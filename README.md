@@ -8,8 +8,6 @@
 - ✅ **P2P Mesh Architecture** - Automatic agent discovery and task routing via SWIM protocol
 - ✅ **Event-Sourced State** - Complete audit trail with crash recovery
 - ✅ **Autonomous Execution** - LLM code generation with automatic repair
-- ✅ **Human-in-the-Loop** - Days/weeks-long approval workflows
-- ✅ **Cost Tracking** - Track LLM token usage per step and workflow
 
 ## Installation
 
