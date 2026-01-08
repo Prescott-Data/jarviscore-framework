@@ -235,14 +235,17 @@ class Mesh:
 
         # Initialize workflow engine (Day 3 implementation)
         if self.mode == MeshMode.AUTONOMOUS:
-            self._logger.info("Workflow engine: Will initialize on Day 3")
-            # DAY 3: Initialize WorkflowEngine
-            # from jarviscore.orchestration import WorkflowEngine
-            # self._workflow_engine = WorkflowEngine(
-            #     mesh=self,
-            #     state_backend=self.config.get("state_backend", "file")
-            # )
-            # await self._workflow_engine.start()
+            self._logger.info("Initializing workflow engine...")
+            from jarviscore.orchestration import WorkflowEngine
+
+            # Initialize workflow engine
+            self._workflow_engine = WorkflowEngine(
+                mesh=self,
+                p2p_coordinator=self._p2p_coordinator,
+                config=self.config
+            )
+            await self._workflow_engine.start()
+            self._logger.info("✓ Workflow engine started")
 
         self._started = True
         self._logger.info(
@@ -305,37 +308,12 @@ class Mesh:
 
         self._logger.info(f"Executing workflow: {workflow_id} with {len(steps)} step(s)")
 
-        # DAY 1: Mock implementation
-        results = []
-        for i, step in enumerate(steps):
-            agent_id = step.get("agent")
-            task_desc = step.get("task", "")
-
-            self._logger.info(f"Step {i}: {agent_id} - {task_desc[:50]}...")
-
-            # Find agent that can handle this step
-            agent = self._find_agent_for_step(step)
-            if not agent:
-                results.append({
-                    "status": "failure",
-                    "error": f"No agent found for role/capability: {agent_id}"
-                })
-                continue
-
-            # Mock execution
-            results.append({
-                "status": "success",
-                "output": f"Mock result from {agent.role}",
-                "message": "Full workflow engine coming on Day 3",
-                "agent": agent.agent_id,
-                "step": i
-            })
-
-        self._logger.info(f"Workflow {workflow_id} completed: {len(results)} step(s)")
-        return results
-
-        # DAY 3: Real implementation
-        # return await self._workflow_engine.execute(workflow_id, steps)
+        # Execute workflow using workflow engine
+        if self._workflow_engine:
+            return await self._workflow_engine.execute(workflow_id, steps)
+        else:
+            # Fallback if workflow engine not initialized
+            raise RuntimeError("Workflow engine not initialized")
 
     async def serve_forever(self):
         """
@@ -416,8 +394,8 @@ class Mesh:
 
         # Cleanup workflow engine
         if self._workflow_engine:
-            # DAY 3: await self._workflow_engine.stop()
-            pass
+            await self._workflow_engine.stop()
+            self._logger.info("✓ Workflow engine stopped")
 
         self._started = False
         self._logger.info("Mesh stopped successfully")
