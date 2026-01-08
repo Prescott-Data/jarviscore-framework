@@ -216,18 +216,22 @@ class Mesh:
                 raise
 
         # Initialize P2P coordinator (Day 2 implementation)
-        if self.mode == MeshMode.DISTRIBUTED or self.config.get("p2p_enabled"):
-            self._logger.info("P2P mode: Will initialize on Day 2")
-            # DAY 2: Initialize P2PCoordinator
-            # from jarviscore.p2p import P2PCoordinator
-            # self._p2p_coordinator = P2PCoordinator(self.config)
-            # await self._p2p_coordinator.start()
-            #
-            # # Announce capabilities to network
-            # capabilities = []
-            # for agent in self.agents:
-            #     capabilities.extend(agent.capabilities)
-            # await self._p2p_coordinator.announce_capabilities(capabilities)
+        if self.mode == MeshMode.DISTRIBUTED or self.config.get("p2p_enabled", False):
+            self._logger.info("Initializing P2P coordinator...")
+            from jarviscore.p2p import P2PCoordinator
+            from jarviscore.config import get_config_from_dict
+
+            # Get full config with defaults
+            full_config = get_config_from_dict(self.config)
+
+            # Initialize P2P Coordinator
+            self._p2p_coordinator = P2PCoordinator(self.agents, full_config)
+            await self._p2p_coordinator.start()
+            self._logger.info("✓ P2P coordinator started")
+
+            # Announce capabilities to network
+            await self._p2p_coordinator.announce_capabilities()
+            self._logger.info("✓ Capabilities announced to mesh")
 
         # Initialize workflow engine (Day 3 implementation)
         if self.mode == MeshMode.AUTONOMOUS:
@@ -367,16 +371,17 @@ class Mesh:
         self._logger.info("Serving requests in distributed mode...")
         self._logger.info("Press Ctrl+C to stop")
 
-        # DAY 1: Simple message
-        import asyncio
+        # Run P2P service
         try:
-            await asyncio.Event().wait()  # Wait forever
+            if self._p2p_coordinator:
+                await self._p2p_coordinator.serve()
+            else:
+                # Fallback if P2P not initialized
+                import asyncio
+                await asyncio.Event().wait()
         except KeyboardInterrupt:
             self._logger.info("Shutting down...")
             await self.stop()
-
-        # DAY 2: Real implementation
-        # await self._p2p_coordinator.serve_forever()
 
     async def stop(self):
         """
@@ -406,8 +411,8 @@ class Mesh:
 
         # Cleanup P2P coordinator
         if self._p2p_coordinator:
-            # DAY 2: await self._p2p_coordinator.stop()
-            pass
+            await self._p2p_coordinator.stop()
+            self._logger.info("✓ P2P coordinator stopped")
 
         # Cleanup workflow engine
         if self._workflow_engine:
