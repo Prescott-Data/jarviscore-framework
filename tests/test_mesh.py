@@ -323,7 +323,8 @@ class TestMeshWorkflow:
     @pytest.mark.asyncio
     async def test_workflow_distributed_mode_fails(self):
         """Test that workflow() fails in distributed mode."""
-        mesh = Mesh(mode="distributed")
+        # Use unique port to avoid conflicts with P2P tests
+        mesh = Mesh(mode="distributed", config={'bind_port': 7999})
         mesh.add(TestAgent1)
 
         await mesh.start()
@@ -334,6 +335,8 @@ class TestMeshWorkflow:
             ])
 
         assert "only available in autonomous mode" in str(exc_info.value)
+
+        await mesh.stop()
 
 
 class TestMeshRepresentation:
