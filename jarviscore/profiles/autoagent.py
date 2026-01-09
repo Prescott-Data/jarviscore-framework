@@ -57,10 +57,14 @@ class AutoAgent(Profile):
 
     async def setup(self):
         """
-        Initialize LLM and execution components.
+        Initialize LLM and execution components with ZERO CONFIG.
 
-        DAY 1: Just log, actual initialization on Day 4
-        DAY 4: Initialize LLM, code generator, sandbox, repair system
+        Framework auto-detects available LLM providers and sets up:
+        - LLM client (tries vLLM → Azure → Gemini → Claude)
+        - Internet search (DuckDuckGo, no API key needed)
+        - Code generator with search injection
+        - Sandbox executor with timeout
+        - Autonomous repair system
         """
         await super().setup()
 
@@ -69,60 +73,143 @@ class AutoAgent(Profile):
         self._logger.info(f"  Capabilities: {self.capabilities}")
         self._logger.info(f"  System Prompt: {self.system_prompt[:50]}...")
 
-        # DAY 4: Initialize execution engine
-        # config = self._mesh.config if self._mesh else {}
-        # self.llm = create_llm_client(config)
-        # self.codegen = CodeGenerator(self.llm)
-        # self.sandbox = SandboxExecutor(config)
-        # self.repair = AutonomousRepair(self.codegen)
+        # Get config from mesh (or use empty dict)
+        config = self._mesh.config if self._mesh else {}
+
+        # Import execution components
+        from jarviscore.execution import (
+            create_llm_client,
+            create_search_client,
+            create_code_generator,
+            create_sandbox_executor,
+            create_autonomous_repair
+        )
+
+        # 1. Initialize LLM (auto-detects providers)
+        self._logger.info("Initializing LLM client...")
+        self.llm = create_llm_client(config)
+
+        # 2. Initialize search (zero-config)
+        self._logger.info("Initializing internet search...")
+        self.search = create_search_client()
+
+        # 3. Initialize code generator (with search injection)
+        self._logger.info("Initializing code generator...")
+        self.codegen = create_code_generator(self.llm, self.search)
+
+        # 4. Initialize sandbox executor (with search access)
+        timeout = config.get('execution_timeout', 300)
+        self._logger.info(f"Initializing sandbox executor ({timeout}s timeout)...")
+        self.sandbox = create_sandbox_executor(timeout, self.search, config)
+
+        # 5. Initialize autonomous repair
+        max_repairs = config.get('max_repair_attempts', 3)
+        self._logger.info(f"Initializing autonomous repair ({max_repairs} attempts)...")
+        self.repair = create_autonomous_repair(self.codegen, max_repairs)
+
+        self._logger.info(f"✓ AutoAgent ready: {self.agent_id}")
 
     async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute task via LLM code generation.
+        Execute task via LLM code generation with automatic repair.
 
-        DAY 1: Mock implementation (returns placeholder result)
-        DAY 4: Full implementation with code generation + sandbox + repair
+        Pipeline:
+        1. Generate Python code from natural language task
+        2. Execute code in sandbox
+        3. If fails → autonomous repair (up to 3 attempts)
+        4. Return result with tokens/cost
 
         Args:
-            task: Task specification with 'task' description
+            task: Task specification with 'task' key (natural language)
 
         Returns:
-            Result dictionary with status, output, cost, tokens
+            {
+                "status": "success" | "failure",
+                "output": Any,  # Task result
+                "error": str,   # Error if failed
+                "tokens": {...},  # Token usage
+                "cost_usd": float,
+                "code": str,    # Generated code
+                "repairs": int  # Number of repair attempts
+            }
+
+        Example:
+            result = await agent.execute_task({
+                "task": "Calculate factorial of 10"
+            })
         """
-        self._logger.info(f"[AutoAgent] Executing task: {task.get('task', '')[:50]}...")
+        task_desc = task.get('task', '')
+        self._logger.info(f"[AutoAgent] Executing: {task_desc[:80]}...")
 
-        # DAY 1: Mock implementation
-        return {
-            "status": "success",
-            "output": f"Mock result from {self.role}",
-            "message": "Full AutoAgent implementation coming on Day 4",
-            "tokens_used": 0,
-            "cost_usd": 0.0
-        }
+        total_tokens = {"input": 0, "output": 0, "total": 0}
+        total_cost = 0.0
+        repairs_attempted = 0
 
-        # DAY 4: Real implementation
-        # 1. Generate code from task description
-        # code = await self.codegen.generate(
-        #     task=task,
-        #     system_prompt=self.system_prompt
-        # )
-        #
-        # 2. Execute in sandbox
-        # try:
-        #     result = await self.sandbox.execute(code)
-        #     return result
-        # except Exception as e:
-        #     # 3. Autonomous repair (up to 3 attempts)
-        #     for attempt in range(3):
-        #         fixed_code = await self.repair.repair(code, e, task)
-        #         try:
-        #             return await self.sandbox.execute(fixed_code)
-        #         except Exception as new_error:
-        #             e = new_error
-        #
-        #     # All repair attempts failed
-        #     return {
-        #         "status": "failure",
-        #         "error": str(e),
-        #         "message": "Autonomous repair exhausted"
-        #     }
+        try:
+            # Step 1: Generate code from natural language
+            self._logger.info("Step 1: Generating code...")
+            code = await self.codegen.generate(
+                task=task,
+                system_prompt=self.system_prompt,
+                context=task.get('context'),  # Dependencies from previous steps
+                enable_search=True
+            )
+
+            # Track generation cost (from LLM response)
+            # Note: codegen now returns just code, cost tracked in llm
+            self._logger.debug(f"Generated {len(code)} characters of code")
+
+            # Step 2: Execute in sandbox
+            self._logger.info("Step 2: Executing code in sandbox...")
+            result = await self.sandbox.execute(code)
+
+            # Step 3: Handle execution failure with autonomous repair
+            if result['status'] == 'failure':
+                self._logger.warning(f"Execution failed: {result.get('error')}")
+                self._logger.info("Step 3: Attempting autonomous repair...")
+
+                # Use repair system with automatic retries
+                repair_result = await self.repair.repair_with_retries(
+                    code=code,
+                    error=Exception(result.get('error', 'Unknown error')),
+                    task=task,
+                    system_prompt=self.system_prompt,
+                    executor=self.sandbox
+                )
+
+                # Update result and track repairs
+                result = repair_result
+                repairs_attempted = len(repair_result.get('attempts', []))
+                self._logger.info(f"Repair attempts: {repairs_attempted}")
+
+            # Enrich result with metadata
+            result['code'] = code
+            result['repairs'] = repairs_attempted
+            result['agent_id'] = self.agent_id
+            result['role'] = self.role
+
+            # Add token/cost info if not already present
+            if 'tokens' not in result:
+                result['tokens'] = total_tokens
+            if 'cost_usd' not in result:
+                result['cost_usd'] = total_cost
+
+            if result['status'] == 'success':
+                self._logger.info(f"✓ Task completed successfully")
+            else:
+                self._logger.error(f"✗ Task failed: {result.get('error')}")
+
+            return result
+
+        except Exception as e:
+            self._logger.error(f"Fatal error in execute_task: {e}", exc_info=True)
+            return {
+                "status": "failure",
+                "error": f"Fatal error: {str(e)}",
+                "error_type": type(e).__name__,
+                "agent_id": self.agent_id,
+                "role": self.role,
+                "repairs": repairs_attempted,
+                "tokens": total_tokens,
+                "cost_usd": total_cost
+            }
