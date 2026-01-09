@@ -6,14 +6,22 @@ from jarviscore import Mesh, AutoAgent, CustomAgent
 
 
 # Example agents for integration testing
-class ScraperAgent(AutoAgent):
-    """Web scraper agent using AutoAgent profile."""
+class ScraperAgent(CustomAgent):
+    """Web scraper agent using CustomAgent profile (mocked for testing)."""
     role = "scraper"
     capabilities = ["web_scraping", "data_extraction"]
-    system_prompt = """
-    You are an expert web scraper. Use BeautifulSoup or Selenium
-    to extract structured data from websites. Return JSON results.
-    """
+
+    async def execute_task(self, task):
+        # Mock scraper for integration testing
+        return {
+            "status": "success",
+            "output": {
+                "url": "example.com",
+                "products": ["Product A", "Product B", "Product C"]
+            },
+            "tokens_used": 0,
+            "cost_usd": 0.0
+        }
 
 
 class ProcessorAgent(CustomAgent):

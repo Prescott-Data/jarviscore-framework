@@ -63,38 +63,43 @@ class TestAutoAgentExecution:
     """Test AutoAgent task execution."""
 
     @pytest.mark.asyncio
-    async def test_execute_task_mock_implementation(self):
-        """Test AutoAgent execute_task mock implementation (Day 1)."""
+    async def test_execute_task_without_setup_fails(self):
+        """Test AutoAgent execute_task fails gracefully without setup."""
         agent = ValidAutoAgent()
 
         task = {"task": "Test task description"}
         result = await agent.execute_task(task)
 
-        # Day 1: Mock implementation
-        assert result["status"] == "success"
-        assert "Mock result" in result["output"]
-        assert result["tokens_used"] == 0
-        assert result["cost_usd"] == 0.0
-        assert "Day 4" in result["message"]
+        # Day 4: Should fail gracefully when components not initialized
+        assert result["status"] == "failure"
+        assert "Fatal error" in result.get("error", "")
 
     @pytest.mark.asyncio
-    async def test_execute_task_with_complex_task(self):
-        """Test AutoAgent with complex task specification."""
+    async def test_execute_task_with_mock_components(self):
+        """Test AutoAgent with mocked execution components."""
+        from unittest.mock import Mock, AsyncMock
+
         agent = ValidAutoAgent()
 
-        task = {
-            "task": "Scrape website and extract product data",
-            "params": {
-                "url": "https://example.com",
-                "selectors": ["h1.title", "span.price"]
-            }
-        }
+        # Mock the execution components
+        agent.codegen = Mock()
+        agent.codegen.generate = AsyncMock(return_value="result = 42")
 
+        agent.sandbox = Mock()
+        agent.sandbox.execute = AsyncMock(return_value={
+            "status": "success",
+            "output": 42
+        })
+
+        agent.repair = Mock()  # Not called if execution succeeds
+
+        task = {"task": "Calculate 21 * 2"}
         result = await agent.execute_task(task)
 
-        # Day 1: Still mock
+        # Should succeed with mocked components
         assert result["status"] == "success"
-        assert "Mock result" in result["output"]
+        assert result["output"] == 42
+        assert result["code"] == "result = 42"
 
 
 class TestAutoAgentInheritance:
