@@ -8,6 +8,8 @@ Modes:
 """
 import asyncio
 import aiohttp
+import base64
+import json
 import logging
 import signal
 import sys
@@ -187,27 +189,39 @@ class SandboxExecutor:
         context: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
-        Execute code via remote sandbox service.
+        Execute code via remote sandbox service (Azure Container Apps).
 
-        Makes HTTP POST to sandbox_service_url with:
+        Matches integration-agent format:
         {
-            "code": "...",
-            "timeout": 300,
-            "context": {}
+            "STEP_DATA": {
+                "id": "job_id",
+                "function_name": "generated_code",
+                "parameters": {},
+                "options": {}
+            },
+            "TASK_CODE_B64": "base64_encoded_code"
         }
 
         Expects response:
         {
-            "status": "success" | "failure",
-            "output": ...,
+            "success": true/false,
+            "result": ...,
             "error": "...",
-            "error_type": "..."
+            ...
         }
         """
+        # Encode code to base64
+        code_b64 = base64.b64encode(code.encode('utf-8')).decode('utf-8')
+
+        # Prepare payload in Azure Container Apps format
         payload = {
-            "code": code,
-            "timeout": timeout,
-            "context": context or {}
+            "STEP_DATA": {
+                "id": f"jarviscore_{int(time.time())}",
+                "function_name": "generated_code",
+                "parameters": context or {},
+                "options": {"timeout": timeout}
+            },
+            "TASK_CODE_B64": code_b64
         }
 
         try:
@@ -216,6 +230,7 @@ class SandboxExecutor:
                 async with session.post(
                     self.sandbox_url,
                     json=payload,
+                    headers={"Content-Type": "application/json"},
                     timeout=aiohttp.ClientTimeout(total=timeout + 10)  # Buffer
                 ) as response:
                     if response.status != 200:
@@ -224,9 +239,25 @@ class SandboxExecutor:
                             f"Sandbox service error ({response.status}): {error_text}"
                         )
 
-                    result = await response.json()
-                    logger.debug(f"Remote sandbox response: {result.get('status')}")
-                    return result
+                    sandbox_response = await response.json()
+                    logger.debug(f"Remote sandbox response: {sandbox_response.get('success')}")
+
+                    # Extract result from Azure Container Apps response format
+                    if sandbox_response.get('success'):
+                        # Success - extract the result
+                        output = sandbox_response.get('result')
+                        return {
+                            'status': 'success',
+                            'output': output
+                        }
+                    else:
+                        # Error - extract error message
+                        error_msg = sandbox_response.get('error', 'Unknown error')
+                        return {
+                            'status': 'failure',
+                            'error': error_msg,
+                            'error_type': 'RemoteSandboxError'
+                        }
 
         except asyncio.TimeoutError:
             logger.error(f"Remote sandbox timeout after {timeout}s")
