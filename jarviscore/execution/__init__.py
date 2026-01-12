@@ -44,6 +44,20 @@ from .repair import (
     create_autonomous_repair
 )
 
+# Result Handler
+from .result_handler import (
+    ResultHandler,
+    ResultStatus,
+    ErrorCategory,
+    create_result_handler
+)
+
+# Code Registry
+from .code_registry import (
+    CodeRegistry,
+    create_code_registry
+)
+
 __all__ = [
     # LLM
     'UnifiedLLMClient',
@@ -67,4 +81,14 @@ __all__ = [
     # Repair
     'AutonomousRepair',
     'create_autonomous_repair',
+
+    # Result Handler
+    'ResultHandler',
+    'ResultStatus',
+    'ErrorCategory',
+    'create_result_handler',
+
+    # Code Registry
+    'CodeRegistry',
+    'create_code_registry',
 ]

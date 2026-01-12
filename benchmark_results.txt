@@ -1,0 +1,67 @@
+======================================================================
+JarvisCore Performance Benchmarking Suite
+======================================================================
+
+Benchmark 1: Sandbox Execution Speed
+----------------------------------------------------------------------
+  ✓ Simple arithmetic                           6.84ms
+  ✓ Factorial calculation                       2.19ms
+  ✓ List comprehension                          2.07ms
+  ✓ Dictionary operations                       2.08ms
+  ✓ String processing                           2.00ms
+
+  Average: 3.04ms
+  Min: 2.00ms
+  Max: 6.84ms
+
+Benchmark 2: Code Generation Speed
+----------------------------------------------------------------------
+  ✓ Task 1: 3540.94ms
+  ✓ Task 2: 2681.16ms
+  ✓ Task 3: 3172.47ms
+
+  Average: 3131.52ms
+
+Benchmark 3: Workflow Orchestration
+----------------------------------------------------------------------
+  ✓ Single agent task: 3649.72ms
+  ✓ Multi-agent workflow (2 steps): 7987.64ms
+
+Benchmark 4: End-to-End Agent Task
+----------------------------------------------------------------------
+  ✓ Complete task execution: 4171.66ms
+    Result: 40320
+
+Benchmark 5: Storage Performance
+----------------------------------------------------------------------
+  ✓ ResultHandler writes (avg):    0.89ms
+  ✓ ResultHandler reads (avg):    0.02ms
+  ✓ CodeRegistry writes (avg):    0.07ms
+  ✓ CodeRegistry search:    0.40ms
+
+======================================================================
+Benchmark Summary
+======================================================================
+
+Sandbox Execution:
+  Average: 3.04ms
+  Range: 2.00ms - 6.84ms
+
+Code Generation:
+  Average: 3131.52ms
+
+Workflow Orchestration:
+  Single agent: 3649.72ms
+  Multi-agent: 7987.64ms
+
+Storage Performance:
+  Result write: 0.89ms
+  Result read: 0.02ms
+  Registry write: 0.07ms
+  Registry search: 0.40ms
+
+End-to-End Task: 4171.66ms ✓
+
+======================================================================
+Benchmarking Complete
+======================================================================

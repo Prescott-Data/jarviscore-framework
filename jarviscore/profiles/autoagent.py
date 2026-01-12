@@ -82,7 +82,9 @@ class AutoAgent(Profile):
             create_search_client,
             create_code_generator,
             create_sandbox_executor,
-            create_autonomous_repair
+            create_autonomous_repair,
+            create_result_handler,
+            create_code_registry
         )
 
         # 1. Initialize LLM (auto-detects providers)
@@ -106,6 +108,16 @@ class AutoAgent(Profile):
         max_repairs = config.get('max_repair_attempts', 3)
         self._logger.info(f"Initializing autonomous repair ({max_repairs} attempts)...")
         self.repair = create_autonomous_repair(self.codegen, max_repairs)
+
+        # 6. Initialize result handler (file + in-memory storage)
+        log_dir = config.get('log_directory', './logs')
+        self._logger.info(f"Initializing result handler (dir: {log_dir})...")
+        self.result_handler = create_result_handler(log_dir)
+
+        # 7. Initialize code registry (reusable generated functions)
+        registry_dir = f"{log_dir}/code_registry"
+        self._logger.info(f"Initializing code registry (dir: {registry_dir})...")
+        self.code_registry = create_code_registry(registry_dir)
 
         self._logger.info(f"✓ AutoAgent ready: {self.agent_id}")
 
@@ -194,8 +206,45 @@ class AutoAgent(Profile):
             if 'cost_usd' not in result:
                 result['cost_usd'] = total_cost
 
+            # Store result to file system + in-memory cache
+            stored_result = self.result_handler.process_result(
+                agent_id=self.agent_id,
+                task=task_desc,
+                code=code,
+                output=result.get('output'),
+                status=result['status'],
+                error=result.get('error'),
+                execution_time=result.get('execution_time'),
+                tokens=result.get('tokens'),
+                cost_usd=result.get('cost_usd'),
+                repairs=repairs_attempted,
+                metadata={
+                    'role': self.role,
+                    'capabilities': self.capabilities,
+                    'system_prompt': self.system_prompt[:100]  # First 100 chars
+                }
+            )
+
+            # Add result_id to response
+            result['result_id'] = stored_result['result_id']
+
+            # Register successful code in registry for reuse
             if result['status'] == 'success':
-                self._logger.info(f"✓ Task completed successfully")
+                function_id = self.code_registry.register(
+                    code=code,
+                    agent_id=self.agent_id,
+                    task=task_desc,
+                    capabilities=self.capabilities,
+                    output=result.get('output'),
+                    result_id=result['result_id'],
+                    metadata={
+                        'role': self.role,
+                        'execution_time': result.get('execution_time'),
+                        'repairs': repairs_attempted
+                    }
+                )
+                result['function_id'] = function_id
+                self._logger.info(f"✓ Task completed successfully (result_id: {result['result_id']}, function_id: {function_id})")
             else:
                 self._logger.error(f"✗ Task failed: {result.get('error')}")
 

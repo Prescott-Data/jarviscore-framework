@@ -76,9 +76,15 @@ class UnifiedLLMClient:
         Initialize LLM client with zero-config defaults.
 
         Args:
-            config: Optional config dict. If None, auto-detects from environment.
+            config: Optional config dict. If None, auto-detects from environment via Pydantic.
         """
-        self.config = config or {}
+        # Load from Pydantic settings first
+        from jarviscore.config import settings
+
+        # Merge: Pydantic settings as base, config dict as override
+        self.config = settings.model_dump()
+        if config:
+            self.config.update(config)
 
         # Provider clients
         self.vllm_endpoint = None
@@ -97,17 +103,37 @@ class UnifiedLLMClient:
     def _setup_providers(self):
         """Auto-detect and setup available LLM providers."""
 
-        # 1. Try vLLM (local, free, always try first)
-        vllm_endpoint = self.config.get('llm_endpoint') or self.config.get('VLLM_ENDPOINT')
+        # 1. Try Claude first (primary provider)
+        if CLAUDE_AVAILABLE:
+            claude_key = self.config.get('claude_api_key') or self.config.get('anthropic_api_key')
+            claude_endpoint = self.config.get('claude_endpoint')
+            if claude_key:
+                try:
+                    # Support custom Claude endpoint (e.g., Azure-hosted Claude)
+                    if claude_endpoint:
+                        self.claude_client = Anthropic(
+                            api_key=claude_key,
+                            base_url=claude_endpoint
+                        )
+                        logger.info(f"✓ Claude provider available with custom endpoint: {claude_endpoint}")
+                    else:
+                        self.claude_client = Anthropic(api_key=claude_key)
+                        logger.info("✓ Claude provider available")
+                    self.provider_order.append(LLMProvider.CLAUDE)
+                except Exception as e:
+                    logger.warning(f"Failed to setup Claude: {e}")
+
+        # 2. Try vLLM (local, free)
+        vllm_endpoint = self.config.get('llm_endpoint') or self.config.get('vllm_endpoint')
         if vllm_endpoint:
             self.vllm_endpoint = vllm_endpoint.rstrip('/')
             self.provider_order.append(LLMProvider.VLLM)
             logger.info(f"✓ vLLM provider available: {self.vllm_endpoint}")
 
-        # 2. Try Azure OpenAI
+        # 3. Try Azure OpenAI
         if AZURE_AVAILABLE:
-            azure_key = self.config.get('azure_api_key') or self.config.get('AZURE_OPENAI_KEY')
-            azure_endpoint = self.config.get('azure_endpoint') or self.config.get('AZURE_OPENAI_ENDPOINT')
+            azure_key = self.config.get('azure_api_key') or self.config.get('azure_openai_key')
+            azure_endpoint = self.config.get('azure_endpoint') or self.config.get('azure_openai_endpoint')
 
             if azure_key and azure_endpoint:
                 try:
@@ -122,9 +148,9 @@ class UnifiedLLMClient:
                 except Exception as e:
                     logger.warning(f"Failed to setup Azure OpenAI: {e}")
 
-        # 3. Try Gemini
+        # 4. Try Gemini
         if GEMINI_AVAILABLE:
-            gemini_key = self.config.get('gemini_api_key') or self.config.get('GEMINI_API_KEY')
+            gemini_key = self.config.get('gemini_api_key')
             if gemini_key:
                 try:
                     genai.configure(api_key=gemini_key)
@@ -134,17 +160,6 @@ class UnifiedLLMClient:
                     logger.info(f"✓ Gemini provider available: {model_name}")
                 except Exception as e:
                     logger.warning(f"Failed to setup Gemini: {e}")
-
-        # 4. Try Claude
-        if CLAUDE_AVAILABLE:
-            claude_key = self.config.get('claude_api_key') or self.config.get('ANTHROPIC_API_KEY')
-            if claude_key:
-                try:
-                    self.claude_client = Anthropic(api_key=claude_key)
-                    self.provider_order.append(LLMProvider.CLAUDE)
-                    logger.info("✓ Claude provider available")
-                except Exception as e:
-                    logger.warning(f"Failed to setup Claude: {e}")
 
         if not self.provider_order:
             logger.warning(
@@ -353,13 +368,21 @@ class UnifiedLLMClient:
         model = self.config.get('claude_model', 'claude-sonnet-4')
         start_time = time.time()
 
+        # Prepare request kwargs
+        request_kwargs = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": conv_messages
+        }
+
+        # Only add system if it exists (Claude API requires it to be string or not present)
+        if system_msg:
+            request_kwargs["system"] = system_msg
+
         response = await asyncio.to_thread(
             self.claude_client.messages.create,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system_msg,
-            messages=conv_messages
+            **request_kwargs
         )
 
         duration = time.time() - start_time

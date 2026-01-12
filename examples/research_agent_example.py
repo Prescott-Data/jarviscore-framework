@@ -39,13 +39,9 @@ async def main():
     print("JarvisCore: Research Agent Example")
     print("="*60)
 
-    config = {
-        'llm_endpoint': 'http://localhost:8000',
-        'llm_model': 'Qwen/Qwen2.5-Coder-32B-Instruct',
-        'execution_timeout': 90
-    }
-
-    mesh = Mesh(mode="autonomous", config=config)
+    # Zero-config: Reads from .env automatically
+    # Framework auto-detects: Claude → Azure → Gemini → vLLM
+    mesh = Mesh(mode="autonomous")
     mesh.add(ResearchAgent)
 
     try:

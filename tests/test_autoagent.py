@@ -93,6 +93,17 @@ class TestAutoAgentExecution:
 
         agent.repair = Mock()  # Not called if execution succeeds
 
+        # Mock result handler (Phase 1)
+        agent.result_handler = Mock()
+        agent.result_handler.process_result = Mock(return_value={
+            'result_id': 'test-result-id',
+            'status': 'success'
+        })
+
+        # Mock code registry (Phase 3)
+        agent.code_registry = Mock()
+        agent.code_registry.register = Mock(return_value='test-function-id')
+
         task = {"task": "Calculate 21 * 2"}
         result = await agent.execute_task(task)
 

@@ -88,27 +88,29 @@ You have access to a 'search' object with these async methods:
 - await search.extract_content(url, max_length=10000) -> Dict with 'title', 'content', 'success'
 - await search.search_and_extract(query, num_results=3) -> List[Dict] combined results
 
-Example using search:
+Example using search (define async main, sandbox will execute it):
 ```python
-import asyncio
-
 async def main():
     # Search the web
     results = await search.search("Python async tutorial")
 
     # Extract content from first result
-    content = await search.extract_content(results[0]['url'])
+    if results:
+        content = await search.extract_content(results[0]['url'])
 
-    # Process and return result
-    result = {{
-        'title': content['title'],
-        'summary': content['content'][:500]
-    }}
-    return result
-
-# Run async code
-result = asyncio.run(main())
+        # Process and return result
+        result = {{
+            'title': content['title'],
+            'summary': content['content'][:500]
+        }}
+        return result
+    return None
 ```
+
+IMPORTANT:
+- Define async def main() - the sandbox will call it automatically
+- Do NOT use asyncio.run() - you're already in an async context
+- Store final result by returning from main() or assigning to 'result' variable
 
 TASK:
 {task}

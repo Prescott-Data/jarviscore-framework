@@ -35,15 +35,12 @@ async def main():
     print("JarvisCore: Calculator Agent Example")
     print("="*60)
 
-    # Configure mesh (optional - auto-detects LLM if not provided)
-    config = {
-        'llm_endpoint': 'http://localhost:8000',  # vLLM endpoint
-        'llm_model': 'Qwen/Qwen2.5-Coder-32B-Instruct',
-        'execution_timeout': 60
-    }
+    # Zero-config: Framework auto-detects LLM from .env
+    # Tries: Claude → Azure → Gemini → vLLM (based on .env)
+    # Or pass custom config dict to override
 
-    # Create mesh and add agent
-    mesh = Mesh(mode="autonomous", config=config)
+    # Create mesh and add agent (reads from .env automatically)
+    mesh = Mesh(mode="autonomous")
     mesh.add(CalculatorAgent)
 
     try:
