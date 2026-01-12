@@ -138,11 +138,20 @@ class UnifiedLLMClient:
         # 4. Try Claude
         if CLAUDE_AVAILABLE:
             claude_key = self.config.get('claude_api_key') or self.config.get('ANTHROPIC_API_KEY')
+            claude_endpoint = self.config.get('claude_endpoint') or self.config.get('CLAUDE_ENDPOINT')
             if claude_key:
                 try:
-                    self.claude_client = Anthropic(api_key=claude_key)
+                    # Support custom Claude endpoint (e.g., Azure-hosted Claude)
+                    if claude_endpoint:
+                        self.claude_client = Anthropic(
+                            api_key=claude_key,
+                            base_url=claude_endpoint
+                        )
+                        logger.info(f"✓ Claude provider available with custom endpoint: {claude_endpoint}")
+                    else:
+                        self.claude_client = Anthropic(api_key=claude_key)
+                        logger.info("✓ Claude provider available")
                     self.provider_order.append(LLMProvider.CLAUDE)
-                    logger.info("✓ Claude provider available")
                 except Exception as e:
                     logger.warning(f"Failed to setup Claude: {e}")
 
