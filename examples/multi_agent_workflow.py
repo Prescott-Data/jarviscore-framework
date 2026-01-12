@@ -57,14 +57,11 @@ async def main():
     print("JarvisCore: Multi-Agent Workflow Example")
     print("="*60)
 
-    config = {
-        'llm_endpoint': 'http://localhost:8000',
-        'llm_model': 'Qwen/Qwen2.5-Coder-32B-Instruct',
-        'execution_timeout': 90
-    }
+    # Zero-config: Reads from .env automatically
+    # Framework tries: Claude → Azure → Gemini → vLLM
 
     # Create mesh with all agents
-    mesh = Mesh(mode="autonomous", config=config)
+    mesh = Mesh(mode="autonomous")
     mesh.add(DataGeneratorAgent)
     mesh.add(DataAnalyzerAgent)
     mesh.add(ReportGeneratorAgent)

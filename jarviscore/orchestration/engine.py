@@ -165,9 +165,31 @@ class WorkflowEngine:
                 # 4. Update status to in_progress
                 self.status_manager.update(step_id, 'in_progress')
 
-                # 5. Execute step
+                # 5. Prepare task with context from dependencies
+                task = step.copy()
+
+                # Inject dependency outputs as context
+                if depends_on := step.get('depends_on'):
+                    dep_ids = self._resolve_dependency_ids(depends_on, normalized_steps)
+                    dep_outputs = {}
+                    for dep_id in dep_ids:
+                        if dep_id in self.memory:
+                            dep_result = self.memory[dep_id]
+                            # Extract output from result
+                            output = dep_result.get('output') if isinstance(dep_result, dict) else dep_result
+                            dep_outputs[dep_id] = output
+
+                    # Add dependency outputs to task context
+                    task['context'] = {
+                        'previous_step_results': dep_outputs,
+                        'workflow_id': workflow_id,
+                        'step_id': step_id
+                    }
+                    logger.debug(f"Injected context with {len(dep_outputs)} dependencies")
+
+                # 6. Execute step with context
                 logger.info(f"Executing step {step_id} with agent {agent.agent_id}")
-                result = await agent.execute_task(step)
+                result = await agent.execute_task(task)
 
                 # Ensure result includes agent_id
                 if isinstance(result, dict) and 'agent' not in result:
