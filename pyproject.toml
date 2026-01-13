@@ -10,7 +10,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Ruth Mutua", email = "mutuandinda82@gmail.com"},
+    {name = "Muyukani Kizito", email = "muyukani@prescottdata.io"}
+]
+maintainers = [
+    {name = "Prescott Data", email = "info@prescottdata.io"}
 ]
 keywords = ["agents", "p2p", "llm", "distributed", "workflow", "orchestration"]
 classifiers = [
@@ -68,7 +72,10 @@ Repository = "https://github.com/yourusername/jarviscore"
 Issues = "https://github.com/yourusername/jarviscore/issues"
 
 [tool.setuptools]
-packages = ["jarviscore"]
+packages = {find = {}}
+
+[tool.setuptools.package-data]
+jarviscore = ["docs/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
