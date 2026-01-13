@@ -198,7 +198,8 @@ class SmokeTest:
                 # Validate result
                 result = results[0]
 
-                if result.get('status') != 'completed':
+                # Check for success (status can be 'success' or 'completed')
+                if result.get('status') not in ['success', 'completed']:
                     error_msg = result.get('error', 'Unknown error')
 
                     # Check if it's a retryable error (rate limit, overloaded, timeout)
