@@ -15,10 +15,31 @@
 pip install jarviscore
 ```
 
-With all features:
+## Setup & Validation
+
+### 1. Configure LLM Provider
+
+Copy the example config and add your API key:
+
 ```bash
-pip install jarviscore[all]
+cp .env.example .env
+# Edit .env and add one of: CLAUDE_API_KEY, AZURE_API_KEY, GEMINI_API_KEY, or LLM_ENDPOINT
 ```
+
+### 2. Validate Installation
+
+```bash
+# Check setup
+python -m jarviscore.cli.check
+
+# Test LLM connectivity
+python -m jarviscore.cli.check --validate-llm
+
+# Run smoke test (end-to-end validation)
+python -m jarviscore.cli.smoketest
+```
+
+✅ **All checks pass?** You're ready to build agents!
 
 ## Quick Start
 
@@ -55,10 +76,11 @@ JarvisCore is built on three layers:
 
 ## Documentation
 
-- [User Guide](docs/USER_GUIDE.md)
-- [API Reference](docs/API_REFERENCE.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Examples](examples/)
+- [User Guide](jarviscore/docs/USER_GUIDE.md) - Complete guide for AutoAgent users
+- [API Reference](jarviscore/docs/API_REFERENCE.md) - Detailed API documentation
+- [Configuration Guide](jarviscore/docs/CONFIGURATION.md) - Settings and environment variables
+- [Troubleshooting](jarviscore/docs/TROUBLESHOOTING.md) - Common issues and solutions
+- [Examples](examples/) - Working code examples
 
 ## Development Status
 

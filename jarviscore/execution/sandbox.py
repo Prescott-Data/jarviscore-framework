@@ -210,8 +210,11 @@ class SandboxExecutor:
             ...
         }
         """
+        # Wrap code to capture result (matching integration agent behavior)
+        wrapped_code = self._wrap_code_for_sandbox(code, context)
+
         # Encode code to base64
-        code_b64 = base64.b64encode(code.encode('utf-8')).decode('utf-8')
+        code_b64 = base64.b64encode(wrapped_code.encode('utf-8')).decode('utf-8')
 
         # Prepare payload in Azure Container Apps format
         payload = {
@@ -226,9 +229,12 @@ class SandboxExecutor:
 
         try:
             # Make HTTP request to sandbox service
+            # Use /normal endpoint for API tasks
+            endpoint_url = f"{self.sandbox_url}/normal"
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    self.sandbox_url,
+                    endpoint_url,
                     json=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=aiohttp.ClientTimeout(total=timeout + 10)  # Buffer
@@ -240,33 +246,172 @@ class SandboxExecutor:
                         )
 
                     sandbox_response = await response.json()
-                    logger.debug(f"Remote sandbox response: {sandbox_response.get('success')}")
 
-                    # Extract result from Azure Container Apps response format
-                    if sandbox_response.get('success'):
-                        # Success - extract the result
-                        output = sandbox_response.get('result')
-                        return {
-                            'status': 'success',
-                            'output': output
-                        }
-                    else:
-                        # Error - extract error message
-                        error_msg = sandbox_response.get('error', 'Unknown error')
+                    logger.debug(f"Remote sandbox response: {sandbox_response}")
+
+                    # Extract result using robust method (matching integration agent)
+                    actual_result = self._extract_sandbox_result(sandbox_response)
+
+                    # Convert to our format
+                    if actual_result.get('success') is False:
+                        # Error case
                         return {
                             'status': 'failure',
-                            'error': error_msg,
+                            'error': actual_result.get('error', 'Unknown error'),
                             'error_type': 'RemoteSandboxError'
+                        }
+                    else:
+                        # Success case
+                        return {
+                            'status': 'success',
+                            'output': actual_result.get('result', actual_result.get('data', actual_result.get('output')))
                         }
 
         except asyncio.TimeoutError:
             logger.error(f"Remote sandbox timeout after {timeout}s")
             raise ExecutionTimeout(f"Remote execution exceeded {timeout} seconds")
 
-        except Exception as e:
-            # If remote execution fails, fallback to local
-            logger.warning(f"Remote sandbox failed: {e}. Falling back to local execution.")
+        except aiohttp.ClientError as e:
+            # Network/HTTP errors
+            logger.warning(f"Remote sandbox connection error: {e}. Falling back to local execution.")
             return await self._execute_local(code, timeout, context)
+
+        except Exception as e:
+            # Only fallback for actual execution errors, not during cleanup
+            if "object has no attribute" not in str(e):
+                logger.warning(f"Remote sandbox failed: {e}. Falling back to local execution.")
+                return await self._execute_local(code, timeout, context)
+            else:
+                # This is likely a cleanup issue, just log and don't fallback
+                logger.debug(f"Ignoring cleanup error: {e}")
+                raise
+
+    def _wrap_code_for_sandbox(self, code: str, context: Optional[Dict] = None) -> str:
+        """
+        Wrap code to capture and print result as JSON (matches integration agent).
+
+        The sandbox executes code and captures stdout. We need to:
+        1. Execute the code
+        2. Extract the 'result' variable
+        3. Print it as JSON to stdout
+
+        Args:
+            code: Python code to wrap
+            context: Optional context variables
+
+        Returns:
+            Wrapped code that prints result as JSON
+        """
+        # Add imports if needed
+        imports = []
+        if 'import json' not in code:
+            imports.append('import json')
+        if 'import sys' not in code:
+            imports.append('import sys')
+
+        imports_str = '\n'.join(imports) + '\n' if imports else ''
+
+        # Wrap code to capture and print result
+        wrapper = f'''{imports_str}{code}
+
+# JarvisCore: Capture and print result
+if __name__ == "__main__":
+    try:
+        # Check if result variable exists
+        if 'result' in locals() or 'result' in globals():
+            output = {{"success": True, "result": result}}
+        else:
+            output = {{"success": False, "error": "No 'result' variable found"}}
+
+        # Print as JSON to stdout (sandbox captures this)
+        print(json.dumps(output))
+        sys.exit(0)
+    except Exception as e:
+        error_output = {{
+            "success": False,
+            "error": str(e),
+            "error_type": type(e).__name__
+        }}
+        print(json.dumps(error_output))
+        sys.exit(1)
+'''
+        return wrapper
+
+    def _extract_sandbox_result(self, sandbox_response: Any) -> Dict[str, Any]:
+        """
+        Extract the actual function result from sandbox response.
+        Matches integration agent's robust extraction logic.
+
+        Args:
+            sandbox_response: Raw response from sandbox service
+
+        Returns:
+            Extracted result dict
+        """
+        # Handle None response
+        if sandbox_response is None:
+            logger.warning("Sandbox returned None response")
+            return {
+                "success": False,
+                "error": "Sandbox returned null response",
+                "error_type": "null_response"
+            }
+
+        # Handle non-dict response
+        if not isinstance(sandbox_response, dict):
+            logger.warning(f"Sandbox returned non-dict response: {type(sandbox_response)}")
+            return {
+                "success": False,
+                "error": f"Sandbox returned unexpected response type: {type(sandbox_response)}",
+                "error_type": "invalid_response_type"
+            }
+
+        # Try to parse 'output' field if it's a JSON string
+        if 'output' in sandbox_response and isinstance(sandbox_response.get('output'), str):
+            output_str = sandbox_response['output'].strip()
+            if output_str:
+                try:
+                    parsed_output = json.loads(output_str)
+                    if isinstance(parsed_output, dict):
+                        logger.debug("Successfully parsed result from output field")
+                        return parsed_output
+                except json.JSONDecodeError as e:
+                    logger.debug(f"JSON parse failed: {e}, trying line-by-line")
+                    lines = output_str.strip().split('\n')
+                    for line in reversed(lines):
+                        line = line.strip()
+                        if line.startswith('{') and line.endswith('}'):
+                            try:
+                                parsed_output = json.loads(line)
+                                if isinstance(parsed_output, dict) and 'success' in parsed_output:
+                                    logger.debug("Successfully parsed result from last JSON line")
+                                    return parsed_output
+                            except json.JSONDecodeError:
+                                continue
+
+                    logger.warning("Could not parse any JSON from output")
+                    return {
+                        "success": sandbox_response.get('success', False),
+                        "output": output_str,
+                        "error": sandbox_response.get('error') or "Failed to parse output as JSON"
+                    }
+
+        # If response has 'success' field but no nested result fields, return as-is
+        if 'success' in sandbox_response:
+            wrapper_fields = {'result', 'function_result', 'execution_result'}
+            if not any(field in sandbox_response for field in wrapper_fields):
+                return sandbox_response
+
+        # Try common result field names
+        result_candidates = ['result', 'function_result', 'execution_result', 'data', 'response']
+        for field in result_candidates:
+            if field in sandbox_response and sandbox_response[field] is not None:
+                candidate = sandbox_response[field]
+                if isinstance(candidate, dict):
+                    return candidate
+
+        logger.debug(f"No specific result field found, returning whole response")
+        return sandbox_response
 
     def _create_namespace(self, context: Optional[Dict] = None) -> Dict:
         """

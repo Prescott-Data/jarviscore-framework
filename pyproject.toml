@@ -10,7 +10,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Ruth Mutua", email = "mutuandinda82@gmail.com"},
+    {name = "Muyukani Kizito", email = "muyukani@prescottdata.io"}
+]
+maintainers = [
+    {name = "Prescott Data", email = "info@prescottdata.io"}
 ]
 keywords = ["agents", "p2p", "llm", "distributed", "workflow", "orchestration"]
 classifiers = [
@@ -24,25 +28,31 @@ classifiers = [
 ]
 
 dependencies = [
+    # Core framework
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-    "asyncio-mqtt>=0.16.0",
+
+    # P2P networking (required for all modes)
+    "swim-p2p",
+    "pyzmq",
+
+    # Configuration
+    "python-dotenv>=1.0.0",
+
+    # Web/HTTP
+    "aiohttp>=3.9.0",
+    "beautifulsoup4>=4.12.0",
+
+    # LLM Providers (at least one required for AutoAgent)
+    "anthropic>=0.18.0",
+    "openai>=1.0.0",
+    "google-generativeai>=0.3.0",
+
+    # Utilities
+    "httpx>=0.25.0",
 ]
 
 [project.optional-dependencies]
-p2p = [
-    "swim-p2p>=1.2.0",
-    "pyzmq>=25.0.0",
-]
-state = [
-    "redis>=5.0.0",
-    "motor>=3.3.0",  # Async MongoDB
-    "boto3>=1.28.0",  # S3
-]
-llm = [
-    "openai>=1.0.0",
-    "anthropic>=0.7.0",
-]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -52,7 +62,7 @@ dev = [
     "ruff>=0.1.0",
 ]
 all = [
-    "jarviscore[p2p,state,llm,dev]",
+    "jarviscore[dev]",
 ]
 
 [project.urls]
@@ -62,7 +72,10 @@ Repository = "https://github.com/yourusername/jarviscore"
 Issues = "https://github.com/yourusername/jarviscore/issues"
 
 [tool.setuptools]
-packages = ["jarviscore"]
+packages = {find = {}}
+
+[tool.setuptools.package-data]
+jarviscore = ["docs/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
