@@ -352,33 +352,6 @@ Smoke test validates these are met.
 
 ---
 
-## Next Steps After Testing
-
-Once all tests pass:
-
-1. **Package for PyPI:**
-   ```bash
-   python -m build
-   twine check dist/*
-   ```
-
-2. **Test installation from wheel:**
-   ```bash
-   pip install dist/jarviscore-0.1.0-py3-none-any.whl
-   ```
-
-3. **Publish to PyPI:**
-   ```bash
-   twine upload dist/*
-   ```
-
-4. **Verify public installation:**
-   ```bash
-   pip install jarviscore
-   ```
-
----
-
 ## Rollout Strategy
 
 ### Phase 1: Alpha Testing (Current)
