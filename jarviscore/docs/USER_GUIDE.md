@@ -23,13 +23,57 @@ Practical guide to building agent systems with JarvisCore.
 
 ## Quick Start
 
-### Installation
+### Step 1: Installation (1 minute)
 
 ```bash
 pip install jarviscore
 ```
 
-### Your First Agent (30 seconds)
+### Step 2: Configuration (2 minutes)
+
+JarvisCore needs an LLM provider to generate code for AutoAgent. Copy the example config:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and add **one** of these API keys:
+
+```bash
+# Option 1: Claude (Recommended)
+CLAUDE_API_KEY=sk-ant-your-key-here
+
+# Option 2: Azure OpenAI
+AZURE_API_KEY=your-key-here
+AZURE_ENDPOINT=https://your-resource.openai.azure.com
+AZURE_DEPLOYMENT=gpt-4o
+
+# Option 3: Google Gemini
+GEMINI_API_KEY=your-key-here
+
+# Option 4: Local vLLM
+LLM_ENDPOINT=http://localhost:8000
+```
+
+### Step 3: Validate Setup (30 seconds)
+
+Run the health check to ensure everything works:
+
+```bash
+# Basic check
+python -m jarviscore.cli.check
+
+# Test LLM connectivity
+python -m jarviscore.cli.check --validate-llm
+```
+
+Run the smoke test to validate end-to-end:
+
+```bash
+python -m jarviscore.cli.smoketest
+```
+
+### Step 4: Your First Agent (30 seconds)
 
 ```python
 import asyncio
