@@ -32,7 +32,7 @@ python -m jarviscore.cli.smoketest --verbose
 
 **Solution:**
 ```bash
-pip install jarviscore
+pip install jarviscore-framework
 
 # Or install in development mode
 cd jarviscore
@@ -45,8 +45,8 @@ pip install -e .
 
 **Solution:**
 ```bash
-pip uninstall jarviscore
-pip install jarviscore
+pip uninstall jarviscore-framework
+pip install jarviscore-framework
 ```
 
 ---
@@ -361,7 +361,7 @@ If issues persist:
 
 3. **Provide this info when asking for help:**
    - Python version: `python --version`
-   - JarvisCore version: `pip show jarviscore`
+   - JarvisCore version: `pip show jarviscore-framework`
    - LLM provider used (Claude/Azure/Gemini)
    - Error message and logs
    - Minimal code to reproduce issue
@@ -391,7 +391,7 @@ If issues persist:
 
 4. **Keep dependencies updated:**
    ```bash
-   pip install --upgrade jarviscore
+   pip install --upgrade jarviscore-framework
    ```
 
 5. **Use version control for `.env`:**
