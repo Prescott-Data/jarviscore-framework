@@ -29,7 +29,7 @@ An **AutoAgent** that takes natural language prompts and automatically:
 ## Step 1: Install JarvisCore (30 seconds)
 
 ```bash
-pip install jarviscore
+pip install jarviscore-framework
 ```
 
 ---

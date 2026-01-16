@@ -26,7 +26,7 @@ Practical guide to building agent systems with JarvisCore.
 ### Step 1: Installation (1 minute)
 
 ```bash
-pip install jarviscore
+pip install jarviscore-framework
 ```
 
 ### Step 2: Configuration (2 minutes)
