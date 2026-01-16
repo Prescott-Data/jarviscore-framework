@@ -1,6 +1,6 @@
 # JarvisCore Framework
 
-**P2P distributed agent framework with LLM code generation and production-grade state management**
+**Build autonomous AI agents in 3 lines of code. Production-ready orchestration with P2P mesh networking.**
 
 ## Features
 
@@ -17,11 +17,13 @@ pip install jarviscore-framework
 
 ## Setup & Validation
 
-### 1. Configure LLM Provider
-
-Copy the example config and add your API key:
+### 1. Initialize Project
 
 ```bash
+# Create .env.example and example files in your project
+python -m jarviscore.cli.scaffold --examples
+
+# Configure your environment
 cp .env.example .env
 # Edit .env and add one of: CLAUDE_API_KEY, AZURE_API_KEY, GEMINI_API_KEY, or LLM_ENDPOINT
 ```

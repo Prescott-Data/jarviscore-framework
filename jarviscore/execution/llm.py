@@ -13,11 +13,11 @@ logger = logging.getLogger(__name__)
 
 # Try importing optional LLM SDKs
 try:
-    import google.generativeai as genai
+    from google import genai
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
-    logger.debug("Gemini SDK not available (pip install google-generativeai)")
+    logger.debug("Gemini SDK not available (pip install google-genai)")
 
 try:
     from openai import AsyncAzureOpenAI
@@ -153,11 +153,10 @@ class UnifiedLLMClient:
             gemini_key = self.config.get('gemini_api_key')
             if gemini_key:
                 try:
-                    genai.configure(api_key=gemini_key)
-                    model_name = self.config.get('gemini_model', 'gemini-1.5-flash')
-                    self.gemini_client = genai.GenerativeModel(model_name)
+                    self.gemini_client = genai.Client(api_key=gemini_key)
+                    self.gemini_model = self.config.get('gemini_model', 'gemini-2.0-flash')
                     self.provider_order.append(LLMProvider.GEMINI)
-                    logger.info(f"✓ Gemini provider available: {model_name}")
+                    logger.info(f"✓ Gemini provider available: {self.gemini_model}")
                 except Exception as e:
                     logger.warning(f"Failed to setup Gemini: {e}")
 
@@ -310,7 +309,7 @@ class UnifiedLLMClient:
         }
 
     async def _call_gemini(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
-        """Call Google Gemini."""
+        """Call Google Gemini using the new google.genai SDK."""
         if not self.gemini_client:
             raise RuntimeError("Gemini client not initialized")
 
@@ -318,10 +317,12 @@ class UnifiedLLMClient:
         prompt = self._messages_to_prompt(messages)
 
         start_time = time.time()
-        response = await asyncio.to_thread(
-            self.gemini_client.generate_content,
-            prompt,
-            generation_config={
+
+        # Use the new async API via client.aio.models
+        response = await self.gemini_client.aio.models.generate_content(
+            model=self.gemini_model,
+            contents=prompt,
+            config={
                 "temperature": temperature,
                 "max_output_tokens": max_tokens
             }
@@ -330,11 +331,17 @@ class UnifiedLLMClient:
 
         content = response.text
 
-        # Estimate tokens (Gemini doesn't always return usage)
-        input_tokens = len(prompt.split()) * 1.3  # rough estimate
-        output_tokens = len(content.split()) * 1.3
+        # Get usage metadata if available, otherwise estimate
+        usage_metadata = getattr(response, 'usage_metadata', None)
+        if usage_metadata:
+            input_tokens = getattr(usage_metadata, 'prompt_token_count', 0)
+            output_tokens = getattr(usage_metadata, 'candidates_token_count', 0)
+        else:
+            # Estimate tokens (fallback)
+            input_tokens = int(len(prompt.split()) * 1.3)
+            output_tokens = int(len(content.split()) * 1.3)
 
-        model_name = self.config.get('gemini_model', 'gemini-1.5-flash')
+        model_name = self.gemini_model
         pricing = TOKEN_PRICING.get(model_name, {"input": 0.10, "output": 0.30})
         cost = (input_tokens * pricing['input'] + output_tokens * pricing['output']) / 1_000_000
 

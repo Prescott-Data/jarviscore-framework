@@ -31,9 +31,13 @@ pip install jarviscore-framework
 
 ### Step 2: Configuration (2 minutes)
 
-JarvisCore needs an LLM provider to generate code for AutoAgent. Copy the example config:
+JarvisCore needs an LLM provider to generate code for AutoAgent. Initialize your project:
 
 ```bash
+# Initialize project (creates .env.example and examples)
+python -m jarviscore.cli.scaffold --examples
+
+# Copy and configure your environment
 cp .env.example .env
 ```
 
