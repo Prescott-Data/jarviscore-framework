@@ -36,10 +36,13 @@ pip install jarviscore-framework
 
 ## Step 2: Configure Your LLM (2 minutes)
 
-Create a `.env` file in your project directory:
+Initialize your project and create configuration files:
 
 ```bash
-# Copy the example config
+# Initialize project (creates .env.example and optionally examples)
+python -m jarviscore.cli.scaffold --examples
+
+# Copy and configure your environment
 cp .env.example .env
 ```
 
@@ -368,7 +371,7 @@ Fine-tune LLM behavior:
 # Model selection (provider-specific)
 CLAUDE_MODEL=claude-sonnet-4        # Claude
 AZURE_DEPLOYMENT=gpt-4o             # Azure
-GEMINI_MODEL=gemini-1.5-flash       # Gemini
+GEMINI_MODEL=gemini-2.0-flash       # Gemini
 LLM_MODEL=Qwen/Qwen2.5-Coder-32B   # vLLM
 
 # Generation parameters

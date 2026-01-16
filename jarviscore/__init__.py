@@ -47,7 +47,7 @@ Quick Start (Custom Profile with decorator):
     ])
 """
 
-__version__ = "0.2.0"
+__version__ = "0.1.1"
 __author__ = "JarvisCore Contributors"
 __license__ = "MIT"
 

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "0.1.0"
-description = "P2P distributed agent framework with LLM code generation and event-sourced state management"
+version = "0.1.1"
+description = "Build autonomous AI agents in 3 lines of code. Production-ready orchestration with P2P mesh networking."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -46,7 +46,7 @@ dependencies = [
     # LLM Providers (at least one required for AutoAgent)
     "anthropic>=0.18.0",
     "openai>=1.0.0",
-    "google-generativeai>=0.3.0",
+    "google-genai>=1.0.0",
 
     # Utilities
     "httpx>=0.25.0",
@@ -75,7 +75,7 @@ Issues = "https://github.com/yourusername/jarviscore/issues"
 packages = {find = {}}
 
 [tool.setuptools.package-data]
-jarviscore = ["docs/*.md"]
+jarviscore = ["docs/*.md", "data/.env.example", "data/examples/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

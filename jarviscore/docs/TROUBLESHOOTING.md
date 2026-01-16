@@ -58,8 +58,9 @@ pip install jarviscore-framework
 **Cause:** Missing API key in `.env`
 
 **Solution:**
-1. Copy example config:
+1. Initialize project and copy example config:
    ```bash
+   python -m jarviscore.cli.scaffold
    cp .env.example .env
    ```
 
@@ -204,7 +205,10 @@ await mesh.workflow("wf-1", [
 
 **Solution:**
 ```bash
-# Create from example
+# Initialize project first (creates .env.example)
+python -m jarviscore.cli.scaffold
+
+# Then copy and configure
 cp .env.example .env
 
 # Or create manually

@@ -222,14 +222,17 @@ class HealthChecker:
             return False
 
     async def _test_gemini(self) -> bool:
-        """Test Gemini connectivity."""
+        """Test Gemini connectivity using the new google.genai SDK."""
         try:
-            import google.generativeai as genai
+            from google import genai
 
-            genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-            model = genai.GenerativeModel(os.getenv('GEMINI_MODEL', 'gemini-1.5-flash'))
+            client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+            model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
 
-            response = await model.generate_content_async("Reply with just 'OK'")
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents="Reply with just 'OK'"
+            )
             return 'OK' in response.text.upper()
 
         except Exception:
@@ -291,13 +294,15 @@ class HealthChecker:
             print("\n" + "="*70)
             print("  Next Steps")
             print("="*70)
-            print("\n1. Copy .env.example to .env:")
+            print("\n1. Initialize project (creates .env.example and examples):")
+            print("   python -m jarviscore.cli.scaffold --examples")
+            print("\n2. Configure your environment:")
             print("   cp .env.example .env")
-            print("\n2. Add your LLM API key to .env (choose one):")
-            print("   - CLAUDE_API_KEY=sk-ant-...")
-            print("   - AZURE_API_KEY=...")
-            print("   - GEMINI_API_KEY=...")
-            print("   - LLM_ENDPOINT=http://localhost:8000 (for local vLLM)")
+            print("   # Edit .env and add one of:")
+            print("   #   CLAUDE_API_KEY=sk-ant-...")
+            print("   #   AZURE_API_KEY=...")
+            print("   #   GEMINI_API_KEY=...")
+            print("   #   LLM_ENDPOINT=http://localhost:8000 (for local vLLM)")
             print("\n3. Run health check again:")
             print("   python -m jarviscore.cli.check --validate-llm")
             print("\n4. Try the smoke test:")
@@ -309,8 +314,8 @@ class HealthChecker:
         print("\n✓ All checks passed! Ready to use JarvisCore.\n")
         print("Next steps:")
         print("  1. Run smoke test: python -m jarviscore.cli.smoketest")
-        print("  2. Try examples: python examples/calculator_agent_example.py")
-        print("  3. Read guide: docs/GETTING_STARTED.md")
+        print("  2. Get examples:   python -m jarviscore.cli.scaffold --examples")
+        print("  3. Try example:    python examples/calculator_agent_example.py")
         print()
 
         return True

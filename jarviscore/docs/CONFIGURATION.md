@@ -52,9 +52,13 @@ That's it! The framework handles the rest.
 
 ### Configuration File
 
-Create `.env` file:
+Initialize your project and create `.env` file:
 
 ```bash
+# Initialize project (creates .env.example)
+python -m jarviscore.cli.scaffold
+
+# Copy and configure
 cp .env.example .env
 # Edit .env with your values
 ```
@@ -716,7 +720,7 @@ LOG_DIRECTORY=/tmp/jarviscore-logs
 | `AZURE_DEPLOYMENT` | None | Azure deployment name |
 | `AZURE_API_VERSION` | 2024-02-15-preview | Azure API version |
 | `GEMINI_API_KEY` | None | Google Gemini key |
-| `GEMINI_MODEL` | gemini-1.5-flash | Gemini model |
+| `GEMINI_MODEL` | gemini-2.0-flash | Gemini model |
 | `LLM_TIMEOUT` | 120.0 | LLM timeout (seconds) |
 | `LLM_TEMPERATURE` | 0.7 | Sampling temperature |
 | `SANDBOX_MODE` | local | Execution mode |
