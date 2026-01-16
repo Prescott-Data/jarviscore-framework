@@ -12,7 +12,7 @@
 ## Installation
 
 ```bash
-pip install jarviscore
+pip install jarviscore-framework
 ```
 
 ## Setup & Validation
