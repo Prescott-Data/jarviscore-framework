@@ -5,6 +5,7 @@
 ## Features
 
 - ✅ **Simple Agent Definition** - Write just 3 attributes, framework handles everything
+- ✅ **Custom Profile** - Use your existing agents (LangChain, CrewAI, etc.) with zero migration
 - ✅ **P2P Mesh Architecture** - Automatic agent discovery and task routing via SWIM protocol
 - ✅ **Event-Sourced State** - Complete audit trail with crash recovery
 - ✅ **Autonomous Execution** - LLM code generation with automatic repair
@@ -45,36 +46,96 @@ python -m jarviscore.cli.smoketest
 
 ## Quick Start
 
+### Option 1: AutoAgent (LLM-Powered)
+
+For rapid prototyping with automatic code generation:
+
 ```python
 from jarviscore import Mesh
-from jarviscore.profiles import PromptDevAgent
+from jarviscore.profiles import AutoAgent
 
-# Define agent (3 lines)
-class ScraperAgent(PromptDevAgent):
-    role = "scraper"
-    capabilities = ["web_scraping"]
-    system_prompt = "You are an expert web scraper..."
+class CalculatorAgent(AutoAgent):
+    role = "calculator"
+    capabilities = ["math"]
+    system_prompt = "You are a math expert..."
 
-# Create mesh and run workflow
 mesh = Mesh(mode="autonomous")
-mesh.add(ScraperAgent)
+mesh.add(CalculatorAgent)
 await mesh.start()
 
-results = await mesh.workflow(
-    workflow_id="wf-123",
-    steps=[
-        {"id": "scrape", "task": "Scrape example.com", "role": "scraper"}
-    ]
+results = await mesh.workflow("calc-1", [
+    {"agent": "calculator", "task": "Calculate factorial of 10"}
+])
+```
+
+### Option 2: Custom Profile with Decorator
+
+For existing classes - just add a decorator:
+
+```python
+from jarviscore import Mesh, jarvis_agent, JarvisContext
+
+@jarvis_agent(role="processor", capabilities=["data_processing"])
+class DataProcessor:
+    def run(self, data):
+        return {"processed": [x * 2 for x in data]}
+
+@jarvis_agent(role="aggregator", capabilities=["aggregation"])
+class Aggregator:
+    def run(self, task, ctx: JarvisContext):
+        # Access previous step results
+        previous = ctx.previous("step1")
+        return {"sum": sum(previous.get("processed", []))}
+
+mesh = Mesh(mode="autonomous")
+mesh.add(DataProcessor)
+mesh.add(Aggregator)
+await mesh.start()
+
+results = await mesh.workflow("pipeline", [
+    {"id": "step1", "agent": "processor", "task": "Process", "params": {"data": [1,2,3]}},
+    {"id": "step2", "agent": "aggregator", "task": "Aggregate", "depends_on": ["step1"]}
+])
+```
+
+### Option 3: Custom Profile with wrap()
+
+For pre-instantiated objects (LangChain, CrewAI, etc.):
+
+```python
+from jarviscore import Mesh, wrap
+
+# Your existing agent (LangChain, CrewAI, etc.)
+my_llm_agent = MyLangChainAgent(model="gpt-4")
+
+# Wrap it for JarvisCore
+wrapped = wrap(
+    my_llm_agent,
+    role="assistant",
+    capabilities=["chat", "qa"],
+    execute_method="invoke"  # LangChain uses "invoke"
 )
+
+mesh = Mesh(mode="autonomous")
+mesh.add(wrapped)
+await mesh.start()
 ```
 
 ## Architecture
 
 JarvisCore is built on three layers:
 
-1. **Execution Layer (20%)** - Profile-specific execution (Prompt-Dev, MCP)
+1. **Execution Layer (20%)** - Profile-specific execution (AutoAgent, Custom Profile)
 2. **Orchestration Layer (60%)** - Workflow engine, dependencies, state management
 3. **P2P Layer (20%)** - Agent discovery, task routing, mesh coordination
+
+## Agent Profiles
+
+| Profile | Use Case | LLM Required |
+|---------|----------|--------------|
+| **AutoAgent** | Rapid prototyping, LLM code generation | Yes |
+| **Custom Profile** | Existing agents, full control | No |
+| **CustomAgent** | Manual implementation | No |
 
 ## Documentation
 
@@ -86,7 +147,7 @@ JarvisCore is built on three layers:
 
 ## Development Status
 
-**Version:** 0.1.1 (Alpha)
+**Version:** 0.2.0 (Alpha)
 
 ## License
 
