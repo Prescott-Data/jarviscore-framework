@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "0.1.1"
+version = "0.2.0"
 description = "Build autonomous AI agents in 3 lines of code. Production-ready orchestration with P2P mesh networking."
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "Ruth Mutua", email = "mutuandinda82@gmail.com"},
     {name = "Muyukani Kizito", email = "muyukani@prescottdata.io"}
@@ -20,7 +20,6 @@ keywords = ["agents", "p2p", "llm", "distributed", "workflow", "orchestration"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",

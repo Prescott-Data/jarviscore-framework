@@ -9,15 +9,16 @@ Practical guide to building agent systems with JarvisCore.
 1. [Quick Start](#quick-start)
 2. [Basic Concepts](#basic-concepts)
 3. [AutoAgent Tutorial](#autoagent-tutorial)
-4. [CustomAgent Tutorial](#customagent-tutorial)
-5. [Multi-Agent Workflows](#multi-agent-workflows)
-6. [Internet Search](#internet-search)
-7. [Remote Sandbox](#remote-sandbox)
-8. [Result Storage](#result-storage)
-9. [Code Registry](#code-registry)
-10. [Best Practices](#best-practices)
-11. [Common Patterns](#common-patterns)
-12. [Troubleshooting](#troubleshooting)
+4. [Custom Profile Tutorial](#custom-profile-tutorial)
+5. [CustomAgent Tutorial](#customagent-tutorial)
+6. [Multi-Agent Workflows](#multi-agent-workflows)
+7. [Internet Search](#internet-search)
+8. [Remote Sandbox](#remote-sandbox)
+9. [Result Storage](#result-storage)
+10. [Code Registry](#code-registry)
+11. [Best Practices](#best-practices)
+12. [Common Patterns](#common-patterns)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -136,10 +137,11 @@ mesh = Mesh(mode="distributed")
 
 ### Agents
 
-**Agents** are workers that execute tasks. JarvisCore has two agent types:
+**Agents** are workers that execute tasks. JarvisCore has three approaches:
 
 1. **AutoAgent**: Zero-config, LLM-powered (for rapid prototyping)
-2. **CustomAgent**: Full control (for production systems)
+2. **Custom Profile**: Use existing agents with decorator or wrap (for integration)
+3. **CustomAgent**: Full manual control (for production systems)
 
 ### Workflows
 
@@ -256,6 +258,249 @@ async def text_processor_demo():
 
 asyncio.run(text_processor_demo())
 ```
+
+---
+
+## Custom Profile Tutorial
+
+The **Custom Profile** lets you use existing agents without rewriting them. Perfect for:
+- LangChain, CrewAI, Haystack agents
+- Pre-configured API clients
+- Any Python class with an execute method
+
+### When to Use Custom Profile
+
+| Scenario | Use Custom Profile? |
+|----------|---------------------|
+| Have existing LangChain/CrewAI agents | Yes |
+| Want workflow orchestration without LLM | Yes |
+| Need dependency management between agents | Yes |
+| Want rapid prototyping with code generation | No (use AutoAgent) |
+| Need full manual control | No (use CustomAgent) |
+
+### Example 1: Using @jarvis_agent Decorator
+
+The simplest approach - just add a decorator:
+
+```python
+import asyncio
+from jarviscore import Mesh, jarvis_agent, JarvisContext
+
+
+@jarvis_agent(role="processor", capabilities=["data_processing"])
+class DataProcessor:
+    """Your existing class - unchanged inside."""
+
+    def run(self, data):
+        """Process data - this is your existing logic."""
+        if isinstance(data, list):
+            return {"processed": [x * 2 for x in data]}
+        return {"processed": data * 2}
+
+
+@jarvis_agent(role="aggregator", capabilities=["aggregation"])
+class Aggregator:
+    """Agent that accesses previous step results."""
+
+    def run(self, task, ctx: JarvisContext):
+        # ctx.previous() gets output from a specific step
+        processed = ctx.previous("step1")
+
+        if processed:
+            data = processed.get("processed", [])
+            return {
+                "sum": sum(data) if isinstance(data, list) else data,
+                "count": len(data) if isinstance(data, list) else 1,
+                "source_step": "step1"
+            }
+        return {"error": "No previous data found"}
+
+
+async def decorator_demo():
+    mesh = Mesh(mode="autonomous")
+    mesh.add(DataProcessor)
+    mesh.add(Aggregator)
+
+    await mesh.start()
+
+    results = await mesh.workflow("decorator-demo", [
+        {
+            "id": "step1",
+            "agent": "processor",
+            "task": "Process input data",
+            "params": {"data": [1, 2, 3, 4, 5]}
+        },
+        {
+            "id": "step2",
+            "agent": "aggregator",
+            "task": "Aggregate results",
+            "depends_on": ["step1"]
+        }
+    ])
+
+    print(f"Step 1: {results[0]['output']}")  # {'processed': [2, 4, 6, 8, 10]}
+    print(f"Step 2: {results[1]['output']}")  # {'sum': 30, 'count': 5}
+
+    await mesh.stop()
+
+asyncio.run(decorator_demo())
+```
+
+### Example 2: Using wrap() for Existing Instances
+
+When you have pre-instantiated agents (like LangChain):
+
+```python
+import asyncio
+from jarviscore import Mesh, wrap, JarvisContext
+
+
+# Simulated LangChain-style agent
+class LangChainAgent:
+    def __init__(self, model_name: str, temperature: float = 0.7):
+        self.model_name = model_name
+        self.temperature = temperature
+
+    def invoke(self, query: str) -> dict:
+        # Your existing LangChain logic
+        return {
+            "answer": f"Response to '{query}' from {self.model_name}",
+            "model": self.model_name
+        }
+
+
+# Simulated data service
+class DataService:
+    def __init__(self, api_url: str):
+        self.api_url = api_url
+
+    def run(self, data):
+        # Your existing logic
+        if isinstance(data, list):
+            return {"transformed": [x ** 2 for x in data]}
+        return {"transformed": data ** 2}
+
+
+# Context-aware processor
+class ContextProcessor:
+    def run(self, task, ctx: JarvisContext):
+        # Access all previous results
+        all_previous = ctx.all_previous()
+        return {
+            "task": task,
+            "previous_steps": list(all_previous.keys()),
+            "combined": all_previous
+        }
+
+
+async def wrap_demo():
+    # Create instances
+    llm_agent = LangChainAgent(model_name="gpt-4-turbo", temperature=0.3)
+    data_service = DataService(api_url="https://api.example.com")
+    context_processor = ContextProcessor()
+
+    # Wrap for JarvisCore
+    wrapped_llm = wrap(
+        llm_agent,
+        role="llm_assistant",
+        capabilities=["chat", "qa"],
+        execute_method="invoke"  # LangChain uses "invoke"
+    )
+
+    wrapped_data = wrap(
+        data_service,
+        role="data_processor",
+        capabilities=["data_processing"]
+        # execute_method auto-detected as "run"
+    )
+
+    wrapped_context = wrap(
+        context_processor,
+        role="context_aggregator",
+        capabilities=["aggregation"]
+    )
+
+    mesh = Mesh(mode="autonomous")
+    mesh.add(wrapped_llm)
+    mesh.add(wrapped_data)
+    mesh.add(wrapped_context)
+
+    await mesh.start()
+
+    results = await mesh.workflow("wrap-demo", [
+        {
+            "id": "llm_step",
+            "agent": "llm_assistant",
+            "task": "What is the capital of France?",
+            "params": {"query": "What is the capital of France?"}
+        },
+        {
+            "id": "data_step",
+            "agent": "data_processor",
+            "task": "Transform numbers",
+            "params": {"data": [1, 2, 3, 4, 5]}
+        },
+        {
+            "id": "summary_step",
+            "agent": "context_aggregator",
+            "task": "Summarize all results",
+            "depends_on": ["llm_step", "data_step"]
+        }
+    ])
+
+    for result in results:
+        print(f"Status: {result['status']}, Output: {result['output']}")
+
+    await mesh.stop()
+
+asyncio.run(wrap_demo())
+```
+
+### Example 3: Custom Execute Method
+
+Specify any method name as the execute method:
+
+```python
+@jarvis_agent(role="validator", capabilities=["validation"], execute_method="validate")
+class DataValidator:
+    """Uses 'validate' instead of 'run'."""
+
+    def validate(self, data):
+        if isinstance(data, list):
+            return {
+                "valid": all(isinstance(x, (int, float)) for x in data),
+                "count": len(data),
+                "type": "list"
+            }
+        return {
+            "valid": isinstance(data, (int, float)),
+            "type": type(data).__name__
+        }
+```
+
+### JarvisContext API
+
+The `JarvisContext` object provides access to workflow state:
+
+```python
+def run(self, task, ctx: JarvisContext):
+    # Get output from a specific previous step
+    step1_output = ctx.previous("step1")
+
+    # Get all previous step outputs
+    all_outputs = ctx.all_previous()  # {"step1": {...}, "step2": {...}}
+
+    # Access shared memory
+    ctx.memory["my_key"] = "my_value"
+    value = ctx.memory.get("my_key")
+
+    return {"result": "..."}
+```
+
+**JarvisContext Methods:**
+- `previous(step_id)` - Get output from a specific step
+- `all_previous()` - Get dict of all previous step outputs
+- `memory` - Shared memory dictionary for the workflow
 
 ---
 
@@ -982,6 +1227,6 @@ mesh = Mesh(config=config)
 
 ## Version
 
-User Guide for JarvisCore v0.1.0
+User Guide for JarvisCore v0.2.0
 
-Last Updated: 2026-01-12
+Last Updated: 2026-01-17

@@ -107,7 +107,7 @@ class Mesh:
 
     def add(
         self,
-        agent_class: Type[Agent],
+        agent_class_or_instance,
         agent_id: Optional[str] = None,
         **kwargs
     ) -> Agent:
@@ -115,30 +115,39 @@ class Mesh:
         Register an agent with the mesh.
 
         Args:
-            agent_class: Agent class to instantiate (must inherit from Agent)
-            agent_id: Optional unique identifier for the agent
-            **kwargs: Additional arguments passed to agent constructor
+            agent_class_or_instance: Agent class to instantiate, or pre-instantiated
+                agent (from wrap() function). Must inherit from Agent.
+            agent_id: Optional unique identifier for the agent (ignored if instance)
+            **kwargs: Additional arguments passed to agent constructor (ignored if instance)
 
         Returns:
-            Instantiated agent instance
+            Agent instance
 
         Raises:
             ValueError: If agent with same role already registered
-            TypeError: If agent_class doesn't inherit from Agent
+            TypeError: If agent doesn't inherit from Agent
 
         Example:
             mesh = Mesh()
-            scraper = mesh.add(ScraperAgent, agent_id="scraper-1")
-            processor = mesh.add(ProcessorAgent)
-        """
-        # Validate agent class
-        if not issubclass(agent_class, Agent):
-            raise TypeError(
-                f"{agent_class.__name__} must inherit from Agent base class"
-            )
 
-        # Instantiate agent
-        agent = agent_class(agent_id=agent_id, **kwargs)
+            # Add a class (will be instantiated)
+            scraper = mesh.add(ScraperAgent, agent_id="scraper-1")
+
+            # Add a pre-instantiated agent (from wrap())
+            wrapped = wrap(my_instance, role="processor", capabilities=["processing"])
+            mesh.add(wrapped)
+        """
+        # Check if it's already an instance (from wrap() function)
+        if isinstance(agent_class_or_instance, Agent):
+            agent = agent_class_or_instance
+        else:
+            # It's a class - validate and instantiate
+            agent_class = agent_class_or_instance
+            if not issubclass(agent_class, Agent):
+                raise TypeError(
+                    f"{agent_class.__name__} must inherit from Agent base class"
+                )
+            agent = agent_class(agent_id=agent_id, **kwargs)
 
         # Check for duplicate agent_ids
         if agent.agent_id in self._agent_ids:
@@ -149,7 +158,9 @@ class Mesh:
 
         # If agent_id was NOT explicitly provided (auto-generated),
         # prevent duplicate roles to avoid accidents
-        if agent_id is None and agent.role in self._agent_registry:
+        # For instances (from wrap()), check if it's a new role
+        is_instance = isinstance(agent_class_or_instance, Agent)
+        if not is_instance and agent_id is None and agent.role in self._agent_registry:
             raise ValueError(
                 f"Agent with role '{agent.role}' already registered. "
                 f"Use agent_id parameter to create multiple agents with same role."

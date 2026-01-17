@@ -4,14 +4,34 @@ Build your first AI agent in 5 minutes!
 
 ---
 
+## Choose Your Path
+
+JarvisCore offers two development approaches:
+
+| Approach | Best For | LLM Required |
+|----------|----------|--------------|
+| **AutoAgent** | Rapid prototyping, LLM code generation | Yes |
+| **Custom Profile** | Existing agents (LangChain, CrewAI), full control | No |
+
+---
+
 ## What You'll Build
 
+### Path A: AutoAgent
 An **AutoAgent** that takes natural language prompts and automatically:
 1. Generates Python code using an LLM
 2. Executes the code securely
 3. Returns the result
 
 **No manual coding required** - just describe what you want!
+
+### Path B: Custom Profile
+Use your **existing agents** with JarvisCore orchestration:
+1. Keep your current agent code unchanged
+2. Add a decorator or wrap your instance
+3. Get workflow orchestration, dependency management, and shared memory
+
+**Zero migration required** - just wrap and go!
 
 ---
 
@@ -175,6 +195,132 @@ Execution time: 4.23s
 ```
 
 **🎉 Congratulations!** You just built an AI agent with zero manual coding!
+
+---
+
+## Step 5: Try Custom Profile (Alternative Path)
+
+If you have existing agents or don't need LLM code generation, use the **Custom Profile**:
+
+### Option A: Using the Decorator
+
+```python
+import asyncio
+from jarviscore import Mesh, jarvis_agent, JarvisContext
+
+
+# Just add a decorator to your existing class
+@jarvis_agent(role="processor", capabilities=["data_processing"])
+class DataProcessor:
+    """Your existing class - no changes needed inside."""
+
+    def run(self, data):
+        """Process data by doubling values."""
+        if isinstance(data, list):
+            return {"processed": [x * 2 for x in data]}
+        return {"processed": data * 2}
+
+
+# Agent with context access (for multi-step workflows)
+@jarvis_agent(role="aggregator", capabilities=["aggregation"])
+class Aggregator:
+    def run(self, task, ctx: JarvisContext):
+        # Access results from previous steps
+        processed = ctx.previous("step1")
+        if processed:
+            data = processed.get("processed", [])
+            return {"sum": sum(data), "count": len(data)}
+        return {"error": "No previous data"}
+
+
+async def main():
+    mesh = Mesh(mode="autonomous")
+    mesh.add(DataProcessor)
+    mesh.add(Aggregator)
+
+    await mesh.start()
+
+    results = await mesh.workflow("custom-demo", [
+        {
+            "id": "step1",
+            "agent": "processor",
+            "task": "Process input data",
+            "params": {"data": [1, 2, 3, 4, 5]}
+        },
+        {
+            "id": "step2",
+            "agent": "aggregator",
+            "task": "Aggregate results",
+            "depends_on": ["step1"]
+        }
+    ])
+
+    print(f"Processed: {results[0]['output']}")  # {'processed': [2, 4, 6, 8, 10]}
+    print(f"Aggregated: {results[1]['output']}")  # {'sum': 30, 'count': 5}
+
+    await mesh.stop()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Option B: Using wrap() for Existing Instances
+
+```python
+import asyncio
+from jarviscore import Mesh, wrap
+
+
+# Your existing agent (could be LangChain, CrewAI, etc.)
+class MyLLMAgent:
+    def __init__(self, model_name: str):
+        self.model_name = model_name
+
+    def invoke(self, query: str) -> dict:
+        # Your existing logic
+        return {"answer": f"Response to '{query}'", "model": self.model_name}
+
+
+async def main():
+    # Create your agent as usual
+    my_agent = MyLLMAgent(model_name="gpt-4")
+
+    # Wrap it for JarvisCore
+    wrapped = wrap(
+        my_agent,
+        role="assistant",
+        capabilities=["chat", "qa"],
+        execute_method="invoke"  # Specify your method name
+    )
+
+    mesh = Mesh(mode="autonomous")
+    mesh.add(wrapped)
+
+    await mesh.start()
+
+    results = await mesh.workflow("wrap-demo", [
+        {
+            "agent": "assistant",
+            "task": "What is Python?",
+            "params": {"query": "What is Python?"}
+        }
+    ])
+
+    print(f"Result: {results[0]['output']}")
+
+    await mesh.stop()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**Key Benefits of Custom Profile:**
+- No LLM API required (no costs!)
+- Keep your existing agent code unchanged
+- Full access to workflow context via `JarvisContext`
+- Works with any framework (LangChain, CrewAI, Haystack, etc.)
 
 ---
 

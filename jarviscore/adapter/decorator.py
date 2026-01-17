@@ -188,27 +188,31 @@ def jarvis_agent(
             # Get the execute method from instance
             method = getattr(self._instance, method_name)
 
-            # Build context if method expects it
+            # Get context if method expects it
             ctx = None
             if expects_context:
-                # Get memory from mesh/workflow engine
-                memory_dict = {}
-                dep_manager = None
+                # Use pre-injected context from WorkflowEngine if available
+                ctx = task.get('_jarvis_context')
 
-                if self._mesh:
-                    engine = getattr(self._mesh, '_workflow_engine', None)
-                    if engine:
-                        memory_dict = engine.memory
-                        dep_manager = getattr(engine, 'dependency_manager', None)
+                # Fallback: build context manually (for standalone usage)
+                if ctx is None:
+                    memory_dict = {}
+                    dep_manager = None
 
-                ctx = create_context(
-                    workflow_id=task.get('context', {}).get('workflow_id', 'unknown'),
-                    step_id=task.get('context', {}).get('step_id', task.get('id', 'unknown')),
-                    task=task.get('task', ''),
-                    params=task.get('params', {}),
-                    memory_dict=memory_dict,
-                    dependency_manager=dep_manager
-                )
+                    if self._mesh:
+                        engine = getattr(self._mesh, '_workflow_engine', None)
+                        if engine:
+                            memory_dict = engine.memory
+                            dep_manager = getattr(engine, 'dependency_manager', None)
+
+                    ctx = create_context(
+                        workflow_id=task.get('context', {}).get('workflow_id', 'unknown'),
+                        step_id=task.get('context', {}).get('step_id', task.get('id', 'unknown')),
+                        task=task.get('task', ''),
+                        params=task.get('params', {}),
+                        memory_dict=memory_dict,
+                        dependency_manager=dep_manager
+                    )
 
             # Prepare arguments based on method signature
             args = self._prepare_args(task, ctx, params)

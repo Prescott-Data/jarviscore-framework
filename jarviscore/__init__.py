@@ -8,6 +8,7 @@ A production-grade framework for building autonomous agent systems with:
   * AutoAgent: LLM code generation (3 lines of user code)
   * CustomAgent: Framework-agnostic (LangChain, MCP, raw Python)
   * @jarvis_agent: Decorator to wrap existing agents (1 line)
+  * wrap(): Function to wrap existing instances
 
 Quick Start (AutoAgent):
     from jarviscore import Mesh, AutoAgent
@@ -29,25 +30,23 @@ Quick Start (Custom Profile with decorator):
         def run(self, data):
             return {"processed": data * 2}
 
-    # With context access
-    @jarvis_agent(role="aggregator", capabilities=["aggregation"])
-    class Aggregator:
-        def run(self, task, ctx: JarvisContext):
-            prev = ctx.previous("step1")
-            return {"result": prev}
-
     mesh = Mesh(mode="autonomous")
     mesh.add(DataProcessor)
-    mesh.add(Aggregator)
     await mesh.start()
 
-    results = await mesh.workflow("pipeline", [
-        {"agent": "processor", "task": "Process", "params": {"data": [1,2,3]}},
-        {"agent": "aggregator", "task": "Aggregate", "depends_on": [0]}
-    ])
+Quick Start (Custom Profile with wrap):
+    from jarviscore import Mesh, wrap
+
+    # Wrap an existing instance (e.g., LangChain agent)
+    my_agent = MyExistingAgent()
+    wrapped = wrap(my_agent, role="assistant", capabilities=["chat"])
+
+    mesh = Mesh(mode="autonomous")
+    mesh.add(wrapped)
+    await mesh.start()
 """
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 __author__ = "JarvisCore Contributors"
 __license__ = "MIT"
 
@@ -60,8 +59,8 @@ from jarviscore.core.mesh import Mesh, MeshMode
 from jarviscore.profiles.autoagent import AutoAgent
 from jarviscore.profiles.customagent import CustomAgent
 
-# Custom Profile: Decorator and Context
-from jarviscore.adapter import jarvis_agent
+# Custom Profile: Decorator, Wrapper, and Context
+from jarviscore.adapter import jarvis_agent, wrap
 from jarviscore.context import JarvisContext, MemoryAccessor, DependencyAccessor
 
 __all__ = [
@@ -78,8 +77,9 @@ __all__ = [
     "AutoAgent",
     "CustomAgent",
 
-    # Custom Profile (decorator approach)
+    # Custom Profile (decorator and wrapper)
     "jarvis_agent",
+    "wrap",
     "JarvisContext",
     "MemoryAccessor",
     "DependencyAccessor",

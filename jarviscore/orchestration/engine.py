@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional
 from .claimer import StepClaimer
 from .dependency import DependencyManager
 from .status import StatusManager
+from jarviscore.context import create_context
 
 logger = logging.getLogger(__name__)
 
@@ -169,9 +170,9 @@ class WorkflowEngine:
                 task = step.copy()
 
                 # Inject dependency outputs as context
+                dep_outputs = {}
                 if depends_on := step.get('depends_on'):
                     dep_ids = self._resolve_dependency_ids(depends_on, normalized_steps)
-                    dep_outputs = {}
                     for dep_id in dep_ids:
                         if dep_id in self.memory:
                             dep_result = self.memory[dep_id]
@@ -179,13 +180,24 @@ class WorkflowEngine:
                             output = dep_result.get('output') if isinstance(dep_result, dict) else dep_result
                             dep_outputs[dep_id] = output
 
-                    # Add dependency outputs to task context
-                    task['context'] = {
-                        'previous_step_results': dep_outputs,
-                        'workflow_id': workflow_id,
-                        'step_id': step_id
-                    }
-                    logger.debug(f"Injected context with {len(dep_outputs)} dependencies")
+                # Add dependency outputs to task context
+                task['context'] = {
+                    'previous_step_results': dep_outputs,
+                    'workflow_id': workflow_id,
+                    'step_id': step_id
+                }
+
+                # Build and inject JarvisContext for Custom Profile agents
+                jarvis_ctx = create_context(
+                    workflow_id=workflow_id,
+                    step_id=step_id,
+                    task=task.get('task', ''),
+                    params=task.get('params', {}),
+                    memory_dict=self.memory,
+                    dependency_manager=self.dependency_manager
+                )
+                task['_jarvis_context'] = jarvis_ctx
+                logger.debug(f"Injected JarvisContext for step {step_id}")
 
                 # 6. Execute step with context
                 logger.info(f"Executing step {step_id} with agent {agent.agent_id}")

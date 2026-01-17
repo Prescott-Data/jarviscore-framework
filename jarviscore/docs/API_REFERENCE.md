@@ -12,6 +12,7 @@ Complete API documentation for JarvisCore framework components.
    - [Profile](#profile)
 2. [Agent Profiles](#agent-profiles)
    - [AutoAgent](#autoagent)
+   - [Custom Profile](#custom-profile)
    - [CustomAgent](#customagent)
 3. [Execution Components](#execution-components)
    - [CodeGenerator](#codegenerator)
@@ -285,6 +286,180 @@ results = await mesh.run_workflow([
 - `result_handler`: ResultHandler instance
 - `code_registry`: CodeRegistry instance
 - `search`: InternetSearch instance (if enabled)
+
+---
+
+### Custom Profile
+
+The Custom Profile enables integration of existing agents without modification.
+
+#### Decorator: `@jarvis_agent`
+
+Convert any Python class into a JarvisCore agent:
+
+```python
+from jarviscore import jarvis_agent, JarvisContext
+
+@jarvis_agent(role="processor", capabilities=["data_processing"])
+class DataProcessor:
+    def run(self, data):
+        return {"processed": [x * 2 for x in data]}
+```
+
+**Parameters:**
+- `role` (str): Agent role identifier
+- `capabilities` (list): List of capability strings
+- `execute_method` (str, optional): Method name to call (default: auto-detect)
+
+**Auto-detected Methods:** `run`, `execute`, `invoke`, `call`, `process`
+
+**Context-Aware Methods:**
+
+If your method has a parameter named `ctx` or `context`, JarvisContext is automatically injected:
+
+```python
+@jarvis_agent(role="aggregator", capabilities=["aggregation"])
+class Aggregator:
+    def run(self, task, ctx: JarvisContext):
+        previous = ctx.previous("step1")
+        return {"result": previous}
+```
+
+---
+
+#### Function: `wrap()`
+
+Wrap an existing instance as a JarvisCore agent:
+
+```python
+from jarviscore import wrap
+
+wrapped = wrap(
+    instance=my_langchain_agent,
+    role="assistant",
+    capabilities=["chat", "qa"],
+    execute_method="invoke"
+)
+```
+
+**Parameters:**
+- `instance` (Any): Pre-instantiated object to wrap
+- `role` (str): Agent role identifier
+- `capabilities` (list): List of capability strings
+- `execute_method` (str, optional): Method name to call (default: auto-detect)
+
+**Returns:** `CustomAgent` instance ready for `mesh.add()`
+
+**Example:**
+
+```python
+from jarviscore import Mesh, wrap
+
+# Your existing LangChain agent
+my_agent = MyLangChainAgent(model="gpt-4")
+
+# Wrap it
+wrapped = wrap(
+    my_agent,
+    role="assistant",
+    capabilities=["chat"],
+    execute_method="invoke"
+)
+
+mesh = Mesh(mode="autonomous")
+mesh.add(wrapped)  # Add directly to mesh
+await mesh.start()
+```
+
+---
+
+#### Class: `JarvisContext`
+
+Provides workflow context access for Custom Profile agents:
+
+```python
+from jarviscore import JarvisContext
+
+def run(self, task, ctx: JarvisContext):
+    # Access previous step outputs
+    step1_output = ctx.previous("step1")
+
+    # Get all previous outputs
+    all_outputs = ctx.all_previous()
+
+    # Access shared memory
+    ctx.memory["key"] = "value"
+    value = ctx.memory.get("key")
+
+    return {"result": "..."}
+```
+
+**Attributes:**
+- `workflow_id` (str): Current workflow identifier
+- `step_id` (str): Current step identifier
+- `task` (str): Task description
+- `params` (dict): Task parameters
+- `memory` (MemoryAccessor): Shared workflow memory
+
+**Methods:**
+
+#### `previous(step_id: str) -> Optional[Any]`
+
+Get output from a specific previous step.
+
+```python
+step1_output = ctx.previous("step1")
+if step1_output:
+    data = step1_output.get("processed", [])
+```
+
+**Parameters:**
+- `step_id` (str): ID of the step to retrieve
+
+**Returns:** Step output or None if not found
+
+---
+
+#### `all_previous() -> Dict[str, Any]`
+
+Get outputs from all previous steps.
+
+```python
+all_outputs = ctx.all_previous()
+# {"step1": {...}, "step2": {...}}
+
+for step_id, output in all_outputs.items():
+    print(f"{step_id}: {output}")
+```
+
+**Returns:** Dictionary mapping step IDs to their outputs
+
+---
+
+#### Class: `MemoryAccessor`
+
+Dictionary-like interface for shared workflow memory:
+
+```python
+# Set value
+ctx.memory["key"] = "value"
+
+# Get value
+value = ctx.memory.get("key", "default")
+
+# Check existence
+if "key" in ctx.memory:
+    ...
+
+# Get all memory
+all_memory = ctx.memory.all()
+```
+
+**Methods:**
+- `get(key, default=None)` - Get value with optional default
+- `set(key, value)` - Set value
+- `all()` - Get entire memory dictionary
+- `__getitem__`, `__setitem__`, `__contains__` - Dict-like access
 
 ---
 
@@ -927,6 +1102,6 @@ async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
 
 ## Version
 
-API Reference for JarvisCore v0.1.0
+API Reference for JarvisCore v0.2.0
 
-Last Updated: 2026-01-12
+Last Updated: 2026-01-17
