@@ -2,11 +2,17 @@
 Agent base class - defines WHAT an agent does (role, capabilities).
 
 This is the foundation of the JarvisCore framework. All agents inherit from this class.
+
+For p2p mode, agents can implement a run() method for their own execution loop
+and use self.peers for direct peer-to-peer communication.
 """
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from uuid import uuid4
 import logging
+
+if TYPE_CHECKING:
+    from jarviscore.p2p import PeerClient
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +65,10 @@ class Agent(ABC):
         self.agent_id = agent_id or f"{self.role}-{uuid4().hex[:8]}"
         self._mesh = None  # Set by Mesh when agent is added
         self._logger = logging.getLogger(f"jarviscore.agent.{self.agent_id}")
+
+        # P2P mode support
+        self.peers: Optional['PeerClient'] = None  # Injected by Mesh in p2p mode
+        self.shutdown_requested: bool = False  # Set True to stop run() loop
 
         self._logger.debug(f"Agent initialized: {self.agent_id}")
 
@@ -124,6 +134,39 @@ class Agent(ABC):
                 await super().teardown()
         """
         self._logger.info(f"Tearing down agent: {self.agent_id}")
+
+    async def run(self):
+        """
+        Optional execution loop for p2p mode agents.
+
+        Override this for agents that run their own execution loops
+        instead of waiting for tasks from the workflow engine.
+
+        The loop should check self.shutdown_requested to know when to stop.
+
+        Example:
+            async def run(self):
+                while not self.shutdown_requested:
+                    # Do agent work
+                    result = await self.do_work()
+
+                    # Notify peer
+                    await self.peers.notify("analyst", {"done": True, "data": result})
+
+                    # Wait before next cycle
+                    await asyncio.sleep(5)
+        """
+        # Default: do nothing (for task-driven agents)
+        pass
+
+    def request_shutdown(self):
+        """
+        Request the agent to stop its run() loop.
+
+        Called by Mesh during shutdown.
+        """
+        self.shutdown_requested = True
+        self._logger.info(f"Shutdown requested for agent: {self.agent_id}")
 
     def can_handle(self, task: Dict[str, Any]) -> bool:
         """
