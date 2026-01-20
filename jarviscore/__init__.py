@@ -63,12 +63,19 @@ from jarviscore.profiles.customagent import CustomAgent
 from jarviscore.adapter import jarvis_agent, wrap
 from jarviscore.context import JarvisContext, MemoryAccessor, DependencyAccessor
 
+# P2P Direct Communication
+from jarviscore.p2p import PeerClient, PeerTool, PeerInfo, IncomingMessage
+
+# Alias for p2p mode agents
+JarvisAgent = Agent  # Use this for agents with run() loops
+
 __all__ = [
     # Version
     "__version__",
 
     # Core
     "Agent",
+    "JarvisAgent",  # Alias for p2p mode
     "Profile",
     "Mesh",
     "MeshMode",
@@ -83,4 +90,10 @@ __all__ = [
     "JarvisContext",
     "MemoryAccessor",
     "DependencyAccessor",
+
+    # P2P Direct Communication
+    "PeerClient",
+    "PeerTool",
+    "PeerInfo",
+    "IncomingMessage",
 ]
