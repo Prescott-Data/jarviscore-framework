@@ -608,6 +608,247 @@ async def _run_integration_test():
                 pass
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# LLM TOOL-USE DEMO - Shows how Analyst's LLM decides to use tools
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class AnalystMockLLM:
+    """
+    Simulates Analyst's LLM decision-making.
+
+    The Analyst's LLM might decide to:
+    - Use LOCAL tool (analyze) for analysis requests
+    - Use PEER tool (ask_peer → researcher) when it needs data
+    - Respond directly for simple queries
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def chat(self, messages: list, tools: list) -> dict:
+        """Simulate LLM deciding what tool to use."""
+        self.calls.append({"messages": messages, "tools": tools})
+
+        user_msg = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                user_msg = msg.get("content", "").lower()
+                break
+
+        tool_names = [t["name"] for t in tools]
+
+        # Analyst's decision logic
+        if "analyze" in user_msg and "analyze" in tool_names:
+            # Use LOCAL analyze tool
+            return {
+                "type": "tool_use",
+                "tool": "analyze",
+                "args": {"data": user_msg}
+            }
+        elif "research" in user_msg or "data" in user_msg or "find" in user_msg:
+            if "ask_peer" in tool_names:
+                # Need data - ask researcher
+                return {
+                    "type": "tool_use",
+                    "tool": "ask_peer",
+                    "args": {"role": "researcher", "question": user_msg}
+                }
+        elif "report" in user_msg and "generate_report" in tool_names:
+            # Generate report
+            return {
+                "type": "tool_use",
+                "tool": "generate_report",
+                "args": {"analysis": {"response": "Previous analysis", "confidence": 0.85}}
+            }
+
+        # Default: respond directly
+        return {
+            "type": "text",
+            "content": f"[analyst] I understand: {user_msg}"
+        }
+
+    def incorporate_tool_result(self, tool_name: str, result: str) -> str:
+        return f"Based on {tool_name}: {result}"
+
+
+class LLMPoweredAnalyst(ConnectedAnalyst):
+    """Analyst with full LLM simulation for demo."""
+
+    def __init__(self, agent_id=None):
+        super().__init__(agent_id)
+        self.llm = AnalystMockLLM()
+        self.conversation_history = []
+        self.tool_calls_made = []
+
+    async def chat(self, user_message: str) -> str:
+        """Complete LLM chat loop."""
+        self.conversation_history.append({"role": "user", "content": user_message})
+
+        tools = self.get_tools()
+        llm_response = self.llm.chat(self.conversation_history, tools)
+
+        if llm_response["type"] == "tool_use":
+            tool_name = llm_response["tool"]
+            tool_args = llm_response["args"]
+            self.tool_calls_made.append({"tool": tool_name, "args": tool_args})
+
+            tool_result = await self.execute_tool(tool_name, tool_args)
+
+            self.conversation_history.append({"role": "assistant", "content": f"[Tool: {tool_name}]"})
+            self.conversation_history.append({"role": "tool", "content": tool_result})
+
+            final = self.llm.incorporate_tool_result(tool_name, tool_result)
+        else:
+            final = llm_response["content"]
+
+        self.conversation_history.append({"role": "assistant", "content": final})
+        return final
+
+
+async def demo_analyst_llm_flow():
+    """Demo showing how Analyst's LLM decides to use tools."""
+    print("\n" + "="*70)
+    print("ANALYST LLM TOOL-USE FLOW")
+    print("="*70)
+
+    print("""
+    This shows how the ANALYST's LLM decides which tools to use:
+
+    ┌─────────────────────────────────────────────────────────────────┐
+    │  "analyze X"        → LLM uses LOCAL tool (analyze)             │
+    │  "find data on X"   → LLM uses PEER tool (ask_peer→researcher)  │
+    │  "generate report"  → LLM uses LOCAL tool (generate_report)     │
+    │  "hello"            → LLM responds DIRECTLY                     │
+    └─────────────────────────────────────────────────────────────────┘
+    """)
+
+    mesh = Mesh(mode="p2p")
+
+    analyst = LLMPoweredAnalyst()
+    mesh._agent_registry["analyst"] = [analyst]
+
+    # Add researcher for analyst to delegate to
+    class Researcher(Agent):
+        role = "researcher"
+        capabilities = ["research"]
+        async def execute_task(self, task): return {}
+        async def run(self):
+            while not self.shutdown_requested:
+                msg = await self.peers.receive(timeout=0.5)
+                if msg and msg.is_request:
+                    await self.peers.respond(msg, {
+                        "response": f"[researcher] Found 5 papers on: {msg.data.get('query')}"
+                    })
+
+    researcher = Researcher()
+    mesh._agent_registry["researcher"] = [researcher]
+    mesh.agents = [analyst, researcher]
+
+    for agent in mesh.agents:
+        agent.peers = PeerClient(
+            coordinator=None,
+            agent_id=agent.agent_id,
+            agent_role=agent.role,
+            agent_registry=mesh._agent_registry,
+            node_id="local"
+        )
+
+    researcher_task = asyncio.create_task(researcher.run())
+    await asyncio.sleep(0.1)
+
+    # ─────────────────────────────────────────────────────────────────
+    # SCENARIO 1: Analyst uses LOCAL analyze tool
+    # ─────────────────────────────────────────────────────────────────
+    print("\n" + "─"*70)
+    print("SCENARIO 1: Request to ANALYZE (Analyst uses LOCAL tool)")
+    print("─"*70)
+    print(f"\n[USER] → Analyst: \"Please analyze Q4 sales performance\"")
+    print(f"\n[ANALYST LLM FLOW]")
+
+    tools = analyst.get_tools()
+    print(f"    │")
+    print(f"    ├─→ [LLM RECEIVES] Message: \"Please analyze Q4 sales performance\"")
+    print(f"    │   Tools available: {[t['name'] for t in tools]}")
+
+    response = await analyst.chat("Please analyze Q4 sales performance")
+
+    print(f"    │")
+    print(f"    ├─→ [LLM DECIDES] Use LOCAL tool: analyze")
+    print(f"    │   Args: {analyst.tool_calls_made[-1]['args']}")
+    print(f"    │")
+    print(f"    ├─→ [EXECUTE LOCAL TOOL] analyze")
+    print(f"    │")
+    print(f"    └─→ [LLM RESPONDS] \"{response[:60]}...\"")
+
+    print(f"\n[FINAL RESPONSE] → User: \"{response}\"")
+    print(f"\n✓ Analyst's LLM used LOCAL tool (analyze)")
+
+    analyst.tool_calls_made = []
+    analyst.conversation_history = []
+
+    # ─────────────────────────────────────────────────────────────────
+    # SCENARIO 2: Analyst delegates to researcher
+    # ─────────────────────────────────────────────────────────────────
+    print("\n" + "─"*70)
+    print("SCENARIO 2: Request needs DATA (Analyst delegates to RESEARCHER)")
+    print("─"*70)
+    print(f"\n[USER] → Analyst: \"Find research data on market trends\"")
+    print(f"\n[ANALYST LLM FLOW]")
+
+    print(f"    │")
+    print(f"    ├─→ [LLM RECEIVES] Message: \"Find research data on market trends\"")
+    print(f"    │   Tools available: {[t['name'] for t in tools]}")
+
+    response = await analyst.chat("Find research data on market trends")
+
+    print(f"    │")
+    print(f"    ├─→ [LLM DECIDES] Use PEER tool: ask_peer → researcher")
+    print(f"    │   Args: {analyst.tool_calls_made[-1]['args']}")
+    print(f"    │")
+    print(f"    ├─→ [EXECUTE PEER TOOL] ask_peer")
+    print(f"    │   Sending to: researcher")
+    print(f"    │   Researcher responds: \"Found 5 papers...\"")
+    print(f"    │")
+    print(f"    └─→ [LLM RESPONDS] \"{response[:60]}...\"")
+
+    print(f"\n[FINAL RESPONSE] → User: \"{response}\"")
+    print(f"\n✓ Analyst's LLM delegated to PEER (researcher)")
+
+    analyst.tool_calls_made = []
+    analyst.conversation_history = []
+
+    # ─────────────────────────────────────────────────────────────────
+    # SCENARIO 3: Analyst responds directly
+    # ─────────────────────────────────────────────────────────────────
+    print("\n" + "─"*70)
+    print("SCENARIO 3: Simple greeting (Analyst responds DIRECTLY)")
+    print("─"*70)
+    print(f"\n[USER] → Analyst: \"Hello, what can you do?\"")
+    print(f"\n[ANALYST LLM FLOW]")
+
+    print(f"    │")
+    print(f"    ├─→ [LLM RECEIVES] Message: \"Hello, what can you do?\"")
+    print(f"    │   Tools available: {[t['name'] for t in tools]}")
+
+    response = await analyst.chat("Hello, what can you do?")
+
+    print(f"    │")
+    print(f"    └─→ [LLM DECIDES] Respond directly (no tool needed)")
+
+    print(f"\n[FINAL RESPONSE] → User: \"{response}\"")
+    print(f"\n✓ Analyst's LLM responded DIRECTLY (no tools)")
+
+    # Cleanup
+    researcher.request_shutdown()
+    researcher_task.cancel()
+    try: await researcher_task
+    except asyncio.CancelledError: pass
+
+    print("\n" + "="*70)
+    print("ANALYST LLM DEMO COMPLETE!")
+    print("="*70)
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("TEST 3: ANALYST AS FULL LLM-POWERED MESH PARTICIPANT")
@@ -680,4 +921,25 @@ KEY INSIGHT: Every agent is a FULL MESH PARTICIPANT
 
   The role ("analyst") defines what it's GOOD at,
   NOT whether it sends or receives.
+""")
+
+    # Run LLM tool-use demo
+    asyncio.run(demo_analyst_llm_flow())
+
+    print("""
+═══════════════════════════════════════════════════════════════════════════════
+KEY INSIGHT: ANALYST LLM TOOL-USE DECISIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+  The Analyst's LLM sees tools and DECIDES:
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  "analyze X"        → Use LOCAL tool (analyze)                          │
+  │  "find data on X"   → Use PEER tool (ask_peer → researcher)             │
+  │  "generate report"  → Use LOCAL tool (generate_report)                  │
+  │  "hello"            → Respond DIRECTLY (no tool needed)                 │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  The Analyst is GOOD at analysis, but can delegate data gathering!
+═══════════════════════════════════════════════════════════════════════════════
 """)

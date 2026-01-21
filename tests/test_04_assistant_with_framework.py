@@ -628,6 +628,279 @@ async def _run_integration_test():
                 pass
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# LLM TOOL-USE DEMO - Shows how Assistant's LLM decides to use tools
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class AssistantMockLLM:
+    """
+    Simulates Assistant's LLM decision-making.
+
+    The Assistant's LLM might decide to:
+    - Use LOCAL tool (search) for web searches
+    - Use LOCAL tool (calculate) for math
+    - Use PEER tool (ask_peer → analyst) for analysis
+    - Respond directly for simple queries
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def chat(self, messages: list, tools: list) -> dict:
+        """Simulate LLM deciding what tool to use."""
+        self.calls.append({"messages": messages, "tools": tools})
+
+        user_msg = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                user_msg = msg.get("content", "").lower()
+                break
+
+        tool_names = [t["name"] for t in tools]
+
+        # Assistant's decision logic
+        if "search" in user_msg and "search" in tool_names:
+            # Use LOCAL search tool
+            return {
+                "type": "tool_use",
+                "tool": "search",
+                "args": {"query": user_msg}
+            }
+        elif "calculate" in user_msg or any(c in user_msg for c in ['+', '-', '*', '/']):
+            if "calculate" in tool_names:
+                # Extract expression or use placeholder
+                expr = user_msg.split("calculate")[-1].strip() if "calculate" in user_msg else "2+2"
+                return {
+                    "type": "tool_use",
+                    "tool": "calculate",
+                    "args": {"expression": expr or "2+2"}
+                }
+        elif "analyze" in user_msg or "analysis" in user_msg:
+            if "ask_peer" in tool_names:
+                # Need analysis - ask analyst
+                return {
+                    "type": "tool_use",
+                    "tool": "ask_peer",
+                    "args": {"role": "analyst", "question": user_msg}
+                }
+
+        # Default: respond directly
+        return {
+            "type": "text",
+            "content": f"[assistant] I can help with that: {user_msg}"
+        }
+
+    def incorporate_tool_result(self, tool_name: str, result: str) -> str:
+        return f"Based on {tool_name}: {result}"
+
+
+class LLMPoweredAssistant(ConnectedAssistant):
+    """Assistant with full LLM simulation for demo."""
+
+    def __init__(self, agent_id=None):
+        super().__init__(agent_id)
+        self.llm = AssistantMockLLM()
+        self.conversation_history = []
+        self.tool_calls_made = []
+
+    async def chat(self, user_message: str) -> str:
+        """Complete LLM chat loop."""
+        self.conversation_history.append({"role": "user", "content": user_message})
+
+        tools = self.get_tools()
+        llm_response = self.llm.chat(self.conversation_history, tools)
+
+        if llm_response["type"] == "tool_use":
+            tool_name = llm_response["tool"]
+            tool_args = llm_response["args"]
+            self.tool_calls_made.append({"tool": tool_name, "args": tool_args})
+
+            tool_result = await self.execute_tool(tool_name, tool_args)
+
+            self.conversation_history.append({"role": "assistant", "content": f"[Tool: {tool_name}]"})
+            self.conversation_history.append({"role": "tool", "content": tool_result})
+
+            final = self.llm.incorporate_tool_result(tool_name, tool_result)
+        else:
+            final = llm_response["content"]
+
+        self.conversation_history.append({"role": "assistant", "content": final})
+        return final
+
+
+async def demo_assistant_llm_flow():
+    """Demo showing how Assistant's LLM decides to use tools."""
+    print("\n" + "="*70)
+    print("ASSISTANT LLM TOOL-USE FLOW")
+    print("="*70)
+
+    print("""
+    This shows how the ASSISTANT's LLM decides which tools to use:
+
+    ┌─────────────────────────────────────────────────────────────────┐
+    │  "search for X"     → LLM uses LOCAL tool (search)              │
+    │  "calculate X"      → LLM uses LOCAL tool (calculate)           │
+    │  "analyze X"        → LLM uses PEER tool (ask_peer→analyst)     │
+    │  "hello"            → LLM responds DIRECTLY                     │
+    └─────────────────────────────────────────────────────────────────┘
+    """)
+
+    mesh = Mesh(mode="p2p")
+
+    assistant = LLMPoweredAssistant()
+    mesh._agent_registry["assistant"] = [assistant]
+
+    # Add analyst for assistant to delegate to
+    class Analyst(Agent):
+        role = "analyst"
+        capabilities = ["analysis"]
+        async def execute_task(self, task): return {}
+        async def run(self):
+            while not self.shutdown_requested:
+                msg = await self.peers.receive(timeout=0.5)
+                if msg and msg.is_request:
+                    await self.peers.respond(msg, {
+                        "response": f"[analyst] Analysis complete: {msg.data.get('query')} shows positive trends"
+                    })
+
+    analyst = Analyst()
+    mesh._agent_registry["analyst"] = [analyst]
+    mesh.agents = [assistant, analyst]
+
+    for agent in mesh.agents:
+        agent.peers = PeerClient(
+            coordinator=None,
+            agent_id=agent.agent_id,
+            agent_role=agent.role,
+            agent_registry=mesh._agent_registry,
+            node_id="local"
+        )
+
+    analyst_task = asyncio.create_task(analyst.run())
+    await asyncio.sleep(0.1)
+
+    # ─────────────────────────────────────────────────────────────────
+    # SCENARIO 1: Assistant uses LOCAL search tool
+    # ─────────────────────────────────────────────────────────────────
+    print("\n" + "─"*70)
+    print("SCENARIO 1: Request to SEARCH (Assistant uses LOCAL tool)")
+    print("─"*70)
+    print(f"\n[USER] → Assistant: \"Please search for Python tutorials\"")
+    print(f"\n[ASSISTANT LLM FLOW]")
+
+    tools = assistant.get_tools()
+    print(f"    │")
+    print(f"    ├─→ [LLM RECEIVES] Message: \"Please search for Python tutorials\"")
+    print(f"    │   Tools available: {[t['name'] for t in tools]}")
+
+    response = await assistant.chat("Please search for Python tutorials")
+
+    print(f"    │")
+    print(f"    ├─→ [LLM DECIDES] Use LOCAL tool: search")
+    print(f"    │   Args: {assistant.tool_calls_made[-1]['args']}")
+    print(f"    │")
+    print(f"    ├─→ [EXECUTE LOCAL TOOL] search")
+    print(f"    │")
+    print(f"    └─→ [LLM RESPONDS] \"{response[:60]}...\"")
+
+    print(f"\n[FINAL RESPONSE] → User: \"{response}\"")
+    print(f"\n✓ Assistant's LLM used LOCAL tool (search)")
+
+    assistant.tool_calls_made = []
+    assistant.conversation_history = []
+
+    # ─────────────────────────────────────────────────────────────────
+    # SCENARIO 2: Assistant uses LOCAL calculate tool
+    # ─────────────────────────────────────────────────────────────────
+    print("\n" + "─"*70)
+    print("SCENARIO 2: Math request (Assistant uses LOCAL calculate tool)")
+    print("─"*70)
+    print(f"\n[USER] → Assistant: \"Please calculate 15% of 200\"")
+    print(f"\n[ASSISTANT LLM FLOW]")
+
+    print(f"    │")
+    print(f"    ├─→ [LLM RECEIVES] Message: \"Please calculate 15% of 200\"")
+    print(f"    │   Tools available: {[t['name'] for t in tools]}")
+
+    response = await assistant.chat("Please calculate 200 * 0.15")
+
+    print(f"    │")
+    print(f"    ├─→ [LLM DECIDES] Use LOCAL tool: calculate")
+    print(f"    │   Args: {assistant.tool_calls_made[-1]['args']}")
+    print(f"    │")
+    print(f"    ├─→ [EXECUTE LOCAL TOOL] calculate")
+    print(f"    │")
+    print(f"    └─→ [LLM RESPONDS] \"{response}\"")
+
+    print(f"\n[FINAL RESPONSE] → User: \"{response}\"")
+    print(f"\n✓ Assistant's LLM used LOCAL tool (calculate)")
+
+    assistant.tool_calls_made = []
+    assistant.conversation_history = []
+
+    # ─────────────────────────────────────────────────────────────────
+    # SCENARIO 3: Assistant delegates to analyst
+    # ─────────────────────────────────────────────────────────────────
+    print("\n" + "─"*70)
+    print("SCENARIO 3: Analysis request (Assistant delegates to ANALYST)")
+    print("─"*70)
+    print(f"\n[USER] → Assistant: \"Please analyze the sales data\"")
+    print(f"\n[ASSISTANT LLM FLOW]")
+
+    print(f"    │")
+    print(f"    ├─→ [LLM RECEIVES] Message: \"Please analyze the sales data\"")
+    print(f"    │   Tools available: {[t['name'] for t in tools]}")
+
+    response = await assistant.chat("Please analyze the sales data")
+
+    print(f"    │")
+    print(f"    ├─→ [LLM DECIDES] Use PEER tool: ask_peer → analyst")
+    print(f"    │   Args: {assistant.tool_calls_made[-1]['args']}")
+    print(f"    │")
+    print(f"    ├─→ [EXECUTE PEER TOOL] ask_peer")
+    print(f"    │   Sending to: analyst")
+    print(f"    │   Analyst responds: \"Analysis complete...\"")
+    print(f"    │")
+    print(f"    └─→ [LLM RESPONDS] \"{response[:60]}...\"")
+
+    print(f"\n[FINAL RESPONSE] → User: \"{response}\"")
+    print(f"\n✓ Assistant's LLM delegated to PEER (analyst)")
+
+    assistant.tool_calls_made = []
+    assistant.conversation_history = []
+
+    # ─────────────────────────────────────────────────────────────────
+    # SCENARIO 4: Assistant responds directly
+    # ─────────────────────────────────────────────────────────────────
+    print("\n" + "─"*70)
+    print("SCENARIO 4: Simple greeting (Assistant responds DIRECTLY)")
+    print("─"*70)
+    print(f"\n[USER] → Assistant: \"Hello, how are you?\"")
+    print(f"\n[ASSISTANT LLM FLOW]")
+
+    print(f"    │")
+    print(f"    ├─→ [LLM RECEIVES] Message: \"Hello, how are you?\"")
+    print(f"    │   Tools available: {[t['name'] for t in tools]}")
+
+    response = await assistant.chat("Hello, how are you?")
+
+    print(f"    │")
+    print(f"    └─→ [LLM DECIDES] Respond directly (no tool needed)")
+
+    print(f"\n[FINAL RESPONSE] → User: \"{response}\"")
+    print(f"\n✓ Assistant's LLM responded DIRECTLY (no tools)")
+
+    # Cleanup
+    analyst.request_shutdown()
+    analyst_task.cancel()
+    try: await analyst_task
+    except asyncio.CancelledError: pass
+
+    print("\n" + "="*70)
+    print("ASSISTANT LLM DEMO COMPLETE!")
+    print("="*70)
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("TEST 4: ASSISTANT AS FULL LLM-POWERED MESH PARTICIPANT")
@@ -705,4 +978,25 @@ KEY INSIGHT: Every agent is a FULL MESH PARTICIPANT
   SAME PATTERN as the analyst!
   The role ("assistant") defines what it's GOOD at,
   NOT whether it sends or receives.
+""")
+
+    # Run LLM tool-use demo
+    asyncio.run(demo_assistant_llm_flow())
+
+    print("""
+═══════════════════════════════════════════════════════════════════════════════
+KEY INSIGHT: ASSISTANT LLM TOOL-USE DECISIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+  The Assistant's LLM sees tools and DECIDES:
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  "search for X"     → Use LOCAL tool (search)                           │
+  │  "calculate X"      → Use LOCAL tool (calculate)                        │
+  │  "analyze X"        → Use PEER tool (ask_peer → analyst)                │
+  │  "hello"            → Respond DIRECTLY (no tool needed)                 │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  The Assistant is GOOD at search/calculate, but can delegate analysis!
+═══════════════════════════════════════════════════════════════════════════════
 """)
