@@ -689,7 +689,7 @@ Need help?
    python -m jarviscore.cli.smoketest --verbose
    ```
 3. **Check logs**: `cat logs/<agent>/<latest>.json`
-4. **Report issues**: [GitHub Issues](https://github.com/yourusername/jarviscore/issues)
+4. **Report issues**: [GitHub Issues](https://github.com/Prescott-Data/jarviscore-framework/issues)
 
 ---
 

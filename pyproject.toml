@@ -65,10 +65,10 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/jarviscore"
-Documentation = "https://jarviscore.readthedocs.io"
-Repository = "https://github.com/yourusername/jarviscore"
-Issues = "https://github.com/yourusername/jarviscore/issues"
+Homepage = "https://github.com/Prescott-Data/jarviscore-framework"
+Documentation = "https://github.com/Prescott-Data/jarviscore-framework/tree/main/jarviscore/docs"
+Repository = "https://github.com/Prescott-Data/jarviscore-framework"
+Issues = "https://github.com/Prescott-Data/jarviscore-framework/issues"
 
 [tool.setuptools]
 packages = {find = {}}
