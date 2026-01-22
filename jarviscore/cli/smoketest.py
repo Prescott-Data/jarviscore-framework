@@ -311,8 +311,9 @@ class SmokeTest:
 
         print("\n✓ All smoke tests passed!")
         print("\nJarvisCore is working correctly. Next steps:")
-        print("  1. Try examples: python examples/calculator_agent_example.py")
-        print("  2. Read user guide: docs/USER_GUIDE.md")
+        print("  1. Try examples - AutoAgent Profile: python examples/calculator_agent_example.py")
+        print("  2. Try examples - CustomAgent Profile: python examples/customagent_p2p_example.py")
+        print("  3. Read user guide: docs/USER_GUIDE.md")
         print("  3. Build your first agent: docs/GETTING_STARTED.md")
         print()
         return True

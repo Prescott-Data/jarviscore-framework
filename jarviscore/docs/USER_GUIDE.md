@@ -85,39 +85,30 @@ import asyncio
 from jarviscore import Mesh
 from jarviscore.profiles import AutoAgent
 
+class CalculatorAgent(AutoAgent):
+    role = "calculator"
+    capabilities = ["math", "calculation"]
+    system_prompt = "You are a math expert. Store results in 'result' variable."
+
 async def main():
-    # Create mesh
     mesh = Mesh(mode="autonomous")
-
-    # Add calculator agent
-    mesh.add_agent(
-        AutoAgent,
-        role="calculator",
-        capabilities=["math", "calculation"],
-        system_prompt="You are a math expert"
-    )
-
-    # Start mesh
+    mesh.add(CalculatorAgent)
     await mesh.start()
 
-    # Execute task
-    results = await mesh.run_workflow([
+    results = await mesh.workflow("calc", [
         {"agent": "calculator", "task": "Calculate the factorial of 10"}
     ])
 
     print(results[0]['output'])  # 3628800
-
-    # Cleanup
     await mesh.stop()
 
-if __name__ == '__main__':
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
-**That's it!** No configuration files, no setup, just three steps:
-1. Create mesh
-2. Add agent
-3. Run task
+**That's it!** Three steps:
+1. Define agent class
+2. Add to mesh
+3. Run workflow
 
 ---
 
@@ -128,27 +119,40 @@ if __name__ == '__main__':
 The **Mesh** is your control center. It manages agents and orchestrates workflows.
 
 ```python
-# Autonomous mode (single machine)
+# Autonomous mode (single machine, workflow engine only)
 mesh = Mesh(mode="autonomous")
 
-# Distributed mode (P2P mesh across network)
-mesh = Mesh(mode="distributed")
+# P2P mode (agent-to-agent communication via SWIM/ZMQ)
+mesh = Mesh(mode="p2p", config={'bind_port': 7950})
+
+# Distributed mode (both workflow engine AND P2P networking)
+mesh = Mesh(mode="distributed", config={'bind_port': 7950})
 ```
+
+**Mode Selection:**
+| Mode | Use Case | Components |
+|------|----------|------------|
+| `autonomous` | Single machine, simple pipelines | Workflow Engine |
+| `p2p` | Agent swarms, real-time coordination | P2P Coordinator |
+| `distributed` | Multi-node production systems | Both |
 
 ### Agents
 
-**Agents** are workers that execute tasks. JarvisCore has three approaches:
+**Agents** are workers that execute tasks. JarvisCore offers two profiles:
 
-1. **AutoAgent**: Zero-config, LLM-powered (for rapid prototyping)
-2. **Custom Profile**: Use existing agents with decorator or wrap (for integration)
-3. **CustomAgent**: Full manual control (for production systems)
+| Profile | Best For | How It Works |
+|---------|----------|--------------|
+| **AutoAgent** | Rapid prototyping | LLM generates + executes code from prompts |
+| **CustomAgent** | Existing code | You provide `execute_task()` or `run()` |
+
+See [AutoAgent Guide](AUTOAGENT_GUIDE.md) and [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for details.
 
 ### Workflows
 
 **Workflows** are sequences of tasks with dependencies:
 
 ```python
-await mesh.run_workflow([
+await mesh.workflow("pipeline-id", [
     {"agent": "scraper", "task": "Scrape data"},
     {"agent": "processor", "task": "Clean data", "depends_on": [0]},
     {"agent": "storage", "task": "Save data", "depends_on": [1]}
@@ -159,6 +163,8 @@ await mesh.run_workflow([
 
 ## AutoAgent Tutorial
 
+AutoAgent handles the "prompt → code → result" workflow automatically. See [AutoAgent Guide](AUTOAGENT_GUIDE.md) for distributed mode.
+
 ### Example 1: Simple Calculator
 
 ```python
@@ -166,25 +172,21 @@ import asyncio
 from jarviscore import Mesh
 from jarviscore.profiles import AutoAgent
 
+class CalculatorAgent(AutoAgent):
+    role = "calculator"
+    capabilities = ["math", "calculation"]
+    system_prompt = "You are a mathematical calculation expert. Store results in 'result'."
+
 async def calculator_demo():
-    mesh = Mesh()
-
-    mesh.add_agent(
-        AutoAgent,
-        role="calculator",
-        capabilities=["math", "calculation"],
-        system_prompt="You are a mathematical calculation expert"
-    )
-
+    mesh = Mesh(mode="autonomous")
+    mesh.add(CalculatorAgent)
     await mesh.start()
 
-    # Single calculation
-    result = await mesh.run_workflow([
+    result = await mesh.workflow("calc", [
         {"agent": "calculator", "task": "Calculate 15!"}
     ])
 
     print(f"15! = {result[0]['output']}")
-
     await mesh.stop()
 
 asyncio.run(calculator_demo())
@@ -193,19 +195,17 @@ asyncio.run(calculator_demo())
 ### Example 2: Data Analyst
 
 ```python
+class AnalystAgent(AutoAgent):
+    role = "analyst"
+    capabilities = ["data_analysis", "statistics"]
+    system_prompt = "You are a data analyst expert. Store results in 'result'."
+
 async def data_analyst_demo():
-    mesh = Mesh()
-
-    mesh.add_agent(
-        AutoAgent,
-        role="analyst",
-        capabilities=["data_analysis", "statistics"],
-        system_prompt="You are a data analyst expert"
-    )
-
+    mesh = Mesh(mode="autonomous")
+    mesh.add(AnalystAgent)
     await mesh.start()
 
-    result = await mesh.run_workflow([{
+    result = await mesh.workflow("analysis", [{
         "agent": "analyst",
         "task": """
         Given this data: [23, 45, 12, 67, 89, 34, 56, 78, 90, 11]
@@ -214,530 +214,112 @@ async def data_analyst_demo():
     }])
 
     print(result[0]['output'])
-    # {'mean': 50.5, 'median': 50.5, 'std': 28.7, ...}
-
     await mesh.stop()
 
 asyncio.run(data_analyst_demo())
-```
-
-### Example 3: Text Processor
-
-```python
-async def text_processor_demo():
-    mesh = Mesh()
-
-    mesh.add_agent(
-        AutoAgent,
-        role="processor",
-        capabilities=["text_processing", "nlp"],
-        system_prompt="You are a text processing expert"
-    )
-
-    await mesh.start()
-
-    text = """
-    The quick brown fox jumps over the lazy dog.
-    Python is a popular programming language.
-    """
-
-    result = await mesh.run_workflow([{
-        "agent": "processor",
-        "task": f"""
-        Analyze this text and return:
-        - Word count
-        - Sentence count
-        - Most common word
-        - Text: {text}
-        """
-    }])
-
-    print(result[0]['output'])
-
-    await mesh.stop()
-
-asyncio.run(text_processor_demo())
 ```
 
 ---
 
 ## Custom Profile Tutorial
 
-The **Custom Profile** lets you use existing agents without rewriting them. Perfect for:
-- LangChain, CrewAI, Haystack agents
-- Pre-configured API clients
-- Any Python class with an execute method
+The **Custom Profile** (decorator/wrap approach) is deprecated. Use **CustomAgent** instead.
 
-### When to Use Custom Profile
-
-| Scenario | Use Custom Profile? |
-|----------|---------------------|
-| Have existing LangChain/CrewAI agents | Yes |
-| Want workflow orchestration without LLM | Yes |
-| Need dependency management between agents | Yes |
-| Want rapid prototyping with code generation | No (use AutoAgent) |
-| Need full manual control | No (use CustomAgent) |
-
-### Example 1: Using @jarvis_agent Decorator
-
-The simplest approach - just add a decorator:
-
-```python
-import asyncio
-from jarviscore import Mesh, jarvis_agent, JarvisContext
-
-
-@jarvis_agent(role="processor", capabilities=["data_processing"])
-class DataProcessor:
-    """Your existing class - unchanged inside."""
-
-    def run(self, data):
-        """Process data - this is your existing logic."""
-        if isinstance(data, list):
-            return {"processed": [x * 2 for x in data]}
-        return {"processed": data * 2}
-
-
-@jarvis_agent(role="aggregator", capabilities=["aggregation"])
-class Aggregator:
-    """Agent that accesses previous step results."""
-
-    def run(self, task, ctx: JarvisContext):
-        # ctx.previous() gets output from a specific step
-        processed = ctx.previous("step1")
-
-        if processed:
-            data = processed.get("processed", [])
-            return {
-                "sum": sum(data) if isinstance(data, list) else data,
-                "count": len(data) if isinstance(data, list) else 1,
-                "source_step": "step1"
-            }
-        return {"error": "No previous data found"}
-
-
-async def decorator_demo():
-    mesh = Mesh(mode="autonomous")
-    mesh.add(DataProcessor)
-    mesh.add(Aggregator)
-
-    await mesh.start()
-
-    results = await mesh.workflow("decorator-demo", [
-        {
-            "id": "step1",
-            "agent": "processor",
-            "task": "Process input data",
-            "params": {"data": [1, 2, 3, 4, 5]}
-        },
-        {
-            "id": "step2",
-            "agent": "aggregator",
-            "task": "Aggregate results",
-            "depends_on": ["step1"]
-        }
-    ])
-
-    print(f"Step 1: {results[0]['output']}")  # {'processed': [2, 4, 6, 8, 10]}
-    print(f"Step 2: {results[1]['output']}")  # {'sum': 30, 'count': 5}
-
-    await mesh.stop()
-
-asyncio.run(decorator_demo())
-```
-
-### Example 2: Using wrap() for Existing Instances
-
-When you have pre-instantiated agents (like LangChain):
-
-```python
-import asyncio
-from jarviscore import Mesh, wrap, JarvisContext
-
-
-# Simulated LangChain-style agent
-class LangChainAgent:
-    def __init__(self, model_name: str, temperature: float = 0.7):
-        self.model_name = model_name
-        self.temperature = temperature
-
-    def invoke(self, query: str) -> dict:
-        # Your existing LangChain logic
-        return {
-            "answer": f"Response to '{query}' from {self.model_name}",
-            "model": self.model_name
-        }
-
-
-# Simulated data service
-class DataService:
-    def __init__(self, api_url: str):
-        self.api_url = api_url
-
-    def run(self, data):
-        # Your existing logic
-        if isinstance(data, list):
-            return {"transformed": [x ** 2 for x in data]}
-        return {"transformed": data ** 2}
-
-
-# Context-aware processor
-class ContextProcessor:
-    def run(self, task, ctx: JarvisContext):
-        # Access all previous results
-        all_previous = ctx.all_previous()
-        return {
-            "task": task,
-            "previous_steps": list(all_previous.keys()),
-            "combined": all_previous
-        }
-
-
-async def wrap_demo():
-    # Create instances
-    llm_agent = LangChainAgent(model_name="gpt-4-turbo", temperature=0.3)
-    data_service = DataService(api_url="https://api.example.com")
-    context_processor = ContextProcessor()
-
-    # Wrap for JarvisCore
-    wrapped_llm = wrap(
-        llm_agent,
-        role="llm_assistant",
-        capabilities=["chat", "qa"],
-        execute_method="invoke"  # LangChain uses "invoke"
-    )
-
-    wrapped_data = wrap(
-        data_service,
-        role="data_processor",
-        capabilities=["data_processing"]
-        # execute_method auto-detected as "run"
-    )
-
-    wrapped_context = wrap(
-        context_processor,
-        role="context_aggregator",
-        capabilities=["aggregation"]
-    )
-
-    mesh = Mesh(mode="autonomous")
-    mesh.add(wrapped_llm)
-    mesh.add(wrapped_data)
-    mesh.add(wrapped_context)
-
-    await mesh.start()
-
-    results = await mesh.workflow("wrap-demo", [
-        {
-            "id": "llm_step",
-            "agent": "llm_assistant",
-            "task": "What is the capital of France?",
-            "params": {"query": "What is the capital of France?"}
-        },
-        {
-            "id": "data_step",
-            "agent": "data_processor",
-            "task": "Transform numbers",
-            "params": {"data": [1, 2, 3, 4, 5]}
-        },
-        {
-            "id": "summary_step",
-            "agent": "context_aggregator",
-            "task": "Summarize all results",
-            "depends_on": ["llm_step", "data_step"]
-        }
-    ])
-
-    for result in results:
-        print(f"Status: {result['status']}, Output: {result['output']}")
-
-    await mesh.stop()
-
-asyncio.run(wrap_demo())
-```
-
-### Example 3: Custom Execute Method
-
-Specify any method name as the execute method:
-
-```python
-@jarvis_agent(role="validator", capabilities=["validation"], execute_method="validate")
-class DataValidator:
-    """Uses 'validate' instead of 'run'."""
-
-    def validate(self, data):
-        if isinstance(data, list):
-            return {
-                "valid": all(isinstance(x, (int, float)) for x in data),
-                "count": len(data),
-                "type": "list"
-            }
-        return {
-            "valid": isinstance(data, (int, float)),
-            "type": type(data).__name__
-        }
-```
-
-### JarvisContext API
-
-The `JarvisContext` object provides access to workflow state:
-
-```python
-def run(self, task, ctx: JarvisContext):
-    # Get output from a specific previous step
-    step1_output = ctx.previous("step1")
-
-    # Get all previous step outputs
-    all_outputs = ctx.all_previous()  # {"step1": {...}, "step2": {...}}
-
-    # Access shared memory
-    ctx.memory["my_key"] = "my_value"
-    value = ctx.memory.get("my_key")
-
-    return {"result": "..."}
-```
-
-**JarvisContext Methods:**
-- `previous(step_id)` - Get output from a specific step
-- `all_previous()` - Get dict of all previous step outputs
-- `memory` - Shared memory dictionary for the workflow
+See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for:
+- Converting standalone agents to JarvisCore
+- P2P mode for agent-to-agent communication
+- Distributed mode for multi-node systems
 
 ---
 
 ## CustomAgent Tutorial
 
-### Example 1: API Integration
+CustomAgent gives you full control over execution logic. See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for P2P and distributed modes.
+
+### Quick Example
 
 ```python
+from jarviscore import Mesh
 from jarviscore.profiles import CustomAgent
-import aiohttp
 
-class WeatherAgent(CustomAgent):
-    """Agent that fetches weather data from external API."""
+class MyAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["data_processing"]
 
     async def setup(self):
-        """Initialize API client."""
-        self.api_key = "your-api-key"
-        self.base_url = "https://api.weather.com"
+        """Initialize resources (DB connections, API clients, etc.)."""
+        await super().setup()
+        self.data = []
 
     async def execute_task(self, task):
-        """Execute weather query."""
-        task_desc = task.get('task', '')
+        """Called by workflow engine for each task."""
+        task_desc = task.get("task", "")
+        context = task.get("context", {})  # From depends_on steps
 
-        # Extract city from task description
-        city = self._extract_city(task_desc)
-
-        # Fetch weather data
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{self.base_url}/weather?city={city}&key={self.api_key}"
-            ) as response:
-                data = await response.json()
-
-        # Track cost (optional)
-        self.track_cost(cost_usd=0.001)
+        # Your logic here
+        result = {"processed": task_desc.upper()}
 
         return {
             "status": "success",
-            "output": {
-                "city": city,
-                "temperature": data['temp'],
-                "conditions": data['conditions']
-            },
-            "agent": self.agent_id
+            "output": result,
+            "agent_id": self.agent_id
         }
 
-    def _extract_city(self, text):
-        """Simple city extraction logic."""
-        # Your parsing logic here
-        return "New York"
-
-# Usage
-async def weather_demo():
-    mesh = Mesh()
-
-    mesh.add_agent(
-        WeatherAgent,
-        role="weather",
-        capabilities=["weather", "api"]
-    )
-
+async def main():
+    mesh = Mesh(mode="autonomous")
+    mesh.add(MyAgent)
     await mesh.start()
 
-    result = await mesh.run_workflow([
-        {"agent": "weather", "task": "Get weather for New York"}
+    results = await mesh.workflow("demo", [
+        {"agent": "processor", "task": "hello world"}
     ])
 
-    print(result[0]['output'])
-
+    print(results[0]["output"])  # {"processed": "HELLO WORLD"}
     await mesh.stop()
-
-asyncio.run(weather_demo())
 ```
 
-### Example 2: Database Agent
+### Key Methods
 
-```python
-from jarviscore.profiles import CustomAgent
-import asyncpg
-
-class DatabaseAgent(CustomAgent):
-    """Agent that queries PostgreSQL database."""
-
-    async def setup(self):
-        """Connect to database."""
-        self.pool = await asyncpg.create_pool(
-            host='localhost',
-            database='mydb',
-            user='user',
-            password='password'
-        )
-
-    async def teardown(self):
-        """Close database connection."""
-        await self.pool.close()
-
-    async def execute_task(self, task):
-        """Execute database query."""
-        query = task.get('task', '')
-
-        async with self.pool.acquire() as conn:
-            # Execute query
-            rows = await conn.fetch(query)
-
-            # Convert to list of dicts
-            results = [dict(row) for row in rows]
-
-        return {
-            "status": "success",
-            "output": results,
-            "agent": self.agent_id
-        }
-
-# Usage
-async def database_demo():
-    mesh = Mesh()
-
-    mesh.add_agent(
-        DatabaseAgent,
-        role="database",
-        capabilities=["database", "query"]
-    )
-
-    await mesh.start()
-
-    result = await mesh.run_workflow([
-        {"agent": "database", "task": "SELECT * FROM users LIMIT 10"}
-    ])
-
-    print(f"Found {len(result[0]['output'])} users")
-
-    await mesh.stop()
-
-asyncio.run(database_demo())
-```
-
-### Example 3: LangChain Integration
-
-```python
-from jarviscore.profiles import CustomAgent
-from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema.runnable import RunnableSequence
-
-class LangChainAgent(CustomAgent):
-    """Agent using LangChain for LLM interactions."""
-
-    async def setup(self):
-        """Initialize LangChain components."""
-        self.llm = ChatOpenAI(model="gpt-4")
-
-        self.prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a helpful assistant"),
-            ("user", "{input}")
-        ])
-
-        self.chain = self.prompt | self.llm
-
-    async def execute_task(self, task):
-        """Execute task using LangChain."""
-        task_desc = task.get('task', '')
-
-        # Run LangChain
-        response = await self.chain.ainvoke({"input": task_desc})
-
-        # Track tokens and cost
-        self.track_cost(
-            input_tokens=100,
-            output_tokens=50,
-            cost_usd=0.002
-        )
-
-        return {
-            "status": "success",
-            "output": response.content,
-            "agent": self.agent_id
-        }
-
-# Usage
-async def langchain_demo():
-    mesh = Mesh()
-
-    mesh.add_agent(
-        LangChainAgent,
-        role="assistant",
-        capabilities=["chat", "qa"]
-    )
-
-    await mesh.start()
-
-    result = await mesh.run_workflow([
-        {"agent": "assistant", "task": "Explain quantum computing"}
-    ])
-
-    print(result[0]['output'])
-
-    await mesh.stop()
-
-asyncio.run(langchain_demo())
-```
+| Method | Purpose | Mode |
+|--------|---------|------|
+| `setup()` | Initialize resources | All |
+| `execute_task(task)` | Handle workflow steps | Autonomous/Distributed |
+| `run()` | Continuous loop | P2P |
+| `teardown()` | Cleanup resources | All |
 
 ---
 
 ## Multi-Agent Workflows
 
-### Example 1: Data Pipeline
+### Example: Data Pipeline
 
 ```python
+from jarviscore import Mesh
+from jarviscore.profiles import AutoAgent
+
+class ScraperAgent(AutoAgent):
+    role = "scraper"
+    capabilities = ["web_scraping", "data_collection"]
+    system_prompt = "You are a web scraping expert. Store results in 'result'."
+
+class ProcessorAgent(AutoAgent):
+    role = "processor"
+    capabilities = ["data_processing", "cleaning"]
+    system_prompt = "You are a data cleaning expert. Store results in 'result'."
+
+class AnalyzerAgent(AutoAgent):
+    role = "analyzer"
+    capabilities = ["analysis", "statistics"]
+    system_prompt = "You are a data analysis expert. Store results in 'result'."
+
 async def data_pipeline():
-    mesh = Mesh()
-
-    # Add three agents
-    mesh.add_agent(
-        AutoAgent,
-        role="scraper",
-        capabilities=["web_scraping", "data_collection"],
-        system_prompt="You are a web scraping expert"
-    )
-
-    mesh.add_agent(
-        AutoAgent,
-        role="processor",
-        capabilities=["data_processing", "cleaning"],
-        system_prompt="You are a data cleaning expert"
-    )
-
-    mesh.add_agent(
-        AutoAgent,
-        role="analyzer",
-        capabilities=["analysis", "statistics"],
-        system_prompt="You are a data analysis expert"
-    )
-
+    mesh = Mesh(mode="autonomous")
+    mesh.add(ScraperAgent)
+    mesh.add(ProcessorAgent)
+    mesh.add(AnalyzerAgent)
     await mesh.start()
 
-    # Run workflow with dependencies
-    results = await mesh.run_workflow([
+    results = await mesh.workflow("pipeline", [
         {
             "id": "scrape",
             "agent": "scraper",
@@ -757,59 +339,12 @@ async def data_pipeline():
         }
     ])
 
-    # Each step gets context from previous steps
-    print("Scrape result:", results[0]['output'])
-    print("Clean result:", results[1]['output'])
+    print("Scrape:", results[0]['output'])
+    print("Clean:", results[1]['output'])
     print("Analysis:", results[2]['output'])
-
     await mesh.stop()
 
 asyncio.run(data_pipeline())
-```
-
-### Example 2: Report Generator
-
-```python
-async def report_generator():
-    mesh = Mesh()
-
-    mesh.add_agent(
-        AutoAgent,
-        role="researcher",
-        capabilities=["research", "data_gathering"],
-        system_prompt="You are a researcher",
-        enable_search=True  # Enable internet search
-    )
-
-    mesh.add_agent(
-        AutoAgent,
-        role="writer",
-        capabilities=["writing", "formatting"],
-        system_prompt="You are a technical writer"
-    )
-
-    await mesh.start()
-
-    results = await mesh.run_workflow([
-        {
-            "id": "research",
-            "agent": "researcher",
-            "task": "Research latest Python 3.12 features"
-        },
-        {
-            "id": "write",
-            "agent": "writer",
-            "task": "Write a 2-paragraph summary of the research findings",
-            "depends_on": ["research"]
-        }
-    ])
-
-    print("Research:", results[0]['output'])
-    print("\nReport:", results[1]['output'])
-
-    await mesh.stop()
-
-asyncio.run(report_generator())
 ```
 
 ---
@@ -822,27 +357,23 @@ Enable web search for research tasks:
 from jarviscore import Mesh
 from jarviscore.profiles import AutoAgent
 
+class ResearcherAgent(AutoAgent):
+    role = "researcher"
+    capabilities = ["research", "web_search"]
+    system_prompt = "You are an expert researcher. Store results in 'result'."
+    enable_search = True  # ← Enable internet search
+
 async def search_demo():
-    mesh = Mesh()
-
-    mesh.add_agent(
-        AutoAgent,
-        role="researcher",
-        capabilities=["research", "web_search"],
-        system_prompt="You are an expert researcher",
-        enable_search=True  # ← Enable internet search
-    )
-
+    mesh = Mesh(mode="autonomous")
+    mesh.add(ResearcherAgent)
     await mesh.start()
 
-    result = await mesh.run_workflow([{
+    result = await mesh.workflow("search", [{
         "agent": "researcher",
-        "task": "Search for 'Python asyncio best practices' and summarize the top 3 results"
+        "task": "Search for 'Python asyncio best practices' and summarize top 3 results"
     }])
 
     print(result[0]['output'])
-    # Returns: Summary of top 3 search results
-
     await mesh.stop()
 
 asyncio.run(search_demo())
@@ -1218,10 +749,11 @@ mesh = Mesh(config=config)
 
 ## Next Steps
 
-1. **Read the [API Reference](API_REFERENCE.md)** for detailed component documentation
-2. **Check the [Configuration Guide](CONFIGURATION.md)** for environment setup
-3. **Explore examples/** directory for more code samples
-4. **Join the community** on GitHub for support
+1. **[AutoAgent Guide](AUTOAGENT_GUIDE.md)** - Multi-node distributed mode
+2. **[CustomAgent Guide](CUSTOMAGENT_GUIDE.md)** - P2P and distributed with your code
+3. **[API Reference](API_REFERENCE.md)** - Detailed component documentation
+4. **[Configuration Guide](CONFIGURATION.md)** - Environment setup
+5. **Explore `examples/`** directory for more code samples
 
 ---
 
@@ -1229,4 +761,4 @@ mesh = Mesh(config=config)
 
 User Guide for JarvisCore v0.2.0
 
-Last Updated: 2026-01-17
+Last Updated: 2026-01-22

@@ -40,35 +40,43 @@ The central orchestrator for managing agents and workflows.
 ```python
 from jarviscore import Mesh
 
-mesh = Mesh(mode="autonomous")  # or "distributed"
+mesh = Mesh(mode="autonomous")  # or "p2p" or "distributed"
 ```
 
 **Parameters:**
-- `mode` (str): Execution mode - "autonomous" (single-node) or "distributed" (P2P mesh)
+- `mode` (str): Execution mode
+  - `"autonomous"` - Workflow Engine only (single-node)
+  - `"p2p"` - P2P Coordinator only (SWIM protocol, ZMQ messaging)
+  - `"distributed"` - Both Workflow Engine AND P2P Coordinator
 - `config` (dict, optional): Configuration dictionary
+
+**Modes Comparison:**
+
+| Mode | Workflow Engine | P2P Coordinator | Use Case |
+|------|-----------------|-----------------|----------|
+| `autonomous` | ✅ | ❌ | Single machine, simple pipelines |
+| `p2p` | ❌ | ✅ | Agent swarms, real-time coordination |
+| `distributed` | ✅ | ✅ | Multi-node production systems |
 
 **Methods:**
 
-#### `add_agent(profile_class, role, capabilities, **kwargs)`
+#### `add(agent_class)`
 
-Register an agent in the mesh.
+Register an agent class in the mesh.
 
 ```python
 from jarviscore.profiles import AutoAgent
 
-mesh.add_agent(
-    AutoAgent,
-    role="calculator",
-    capabilities=["math", "calculation"],
-    system_prompt="You are a math expert"
-)
+class CalculatorAgent(AutoAgent):
+    role = "calculator"
+    capabilities = ["math", "calculation"]
+    system_prompt = "You are a math expert"
+
+mesh.add(CalculatorAgent)
 ```
 
 **Parameters:**
-- `profile_class`: Agent profile class (AutoAgent or CustomAgent)
-- `role` (str): Unique agent role identifier
-- `capabilities` (list): List of capability strings
-- `**kwargs`: Additional agent-specific parameters
+- `agent_class`: Agent class (AutoAgent or CustomAgent subclass)
 
 **Returns:** Agent instance
 
@@ -96,12 +104,12 @@ await mesh.stop()
 
 ---
 
-#### `async run_workflow(steps)`
+#### `async workflow(workflow_id, steps)`
 
 Execute a multi-step workflow with dependency management.
 
 ```python
-results = await mesh.run_workflow([
+results = await mesh.workflow("pipeline-id", [
     {"agent": "scraper", "task": "Scrape data from URL"},
     {"agent": "processor", "task": "Clean the data", "depends_on": [0]},
     {"agent": "storage", "task": "Save to database", "depends_on": [1]}
@@ -109,6 +117,7 @@ results = await mesh.run_workflow([
 ```
 
 **Parameters:**
+- `workflow_id` (str): Unique workflow identifier
 - `steps` (list): List of step dictionaries with keys:
   - `agent` (str): Role or capability of target agent
   - `task` (str): Task description
@@ -116,6 +125,20 @@ results = await mesh.run_workflow([
   - `id` (str, optional): Custom step identifier
 
 **Returns:** List of result dictionaries
+
+**Note:** Only available in `autonomous` and `distributed` modes.
+
+---
+
+#### `async run_forever()`
+
+Keep the mesh running until shutdown signal (P2P and distributed modes).
+
+```python
+await mesh.run_forever()  # Blocks until SIGINT/SIGTERM
+```
+
+**Note:** Only available in `p2p` and `distributed` modes.
 
 ---
 
@@ -472,50 +495,65 @@ Flexible agent profile for integrating external frameworks.
 ```python
 from jarviscore.profiles import CustomAgent
 
-class LangChainAgent(CustomAgent):
+class MyAgent(CustomAgent):
+    role = "my_role"
+    capabilities = ["my_capability"]
+
     async def setup(self):
-        from langchain import LLMChain
-        self.chain = LLMChain(...)
+        await super().setup()
+        # Initialize your resources
 
     async def execute_task(self, task):
-        result = await self.chain.arun(task['task'])
-        return {
-            "status": "success",
-            "output": result,
-            "agent": self.agent_id
-        }
+        """Called by workflow engine (autonomous/distributed modes)."""
+        return {"status": "success", "output": result}
+
+    async def run(self):
+        """Called in P2P mode - continuous run loop."""
+        while not self.shutdown_requested:
+            msg = await self.peers.receive(timeout=0.5)
+            if msg and msg.is_request:
+                await self.peers.respond(msg, {"response": "..."})
 ```
 
-**Features:**
-- Integrate LangChain, LlamaIndex, Haystack, CrewAI, etc.
-- Manual control over execution logic
-- Optional cost tracking with `track_cost()`
-- Full access to mesh and workflow context
+**Class Attributes:**
+- `role` (str): Agent role identifier (required)
+- `capabilities` (list): List of capability strings (required)
 
-**Example:**
+**Instance Attributes:**
+- `agent_id` (str): Unique agent identifier
+- `peers` (PeerTool): P2P communication tool (distributed/p2p modes)
+- `shutdown_requested` (bool): Set to True when shutdown requested
+
+**Key Methods:**
+
+| Method | Purpose | Mode |
+|--------|---------|------|
+| `setup()` | Initialize resources | All |
+| `execute_task(task)` | Handle workflow steps | Autonomous/Distributed |
+| `run()` | Continuous loop | P2P |
+| `teardown()` | Cleanup resources | All |
+
+**P2P Communication (distributed/p2p modes):**
 
 ```python
-class APIAgent(CustomAgent):
-    async def setup(self):
-        self.api_client = MyAPIClient()
+async def run(self):
+    while not self.shutdown_requested:
+        # Receive messages
+        msg = await self.peers.receive(timeout=0.5)
+        if msg and msg.is_request:
+            # Process and respond
+            await self.peers.respond(msg, {"response": result})
 
-    async def execute_task(self, task):
-        # Manual implementation
-        response = await self.api_client.call(task['task'])
-
-        # Optional cost tracking
-        self.track_cost(
-            input_tokens=100,
-            output_tokens=50,
-            cost_usd=0.01
-        )
-
-        return {
-            "status": "success",
-            "output": response,
-            "agent": self.agent_id
-        }
+async def ask_another_agent(self, question):
+    # Ask another agent via peer tools
+    result = await self.peers.as_tool().execute(
+        "ask_peer",
+        {"role": "researcher", "question": question}
+    )
+    return result
 ```
+
+See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for P2P and distributed mode details.
 
 ---
 
@@ -1104,4 +1142,4 @@ async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
 
 API Reference for JarvisCore v0.2.0
 
-Last Updated: 2026-01-17
+Last Updated: 2026-01-22

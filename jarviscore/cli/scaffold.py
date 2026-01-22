@@ -119,7 +119,7 @@ def print_next_steps(env_created: bool, examples_created: bool):
 
     if examples_created:
         steps.append(f"{'4' if env_created else '3'}. Try an example:\n"
-                    "   python examples/calculator_agent_example.py")
+                    "   python examples/calculator_agent_example.py for AutoAgent Profile or python examples/customagent_p2p_example.py ")
 
     for step in steps:
         print(f"\n{step}")
