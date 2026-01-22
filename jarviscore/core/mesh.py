@@ -332,10 +332,11 @@ class Mesh:
         if not self._started:
             raise RuntimeError("Mesh not started. Call await mesh.start() first.")
 
-        if self.mode != MeshMode.AUTONOMOUS:
+        if self.mode == MeshMode.P2P:
             raise RuntimeError(
-                f"workflow() only available in autonomous mode. "
-                f"Current mode: {self.mode.value}"
+                f"workflow() not available in p2p mode. "
+                f"P2P mode uses agent.run() loops with direct peer communication. "
+                f"Use autonomous or distributed mode for workflow orchestration."
             )
 
         self._logger.info(f"Executing workflow: {workflow_id} with {len(steps)} step(s)")
