@@ -1,14 +1,13 @@
 # JarvisCore Framework
 
-**Build autonomous AI agents in 3 lines of code. Production-ready orchestration with P2P mesh networking.**
+**Build autonomous AI agents with P2P mesh networking.**
 
 ## Features
 
-- ✅ **Simple Agent Definition** - Write just 3 attributes, framework handles everything
-- ✅ **Custom Profile** - Use your existing agents (LangChain, CrewAI, etc.) with zero migration
-- ✅ **P2P Mesh Architecture** - Automatic agent discovery and task routing via SWIM protocol
-- ✅ **Event-Sourced State** - Complete audit trail with crash recovery
-- ✅ **Autonomous Execution** - LLM code generation with automatic repair
+- ✅ **AutoAgent** - LLM generates and executes code from natural language
+- ✅ **CustomAgent** - Bring your own logic (LangChain, CrewAI, etc.)
+- ✅ **P2P Mesh** - Agent discovery and communication via SWIM protocol
+- ✅ **Workflow Orchestration** - Dependencies, context passing, multi-step pipelines
 
 ## Installation
 
@@ -16,39 +15,22 @@
 pip install jarviscore-framework
 ```
 
-## Setup & Validation
-
-### 1. Initialize Project
+## Setup
 
 ```bash
-# Create .env.example and example files in your project
+# Initialize project
 python -m jarviscore.cli.scaffold --examples
-
-# Configure your environment
 cp .env.example .env
-# Edit .env and add one of: CLAUDE_API_KEY, AZURE_API_KEY, GEMINI_API_KEY, or LLM_ENDPOINT
-```
+# Add your LLM API key to .env
 
-### 2. Validate Installation
-
-```bash
-# Check setup
-python -m jarviscore.cli.check
-
-# Test LLM connectivity
+# Validate
 python -m jarviscore.cli.check --validate-llm
-
-# Run smoke test (end-to-end validation)
 python -m jarviscore.cli.smoketest
 ```
 
-✅ **All checks pass?** You're ready to build agents!
-
 ## Quick Start
 
-### Option 1: AutoAgent (LLM-Powered)
-
-For rapid prototyping with automatic code generation:
+### AutoAgent (LLM-Powered)
 
 ```python
 from jarviscore import Mesh
@@ -57,98 +39,62 @@ from jarviscore.profiles import AutoAgent
 class CalculatorAgent(AutoAgent):
     role = "calculator"
     capabilities = ["math"]
-    system_prompt = "You are a math expert..."
+    system_prompt = "You are a math expert. Store result in 'result'."
 
 mesh = Mesh(mode="autonomous")
 mesh.add(CalculatorAgent)
 await mesh.start()
 
-results = await mesh.workflow("calc-1", [
+results = await mesh.workflow("calc", [
     {"agent": "calculator", "task": "Calculate factorial of 10"}
 ])
+print(results[0]["output"])  # 3628800
 ```
 
-### Option 2: Custom Profile with Decorator
-
-For existing classes - just add a decorator:
+### CustomAgent (Your Code)
 
 ```python
-from jarviscore import Mesh, jarvis_agent, JarvisContext
+from jarviscore import Mesh
+from jarviscore.profiles import CustomAgent
 
-@jarvis_agent(role="processor", capabilities=["data_processing"])
-class DataProcessor:
-    def run(self, data):
-        return {"processed": [x * 2 for x in data]}
+class ProcessorAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["processing"]
 
-@jarvis_agent(role="aggregator", capabilities=["aggregation"])
-class Aggregator:
-    def run(self, task, ctx: JarvisContext):
-        # Access previous step results
-        previous = ctx.previous("step1")
-        return {"sum": sum(previous.get("processed", []))}
+    async def execute_task(self, task):
+        data = task.get("params", {}).get("data", [])
+        return {"status": "success", "output": [x * 2 for x in data]}
 
-mesh = Mesh(mode="autonomous")
-mesh.add(DataProcessor)
-mesh.add(Aggregator)
+mesh = Mesh(mode="distributed", config={'bind_port': 7950})
+mesh.add(ProcessorAgent)
 await mesh.start()
 
-results = await mesh.workflow("pipeline", [
-    {"id": "step1", "agent": "processor", "task": "Process", "params": {"data": [1,2,3]}},
-    {"id": "step2", "agent": "aggregator", "task": "Aggregate", "depends_on": ["step1"]}
+results = await mesh.workflow("demo", [
+    {"agent": "processor", "task": "Process", "params": {"data": [1, 2, 3]}}
 ])
+print(results[0]["output"])  # [2, 4, 6]
 ```
 
-### Option 3: Custom Profile with wrap()
+## Execution Modes
 
-For pre-instantiated objects (LangChain, CrewAI, etc.):
-
-```python
-from jarviscore import Mesh, wrap
-
-# Your existing agent (LangChain, CrewAI, etc.)
-my_llm_agent = MyLangChainAgent(model="gpt-4")
-
-# Wrap it for JarvisCore
-wrapped = wrap(
-    my_llm_agent,
-    role="assistant",
-    capabilities=["chat", "qa"],
-    execute_method="invoke"  # LangChain uses "invoke"
-)
-
-mesh = Mesh(mode="autonomous")
-mesh.add(wrapped)
-await mesh.start()
-```
-
-## Architecture
-
-JarvisCore is built on three layers:
-
-1. **Execution Layer (20%)** - Profile-specific execution (AutoAgent, Custom Profile)
-2. **Orchestration Layer (60%)** - Workflow engine, dependencies, state management
-3. **P2P Layer (20%)** - Agent discovery, task routing, mesh coordination
-
-## Agent Profiles
-
-| Profile | Use Case | LLM Required |
-|---------|----------|--------------|
-| **AutoAgent** | Rapid prototyping, LLM code generation | Yes |
-| **Custom Profile** | Existing agents, full control | No |
-| **CustomAgent** | Manual implementation | No |
+| Mode | Profile | Use Case |
+|------|---------|----------|
+| `autonomous` | AutoAgent | Single machine, LLM code generation |
+| `p2p` | CustomAgent | Agent-to-agent communication, swarms |
+| `distributed` | CustomAgent | Multi-node workflows + P2P |
 
 ## Documentation
 
-- [User Guide](jarviscore/docs/USER_GUIDE.md) - Complete guide for AutoAgent users
-- [API Reference](jarviscore/docs/API_REFERENCE.md) - Detailed API documentation
-- [Configuration Guide](jarviscore/docs/CONFIGURATION.md) - Settings and environment variables
-- [Troubleshooting](jarviscore/docs/TROUBLESHOOTING.md) - Common issues and solutions
-- [Examples](examples/) - Working code examples
+- [Getting Started](jarviscore/docs/GETTING_STARTED.md) - 5-minute quickstart
+- [AutoAgent Guide](jarviscore/docs/AUTOAGENT_GUIDE.md) - LLM-powered agents
+- [CustomAgent Guide](jarviscore/docs/CUSTOMAGENT_GUIDE.md) - Bring your own code
+- [API Reference](jarviscore/docs/API_REFERENCE.md) - Detailed API docs
+- [Configuration](jarviscore/docs/CONFIGURATION.md) - Settings reference
 
-## Development Status
+## Version
 
-**Version:** 0.2.0 (Alpha)
+**0.2.0**
 
 ## License
 
-MIT License - see LICENSE file for details
+MIT License

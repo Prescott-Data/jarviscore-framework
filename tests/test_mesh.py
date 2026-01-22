@@ -1,6 +1,7 @@
 """
 Tests for Mesh orchestrator.
 """
+import asyncio
 import pytest
 from jarviscore import Mesh, MeshMode, Agent
 
@@ -321,20 +322,50 @@ class TestMeshWorkflow:
         assert "not started" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_workflow_distributed_mode_fails(self):
-        """Test that workflow() fails in distributed mode."""
+    async def test_workflow_distributed_mode_works(self):
+        """Test that workflow() works in distributed mode (has workflow engine)."""
         # Use unique port to avoid conflicts with P2P tests
         mesh = Mesh(mode="distributed", config={'bind_port': 7999})
         mesh.add(TestAgent1)
 
         await mesh.start()
 
+        # Distributed mode should allow workflow execution
+        results = await mesh.workflow("test-workflow", [
+            {"agent": "agent1", "task": "Should succeed"}
+        ])
+
+        assert len(results) == 1
+        assert results[0]["status"] == "success"
+
+        await mesh.stop()
+
+    @pytest.mark.asyncio
+    async def test_workflow_p2p_mode_fails(self):
+        """Test that workflow() fails in p2p mode (no workflow engine)."""
+        mesh = Mesh(mode="p2p", config={'bind_port': 7998})
+
+        class P2PTestAgent(Agent):
+            role = "p2p_test"
+            capabilities = ["test"]
+
+            async def execute_task(self, task):
+                return {"status": "success"}
+
+            async def run(self):
+                while not self.shutdown_requested:
+                    await asyncio.sleep(0.1)
+
+        mesh.add(P2PTestAgent)
+
+        await mesh.start()
+
         with pytest.raises(RuntimeError) as exc_info:
             await mesh.workflow("test-workflow", [
-                {"agent": "agent1", "task": "Should fail"}
+                {"agent": "p2p_test", "task": "Should fail"}
             ])
 
-        assert "only available in autonomous mode" in str(exc_info.value)
+        assert "not available in p2p mode" in str(exc_info.value)
 
         await mesh.stop()
 

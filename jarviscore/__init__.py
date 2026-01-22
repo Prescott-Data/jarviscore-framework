@@ -2,48 +2,48 @@
 JarvisCore - P2P Distributed Agent Framework
 
 A production-grade framework for building autonomous agent systems with:
-- Event-sourced state management (crash recovery, HITL support)
 - P2P coordination via SWIM protocol
-- Three execution profiles:
-  * AutoAgent: LLM code generation (3 lines of user code)
-  * CustomAgent: Framework-agnostic (LangChain, MCP, raw Python)
-  * @jarvis_agent: Decorator to wrap existing agents (1 line)
-  * wrap(): Function to wrap existing instances
+- Workflow orchestration with dependencies
+- Two agent profiles: AutoAgent (LLM-powered) and CustomAgent (your code)
 
-Quick Start (AutoAgent):
-    from jarviscore import Mesh, AutoAgent
+Profiles:
+    AutoAgent  - LLM generates and executes code from prompts (autonomous mode)
+    CustomAgent - You provide execute_task() or run() (p2p/distributed modes)
 
-    class ScraperAgent(AutoAgent):
-        role = "scraper"
-        capabilities = ["web_scraping"]
-        system_prompt = "You are an expert web scraper..."
+Modes:
+    autonomous  - Workflow engine only (AutoAgent)
+    p2p         - P2P coordinator only (CustomAgent with run() loops)
+    distributed - Both workflow + P2P (CustomAgent with execute_task())
 
-    mesh = Mesh(mode="autonomous")
-    mesh.add(ScraperAgent)
-    await mesh.start()
+Quick Start (AutoAgent - autonomous mode):
+    from jarviscore import Mesh
+    from jarviscore.profiles import AutoAgent
 
-Quick Start (Custom Profile with decorator):
-    from jarviscore import Mesh, jarvis_agent, JarvisContext
-
-    @jarvis_agent(role="processor", capabilities=["processing"])
-    class DataProcessor:
-        def run(self, data):
-            return {"processed": data * 2}
+    class CalcAgent(AutoAgent):
+        role = "calculator"
+        capabilities = ["math"]
+        system_prompt = "You are a math expert. Store result in 'result'."
 
     mesh = Mesh(mode="autonomous")
-    mesh.add(DataProcessor)
+    mesh.add(CalcAgent)
     await mesh.start()
+    results = await mesh.workflow("calc", [{"agent": "calculator", "task": "Calculate 10!"}])
 
-Quick Start (Custom Profile with wrap):
-    from jarviscore import Mesh, wrap
+Quick Start (CustomAgent - distributed mode):
+    from jarviscore import Mesh
+    from jarviscore.profiles import CustomAgent
 
-    # Wrap an existing instance (e.g., LangChain agent)
-    my_agent = MyExistingAgent()
-    wrapped = wrap(my_agent, role="assistant", capabilities=["chat"])
+    class MyAgent(CustomAgent):
+        role = "processor"
+        capabilities = ["processing"]
 
-    mesh = Mesh(mode="autonomous")
-    mesh.add(wrapped)
+        async def execute_task(self, task):
+            return {"status": "success", "output": task.get("task").upper()}
+
+    mesh = Mesh(mode="distributed", config={'bind_port': 7950})
+    mesh.add(MyAgent)
     await mesh.start()
+    results = await mesh.workflow("demo", [{"agent": "processor", "task": "hello"}])
 """
 
 __version__ = "0.2.0"

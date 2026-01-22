@@ -1,6 +1,6 @@
 # JarvisCore Troubleshooting Guide
 
-Common issues and solutions for AutoAgent and Custom Profile users.
+Common issues and solutions for AutoAgent and CustomAgent users.
 
 ---
 
@@ -199,97 +199,63 @@ await mesh.workflow("wf-1", [
 
 ---
 
-### 5. Custom Profile Issues
+### 5. CustomAgent Issues
 
-#### Issue: `No execute method found on instance`
+#### Issue: `execute_task not called`
 
-**Cause:** wrap() couldn't find a suitable execute method
+**Cause:** Wrong mode for your use case
 
 **Solution:**
 ```python
-# Specify the method explicitly
-wrapped = wrap(
-    my_agent,
-    role="assistant",
-    capabilities=["chat"],
-    execute_method="invoke"  # Specify your method name
+# For workflow orchestration (autonomous/distributed modes)
+class MyAgent(CustomAgent):
+    async def execute_task(self, task):  # Called by workflow engine
+        return {"status": "success", "output": ...}
+
+# For P2P mode, use run() instead
+class MyAgent(CustomAgent):
+    async def run(self):  # Called in P2P mode
+        while not self.shutdown_requested:
+            msg = await self.peers.receive(timeout=0.5)
+            ...
+```
+
+#### Issue: `self.peers is None`
+
+**Cause:** Agent not in P2P or distributed mode
+
+**Solution:**
+```python
+# Ensure mesh is in p2p or distributed mode
+mesh = Mesh(mode="distributed", config={  # or "p2p"
+    'bind_port': 7950,
+    'node_name': 'my-node',
+})
+
+# Check peers is available before using
+if self.peers:
+    result = await self.peers.as_tool().execute("ask_peer", {...})
+```
+
+#### Issue: `No response from peer`
+
+**Cause:** Target agent not listening or wrong role
+
+**Solution:**
+```python
+# Ensure target agent is running its run() loop
+# In researcher agent:
+async def run(self):
+    while not self.shutdown_requested:
+        msg = await self.peers.receive(timeout=0.5)
+        if msg and msg.is_request:
+            await self.peers.respond(msg, {"response": ...})
+
+# When asking, use correct role
+result = await self.peers.as_tool().execute(
+    "ask_peer",
+    {"role": "researcher", "question": "..."}  # Must match agent's role
 )
-```
-
-Auto-detected methods: `run`, `execute`, `invoke`, `call`, `process`
-
-#### Issue: `ctx.previous() returns None`
-
-**Cause:** Step ID doesn't exist or step hasn't completed
-
-**Solution:**
-```python
-# Ensure step IDs match
-results = await mesh.workflow("wf-1", [
-    {"id": "step1", "agent": "processor", ...},  # ID is "step1"
-    {"id": "step2", "agent": "aggregator", ..., "depends_on": ["step1"]}
-])
-
-# In aggregator:
-def run(self, task, ctx: JarvisContext):
-    result = ctx.previous("step1")  # Must match exactly
-    if result is None:
-        # Handle missing data
-        return {"error": "step1 not found"}
-```
-
-#### Issue: `JarvisContext not injected`
-
-**Cause:** Method signature doesn't have `ctx` or `context` parameter
-
-**Solution:**
-```python
-# Wrong - no context parameter
-def run(self, data):
-    # ctx not available here
-    pass
-
-# Correct - add ctx parameter
-def run(self, task, ctx: JarvisContext):
-    # ctx is now available
-    previous = ctx.previous("step1")
-```
-
-#### Issue: `TypeError: issubclass() arg 1 must be a class`
-
-**Cause:** Passing a wrapped instance where a class is expected
-
-**Solution:**
-```python
-# Wrong - mesh.add() used to only accept classes
-mesh.add(MyAgentClass)
-
-# Correct - mesh.add() now accepts both
-wrapped = wrap(my_instance, ...)
-mesh.add(wrapped)  # Works in v0.2.0+
-```
-
-#### Issue: Custom agent params not received
-
-**Cause:** Parameters passed in workflow step not matching method signature
-
-**Solution:**
-```python
-# Workflow step
-{
-    "agent": "processor",
-    "task": "Process data",
-    "params": {"data": [1, 2, 3]}  # Pass params here
-}
-
-# Agent method - params are passed as kwargs
-def run(self, data):  # 'data' matches key in params
-    return {"processed": data}
-
-# Or access via task dict
-def run(self, **kwargs):
-    data = kwargs.get('data', [])
-    return {"processed": data}
 ```
 
 ---
@@ -354,7 +320,78 @@ python your_script.py
 
 ---
 
-### 8. Performance Issues
+### 8. P2P/Distributed Mode Issues
+
+#### Issue: `P2P coordinator failed to start`
+
+**Cause:** Port already in use or network issue
+
+**Solution:**
+```bash
+# Check if port is in use
+lsof -i :7950
+
+# Try different port
+mesh = Mesh(mode="distributed", config={
+    'bind_port': 7960,  # Different port
+})
+```
+
+#### Issue: `Cannot connect to seed nodes`
+
+**Cause:** Firewall, wrong address, or seed node not running
+
+**Solution:**
+```bash
+# Check connectivity
+nc -zv 192.168.1.10 7950
+
+# Open firewall ports
+sudo ufw allow 7950/tcp
+sudo ufw allow 7950/udp
+
+# Ensure seed node is running first
+# On seed node:
+mesh = Mesh(mode="distributed", config={
+    'bind_host': '0.0.0.0',  # Listen on all interfaces
+    'bind_port': 7950,
+})
+```
+
+#### Issue: `Workflow not available in p2p mode`
+
+**Cause:** P2P mode doesn't include workflow engine
+
+**Solution:**
+```python
+# Use distributed mode for both workflow + P2P
+mesh = Mesh(mode="distributed", config={...})
+
+# Or use p2p mode with run() loops instead
+mesh = Mesh(mode="p2p", config={...})
+await mesh.start()
+await mesh.run_forever()  # Agents use run() loops
+```
+
+#### Issue: `Agents not discovering each other`
+
+**Cause:** Network configuration or timing
+
+**Solution:**
+```python
+# Wait for mesh to stabilize after start
+await mesh.start()
+await asyncio.sleep(1)  # Give time for peer discovery
+
+# Check if peers are available
+agent = mesh.get_agent("my_role")
+if agent.peers:
+    print("Peers available")
+```
+
+---
+
+### 9. Performance Issues
 
 #### Issue: Code generation is slow (>10 seconds)
 
@@ -520,7 +557,7 @@ If significantly slower:
 
 ---
 
-*Last updated: 2026-01-17*
+*Last updated: 2026-01-22*
 
 ---
 

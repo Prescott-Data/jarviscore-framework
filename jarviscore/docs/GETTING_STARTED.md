@@ -6,32 +6,33 @@ Build your first AI agent in 5 minutes!
 
 ## Choose Your Path
 
-JarvisCore offers two development approaches:
+### Profiles (How agents execute)
 
-| Approach | Best For | LLM Required |
-|----------|----------|--------------|
-| **AutoAgent** | Rapid prototyping, LLM code generation | Yes |
-| **Custom Profile** | Existing agents (LangChain, CrewAI), full control | No |
+| Profile | Best For | LLM Required |
+|---------|----------|--------------|
+| **AutoAgent** | Rapid prototyping, LLM generates code from prompts | Yes |
+| **CustomAgent** | Existing code, full control (LangChain, CrewAI, etc.) | Optional |
+
+### Execution Modes (How agents are orchestrated)
+
+| Mode | Use Case | Start Here |
+|------|----------|------------|
+| **Autonomous** | Single machine, simple pipelines | ✅ This guide |
+| **P2P** | Direct agent communication, swarms | [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) |
+| **Distributed** | Multi-node production systems | [AutoAgent Guide](AUTOAGENT_GUIDE.md) |
+
+**Recommendation:** Start with **AutoAgent + Autonomous mode** below, then explore other modes.
 
 ---
 
 ## What You'll Build
 
-### Path A: AutoAgent
 An **AutoAgent** that takes natural language prompts and automatically:
 1. Generates Python code using an LLM
-2. Executes the code securely
+2. Executes the code securely in a sandbox
 3. Returns the result
 
 **No manual coding required** - just describe what you want!
-
-### Path B: Custom Profile
-Use your **existing agents** with JarvisCore orchestration:
-1. Keep your current agent code unchanged
-2. Add a decorator or wrap your instance
-3. Get workflow orchestration, dependency management, and shared memory
-
-**Zero migration required** - just wrap and go!
 
 ---
 
@@ -198,129 +199,53 @@ Execution time: 4.23s
 
 ---
 
-## Step 5: Try Custom Profile (Alternative Path)
+## Step 5: Try CustomAgent (Alternative Path)
 
-If you have existing agents or don't need LLM code generation, use the **Custom Profile**:
-
-### Option A: Using the Decorator
+If you have existing agents or don't need LLM code generation, use **CustomAgent**:
 
 ```python
 import asyncio
-from jarviscore import Mesh, jarvis_agent, JarvisContext
+from jarviscore import Mesh
+from jarviscore.profiles import CustomAgent
 
 
-# Just add a decorator to your existing class
-@jarvis_agent(role="processor", capabilities=["data_processing"])
-class DataProcessor:
-    """Your existing class - no changes needed inside."""
+class MyAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["data_processing"]
 
-    def run(self, data):
-        """Process data by doubling values."""
-        if isinstance(data, list):
-            return {"processed": [x * 2 for x in data]}
-        return {"processed": data * 2}
-
-
-# Agent with context access (for multi-step workflows)
-@jarvis_agent(role="aggregator", capabilities=["aggregation"])
-class Aggregator:
-    def run(self, task, ctx: JarvisContext):
-        # Access results from previous steps
-        processed = ctx.previous("step1")
-        if processed:
-            data = processed.get("processed", [])
-            return {"sum": sum(data), "count": len(data)}
-        return {"error": "No previous data"}
+    async def execute_task(self, task):
+        """Your existing logic goes here."""
+        data = task.get("params", {}).get("data", [])
+        result = [x * 2 for x in data]
+        return {"status": "success", "output": result}
 
 
 async def main():
-    mesh = Mesh(mode="autonomous")
-    mesh.add(DataProcessor)
-    mesh.add(Aggregator)
-
+    # CustomAgent uses "distributed" (workflow + P2P) or "p2p" (P2P only)
+    mesh = Mesh(mode="distributed", config={
+        'bind_port': 7950,
+        'node_name': 'custom-node',
+    })
+    mesh.add(MyAgent)
     await mesh.start()
 
     results = await mesh.workflow("custom-demo", [
-        {
-            "id": "step1",
-            "agent": "processor",
-            "task": "Process input data",
-            "params": {"data": [1, 2, 3, 4, 5]}
-        },
-        {
-            "id": "step2",
-            "agent": "aggregator",
-            "task": "Aggregate results",
-            "depends_on": ["step1"]
-        }
+        {"agent": "processor", "task": "Process data", "params": {"data": [1, 2, 3]}}
     ])
 
-    print(f"Processed: {results[0]['output']}")  # {'processed': [2, 4, 6, 8, 10]}
-    print(f"Aggregated: {results[1]['output']}")  # {'sum': 30, 'count': 5}
-
+    print(results[0]["output"])  # [2, 4, 6]
     await mesh.stop()
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
-### Option B: Using wrap() for Existing Instances
-
-```python
-import asyncio
-from jarviscore import Mesh, wrap
-
-
-# Your existing agent (could be LangChain, CrewAI, etc.)
-class MyLLMAgent:
-    def __init__(self, model_name: str):
-        self.model_name = model_name
-
-    def invoke(self, query: str) -> dict:
-        # Your existing logic
-        return {"answer": f"Response to '{query}'", "model": self.model_name}
-
-
-async def main():
-    # Create your agent as usual
-    my_agent = MyLLMAgent(model_name="gpt-4")
-
-    # Wrap it for JarvisCore
-    wrapped = wrap(
-        my_agent,
-        role="assistant",
-        capabilities=["chat", "qa"],
-        execute_method="invoke"  # Specify your method name
-    )
-
-    mesh = Mesh(mode="autonomous")
-    mesh.add(wrapped)
-
-    await mesh.start()
-
-    results = await mesh.workflow("wrap-demo", [
-        {
-            "agent": "assistant",
-            "task": "What is Python?",
-            "params": {"query": "What is Python?"}
-        }
-    ])
-
-    print(f"Result: {results[0]['output']}")
-
-    await mesh.stop()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-**Key Benefits of Custom Profile:**
+**Key Benefits:**
 - No LLM API required (no costs!)
-- Keep your existing agent code unchanged
-- Full access to workflow context via `JarvisContext`
-- Works with any framework (LangChain, CrewAI, Haystack, etc.)
+- Keep your existing logic
+- Works with any framework (LangChain, CrewAI, etc.)
+
+**For more:** See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for P2P mode and multi-node examples.
 
 ---
 
@@ -345,7 +270,7 @@ All from a single natural language prompt!
 
 ---
 
-## Step 5: Try More Complex Examples
+## Step 5: Try More Complex AutoAgent Profile Examples
 
 ### Example 1: Data Processing
 
@@ -451,19 +376,42 @@ class MyAgent(AutoAgent):
     system_prompt = "Instructions for the LLM"  # How to generate code
 ```
 
-### 2. Mesh
+### 2. CustomAgent Profile
+
+The `CustomAgent` profile lets you bring your own execution logic:
+
+```python
+class MyAgent(CustomAgent):
+    role = "unique_name"
+    capabilities = ["skill1", "skill2"]
+
+    async def execute_task(self, task):      # For workflow steps (distributed)
+        return {"status": "success", "output": ...}
+
+    async def run(self):                      # For continuous loop (p2p)
+        while not self.shutdown_requested:
+            msg = await self.peers.receive(timeout=0.5)
+            ...
+```
+
+### 3. Mesh
 
 The `Mesh` is the orchestrator that manages agents and workflows:
 
 ```python
-mesh = Mesh(mode="autonomous")  # Autonomous mode for AutoAgent
+mesh = Mesh(mode="autonomous")  # Or "p2p", "distributed"
 mesh.add(MyAgent)               # Register your agent
 await mesh.start()              # Initialize
 results = await mesh.workflow(...)  # Execute tasks
 await mesh.stop()               # Cleanup
 ```
 
-### 3. Workflow
+**Modes:**
+- `autonomous`: Workflow engine only (AutoAgent)
+- `p2p`: P2P coordinator for agent-to-agent communication (CustomAgent)
+- `distributed`: Both workflow engine AND P2P (CustomAgent)
+
+### 4. Workflow
 
 A workflow is a list of tasks to execute:
 
@@ -477,7 +425,7 @@ results = await mesh.workflow("workflow-id", [
 ])
 ```
 
-### 4. Results
+### 5. Results
 
 Each task returns a result dict:
 
@@ -643,11 +591,12 @@ Check `repairs` in the result to see how many fixes were needed.
 
 ## Next Steps
 
-1. **Read the User Guide**: Complete documentation at [USER_GUIDE.md](USER_GUIDE.md)
-2. **Explore Examples**: Check out `examples/` directory
-3. **Try the API Reference**: [API_REFERENCE.md](API_REFERENCE.md)
-4. **Configuration Guide**: [CONFIGURATION.md](CONFIGURATION.md)
-5. **Troubleshooting**: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+1. **AutoAgent Guide**: Multi-node distributed mode → [AUTOAGENT_GUIDE.md](AUTOAGENT_GUIDE.md)
+2. **CustomAgent Guide**: P2P and distributed with your code → [CUSTOMAGENT_GUIDE.md](CUSTOMAGENT_GUIDE.md)
+3. **User Guide**: Complete documentation → [USER_GUIDE.md](USER_GUIDE.md)
+4. **API Reference**: [API_REFERENCE.md](API_REFERENCE.md)
+5. **Configuration**: [CONFIGURATION.md](CONFIGURATION.md)
+6. **Examples**: Check out `examples/` directory
 
 ---
 
@@ -745,5 +694,3 @@ Need help?
 ---
 
 **🚀 Happy building with JarvisCore!**
-
-*Built for the AutoAgent/Prompt-Dev generation - where AI writes the code, you write the prompts.*

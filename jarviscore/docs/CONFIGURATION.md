@@ -251,27 +251,28 @@ Generated code is automatically registered:
 
 ## P2P Configuration
 
-Configure distributed mesh networking (optional).
+Configure distributed mesh networking for `p2p` and `distributed` modes.
 
-### Enable P2P
+### Execution Modes
 
-```bash
-# Enable P2P mesh
-P2P_ENABLED=true
+| Mode | Code Config | Workflow Engine | P2P Coordinator |
+|------|-------------|-----------------|-----------------|
+| `autonomous` | `Mesh(mode="autonomous")` | ✅ | ❌ |
+| `p2p` | `Mesh(mode="p2p", config={...})` | ❌ | ✅ |
+| `distributed` | `Mesh(mode="distributed", config={...})` | ✅ | ✅ |
 
-# Node identification
-NODE_NAME=jarviscore-node-1
-```
-
-### Network Settings
+### Network Settings (P2P and Distributed)
 
 ```bash
 # Bind address and port
 BIND_HOST=0.0.0.0      # Listen on all interfaces
-BIND_PORT=7946         # SWIM protocol port
+BIND_PORT=7950         # SWIM protocol port
 
-# Seed nodes (comma-separated)
-SEED_NODES=192.168.1.100:7946,192.168.1.101:7946
+# Node identification
+NODE_NAME=jarviscore-node-1
+
+# Seed nodes (comma-separated) for joining existing cluster
+SEED_NODES=192.168.1.100:7950,192.168.1.101:7950
 ```
 
 ### Transport Configuration
@@ -540,14 +541,27 @@ Override environment variables in code:
 ```python
 from jarviscore import Mesh
 
-config = {
-    'sandbox_mode': 'remote',
-    'sandbox_service_url': 'https://...',
+# Autonomous mode (no P2P config needed)
+mesh = Mesh(mode="autonomous", config={
     'execution_timeout': 600,
     'log_level': 'DEBUG'
-}
+})
 
-mesh = Mesh(mode="autonomous", config=config)
+# P2P mode (requires network config)
+mesh = Mesh(mode="p2p", config={
+    'bind_host': '0.0.0.0',
+    'bind_port': 7950,
+    'node_name': 'my-node',
+    'seed_nodes': '192.168.1.10:7950',  # Optional, for joining cluster
+})
+
+# Distributed mode (both workflow + P2P)
+mesh = Mesh(mode="distributed", config={
+    'bind_host': '0.0.0.0',
+    'bind_port': 7950,
+    'node_name': 'my-node',
+    'execution_timeout': 600,
+})
 ```
 
 **Note:** Programmatic config overrides environment variables.
@@ -754,4 +768,4 @@ LOG_DIRECTORY=/tmp/jarviscore-logs
 
 Configuration Guide for JarvisCore v0.2.0
 
-Last Updated: 2026-01-17
+Last Updated: 2026-01-22
