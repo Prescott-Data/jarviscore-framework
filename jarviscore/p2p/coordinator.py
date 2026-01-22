@@ -13,6 +13,7 @@ from typing import List, Dict, Any, Optional
 from .swim_manager import SWIMThreadManager
 from .keepalive import P2PKeepaliveManager
 from .broadcaster import StepOutputBroadcaster
+from .messages import IncomingMessage, MessageType
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ class P2PCoordinator:
         # State
         self._started = False
         self._capability_map: Dict[str, List[str]] = {}  # capability -> [agent_ids]
+        self._agent_peer_clients: Dict[str, Any] = {}  # agent_id -> PeerClient
 
     async def start(self):
         """
@@ -140,6 +142,10 @@ class P2PCoordinator:
             "CAPABILITY_QUERY": self._handle_capability_query,
             "P2P_KEEPALIVE": self.keepalive_manager.handle_keepalive_received,
             "P2P_KEEPALIVE_ACK": self.keepalive_manager.handle_keepalive_ack,
+            # Peer-to-peer messaging (PeerClient)
+            "PEER_NOTIFY": self._handle_peer_notify,
+            "PEER_REQUEST": self._handle_peer_request,
+            "PEER_RESPONSE": self._handle_peer_response,
         }
 
         for msg_type, handler in message_types.items():
@@ -362,3 +368,126 @@ class P2PCoordinator:
             logger.debug(f"Responded to capability query from {sender} for {capability}")
         except Exception as e:
             logger.error(f"Error handling capability query: {e}")
+
+    # ─────────────────────────────────────────────────────────────────
+    # Peer-to-peer messaging handlers (PeerClient support)
+    # ─────────────────────────────────────────────────────────────────
+
+    def register_peer_client(self, agent_id: str, peer_client):
+        """
+        Register a PeerClient for an agent.
+
+        Called by Mesh when injecting PeerClients into agents.
+        """
+        self._agent_peer_clients[agent_id] = peer_client
+        logger.debug(f"Registered PeerClient for agent: {agent_id}")
+
+    def unregister_peer_client(self, agent_id: str):
+        """Unregister a PeerClient when agent leaves mesh."""
+        self._agent_peer_clients.pop(agent_id, None)
+        logger.debug(f"Unregistered PeerClient for agent: {agent_id}")
+
+    async def _handle_peer_notify(self, sender, message):
+        """Handle peer notification message."""
+        try:
+            payload = message.get('payload', {})
+            target = payload.get('target')
+
+            # Find target agent's PeerClient
+            target_client = self._find_peer_client_by_role_or_id(target)
+            if not target_client:
+                logger.warning(f"Peer notify: target '{target}' not found")
+                return
+
+            # Create incoming message and deliver
+            incoming = IncomingMessage(
+                sender=payload.get('sender', sender),
+                sender_node=payload.get('sender_node', sender),
+                type=MessageType.NOTIFY,
+                data=payload.get('data', {}),
+                correlation_id=payload.get('correlation_id'),
+                timestamp=payload.get('timestamp', 0)
+            )
+
+            await target_client._deliver_message(incoming)
+            logger.debug(f"Delivered peer notify to {target}")
+
+        except Exception as e:
+            logger.error(f"Error handling peer notify: {e}")
+
+    async def _handle_peer_request(self, sender, message):
+        """Handle peer request message (expects response)."""
+        try:
+            payload = message.get('payload', {})
+            target = payload.get('target')
+
+            # Find target agent's PeerClient
+            target_client = self._find_peer_client_by_role_or_id(target)
+            if not target_client:
+                logger.warning(f"Peer request: target '{target}' not found")
+                return
+
+            # Create incoming message and deliver
+            incoming = IncomingMessage(
+                sender=payload.get('sender', sender),
+                sender_node=payload.get('sender_node', sender),
+                type=MessageType.REQUEST,
+                data=payload.get('data', {}),
+                correlation_id=payload.get('correlation_id'),
+                timestamp=payload.get('timestamp', 0)
+            )
+
+            await target_client._deliver_message(incoming)
+            logger.debug(f"Delivered peer request to {target}")
+
+        except Exception as e:
+            logger.error(f"Error handling peer request: {e}")
+
+    async def _handle_peer_response(self, sender, message):
+        """Handle peer response message."""
+        try:
+            payload = message.get('payload', {})
+            target = payload.get('target')
+
+            # Find target agent's PeerClient
+            target_client = self._find_peer_client_by_role_or_id(target)
+            if not target_client:
+                logger.warning(f"Peer response: target '{target}' not found")
+                return
+
+            # Create incoming message and deliver
+            incoming = IncomingMessage(
+                sender=payload.get('sender', sender),
+                sender_node=payload.get('sender_node', sender),
+                type=MessageType.RESPONSE,
+                data=payload.get('data', {}),
+                correlation_id=payload.get('correlation_id'),
+                timestamp=payload.get('timestamp', 0)
+            )
+
+            await target_client._deliver_message(incoming)
+            logger.debug(f"Delivered peer response to {target}")
+
+        except Exception as e:
+            logger.error(f"Error handling peer response: {e}")
+
+    def _find_peer_client_by_role_or_id(self, target: str):
+        """
+        Find a PeerClient by agent role or agent_id.
+
+        Args:
+            target: Role name or agent_id
+
+        Returns:
+            PeerClient instance or None
+        """
+        # Try direct agent_id lookup
+        if target in self._agent_peer_clients:
+            return self._agent_peer_clients[target]
+
+        # Try role lookup via agents
+        for agent in self.agents:
+            if agent.role == target or agent.agent_id == target:
+                return self._agent_peer_clients.get(agent.agent_id)
+
+        return None

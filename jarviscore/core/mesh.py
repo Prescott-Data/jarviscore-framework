@@ -1,9 +1,10 @@
 """
 Mesh - Central orchestrator for JarvisCore framework.
 
-The Mesh coordinates agent execution and provides two operational modes:
+The Mesh coordinates agent execution and provides three operational modes:
 - Autonomous: Execute multi-step workflows with dependency resolution
 - Distributed: Run as P2P service responding to task requests
+- P2P: Agents run their own loops with direct peer-to-peer communication
 
 Day 1: Foundation with agent registration and setup
 Day 2: P2P integration for agent discovery and coordination
@@ -11,6 +12,7 @@ Day 3: Full workflow orchestration with state management
 """
 from typing import List, Dict, Any, Optional, Type
 from enum import Enum
+import asyncio
 import logging
 
 from .agent import Agent
@@ -21,7 +23,8 @@ logger = logging.getLogger(__name__)
 class MeshMode(Enum):
     """Operational modes for Mesh."""
     AUTONOMOUS = "autonomous"  # Execute workflows locally
-    DISTRIBUTED = "distributed"  # Run as P2P service
+    DISTRIBUTED = "distributed"  # Run as P2P service (workflow-driven)
+    P2P = "p2p"  # Agents run own loops with direct peer communication
 
 
 class Mesh:
@@ -29,17 +32,22 @@ class Mesh:
     Central orchestrator for JarvisCore agent framework.
 
     The Mesh manages agent lifecycle, coordinates execution, and provides
-    two operational modes:
+    three operational modes:
 
     1. **Autonomous Mode**: Execute multi-step workflows locally
        - User defines workflow steps with dependencies
        - Mesh routes tasks to capable agents
        - Handles crash recovery and checkpointing
 
-    2. **Distributed Mode**: Run as P2P service
+    2. **Distributed Mode**: Run as P2P service (workflow-driven)
        - Agents join P2P network and announce capabilities
        - Receive and execute tasks from other nodes
        - Coordinate with remote agents for complex workflows
+
+    3. **P2P Mode**: Direct agent-to-agent communication
+       - Agents run their own execution loops via run() method
+       - Agents communicate directly via self.peers client
+       - No workflow engine - agents control their own flow
 
     Example (Autonomous):
         mesh = Mesh(mode="autonomous")
@@ -58,7 +66,15 @@ class Mesh:
         mesh.add(DatabaseAgent)
 
         await mesh.start()
-        await mesh.serve_forever()  # Run as service
+        await mesh.serve_forever()  # Run as workflow service
+
+    Example (P2P):
+        mesh = Mesh(mode="p2p")
+        mesh.add(ScoutAgent)    # Has run() method
+        mesh.add(AnalystAgent)  # Has run() method
+
+        await mesh.start()
+        await mesh.run_forever()  # Agents run their own loops
     """
 
     def __init__(
@@ -70,9 +86,9 @@ class Mesh:
         Initialize Mesh orchestrator.
 
         Args:
-            mode: Operational mode ("autonomous" or "distributed")
+            mode: Operational mode ("autonomous", "distributed", or "p2p")
             config: Optional configuration dictionary:
-                - p2p_enabled: Enable P2P networking (default: True for distributed)
+                - p2p_enabled: Enable P2P networking (default: True for distributed/p2p)
                 - state_backend: "file", "redis", "mongodb" (default: "file")
                 - event_store: Path or connection string for event storage
                 - checkpoint_interval: Save checkpoints every N steps (default: 1)
@@ -86,7 +102,7 @@ class Mesh:
             self.mode = MeshMode(mode)
         except ValueError:
             raise ValueError(
-                f"Invalid mode '{mode}'. Must be 'autonomous' or 'distributed'"
+                f"Invalid mode '{mode}'. Must be 'autonomous', 'distributed', or 'p2p'"
             )
 
         self.config = config or {}
@@ -226,8 +242,8 @@ class Mesh:
                 self._logger.error(f"Failed to setup agent {agent.agent_id}: {e}")
                 raise
 
-        # Initialize P2P coordinator (Day 2 implementation)
-        if self.mode == MeshMode.DISTRIBUTED or self.config.get("p2p_enabled", False):
+        # Initialize P2P coordinator for distributed and p2p modes
+        if self.mode in (MeshMode.DISTRIBUTED, MeshMode.P2P) or self.config.get("p2p_enabled", False):
             self._logger.info("Initializing P2P coordinator...")
             from jarviscore.p2p import P2PCoordinator
             from jarviscore.config import get_config_from_dict
@@ -244,8 +260,13 @@ class Mesh:
             await self._p2p_coordinator.announce_capabilities()
             self._logger.info("✓ Capabilities announced to mesh")
 
-        # Initialize workflow engine (Day 3 implementation)
-        if self.mode == MeshMode.AUTONOMOUS:
+        # Inject PeerClients for p2p mode
+        if self.mode == MeshMode.P2P:
+            self._inject_peer_clients()
+            self._logger.info("✓ PeerClients injected into agents")
+
+        # Initialize workflow engine (for autonomous and distributed modes)
+        if self.mode in (MeshMode.AUTONOMOUS, MeshMode.DISTRIBUTED):
             self._logger.info("Initializing workflow engine...")
             from jarviscore.orchestration import WorkflowEngine
 
@@ -377,10 +398,11 @@ class Mesh:
         Stop mesh and cleanup resources.
 
         This method:
-        1. Calls teardown() on all agents
-        2. Disconnects from P2P network (distributed mode)
-        3. Saves state and checkpoints
-        4. Closes all connections
+        1. Requests shutdown for all agents (p2p mode)
+        2. Calls teardown() on all agents
+        3. Disconnects from P2P network
+        4. Saves state and checkpoints
+        5. Closes all connections
 
         Example:
             await mesh.stop()
@@ -389,6 +411,15 @@ class Mesh:
             return
 
         self._logger.info("Stopping mesh...")
+
+        # Request shutdown for all agents (for p2p mode loops)
+        for agent in self.agents:
+            agent.request_shutdown()
+
+        # Unregister peer clients
+        if self._p2p_coordinator:
+            for agent in self.agents:
+                self._p2p_coordinator.unregister_peer_client(agent.agent_id)
 
         # Teardown agents
         for agent in self.agents:
@@ -410,6 +441,124 @@ class Mesh:
 
         self._started = False
         self._logger.info("Mesh stopped successfully")
+
+    def _inject_peer_clients(self):
+        """
+        Inject PeerClient instances into all agents.
+
+        Called during start() in p2p mode. Gives each agent a self.peers
+        client for direct peer-to-peer communication.
+        """
+        from jarviscore.p2p import PeerClient
+
+        node_id = ""
+        if self._p2p_coordinator and self._p2p_coordinator.swim_manager:
+            addr = self._p2p_coordinator.swim_manager.bind_addr
+            if addr:
+                node_id = f"{addr[0]}:{addr[1]}"
+
+        for agent in self.agents:
+            peer_client = PeerClient(
+                coordinator=self._p2p_coordinator,
+                agent_id=agent.agent_id,
+                agent_role=agent.role,
+                agent_registry=self._agent_registry,
+                node_id=node_id
+            )
+            agent.peers = peer_client
+
+            # Register with coordinator for remote message routing
+            if self._p2p_coordinator:
+                self._p2p_coordinator.register_peer_client(agent.agent_id, peer_client)
+
+            self._logger.debug(f"Injected PeerClient into agent: {agent.agent_id}")
+
+    async def run_forever(self):
+        """
+        Run all agent loops concurrently (p2p mode only).
+
+        In p2p mode, agents run their own execution loops via their run() method.
+        This method starts all agent loops and waits until shutdown is requested.
+
+        Raises:
+            RuntimeError: If mesh not started or not in p2p mode
+
+        Example:
+            mesh = Mesh(mode="p2p")
+            mesh.add(ScoutAgent)    # Has async def run(self)
+            mesh.add(AnalystAgent)  # Has async def run(self)
+
+            await mesh.start()
+            await mesh.run_forever()  # Blocks until Ctrl+C
+        """
+        if not self._started:
+            raise RuntimeError("Mesh not started. Call await mesh.start() first.")
+
+        if self.mode != MeshMode.P2P:
+            raise RuntimeError(
+                f"run_forever() only available in p2p mode. "
+                f"Current mode: {self.mode.value}. "
+                f"Use workflow() for autonomous mode or serve_forever() for distributed mode."
+            )
+
+        self._logger.info("Starting agent loops in p2p mode...")
+
+        # Collect all agent run() coroutines
+        agent_tasks = []
+        for agent in self.agents:
+            if hasattr(agent, 'run') and asyncio.iscoroutinefunction(agent.run):
+                task = asyncio.create_task(
+                    self._run_agent_loop(agent),
+                    name=f"agent-{agent.agent_id}"
+                )
+                agent_tasks.append(task)
+                self._logger.info(f"Started loop for agent: {agent.agent_id}")
+            else:
+                self._logger.warning(
+                    f"Agent {agent.agent_id} has no async run() method, skipping"
+                )
+
+        if not agent_tasks:
+            raise RuntimeError(
+                "No agents with run() method found. "
+                "p2p mode requires agents that implement async def run(self)."
+            )
+
+        self._logger.info(f"Running {len(agent_tasks)} agent loop(s). Press Ctrl+C to stop.")
+
+        # Run until shutdown
+        try:
+            await asyncio.gather(*agent_tasks)
+        except asyncio.CancelledError:
+            self._logger.info("Agent loops cancelled")
+        except KeyboardInterrupt:
+            self._logger.info("Keyboard interrupt received")
+        finally:
+            # Request shutdown for all agents
+            for agent in self.agents:
+                agent.request_shutdown()
+
+            # Cancel any remaining tasks
+            for task in agent_tasks:
+                if not task.done():
+                    task.cancel()
+
+            await self.stop()
+
+    async def _run_agent_loop(self, agent: Agent):
+        """
+        Run a single agent's loop with error handling.
+
+        Wraps the agent's run() method to catch and log errors.
+        """
+        try:
+            await agent.run()
+        except asyncio.CancelledError:
+            self._logger.debug(f"Agent {agent.agent_id} loop cancelled")
+            raise
+        except Exception as e:
+            self._logger.error(f"Agent {agent.agent_id} loop error: {e}")
+            raise
 
     def _find_agent_for_step(self, step: Dict[str, Any]) -> Optional[Agent]:
         """
