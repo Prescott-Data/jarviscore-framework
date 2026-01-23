@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "0.2.0"
+version = "0.2.1"
 description = "Build autonomous AI agents in 3 lines of code. Production-ready orchestration with P2P mesh networking."
 readme = "README.md"
 requires-python = ">=3.10"
