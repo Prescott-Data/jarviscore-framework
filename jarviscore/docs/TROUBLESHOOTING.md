@@ -557,10 +557,10 @@ If significantly slower:
 
 ---
 
-*Last updated: 2026-01-22*
+*Last updated: 2026-01-23*
 
 ---
 
 ## Version
 
-Troubleshooting Guide for JarvisCore v0.2.0
+Troubleshooting Guide for JarvisCore v0.2.1

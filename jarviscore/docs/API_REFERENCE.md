@@ -1140,6 +1140,6 @@ async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
 
 ## Version
 
-API Reference for JarvisCore v0.2.0
+API Reference for JarvisCore v0.2.1
 
-Last Updated: 2026-01-22
+Last Updated: 2026-01-23

@@ -94,7 +94,7 @@ print(results[0]["output"])  # [2, 4, 6]
 
 ## Version
 
-**0.2.0**
+**0.2.1**
 
 ## License
 
