@@ -135,8 +135,20 @@ class ResearcherAgent(CustomAgent):
                 await asyncio.sleep(0.1)
 
     async def execute_task(self, task):
-        """Not used in P2P mode, but required by base class."""
-        return {"status": "success", "note": "P2P mode uses run() instead"}
+        """
+        Required by Agent base class (@abstractmethod).
+
+        Why this exists even in P2P mode:
+        1. Agent.execute_task() is declared as @abstractmethod in core/agent.py
+        2. Python requires ALL abstract methods to be implemented, or you get:
+           TypeError: Can't instantiate abstract class ResearcherAgent
+           with abstract method execute_task
+        3. This provides a consistent interface - even P2P agents CAN be called
+           via execute_task() if needed (e.g., hybrid mode, testing)
+
+        In P2P mode, your main logic lives in run(), not here.
+        """
+        return {"status": "success", "note": "This agent uses run() for P2P mode"}
 
 
 class AssistantAgent(CustomAgent):
@@ -230,8 +242,14 @@ class AssistantAgent(CustomAgent):
                 await asyncio.sleep(0.1)
 
     async def execute_task(self, task):
-        """Not used in P2P mode, but required by base class."""
-        return {"status": "success", "note": "P2P mode uses run() instead"}
+        """
+        Required by Agent base class (@abstractmethod).
+
+        Same as ResearcherAgent - must implement to satisfy Python's
+        abstract method requirement. See ResearcherAgent.execute_task
+        for detailed explanation.
+        """
+        return {"status": "success", "note": "This agent uses run() for P2P mode"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
