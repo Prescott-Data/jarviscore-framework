@@ -209,6 +209,8 @@ class ResearcherAgent(CustomAgent):
 | `if __name__ == "__main__":` | `async def run(self):` loop |
 | Direct method calls | Peer message handling |
 
+> **Note**: This is a minimal example. For the full pattern with **LLM-driven peer communication** (where your LLM autonomously decides when to call other agents), see the [Complete Example](#complete-example-llm-driven-peer-communication) below.
+
 ### Step 4: Create New Entry Point → `main.py`
 
 **This is your NEW main file.** Instead of running `python my_agent.py`, you'll run `python main.py`.
@@ -265,9 +267,47 @@ python main.py
 
 ---
 
-### Complete Example: Two Agents Communicating
+### Complete Example: LLM-Driven Peer Communication
 
-This example shows an assistant that delegates research to a researcher agent.
+This is the **key pattern** for P2P mode. Your LLM gets peer tools added to its toolset, and it **autonomously decides** when to ask other agents for help.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    LLM-DRIVEN PEER COMMUNICATION                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  User: "Analyze this sales data"                                │
+│                    │                                            │
+│                    ▼                                            │
+│  ┌─────────────────────────────────────┐                        │
+│  │         ASSISTANT'S LLM             │                        │
+│  │                                     │                        │
+│  │  Tools available:                   │                        │
+│  │  - web_search (local)               │                        │
+│  │  - ask_peer   (peer) ◄── NEW!       │                        │
+│  │  - broadcast  (peer) ◄── NEW!       │                        │
+│  │                                     │                        │
+│  │  LLM decides: "I need analysis      │                        │
+│  │  help, let me ask the analyst"      │                        │
+│  └─────────────────────────────────────┘                        │
+│                    │                                            │
+│                    ▼ uses ask_peer tool                         │
+│  ┌─────────────────────────────────────┐                        │
+│  │          ANALYST AGENT              │                        │
+│  │  (processes with its own LLM)       │                        │
+│  └─────────────────────────────────────┘                        │
+│                    │                                            │
+│                    ▼ returns analysis                           │
+│  ┌─────────────────────────────────────┐                        │
+│  │         ASSISTANT'S LLM             │                        │
+│  │  "Based on the analyst's findings,  │                        │
+│  │   here's your answer..."            │                        │
+│  └─────────────────────────────────────┘                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**The key insight**: You add peer tools to your LLM's toolset. The LLM decides when to use them.
 
 ```python
 # agents.py
@@ -275,76 +315,233 @@ import asyncio
 from jarviscore.profiles import CustomAgent
 
 
-class ResearcherAgent(CustomAgent):
-    """Agent that performs research when asked by peers."""
+class AnalystAgent(CustomAgent):
+    """
+    Analyst agent - specialists in data analysis.
 
-    role = "researcher"
-    capabilities = ["research", "analysis"]
+    This agent:
+    1. Listens for incoming requests from peers
+    2. Processes requests using its own LLM
+    3. Responds with analysis results
+    """
+    role = "analyst"
+    capabilities = ["analysis", "data_interpretation", "reporting"]
 
     async def setup(self):
         await super().setup()
-        # Initialize your LLM client here
-        # self.llm = MyLLMClient()
+        self.llm = MyLLMClient()  # Your LLM client
+
+    def get_tools(self) -> list:
+        """
+        Tools available to THIS agent's LLM.
+
+        The analyst has local analysis tools.
+        It can also ask other peers if needed.
+        """
+        tools = [
+            {
+                "name": "statistical_analysis",
+                "description": "Run statistical analysis on numeric data",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "data": {"type": "string", "description": "Data to analyze"}
+                    },
+                    "required": ["data"]
+                }
+            }
+        ]
+
+        # ADD PEER TOOLS - so LLM can ask other agents if needed
+        if self.peers:
+            tools.extend(self.peers.as_tool().schema)
+
+        return tools
+
+    async def execute_tool(self, tool_name: str, args: dict) -> str:
+        """
+        Execute a tool by name.
+
+        Routes to peer tools or local tools as appropriate.
+        """
+        # PEER TOOLS - check and execute
+        if self.peers and tool_name in self.peers.as_tool().tool_names:
+            return await self.peers.as_tool().execute(tool_name, args)
+
+        # LOCAL TOOLS
+        if tool_name == "statistical_analysis":
+            data = args.get("data", "")
+            return f"Analysis of '{data}': mean=150.3, std=23.4, trend=positive"
+
+        return f"Unknown tool: {tool_name}"
+
+    async def process_with_llm(self, query: str) -> str:
+        """Process a request using LLM with tools."""
+        system_prompt = """You are an expert data analyst.
+You have tools for statistical analysis.
+Analyze data thoroughly and provide insights."""
+
+        tools = self.get_tools()
+        messages = [{"role": "user", "content": query}]
+
+        # Call LLM with tools
+        response = self.llm.chat(messages, tools=tools, system=system_prompt)
+
+        # Handle tool use if LLM decides to use a tool
+        if response.get("type") == "tool_use":
+            tool_result = await self.execute_tool(
+                response["tool_name"],
+                response["tool_args"]
+            )
+            # Continue conversation with tool result
+            response = self.llm.continue_with_tool_result(
+                messages, response["tool_use_id"], tool_result
+            )
+
+        return response.get("content", "Analysis complete.")
 
     async def run(self):
-        """Listen for research requests from peers."""
+        """Listen for incoming requests from peers."""
         while not self.shutdown_requested:
             if self.peers:
                 msg = await self.peers.receive(timeout=0.5)
                 if msg and msg.is_request:
-                    query = msg.data.get("question", "")
+                    query = msg.data.get("question", msg.data.get("query", ""))
 
-                    # Your research logic here
-                    result = f"Research results for: {query}"
-                    # result = self.llm.chat(f"Research: {query}")
+                    # Process with LLM
+                    result = await self.process_with_llm(query)
 
                     await self.peers.respond(msg, {"response": result})
             await asyncio.sleep(0.1)
 
     async def execute_task(self, task: dict) -> dict:
+        """Required by base class."""
         return {"status": "success"}
 
 
 class AssistantAgent(CustomAgent):
-    """Agent that helps users and delegates research to ResearcherAgent."""
+    """
+    Assistant agent - coordinates with other specialists.
 
+    This agent:
+    1. Has its own LLM for reasoning
+    2. Has peer tools (ask_peer, broadcast) in its toolset
+    3. LLM AUTONOMOUSLY decides when to ask other agents
+    """
     role = "assistant"
-    capabilities = ["help", "coordination"]
+    capabilities = ["chat", "coordination", "search"]
 
     async def setup(self):
         await super().setup()
-        # self.llm = MyLLMClient()
+        self.llm = MyLLMClient()  # Your LLM client
+        self.tool_calls = []  # Track tool usage
 
-    async def ask_researcher(self, question: str) -> str:
-        """Send a question to the researcher agent and wait for response."""
-        if not self.peers:
-            return "Peer system not available"
+    def get_tools(self) -> list:
+        """
+        Tools available to THIS agent's LLM.
 
-        try:
-            response = await self.peers.as_tool().execute(
-                "ask_peer",
-                {"role": "researcher", "question": question}
+        IMPORTANT: This includes PEER TOOLS!
+        The LLM sees ask_peer, broadcast_update, list_peers
+        and decides when to use them.
+        """
+        # Local tools
+        tools = [
+            {
+                "name": "web_search",
+                "description": "Search the web for information",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        ]
+
+        # ADD PEER TOOLS TO LLM'S TOOLSET
+        # This is the key! LLM will see:
+        # - ask_peer: Ask another agent for help
+        # - broadcast_update: Send message to all peers
+        # - list_peers: See available agents
+        if self.peers:
+            tools.extend(self.peers.as_tool().schema)
+
+        return tools
+
+    async def execute_tool(self, tool_name: str, args: dict) -> str:
+        """
+        Execute a tool by name.
+
+        When LLM calls ask_peer, this routes to the peer system.
+        """
+        self.tool_calls.append({"tool": tool_name, "args": args})
+
+        # PEER TOOLS - route to peer system
+        if self.peers and tool_name in self.peers.as_tool().tool_names:
+            return await self.peers.as_tool().execute(tool_name, args)
+
+        # LOCAL TOOLS
+        if tool_name == "web_search":
+            return f"Search results for '{args.get('query')}': Found 10 articles."
+
+        return f"Unknown tool: {tool_name}"
+
+    async def chat(self, user_message: str) -> str:
+        """
+        Complete LLM chat with autonomous tool use.
+
+        The LLM sees all tools (including peer tools) and decides
+        which to use. If user asks for analysis, LLM will use
+        ask_peer to contact the analyst.
+        """
+        # System prompt tells LLM about its capabilities
+        system_prompt = """You are a helpful assistant.
+
+You have access to these capabilities:
+- web_search: Search the web for information
+- ask_peer: Ask specialist agents for help (e.g., analyst for data analysis)
+- broadcast_update: Send updates to all connected agents
+- list_peers: See what other agents are available
+
+When a user needs data analysis, USE ask_peer to ask the analyst.
+When a user needs web information, USE web_search.
+Be concise in your responses."""
+
+        tools = self.get_tools()
+        messages = [{"role": "user", "content": user_message}]
+
+        # Call LLM - it will decide which tools to use
+        response = self.llm.chat(messages, tools=tools, system=system_prompt)
+
+        # Handle tool use loop
+        while response.get("type") == "tool_use":
+            tool_name = response["tool_name"]
+            tool_args = response["tool_args"]
+
+            # Execute the tool (might be ask_peer!)
+            tool_result = await self.execute_tool(tool_name, tool_args)
+
+            # Continue conversation with tool result
+            response = self.llm.continue_with_tool_result(
+                messages, response["tool_use_id"], tool_result, tools
             )
-            return response.get("response", "No response received")
-        except Exception as e:
-            return f"Failed to reach researcher: {e}"
 
-    async def help(self, question: str) -> str:
-        """Public method - answer a question using research."""
-        research = await self.ask_researcher(question)
-
-        # Your logic to combine research with answer
-        answer = f"Based on research: {research}\nAnswer: {question}"
-        # answer = self.llm.chat(f"Based on: {research}\nAnswer: {question}")
-
-        return answer
+        return response.get("content", "")
 
     async def run(self):
-        """Main loop - could listen for HTTP requests, websockets, etc."""
+        """Main loop - listen for incoming requests."""
         while not self.shutdown_requested:
+            if self.peers:
+                msg = await self.peers.receive(timeout=0.5)
+                if msg and msg.is_request:
+                    query = msg.data.get("query", "")
+                    result = await self.chat(query)
+                    await self.peers.respond(msg, {"response": result})
             await asyncio.sleep(0.1)
 
     async def execute_task(self, task: dict) -> dict:
+        """Required by base class."""
         return {"status": "success"}
 ```
 
@@ -352,7 +549,7 @@ class AssistantAgent(CustomAgent):
 # main.py
 import asyncio
 from jarviscore import Mesh
-from agents import ResearcherAgent, AssistantAgent
+from agents import AnalystAgent, AssistantAgent
 
 
 async def main():
@@ -360,22 +557,35 @@ async def main():
         mode="p2p",
         config={
             "bind_port": 7950,
-            "node_name": "assistant-node",
+            "node_name": "my-agents",
         }
     )
 
-    mesh.add(ResearcherAgent)
-    mesh.add(AssistantAgent)
+    # Add both agents
+    mesh.add(AnalystAgent)
+    assistant = mesh.add(AssistantAgent)
 
     await mesh.start()
 
-    # Get the assistant agent instance to interact with it
-    assistant = mesh.get_agent("assistant")
+    # Start analyst listening in background
+    analyst = mesh.get_agent("analyst")
+    analyst_task = asyncio.create_task(analyst.run())
 
-    # Ask a question
-    result = await assistant.help("What is quantum computing?")
-    print(result)
+    # Give time for setup
+    await asyncio.sleep(0.5)
 
+    # User asks a question - LLM will autonomously decide to use ask_peer
+    print("User: Please analyze the Q4 sales trends")
+    response = await assistant.chat("Please analyze the Q4 sales trends")
+    print(f"Assistant: {response}")
+
+    # Check what tools were used
+    print(f"\nTools used: {assistant.tool_calls}")
+    # Output: [{'tool': 'ask_peer', 'args': {'role': 'analyst', 'question': '...'}}]
+
+    # Cleanup
+    analyst.request_shutdown()
+    analyst_task.cancel()
     await mesh.stop()
 
 
@@ -385,37 +595,68 @@ if __name__ == "__main__":
 
 ### Key Concepts for P2P Mode
 
-#### The `run()` Method
+#### Adding Peer Tools to Your LLM
 
-This is your agent's main loop. It runs continuously until shutdown.
+This is the most important pattern. Add peer tools to `get_tools()`:
+
+```python
+def get_tools(self) -> list:
+    tools = [
+        # Your local tools...
+    ]
+
+    # ADD PEER TOOLS - LLM will see ask_peer, broadcast, list_peers
+    if self.peers:
+        tools.extend(self.peers.as_tool().schema)
+
+    return tools
+```
+
+#### Routing Tool Execution
+
+Route tool calls to either peer tools or local tools:
+
+```python
+async def execute_tool(self, tool_name: str, args: dict) -> str:
+    # Check peer tools first
+    if self.peers and tool_name in self.peers.as_tool().tool_names:
+        return await self.peers.as_tool().execute(tool_name, args)
+
+    # Then local tools
+    if tool_name == "my_local_tool":
+        return self.my_local_tool(args)
+
+    return f"Unknown tool: {tool_name}"
+```
+
+#### System Prompt for Peer Awareness
+
+Tell the LLM about peer capabilities:
+
+```python
+system_prompt = """You are a helpful assistant.
+
+You have access to:
+- ask_peer: Ask specialist agents for help
+- broadcast_update: Send updates to all agents
+
+When a user needs specialized help, USE ask_peer to contact the right agent."""
+```
+
+#### The `run()` Loop
+
+Listen for incoming requests and process with LLM:
 
 ```python
 async def run(self):
-    while not self.shutdown_requested:  # Framework sets this on shutdown
-        # Your continuous logic here
-        await asyncio.sleep(0.1)  # Prevent CPU spinning
+    while not self.shutdown_requested:
+        if self.peers:
+            msg = await self.peers.receive(timeout=0.5)
+            if msg and msg.is_request:
+                result = await self.process_with_llm(msg.data)
+                await self.peers.respond(msg, {"response": result})
+        await asyncio.sleep(0.1)
 ```
-
-#### The `self.peers` Object
-
-Available after `setup()` completes. Provides peer communication:
-
-```python
-# Check if peers system is available
-if self.peers:
-    # Receive messages (non-blocking with timeout)
-    msg = await self.peers.receive(timeout=0.5)
-
-    # Respond to a request
-    await self.peers.respond(msg, {"key": "value"})
-
-    # Use peer tools
-    result = await self.peers.as_tool().execute("ask_peer", {...})
-```
-
-#### The `self.shutdown_requested` Flag
-
-Set to `True` by the framework when `mesh.stop()` is called. Always check this in your `run()` loop.
 
 ---
 
