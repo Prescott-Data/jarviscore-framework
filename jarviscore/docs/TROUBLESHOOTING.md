@@ -503,7 +503,7 @@ If issues persist:
    - Minimal code to reproduce issue
 
 4. **Create an issue:**
-   - GitHub: https://github.com/yourusername/jarviscore/issues
+   - GitHub: https://github.com/Prescott-Data/jarviscore-framework/issues
    - Include diagnostics output above
 
 ---

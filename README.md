@@ -85,6 +85,7 @@ print(results[0]["output"])  # [2, 4, 6]
 
 ## Documentation
 
+- [User Guide](jarviscore/docs/USER_GUIDE.md) - Complete documentation
 - [Getting Started](jarviscore/docs/GETTING_STARTED.md) - 5-minute quickstart
 - [AutoAgent Guide](jarviscore/docs/AUTOAGENT_GUIDE.md) - LLM-powered agents
 - [CustomAgent Guide](jarviscore/docs/CUSTOMAGENT_GUIDE.md) - Bring your own code
