@@ -4,15 +4,16 @@ JarvisCore - P2P Distributed Agent Framework
 A production-grade framework for building autonomous agent systems with:
 - P2P coordination via SWIM protocol
 - Workflow orchestration with dependencies
-- Two agent profiles: AutoAgent (LLM-powered) and CustomAgent (your code)
+- Three agent profiles: AutoAgent, CustomAgent, and ListenerAgent
 
 Profiles:
-    AutoAgent  - LLM generates and executes code from prompts (autonomous mode)
-    CustomAgent - You provide execute_task() or run() (p2p/distributed modes)
+    AutoAgent     - LLM generates and executes code from prompts (autonomous mode)
+    CustomAgent   - You provide execute_task() or run() (p2p/distributed modes)
+    ListenerAgent - API-first agents with background P2P (just implement handlers)
 
 Modes:
     autonomous  - Workflow engine only (AutoAgent)
-    p2p         - P2P coordinator only (CustomAgent with run() loops)
+    p2p         - P2P coordinator only (CustomAgent/ListenerAgent with run() loops)
     distributed - Both workflow + P2P (CustomAgent with execute_task())
 
 Quick Start (AutoAgent - autonomous mode):
@@ -28,6 +29,20 @@ Quick Start (AutoAgent - autonomous mode):
     mesh.add(CalcAgent)
     await mesh.start()
     results = await mesh.workflow("calc", [{"agent": "calculator", "task": "Calculate 10!"}])
+
+Quick Start (ListenerAgent + FastAPI):
+    from fastapi import FastAPI
+    from jarviscore.profiles import ListenerAgent
+    from jarviscore.integrations.fastapi import JarvisLifespan
+
+    class MyAgent(ListenerAgent):
+        role = "processor"
+        capabilities = ["processing"]
+
+        async def on_peer_request(self, msg):
+            return {"result": msg.data.get("task", "").upper()}
+
+    app = FastAPI(lifespan=JarvisLifespan(MyAgent(), mode="p2p"))
 
 Quick Start (CustomAgent - distributed mode):
     from jarviscore import Mesh
@@ -46,7 +61,7 @@ Quick Start (CustomAgent - distributed mode):
     results = await mesh.workflow("demo", [{"agent": "processor", "task": "hello"}])
 """
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 __author__ = "JarvisCore Contributors"
 __license__ = "MIT"
 
@@ -58,6 +73,7 @@ from jarviscore.core.mesh import Mesh, MeshMode
 # Execution profiles
 from jarviscore.profiles.autoagent import AutoAgent
 from jarviscore.profiles.customagent import CustomAgent
+from jarviscore.profiles.listeneragent import ListenerAgent
 
 # Custom Profile: Decorator, Wrapper, and Context
 from jarviscore.adapter import jarvis_agent, wrap
@@ -83,6 +99,7 @@ __all__ = [
     # Profiles
     "AutoAgent",
     "CustomAgent",
+    "ListenerAgent",
 
     # Custom Profile (decorator and wrapper)
     "jarvis_agent",
