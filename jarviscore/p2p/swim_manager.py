@@ -116,12 +116,17 @@ class SWIMThreadManager:
             self.bind_addr = swim_parse_address(f"{bind_host}:{bind_port}")
             logger.info(f"SWIM bind address: {self.bind_addr}")
 
-            # Parse seed nodes
+            # Parse seed nodes - handle both string and list
             seed_addrs = []
             if seed_nodes:
-                for seed in seed_nodes.split(','):
-                    if seed.strip():
-                        seed_addrs.append(swim_parse_address(seed.strip()))
+                # Handle both string (comma-separated) and list
+                if isinstance(seed_nodes, str):
+                    seed_list = [s.strip() for s in seed_nodes.split(',') if s.strip()]
+                else:
+                    seed_list = seed_nodes
+                for seed in seed_list:
+                    if seed:
+                        seed_addrs.append(swim_parse_address(seed.strip() if isinstance(seed, str) else seed))
             logger.info(f"SWIM seed nodes: {seed_addrs}")
 
             # Get SWIM config

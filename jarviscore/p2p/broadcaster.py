@@ -143,12 +143,19 @@ class StepOutputBroadcaster:
         """
         try:
             message_id = message_data.get('id', str(uuid.uuid4()))
-            step_result_data = message_data.get('step_result', {})
-            
+
+            # The sender uses 'step_output_data' as the key (json string)
+            step_output_json = message_data.get('step_output_data', '')
+            if step_output_json:
+                step_result_data = json.loads(step_output_json)
+            else:
+                # Fallback for legacy format
+                step_result_data = message_data.get('step_result', {})
+
             # Send acknowledgment if callback provided
             if send_ack_callback:
                 await send_ack_callback(sender_swim_id, message_id, "STEP_OUTPUT_BROADCAST")
-            
+
             # Create StepExecutionResult from received data
             result = StepExecutionResult(**step_result_data)
             

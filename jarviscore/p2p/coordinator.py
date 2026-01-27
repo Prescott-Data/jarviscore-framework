@@ -63,6 +63,7 @@ class P2PCoordinator:
         self._started = False
         self._capability_map: Dict[str, List[str]] = {}  # capability -> [agent_ids]
         self._agent_peer_clients: Dict[str, Any] = {}  # agent_id -> PeerClient
+        self._remote_agent_registry: Dict[str, Dict[str, Any]] = {}  # agent_id -> agent info
 
     async def start(self):
         """
@@ -139,7 +140,9 @@ class P2PCoordinator:
             "STEP_COMPLETION_NUDGE_RESPONSE": self._handle_nudge_response,
             "STEP_DATA_REQUEST": self._handle_data_request,
             "CAPABILITY_ANNOUNCEMENT": self._handle_capability_announcement,
+            "CAPABILITY_DEANNOUNCEMENT": self._handle_capability_deannouncement,
             "CAPABILITY_QUERY": self._handle_capability_query,
+            "CAPABILITY_REQUEST": self._handle_capability_request,
             "P2P_KEEPALIVE": self.keepalive_manager.handle_keepalive_received,
             "P2P_KEEPALIVE_ACK": self.keepalive_manager.handle_keepalive_ack,
             # Peer-to-peer messaging (PeerClient)
@@ -157,34 +160,228 @@ class P2PCoordinator:
 
         logger.info(f"Registered {len(message_types)} message handlers")
 
+    async def _wait_for_zmq_connections(self, timeout: float = 10.0) -> bool:
+        """
+        Wait for ZMQ connections to alive SWIM members to be established.
+
+        This ensures we don't try to send messages before ZMQ is ready.
+        The ZMQ connection establishment happens asynchronously after
+        SWIM membership changes are detected.
+
+        Args:
+            timeout: Maximum time to wait in seconds
+
+        Returns:
+            True if connections are ready, False if timeout
+        """
+        import asyncio
+        import time
+
+        if not self.swim_manager or not self.swim_manager.zmq_agent:
+            logger.warning("No ZMQ agent available")
+            return False
+
+        swim_node = self.swim_manager.swim_node
+        if not swim_node:
+            logger.warning("No SWIM node available")
+            return False
+
+        conn_mgr = self.swim_manager.zmq_agent.connection_manager
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            # Get alive members (excluding self)
+            alive_members = list(swim_node.members.get_alive_members(exclude_self=True))
+
+            if not alive_members:
+                # No peers to connect to - that's fine
+                logger.debug("No alive peers to wait for")
+                return True
+
+            # Check if all have ZMQ connections ready
+            all_ready = True
+            for member in alive_members:
+                swim_addr = str(member.address)
+                zmq_addr = conn_mgr.get_zmq_address_for_swim(swim_addr)
+
+                if zmq_addr and conn_mgr.can_send_to_node(zmq_addr):
+                    logger.debug(f"ZMQ connection to {swim_addr} is ready")
+                else:
+                    logger.debug(f"ZMQ connection to {swim_addr} not ready yet")
+                    all_ready = False
+                    break
+
+            if all_ready:
+                logger.info(f"All ZMQ connections ready ({len(alive_members)} peers)")
+                return True
+
+            # Wait a bit before checking again
+            await asyncio.sleep(0.2)
+
+        logger.warning(f"Timeout waiting for ZMQ connections after {timeout}s")
+        return False
+
     async def announce_capabilities(self):
         """Broadcast agent capabilities to mesh."""
         if not self._started:
             raise RuntimeError("P2P Coordinator not started")
 
+        # Wait for ZMQ connections to be ready before announcing
+        await self._wait_for_zmq_connections(timeout=5.0)
+
         capabilities = {}
+        agents_info = {}  # Full agent info for remote registry
+
         for agent in self.agents:
             for cap in agent.capabilities:
                 if cap not in capabilities:
                     capabilities[cap] = []
                 capabilities[cap].append(agent.agent_id)
 
-        self._capability_map = capabilities
+            # Collect full agent info for remote visibility
+            agents_info[agent.agent_id] = {
+                'agent_id': agent.agent_id,
+                'role': agent.role,
+                'capabilities': list(agent.capabilities),
+                'description': getattr(agent, 'description', ''),
+                'node_id': self._get_node_id()
+            }
+
+        # Merge local capabilities into the map (preserve remote agents)
+        for cap, agent_ids in capabilities.items():
+            if cap not in self._capability_map:
+                self._capability_map[cap] = []
+            for agent_id in agent_ids:
+                if agent_id not in self._capability_map[cap]:
+                    self._capability_map[cap].append(agent_id)
 
         payload = {
             'node_id': self._get_node_id(),
-            'capabilities': capabilities
+            'capabilities': capabilities,
+            'agents': agents_info  # Include for remote agent registry
         }
 
-        # Broadcast using the broadcaster
-        await self.broadcaster.broadcast_step_result(
-            step_id='capability_announcement',
-            workflow_id='system',
-            output_data=payload,
-            status='success'
+        # Broadcast directly using CAPABILITY_ANNOUNCEMENT message type
+        # This ensures the handler updates the capability map
+        # Note: _send_p2p_message wraps in 'payload' key, so send payload directly
+        success_count = await self._broadcast_p2p_message(
+            'CAPABILITY_ANNOUNCEMENT',
+            payload
         )
 
-        logger.info(f"Announced capabilities: {list(capabilities.keys())}")
+        logger.info(f"Announced capabilities to {success_count} peers: {list(capabilities.keys())}")
+
+    async def request_peer_capabilities(self):
+        """
+        Request capabilities from all existing peers.
+
+        Called when joining an existing mesh to discover what agents/capabilities
+        already exist. This ensures late-joiners see existing agents.
+        """
+        if not self._started or not self.swim_manager:
+            logger.warning("Cannot request capabilities - coordinator not started")
+            return
+
+        # Wait for ZMQ connections to be ready before requesting
+        await self._wait_for_zmq_connections(timeout=5.0)
+
+        # Get alive peers from SWIM
+        swim_node = self.swim_manager.swim_node
+        if not swim_node:
+            logger.warning("SWIM node not available")
+            return
+
+        try:
+            alive_members = list(swim_node.members.get_alive_members(exclude_self=True))
+            logger.info(f"Requesting capabilities from {len(alive_members)} peers")
+
+            for member in alive_members:
+                # member.address is already a string like "127.0.0.1:9905"
+                peer_addr = str(member.address)
+                try:
+                    # Send capability request - peers should respond with their capabilities
+                    await self._send_p2p_message(
+                        peer_addr,
+                        'CAPABILITY_REQUEST',
+                        {'node_id': self._get_node_id()}
+                    )
+                    logger.debug(f"Sent capability request to {peer_addr}")
+                except Exception as e:
+                    logger.debug(f"Failed to request capabilities from {peer_addr}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error requesting peer capabilities: {e}")
+
+    async def _handle_capability_request(self, sender, message):
+        """Handle capability request from a new joiner - respond with our capabilities."""
+        try:
+            # Get the SWIM ID of the sender from the message (not the ZMQ identity)
+            sender_swim_id = message.get('from_node')
+            if not sender_swim_id:
+                logger.warning(f"Capability request missing from_node, cannot respond")
+                return
+
+            # Re-announce our capabilities to this specific peer
+            capabilities = {}
+            agents_info = {}
+
+            for agent in self.agents:
+                for cap in agent.capabilities:
+                    if cap not in capabilities:
+                        capabilities[cap] = []
+                    capabilities[cap].append(agent.agent_id)
+
+                agents_info[agent.agent_id] = {
+                    'agent_id': agent.agent_id,
+                    'role': agent.role,
+                    'capabilities': list(agent.capabilities),
+                    'description': getattr(agent, 'description', ''),
+                    'node_id': self._get_node_id()
+                }
+
+            response = {
+                'node_id': self._get_node_id(),
+                'capabilities': capabilities,
+                'agents': agents_info
+            }
+
+            # Send to the SWIM address (from_node), not the ZMQ identity (sender)
+            await self._send_p2p_message(sender_swim_id, 'CAPABILITY_ANNOUNCEMENT', response)
+            logger.info(f"Sent capabilities to requesting peer {sender_swim_id}")
+
+        except Exception as e:
+            logger.error(f"Error handling capability request: {e}")
+
+    async def deannounce_capabilities(self):
+        """
+        Broadcast capability removal to mesh.
+
+        Called when agent leaves mesh gracefully to notify other nodes
+        that this agent's capabilities are no longer available.
+        """
+        import time
+
+        if not self._started or not self.swim_manager:
+            return
+
+        node_id = self._get_node_id()
+
+        capabilities = []
+        agent_ids = []
+        for agent in self.agents:
+            capabilities.extend(agent.capabilities)
+            agent_ids.append(agent.agent_id)
+
+        payload = {
+            'type': 'CAPABILITY_DEANNOUNCEMENT',
+            'node_id': node_id,
+            'capabilities': list(set(capabilities)),
+            'agent_ids': agent_ids,
+            'timestamp': time.time()
+        }
+
+        await self._broadcast_p2p_message("CAPABILITY_DEANNOUNCEMENT", payload)
+        logger.info(f"Deannounced capabilities: {capabilities}")
 
     async def query_mesh(self, capability: str) -> List[str]:
         """
@@ -266,13 +463,21 @@ class P2PCoordinator:
                 logger.error("Cannot send P2P message: ZMQ agent not available")
                 return False
 
-            await self.swim_manager.zmq_agent.send_message(target, msg_type, payload)
+            import json
+            payload_json = json.dumps(payload)
+            success = await self.swim_manager.zmq_agent.send_message_base(
+                target,
+                msg_type,
+                "payload",
+                payload_json,
+                f"p2p_{msg_type}"
+            )
 
             # Record activity for keepalive suppression
             if self.keepalive_manager:
                 self.keepalive_manager.record_p2p_activity()
 
-            return True
+            return success
         except Exception as e:
             logger.error(f"Failed to send P2P message to {target}: {e}")
             return False
@@ -338,10 +543,18 @@ class P2PCoordinator:
 
     async def _handle_capability_announcement(self, sender, message):
         """Handle capability announcement from peer."""
+        import time
+        import json
+
         try:
             payload = message.get('payload', {})
+            # Handle both JSON string and dict payload
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+
             caps = payload.get('capabilities', {})
             node_id = payload.get('node_id')
+            agents_info = payload.get('agents', {})
 
             # Update local capability map
             for cap, agents in caps.items():
@@ -352,20 +565,65 @@ class P2PCoordinator:
                     if agent_id not in self._capability_map[cap]:
                         self._capability_map[cap].append(agent_id)
 
-            logger.info(f"Updated capabilities from {node_id}: {list(caps.keys())}")
+            # Update remote agent registry for visibility
+            for agent_id, info in agents_info.items():
+                self._remote_agent_registry[agent_id] = {
+                    **info,
+                    'node_id': node_id,
+                    'last_seen': time.time()
+                }
+
+            logger.info(
+                f"Updated from {node_id}: caps={list(caps.keys())}, "
+                f"agents={list(agents_info.keys())}"
+            )
         except Exception as e:
             logger.error(f"Error handling capability announcement: {e}")
+
+    async def _handle_capability_deannouncement(self, sender, message):
+        """Handle capability deannouncement from departing node."""
+        import json
+        try:
+            payload = message.get('payload', {})
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            node_id = payload.get('node_id')
+            agent_ids = payload.get('agent_ids', [])
+
+            # Remove from capability map
+            for cap in list(self._capability_map.keys()):
+                self._capability_map[cap] = [
+                    a for a in self._capability_map[cap]
+                    if a not in agent_ids
+                ]
+                # Clean up empty capabilities
+                if not self._capability_map[cap]:
+                    del self._capability_map[cap]
+
+            # Remove from remote agent registry
+            for agent_id in agent_ids:
+                self._remote_agent_registry.pop(agent_id, None)
+
+            logger.info(f"Node {node_id} departed, removed agents: {agent_ids}")
+        except Exception as e:
+            logger.error(f"Error handling capability deannouncement: {e}")
 
     async def _handle_capability_query(self, sender, message):
         """Handle capability query from peer."""
         try:
+            # Get the SWIM ID from the message (not the ZMQ identity)
+            sender_swim_id = message.get('from_node')
+            if not sender_swim_id:
+                logger.warning("Capability query missing from_node, cannot respond")
+                return
+
             capability = message.get('capability')
             response = {
                 'capability': capability,
                 'agents': self._capability_map.get(capability, [])
             }
-            await self._send_p2p_message(sender, 'CAPABILITY_QUERY_RESPONSE', response)
-            logger.debug(f"Responded to capability query from {sender} for {capability}")
+            await self._send_p2p_message(sender_swim_id, 'CAPABILITY_QUERY_RESPONSE', response)
+            logger.debug(f"Responded to capability query from {sender_swim_id} for {capability}")
         except Exception as e:
             logger.error(f"Error handling capability query: {e}")
 
@@ -386,6 +644,44 @@ class P2PCoordinator:
         """Unregister a PeerClient when agent leaves mesh."""
         self._agent_peer_clients.pop(agent_id, None)
         logger.debug(f"Unregistered PeerClient for agent: {agent_id}")
+
+    def get_remote_agent(self, role_or_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Find a remote agent by role or agent ID.
+
+        Args:
+            role_or_id: Role name or agent_id to search for
+
+        Returns:
+            Agent info dict with node_id, or None if not found
+
+        Example:
+            info = coordinator.get_remote_agent("analyst")
+            if info:
+                print(f"Found analyst at {info['node_id']}")
+        """
+        # Direct agent_id lookup
+        if role_or_id in self._remote_agent_registry:
+            return self._remote_agent_registry[role_or_id]
+
+        # Role lookup
+        for agent_id, info in self._remote_agent_registry.items():
+            if info.get('role') == role_or_id:
+                return {'agent_id': agent_id, **info}
+
+        return None
+
+    def list_remote_agents(self) -> List[Dict[str, Any]]:
+        """
+        List all known remote agents.
+
+        Returns:
+            List of agent info dicts with agent_id, role, capabilities, node_id
+        """
+        return [
+            {'agent_id': aid, **info}
+            for aid, info in self._remote_agent_registry.items()
+        ]
 
     async def _handle_peer_notify(self, sender, message):
         """Handle peer notification message."""
