@@ -1558,6 +1558,48 @@ Your agent is now:
 - Discoverable by other agents
 - Automatically handles lifecycle
 
+### Testing the Flow
+
+**Step 1: Start the FastAPI server (Terminal 1)**
+```bash
+python examples/fastapi_integration_example.py
+```
+
+**Step 2: Join a scout agent (Terminal 2)**
+```bash
+python examples/fastapi_integration_example.py --join-as scout
+```
+
+**Step 3: Test with curl (Terminal 3)**
+```bash
+# Chat with assistant (may delegate to analyst)
+curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"message": "Analyze Q4 sales trends"}'
+
+# Ask analyst directly
+curl -X POST http://localhost:8000/ask/analyst -H "Content-Type: application/json" -d '{"message": "What are key revenue metrics?"}'
+
+# See what each agent knows about peers (cognitive context)
+curl http://localhost:8000/agents
+```
+
+**Expected flow for `/chat`:**
+1. Request goes to **assistant** agent
+2. Assistant's LLM sees peers via `get_cognitive_context()`
+3. LLM decides to delegate to **analyst** (data analysis request)
+4. Assistant uses `ask_peer` tool → P2P message to analyst
+5. Analyst processes and responds via P2P
+6. Response includes `"delegated_to": "analyst"` and `"peer_data"`
+
+**Example response:**
+```json
+{
+  "message": "Analyze Q4 sales trends",
+  "response": "Based on the analyst's findings...",
+  "delegated_to": "analyst",
+  "peer_data": {"analysis": "...", "confidence": 0.9}
+}
+```
+
 ---
 
 ## Cloud Deployment (v0.3.0)
