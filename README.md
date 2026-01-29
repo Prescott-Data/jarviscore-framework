@@ -118,12 +118,20 @@ app = FastAPI(lifespan=JarvisLifespan(ProcessorAgent(), mode="p2p"))
 
 ## Documentation
 
-- [User Guide](jarviscore/docs/USER_GUIDE.md) - Complete documentation
-- [Getting Started](jarviscore/docs/GETTING_STARTED.md) - 5-minute quickstart
-- [AutoAgent Guide](jarviscore/docs/AUTOAGENT_GUIDE.md) - LLM-powered agents
-- [CustomAgent Guide](jarviscore/docs/CUSTOMAGENT_GUIDE.md) - Bring your own code
-- [API Reference](jarviscore/docs/API_REFERENCE.md) - Detailed API docs
-- [Configuration](jarviscore/docs/CONFIGURATION.md) - Settings reference
+Documentation is included with the package. After installation:
+
+```bash
+python -c "import jarviscore; print(jarviscore.__path__[0] + '/docs')"
+```
+
+**Available guides:**
+- `USER_GUIDE.md` - Complete documentation
+- `GETTING_STARTED.md` - 5-minute quickstart
+- `AUTOAGENT_GUIDE.md` - LLM-powered agents
+- `CUSTOMAGENT_GUIDE.md` - Bring your own code
+- `API_REFERENCE.md` - Detailed API docs
+- `CONFIGURATION.md` - Settings reference
+- `CHANGELOG.md` - Version history
 
 ## Version
 
