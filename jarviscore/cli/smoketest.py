@@ -311,10 +311,14 @@ class SmokeTest:
 
         print("\n✓ All smoke tests passed!")
         print("\nJarvisCore is working correctly. Next steps:")
-        print("  1. Try examples - AutoAgent Profile: python examples/calculator_agent_example.py")
-        print("  2. Try examples - CustomAgent Profile: python examples/customagent_p2p_example.py")
-        print("  3. Read user guide: docs/USER_GUIDE.md")
-        print("  3. Build your first agent: docs/GETTING_STARTED.md")
+        print("  1. AutoAgent example:     python examples/calculator_agent_example.py")
+        print("  2. CustomAgent P2P:       python examples/customagent_p2p_example.py")
+        print("  3. ListenerAgent (v0.3):  python examples/listeneragent_cognitive_discovery_example.py")
+        print("  4. FastAPI (v0.3):        python examples/fastapi_integration_example.py")
+        print("  5. Cloud deploy (v0.3):   python examples/cloud_deployment_example.py")
+        print("\nDocumentation:")
+        print("  - Getting Started: docs/GETTING_STARTED.md")
+        print("  - User Guide:      docs/USER_GUIDE.md")
         print()
         return True
 

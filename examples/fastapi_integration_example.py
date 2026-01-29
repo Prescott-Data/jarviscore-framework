@@ -1,33 +1,29 @@
 """
-Unified DX Example - Autonomous Agents with Mesh Discovery
+FastAPI Integration Example (v0.3.0)
 
-Demonstrates ALL DX improvements
+Demonstrates JarvisLifespan for 3-line FastAPI integration with autonomous agents.
 
-FastAPI Integration:
-    1. JarvisLifespan - One-line FastAPI integration
+Features shown:
+    1. JarvisLifespan - Automatic agent lifecycle management
     2. ListenerAgent - API-first agents with on_peer_request handlers
     3. Cognitive Discovery - get_cognitive_context() for LLM awareness
-
-Cloud Deployment:
-    4. Autonomous Agents - Each agent has MESH as a TOOL
-    5. join_mesh() / leave_mesh() - Standalone agent self-registration
-    6. Remote Agent Visibility - Agents on different nodes can discover each other
+    4. Autonomous Agents - Each agent has MESH as a TOOL, LLM decides when to delegate
 
 Real-World Flow:
     HTTP Request → Agent A (with LLM) → LLM sees peers as tools
     → LLM decides to ask Agent B → Agent B responds → HTTP Response
 
 Usage:
-    # MODE 1: Start FastAPI server with all agents
-    python examples/unified_dx_example.py
-
-    # MODE 2: Start a standalone agent that joins the mesh (in another terminal)
-    python examples/unified_dx_example.py --join-as scout
+    # Start FastAPI server with all agents
+    python examples/fastapi_integration_example.py
 
     # Test the endpoint
     curl -X POST http://localhost:8000/chat \
         -H "Content-Type: application/json" \
         -d '{"message": "Analyze the Q4 sales trends"}'
+
+    # Optional: Start a standalone agent that joins the mesh (in another terminal)
+    python examples/fastapi_integration_example.py --join-as scout
 
 Prerequisites:
     - pip install fastapi uvicorn
@@ -362,8 +358,8 @@ async def run_standalone_scout(mesh_endpoint: str):
     - Can communicate with mesh peers via P2P messaging
 
     Usage:
-        Terminal 1: python examples/unified_dx_example.py  (starts FastAPI + mesh)
-        Terminal 2: python examples/unified_dx_example.py --join-as scout
+        Terminal 1: python examples/fastapi_integration_example.py  (starts FastAPI + mesh)
+        Terminal 2: python examples/fastapi_integration_example.py --join-as scout
     """
     print("=" * 60)
     print("STANDALONE SCOUT - Cloud Deployment Demo")
@@ -374,7 +370,7 @@ async def run_standalone_scout(mesh_endpoint: str):
     scout = ScoutAgent()
 
     try:
-        # Join the existing mesh (this is the key Day 2 API)
+        # Join the existing mesh 
         await scout.join_mesh(seed_nodes=mesh_endpoint)
         print(f"Successfully joined mesh!")
         print(f"  - is_mesh_connected: {scout.is_mesh_connected}")
@@ -563,7 +559,7 @@ def main():
     print('    -H "Content-Type: application/json" \\')
     print('    -d \'{"message": "Analyze Q4 sales trends"}\'')
     print("\nCloud Deployment (in another terminal):")
-    print("  python examples/unified_dx_example.py --join-as scout")
+    print("  python examples/fastapi_integration_example.py --join-as scout")
     print("=" * 60)
 
     app = create_app()

@@ -14,7 +14,14 @@ Complete API documentation for JarvisCore framework components.
    - [AutoAgent](#autoagent)
    - [Custom Profile](#custom-profile)
    - [CustomAgent](#customagent)
-3. [Execution Components](#execution-components)
+   - [ListenerAgent (v0.3.0)](#listeneragent-v030)
+3. [P2P Communication (v0.3.0)](#p2p-communication-v030)
+   - [PeerClient](#peerclient)
+   - [IncomingMessage](#incomingmessage)
+   - [Cognitive Discovery](#cognitive-discovery)
+4. [Integrations (v0.3.0)](#integrations-v030)
+   - [JarvisLifespan](#jarvislifespan)
+5. [Execution Components](#execution-components)
    - [CodeGenerator](#codegenerator)
    - [SandboxExecutor](#sandboxexecutor)
    - [AutoRepair](#autorepair)
@@ -554,6 +561,292 @@ async def ask_another_agent(self, question):
 ```
 
 See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for P2P and distributed mode details.
+
+---
+
+### ListenerAgent (v0.3.0)
+
+Handler-based agent for P2P communication without manual run loops.
+
+#### Class: `ListenerAgent(CustomAgent)`
+
+```python
+from jarviscore.profiles import ListenerAgent
+
+class MyAgent(ListenerAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        """Handle incoming requests from peers."""
+        return {"result": msg.data.get("task", "").upper()}
+
+    async def on_peer_notify(self, msg):
+        """Handle broadcast notifications."""
+        print(f"Notification: {msg.data}")
+```
+
+**Class Attributes:**
+- `role` (str): Agent role identifier (required)
+- `capabilities` (list): List of capability strings (required)
+
+**Handler Methods:**
+
+#### `async on_peer_request(msg) -> dict`
+
+Handle incoming request messages. Return value is sent back to requester.
+
+```python
+async def on_peer_request(self, msg):
+    query = msg.data.get("question", "")
+    result = self.process(query)
+    return {"response": result, "status": "success"}
+```
+
+**Parameters:**
+- `msg` (IncomingMessage): Incoming message with `data`, `sender_role`, `sender_id`
+
+**Returns:** dict - Response sent back to requester
+
+---
+
+#### `async on_peer_notify(msg) -> None`
+
+Handle broadcast notifications. No return value needed.
+
+```python
+async def on_peer_notify(self, msg):
+    event_type = msg.data.get("type")
+    if event_type == "status_update":
+        self.handle_status(msg.data)
+```
+
+**Parameters:**
+- `msg` (IncomingMessage): Incoming notification message
+
+**Returns:** None
+
+---
+
+**Self-Registration Methods (v0.3.0):**
+
+#### `async join_mesh(seed_nodes, advertise_endpoint=None)`
+
+Join an existing mesh without central orchestrator.
+
+```python
+await agent.join_mesh(
+    seed_nodes="10.0.0.1:7950,10.0.0.2:7950",
+    advertise_endpoint="my-pod:7950"
+)
+```
+
+**Parameters:**
+- `seed_nodes` (str): Comma-separated list of seed node addresses
+- `advertise_endpoint` (str, optional): Address for other nodes to reach this agent
+
+---
+
+#### `async leave_mesh()`
+
+Gracefully leave the mesh network.
+
+```python
+await agent.leave_mesh()
+```
+
+---
+
+#### `async serve_forever()`
+
+Run the agent until shutdown signal.
+
+```python
+await agent.serve_forever()
+```
+
+---
+
+## P2P Communication (v0.3.0)
+
+### PeerClient
+
+Client for peer-to-peer communication, available as `self.peers` on agents.
+
+#### Class: `PeerClient`
+
+**Methods:**
+
+#### `get_cognitive_context() -> str`
+
+Generate LLM-ready text describing available peers.
+
+```python
+if self.peers:
+    context = self.peers.get_cognitive_context()
+    # Returns:
+    # "Available Peers:
+    # - analyst (capabilities: analysis, data_interpretation)
+    #   Use ask_peer with role="analyst" for analysis tasks
+    # - researcher (capabilities: research, web_search)
+    #   Use ask_peer with role="researcher" for research tasks"
+```
+
+**Returns:** str - Human-readable peer descriptions for LLM prompts
+
+---
+
+#### `list() -> List[PeerInfo]`
+
+Get list of connected peers.
+
+```python
+peers = self.peers.list()
+for peer in peers:
+    print(f"{peer.role}: {peer.capabilities}")
+```
+
+**Returns:** List of PeerInfo objects
+
+---
+
+#### `as_tool() -> PeerTool`
+
+Get peer tools for LLM tool use.
+
+```python
+tools = self.peers.as_tool()
+result = await tools.execute("ask_peer", {"role": "analyst", "question": "..."})
+```
+
+**Available Tools:**
+- `ask_peer` - Send request and wait for response
+- `broadcast` - Send notification to all peers
+- `list_peers` - List available peers
+
+---
+
+#### `async receive(timeout) -> IncomingMessage`
+
+Receive next message (for CustomAgent manual loops).
+
+```python
+msg = await self.peers.receive(timeout=0.5)
+if msg and msg.is_request:
+    await self.peers.respond(msg, {"result": "..."})
+```
+
+---
+
+#### `async respond(msg, data) -> None`
+
+Respond to a request message.
+
+```python
+await self.peers.respond(msg, {"status": "success", "result": data})
+```
+
+---
+
+### IncomingMessage
+
+Message received from a peer.
+
+#### Class: `IncomingMessage`
+
+**Attributes:**
+- `data` (dict): Message payload
+- `sender_role` (str): Role of sending agent
+- `sender_id` (str): ID of sending agent
+- `is_request` (bool): True if this is a request expecting response
+- `is_notify` (bool): True if this is a notification
+
+```python
+async def on_peer_request(self, msg):
+    print(f"From: {msg.sender_role}")
+    print(f"Data: {msg.data}")
+    return {"received": True}
+```
+
+---
+
+### Cognitive Discovery
+
+Dynamic peer awareness for LLM prompts.
+
+**Pattern:**
+
+```python
+class MyAgent(CustomAgent):
+    def get_system_prompt(self) -> str:
+        base = "You are a helpful assistant."
+
+        # Dynamically add peer context
+        if self.peers:
+            peer_context = self.peers.get_cognitive_context()
+            return f"{base}\n\n{peer_context}"
+
+        return base
+```
+
+**Benefits:**
+- No hardcoded agent names in prompts
+- Automatically updates when peers join/leave
+- LLM always knows current capabilities
+
+---
+
+## Integrations (v0.3.0)
+
+### JarvisLifespan
+
+FastAPI lifespan context manager for automatic agent lifecycle management.
+
+#### Class: `JarvisLifespan`
+
+```python
+from jarviscore.integrations.fastapi import JarvisLifespan
+
+app = FastAPI(lifespan=JarvisLifespan(agent, mode="p2p"))
+```
+
+**Parameters:**
+- `agent`: Agent instance (ListenerAgent or CustomAgent)
+- `mode` (str): "p2p" or "distributed"
+- `bind_port` (int, optional): P2P port (default: 7950)
+- `seed_nodes` (str, optional): Comma-separated seed node addresses
+
+**Example:**
+
+```python
+from fastapi import FastAPI
+from jarviscore.profiles import ListenerAgent
+from jarviscore.integrations.fastapi import JarvisLifespan
+
+
+class ProcessorAgent(ListenerAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        return {"result": "processed"}
+
+
+agent = ProcessorAgent()
+app = FastAPI(lifespan=JarvisLifespan(agent, mode="p2p", bind_port=7950))
+
+
+@app.post("/process")
+async def process(data: dict):
+    # Agent is already running and connected to mesh
+    return {"status": "ok"}
+```
+
+**Handles:**
+- Agent setup and teardown
+- Mesh initialization
+- Background run loop (for ListenerAgent)
+- Graceful shutdown
 
 ---
 
@@ -1140,6 +1433,6 @@ async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
 
 ## Version
 
-API Reference for JarvisCore v0.2.1
+API Reference for JarvisCore v0.3.0
 
-Last Updated: 2026-01-23
+Last Updated: 2026-01-29

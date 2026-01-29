@@ -1,12 +1,12 @@
 """
-Standalone Agent Example - Cloud Deployment Pattern
+Cloud Deployment Example (v0.3.0)
 
-Demonstrates agent self-registration for containerized deployments.
-Instead of using mesh.add(), agents join an existing mesh independently.
+Demonstrates agent self-registration with join_mesh() and leave_mesh().
+Agents join an existing mesh independently - no central orchestrator needed.
 
 This is the pattern for:
 - Docker containers where each container runs one agent
-- Kubernetes pods
+- Kubernetes pods with auto-scaling
 - Cloud Functions / Lambda
 - Any distributed deployment where agents start independently
 
@@ -14,8 +14,8 @@ Usage:
     # Terminal 1: Start a mesh (or use an existing one)
     python examples/customagent_p2p_example.py
 
-    # Terminal 2: Run standalone agent
-    JARVISCORE_SEED_NODES=127.0.0.1:7946 python examples/standalone_agent_example.py
+    # Terminal 2: Run standalone agent that joins the mesh
+    JARVISCORE_SEED_NODES=127.0.0.1:7946 python examples/cloud_deployment_example.py
 
 Environment Variables:
     JARVISCORE_SEED_NODES: Comma-separated seed nodes (e.g., "host1:7946,host2:7946")
@@ -85,7 +85,7 @@ async def main():
         print("  - JARVISCORE_MESH_ENDPOINT (single endpoint)")
         print("  - JARVISCORE_SEED_NODES (comma-separated list)")
         print("\nExample:")
-        print("  JARVISCORE_SEED_NODES=127.0.0.1:7946 python standalone_agent_example.py")
+        print("  JARVISCORE_SEED_NODES=127.0.0.1:7946 python cloud_deployment_example.py")
         print("\nTo start a mesh first, run:")
         print("  python examples/customagent_p2p_example.py")
         return

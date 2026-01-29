@@ -16,9 +16,12 @@ Practical guide to building agent systems with JarvisCore.
 8. [Remote Sandbox](#remote-sandbox)
 9. [Result Storage](#result-storage)
 10. [Code Registry](#code-registry)
-11. [Best Practices](#best-practices)
-12. [Common Patterns](#common-patterns)
-13. [Troubleshooting](#troubleshooting)
+11. [FastAPI Integration (v0.3.0)](#fastapi-integration-v030)
+12. [Cloud Deployment (v0.3.0)](#cloud-deployment-v030)
+13. [Cognitive Discovery (v0.3.0)](#cognitive-discovery-v030)
+14. [Best Practices](#best-practices)
+15. [Common Patterns](#common-patterns)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -138,12 +141,13 @@ mesh = Mesh(mode="distributed", config={'bind_port': 7950})
 
 ### Agents
 
-**Agents** are workers that execute tasks. JarvisCore offers two profiles:
+**Agents** are workers that execute tasks. JarvisCore offers three profiles:
 
 | Profile | Best For | How It Works |
 |---------|----------|--------------|
 | **AutoAgent** | Rapid prototyping | LLM generates + executes code from prompts |
 | **CustomAgent** | Existing code | You provide `execute_task()` or `run()` |
+| **ListenerAgent** | API-first agents | Just implement `on_peer_request()` handlers |
 
 See [AutoAgent Guide](AUTOAGENT_GUIDE.md) and [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for details.
 
@@ -534,6 +538,148 @@ print(f"Registered: {func['registered_at']}")
 
 ---
 
+## FastAPI Integration (v0.3.0)
+
+Deploy agents as FastAPI services with minimal boilerplate:
+
+### JarvisLifespan
+
+```python
+from fastapi import FastAPI, Request
+from jarviscore.profiles import ListenerAgent
+from jarviscore.integrations.fastapi import JarvisLifespan
+
+class ProcessorAgent(ListenerAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        return {"result": msg.data.get("task", "").upper()}
+
+# 3 lines to integrate
+agent = ProcessorAgent()
+app = FastAPI(lifespan=JarvisLifespan(agent, mode="p2p", bind_port=7950))
+
+@app.get("/peers")
+async def list_peers(request: Request):
+    agent = request.app.state.jarvis_agents["processor"]
+    return {"peers": agent.peers.list_peers()}
+```
+
+**What JarvisLifespan handles:**
+- Mesh startup/shutdown
+- Background task management for agent run() loops
+- Graceful shutdown with timeouts
+- State injection into FastAPI app
+
+---
+
+## Cloud Deployment (v0.3.0)
+
+Deploy agents to containers without a central orchestrator:
+
+### Self-Registration Pattern
+
+```python
+# In your container entrypoint
+import asyncio
+from jarviscore.profiles import ListenerAgent
+
+class MyAgent(ListenerAgent):
+    role = "worker"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        return {"processed": msg.data}
+
+async def main():
+    agent = MyAgent()
+
+    # Join existing mesh (uses JARVISCORE_SEED_NODES env var)
+    await agent.join_mesh()
+
+    print(f"Joined as {agent.role}, discovered: {agent.peers.list_peers()}")
+
+    # Run until shutdown, auto-leaves mesh on exit
+    await agent.run_standalone()
+
+asyncio.run(main())
+```
+
+### Docker/Kubernetes
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN pip install jarviscore-framework
+
+# Point to existing mesh
+ENV JARVISCORE_SEED_NODES=mesh-service:7946
+
+CMD ["python", "-m", "myapp.agent"]
+```
+
+**Environment Variables:**
+- `JARVISCORE_SEED_NODES` - Comma-separated list of seed nodes
+- `JARVISCORE_MESH_ENDPOINT` - Single endpoint to join
+
+---
+
+## Cognitive Discovery (v0.3.0)
+
+Let LLMs dynamically discover mesh peers instead of hardcoding agent names:
+
+### The Problem
+
+```python
+# Before: Hardcoded peer names in prompts
+system_prompt = """
+You can delegate to:
+- analyst for data analysis
+- scout for research
+"""
+# Breaks when mesh composition changes!
+```
+
+### The Solution
+
+```python
+# After: Dynamic discovery
+system_prompt = self.peers.build_system_prompt(
+    "You are a coordinator agent."
+)
+# Automatically includes all available peers!
+```
+
+### get_cognitive_context()
+
+```python
+# Get prompt-ready peer descriptions
+context = self.peers.get_cognitive_context(format="markdown")
+```
+
+**Output:**
+```markdown
+## AVAILABLE MESH PEERS
+
+You are part of a multi-agent mesh. The following peers are available:
+
+- **analyst** (`agent-analyst-abc123`)
+  - Capabilities: analysis, charting, reporting
+  - Description: Analyzes data and generates insights
+
+- **scout** (`agent-scout-def456`)
+  - Capabilities: research, reconnaissance
+  - Description: Gathers information
+
+Use the `ask_peer` tool to delegate tasks to these specialists.
+```
+
+**Formats:** `markdown`, `json`, `text`
+
+---
+
 ## Best Practices
 
 ### 1. Always Use Context Managers
@@ -759,6 +905,6 @@ mesh = Mesh(config=config)
 
 ## Version
 
-User Guide for JarvisCore v0.2.1
+User Guide for JarvisCore v0.3.0
 
-Last Updated: 2026-01-23
+Last Updated: 2026-01-29

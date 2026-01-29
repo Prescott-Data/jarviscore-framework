@@ -1,17 +1,19 @@
 """
-LLM Cognitive Discovery Example
+ListenerAgent + Cognitive Discovery Example
 
-Demonstrates the "Smart LLM Autonomous Agent Discovery" pattern where:
-1. An LLM agent dynamically discovers mesh peers via get_cognitive_context()
-2. The peer context is injected into the LLM's system prompt
-3. The LLM autonomously decides when to delegate to specialists
-4. Peer communication happens transparently
+Demonstrates two v0.3.0 features:
 
-This is the key pattern for building truly autonomous multi-agent systems
-where agents don't need hardcoded knowledge of other agents.
+1. ListenerAgent - Handler-based P2P agents (no run() loop needed)
+   - on_peer_request() handles incoming requests
+   - on_peer_notify() handles broadcast notifications
+
+2. Cognitive Discovery - Dynamic peer awareness for LLMs
+   - get_cognitive_context() generates LLM-ready peer descriptions
+   - No hardcoded agent names in prompts
+   - LLM autonomously decides when to delegate
 
 Usage:
-    python examples/llm_cognitive_discovery_example.py
+    python examples/listeneragent_cognitive_discovery_example.py
 
 Prerequisites:
     - .env file with CLAUDE_API_KEY (or other LLM provider)
