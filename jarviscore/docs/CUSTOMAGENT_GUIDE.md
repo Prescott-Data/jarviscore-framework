@@ -12,11 +12,15 @@ CustomAgent lets you integrate your **existing agent code** with JarvisCore's ne
 1. [Prerequisites](#prerequisites)
 2. [Choose Your Mode](#choose-your-mode)
 3. [P2P Mode](#p2p-mode)
-4. [Distributed Mode](#distributed-mode)
-5. [API Reference](#api-reference)
-6. [Multi-Node Deployment](#multi-node-deployment)
-7. [Error Handling](#error-handling)
-8. [Troubleshooting](#troubleshooting)
+4. [ListenerAgent (v0.3.0)](#listeneragent-v030) - API-first agents without run() loops
+5. [Distributed Mode](#distributed-mode)
+6. [Cognitive Discovery (v0.3.0)](#cognitive-discovery-v030) - Dynamic peer awareness for LLMs
+7. [FastAPI Integration (v0.3.0)](#fastapi-integration-v030) - 3-line setup with JarvisLifespan
+8. [Cloud Deployment (v0.3.0)](#cloud-deployment-v030) - Self-registration for containers
+9. [API Reference](#api-reference)
+10. [Multi-Node Deployment](#multi-node-deployment)
+11. [Error Handling](#error-handling)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -98,13 +102,15 @@ class MyLLMClient:
 
 ### Quick Comparison
 
-| Feature | P2P Mode | Distributed Mode |
-|---------|----------|------------------|
-| **Primary method** | `run()` - continuous loop | `execute_task()` - on-demand |
-| **Communication** | Direct peer messaging | Workflow orchestration |
-| **Best for** | Chatbots, real-time agents | Pipelines, batch processing |
-| **Coordination** | Agents self-coordinate | Framework coordinates |
-| **Supports workflows** | No | Yes |
+| Feature | P2P Mode (CustomAgent) | P2P Mode (ListenerAgent) | Distributed Mode |
+|---------|------------------------|--------------------------|------------------|
+| **Primary method** | `run()` - continuous loop | `on_peer_request()` handlers | `execute_task()` - on-demand |
+| **Communication** | Direct peer messaging | Handler-based (no loop) | Workflow orchestration |
+| **Best for** | Custom message loops | API-first agents, FastAPI | Pipelines, batch processing |
+| **Coordination** | Agents self-coordinate | Framework handles loop | Framework coordinates |
+| **Supports workflows** | No | No | Yes |
+
+> **New in v0.3.0**: `ListenerAgent` lets you write P2P agents without managing the `run()` loop yourself. Just implement `on_peer_request()` and `on_peer_notify()` handlers.
 
 ---
 
@@ -660,6 +666,183 @@ async def run(self):
 
 ---
 
+## ListenerAgent (v0.3.0)
+
+**ListenerAgent** is for developers who want P2P communication without writing the `run()` loop themselves.
+
+### The Problem with CustomAgent for P2P
+
+Every P2P CustomAgent needs this boilerplate:
+
+```python
+# BEFORE (CustomAgent) - You write the same loop every time
+class MyAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def run(self):
+        """You have to write this loop for every P2P agent."""
+        while not self.shutdown_requested:
+            if self.peers:
+                msg = await self.peers.receive(timeout=0.5)
+                if msg and msg.is_request:
+                    # Handle request
+                    result = self.process(msg.data)
+                    await self.peers.respond(msg, {"response": result})
+                elif msg and msg.is_notify:
+                    # Handle notification
+                    self.handle_notify(msg.data)
+            await asyncio.sleep(0.1)
+
+    async def execute_task(self, task):
+        """Still required even though you're using run()."""
+        return {"status": "success"}
+```
+
+### The Solution: ListenerAgent
+
+```python
+# AFTER (ListenerAgent) - Just implement the handlers
+from jarviscore.profiles import ListenerAgent
+
+class MyAgent(ListenerAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        """Called when another agent sends a request."""
+        return {"result": msg.data.get("task", "").upper()}
+
+    async def on_peer_notify(self, msg):
+        """Called when another agent broadcasts a notification."""
+        print(f"Notification received: {msg.data}")
+```
+
+**What you no longer need:**
+- ❌ `run()` loop with `while not self.shutdown_requested`
+- ❌ `self.peers.receive()` and `self.peers.respond()` boilerplate
+- ❌ `execute_task()` stub method
+- ❌ `asyncio.sleep()` timing
+
+**What the framework handles:**
+- ✅ Message receiving loop
+- ✅ Routing requests to `on_peer_request()`
+- ✅ Routing notifications to `on_peer_notify()`
+- ✅ Automatic response sending
+- ✅ Shutdown handling
+
+### Complete ListenerAgent Example
+
+```python
+# agents.py
+from jarviscore.profiles import ListenerAgent
+
+
+class AnalystAgent(ListenerAgent):
+    """A data analyst that responds to peer requests."""
+
+    role = "analyst"
+    capabilities = ["analysis", "data_interpretation"]
+
+    async def setup(self):
+        await super().setup()
+        self.llm = MyLLMClient()  # Your LLM client
+
+    async def on_peer_request(self, msg):
+        """
+        Handle incoming requests from other agents.
+
+        Args:
+            msg: IncomingMessage with msg.data, msg.sender_role, etc.
+
+        Returns:
+            dict: Response sent back to the requesting agent
+        """
+        query = msg.data.get("question", "")
+
+        # Your analysis logic
+        result = self.llm.chat(f"Analyze: {query}")
+
+        return {"response": result, "status": "success"}
+
+    async def on_peer_notify(self, msg):
+        """
+        Handle broadcast notifications.
+
+        Args:
+            msg: IncomingMessage with notification data
+
+        Returns:
+            None (notifications don't expect responses)
+        """
+        print(f"[{self.role}] Received notification: {msg.data}")
+
+
+class AssistantAgent(ListenerAgent):
+    """An assistant that coordinates with specialists."""
+
+    role = "assistant"
+    capabilities = ["chat", "coordination"]
+
+    async def setup(self):
+        await super().setup()
+        self.llm = MyLLMClient()
+
+    async def on_peer_request(self, msg):
+        """Handle incoming chat requests."""
+        query = msg.data.get("query", "")
+
+        # Use peer tools to ask specialists
+        if self.peers and "data" in query.lower():
+            # Ask the analyst for help
+            analyst_response = await self.peers.as_tool().execute(
+                "ask_peer",
+                {"role": "analyst", "question": query}
+            )
+            return {"response": analyst_response.get("response", "")}
+
+        # Handle directly
+        return {"response": self.llm.chat(query)}
+```
+
+```python
+# main.py
+import asyncio
+from jarviscore import Mesh
+from agents import AnalystAgent, AssistantAgent
+
+
+async def main():
+    mesh = Mesh(mode="p2p", config={"bind_port": 7950})
+
+    mesh.add(AnalystAgent)
+    mesh.add(AssistantAgent)
+
+    await mesh.start()
+
+    # Agents automatically run their listeners
+    await mesh.run_forever()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### When to Use ListenerAgent vs CustomAgent
+
+| Use ListenerAgent when... | Use CustomAgent when... |
+|---------------------------|-------------------------|
+| You want the simplest P2P agent | You need custom message loop timing |
+| Request/response pattern fits your use case | You need to initiate messages proactively |
+| You're integrating with FastAPI | You need fine-grained control over the loop |
+| You want less boilerplate | You have complex coordination logic |
+
+### ListenerAgent with FastAPI
+
+ListenerAgent shines with FastAPI integration. See [FastAPI Integration](#fastapi-integration-v030) below.
+
+---
+
 ## Distributed Mode
 
 Distributed mode is for task pipelines where the framework orchestrates execution order and passes data between steps.
@@ -1066,6 +1249,550 @@ results = await mesh.workflow("parallel-example", [
 
 ---
 
+## Cognitive Discovery (v0.3.0)
+
+**Cognitive Discovery** lets your LLM dynamically learn about available peers instead of hardcoding agent names in prompts.
+
+### The Problem: Hardcoded Peer Names
+
+Before v0.3.0, you had to hardcode peer information in your system prompts:
+
+```python
+# BEFORE: Hardcoded peer names - breaks when peers change
+system_prompt = """You are a helpful assistant.
+
+You have access to:
+- ask_peer: Ask specialist agents for help
+  - Use role="analyst" for data analysis
+  - Use role="researcher" for research tasks
+  - Use role="writer" for content creation
+
+When a user needs data analysis, USE ask_peer with role="analyst"."""
+```
+
+**Problems:**
+- If you add a new agent, you must update every prompt
+- If an agent is offline, the LLM still tries to call it
+- Prompts become stale as your system evolves
+- Difficult to manage across many agents
+
+### The Solution: `get_cognitive_context()`
+
+```python
+# AFTER: Dynamic peer awareness - always up to date
+async def get_system_prompt(self) -> str:
+    base_prompt = """You are a helpful assistant.
+
+You have access to peer tools for collaborating with other agents."""
+
+    # Generate LLM-ready peer descriptions dynamically
+    if self.peers:
+        peer_context = self.peers.get_cognitive_context()
+        return f"{base_prompt}\n\n{peer_context}"
+
+    return base_prompt
+```
+
+The `get_cognitive_context()` method generates text like:
+
+```
+Available Peers:
+- analyst (capabilities: analysis, data_interpretation)
+  Use ask_peer with role="analyst" for data analysis tasks
+- researcher (capabilities: research, web_search)
+  Use ask_peer with role="researcher" for research tasks
+```
+
+### Complete Example: Dynamic Peer Discovery
+
+```python
+# agents.py
+from jarviscore.profiles import CustomAgent
+
+
+class AssistantAgent(CustomAgent):
+    """An assistant that dynamically discovers and uses peers."""
+
+    role = "assistant"
+    capabilities = ["chat", "coordination"]
+
+    async def setup(self):
+        await super().setup()
+        self.llm = MyLLMClient()
+
+    def get_system_prompt(self) -> str:
+        """Build system prompt with dynamic peer context."""
+        base_prompt = """You are a helpful AI assistant.
+
+When users ask questions that require specialized knowledge:
+1. Check what peers are available
+2. Use ask_peer to get help from the right specialist
+3. Synthesize their response for the user"""
+
+        # DYNAMIC: Add current peer information
+        if self.peers:
+            peer_context = self.peers.get_cognitive_context()
+            return f"{base_prompt}\n\n{peer_context}"
+
+        return base_prompt
+
+    def get_tools(self) -> list:
+        """Get tools including peer tools."""
+        tools = [
+            # Your local tools...
+        ]
+
+        if self.peers:
+            tools.extend(self.peers.as_tool().schema)
+
+        return tools
+
+    async def chat(self, user_message: str) -> str:
+        """Chat with dynamic peer awareness."""
+        # System prompt now includes current peer info
+        system = self.get_system_prompt()
+        tools = self.get_tools()
+
+        response = self.llm.chat(
+            messages=[{"role": "user", "content": user_message}],
+            tools=tools,
+            system=system
+        )
+
+        # Handle tool use...
+        return response.get("content", "")
+```
+
+### Benefits of Cognitive Discovery
+
+| Before (Hardcoded) | After (Dynamic) |
+|--------------------|-----------------|
+| Update prompts manually when peers change | Prompts auto-update |
+| LLM tries to call offline agents | Only shows available agents |
+| Difficult to manage at scale | Scales automatically |
+| Stale documentation in prompts | Always current |
+
+---
+
+## FastAPI Integration (v0.3.0)
+
+**JarvisLifespan** reduces FastAPI integration from ~100 lines to 3 lines.
+
+### The Problem: Manual Lifecycle Management
+
+Before v0.3.0, integrating an agent with FastAPI required manual lifecycle management:
+
+```python
+# BEFORE: ~100 lines of boilerplate
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from jarviscore import Mesh
+from jarviscore.profiles import CustomAgent
+import asyncio
+
+
+class MyAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def run(self):
+        while not self.shutdown_requested:
+            if self.peers:
+                msg = await self.peers.receive(timeout=0.5)
+                if msg and msg.is_request:
+                    result = self.process(msg.data)
+                    await self.peers.respond(msg, {"response": result})
+            await asyncio.sleep(0.1)
+
+    async def execute_task(self, task):
+        return {"status": "success"}
+
+
+# Manual lifecycle management
+mesh = None
+agent = None
+run_task = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global mesh, agent, run_task
+
+    # Startup
+    mesh = Mesh(mode="p2p", config={"bind_port": 7950})
+    agent = mesh.add(MyAgent)
+    await mesh.start()
+    run_task = asyncio.create_task(agent.run())
+
+    yield
+
+    # Shutdown
+    agent.request_shutdown()
+    run_task.cancel()
+    await mesh.stop()
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.post("/process")
+async def process(data: dict):
+    # Your endpoint logic
+    return {"result": "processed"}
+```
+
+### The Solution: JarvisLifespan
+
+```python
+# AFTER: 3 lines to integrate
+from fastapi import FastAPI
+from jarviscore.profiles import ListenerAgent
+from jarviscore.integrations.fastapi import JarvisLifespan
+
+
+class ProcessorAgent(ListenerAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        return {"result": msg.data.get("task", "").upper()}
+
+
+# That's it - 3 lines!
+app = FastAPI(lifespan=JarvisLifespan(ProcessorAgent(), mode="p2p"))
+
+
+@app.post("/process")
+async def process(data: dict):
+    return {"result": "processed"}
+```
+
+### JarvisLifespan Configuration
+
+```python
+from jarviscore.integrations.fastapi import JarvisLifespan
+
+# Basic usage
+app = FastAPI(lifespan=JarvisLifespan(agent, mode="p2p"))
+
+# With configuration
+app = FastAPI(
+    lifespan=JarvisLifespan(
+        agent,
+        mode="p2p",              # or "distributed"
+        bind_port=7950,          # P2P port
+        seed_nodes="ip:port",    # For multi-node
+    )
+)
+```
+
+### Complete FastAPI Example
+
+```python
+# app.py
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from jarviscore.profiles import ListenerAgent
+from jarviscore.integrations.fastapi import JarvisLifespan
+
+
+class AnalysisRequest(BaseModel):
+    data: str
+
+
+class AnalystAgent(ListenerAgent):
+    """Agent that handles both API requests and P2P messages."""
+
+    role = "analyst"
+    capabilities = ["analysis"]
+
+    async def setup(self):
+        await super().setup()
+        self.llm = MyLLMClient()
+
+    async def on_peer_request(self, msg):
+        """Handle requests from other agents in the mesh."""
+        query = msg.data.get("question", "")
+        result = self.llm.chat(f"Analyze: {query}")
+        return {"response": result}
+
+    def analyze(self, data: str) -> dict:
+        """Method called by API endpoint."""
+        result = self.llm.chat(f"Analyze this data: {data}")
+        return {"analysis": result}
+
+
+# Create agent instance
+analyst = AnalystAgent()
+
+# Create FastAPI app with automatic lifecycle management
+app = FastAPI(
+    title="Analyst Service",
+    lifespan=JarvisLifespan(analyst, mode="p2p", bind_port=7950)
+)
+
+
+@app.post("/analyze")
+async def analyze(request: AnalysisRequest):
+    """API endpoint - also accessible as a peer in the mesh."""
+    result = analyst.analyze(request.data)
+    return result
+
+
+@app.get("/peers")
+async def list_peers():
+    """See what other agents are in the mesh."""
+    if analyst.peers:
+        return {"peers": analyst.peers.list()}
+    return {"peers": []}
+```
+
+Run with:
+```bash
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+Your agent is now:
+- Serving HTTP API on port 8000
+- Participating in P2P mesh on port 7950
+- Discoverable by other agents
+- Automatically handles lifecycle
+
+---
+
+## Cloud Deployment (v0.3.0)
+
+**Self-registration** lets agents join existing meshes without a central orchestrator - perfect for Docker, Kubernetes, and auto-scaling.
+
+### The Problem: Central Orchestrator Required
+
+Before v0.3.0, all agents had to be registered with a central Mesh:
+
+```python
+# BEFORE: Central orchestrator pattern
+# You needed one "main" node that registered all agents
+
+# main_node.py (central orchestrator)
+mesh = Mesh(mode="distributed", config={"bind_port": 7950})
+mesh.add(ResearcherAgent)  # Must be on this node
+mesh.add(WriterAgent)      # Must be on this node
+await mesh.start()
+```
+
+**Problems with this approach:**
+- Single point of failure
+- Can't easily scale agent instances
+- Doesn't work well with Kubernetes/Docker
+- All agents must be on the same node or manually configured
+
+### The Solution: `join_mesh()` and `leave_mesh()`
+
+```python
+# AFTER: Self-registering agents
+# Each agent can join any mesh independently
+
+# agent_container.py (runs in Docker/K8s)
+from jarviscore.profiles import ListenerAgent
+import os
+
+
+class WorkerAgent(ListenerAgent):
+    role = "worker"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        return {"result": "processed"}
+
+
+async def main():
+    agent = WorkerAgent()
+    await agent.setup()
+
+    # Join existing mesh via environment variable
+    seed_nodes = os.environ.get("JARVISCORE_SEED_NODES", "mesh-service:7950")
+    await agent.join_mesh(seed_nodes=seed_nodes)
+
+    # Agent is now part of the mesh, discoverable by others
+    await agent.serve_forever()
+
+    # Clean shutdown
+    await agent.leave_mesh()
+```
+
+### Environment Variables for Cloud
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `JARVISCORE_SEED_NODES` | Comma-separated list of mesh nodes | `"10.0.0.1:7950,10.0.0.2:7950"` |
+| `JARVISCORE_MESH_ENDPOINT` | This agent's reachable address | `"worker-pod-abc:7950"` |
+| `JARVISCORE_BIND_PORT` | Port to listen on | `"7950"` |
+
+### Docker Deployment Example
+
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+CMD ["python", "agent.py"]
+```
+
+```python
+# agent.py
+import asyncio
+import os
+from jarviscore.profiles import ListenerAgent
+
+
+class WorkerAgent(ListenerAgent):
+    role = "worker"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        task = msg.data.get("task", "")
+        return {"result": f"Processed: {task}"}
+
+
+async def main():
+    agent = WorkerAgent()
+    await agent.setup()
+
+    # Configuration from environment
+    seed_nodes = os.environ.get("JARVISCORE_SEED_NODES")
+    mesh_endpoint = os.environ.get("JARVISCORE_MESH_ENDPOINT")
+
+    if seed_nodes:
+        await agent.join_mesh(
+            seed_nodes=seed_nodes,
+            advertise_endpoint=mesh_endpoint
+        )
+        print(f"Joined mesh via {seed_nodes}")
+    else:
+        print("Running standalone (no JARVISCORE_SEED_NODES)")
+
+    await agent.serve_forever()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  mesh-seed:
+    build: .
+    environment:
+      - JARVISCORE_BIND_PORT=7950
+    ports:
+      - "7950:7950"
+
+  worker-1:
+    build: .
+    environment:
+      - JARVISCORE_SEED_NODES=mesh-seed:7950
+      - JARVISCORE_MESH_ENDPOINT=worker-1:7950
+    depends_on:
+      - mesh-seed
+
+  worker-2:
+    build: .
+    environment:
+      - JARVISCORE_SEED_NODES=mesh-seed:7950
+      - JARVISCORE_MESH_ENDPOINT=worker-2:7950
+    depends_on:
+      - mesh-seed
+```
+
+### Kubernetes Deployment Example
+
+```yaml
+# k8s-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jarvis-worker
+spec:
+  replicas: 3  # Scale as needed
+  selector:
+    matchLabels:
+      app: jarvis-worker
+  template:
+    metadata:
+      labels:
+        app: jarvis-worker
+    spec:
+      containers:
+      - name: worker
+        image: myregistry/jarvis-worker:latest
+        env:
+        - name: JARVISCORE_SEED_NODES
+          value: "jarvis-mesh-service:7950"
+        - name: JARVISCORE_MESH_ENDPOINT
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        ports:
+        - containerPort: 7950
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jarvis-mesh-service
+spec:
+  selector:
+    app: jarvis-mesh-seed
+  ports:
+  - port: 7950
+    targetPort: 7950
+```
+
+### How Self-Registration Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    SELF-REGISTRATION FLOW                    │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. New container starts                                    │
+│     │                                                       │
+│     ▼                                                       │
+│  2. agent.join_mesh(seed_nodes="mesh:7950")                │
+│     │                                                       │
+│     ▼                                                       │
+│  3. Agent connects to seed node                            │
+│     │                                                       │
+│     ▼                                                       │
+│  4. SWIM protocol discovers all peers                      │
+│     │                                                       │
+│     ▼                                                       │
+│  5. Agent registers its role/capabilities                  │
+│     │                                                       │
+│     ▼                                                       │
+│  6. Other agents can now discover and call this agent      │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### RemoteAgentProxy (Automatic)
+
+When agents join from different nodes, the framework automatically creates `RemoteAgentProxy` objects. You don't need to do anything special - the mesh handles it:
+
+```python
+# On any node, you can discover and call remote agents
+if agent.peers:
+    # This works whether the peer is local or remote
+    response = await agent.peers.as_tool().execute(
+        "ask_peer",
+        {"role": "worker", "question": "Process this data"}
+    )
+```
+
+---
+
 ## API Reference
 
 ### CustomAgent Class Attributes
@@ -1082,6 +1809,22 @@ results = await mesh.workflow("parallel-example", [
 | `setup()` | Both | Called once on startup. Initialize resources here. Always call `await super().setup()` |
 | `run()` | P2P | Main loop for continuous operation. Required for P2P mode |
 | `execute_task(task)` | Distributed | Handle a workflow task. Required for Distributed mode |
+| `join_mesh(seed_nodes, ...)` | Both | **(v0.3.0)** Self-register with an existing mesh |
+| `leave_mesh()` | Both | **(v0.3.0)** Gracefully leave the mesh |
+| `serve_forever()` | Both | **(v0.3.0)** Block until shutdown signal |
+
+### ListenerAgent Class (v0.3.0)
+
+ListenerAgent extends CustomAgent with handler-based P2P communication.
+
+| Attribute/Method | Type | Description |
+|------------------|------|-------------|
+| `role` | `str` | Required. Unique identifier for this agent type |
+| `capabilities` | `list[str]` | Required. List of capabilities for discovery |
+| `on_peer_request(msg)` | async method | Handle incoming requests. Return dict to respond |
+| `on_peer_notify(msg)` | async method | Handle broadcast notifications. No return needed |
+
+**Note:** ListenerAgent does not require `run()` or `execute_task()` implementations.
 
 ### Why `execute_task()` is Required in P2P Mode
 
@@ -1127,6 +1870,33 @@ Access via `self.peers.as_tool().execute(tool_name, params)`:
 | `ask_peer` | `{"role": str, "question": str}` | Send a request to a peer by role and wait for response |
 | `broadcast` | `{"message": str}` | Send a message to all connected peers |
 | `list_peers` | `{}` | Get list of available peers and their capabilities |
+
+### PeerClient Methods (v0.3.0)
+
+Access via `self.peers`:
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `get_cognitive_context()` | `str` | Generate LLM-ready text describing available peers |
+| `list()` | `list[PeerInfo]` | Get list of connected peers |
+| `as_tool()` | `PeerTool` | Get peer tools for LLM tool use |
+| `receive(timeout)` | `IncomingMessage` | Receive next message (for CustomAgent run loops) |
+| `respond(msg, data)` | `None` | Respond to a request message |
+
+### JarvisLifespan (v0.3.0)
+
+FastAPI integration helper:
+
+```python
+from jarviscore.integrations.fastapi import JarvisLifespan
+
+JarvisLifespan(
+    agent,                      # Agent instance
+    mode="p2p",                 # "p2p" or "distributed"
+    bind_port=7950,             # Optional: P2P port
+    seed_nodes="ip:port",       # Optional: for multi-node
+)
+```
 
 ### Mesh Configuration
 
@@ -1358,5 +2128,12 @@ async def ask_researcher(self, question: str) -> str:
 
 For complete, runnable examples, see:
 
-- `examples/customagent_p2p_example.py` - P2P mode with peer communication
+- `examples/customagent_p2p_example.py` - P2P mode with LLM-driven peer communication
 - `examples/customagent_distributed_example.py` - Distributed mode with workflows
+- `examples/listeneragent_cognitive_discovery_example.py` - ListenerAgent + cognitive discovery (v0.3.0)
+- `examples/fastapi_integration_example.py` - FastAPI + JarvisLifespan (v0.3.0)
+- `examples/cloud_deployment_example.py` - Self-registration with join_mesh (v0.3.0)
+
+---
+
+*CustomAgent Guide - JarvisCore Framework v0.3.0*

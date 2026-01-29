@@ -32,6 +32,31 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class RemoteAgentProxy:
+    """
+    Proxy object for remote agents.
+
+    Used by PeerClient to represent agents on other nodes in the mesh.
+    Contains enough information to route messages via P2P coordinator.
+    """
+
+    def __init__(
+        self,
+        agent_id: str,
+        role: str,
+        node_id: str,
+        capabilities: List[str] = None
+    ):
+        self.agent_id = agent_id
+        self.role = role
+        self.node_id = node_id
+        self.capabilities = capabilities or []
+        self.peers = None  # Remote agents don't have local PeerClient
+
+    def __repr__(self):
+        return f"<RemoteAgentProxy {self.role}@{self.node_id}>"
+
+
 class PeerClient:
     """
     Client for peer-to-peer agent communication.
@@ -234,15 +259,22 @@ class PeerClient:
         """
         Get detailed list of peers with capabilities.
 
+        Includes both local and remote agents in the mesh.
+
         Returns:
-            List of dicts with role, agent_id, capabilities, status
+            List of dicts with role, agent_id, capabilities, status, location
 
         Example:
             peers = self.peers.list_peers()
-            # [{"role": "scout", "capabilities": ["reasoning"], ...}]
+            # [
+            #     {"role": "scout", "capabilities": ["reasoning"], "location": "local", ...},
+            #     {"role": "analyst", "capabilities": ["analysis"], "location": "remote", ...}
+            # ]
         """
         seen = set()
         peers = []
+
+        # 1. Local agents
         for role_name, agents in self._agent_registry.items():
             for agent in agents:
                 if agent.agent_id != self._agent_id and agent.agent_id not in seen:
@@ -251,8 +283,27 @@ class PeerClient:
                         "role": agent.role,
                         "agent_id": agent.agent_id,
                         "capabilities": list(agent.capabilities),
-                        "status": "online"
+                        "description": getattr(agent, 'description', ''),
+                        "status": "online",
+                        "location": "local"
                     })
+
+        # 2. Remote agents from coordinator
+        if self._coordinator:
+            for remote in self._coordinator.list_remote_agents():
+                agent_id = remote.get('agent_id')
+                if agent_id and agent_id not in seen:
+                    seen.add(agent_id)
+                    peers.append({
+                        "role": remote.get('role', 'unknown'),
+                        "agent_id": agent_id,
+                        "capabilities": remote.get('capabilities', []),
+                        "description": remote.get('description', ''),
+                        "status": "online",
+                        "location": "remote",
+                        "node_id": remote.get('node_id', '')
+                    })
+
         return peers
 
     # ─────────────────────────────────────────────────────────────────
@@ -440,6 +491,183 @@ class PeerClient:
         return PeerTool(self)
 
     # ─────────────────────────────────────────────────────────────────
+    # COGNITIVE CONTEXT (for LLM prompts)
+    # ─────────────────────────────────────────────────────────────────
+
+    def get_cognitive_context(
+        self,
+        format: str = "markdown",
+        include_capabilities: bool = True,
+        include_description: bool = True,
+        tool_name: str = "ask_peer"
+    ) -> str:
+        """
+        Generate a prompt-ready description of available mesh peers.
+
+        Bridges the gap between the Network Layer (who is connected)
+        and the Cognitive Layer (who the LLM should know about).
+
+        This enables dynamic system prompts that automatically update
+        as peers join or leave the mesh, eliminating hardcoded peer names.
+
+        Args:
+            format: Output format - "markdown", "json", or "text"
+            include_capabilities: Include peer capabilities in output
+            include_description: Include peer descriptions in output
+            tool_name: Name of the tool for peer communication
+
+        Returns:
+            Formatted string suitable for inclusion in system prompts
+
+        Example - Basic Usage:
+            system_prompt = BASE_PROMPT + "\\n\\n" + self.peers.get_cognitive_context()
+
+        Example - Output (markdown):
+            ## AVAILABLE MESH PEERS
+
+            You are part of a multi-agent mesh. The following peers are available:
+
+            - **analyst** (`agent-analyst-abc123`)
+              - Capabilities: analysis, charting, reporting
+              - Description: Analyzes data and generates insights
+
+            - **scout** (`agent-scout-def456`)
+              - Capabilities: research, reconnaissance
+              - Description: Gathers information from external sources
+
+            Use the `ask_peer` tool to delegate tasks to these specialists.
+        """
+        peers = self.list_peers()
+
+        if not peers:
+            return "No other agents are currently available in the mesh."
+
+        if format == "json":
+            return self._format_cognitive_json(peers)
+        elif format == "text":
+            return self._format_cognitive_text(peers, include_capabilities, tool_name)
+        else:  # markdown (default)
+            return self._format_cognitive_markdown(
+                peers, include_capabilities, include_description, tool_name
+            )
+
+    def _format_cognitive_markdown(
+        self,
+        peers: List[Dict[str, Any]],
+        include_capabilities: bool,
+        include_description: bool,
+        tool_name: str
+    ) -> str:
+        """Format peers as markdown for LLM consumption."""
+        lines = [
+            "## AVAILABLE MESH PEERS",
+            "",
+            "You are part of a multi-agent mesh. The following peers are available for collaboration:",
+            ""
+        ]
+
+        for peer in peers:
+            role = peer.get("role", "unknown")
+            agent_id = peer.get("agent_id", "unknown")
+            capabilities = peer.get("capabilities", [])
+            description = peer.get("description", "")
+
+            # Role line with agent ID
+            lines.append(f"- **{role}** (`{agent_id}`)")
+
+            # Capabilities
+            if include_capabilities and capabilities:
+                lines.append(f"  - Capabilities: {', '.join(capabilities)}")
+
+            # Description
+            if include_description:
+                desc = description if description else f"Specialist in {role} tasks"
+                lines.append(f"  - Description: {desc}")
+
+            lines.append("")  # Blank line between peers
+
+        # Usage instructions
+        lines.append(f"Use the `{tool_name}` tool to delegate tasks to these specialists.")
+        lines.append("When delegating, be specific about what you need and provide relevant context.")
+
+        return "\n".join(lines)
+
+    def _format_cognitive_text(
+        self,
+        peers: List[Dict[str, Any]],
+        include_capabilities: bool,
+        tool_name: str
+    ) -> str:
+        """Format peers as plain text for simpler LLM contexts."""
+        lines = ["Available Peers:"]
+
+        for peer in peers:
+            role = peer.get("role", "unknown")
+            capabilities = peer.get("capabilities", [])
+
+            if include_capabilities and capabilities:
+                lines.append(f"- {role}: {', '.join(capabilities)}")
+            else:
+                lines.append(f"- {role}")
+
+        lines.append(f"\nUse {tool_name} tool to communicate with peers.")
+
+        return "\n".join(lines)
+
+    def _format_cognitive_json(self, peers: List[Dict[str, Any]]) -> str:
+        """Format peers as JSON string for structured LLM contexts."""
+        import json
+        return json.dumps({
+            "available_peers": [
+                {
+                    "role": p.get("role"),
+                    "agent_id": p.get("agent_id"),
+                    "capabilities": p.get("capabilities", [])
+                }
+                for p in peers
+            ],
+            "instruction": "Use ask_peer tool to communicate with these agents"
+        }, indent=2)
+
+    def build_system_prompt(self, base_prompt: str, **context_kwargs) -> str:
+        """
+        Build a complete system prompt with peer context appended.
+
+        Convenience method that combines your base prompt with
+        dynamic peer context.
+
+        Args:
+            base_prompt: Your base system prompt
+            **context_kwargs: Arguments passed to get_cognitive_context()
+                - format: "markdown", "json", or "text"
+                - include_capabilities: bool
+                - include_description: bool
+                - tool_name: str
+
+        Returns:
+            Complete system prompt with peer awareness
+
+        Example:
+            # Simple usage
+            prompt = self.peers.build_system_prompt("You are a helpful analyst.")
+
+            # With options
+            prompt = self.peers.build_system_prompt(
+                "You are a data processor.",
+                include_capabilities=True,
+                include_description=False
+            )
+
+            # Use in LLM call
+            response = await llm.chat(
+                messages=[{"role": "system", "content": prompt}, ...],
+                tools=[self.peers.as_tool().schema]
+            )
+        """
+        context = self.get_cognitive_context(**context_kwargs)
+        return f"{base_prompt}\n\n{context}"
+
+    # ─────────────────────────────────────────────────────────────────
     # MESSAGING - RECEIVE
     # ─────────────────────────────────────────────────────────────────
 
@@ -483,24 +711,39 @@ class PeerClient:
 
     def _resolve_target(self, target: str):
         """
-        Resolve target string to agent.
+        Resolve target string to agent (local or remote).
+
+        Checks:
+        1. Local registry (same mesh)
+        2. Remote registry (other nodes via P2P coordinator)
 
         Args:
             target: Role name or agent_id
 
         Returns:
-            Agent instance or None
+            Agent instance (local) or RemoteAgentProxy (remote), or None
         """
-        # First try as role
+        # 1. Try local registry first (by role)
         agents = self._agent_registry.get(target, [])
         if agents:
             return agents[0]
 
-        # Try as agent_id
+        # 2. Try local agent_id match
         for role_name, agents in self._agent_registry.items():
             for agent in agents:
                 if agent.agent_id == target:
                     return agent
+
+        # 3. Try remote agents via coordinator
+        if self._coordinator:
+            remote_info = self._coordinator.get_remote_agent(target)
+            if remote_info:
+                return RemoteAgentProxy(
+                    agent_id=remote_info.get('agent_id', target),
+                    role=remote_info.get('role', target),
+                    node_id=remote_info.get('node_id', ''),
+                    capabilities=remote_info.get('capabilities', [])
+                )
 
         return None
 
@@ -509,9 +752,37 @@ class PeerClient:
         Send message to target agent via coordinator.
 
         For local agents (same mesh), delivers directly to their queue.
-        For remote agents, sends via P2P coordinator.
+        For remote agents (RemoteAgentProxy), sends via P2P coordinator.
         """
         try:
+            # Check if it's a RemoteAgentProxy (remote agent on another node)
+            if isinstance(target_agent, RemoteAgentProxy):
+                # Remote delivery via P2P coordinator
+                if self._coordinator:
+                    msg_type = f"PEER_{message.type.value.upper()}"
+                    payload = {
+                        'sender': message.sender,
+                        'sender_node': message.sender_node,
+                        'target': target_agent.agent_id,
+                        'target_role': target_agent.role,
+                        'data': message.data,
+                        'correlation_id': message.correlation_id,
+                        'timestamp': message.timestamp
+                    }
+                    result = await self._coordinator._send_p2p_message(
+                        target_agent.node_id,
+                        msg_type,
+                        payload
+                    )
+                    if result:
+                        self._logger.debug(
+                            f"Sent {message.type.value} to remote agent "
+                            f"{target_agent.role}@{target_agent.node_id}"
+                        )
+                    return result
+                self._logger.warning("No coordinator available for remote delivery")
+                return False
+
             # Check if target has a peer client (local agent)
             if hasattr(target_agent, 'peers') and target_agent.peers:
                 # Direct local delivery
@@ -529,7 +800,7 @@ class PeerClient:
                 )
                 return True
 
-            # Remote delivery via P2P coordinator
+            # Fallback: Remote delivery via P2P coordinator
             if self._coordinator:
                 msg_type = f"PEER_{message.type.value.upper()}"
                 payload = {
@@ -540,8 +811,9 @@ class PeerClient:
                     'correlation_id': message.correlation_id,
                     'timestamp': message.timestamp
                 }
+                node_id = getattr(target_agent, 'node_id', None) or self._node_id
                 return await self._coordinator._send_p2p_message(
-                    target_agent.node_id or self._node_id,
+                    node_id,
                     msg_type,
                     payload
                 )

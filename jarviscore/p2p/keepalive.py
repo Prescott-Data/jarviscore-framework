@@ -242,62 +242,84 @@ class P2PKeepaliveManager:
         except Exception as e:
             logger.error(f"P2P_KEEPALIVE ({self.agent_id}): Error sending keepalive: {e}")
     
-    async def handle_keepalive_received(self, sender_id: str, payload: Dict[str, Any]):
+    async def handle_keepalive_received(self, sender_zmq_id: str, message: Dict[str, Any]):
         """
         Handle incoming keepalive message from peer.
-        
+
         Args:
-            sender_id: ID of the peer that sent keepalive
-            payload: Keepalive message payload
+            sender_zmq_id: ZMQ identity of the sender (not used for response)
+            message: Full message dict containing 'from_node' with SWIM address
         """
         try:
             self.metrics.keepalives_received += 1
-            logger.debug(f"P2P_KEEPALIVE ({self.agent_id}): Received keepalive from {sender_id}")
-            
-            # Send ACK back to sender
+
+            # Extract the SWIM address from the message (not the ZMQ identity)
+            sender_swim_id = message.get('from_node')
+            if not sender_swim_id:
+                logger.warning(f"P2P_KEEPALIVE ({self.agent_id}): Keepalive missing from_node, cannot ACK")
+                return
+
+            logger.debug(f"P2P_KEEPALIVE ({self.agent_id}): Received keepalive from {sender_swim_id}")
+
+            # Extract the nested payload for timestamp
+            payload = message.get('payload', {})
+            if isinstance(payload, str):
+                import json
+                payload = json.loads(payload)
+
+            # Send ACK back to sender using SWIM address
             ack_payload = {
                 'agent_id': self.agent_id,
                 'timestamp': time.time(),
                 'original_timestamp': payload.get('timestamp')
             }
-            
+
             # Send ACK using direct message (not broadcast)
             if self.send_p2p_message:
-                success = await self.send_p2p_message(sender_id, 'P2P_KEEPALIVE_ACK', ack_payload)
+                success = await self.send_p2p_message(sender_swim_id, 'P2P_KEEPALIVE_ACK', ack_payload)
                 if success:
-                    logger.debug(f"P2P_KEEPALIVE ({self.agent_id}): Sent ACK to {sender_id}")
+                    logger.debug(f"P2P_KEEPALIVE ({self.agent_id}): Sent ACK to {sender_swim_id}")
                 else:
-                    logger.warning(f"P2P_KEEPALIVE ({self.agent_id}): Failed to send ACK to {sender_id}")
-            
+                    logger.warning(f"P2P_KEEPALIVE ({self.agent_id}): Failed to send ACK to {sender_swim_id}")
+
         except Exception as e:
             logger.error(f"P2P_KEEPALIVE ({self.agent_id}): Error handling keepalive: {e}")
     
-    async def handle_keepalive_ack(self, sender_id: str, payload: Dict[str, Any]):
+    async def handle_keepalive_ack(self, sender_zmq_id: str, message: Dict[str, Any]):
         """
         Handle incoming keepalive ACK from peer.
-        
+
         Args:
-            sender_id: ID of the peer that sent ACK
-            payload: ACK message payload
+            sender_zmq_id: ZMQ identity of the sender
+            message: Full message dict containing 'from_node' with SWIM address
         """
         try:
             self.metrics.acks_received += 1
             current_time = time.time()
-            
+
+            # Extract the SWIM address from the message
+            sender_swim_id = message.get('from_node', sender_zmq_id)
+
+            # Extract the nested payload
+            payload = message.get('payload', {})
+            if isinstance(payload, str):
+                import json
+                payload = json.loads(payload)
+
             # Calculate latency if original timestamp available
             original_timestamp = payload.get('original_timestamp')
             if original_timestamp:
                 latency = current_time - original_timestamp
                 self.metrics.last_keepalive_latency = latency
-                logger.debug(f"P2P_KEEPALIVE ({self.agent_id}): ACK from {sender_id}, "
+                logger.debug(f"P2P_KEEPALIVE ({self.agent_id}): ACK from {sender_swim_id}, "
                            f"latency={latency*1000:.1f}ms")
-            
+
             self.metrics.last_successful_keepalive = current_time
-            
+
             # Remove from pending if tracked
-            if sender_id in self.pending_keepalives:
-                del self.pending_keepalives[sender_id]
-            
+            if sender_swim_id in self.pending_keepalives:
+                del self.pending_keepalives[sender_swim_id]
+
         except Exception as e:
             logger.error(f"P2P_KEEPALIVE ({self.agent_id}): Error handling ACK: {e}")
     

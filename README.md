@@ -6,8 +6,11 @@
 
 - ✅ **AutoAgent** - LLM generates and executes code from natural language
 - ✅ **CustomAgent** - Bring your own logic (LangChain, CrewAI, etc.)
+- ✅ **ListenerAgent** - API-first agents with background P2P (just implement handlers)
 - ✅ **P2P Mesh** - Agent discovery and communication via SWIM protocol
 - ✅ **Workflow Orchestration** - Dependencies, context passing, multi-step pipelines
+- ✅ **FastAPI Integration** - 3-line setup with JarvisLifespan
+- ✅ **Cloud Deployment** - Self-registering agents for Docker/K8s
 
 ## Installation
 
@@ -75,13 +78,43 @@ results = await mesh.workflow("demo", [
 print(results[0]["output"])  # [2, 4, 6]
 ```
 
+### ListenerAgent + FastAPI (API-First)
+
+```python
+from fastapi import FastAPI
+from jarviscore.profiles import ListenerAgent
+from jarviscore.integrations.fastapi import JarvisLifespan
+
+class ProcessorAgent(ListenerAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        # Handle requests from other agents
+        return {"result": msg.data.get("task", "").upper()}
+
+# That's it - 3 lines to integrate with FastAPI
+app = FastAPI(lifespan=JarvisLifespan(ProcessorAgent(), mode="p2p"))
+```
+
 ## Execution Modes
 
 | Mode | Profile | Use Case |
 |------|---------|----------|
 | `autonomous` | AutoAgent | Single machine, LLM code generation |
-| `p2p` | CustomAgent | Agent-to-agent communication, swarms |
-| `distributed` | CustomAgent | Multi-node workflows + P2P |
+| `p2p` | CustomAgent, ListenerAgent | Agent-to-agent communication, swarms |
+| `distributed` | CustomAgent, ListenerAgent | Multi-node workflows + P2P |
+
+## What's New in 0.3.0
+
+**Developer Experience Improvements:**
+- **ListenerAgent** - No more writing `run()` loops. Just implement `on_peer_request()` and `on_peer_notify()` handlers.
+- **JarvisLifespan** - FastAPI integration reduced from ~100 lines to 3 lines.
+- **Cognitive Discovery** - `peers.get_cognitive_context()` generates LLM-ready peer descriptions. No more hardcoded agent names in prompts.
+
+**Cloud Deployment:**
+- **Self-Registration** - `agent.join_mesh()` lets agents join existing meshes without central orchestrator.
+- **Remote Visibility** - Agents on different nodes are automatically discovered and callable.
 
 ## Documentation
 
@@ -94,7 +127,7 @@ print(results[0]["output"])  # [2, 4, 6]
 
 ## Version
 
-**0.2.1**
+**0.3.0**
 
 ## License
 

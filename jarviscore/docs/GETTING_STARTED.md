@@ -12,6 +12,7 @@ Build your first AI agent in 5 minutes!
 |---------|----------|--------------|
 | **AutoAgent** | Rapid prototyping, LLM generates code from prompts | Yes |
 | **CustomAgent** | Existing code, full control (LangChain, CrewAI, etc.) | Optional |
+| **ListenerAgent** | API-first (FastAPI), just implement handlers | Optional |
 
 ### Execution Modes (How agents are orchestrated)
 
@@ -19,9 +20,12 @@ Build your first AI agent in 5 minutes!
 |------|----------|------------|
 | **Autonomous** | Single machine, simple pipelines | ✅ This guide |
 | **P2P** | Direct agent communication, swarms | [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) |
-| **Distributed** | Multi-node production systems | [AutoAgent Guide](AUTOAGENT_GUIDE.md) |
+| **Distributed** | Multi-node production systems | [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) |
 
-**Recommendation:** Start with **AutoAgent + Autonomous mode** below, then explore other modes.
+**Recommendation:**
+- **New to agents?** Start with **AutoAgent + Autonomous mode** below
+- **Have existing code?** Jump to **CustomAgent** or **ListenerAgent** sections
+- **Building APIs?** See **ListenerAgent + FastAPI** below
 
 ---
 
@@ -249,6 +253,90 @@ asyncio.run(main())
 
 ---
 
+## Step 6: ListenerAgent + FastAPI (API-First Path)
+
+Building an API where agents run in the background? **ListenerAgent** eliminates the boilerplate.
+
+### The Problem
+
+With CustomAgent, you write a `run()` loop to handle peer messages:
+
+```python
+# CustomAgent - you write the loop
+class MyAgent(CustomAgent):
+    async def run(self):
+        while not self.shutdown_requested:
+            msg = await self.peers.receive(timeout=1.0)
+            if msg is None:
+                continue
+            if msg.type == MessageType.REQUEST:
+                result = await self.process(msg.data)
+                await self.peers.respond(msg, result)
+            # ... error handling, logging, etc.
+```
+
+### The Solution
+
+With ListenerAgent, just implement handlers:
+
+```python
+from jarviscore.profiles import ListenerAgent
+
+class MyAgent(ListenerAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        """Handle requests - return value is sent as response."""
+        return {"result": await self.process(msg.data)}
+
+    async def on_peer_notify(self, msg):
+        """Handle fire-and-forget notifications."""
+        await self.log_event(msg.data)
+```
+
+### FastAPI Integration (3 Lines)
+
+```python
+from fastapi import FastAPI, Request
+from jarviscore.profiles import ListenerAgent
+from jarviscore.integrations.fastapi import JarvisLifespan
+
+class ProcessorAgent(ListenerAgent):
+    role = "processor"
+    capabilities = ["data_processing"]
+
+    async def on_peer_request(self, msg):
+        return {"processed": msg.data.get("task", "").upper()}
+
+# Create agent and integrate with FastAPI
+agent = ProcessorAgent()
+app = FastAPI(lifespan=JarvisLifespan(agent, mode="p2p", bind_port=7950))
+
+@app.post("/process")
+async def process(data: dict, request: Request):
+    # Access your agent from the request
+    agent = request.app.state.jarvis_agents["processor"]
+    return await agent.process(data)
+
+@app.get("/peers")
+async def list_peers(request: Request):
+    agent = request.app.state.jarvis_agents["processor"]
+    return {"peers": agent.peers.list_peers()}
+```
+
+Run with: `uvicorn myapp:app --host 0.0.0.0 --port 8000`
+
+**What you get:**
+- HTTP endpoints (FastAPI routes) as primary interface
+- P2P mesh participation in background
+- Auto message dispatch to handlers
+- Graceful startup/shutdown handled by JarvisLifespan
+
+**For more:** See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for ListenerAgent details.
+
+---
+
 ## What Just Happened?
 
 Behind the scenes, JarvisCore:
@@ -394,7 +482,23 @@ class MyAgent(CustomAgent):
             ...
 ```
 
-### 3. Mesh
+### 3. ListenerAgent Profile
+
+The `ListenerAgent` profile is for API-first agents - just implement handlers:
+
+```python
+class MyAgent(ListenerAgent):
+    role = "unique_name"
+    capabilities = ["skill1", "skill2"]
+
+    async def on_peer_request(self, msg):    # Handle requests (return = response)
+        return {"result": ...}
+
+    async def on_peer_notify(self, msg):     # Handle notifications (fire-and-forget)
+        await self.log(msg.data)
+```
+
+### 4. Mesh
 
 The `Mesh` is the orchestrator that manages agents and workflows:
 
@@ -408,10 +512,10 @@ await mesh.stop()               # Cleanup
 
 **Modes:**
 - `autonomous`: Workflow engine only (AutoAgent)
-- `p2p`: P2P coordinator for agent-to-agent communication (CustomAgent)
-- `distributed`: Both workflow engine AND P2P (CustomAgent)
+- `p2p`: P2P coordinator for agent-to-agent communication (CustomAgent, ListenerAgent)
+- `distributed`: Both workflow engine AND P2P (CustomAgent, ListenerAgent)
 
-### 4. Workflow
+### 5. Workflow
 
 A workflow is a list of tasks to execute:
 
@@ -425,7 +529,7 @@ results = await mesh.workflow("workflow-id", [
 ])
 ```
 
-### 5. Results
+### 6. Results
 
 Each task returns a result dict:
 
