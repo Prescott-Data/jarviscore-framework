@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.1] - 2026-02-02
+
+### Breaking Changes
+
+#### ListenerAgent Removed
+- **ListenerAgent has been merged into CustomAgent**
+- Migration is simple - just change the import:
+  ```python
+  # Before
+  from jarviscore.profiles import ListenerAgent
+  class MyAgent(ListenerAgent): ...
+
+  # After
+  from jarviscore.profiles import CustomAgent
+  class MyAgent(CustomAgent): ...
+  ```
+- All handler methods work exactly the same way
+- No other code changes required
+
+### Changed
+
+#### CustomAgent Now Includes P2P Handlers
+- `on_peer_request(msg)` - Handle incoming requests (return value sent as response)
+- `on_peer_notify(msg)` - Handle fire-and-forget notifications
+- `on_error(error, msg)` - Handle errors during message processing
+- `run()` - Built-in listener loop (no need to write your own)
+- Configuration: `listen_timeout`, `auto_respond`
+
+#### Simplified Profile Architecture
+| Before (v0.3.0) | After (v0.3.1) |
+|-----------------|----------------|
+| AutoAgent + CustomAgent + ListenerAgent | AutoAgent + CustomAgent |
+| "Which profile do I use?" confusion | Clear: AutoAgent (LLM) or CustomAgent (your code) |
+
+### Documentation
+- README.md updated with unified CustomAgent examples
+- GETTING_STARTED.md rewritten with framework integration patterns
+- CUSTOMAGENT_GUIDE.md updated (ListenerAgent sections removed)
+- Added async-first framework guidance (FastAPI, aiohttp, Flask patterns)
+
+---
+
 ## [0.3.0] - 2026-01-29
 
 ### Added

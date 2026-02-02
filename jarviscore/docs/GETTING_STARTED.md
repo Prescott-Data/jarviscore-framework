@@ -11,21 +11,20 @@ Build your first AI agent in 5 minutes!
 | Profile | Best For | LLM Required |
 |---------|----------|--------------|
 | **AutoAgent** | Rapid prototyping, LLM generates code from prompts | Yes |
-| **CustomAgent** | Existing code, full control (LangChain, CrewAI, etc.) | Optional |
-| **ListenerAgent** | API-first (FastAPI), just implement handlers | Optional |
+| **CustomAgent** | Your own code with P2P handlers or workflow tasks | Optional |
 
 ### Execution Modes (How agents are orchestrated)
 
 | Mode | Use Case | Start Here |
 |------|----------|------------|
-| **Autonomous** | Single machine, simple pipelines | ✅ This guide |
+| **Autonomous** | Single machine, simple pipelines | This guide |
 | **P2P** | Direct agent communication, swarms | [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) |
 | **Distributed** | Multi-node production systems | [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) |
 
 **Recommendation:**
 - **New to agents?** Start with **AutoAgent + Autonomous mode** below
-- **Have existing code?** Jump to **CustomAgent** or **ListenerAgent** sections
-- **Building APIs?** See **ListenerAgent + FastAPI** below
+- **Have existing code?** Jump to **CustomAgent** section
+- **Building APIs?** See **CustomAgent + FastAPI** below
 
 ---
 
@@ -42,8 +41,8 @@ An **AutoAgent** that takes natural language prompts and automatically:
 
 ## Prerequisites
 
-- ✅ Python 3.10 or higher
-- ✅ An API key from one of these LLM providers:
+- Python 3.10 or higher
+- An API key from one of these LLM providers:
   - [Claude (Anthropic)](https://console.anthropic.com/) - Recommended
   - [Azure OpenAI](https://azure.microsoft.com/en-us/products/ai-services/openai-service)
   - [Google Gemini](https://ai.google.dev/)
@@ -97,7 +96,7 @@ LLM_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
 ```
 
 **Tip:** JarvisCore automatically tries providers in this order:
-Claude → Azure → Gemini → vLLM
+Claude -> Azure -> Gemini -> vLLM
 
 ---
 
@@ -115,11 +114,11 @@ python -m jarviscore.cli.check --validate-llm
 
 You should see:
 ```
-✓ Python Version: OK
-✓ JarvisCore Package: OK
-✓ Dependencies: OK
-✓ .env File: OK
-✓ Claude/Azure/Gemini: OK
+ Python Version: OK
+ JarvisCore Package: OK
+ Dependencies: OK
+ .env File: OK
+ Claude/Azure/Gemini: OK
 ```
 
 Run the smoke test for end-to-end validation:
@@ -128,7 +127,7 @@ Run the smoke test for end-to-end validation:
 python -m jarviscore.cli.smoketest
 ```
 
-✅ **If all tests pass**, you're ready to build agents!
+**If all tests pass**, you're ready to build agents!
 
 ---
 
@@ -199,13 +198,15 @@ Output: 3628800
 Execution time: 4.23s
 ```
 
-**🎉 Congratulations!** You just built an AI agent with zero manual coding!
+**Congratulations!** You just built an AI agent with zero manual coding!
 
 ---
 
-## Step 5: Try CustomAgent (Alternative Path)
+## Step 5: CustomAgent (Your Own Code)
 
 If you have existing agents or don't need LLM code generation, use **CustomAgent**:
+
+### Workflow Mode (execute_task)
 
 ```python
 import asyncio
@@ -225,7 +226,6 @@ class MyAgent(CustomAgent):
 
 
 async def main():
-    # CustomAgent uses "distributed" (workflow + P2P) or "p2p" (P2P only)
     mesh = Mesh(mode="distributed", config={
         'bind_port': 7950,
         'node_name': 'custom-node',
@@ -244,80 +244,79 @@ async def main():
 asyncio.run(main())
 ```
 
+### P2P Mode (on_peer_request)
+
+```python
+import asyncio
+from jarviscore import Mesh
+from jarviscore.profiles import CustomAgent
+
+
+class MyAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["data_processing"]
+
+    async def on_peer_request(self, msg):
+        """Handle requests from other agents."""
+        data = msg.data.get("data", [])
+        return {"result": [x * 2 for x in data]}
+
+
+async def main():
+    mesh = Mesh(mode="p2p", config={'bind_port': 7950})
+    mesh.add(MyAgent)
+    await mesh.start()
+
+    # Agent listens for peer requests
+    print("Agent running. Press Ctrl+C to stop.")
+    await mesh.agents[0].run()
+
+    await mesh.stop()
+
+
+asyncio.run(main())
+```
+
 **Key Benefits:**
-- No LLM API required (no costs!)
 - Keep your existing logic
 - Works with any framework (LangChain, CrewAI, etc.)
 
-**For more:** See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for P2P mode and multi-node examples.
-
 ---
 
-## Step 6: ListenerAgent + FastAPI (API-First Path)
+## Step 6: CustomAgent + FastAPI (API-First)
 
-Building an API where agents run in the background? **ListenerAgent** eliminates the boilerplate.
-
-### The Problem
-
-With CustomAgent, you write a `run()` loop to handle peer messages:
-
-```python
-# CustomAgent - you write the loop
-class MyAgent(CustomAgent):
-    async def run(self):
-        while not self.shutdown_requested:
-            msg = await self.peers.receive(timeout=1.0)
-            if msg is None:
-                continue
-            if msg.type == MessageType.REQUEST:
-                result = await self.process(msg.data)
-                await self.peers.respond(msg, result)
-            # ... error handling, logging, etc.
-```
-
-### The Solution
-
-With ListenerAgent, just implement handlers:
-
-```python
-from jarviscore.profiles import ListenerAgent
-
-class MyAgent(ListenerAgent):
-    role = "processor"
-    capabilities = ["processing"]
-
-    async def on_peer_request(self, msg):
-        """Handle requests - return value is sent as response."""
-        return {"result": await self.process(msg.data)}
-
-    async def on_peer_notify(self, msg):
-        """Handle fire-and-forget notifications."""
-        await self.log_event(msg.data)
-```
+Building an API where agents run in the background? JarvisCore makes it easy.
 
 ### FastAPI Integration (3 Lines)
 
 ```python
 from fastapi import FastAPI, Request
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 from jarviscore.integrations.fastapi import JarvisLifespan
 
-class ProcessorAgent(ListenerAgent):
+
+class ProcessorAgent(CustomAgent):
     role = "processor"
     capabilities = ["data_processing"]
 
     async def on_peer_request(self, msg):
+        """Handle requests from other agents in the mesh."""
         return {"processed": msg.data.get("task", "").upper()}
+
 
 # Create agent and integrate with FastAPI
 agent = ProcessorAgent()
 app = FastAPI(lifespan=JarvisLifespan(agent, mode="p2p", bind_port=7950))
 
+
 @app.post("/process")
 async def process(data: dict, request: Request):
     # Access your agent from the request
     agent = request.app.state.jarvis_agents["processor"]
-    return await agent.process(data)
+    # Call another agent in the mesh
+    result = await agent.peers.request("analyst", {"task": data.get("task")})
+    return result
+
 
 @app.get("/peers")
 async def list_peers(request: Request):
@@ -333,121 +332,131 @@ Run with: `uvicorn myapp:app --host 0.0.0.0 --port 8000`
 - Auto message dispatch to handlers
 - Graceful startup/shutdown handled by JarvisLifespan
 
-**For more:** See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for ListenerAgent details.
-
 ---
 
-## What Just Happened?
+## Step 7: Framework Integration Patterns
 
-Behind the scenes, JarvisCore:
+JarvisCore is **async-first**. Here's how to integrate with different frameworks:
 
-1. **Received your prompt**: "Calculate the factorial of 10"
-2. **Generated Python code** using Claude/Azure/Gemini:
-   ```python
-   def factorial(n):
-       if n == 0 or n == 1:
-           return 1
-       return n * factorial(n - 1)
-
-   result = factorial(10)
-   ```
-3. **Executed the code** safely in a sandbox
-4. **Returned the result**: 3628800
-
-All from a single natural language prompt!
-
----
-
-## Step 5: Try More Complex AutoAgent Profile Examples
-
-### Example 1: Data Processing
+### Pattern 1: FastAPI (Recommended)
 
 ```python
-class DataAgent(AutoAgent):
-    role = "data_analyst"
-    capabilities = ["data_processing", "statistics"]
-    system_prompt = "You are a data analyst. Generate Python code for data tasks."
+from fastapi import FastAPI
+from jarviscore.profiles import CustomAgent
+from jarviscore.integrations.fastapi import JarvisLifespan
 
+class MyAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["processing"]
 
-async def analyze_data():
-    mesh = Mesh(mode="autonomous")
-    mesh.add(DataAgent)
-    await mesh.start()
+    async def on_peer_request(self, msg):
+        return {"result": msg.data}
 
-    results = await mesh.workflow("data-workflow", [
-        {
-            "agent": "data_analyst",
-            "task": """
-            Given this list: [10, 20, 30, 40, 50]
-            Calculate: mean, median, min, max, sum
-            Return as a dict
-            """
-        }
-    ])
-
-    print(results[0]['output'])
-    # Output: {'mean': 30.0, 'median': 30, 'min': 10, 'max': 50, 'sum': 150}
-
-    await mesh.stop()
+app = FastAPI(lifespan=JarvisLifespan(MyAgent(), mode="p2p", bind_port=7950))
 ```
 
-### Example 2: Text Processing
+### Pattern 2: Other Async Frameworks (aiohttp, Quart, Tornado)
 
 ```python
-class TextAgent(AutoAgent):
-    role = "text_processor"
-    capabilities = ["text", "nlp"]
-    system_prompt = "You are a text processing expert."
+# aiohttp example
+import asyncio
+from aiohttp import web
+from jarviscore import Mesh
+from jarviscore.profiles import CustomAgent
 
+class MyAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["processing"]
 
-async def process_text():
-    mesh = Mesh(mode="autonomous")
-    mesh.add(TextAgent)
+    async def on_peer_request(self, msg):
+        return {"result": msg.data}
+
+mesh = None
+agent = None
+
+async def on_startup(app):
+    global mesh, agent
+    mesh = Mesh(mode="p2p", config={"bind_port": 7950})
+    agent = mesh.add(MyAgent())
     await mesh.start()
+    asyncio.create_task(agent.run())
+    app['agent'] = agent
 
-    results = await mesh.workflow("text-workflow", [
-        {
-            "agent": "text_processor",
-            "task": """
-            Count the words in this sentence:
-            "JarvisCore makes building AI agents incredibly easy"
-            """
-        }
-    ])
-
-    print(results[0]['output'])  # Output: 7
-
+async def on_cleanup(app):
+    agent.request_shutdown()
     await mesh.stop()
+
+async def process_handler(request):
+    agent = request.app['agent']
+    result = await agent.peers.request("analyst", {"task": "analyze"})
+    return web.json_response(result)
+
+app = web.Application()
+app.on_startup.append(on_startup)
+app.on_cleanup.append(on_cleanup)
+app.router.add_post('/process', process_handler)
 ```
 
-### Example 3: Multi-Step Workflow
+### Pattern 3: Sync Frameworks (Flask, Django)
 
 ```python
-async def multi_step_workflow():
-    mesh = Mesh(mode="autonomous")
-    mesh.add(CalculatorAgent)
-    mesh.add(DataAgent)
-    await mesh.start()
+# Flask example - requires background thread
+import asyncio
+import threading
+from flask import Flask, jsonify
+from jarviscore import Mesh
+from jarviscore.profiles import CustomAgent
 
-    results = await mesh.workflow("multi-step", [
-        {
-            "id": "step1",
-            "agent": "calculator",
-            "task": "Calculate 5 factorial"
-        },
-        {
-            "id": "step2",
-            "agent": "data_analyst",
-            "task": "Take the result from step1 and calculate its square root",
-            "dependencies": ["step1"]  # Waits for step1 to complete
-        }
-    ])
+app = Flask(__name__)
 
-    print(f"Factorial(5): {results[0]['output']}")      # 120
-    print(f"Square root: {results[1]['output']:.2f}")   # 10.95
+class MyAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["processing"]
 
-    await mesh.stop()
+    async def on_peer_request(self, msg):
+        return {"result": msg.data}
+
+# Global state
+_loop = None
+_mesh = None
+_agent = None
+
+def _start_mesh():
+    """Run in background thread."""
+    global _loop, _mesh, _agent
+    _loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_loop)
+
+    _mesh = Mesh(mode="p2p", config={"bind_port": 7950})
+    _agent = _mesh.add(MyAgent())
+
+    _loop.run_until_complete(_mesh.start())
+    _loop.run_until_complete(_agent.run())
+
+# Start mesh in background thread
+_thread = threading.Thread(target=_start_mesh, daemon=True)
+_thread.start()
+
+@app.route("/process", methods=["POST"])
+def process():
+    future = asyncio.run_coroutine_threadsafe(
+        _agent.peers.request("analyst", {"task": "analyze"}),
+        _loop
+    )
+    result = future.result(timeout=30)
+    return jsonify(result)
 ```
+
+### Framework Recommendation
+
+| Use Case | Recommended Approach |
+|----------|---------------------|
+| FastAPI project | FastAPI + JarvisLifespan |
+| Existing async app | Manual mesh lifecycle |
+| Existing Flask/Django | Background thread pattern |
+| CLI tool / script | Standalone asyncio.run() |
+
+**For more:** See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for detailed integration examples.
 
 ---
 
@@ -455,7 +464,7 @@ async def multi_step_workflow():
 
 ### 1. AutoAgent Profile
 
-The `AutoAgent` profile handles the "prompt → code → result" workflow automatically:
+The `AutoAgent` profile handles the "prompt -> code -> result" workflow automatically:
 
 ```python
 class MyAgent(AutoAgent):
@@ -473,32 +482,24 @@ class MyAgent(CustomAgent):
     role = "unique_name"
     capabilities = ["skill1", "skill2"]
 
-    async def execute_task(self, task):      # For workflow steps (distributed)
+    # For P2P messaging - handle requests from other agents
+    async def on_peer_request(self, msg):
+        return {"result": ...}  # Return value sent as response
+
+    # For P2P messaging - handle notifications (fire-and-forget)
+    async def on_peer_notify(self, msg):
+        await self.log(msg.data)
+
+    # For workflow tasks
+    async def execute_task(self, task):
         return {"status": "success", "output": ...}
 
-    async def run(self):                      # For continuous loop (p2p)
-        while not self.shutdown_requested:
-            msg = await self.peers.receive(timeout=0.5)
-            ...
+    # Configuration
+    listen_timeout = 1.0   # Seconds to wait for messages
+    auto_respond = True    # Auto-send on_peer_request return value
 ```
 
-### 3. ListenerAgent Profile
-
-The `ListenerAgent` profile is for API-first agents - just implement handlers:
-
-```python
-class MyAgent(ListenerAgent):
-    role = "unique_name"
-    capabilities = ["skill1", "skill2"]
-
-    async def on_peer_request(self, msg):    # Handle requests (return = response)
-        return {"result": ...}
-
-    async def on_peer_notify(self, msg):     # Handle notifications (fire-and-forget)
-        await self.log(msg.data)
-```
-
-### 4. Mesh
+### 3. Mesh
 
 The `Mesh` is the orchestrator that manages agents and workflows:
 
@@ -512,10 +513,10 @@ await mesh.stop()               # Cleanup
 
 **Modes:**
 - `autonomous`: Workflow engine only (AutoAgent)
-- `p2p`: P2P coordinator for agent-to-agent communication (CustomAgent, ListenerAgent)
-- `distributed`: Both workflow engine AND P2P (CustomAgent, ListenerAgent)
+- `p2p`: P2P coordinator for agent-to-agent communication (CustomAgent)
+- `distributed`: Both workflow engine AND P2P (CustomAgent)
 
-### 5. Workflow
+### 4. Workflow
 
 A workflow is a list of tasks to execute:
 
@@ -529,7 +530,7 @@ results = await mesh.workflow("workflow-id", [
 ])
 ```
 
-### 6. Results
+### 5. Results
 
 Each task returns a result dict:
 
@@ -546,48 +547,6 @@ Each task returns a result dict:
 
 ---
 
-## Configuration Options
-
-### Sandbox Mode
-
-Choose between local or remote code execution:
-
-```bash
-# Local (default) - runs on your machine
-SANDBOX_MODE=local
-
-# Remote - runs on Azure Container Apps (more secure)
-SANDBOX_MODE=remote
-SANDBOX_SERVICE_URL=https://your-sandbox-service.com
-```
-
-### LLM Settings
-
-Fine-tune LLM behavior:
-
-```bash
-# Model selection (provider-specific)
-CLAUDE_MODEL=claude-sonnet-4        # Claude
-AZURE_DEPLOYMENT=gpt-4o             # Azure
-GEMINI_MODEL=gemini-2.0-flash       # Gemini
-LLM_MODEL=Qwen/Qwen2.5-Coder-32B   # vLLM
-
-# Generation parameters
-LLM_TEMPERATURE=0.0   # 0.0 = deterministic, 1.0 = creative
-LLM_MAX_TOKENS=2000   # Max response length
-LLM_TIMEOUT=120       # Request timeout (seconds)
-```
-
-### Logging
-
-Control log verbosity:
-
-```bash
-LOG_LEVEL=INFO   # DEBUG, INFO, WARNING, ERROR, CRITICAL
-```
-
----
-
 ## Common Patterns
 
 ### Pattern 1: Error Handling
@@ -600,7 +559,6 @@ try:
 
     if results[0]['status'] == 'failure':
         print(f"Error: {results[0]['error']}")
-        # The agent automatically attempted repairs
         print(f"Repair attempts: {results[0]['repairs']}")
 
 except Exception as e:
@@ -619,29 +577,25 @@ results = await mesh.workflow("dynamic", [
 print(results[0]['output'])  # 78.54
 ```
 
-### Pattern 3: Context Passing
-
-Pass data between steps:
+### Pattern 3: Multi-Step Workflow
 
 ```python
-results = await mesh.workflow("context-workflow", [
+results = await mesh.workflow("multi-step", [
     {
-        "id": "generate",
-        "agent": "data_analyst",
-        "task": "Generate a list of 10 random numbers between 1 and 100"
+        "id": "step1",
+        "agent": "calculator",
+        "task": "Calculate 5 factorial"
     },
     {
-        "id": "analyze",
+        "id": "step2",
         "agent": "data_analyst",
-        "task": "Calculate statistics on the numbers from step 'generate'",
-        "dependencies": ["generate"]
+        "task": "Take the result from step1 and calculate its square root",
+        "dependencies": ["step1"]  # Waits for step1 to complete
     }
 ])
 
-numbers = results[0]['output']
-stats = results[1]['output']
-print(f"Numbers: {numbers}")
-print(f"Statistics: {stats}")
+print(f"Factorial(5): {results[0]['output']}")      # 120
+print(f"Square root: {results[1]['output']:.2f}")   # 10.95
 ```
 
 ---
@@ -663,138 +617,41 @@ ls -la logs/
 cat logs/<agent>/<latest>.json
 ```
 
-Run smoke test with verbose output:
-```bash
-python -m jarviscore.cli.smoketest --verbose
-```
-
 ### Issue: Slow execution
-
-**Causes:**
-1. LLM latency (2-5s per request)
-2. Complex prompts
-3. Network issues
 
 **Solutions:**
 - Use faster models (Claude Haiku, Gemini Flash)
 - Simplify prompts
 - Use local vLLM for zero-latency
 
-### Issue: Generated code has errors
-
-**Good news:** AutoAgent automatically attempts to fix errors!
-
-It will:
-1. Detect the error
-2. Ask the LLM to fix the code
-3. Retry execution (up to 3 times)
-
-Check `repairs` in the result to see how many fixes were needed.
-
 ---
 
 ## Next Steps
 
-1. **AutoAgent Guide**: Multi-node distributed mode → [AUTOAGENT_GUIDE.md](AUTOAGENT_GUIDE.md)
-2. **CustomAgent Guide**: P2P and distributed with your code → [CUSTOMAGENT_GUIDE.md](CUSTOMAGENT_GUIDE.md)
-3. **User Guide**: Complete documentation → [USER_GUIDE.md](USER_GUIDE.md)
+1. **CustomAgent Guide**: P2P and distributed with your code -> [CUSTOMAGENT_GUIDE.md](CUSTOMAGENT_GUIDE.md)
+2. **AutoAgent Guide**: Multi-node distributed mode -> [AUTOAGENT_GUIDE.md](AUTOAGENT_GUIDE.md)
+3. **User Guide**: Complete documentation -> [USER_GUIDE.md](USER_GUIDE.md)
 4. **API Reference**: [API_REFERENCE.md](API_REFERENCE.md)
-5. **Configuration**: [CONFIGURATION.md](CONFIGURATION.md)
-6. **Examples**: Check out `examples/` directory
+5. **Examples**: Check out `examples/` directory
 
 ---
 
 ## Best Practices
 
-### ✅ DO
+### DO
 
 - **Be specific in prompts**: "Calculate factorial of 10" > "Do math"
 - **Test with simple tasks first**: Validate your setup works
 - **Use appropriate models**: Haiku/Flash for simple tasks, Opus/GPT-4 for complex
-- **Monitor costs**: Check LLM usage if using paid APIs
-- **Read error messages**: They contain helpful hints
+- **Use async frameworks**: FastAPI, aiohttp for best experience
 
-### ❌ DON'T
+### DON'T
 
 - **Use vague prompts**: "Do something" won't work well
 - **Expect instant results**: LLM generation takes 2-5 seconds
 - **Skip validation**: Always run health check after setup
 - **Commit API keys**: Keep `.env` out of version control
-- **Ignore logs**: They help debug issues
 
 ---
 
-## FAQ
-
-### Q: How much does it cost?
-
-**A:** Depends on your LLM provider:
-- **Claude**: ~$3-15 per million tokens (most expensive but best quality)
-- **Azure**: ~$3-15 per million tokens (enterprise-grade)
-- **Gemini**: $0.10-5 per million tokens (cheapest cloud option)
-- **vLLM**: FREE (self-hosted, no API costs)
-
-A typical simple task uses ~500 tokens = $0.0015 with Claude.
-
-### Q: Is the code execution safe?
-
-**A:** Yes! Code runs in an isolated sandbox:
-- **Local mode**: Restricted Python environment (no file/network access)
-- **Remote mode**: Azure Container Apps (fully isolated containers)
-
-### Q: Can I use my own LLM?
-
-**A:** Yes! Point `LLM_ENDPOINT` to any OpenAI-compatible API:
-```bash
-LLM_ENDPOINT=http://localhost:8000  # Local vLLM
-LLM_ENDPOINT=https://your-api.com   # Custom endpoint
-```
-
-### Q: What if the LLM generates bad code?
-
-**A:** AutoAgent automatically detects and fixes errors:
-1. Catches syntax/runtime errors
-2. Sends error to LLM with fix instructions
-3. Retries with corrected code (up to 3 attempts)
-
-Check `repairs` in the result to see how many fixes were needed.
-
-### Q: Can I see the generated code?
-
-**A:** Yes! It's in the result:
-```python
-result = results[0]
-print(result['code'])  # Shows the generated Python code
-```
-
-Or check logs:
-```bash
-cat logs/<agent-role>/<result-id>.json
-```
-
-### Q: How do I deploy this in production?
-
-**A:** See the User Guide for:
-- Remote sandbox configuration (Azure Container Apps)
-- High-availability setup
-- Monitoring and logging
-- Cost optimization
-
----
-
-## Support
-
-Need help?
-
-1. **Check docs**: [USER_GUIDE.md](USER_GUIDE.md) | [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
-2. **Run diagnostics**:
-   ```bash
-   python -m jarviscore.cli.check --verbose
-   python -m jarviscore.cli.smoketest --verbose
-   ```
-3. **Check logs**: `cat logs/<agent>/<latest>.json`
-4. **Report issues**: [GitHub Issues](https://github.com/Prescott-Data/jarviscore-framework/issues)
-
----
-
-**🚀 Happy building with JarvisCore!**
+**Happy building with JarvisCore!**

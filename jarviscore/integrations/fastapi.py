@@ -49,9 +49,9 @@ class JarvisLifespan:
     Example - Single Agent:
         from fastapi import FastAPI, Request
         from jarviscore.integrations.fastapi import JarvisLifespan
-        from jarviscore.profiles import ListenerAgent
+        from jarviscore.profiles import CustomAgent
 
-        class MyAgent(ListenerAgent):
+        class MyAgent(CustomAgent):
             role = "processor"
             capabilities = ["processing"]
 
@@ -220,9 +220,9 @@ def create_jarvis_app(
 
     Example:
         from jarviscore.integrations.fastapi import create_jarvis_app
-        from jarviscore.profiles import ListenerAgent
+        from jarviscore.profiles import CustomAgent
 
-        class MyAgent(ListenerAgent):
+        class MyAgent(CustomAgent):
             role = "processor"
             capabilities = ["processing"]
 

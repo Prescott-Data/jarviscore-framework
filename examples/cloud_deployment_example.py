@@ -28,10 +28,10 @@ import sys
 
 sys.path.insert(0, '.')
 
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 
 
-class StandaloneProcessor(ListenerAgent):
+class StandaloneProcessor(CustomAgent):
     """
     Example standalone agent that joins mesh independently.
 
@@ -143,7 +143,7 @@ async def main():
     print("Listening for peer requests...")
     print("Press Ctrl+C to stop.\n")
 
-    # Run agent (ListenerAgent's run() handles the message loop)
+    # Run agent (CustomAgent's run() handles the message loop)
     try:
         await agent.run()
     except asyncio.CancelledError:

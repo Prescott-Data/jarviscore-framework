@@ -153,6 +153,7 @@ class PeerClient:
         """
         results = []
 
+        # Search LOCAL agents first
         if role:
             agents = self._agent_registry.get(role, [])
             for agent in agents:
@@ -166,7 +167,7 @@ class PeerClient:
                     ))
 
         elif capability:
-            # Search all agents for capability
+            # Search all local agents for capability
             for role_name, agents in self._agent_registry.items():
                 for agent in agents:
                     if agent.agent_id != self._agent_id:  # Exclude self
@@ -180,7 +181,7 @@ class PeerClient:
                             ))
 
         else:
-            # Return all peers
+            # Return all local peers
             for role_name, agents in self._agent_registry.items():
                 for agent in agents:
                     if agent.agent_id != self._agent_id:  # Exclude self
@@ -191,6 +192,32 @@ class PeerClient:
                             node_id=self._node_id,
                             status="alive"
                         ))
+
+        # BUG FIX: Also search REMOTE agents from other nodes
+        # Access coordinator's _remote_agent_registry
+        if self._coordinator and hasattr(self._coordinator, '_remote_agent_registry'):
+            remote_registry = self._coordinator._remote_agent_registry
+            
+            for agent_id, info in remote_registry.items():
+                if agent_id == self._agent_id:  # Exclude self
+                    continue
+                
+                # Filter by role if specified
+                if role and info.get('role') != role:
+                    continue
+                
+                # Filter by capability if specified
+                if capability and capability not in info.get('capabilities', []):
+                    continue
+                
+                # Add remote peer
+                results.append(PeerInfo(
+                    agent_id=info['agent_id'],
+                    role=info['role'],
+                    capabilities=info.get('capabilities', []),
+                    node_id=info.get('node_id', 'unknown'),
+                    status="alive"
+                ))
 
         return results
 

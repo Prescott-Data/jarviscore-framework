@@ -3,7 +3,7 @@ Test 16: Unified DX Flow - Autonomous Agents with Mesh as Tool
 
 Tests the COMPLETE real-world flow combining all DX improvements:
 1. FastAPI Integration (JarvisLifespan)
-2. ListenerAgent Profile
+2. CustomAgent Profile with P2P Handlers
 3. Cognitive Discovery (get_cognitive_context)
 4. LLM Autonomous Delegation - Each agent has mesh as a TOOL
 5. Peer-to-Peer Communication - No coordinator, any agent can talk to any agent
@@ -85,9 +85,9 @@ requires_llm = pytest.mark.skipif(not llm_is_available(), reason="No valid LLM A
 
 def create_llm_agent_class():
     """Create the LLMAgent base class."""
-    from jarviscore.profiles import ListenerAgent
+    from jarviscore.profiles import CustomAgent
 
-    class LLMAgent(ListenerAgent):
+    class LLMAgent(CustomAgent):
         """
         Base for LLM-powered agents that can discover and delegate to peers.
 

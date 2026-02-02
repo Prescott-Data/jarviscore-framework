@@ -563,4 +563,4 @@ If significantly slower:
 
 ## Version
 
-Troubleshooting Guide for JarvisCore v0.2.1
+Troubleshooting Guide for JarvisCore v0.3.1

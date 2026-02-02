@@ -14,7 +14,6 @@ Complete API documentation for JarvisCore framework components.
    - [AutoAgent](#autoagent)
    - [Custom Profile](#custom-profile)
    - [CustomAgent](#customagent)
-   - [ListenerAgent (v0.3.0)](#listeneragent-v030)
 3. [P2P Communication (v0.3.0)](#p2p-communication-v030)
    - [PeerClient](#peerclient)
    - [IncomingMessage](#incomingmessage)
@@ -564,33 +563,9 @@ See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for P2P and distributed mode detai
 
 ---
 
-### ListenerAgent (v0.3.0)
+#### P2P Message Handlers
 
-Handler-based agent for P2P communication without manual run loops.
-
-#### Class: `ListenerAgent(CustomAgent)`
-
-```python
-from jarviscore.profiles import ListenerAgent
-
-class MyAgent(ListenerAgent):
-    role = "processor"
-    capabilities = ["processing"]
-
-    async def on_peer_request(self, msg):
-        """Handle incoming requests from peers."""
-        return {"result": msg.data.get("task", "").upper()}
-
-    async def on_peer_notify(self, msg):
-        """Handle broadcast notifications."""
-        print(f"Notification: {msg.data}")
-```
-
-**Class Attributes:**
-- `role` (str): Agent role identifier (required)
-- `capabilities` (list): List of capability strings (required)
-
-**Handler Methods:**
+CustomAgent includes built-in P2P message handlers:
 
 #### `async on_peer_request(msg) -> dict`
 
@@ -604,9 +579,9 @@ async def on_peer_request(self, msg):
 ```
 
 **Parameters:**
-- `msg` (IncomingMessage): Incoming message with `data`, `sender_role`, `sender_id`
+- `msg` (IncomingMessage): Incoming message with `data`, `sender`, `correlation_id`
 
-**Returns:** dict - Response sent back to requester
+**Returns:** dict - Response sent back to requester (if `auto_respond=True`)
 
 ---
 
@@ -628,7 +603,29 @@ async def on_peer_notify(self, msg):
 
 ---
 
-**Self-Registration Methods (v0.3.0):**
+#### `async on_error(error, msg) -> None`
+
+Handle errors during message processing.
+
+```python
+async def on_error(self, error, msg):
+    self._logger.error(f"Error processing message: {error}")
+```
+
+**Parameters:**
+- `error` (Exception): The exception that occurred
+- `msg` (IncomingMessage, optional): The message being processed
+
+---
+
+#### Configuration Attributes
+
+- `listen_timeout` (float): Seconds to wait for messages in run loop (default: 1.0)
+- `auto_respond` (bool): Automatically send on_peer_request return value (default: True)
+
+---
+
+#### Self-Registration Methods
 
 #### `async join_mesh(seed_nodes, advertise_endpoint=None)`
 
@@ -653,16 +650,6 @@ Gracefully leave the mesh network.
 
 ```python
 await agent.leave_mesh()
-```
-
----
-
-#### `async serve_forever()`
-
-Run the agent until shutdown signal.
-
-```python
-await agent.serve_forever()
 ```
 
 ---
@@ -811,7 +798,7 @@ app = FastAPI(lifespan=JarvisLifespan(agent, mode="p2p"))
 ```
 
 **Parameters:**
-- `agent`: Agent instance (ListenerAgent or CustomAgent)
+- `agent`: CustomAgent instance (or list of agents)
 - `mode` (str): "p2p" or "distributed"
 - `bind_port` (int, optional): P2P port (default: 7950)
 - `seed_nodes` (str, optional): Comma-separated seed node addresses
@@ -820,11 +807,11 @@ app = FastAPI(lifespan=JarvisLifespan(agent, mode="p2p"))
 
 ```python
 from fastapi import FastAPI
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 from jarviscore.integrations.fastapi import JarvisLifespan
 
 
-class ProcessorAgent(ListenerAgent):
+class ProcessorAgent(CustomAgent):
     role = "processor"
     capabilities = ["processing"]
 
@@ -845,7 +832,7 @@ async def process(data: dict):
 **Handles:**
 - Agent setup and teardown
 - Mesh initialization
-- Background run loop (for ListenerAgent)
+- Background run loop (runs agent.run())
 - Graceful shutdown
 
 ---
@@ -1433,6 +1420,6 @@ async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
 
 ## Version
 
-API Reference for JarvisCore v0.3.0
+API Reference for JarvisCore v0.3.1
 
 Last Updated: 2026-01-29

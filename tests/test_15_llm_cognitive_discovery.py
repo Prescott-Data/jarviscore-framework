@@ -201,19 +201,19 @@ class TestCognitiveContextWithRealMesh:
 # TEST: LISTENERAGENT PEER COMMUNICATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestListenerAgentPeerCommunication:
-    """Test ListenerAgent handles peer requests correctly."""
+class TestCustomAgentPeerCommunication:
+    """Test CustomAgent handles peer requests correctly."""
 
     @pytest.mark.asyncio
-    async def test_listener_agent_receives_and_responds(self):
-        """Test ListenerAgent receives requests and sends responses."""
+    async def test_customagent_receives_and_responds(self):
+        """Test CustomAgent receives requests and sends responses."""
         from jarviscore import Mesh
-        from jarviscore.profiles import ListenerAgent, CustomAgent
+        from jarviscore.profiles import CustomAgent
 
         request_received = False
         request_data = None
 
-        class ResponderAgent(ListenerAgent):
+        class ResponderAgent(CustomAgent):
             role = "responder"
             capabilities = ["responding"]
             listen_timeout = 0.1
@@ -273,9 +273,9 @@ class TestListenerAgentPeerCommunication:
     async def test_cognitive_context_enables_peer_discovery_for_requests(self):
         """Test that cognitive context helps discover correct peer for requests."""
         from jarviscore import Mesh
-        from jarviscore.profiles import ListenerAgent
+        from jarviscore.profiles import CustomAgent
 
-        class AnalystAgent(ListenerAgent):
+        class AnalystAgent(CustomAgent):
             role = "analyst"
             capabilities = ["data_analysis", "statistics"]
             description = "Expert in data analysis"
@@ -285,7 +285,7 @@ class TestListenerAgentPeerCommunication:
                 query = msg.data.get("query", "")
                 return {"analysis": f"Analyzed: {query}", "confidence": 0.9}
 
-        class CoordinatorAgent(ListenerAgent):
+        class CoordinatorAgent(CustomAgent):
             role = "coordinator"
             capabilities = ["coordination"]
             listen_timeout = 0.1
@@ -415,9 +415,9 @@ class TestLLMCognitiveDiscovery:
     async def test_llm_receives_peer_context_in_prompt(self):
         """Test LLM receives and understands peer context."""
         from jarviscore import Mesh
-        from jarviscore.profiles import ListenerAgent
+        from jarviscore.profiles import CustomAgent
 
-        class SpecialistAgent(ListenerAgent):
+        class SpecialistAgent(CustomAgent):
             role = "data_specialist"
             capabilities = ["data_processing", "analytics"]
             description = "Processes and analyzes data"
@@ -464,11 +464,11 @@ class TestLLMCognitiveDiscovery:
     async def test_llm_decides_to_delegate_based_on_context(self):
         """Test LLM autonomously decides to delegate based on peer context."""
         from jarviscore import Mesh
-        from jarviscore.profiles import ListenerAgent
+        from jarviscore.profiles import CustomAgent
 
         delegation_occurred = False
 
-        class AnalystAgent(ListenerAgent):
+        class AnalystAgent(CustomAgent):
             role = "analyst"
             capabilities = ["data_analysis", "statistics", "insights"]
             description = "Expert data analyst"
@@ -482,7 +482,7 @@ class TestLLMCognitiveDiscovery:
                     "insights": ["Positive trend", "Growth accelerating"]
                 }
 
-        class CoordinatorAgent(ListenerAgent):
+        class CoordinatorAgent(CustomAgent):
             role = "coordinator"
             capabilities = ["coordination", "delegation"]
             listen_timeout = 0.1
@@ -577,12 +577,12 @@ class TestEndToEndCognitiveDiscovery:
     async def test_full_flow_without_llm(self):
         """Test complete flow with mock LLM decisions."""
         from jarviscore import Mesh
-        from jarviscore.profiles import ListenerAgent
+        from jarviscore.profiles import CustomAgent
 
         analyst_requests = []
         scout_requests = []
 
-        class AnalystAgent(ListenerAgent):
+        class AnalystAgent(CustomAgent):
             role = "analyst"
             capabilities = ["analysis"]
             listen_timeout = 0.1
@@ -591,7 +591,7 @@ class TestEndToEndCognitiveDiscovery:
                 analyst_requests.append(msg.data)
                 return {"analysis_result": "Data analyzed successfully"}
 
-        class ScoutAgent(ListenerAgent):
+        class ScoutAgent(CustomAgent):
             role = "scout"
             capabilities = ["research"]
             listen_timeout = 0.1
@@ -600,7 +600,7 @@ class TestEndToEndCognitiveDiscovery:
                 scout_requests.append(msg.data)
                 return {"research_result": "Research completed"}
 
-        class OrchestratorAgent(ListenerAgent):
+        class OrchestratorAgent(CustomAgent):
             role = "orchestrator"
             capabilities = ["orchestration"]
             listen_timeout = 0.1

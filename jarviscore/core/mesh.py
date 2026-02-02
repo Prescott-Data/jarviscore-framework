@@ -256,9 +256,18 @@ class Mesh:
             await self._p2p_coordinator.start()
             self._logger.info("✓ P2P coordinator started")
 
+            # Wait for mesh to stabilize before announcing
+            # Increased delay to ensure SWIM fully connects all nodes
+            await asyncio.sleep(5)
+            self._logger.info("Waited for mesh stabilization")
+
             # Announce capabilities to network
             await self._p2p_coordinator.announce_capabilities()
             self._logger.info("✓ Capabilities announced to mesh")
+            
+            # Request capabilities from existing peers (for late-joiners)
+            await self._p2p_coordinator.request_peer_capabilities()
+            self._logger.info("✓ Requested capabilities from existing peers")
 
         # Inject PeerClients for p2p mode
         if self.mode == MeshMode.P2P:
