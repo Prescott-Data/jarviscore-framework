@@ -181,15 +181,22 @@ class CustomAgent(Profile):
         Handles:
         - REQUEST messages: calls on_peer_request, sends response if auto_respond=True
         - NOTIFY messages: calls on_peer_notify
+        - RESPONSE messages: ignored (handled by _deliver_message resolving futures)
         """
         from jarviscore.p2p.messages import MessageType
 
         try:
+            # Skip RESPONSE messages - they should be handled by pending request futures
+            if msg.type == MessageType.RESPONSE:
+                self._logger.debug(
+                    f"[{self.role}] Ignoring orphaned RESPONSE from {msg.sender} (no pending request)"
+                )
+                return
+            
             # Check if this is a request (expects response)
             is_request = (
                 msg.type == MessageType.REQUEST or
-                getattr(msg, 'is_request', False) or
-                msg.correlation_id is not None
+                getattr(msg, 'is_request', False)
             )
 
             if is_request:

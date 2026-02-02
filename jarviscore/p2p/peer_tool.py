@@ -185,21 +185,27 @@ class PeerTool:
         if not role or not question:
             return "Error: 'role' and 'question' are required"
 
-        # Check peer exists
-        peer = self._peers.get_peer(role=role)
-        if not peer:
-            available = self._peers.list_roles()
-            return (
-                f"Error: '{role}' is not online. "
-                f"Available: {', '.join(available) if available else 'none'}"
-            )
-
-        # Send request
+        self._logger.info(f"ask_peer: Attempting to contact role='{role}'")
+        
+        # Send request (request() will handle resolution of local/remote peers)
+        # Use 10min timeout to allow analyst time to query database and analyze
         response = await self._peers.request(
             role,
             {"query": question, "from": self._peers.my_role},
-            timeout=30.0
+            timeout=600.0
         )
+        
+        self._logger.info(f"ask_peer: Got response: {response}")
+        
+        # If request() returns None, peer wasn't found or didn't respond
+        if response is None:
+            peers = self._peers.list_peers()
+            available_roles = [p['role'] for p in peers]
+            self._logger.warning(f"ask_peer: request() returned None. Available peers: {available_roles}")
+            return (
+                f"Error: '{role}' not found or did not respond. "
+                f"Available: {', '.join(available_roles) if available_roles else 'none'}"
+            )
 
         if response is None:
             return f"Error: {role} did not respond (timeout)"

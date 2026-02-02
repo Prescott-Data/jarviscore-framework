@@ -714,15 +714,34 @@ class P2PCoordinator:
     async def _handle_peer_request(self, sender, message):
         """Handle peer request message (expects response)."""
         try:
-            payload = message.get('payload', {})
+            logger.info(f"[COORDINATOR] Received PEER_REQUEST from {sender}")
+            
+            # Parse payload - it comes as JSON string in message['payload']
+            import json
+            payload_raw = message.get('payload', {})
+            if isinstance(payload_raw, str):
+                try:
+                    payload = json.loads(payload_raw)
+                    logger.info(f"[COORDINATOR] Parsed JSON payload")
+                except json.JSONDecodeError as e:
+                    logger.error(f"[COORDINATOR] Failed to parse payload JSON: {e}")
+                    return
+            else:
+                payload = payload_raw
+            
             target = payload.get('target')
+            logger.info(f"[COORDINATOR] Target: {target}, Payload keys: {list(payload.keys())}")
 
             # Find target agent's PeerClient
             target_client = self._find_peer_client_by_role_or_id(target)
             if not target_client:
                 logger.warning(f"Peer request: target '{target}' not found")
+                logger.warning(f"Available agents: {[a.agent_id for a in self.agents]}")
+                logger.warning(f"Available peer clients: {list(self._agent_peer_clients.keys())}")
                 return
 
+            logger.info(f"[COORDINATOR] Found target_client for {target}, delivering message...")
+            
             # Create incoming message and deliver
             incoming = IncomingMessage(
                 sender=payload.get('sender', sender),
@@ -734,15 +753,22 @@ class P2PCoordinator:
             )
 
             await target_client._deliver_message(incoming)
-            logger.debug(f"Delivered peer request to {target}")
+            logger.info(f"[COORDINATOR] Delivered peer request to {target}")
 
         except Exception as e:
-            logger.error(f"Error handling peer request: {e}")
+            logger.error(f"Error handling peer request: {e}", exc_info=True)
 
     async def _handle_peer_response(self, sender, message):
         """Handle peer response message."""
         try:
-            payload = message.get('payload', {})
+            # Parse payload - it comes as JSON string
+            import json
+            payload_raw = message.get('payload', {})
+            if isinstance(payload_raw, str):
+                payload = json.loads(payload_raw)
+            else:
+                payload = payload_raw
+                
             target = payload.get('target')
 
             # Find target agent's PeerClient
