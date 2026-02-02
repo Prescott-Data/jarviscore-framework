@@ -146,8 +146,7 @@ mesh = Mesh(mode="distributed", config={'bind_port': 7950})
 | Profile | Best For | How It Works |
 |---------|----------|--------------|
 | **AutoAgent** | Rapid prototyping | LLM generates + executes code from prompts |
-| **CustomAgent** | Existing code | You provide `execute_task()` or `run()` |
-| **ListenerAgent** | API-first agents | Just implement `on_peer_request()` handlers |
+| **CustomAgent** | Your own code | Implement `on_peer_request()` for P2P or `execute_task()` for workflows |
 
 See [AutoAgent Guide](AUTOAGENT_GUIDE.md) and [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for details.
 
@@ -227,7 +226,7 @@ asyncio.run(data_analyst_demo())
 
 ## Custom Profile Tutorial
 
-The **Custom Profile** (decorator/wrap approach) is deprecated. Use **CustomAgent** instead.
+Use **CustomAgent** profile.
 
 See [CustomAgent Guide](CUSTOMAGENT_GUIDE.md) for:
 - Converting standalone agents to JarvisCore
@@ -546,10 +545,10 @@ Deploy agents as FastAPI services with minimal boilerplate:
 
 ```python
 from fastapi import FastAPI, Request
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 from jarviscore.integrations.fastapi import JarvisLifespan
 
-class ProcessorAgent(ListenerAgent):
+class ProcessorAgent(CustomAgent):
     role = "processor"
     capabilities = ["processing"]
 
@@ -583,9 +582,9 @@ Deploy agents to containers without a central orchestrator:
 ```python
 # In your container entrypoint
 import asyncio
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 
-class MyAgent(ListenerAgent):
+class MyAgent(CustomAgent):
     role = "worker"
     capabilities = ["processing"]
 
@@ -905,6 +904,6 @@ mesh = Mesh(config=config)
 
 ## Version
 
-User Guide for JarvisCore v0.3.0
+User Guide for JarvisCore v0.3.1
 
-Last Updated: 2026-01-29
+Last Updated: 2026-02-02

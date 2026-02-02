@@ -1,9 +1,9 @@
 """
-Test 13: DX Improvements - FastAPI Integration, ListenerAgent, Cognitive Context
+Test 13: DX Improvements - FastAPI Integration, CustomAgent Handlers, Cognitive Context
 
 Tests the Developer Experience improvements:
 - JarvisLifespan for FastAPI integration
-- ListenerAgent profile for API-first agents
+- CustomAgent profile with P2P message handlers
 - Cognitive context generation for LLM prompts
 
 Run with: pytest tests/test_13_dx_improvements.py -v -s
@@ -127,22 +127,22 @@ class TestJarvisLifespan:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TEST: LISTENER AGENT PROFILE
+# TEST: CUSTOMAGENT P2P HANDLERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestListenerAgent:
-    """Test ListenerAgent profile."""
+class TestCustomAgentHandlers:
+    """Test CustomAgent P2P message handlers."""
 
     @pytest.mark.asyncio
-    async def test_listener_dispatches_request_to_handler(self):
-        """Test ListenerAgent dispatches REQUEST messages to on_peer_request."""
-        from jarviscore.profiles import ListenerAgent
+    async def test_customagent_dispatches_request_to_handler(self):
+        """Test CustomAgent dispatches REQUEST messages to on_peer_request."""
+        from jarviscore.profiles import CustomAgent
         from jarviscore.p2p.messages import IncomingMessage, MessageType
 
         request_received = False
         request_data = None
 
-        class TestListener(ListenerAgent):
+        class TestAgent(CustomAgent):
             role = "listener"
             capabilities = ["listening"]
 
@@ -152,7 +152,7 @@ class TestListenerAgent:
                 request_data = msg.data
                 return {"handled": True, "echo": msg.data.get("value")}
 
-        agent = TestListener()
+        agent = TestAgent()
         agent._logger = MagicMock()
 
         # Mock peers
@@ -182,15 +182,15 @@ class TestListenerAgent:
         assert call_args[0][1] == {"handled": True, "echo": 42}
 
     @pytest.mark.asyncio
-    async def test_listener_dispatches_notify_to_handler(self):
-        """Test ListenerAgent dispatches NOTIFY messages to on_peer_notify."""
-        from jarviscore.profiles import ListenerAgent
+    async def test_customagent_dispatches_notify_to_handler(self):
+        """Test CustomAgent dispatches NOTIFY messages to on_peer_notify."""
+        from jarviscore.profiles import CustomAgent
         from jarviscore.p2p.messages import IncomingMessage, MessageType
 
         notify_received = False
         notify_data = None
 
-        class TestListener(ListenerAgent):
+        class TestAgent(CustomAgent):
             role = "listener"
             capabilities = ["listening"]
 
@@ -202,7 +202,7 @@ class TestListenerAgent:
                 notify_received = True
                 notify_data = msg.data
 
-        agent = TestListener()
+        agent = TestAgent()
         agent._logger = MagicMock()
 
         # Create test notify message
@@ -221,12 +221,12 @@ class TestListenerAgent:
         assert notify_data == {"event": "task_complete", "result": "success"}
 
     @pytest.mark.asyncio
-    async def test_listener_auto_respond_disabled(self):
-        """Test ListenerAgent respects auto_respond=False setting."""
-        from jarviscore.profiles import ListenerAgent
+    async def test_customagent_auto_respond_disabled(self):
+        """Test CustomAgent respects auto_respond=False setting."""
+        from jarviscore.profiles import CustomAgent
         from jarviscore.p2p.messages import IncomingMessage, MessageType
 
-        class TestListener(ListenerAgent):
+        class TestAgent(CustomAgent):
             role = "listener"
             capabilities = ["listening"]
             auto_respond = False  # Disable auto response
@@ -234,7 +234,7 @@ class TestListenerAgent:
             async def on_peer_request(self, msg):
                 return {"result": "this should not be sent automatically"}
 
-        agent = TestListener()
+        agent = TestAgent()
         agent._logger = MagicMock()
         agent.peers = MagicMock()
         agent.peers.respond = AsyncMock()
@@ -254,15 +254,15 @@ class TestListenerAgent:
         agent.peers.respond.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_listener_error_handling(self):
-        """Test ListenerAgent calls on_error when handler raises exception."""
-        from jarviscore.profiles import ListenerAgent
+    async def test_customagent_error_handling(self):
+        """Test CustomAgent calls on_error when handler raises exception."""
+        from jarviscore.profiles import CustomAgent
         from jarviscore.p2p.messages import IncomingMessage, MessageType
 
         error_received = None
         error_msg = None
 
-        class TestListener(ListenerAgent):
+        class TestAgent(CustomAgent):
             role = "listener"
             capabilities = ["listening"]
 
@@ -274,7 +274,7 @@ class TestListenerAgent:
                 error_received = error
                 error_msg = msg
 
-        agent = TestListener()
+        agent = TestAgent()
         agent._logger = MagicMock()
         agent.peers = MagicMock()
 
@@ -295,11 +295,11 @@ class TestListenerAgent:
         assert error_msg is not None
 
     @pytest.mark.asyncio
-    async def test_listener_workflow_compatibility(self):
-        """Test ListenerAgent.execute_task() delegates to on_peer_request."""
-        from jarviscore.profiles import ListenerAgent
+    async def test_customagent_workflow_compatibility(self):
+        """Test CustomAgent.execute_task() delegates to on_peer_request."""
+        from jarviscore.profiles import CustomAgent
 
-        class TestListener(ListenerAgent):
+        class TestAgent(CustomAgent):
             role = "processor"
             capabilities = ["processing"]
 
@@ -307,7 +307,7 @@ class TestListenerAgent:
                 task = msg.data.get("task", "")
                 return {"processed": task.upper()}
 
-        agent = TestListener()
+        agent = TestAgent()
         agent._logger = MagicMock()
 
         result = await agent.execute_task({"task": "hello world"})
@@ -500,21 +500,21 @@ class TestCognitiveContext:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TEST: INTEGRATION - ListenerAgent + JarvisLifespan
+# TEST: INTEGRATION - CustomAgent + JarvisLifespan
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestListenerAgentWithFastAPI:
-    """Integration test for ListenerAgent with FastAPI lifespan."""
+class TestCustomAgentWithFastAPI:
+    """Integration test for CustomAgent with FastAPI lifespan."""
 
     @pytest.mark.asyncio
-    async def test_listener_agent_in_fastapi_lifespan(self):
-        """Test ListenerAgent works correctly with JarvisLifespan."""
-        from jarviscore.profiles import ListenerAgent
+    async def test_customagent_in_fastapi_lifespan(self):
+        """Test CustomAgent works correctly with JarvisLifespan."""
+        from jarviscore.profiles import CustomAgent
         from jarviscore.integrations.fastapi import JarvisLifespan
 
         messages_received = []
 
-        class APIAgent(ListenerAgent):
+        class APIAgent(CustomAgent):
             role = "api_processor"
             capabilities = ["api_processing"]
             listen_timeout = 0.1  # Fast timeout for test

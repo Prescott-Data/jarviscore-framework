@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "0.3.0"
+version = "0.3.1"
 description = "Build autonomous AI agents in 3 lines of code. Production-ready orchestration with P2P mesh networking."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -41,6 +41,8 @@ dependencies = [
     # Web/HTTP
     "aiohttp>=3.9.0",
     "beautifulsoup4>=4.12.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.29.0",
 
     # LLM Providers (at least one required for AutoAgent)
     "anthropic>=0.18.0",

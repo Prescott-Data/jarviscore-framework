@@ -11,11 +11,11 @@ CustomAgent lets you integrate your **existing agent code** with JarvisCore's ne
 
 1. [Prerequisites](#prerequisites)
 2. [Choose Your Mode](#choose-your-mode)
-3. [P2P Mode](#p2p-mode)
-4. [ListenerAgent (v0.3.0)](#listeneragent-v030) - API-first agents without run() loops
-5. [Distributed Mode](#distributed-mode)
-6. [Cognitive Discovery (v0.3.0)](#cognitive-discovery-v030) - Dynamic peer awareness for LLMs
-7. [FastAPI Integration (v0.3.0)](#fastapi-integration-v030) - 3-line setup with JarvisLifespan
+3. [P2P Mode](#p2p-mode) - Handler-based peer communication
+4. [Distributed Mode](#distributed-mode) - Workflow tasks + P2P
+5. [Cognitive Discovery (v0.3.0)](#cognitive-discovery-v030) - Dynamic peer awareness for LLMs
+6. [FastAPI Integration (v0.3.0)](#fastapi-integration-v030) - 3-line setup with JarvisLifespan
+7. [Framework Integration Patterns](#framework-integration-patterns) - aiohttp, Flask, Django
 8. [Cloud Deployment (v0.3.0)](#cloud-deployment-v030) - Self-registration for containers
 9. [API Reference](#api-reference)
 10. [Multi-Node Deployment](#multi-node-deployment)
@@ -102,7 +102,7 @@ class MyLLMClient:
 
 ### Quick Comparison
 
-| Feature | P2P Mode (CustomAgent) | P2P Mode (ListenerAgent) | Distributed Mode |
+| Feature | P2P Mode (CustomAgent) | P2P Mode (CustomAgent) | Distributed Mode |
 |---------|------------------------|--------------------------|------------------|
 | **Primary method** | `run()` - continuous loop | `on_peer_request()` handlers | `execute_task()` - on-demand |
 | **Communication** | Direct peer messaging | Handler-based (no loop) | Workflow orchestration |
@@ -110,13 +110,53 @@ class MyLLMClient:
 | **Coordination** | Agents self-coordinate | Framework handles loop | Framework coordinates |
 | **Supports workflows** | No | No | Yes |
 
-> **New in v0.3.0**: `ListenerAgent` lets you write P2P agents without managing the `run()` loop yourself. Just implement `on_peer_request()` and `on_peer_notify()` handlers.
+> **CustomAgent** includes built-in P2P handlers - just implement `on_peer_request()` and `on_peer_notify()`. No need to write your own `run()` loop.
 
 ---
 
 ## P2P Mode
 
 P2P mode is for agents that run continuously and communicate directly with each other.
+
+### v0.3.1 Update: Handler-Based Pattern
+
+**We've simplified P2P agents!** No more manual `run()` loops.
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                    OLD vs NEW Pattern                          │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│  ❌ OLD (v0.2.x) - Manual Loop                                 │
+│  ┌──────────────────────────────────────────────┐              │
+│  │ async def run(self):                         │              │
+│  │     while not self.shutdown_requested:       │              │
+│  │         msg = await self.peers.receive()     │ ← Polling    │
+│  │         if msg and msg.is_request:           │              │
+│  │             result = self.process(msg)       │              │
+│  │             await self.peers.respond(...)    │ ← Manual     │
+│  │         await asyncio.sleep(0.1)             │              │
+│  └──────────────────────────────────────────────┘              │
+│                                                                │
+│  ✅ NEW (v0.3.0+) - Handler-Based                              │
+│  ┌──────────────────────────────────────────────┐              │
+│  │ async def on_peer_request(self, msg):        │              │
+│  │     result = self.process(msg)               │              │
+│  │     return result                            │ ← Simple!    │
+│  └──────────────────────────────────────────────┘              │
+│         ▲                                                      │
+│         │                                                      │
+│         └─ Framework calls this automatically                 │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Benefits:**
+- ✅ **Less Code**: No boilerplate loops
+- ✅ **Simpler**: Just return your result
+- ✅ **Automatic**: Framework handles message dispatch
+- ✅ **Error Handling**: Built-in exception capture
+- ✅ **FastAPI Ready**: Works with `JarvisLifespan` out of the box
 
 ### Migration Overview
 
@@ -163,59 +203,89 @@ if __name__ == "__main__":
 
 ### Step 3: Modify Your Agent Code → `agents.py`
 
-Convert your existing class to inherit from `CustomAgent`:
+**🚨 IMPORTANT CHANGE (v0.3.0+)**: We've moved from `run()` loops to **handler-based** agents!
 
+#### ❌ OLD Pattern (Deprecated)
 ```python
-# agents.py (MODIFIED VERSION OF YOUR CODE)
-import asyncio
+# DON'T DO THIS ANYMORE!
+class ResearcherAgent(CustomAgent):
+    async def run(self):  # ❌ Manual loop
+        while not self.shutdown_requested:
+            msg = await self.peers.receive(timeout=0.5)
+            if msg and msg.is_request:
+                result = self.llm.chat(f"Research: {msg.data['question']}")
+                await self.peers.respond(msg, {"response": result})
+            await asyncio.sleep(0.1)
+```
+**Problems**: Manual loops, boilerplate, error-prone
+
+#### ✅ NEW Pattern (Recommended)
+```python
+# agents.py (MODERN VERSION)
 from jarviscore.profiles import CustomAgent
 
 
 class ResearcherAgent(CustomAgent):
-    """Your agent, now framework-integrated."""
+    """Your agent, now framework-integrated with handlers."""
 
-    # NEW: Required class attributes for discovery
+    # Required class attributes for discovery
     role = "researcher"
     capabilities = ["research", "analysis"]
+    description = "Research specialist that gathers and synthesizes information"
 
     async def setup(self):
-        """NEW: Called once on startup. Move your __init__ logic here."""
+        """Called once on startup. Initialize your LLM here."""
         await super().setup()
         self.llm = MyLLMClient()  # Your existing initialization
 
-    async def run(self):
-        """NEW: Main loop - replaces your if __name__ == '__main__' block."""
-        while not self.shutdown_requested:
-            if self.peers:
-                msg = await self.peers.receive(timeout=0.5)
-                if msg and msg.is_request:
-                    query = msg.data.get("question", "")
-                    # YOUR EXISTING LOGIC:
-                    result = self.llm.chat(f"Research: {query}")
-                    await self.peers.respond(msg, {"response": result})
-            await asyncio.sleep(0.1)
+    async def on_peer_request(self, msg):
+        """
+        Handle incoming requests from other agents.
+        
+        This is called AUTOMATICALLY when another agent asks you a question.
+        No loops, no polling, no boilerplate!
+        """
+        query = msg.data.get("question", "")
+        
+        # YOUR EXISTING LOGIC:
+        result = self.llm.chat(f"Research: {query}")
+        
+        # Just return the data - framework handles the response
+        return {"response": result}
 
     async def execute_task(self, task: dict) -> dict:
         """
-        Required by base Agent class (@abstractmethod).
-
-        In P2P mode, your main logic lives in run(), not here.
-        This must exist because Python requires all abstract methods
-        to be implemented, or you get TypeError on instantiation.
+        Required by base Agent class for workflow mode.
+        
+        In pure P2P mode, your logic is in on_peer_request().
+        This is used when agent is part of a workflow pipeline.
         """
-        return {"status": "success", "note": "This agent uses run() for P2P mode"}
+        return {"status": "success", "note": "This agent uses handlers for P2P mode"}
 ```
 
 **What changed:**
 
-| Before | After |
-|--------|-------|
-| `class MyResearcher:` | `class ResearcherAgent(CustomAgent):` |
-| `def __init__(self):` | `async def setup(self):` + `await super().setup()` |
-| `if __name__ == "__main__":` | `async def run(self):` loop |
-| Direct method calls | Peer message handling |
+| Before (v0.2.x) | After (v0.3.0+) | Why? |
+|-----------------|-----------------|------|
+| `async def run(self):` with `while` loop | `async def on_peer_request(self, msg):` handler | Automatic dispatch, less boilerplate |
+| Manual `await self.peers.receive()` | Framework calls your handler | No polling needed |
+| Manual `await self.peers.respond(msg, data)` | Just `return data` | Simpler error handling |
+| `asyncio.create_task(agent.run())` | Not needed - handlers run automatically | Cleaner lifecycle |
 
-> **Note**: This is a minimal example. For the full pattern with **LLM-driven peer communication** (where your LLM autonomously decides when to call other agents), see the [Complete Example](#complete-example-llm-driven-peer-communication) below.
+#### Migration Checklist (v0.2.x → v0.3.0+)
+
+If you have existing agents using the `run()` loop pattern:
+
+- [ ] Replace `async def run(self):` with `async def on_peer_request(self, msg):`
+- [ ] Remove `while not self.shutdown_requested:` loop
+- [ ] Remove `msg = await self.peers.receive(timeout=0.5)` polling
+- [ ] Change `await self.peers.respond(msg, data)` to `return data`
+- [ ] Remove manual `asyncio.create_task(agent.run())` calls in main.py
+- [ ] Consider using `JarvisLifespan` for FastAPI integration (see Step 4)
+- [ ] Add `description` class attribute for better cognitive discovery
+- [ ] Use `get_cognitive_context()` instead of hardcoded peer lists
+
+> **Note**: The `run()` method is **still supported** for backward compatibility, but handlers are now the recommended approach. For the full pattern with **LLM-driven peer communication** (where your LLM autonomously decides when to call other agents), see the [Complete Example](#complete-example-llm-driven-peer-communication) below.
 
 ### Step 4: Create New Entry Point → `main.py`
 
@@ -316,22 +386,22 @@ This is the **key pattern** for P2P mode. Your LLM gets peer tools added to its 
 **The key insight**: You add peer tools to your LLM's toolset. The LLM decides when to use them.
 
 ```python
-# agents.py
-import asyncio
+# agents.py - UPDATED FOR v0.3.0+
 from jarviscore.profiles import CustomAgent
 
 
 class AnalystAgent(CustomAgent):
     """
-    Analyst agent - specialists in data analysis.
+    Analyst agent - specialist in data analysis.
 
-    This agent:
-    1. Listens for incoming requests from peers
-    2. Processes requests using its own LLM
-    3. Responds with analysis results
+    NEW PATTERN (v0.3.0+):
+    - Uses @on_peer_request HANDLER instead of run() loop
+    - Automatically receives and responds to peer requests
+    - No manual message polling needed!
     """
     role = "analyst"
     capabilities = ["analysis", "data_interpretation", "reporting"]
+    description = "Expert data analyst for statistics and insights"
 
     async def setup(self):
         await super().setup()
@@ -406,19 +476,20 @@ Analyze data thoroughly and provide insights."""
 
         return response.get("content", "Analysis complete.")
 
-    async def run(self):
-        """Listen for incoming requests from peers."""
-        while not self.shutdown_requested:
-            if self.peers:
-                msg = await self.peers.receive(timeout=0.5)
-                if msg and msg.is_request:
-                    query = msg.data.get("question", msg.data.get("query", ""))
+    async def on_peer_request(self, msg):
+        """
+        Handle incoming requests from peers.
+        
+        ✅ NEW: This is called automatically when another agent sends a request.
+        ❌ OLD: Manual while loop with receive() polling
+        """
+        query = msg.data.get("question", msg.data.get("query", ""))
 
-                    # Process with LLM
-                    result = await self.process_with_llm(query)
+        # Process with LLM
+        result = await self.process_with_llm(query)
 
-                    await self.peers.respond(msg, {"response": result})
-            await asyncio.sleep(0.1)
+        # Just return the data - framework handles the response!
+        return {"response": result}
 
     async def execute_task(self, task: dict) -> dict:
         """Required by base class."""
@@ -429,13 +500,16 @@ class AssistantAgent(CustomAgent):
     """
     Assistant agent - coordinates with other specialists.
 
-    This agent:
+    NEW PATTERN (v0.3.0+):
     1. Has its own LLM for reasoning
-    2. Has peer tools (ask_peer, broadcast) in its toolset
-    3. LLM AUTONOMOUSLY decides when to ask other agents
+    2. Uses get_cognitive_context() to discover available peers
+    3. Peer tools (ask_peer, broadcast) added to LLM toolset
+    4. LLM AUTONOMOUSLY decides when to ask other agents
+    5. Uses on_peer_request handler instead of run() loop
     """
     role = "assistant"
     capabilities = ["chat", "coordination", "search"]
+    description = "General assistant that delegates specialized tasks to experts"
 
     async def setup(self):
         await super().setup()
@@ -535,16 +609,16 @@ Be concise in your responses."""
 
         return response.get("content", "")
 
-    async def run(self):
-        """Main loop - listen for incoming requests."""
-        while not self.shutdown_requested:
-            if self.peers:
-                msg = await self.peers.receive(timeout=0.5)
-                if msg and msg.is_request:
-                    query = msg.data.get("query", "")
-                    result = await self.chat(query)
-                    await self.peers.respond(msg, {"response": result})
-            await asyncio.sleep(0.1)
+    async def on_peer_request(self, msg):
+        """
+        Handle incoming requests from other agents.
+        
+        ✅ NEW: Handler-based - called automatically on request
+        ❌ OLD: Manual while loop with receive() polling
+        """
+        query = msg.data.get("query", "")
+        result = await self.chat(query)
+        return {"response": result}
 
     async def execute_task(self, task: dict) -> dict:
         """Required by base class."""
@@ -552,13 +626,14 @@ Be concise in your responses."""
 ```
 
 ```python
-# main.py
+# main.py - UPDATED FOR v0.3.0+ (Handler-Based Pattern)
 import asyncio
 from jarviscore import Mesh
 from agents import AnalystAgent, AssistantAgent
 
 
 async def main():
+    """Simple P2P mesh without web server."""
     mesh = Mesh(
         mode="p2p",
         config={
@@ -567,17 +642,15 @@ async def main():
         }
     )
 
-    # Add both agents
+    # Add both agents - they'll use handlers automatically
     mesh.add(AnalystAgent)
     assistant = mesh.add(AssistantAgent)
 
     await mesh.start()
 
-    # Start analyst listening in background
-    analyst = mesh.get_agent("analyst")
-    analyst_task = asyncio.create_task(analyst.run())
-
-    # Give time for setup
+    # ✅ NO MORE MANUAL run() TASKS! Handlers are automatic.
+    
+    # Give time for mesh to stabilize
     await asyncio.sleep(0.5)
 
     # User asks a question - LLM will autonomously decide to use ask_peer
@@ -590,13 +663,64 @@ async def main():
     # Output: [{'tool': 'ask_peer', 'args': {'role': 'analyst', 'question': '...'}}]
 
     # Cleanup
-    analyst.request_shutdown()
-    analyst_task.cancel()
     await mesh.stop()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+```
+
+**Or better yet, use FastAPI + JarvisLifespan:**
+
+```python
+# main.py - PRODUCTION PATTERN (FastAPI + JarvisLifespan)
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from jarviscore.integrations import JarvisLifespan
+from agents import AnalystAgent, AssistantAgent
+import uvicorn
+
+
+# ✅ ONE-LINE MESH SETUP with JarvisLifespan!
+app = FastAPI(lifespan=JarvisLifespan([AnalystAgent, AssistantAgent]))
+
+
+@app.post("/chat")
+async def chat(request: Request):
+    """Chat endpoint - assistant may autonomously delegate to analyst."""
+    data = await request.json()
+    message = data.get("message", "")
+    
+    # Get assistant from mesh (JarvisLifespan manages it)
+    assistant = app.state.mesh.get_agent("assistant")
+    
+    # Chat - LLM autonomously discovers and delegates if needed
+    response = await assistant.chat(message)
+    
+    return JSONResponse(response)
+
+
+@app.get("/agents")
+async def list_agents():
+    """Show what each agent sees (cognitive context)."""
+    mesh = app.state.mesh
+    agents_info = {}
+    
+    for agent in mesh.agents:
+        if agent.peers:
+            context = agent.peers.get_cognitive_context(format="markdown")
+            agents_info[agent.role] = {
+                "role": agent.role,
+                "capabilities": agent.capabilities,
+                "peers_visible": len(agent.peers.get_all_peers()),
+                "cognitive_context": context[:200] + "..."
+            }
+    
+    return JSONResponse(agents_info)
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 ```
 
 ### Key Concepts for P2P Mode
@@ -666,46 +790,16 @@ async def run(self):
 
 ---
 
-## ListenerAgent (v0.3.0)
+## P2P Message Handlers
 
-**ListenerAgent** is for developers who want P2P communication without writing the `run()` loop themselves.
+CustomAgent includes built-in handlers for P2P communication - just implement the handlers you need.
 
-### The Problem with CustomAgent for P2P
-
-Every P2P CustomAgent needs this boilerplate:
+### Handler-Based P2P (Recommended)
 
 ```python
-# BEFORE (CustomAgent) - You write the same loop every time
+from jarviscore.profiles import CustomAgent
+
 class MyAgent(CustomAgent):
-    role = "processor"
-    capabilities = ["processing"]
-
-    async def run(self):
-        """You have to write this loop for every P2P agent."""
-        while not self.shutdown_requested:
-            if self.peers:
-                msg = await self.peers.receive(timeout=0.5)
-                if msg and msg.is_request:
-                    # Handle request
-                    result = self.process(msg.data)
-                    await self.peers.respond(msg, {"response": result})
-                elif msg and msg.is_notify:
-                    # Handle notification
-                    self.handle_notify(msg.data)
-            await asyncio.sleep(0.1)
-
-    async def execute_task(self, task):
-        """Still required even though you're using run()."""
-        return {"status": "success"}
-```
-
-### The Solution: ListenerAgent
-
-```python
-# AFTER (ListenerAgent) - Just implement the handlers
-from jarviscore.profiles import ListenerAgent
-
-class MyAgent(ListenerAgent):
     role = "processor"
     capabilities = ["processing"]
 
@@ -718,27 +812,25 @@ class MyAgent(ListenerAgent):
         print(f"Notification received: {msg.data}")
 ```
 
-**What you no longer need:**
-- ❌ `run()` loop with `while not self.shutdown_requested`
-- ❌ `self.peers.receive()` and `self.peers.respond()` boilerplate
-- ❌ `execute_task()` stub method
-- ❌ `asyncio.sleep()` timing
-
 **What the framework handles:**
-- ✅ Message receiving loop
-- ✅ Routing requests to `on_peer_request()`
-- ✅ Routing notifications to `on_peer_notify()`
-- ✅ Automatic response sending
-- ✅ Shutdown handling
+- Message receiving loop (`run()` is built-in)
+- Routing requests to `on_peer_request()`
+- Routing notifications to `on_peer_notify()`
+- Automatic response sending (configurable with `auto_respond`)
+- Shutdown handling
 
-### Complete ListenerAgent Example
+**Configuration:**
+- `listen_timeout` (float): Seconds to wait for messages (default: 1.0)
+- `auto_respond` (bool): Auto-send `on_peer_request()` return value (default: True)
+
+### Complete P2P Example
 
 ```python
 # agents.py
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 
 
-class AnalystAgent(ListenerAgent):
+class AnalystAgent(CustomAgent):
     """A data analyst that responds to peer requests."""
 
     role = "analyst"
@@ -778,7 +870,7 @@ class AnalystAgent(ListenerAgent):
         print(f"[{self.role}] Received notification: {msg.data}")
 
 
-class AssistantAgent(ListenerAgent):
+class AssistantAgent(CustomAgent):
     """An assistant that coordinates with specialists."""
 
     role = "assistant"
@@ -828,18 +920,17 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-### When to Use ListenerAgent vs CustomAgent
+### When to Use Handlers vs Custom run()
 
-| Use ListenerAgent when... | Use CustomAgent when... |
-|---------------------------|-------------------------|
-| You want the simplest P2P agent | You need custom message loop timing |
-| Request/response pattern fits your use case | You need to initiate messages proactively |
-| You're integrating with FastAPI | You need fine-grained control over the loop |
-| You want less boilerplate | You have complex coordination logic |
+| Use handlers (`on_peer_request`) when... | Override `run()` when... |
+|------------------------------------------|--------------------------|
+| Request/response pattern fits your use case | You need custom message loop timing |
+| You're integrating with FastAPI | You need to initiate messages proactively |
+| You want minimal boilerplate | You have complex coordination logic |
 
-### ListenerAgent with FastAPI
+### CustomAgent with FastAPI
 
-ListenerAgent shines with FastAPI integration. See [FastAPI Integration](#fastapi-integration-v030) below.
+CustomAgent works seamlessly with FastAPI. See [FastAPI Integration](#fastapi-integration-v030) below.
 
 ---
 
@@ -1446,11 +1537,11 @@ async def process(data: dict):
 ```python
 # AFTER: 3 lines to integrate
 from fastapi import FastAPI
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 from jarviscore.integrations.fastapi import JarvisLifespan
 
 
-class ProcessorAgent(ListenerAgent):
+class ProcessorAgent(CustomAgent):
     role = "processor"
     capabilities = ["processing"]
 
@@ -1492,7 +1583,7 @@ app = FastAPI(
 # app.py
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 from jarviscore.integrations.fastapi import JarvisLifespan
 
 
@@ -1500,7 +1591,7 @@ class AnalysisRequest(BaseModel):
     data: str
 
 
-class AnalystAgent(ListenerAgent):
+class AnalystAgent(CustomAgent):
     """Agent that handles both API requests and P2P messages."""
 
     role = "analyst"
@@ -1634,11 +1725,11 @@ await mesh.start()
 # Each agent can join any mesh independently
 
 # agent_container.py (runs in Docker/K8s)
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 import os
 
 
-class WorkerAgent(ListenerAgent):
+class WorkerAgent(CustomAgent):
     role = "worker"
     capabilities = ["processing"]
 
@@ -1685,10 +1776,10 @@ CMD ["python", "agent.py"]
 # agent.py
 import asyncio
 import os
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 
 
-class WorkerAgent(ListenerAgent):
+class WorkerAgent(CustomAgent):
     role = "worker"
     capabilities = ["processing"]
 
@@ -1855,20 +1946,22 @@ if agent.peers:
 | `leave_mesh()` | Both | **(v0.3.0)** Gracefully leave the mesh |
 | `serve_forever()` | Both | **(v0.3.0)** Block until shutdown signal |
 
-### ListenerAgent Class (v0.3.0)
+### P2P Message Handlers (v0.3.1)
 
-ListenerAgent extends CustomAgent with handler-based P2P communication.
+CustomAgent includes built-in P2P message handlers for handler-based communication.
 
 | Attribute/Method | Type | Description |
 |------------------|------|-------------|
-| `role` | `str` | Required. Unique identifier for this agent type |
-| `capabilities` | `list[str]` | Required. List of capabilities for discovery |
-| `on_peer_request(msg)` | async method | Handle incoming requests. Return dict to respond |
+| `listen_timeout` | `float` | Seconds to wait for messages in `run()` loop. Default: 1.0 |
+| `auto_respond` | `bool` | Auto-send `on_peer_request` return value. Default: True |
+| `on_peer_request(msg)` | async method | Handle incoming requests. Return value sent as response |
 | `on_peer_notify(msg)` | async method | Handle broadcast notifications. No return needed |
+| `on_error(error, msg)` | async method | Handle errors during message processing |
+| `run()` | async method | Built-in listener loop that dispatches to handlers |
 
-**Note:** ListenerAgent does not require `run()` or `execute_task()` implementations.
+**Note:** Override `on_peer_request()` and `on_peer_notify()` for your business logic. The `run()` method handles the message dispatch automatically.
 
-### Why `execute_task()` is Required in P2P Mode
+### Why `execute_task()` Exists in CustomAgent
 
 You may notice that P2P agents must implement `execute_task()` even though they primarily use `run()`. Here's why:
 
@@ -2172,10 +2265,10 @@ For complete, runnable examples, see:
 
 - `examples/customagent_p2p_example.py` - P2P mode with LLM-driven peer communication
 - `examples/customagent_distributed_example.py` - Distributed mode with workflows
-- `examples/listeneragent_cognitive_discovery_example.py` - ListenerAgent + cognitive discovery (v0.3.0)
+- `examples/customagent_cognitive_discovery_example.py` - CustomAgent + cognitive discovery (v0.4.0)
 - `examples/fastapi_integration_example.py` - FastAPI + JarvisLifespan (v0.3.0)
 - `examples/cloud_deployment_example.py` - Self-registration with join_mesh (v0.3.0)
 
 ---
 
-*CustomAgent Guide - JarvisCore Framework v0.3.0*
+*CustomAgent Guide - JarvisCore Framework v0.3.1*

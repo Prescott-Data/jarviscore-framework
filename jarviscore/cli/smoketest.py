@@ -313,7 +313,7 @@ class SmokeTest:
         print("\nJarvisCore is working correctly. Next steps:")
         print("  1. AutoAgent example:     python examples/calculator_agent_example.py")
         print("  2. CustomAgent P2P:       python examples/customagent_p2p_example.py")
-        print("  3. ListenerAgent (v0.3):  python examples/listeneragent_cognitive_discovery_example.py")
+        print("  3. Cognitive Discovery:   python examples/customagent_cognitive_discovery_example.py")
         print("  4. FastAPI (v0.3):        python examples/fastapi_integration_example.py")
         print("  5. Cloud deploy (v0.3):   python examples/cloud_deployment_example.py")
         print("\nDocumentation:")

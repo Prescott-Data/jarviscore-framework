@@ -4,13 +4,13 @@
 
 ## Features
 
-- ✅ **AutoAgent** - LLM generates and executes code from natural language
-- ✅ **CustomAgent** - Bring your own logic (LangChain, CrewAI, etc.)
-- ✅ **ListenerAgent** - API-first agents with background P2P (just implement handlers)
-- ✅ **P2P Mesh** - Agent discovery and communication via SWIM protocol
-- ✅ **Workflow Orchestration** - Dependencies, context passing, multi-step pipelines
-- ✅ **FastAPI Integration** - 3-line setup with JarvisLifespan
-- ✅ **Cloud Deployment** - Self-registering agents for Docker/K8s
+- **AutoAgent** - LLM generates and executes code from natural language
+- **CustomAgent** - Bring your own logic with P2P message handlers
+- **P2P Mesh** - Agent discovery and communication via SWIM protocol
+- **Workflow Orchestration** - Dependencies, context passing, multi-step pipelines
+- **FastAPI Integration** - 3-line setup with JarvisLifespan
+- **Cognitive Discovery** - LLM-ready peer descriptions for autonomous delegation
+- **Cloud Deployment** - Self-registering agents for Docker/K8s
 
 ## Installation
 
@@ -54,7 +54,26 @@ results = await mesh.workflow("calc", [
 print(results[0]["output"])  # 3628800
 ```
 
-### CustomAgent (Your Code)
+### CustomAgent + FastAPI (Recommended)
+
+```python
+from fastapi import FastAPI
+from jarviscore.profiles import CustomAgent
+from jarviscore.integrations.fastapi import JarvisLifespan
+
+class ProcessorAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        # Handle requests from other agents
+        return {"result": msg.data.get("task", "").upper()}
+
+# 3 lines to integrate with FastAPI
+app = FastAPI(lifespan=JarvisLifespan(ProcessorAgent(), mode="p2p"))
+```
+
+### CustomAgent (Workflow Mode)
 
 ```python
 from jarviscore import Mesh
@@ -78,64 +97,50 @@ results = await mesh.workflow("demo", [
 print(results[0]["output"])  # [2, 4, 6]
 ```
 
-### ListenerAgent + FastAPI (API-First)
+## Profiles
 
-```python
-from fastapi import FastAPI
-from jarviscore.profiles import ListenerAgent
-from jarviscore.integrations.fastapi import JarvisLifespan
-
-class ProcessorAgent(ListenerAgent):
-    role = "processor"
-    capabilities = ["processing"]
-
-    async def on_peer_request(self, msg):
-        # Handle requests from other agents
-        return {"result": msg.data.get("task", "").upper()}
-
-# That's it - 3 lines to integrate with FastAPI
-app = FastAPI(lifespan=JarvisLifespan(ProcessorAgent(), mode="p2p"))
-```
+| Profile | You Write | JarvisCore Handles |
+|---------|-----------|-------------------|
+| **AutoAgent** | System prompt | LLM code generation, sandboxed execution |
+| **CustomAgent** | `on_peer_request()` and/or `execute_task()` | Mesh, discovery, routing, lifecycle |
 
 ## Execution Modes
 
-| Mode | Profile | Use Case |
-|------|---------|----------|
-| `autonomous` | AutoAgent | Single machine, LLM code generation |
-| `p2p` | CustomAgent, ListenerAgent | Agent-to-agent communication, swarms |
-| `distributed` | CustomAgent, ListenerAgent | Multi-node workflows + P2P |
+| Mode | Use Case |
+|------|----------|
+| `autonomous` | Single machine, LLM code generation (AutoAgent) |
+| `p2p` | Agent-to-agent communication, swarms (CustomAgent) |
+| `distributed` | Multi-node workflows + P2P (CustomAgent) |
 
-## What's New in 0.3.0
+## Framework Integration
 
-**Developer Experience Improvements:**
-- **ListenerAgent** - No more writing `run()` loops. Just implement `on_peer_request()` and `on_peer_notify()` handlers.
-- **JarvisLifespan** - FastAPI integration reduced from ~100 lines to 3 lines.
-- **Cognitive Discovery** - `peers.get_cognitive_context()` generates LLM-ready peer descriptions. No more hardcoded agent names in prompts.
+JarvisCore is **async-first**. Best experience with async frameworks.
 
-**Cloud Deployment:**
-- **Self-Registration** - `agent.join_mesh()` lets agents join existing meshes without central orchestrator.
-- **Remote Visibility** - Agents on different nodes are automatically discovered and callable.
+| Framework | Integration |
+|-----------|-------------|
+| **FastAPI** | `JarvisLifespan` (3 lines) |
+| **aiohttp, Quart, Tornado** | Manual lifecycle (see docs) |
+| **Flask, Django** | Background thread pattern (see docs) |
 
 ## Documentation
 
-Documentation is included with the package. After installation:
+Documentation is included with the package:
 
 ```bash
 python -c "import jarviscore; print(jarviscore.__path__[0] + '/docs')"
 ```
 
 **Available guides:**
-- `USER_GUIDE.md` - Complete documentation
 - `GETTING_STARTED.md` - 5-minute quickstart
+- `CUSTOMAGENT_GUIDE.md` - CustomAgent patterns and framework integration
 - `AUTOAGENT_GUIDE.md` - LLM-powered agents
-- `CUSTOMAGENT_GUIDE.md` - Bring your own code
+- `USER_GUIDE.md` - Complete documentation
 - `API_REFERENCE.md` - Detailed API docs
 - `CONFIGURATION.md` - Settings reference
-- `CHANGELOG.md` - Version history
 
 ## Version
 
-**0.3.0**
+**0.4.0**
 
 ## License
 

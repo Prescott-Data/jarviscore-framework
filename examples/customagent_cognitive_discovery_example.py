@@ -1,9 +1,9 @@
 """
-ListenerAgent + Cognitive Discovery Example
+CustomAgent + Cognitive Discovery Example
 
 Demonstrates two v0.3.0 features:
 
-1. ListenerAgent - Handler-based P2P agents (no run() loop needed)
+1. CustomAgent - Handler-based P2P agents (no run() loop needed)
    - on_peer_request() handles incoming requests
    - on_peer_notify() handles broadcast notifications
 
@@ -25,18 +25,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jarviscore import Mesh
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SPECIALIST AGENT - Responds to requests from other agents
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class AnalystAgent(ListenerAgent):
+class AnalystAgent(CustomAgent):
     """
     Specialist agent that handles analysis requests.
 
-    Uses ListenerAgent profile - just implement handlers, no run() loop needed.
+    Uses CustomAgent profile - just implement handlers, no run() loop needed.
     """
     role = "analyst"
     capabilities = ["data_analysis", "statistics", "insights"]
@@ -62,7 +62,7 @@ class AnalystAgent(ListenerAgent):
 # COORDINATOR AGENT - Uses LLM with cognitive discovery
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class CoordinatorAgent(ListenerAgent):
+class CoordinatorAgent(CustomAgent):
     """
     Coordinator agent that uses LLM with dynamic peer discovery.
 

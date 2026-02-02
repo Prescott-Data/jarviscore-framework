@@ -5,7 +5,7 @@ Demonstrates JarvisLifespan for 3-line FastAPI integration with autonomous agent
 
 Features shown:
     1. JarvisLifespan - Automatic agent lifecycle management
-    2. ListenerAgent - API-first agents with on_peer_request handlers
+    2. CustomAgent - API-first agents with on_peer_request handlers
     3. Cognitive Discovery - get_cognitive_context() for LLM awareness
     4. Autonomous Agents - Each agent has MESH as a TOOL, LLM decides when to delegate
 
@@ -45,14 +45,14 @@ except ImportError:
     FASTAPI_AVAILABLE = False
     print("FastAPI not installed. Run: pip install fastapi uvicorn")
 
-from jarviscore.profiles import ListenerAgent
+from jarviscore.profiles import CustomAgent
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LLM-POWERED AGENT BASE - Each agent can discover and delegate
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class LLMAgent(ListenerAgent):
+class LLMAgent(CustomAgent):
     """
     Base for LLM-powered agents that can discover and delegate to peers.
 
@@ -544,7 +544,7 @@ def main():
     print("=" * 60)
     print("\n - FastAPI Integration:")
     print("  - JarvisLifespan for one-line integration")
-    print("  - ListenerAgent with on_peer_request handlers")
+    print("  - CustomAgent with on_peer_request handlers")
     print("  - Cognitive discovery via get_cognitive_context()")
     print("\n - Cloud Deployment:")
     print("  - Each agent has MESH as a TOOL")
