@@ -21,6 +21,8 @@ Example:
 """
 import asyncio
 import logging
+import random
+import time
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from uuid import uuid4
 
@@ -95,6 +97,16 @@ class PeerClient:
         # Pending requests waiting for responses (correlation_id -> Future)
         self._pending_requests: Dict[str, asyncio.Future] = {}
 
+        # Async request inbox (correlation_id -> response data or None)
+        self._async_inbox: Dict[str, Optional[Dict[str, Any]]] = {}
+
+        # Async request metadata (correlation_id -> metadata dict)
+        self._async_requests: Dict[str, Dict[str, Any]] = {}
+
+        # Load balancing state
+        self._round_robin_index: Dict[str, int] = {}  # key -> current index
+        self._peer_last_used: Dict[str, float] = {}   # agent_id -> timestamp
+
         self._logger = logging.getLogger(f"jarviscore.peer_client.{agent_id}")
 
     # ─────────────────────────────────────────────────────────────────
@@ -134,7 +146,8 @@ class PeerClient:
     def discover(
         self,
         capability: str = None,
-        role: str = None
+        role: str = None,
+        strategy: str = "first"
     ) -> List[PeerInfo]:
         """
         Discover peers by capability or role.
@@ -142,14 +155,23 @@ class PeerClient:
         Args:
             capability: Filter by capability (e.g., "analysis")
             role: Filter by role (e.g., "analyst")
+            strategy: Selection strategy for ordering results:
+                - "first": Return in discovery order (default, current behavior)
+                - "random": Shuffle results randomly
+                - "round_robin": Rotate through peers on each call
+                - "least_recent": Return least recently used peers first
 
         Returns:
-            List of matching PeerInfo objects
+            List of matching PeerInfo objects, ordered by strategy
 
         Example:
-            analysts = self.peers.discover(capability="analysis")
-            for peer in analysts:
-                print(f"Found: {peer.role} - {peer.capabilities}")
+            # Get a random analyst for load balancing
+            analysts = self.peers.discover(role="analyst", strategy="random")
+            if analysts:
+                await self.peers.request(analysts[0].role, {"task": "..."})
+
+            # Round-robin across workers
+            workers = self.peers.discover(capability="processing", strategy="round_robin")
         """
         results = []
 
@@ -197,19 +219,19 @@ class PeerClient:
         # Access coordinator's _remote_agent_registry
         if self._coordinator and hasattr(self._coordinator, '_remote_agent_registry'):
             remote_registry = self._coordinator._remote_agent_registry
-            
+
             for agent_id, info in remote_registry.items():
                 if agent_id == self._agent_id:  # Exclude self
                     continue
-                
+
                 # Filter by role if specified
                 if role and info.get('role') != role:
                     continue
-                
+
                 # Filter by capability if specified
                 if capability and capability not in info.get('capabilities', []):
                     continue
-                
+
                 # Add remote peer
                 results.append(PeerInfo(
                     agent_id=info['agent_id'],
@@ -219,7 +241,85 @@ class PeerClient:
                     status="alive"
                 ))
 
+        # Apply selection strategy
+        if results and strategy != "first":
+            key = capability or role or "all"
+            results = self._apply_strategy(results, key, strategy)
+
         return results
+
+    def _apply_strategy(
+        self,
+        peers: List[PeerInfo],
+        key: str,
+        strategy: str
+    ) -> List[PeerInfo]:
+        """Apply selection strategy to reorder peer list."""
+        if len(peers) <= 1:
+            return peers
+
+        if strategy == "random":
+            shuffled = peers.copy()
+            random.shuffle(shuffled)
+            return shuffled
+
+        elif strategy == "round_robin":
+            # Get current index for this key
+            idx = self._round_robin_index.get(key, 0)
+            # Rotate list to start from current index
+            rotated = peers[idx:] + peers[:idx]
+            # Increment index for next call
+            self._round_robin_index[key] = (idx + 1) % len(peers)
+            return rotated
+
+        elif strategy == "least_recent":
+            # Sort by last used time (oldest first)
+            def get_last_used(peer: PeerInfo) -> float:
+                return self._peer_last_used.get(peer.agent_id, 0.0)
+            return sorted(peers, key=get_last_used)
+
+        else:  # "first" or unknown
+            return peers
+
+    def discover_one(
+        self,
+        capability: str = None,
+        role: str = None,
+        strategy: str = "first"
+    ) -> Optional[PeerInfo]:
+        """
+        Discover a single peer by capability or role.
+
+        Convenience method that returns just the first peer from discover().
+
+        Args:
+            capability: Filter by capability
+            role: Filter by role
+            strategy: Selection strategy ("first", "random", "round_robin", "least_recent")
+
+        Returns:
+            Single PeerInfo or None if no match found
+
+        Example:
+            # Get a random analyst
+            analyst = self.peers.discover_one(role="analyst", strategy="random")
+            if analyst:
+                response = await self.peers.request(analyst.agent_id, {...})
+        """
+        peers = self.discover(capability=capability, role=role, strategy=strategy)
+        return peers[0] if peers else None
+
+    def record_peer_usage(self, peer_id: str):
+        """
+        Record that a peer was used (for least_recent strategy).
+
+        Call this after successfully communicating with a peer
+        to update the usage timestamp for load balancing.
+
+        Args:
+            peer_id: The agent_id of the peer that was used
+        """
+        self._peer_last_used[peer_id] = time.time()
 
     @property
     def registry(self) -> Dict[str, PeerInfo]:
@@ -337,13 +437,19 @@ class PeerClient:
     # MESSAGING - SEND
     # ─────────────────────────────────────────────────────────────────
 
-    async def notify(self, target: str, message: Dict[str, Any]) -> bool:
+    async def notify(
+        self,
+        target: str,
+        message: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """
         Send a fire-and-forget notification to a peer.
 
         Args:
             target: Target agent role (e.g., "analyst") or agent_id
             message: Message payload (any JSON-serializable dict)
+            context: Optional metadata (mission_id, priority, trace_id, etc.)
 
         Returns:
             True if message was sent successfully
@@ -352,7 +458,7 @@ class PeerClient:
             await self.peers.notify("analyst", {
                 "event": "scouting_complete",
                 "data": {"findings": 42}
-            })
+            }, context={"mission_id": "abc123"})
         """
         target_agent = self._resolve_target(target)
         if not target_agent:
@@ -364,7 +470,8 @@ class PeerClient:
             type=MessageType.NOTIFY,
             data=message,
             sender=self._agent_id,
-            sender_node=self._node_id
+            sender_node=self._node_id,
+            context=context
         )
 
         return await self._send_message(target_agent, outgoing)
@@ -373,7 +480,8 @@ class PeerClient:
         self,
         target: str,
         message: Dict[str, Any],
-        timeout: float = 30.0
+        timeout: float = 30.0,
+        context: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Send a request and wait for a response.
@@ -382,6 +490,7 @@ class PeerClient:
             target: Target agent role (e.g., "scout") or agent_id
             message: Request payload
             timeout: Max seconds to wait for response (default: 30)
+            context: Optional metadata (mission_id, priority, trace_id, etc.)
 
         Returns:
             Response data dict, or None if timeout/failure
@@ -390,7 +499,7 @@ class PeerClient:
             response = await self.peers.request("scout", {
                 "need": "clarification",
                 "entity": "Entity_X"
-            }, timeout=10)
+            }, timeout=10, context={"mission_id": "abc123", "priority": "high"})
 
             if response:
                 print(f"Got clarification: {response}")
@@ -409,7 +518,8 @@ class PeerClient:
             data=message,
             correlation_id=correlation_id,
             sender=self._agent_id,
-            sender_node=self._node_id
+            sender_node=self._node_id,
+            context=context
         )
 
         # Create future to wait for response
@@ -434,13 +544,20 @@ class PeerClient:
             # Cleanup pending request
             self._pending_requests.pop(correlation_id, None)
 
-    async def respond(self, message: IncomingMessage, response: Dict[str, Any]) -> bool:
+    async def respond(
+        self,
+        message: IncomingMessage,
+        response: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """
         Respond to an incoming request.
 
         Args:
             message: The incoming request message
             response: Response data to send back
+            context: Optional metadata to include in response.
+                     If None, automatically propagates the original request's context.
 
         Returns:
             True if response was sent successfully
@@ -448,7 +565,12 @@ class PeerClient:
         Example:
             message = await self.peers.receive()
             if message and message.is_request:
+                # Context is auto-propagated from the request
                 await self.peers.respond(message, {"result": "done"})
+
+                # Or override with custom context
+                await self.peers.respond(message, {"result": "done"},
+                                         context={"status": "completed"})
         """
         if not message.correlation_id:
             self._logger.warning("Cannot respond: message has no correlation_id")
@@ -460,23 +582,32 @@ class PeerClient:
             self._logger.warning(f"Cannot respond: sender '{message.sender}' not found")
             return False
 
+        # Auto-propagate context from request if not overridden
+        response_context = context if context is not None else message.context
+
         outgoing = OutgoingMessage(
             target=message.sender,
             type=MessageType.RESPONSE,
             data=response,
             correlation_id=message.correlation_id,
             sender=self._agent_id,
-            sender_node=self._node_id
+            sender_node=self._node_id,
+            context=response_context
         )
 
         return await self._send_message(target_agent, outgoing)
 
-    async def broadcast(self, message: Dict[str, Any]) -> int:
+    async def broadcast(
+        self,
+        message: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> int:
         """
         Broadcast notification to ALL peers.
 
         Args:
             message: Message payload to broadcast
+            context: Optional metadata (mission_id, priority, trace_id, etc.)
 
         Returns:
             Number of peers successfully notified
@@ -485,14 +616,212 @@ class PeerClient:
             count = await self.peers.broadcast({
                 "event": "status_update",
                 "status": "completed"
-            })
+            }, context={"mission_id": "abc123"})
             print(f"Notified {count} peers")
         """
         count = 0
         for peer in self.discover():
-            if await self.notify(peer.role, message):
+            if await self.notify(peer.role, message, context=context):
                 count += 1
         return count
+
+    # ─────────────────────────────────────────────────────────────────
+    # ASYNC REQUEST PATTERN
+    # ─────────────────────────────────────────────────────────────────
+
+    async def ask_async(
+        self,
+        target: str,
+        message: Dict[str, Any],
+        timeout: float = 120.0,
+        context: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Send a request asynchronously without blocking for response.
+
+        Unlike request(), this method returns immediately with a request_id.
+        Use check_inbox() to retrieve the response later.
+
+        Args:
+            target: Target agent role or agent_id
+            message: Request payload
+            timeout: Max time to keep request active (default: 120s)
+            context: Optional context metadata
+
+        Returns:
+            Request ID to use with check_inbox()
+
+        Raises:
+            ValueError: If target not found or send fails
+
+        Example:
+            # Fire off multiple requests in parallel
+            request_ids = []
+            for analyst in analysts:
+                req_id = await self.peers.ask_async(analyst, {"question": "..."})
+                request_ids.append(req_id)
+
+            # Do other work...
+            await process_other_tasks()
+
+            # Collect responses later
+            for req_id in request_ids:
+                response = await self.peers.check_inbox(req_id, timeout=5)
+                if response:
+                    results.append(response)
+        """
+        target_agent = self._resolve_target(target)
+        if not target_agent:
+            raise ValueError(f"No peer found for target: {target}")
+
+        # Generate correlation ID
+        correlation_id = f"async-{uuid4().hex[:12]}"
+
+        # Create outgoing message
+        outgoing = OutgoingMessage(
+            target=target,
+            type=MessageType.REQUEST,
+            data=message,
+            correlation_id=correlation_id,
+            sender=self._agent_id,
+            sender_node=self._node_id,
+            context=context
+        )
+
+        # Initialize inbox slot
+        self._async_inbox[correlation_id] = None
+        self._async_requests[correlation_id] = {
+            'target': target,
+            'sent_at': time.time(),
+            'timeout': timeout
+        }
+
+        # Create future for async response handling
+        response_future: asyncio.Future = asyncio.get_event_loop().create_future()
+        self._pending_requests[correlation_id] = response_future
+
+        # Setup background task to move response to inbox
+        asyncio.create_task(
+            self._async_response_handler(correlation_id, response_future, timeout)
+        )
+
+        # Send request
+        sent = await self._send_message(target_agent, outgoing)
+        if not sent:
+            # Cleanup on send failure
+            self._async_inbox.pop(correlation_id, None)
+            self._async_requests.pop(correlation_id, None)
+            self._pending_requests.pop(correlation_id, None)
+            raise ValueError(f"Failed to send async request to {target}")
+
+        self._logger.debug(f"Sent async request {correlation_id} to {target}")
+        return correlation_id
+
+    async def _async_response_handler(
+        self,
+        correlation_id: str,
+        future: asyncio.Future,
+        timeout: float
+    ):
+        """Background handler that moves response to inbox when received."""
+        try:
+            response = await asyncio.wait_for(future, timeout=timeout)
+            self._async_inbox[correlation_id] = response
+            self._logger.debug(f"Async response received for {correlation_id}")
+        except asyncio.TimeoutError:
+            self._async_inbox[correlation_id] = None  # Mark as timed out
+            self._logger.debug(f"Async request {correlation_id} timed out")
+        except asyncio.CancelledError:
+            self._async_inbox.pop(correlation_id, None)
+        finally:
+            self._pending_requests.pop(correlation_id, None)
+
+    async def check_inbox(
+        self,
+        request_id: str,
+        timeout: float = 0.0,
+        remove: bool = True
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check for a response to an async request.
+
+        Args:
+            request_id: The ID returned by ask_async()
+            timeout: How long to wait for response (0 = don't wait, return immediately)
+            remove: Remove from inbox after reading (default: True)
+
+        Returns:
+            Response data dict if available, None if not ready or timed out
+
+        Example:
+            # Non-blocking check
+            response = await self.peers.check_inbox(request_id)
+
+            # Wait up to 5 seconds
+            response = await self.peers.check_inbox(request_id, timeout=5)
+        """
+        if request_id not in self._async_inbox:
+            self._logger.debug(f"Request {request_id} not found in inbox")
+            return None
+
+        # If response already available
+        response = self._async_inbox.get(request_id)
+        if response is not None:
+            if remove:
+                self._async_inbox.pop(request_id, None)
+                self._async_requests.pop(request_id, None)
+            return response
+
+        # If no timeout, return None immediately
+        if timeout <= 0:
+            return None
+
+        # Wait for response with timeout
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            await asyncio.sleep(0.1)  # Check every 100ms
+            response = self._async_inbox.get(request_id)
+            if response is not None:
+                if remove:
+                    self._async_inbox.pop(request_id, None)
+                    self._async_requests.pop(request_id, None)
+                return response
+
+        return None
+
+    def get_pending_async_requests(self) -> List[Dict[str, Any]]:
+        """
+        Get list of pending async requests.
+
+        Returns:
+            List of dicts with request_id, target, sent_at, timeout
+
+        Example:
+            pending = self.peers.get_pending_async_requests()
+            for req in pending:
+                print(f"Waiting for {req['target']} since {req['sent_at']}")
+        """
+        return [
+            {
+                'request_id': req_id,
+                **metadata
+            }
+            for req_id, metadata in self._async_requests.items()
+        ]
+
+    def clear_inbox(self, request_id: Optional[str] = None):
+        """
+        Clear async request inbox.
+
+        Args:
+            request_id: Specific request to clear, or None to clear all
+        """
+        if request_id:
+            self._async_inbox.pop(request_id, None)
+            self._async_requests.pop(request_id, None)
+        else:
+            self._async_inbox.clear()
+            self._async_requests.clear()
 
     # ─────────────────────────────────────────────────────────────────
     # TOOL ADAPTER
@@ -794,7 +1123,8 @@ class PeerClient:
                         'target_role': target_agent.role,
                         'data': message.data,
                         'correlation_id': message.correlation_id,
-                        'timestamp': message.timestamp
+                        'timestamp': message.timestamp,
+                        'context': message.context
                     }
                     result = await self._coordinator._send_p2p_message(
                         target_agent.node_id,
@@ -819,7 +1149,8 @@ class PeerClient:
                     type=message.type,
                     data=message.data,
                     correlation_id=message.correlation_id,
-                    timestamp=message.timestamp
+                    timestamp=message.timestamp,
+                    context=message.context
                 )
                 await target_agent.peers._deliver_message(incoming)
                 self._logger.debug(
@@ -836,7 +1167,8 @@ class PeerClient:
                     'target': message.target,
                     'data': message.data,
                     'correlation_id': message.correlation_id,
-                    'timestamp': message.timestamp
+                    'timestamp': message.timestamp,
+                    'context': message.context
                 }
                 node_id = getattr(target_agent, 'node_id', None) or self._node_id
                 return await self._coordinator._send_p2p_message(

@@ -702,7 +702,8 @@ class P2PCoordinator:
                 type=MessageType.NOTIFY,
                 data=payload.get('data', {}),
                 correlation_id=payload.get('correlation_id'),
-                timestamp=payload.get('timestamp', 0)
+                timestamp=payload.get('timestamp', 0),
+                context=payload.get('context')
             )
 
             await target_client._deliver_message(incoming)
@@ -730,7 +731,8 @@ class P2PCoordinator:
                 type=MessageType.REQUEST,
                 data=payload.get('data', {}),
                 correlation_id=payload.get('correlation_id'),
-                timestamp=payload.get('timestamp', 0)
+                timestamp=payload.get('timestamp', 0),
+                context=payload.get('context')
             )
 
             await target_client._deliver_message(incoming)
@@ -758,7 +760,8 @@ class P2PCoordinator:
                 type=MessageType.RESPONSE,
                 data=payload.get('data', {}),
                 correlation_id=payload.get('correlation_id'),
-                timestamp=payload.get('timestamp', 0)
+                timestamp=payload.get('timestamp', 0),
+                context=payload.get('context')
             )
 
             await target_client._deliver_message(incoming)
