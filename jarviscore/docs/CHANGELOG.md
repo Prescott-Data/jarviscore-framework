@@ -7,6 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.2] - 2026-02-03
+
+### Added
+
+#### Session Context Propagation
+- Added `context` parameter to `notify()`, `request()`, `respond()`, and `broadcast()` methods
+- Context carries metadata like mission_id, priority, trace_id across message flows
+- `respond()` automatically propagates context from request if not overridden
+- `IncomingMessage.context` accessible in all message handlers
+
+```python
+# Send request with context
+response = await peers.request("analyst", {"q": "..."}, context={"mission_id": "abc"})
+
+# Access context in handler
+async def on_peer_request(self, msg):
+    mission_id = msg.context.get("mission_id")  # Available!
+    return {"result": "..."}
+```
+
+#### Mesh Diagnostics
+- Added `mesh.get_diagnostics()` method for mesh health monitoring
+- Returns: `local_node`, `known_peers`, `local_agents`, `connectivity_status`
+- Connectivity status values: `healthy`, `isolated`, `degraded`, `not_started`, `local_only`
+- Includes SWIM and keepalive status when P2P is enabled
+
+```python
+diag = mesh.get_diagnostics()
+print(diag["connectivity_status"])  # "healthy", "isolated", etc.
+```
+
+#### Async Request Pattern
+- Added `ask_async(target, message, timeout, context)` - returns request_id immediately
+- Added `check_inbox(request_id, timeout, remove)` - returns response or None
+- Added `get_pending_async_requests()` - list pending async requests
+- Added `clear_inbox(request_id)` - clear specific or all inbox entries
+
+```python
+# Fire off multiple requests
+req_ids = [await peers.ask_async(a, {"q": "..."}) for a in analysts]
+
+# Do other work...
+await process_other_tasks()
+
+# Collect responses later
+for req_id in req_ids:
+    response = await peers.check_inbox(req_id, timeout=5)
+```
+
+#### Load Balancing Strategies
+- Added `strategy` parameter to `discover()`: `"first"`, `"random"`, `"round_robin"`, `"least_recent"`
+- Added `discover_one()` convenience method for single peer lookup
+- Added `record_peer_usage(peer_id)` for least_recent tracking
+
+```python
+# Round-robin across workers
+worker = peers.discover_one(role="worker", strategy="round_robin")
+
+# Least recently used analyst
+analyst = peers.discover_one(role="analyst", strategy="least_recent")
+```
+
+#### MockMesh Testing Utilities
+- Created `jarviscore.testing` module
+- `MockPeerClient`: Full mock with discovery, messaging, assertion helpers
+- `MockMesh`: Simplified mesh without real P2P infrastructure
+- Auto-injects MockPeerClient into agents during MockMesh.start()
+
+```python
+from jarviscore.testing import MockMesh, MockPeerClient
+
+mesh = MockMesh()
+mesh.add(MyAgent)
+await mesh.start()
+
+agent = mesh.get_agent("my_role")
+agent.peers.set_mock_response("analyst", {"result": "test"})
+agent.peers.assert_requested("analyst")
+```
+
+### Testing
+- Session context propagation through all messaging methods
+- Mesh diagnostics structure and connectivity status values
+- Async request/response flow with check_inbox
+- Load balancing strategies (first, random, round_robin, least_recent)
+- MockMesh and MockPeerClient functionality and assertion helpers
+
+---
+
 ## [0.3.1] - 2026-02-02
 
 ### Breaking Changes

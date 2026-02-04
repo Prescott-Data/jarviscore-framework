@@ -1,5 +1,5 @@
 """
-FastAPI Integration Example (v0.3.0)
+FastAPI Integration Example (v0.3.0 + v0.3.2)
 
 Demonstrates JarvisLifespan for 3-line FastAPI integration with autonomous agents.
 
@@ -8,6 +8,8 @@ Features shown:
     2. CustomAgent - API-first agents with on_peer_request handlers
     3. Cognitive Discovery - get_cognitive_context() for LLM awareness
     4. Autonomous Agents - Each agent has MESH as a TOOL, LLM decides when to delegate
+    5. Mesh Diagnostics (v0.3.2) - /health endpoint using get_diagnostics()
+    6. Session Context (v0.3.2) - Request tracking with context parameter
 
 Real-World Flow:
     HTTP Request → Agent A (with LLM) → LLM sees peers as tools
@@ -22,6 +24,9 @@ Usage:
         -H "Content-Type: application/json" \
         -d '{"message": "Analyze the Q4 sales trends"}'
 
+    # Check mesh health (v0.3.2)
+    curl http://localhost:8000/health
+
     # Optional: Start a standalone agent that joins the mesh (in another terminal)
     python examples/fastapi_integration_example.py --join-as scout
 
@@ -32,6 +37,7 @@ Prerequisites:
 import asyncio
 import sys
 import os
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -104,14 +110,27 @@ class LLMAgent(CustomAgent):
             }
         }]
 
-    async def _ask_peer(self, role: str, question: str) -> dict:
+    async def _ask_peer(self, role: str, question: str, request_id: str = None) -> dict:
         """Execute ask_peer tool - send request to another agent."""
         print(f"[{self.role}] Asking {role}: {question[:50]}...")
-        response = await self.peers.request(role, {"question": question}, timeout=30)
+
+        # v0.3.2: Pass context for request tracking
+        context = {
+            "request_id": request_id or str(uuid.uuid4()),
+            "source_agent": self.role,
+            "tool": "ask_peer"
+        }
+
+        response = await self.peers.request(
+            role,
+            {"question": question},
+            timeout=30,
+            context=context  # v0.3.2: Session context
+        )
         print(f"[{self.role}] Got response from {role}")
         return response
 
-    async def chat(self, message: str) -> dict:
+    async def chat(self, message: str, request_id: str = None) -> dict:
         """
         Process a message with LLM that can discover and delegate to peers.
 
@@ -119,7 +138,14 @@ class LLMAgent(CustomAgent):
         1. Build system prompt with WHO I AM + WHO ELSE IS AVAILABLE
         2. LLM sees available peers as potential helpers
         3. LLM decides whether to handle directly or delegate
+
+        Args:
+            message: The user message to process
+            request_id: Optional request ID for tracking (v0.3.2)
         """
+        # v0.3.2: Generate request_id for tracking if not provided
+        request_id = request_id or str(uuid.uuid4())
+
         if not self.llm:
             return await self._chat_mock(message)
 
@@ -154,7 +180,8 @@ class LLMAgent(CustomAgent):
             role = tool_use_block.input.get("role")
             question = tool_use_block.input.get("question")
 
-            peer_response = await self._ask_peer(role, question)
+            # v0.3.2: Pass request_id for tracing
+            peer_response = await self._ask_peer(role, question, request_id=request_id)
 
             # Continue with tool result
             messages = [{"role": "user", "content": message}]
@@ -467,6 +494,36 @@ def create_app():
                 }
         return result
 
+    @app.get("/health")
+    async def health_check(request: Request):
+        """
+        Health check endpoint using mesh diagnostics (v0.3.2).
+
+        Returns mesh status, connected agents, and network health.
+        Useful for Kubernetes probes, load balancer checks, and monitoring.
+        """
+        # Get the mesh from JarvisLifespan state
+        mesh = getattr(request.app.state, "jarvis_mesh", None)
+        if not mesh:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unhealthy", "error": "Mesh not initialized"}
+            )
+
+        # v0.3.2: Use get_diagnostics() for comprehensive health info
+        diagnostics = mesh.get_diagnostics()
+
+        return {
+            "status": "healthy",
+            "mesh": {
+                "mode": diagnostics.get("mode", "unknown"),
+                "agent_count": diagnostics.get("agent_count", 0),
+                "agents": diagnostics.get("agents", []),
+            },
+            "network": diagnostics.get("network", {}),
+            "uptime_seconds": diagnostics.get("uptime_seconds", 0)
+        }
+
     @app.post("/chat")
     async def chat(request: Request):
         """
@@ -476,16 +533,21 @@ def create_app():
         1. Sees other agents via get_cognitive_context()
         2. Decides if it needs to delegate
         3. Uses ask_peer tool to communicate
+
+        v0.3.2: Supports request_id for tracking across agent boundaries.
         """
         body = await request.json()
         message = body.get("message", "")
+
+        # v0.3.2: Generate request_id for tracking
+        request_id = str(uuid.uuid4())
 
         assistant = request.app.state.jarvis_agents.get("assistant")
         if not assistant:
             return JSONResponse(status_code=503, content={"error": "Assistant not available"})
 
-        result = await assistant.chat(message)
-        return {"message": message, **result}
+        result = await assistant.chat(message, request_id=request_id)
+        return {"message": message, "request_id": request_id, **result}
 
     @app.post("/ask/{agent_role}")
     async def ask_agent(agent_role: str, request: Request):
@@ -551,6 +613,7 @@ def main():
     print("  - LLM decides when to delegate autonomously")
     print("  - Standalone agents can join with --join-as flag")
     print("\nEndpoints:")
+    print("  GET  /health      - Mesh health diagnostics (v0.3.2)")
     print("  GET  /agents      - Show what each agent sees")
     print("  POST /chat        - Chat with assistant (may delegate)")
     print("  POST /ask/{role}  - Ask specific agent directly")
