@@ -6,6 +6,10 @@ Demonstrates CustomAgent in distributed mode, which combines:
 - Workflow orchestration (step execution, dependencies)
 - User-controlled execution logic (you write execute_task)
 
+v0.3.2 Features Demonstrated:
+- Async Requests (ask_async) - Non-blocking parallel requests to multiple agents
+- Load Balancing (strategy="round_robin") - Distribute requests across agent instances
+
 This is ideal for:
 - Multi-node deployments with custom logic
 - Integrating external frameworks (LangChain, CrewAI, etc.)
@@ -231,6 +235,7 @@ async def main():
     """Run CustomAgent distributed mode example."""
     print("\n" + "="*70)
     print("JarvisCore: CustomAgent in Distributed Mode")
+    print("v0.3.2: Also supports --async and --load-balance demos")
     print("="*70)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -358,5 +363,139 @@ async def peer_communication_example():
     pass
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# v0.3.2 FEATURES: ASYNC REQUESTS & LOAD BALANCING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def async_requests_demo():
+    """
+    Demonstrate v0.3.2 async requests for parallel agent communication.
+
+    ask_async() returns a Future that can be awaited later, enabling:
+    - Fire multiple requests in parallel
+    - Continue other work while waiting
+    - Gather results when needed
+    """
+    print("\n" + "="*70)
+    print("v0.3.2 Feature: Async Requests (ask_async)")
+    print("="*70)
+
+    mesh = Mesh(mode="p2p", config={"bind_port": 7966})
+
+    # Add multiple agents
+    mesh.add(ContentResearcherAgent)
+    mesh.add(ContentWriterAgent)
+    mesh.add(ContentReviewerAgent)
+
+    try:
+        await mesh.start()
+
+        # Get an agent with peer access
+        researcher = next((a for a in mesh.agents if a.role == "content_researcher"), None)
+        if not researcher or not researcher.peers:
+            print("Peers not available")
+            return
+
+        print("\n[Demo] Firing parallel requests to multiple agents...")
+
+        # v0.3.2: ask_async returns a Future - doesn't block!
+        future1 = researcher.peers.ask_async(
+            "content_writer",
+            {"question": "What makes good technical writing?"}
+        )
+        future2 = researcher.peers.ask_async(
+            "content_reviewer",
+            {"question": "What are common writing mistakes?"}
+        )
+
+        print("[Demo] Requests sent! Doing other work while waiting...")
+        await asyncio.sleep(0.1)  # Simulate other work
+
+        # Gather results when ready
+        print("[Demo] Gathering results...")
+        results = await asyncio.gather(future1, future2, return_exceptions=True)
+
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                print(f"  Request {i+1}: Error - {result}")
+            else:
+                print(f"  Request {i+1}: Got response")
+
+        print("\n[Demo] Async requests complete!")
+
+    finally:
+        await mesh.stop()
+
+
+async def load_balancing_demo():
+    """
+    Demonstrate v0.3.2 load balancing strategies.
+
+    When multiple agents have the same capability, use strategy parameter:
+    - "random" (default): Random selection
+    - "round_robin": Distribute evenly across instances
+    """
+    print("\n" + "="*70)
+    print("v0.3.2 Feature: Load Balancing Strategies")
+    print("="*70)
+
+    mesh = Mesh(mode="p2p", config={"bind_port": 7967})
+
+    # Add agents
+    mesh.add(ContentResearcherAgent)
+    mesh.add(ContentWriterAgent)
+
+    try:
+        await mesh.start()
+
+        researcher = next((a for a in mesh.agents if a.role == "content_researcher"), None)
+        if not researcher or not researcher.peers:
+            print("Peers not available")
+            return
+
+        print("\n[Demo] Load balancing with strategy='round_robin'")
+        print("[Demo] Sending 3 requests to 'writing' capability...")
+
+        # v0.3.2: Use discover_one() with strategy for load balancing
+        for i in range(3):
+            # round_robin distributes requests evenly across matching peers
+            # First, discover which peer to use with the strategy
+            target = researcher.peers.discover_one(
+                role="content_writer",
+                strategy="round_robin"  # v0.3.2: Load balancing
+            )
+
+            if target:
+                # Then make the request to that specific peer
+                response = await researcher.peers.request(
+                    target.role,
+                    {"question": f"Request #{i+1}"},
+                    timeout=10
+                )
+                print(f"  Request {i+1}: Handled by {target.agent_id[:8]}...")
+            else:
+                print(f"  Request {i+1}: No peer found")
+
+        print("\n[Demo] Load balancing complete!")
+        print("[Demo] In a multi-node setup with multiple writers,")
+        print("       round_robin would distribute across all instances.")
+
+    finally:
+        await mesh.stop()
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--async":
+            asyncio.run(async_requests_demo())
+        elif sys.argv[1] == "--load-balance":
+            asyncio.run(load_balancing_demo())
+        else:
+            print("Usage:")
+            print("  python customagent_distributed_example.py           # Main workflow demo")
+            print("  python customagent_distributed_example.py --async   # Async requests demo")
+            print("  python customagent_distributed_example.py --load-balance  # Load balancing demo")
+    else:
+        asyncio.run(main())

@@ -140,7 +140,7 @@ python -c "import jarviscore; print(jarviscore.__path__[0] + '/docs')"
 
 ## Version
 
-**0.4.0**
+**0.3.2**
 
 ## License
 

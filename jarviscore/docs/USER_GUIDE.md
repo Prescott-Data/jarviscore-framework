@@ -19,9 +19,14 @@ Practical guide to building agent systems with JarvisCore.
 11. [FastAPI Integration (v0.3.0)](#fastapi-integration-v030)
 12. [Cloud Deployment (v0.3.0)](#cloud-deployment-v030)
 13. [Cognitive Discovery (v0.3.0)](#cognitive-discovery-v030)
-14. [Best Practices](#best-practices)
-15. [Common Patterns](#common-patterns)
-16. [Troubleshooting](#troubleshooting)
+14. [Session Context (v0.3.2)](#session-context-v032)
+15. [Async Requests (v0.3.2)](#async-requests-v032)
+16. [Load Balancing (v0.3.2)](#load-balancing-v032)
+17. [Mesh Diagnostics (v0.3.2)](#mesh-diagnostics-v032)
+18. [Testing with MockMesh (v0.3.2)](#testing-with-mockmesh-v032)
+19. [Best Practices](#best-practices)
+20. [Common Patterns](#common-patterns)
+21. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -679,6 +684,282 @@ Use the `ask_peer` tool to delegate tasks to these specialists.
 
 ---
 
+## Session Context (v0.3.2)
+
+Pass metadata through your message flows for tracing, priority, and session tracking:
+
+### Basic Usage
+
+```python
+# Send request with context
+response = await self.peers.request(
+    "analyst",
+    {"query": "analyze sales data"},
+    context={"mission_id": "m-123", "priority": "high", "user_id": "u-456"}
+)
+
+# Context is available in the handler
+async def on_peer_request(self, msg):
+    mission_id = msg.context.get("mission_id")  # "m-123"
+    print(f"Processing request for mission: {mission_id}")
+    return {"result": "analysis complete"}
+```
+
+### Auto-Propagation
+
+When you `respond()`, context automatically propagates from the request:
+
+```python
+async def on_peer_request(self, msg):
+    # msg.context = {"mission_id": "m-123", ...}
+    result = process(msg.data)
+
+    # Context auto-propagates - no need to pass it!
+    await self.peers.respond(msg, {"result": result})
+
+    # Or override with custom context
+    await self.peers.respond(msg, {"result": result},
+                            context={"status": "completed"})
+```
+
+### All Methods Support Context
+
+```python
+# notify
+await self.peers.notify("logger", {"event": "started"}, context={"trace_id": "t-1"})
+
+# request
+response = await self.peers.request("worker", {"task": "..."}, context={"priority": "low"})
+
+# broadcast
+await self.peers.broadcast({"alert": "system ready"}, context={"source": "coordinator"})
+
+# ask_async
+req_id = await self.peers.ask_async("analyst", {"q": "..."}, context={"batch_id": "b-1"})
+```
+
+---
+
+## Async Requests (v0.3.2)
+
+Fire-and-collect pattern for parallel requests without blocking:
+
+### Basic Pattern
+
+```python
+# Fire off multiple requests (non-blocking)
+request_ids = []
+for analyst in self.peers.discover(role="analyst"):
+    req_id = await self.peers.ask_async(analyst.agent_id, {"task": "analyze"})
+    request_ids.append(req_id)
+
+# Do other work while analysts process...
+await self.do_other_work()
+
+# Collect responses
+results = []
+for req_id in request_ids:
+    response = await self.peers.check_inbox(req_id, timeout=10)
+    if response:
+        results.append(response)
+```
+
+### API Reference
+
+```python
+# Send async request - returns immediately
+req_id = await self.peers.ask_async(target, message, timeout=120, context=None)
+
+# Check for response (non-blocking if timeout=0)
+response = await self.peers.check_inbox(req_id, timeout=0)
+
+# Check with wait
+response = await self.peers.check_inbox(req_id, timeout=5)
+
+# List pending requests
+pending = self.peers.get_pending_async_requests()
+# [{"request_id": "...", "target": "analyst", "sent_at": 1234567890.0}]
+
+# Clear inbox
+self.peers.clear_inbox(req_id)  # Specific
+self.peers.clear_inbox()        # All
+```
+
+---
+
+## Load Balancing (v0.3.2)
+
+Distribute requests across multiple peers with discovery strategies:
+
+### Strategies
+
+```python
+# Default: first in discovery order
+peers = self.peers.discover(role="worker", strategy="first")
+
+# Random: shuffle for basic load distribution
+peers = self.peers.discover(role="worker", strategy="random")
+
+# Round-robin: rotate through peers on each call
+peers = self.peers.discover(role="worker", strategy="round_robin")
+
+# Least-recent: prefer peers not used recently
+peers = self.peers.discover(role="worker", strategy="least_recent")
+```
+
+### Convenience Method
+
+```python
+# Get single peer with strategy
+worker = self.peers.discover_one(role="worker", strategy="round_robin")
+if worker:
+    await self.peers.request(worker.agent_id, {"task": "..."})
+```
+
+### Track Usage for least_recent
+
+```python
+peer = self.peers.discover_one(role="worker", strategy="least_recent")
+response = await self.peers.request(peer.agent_id, {"task": "..."})
+
+# Update usage timestamp after successful communication
+self.peers.record_peer_usage(peer.agent_id)
+```
+
+### Example: Round-Robin Work Distribution
+
+```python
+async def distribute_tasks(self, tasks):
+    results = []
+    for task in tasks:
+        # Each call rotates to next worker
+        worker = self.peers.discover_one(role="worker", strategy="round_robin")
+        if worker:
+            response = await self.peers.request(worker.agent_id, {"task": task})
+            results.append(response)
+    return results
+```
+
+---
+
+## Mesh Diagnostics (v0.3.2)
+
+Monitor mesh health and debug connectivity issues:
+
+### Get Diagnostics
+
+```python
+diag = mesh.get_diagnostics()
+
+print(f"Mode: {diag['local_node']['mode']}")
+print(f"Status: {diag['connectivity_status']}")
+print(f"Agents: {diag['local_node']['agent_count']}")
+
+for agent in diag['local_agents']:
+    print(f"  - {agent['role']}: {agent['capabilities']}")
+
+for peer in diag['known_peers']:
+    print(f"  - {peer['role']} @ {peer['node_id']}: {peer['status']}")
+```
+
+### Connectivity Status Values
+
+| Status | Meaning |
+|--------|---------|
+| `healthy` | P2P active with connected peers |
+| `isolated` | P2P active but no peers found |
+| `degraded` | Some connectivity issues |
+| `not_started` | Mesh not yet started |
+| `local_only` | Autonomous mode (no P2P) |
+
+### FastAPI Health Endpoint
+
+```python
+@app.get("/health")
+async def health(request: Request):
+    mesh = request.app.state.jarvis_mesh
+    diag = mesh.get_diagnostics()
+    return {
+        "status": diag["connectivity_status"],
+        "agents": diag["local_node"]["agent_count"],
+        "peers": len(diag["known_peers"])
+    }
+```
+
+---
+
+## Testing with MockMesh (v0.3.2)
+
+Unit test your agents without real P2P infrastructure:
+
+### Basic Setup
+
+```python
+import pytest
+from jarviscore.testing import MockMesh
+from jarviscore.profiles import CustomAgent
+
+class MyAgent(CustomAgent):
+    role = "processor"
+    capabilities = ["processing"]
+
+    async def on_peer_request(self, msg):
+        # Delegate to analyst
+        analysis = await self.peers.request("analyst", {"data": msg.data})
+        return {"processed": True, "analysis": analysis}
+
+@pytest.mark.asyncio
+async def test_processor_delegates():
+    mesh = MockMesh()
+    mesh.add(MyAgent)
+    await mesh.start()
+
+    agent = mesh.get_agent("processor")
+
+    # Configure mock response for analyst
+    agent.peers.set_mock_response("analyst", {"result": "analyzed"})
+
+    # Test the agent
+    response = await agent.peers.request("analyst", {"test": "data"})
+
+    # Verify
+    assert response["result"] == "analyzed"
+    agent.peers.assert_requested("analyst")
+
+    await mesh.stop()
+```
+
+### MockPeerClient Features
+
+```python
+# Configure responses
+agent.peers.set_mock_response("analyst", {"result": "..."})
+agent.peers.set_default_response({"status": "ok"})
+
+# Custom handler for dynamic responses
+async def handler(target, message, context):
+    return {"echo": message, "target": target}
+agent.peers.set_request_handler(handler)
+
+# Inject messages for handler testing
+from jarviscore.p2p.messages import MessageType
+agent.peers.inject_message("sender", MessageType.REQUEST, {"data": "test"})
+
+# Assertions
+agent.peers.assert_notified("target")
+agent.peers.assert_requested("analyst", message_contains={"query": "test"})
+agent.peers.assert_broadcasted()
+
+# Track what was sent
+notifications = agent.peers.get_sent_notifications()
+requests = agent.peers.get_sent_requests()
+
+# Reset between tests
+agent.peers.reset()
+```
+
+---
+
 ## Best Practices
 
 ### 1. Always Use Context Managers
@@ -904,6 +1185,6 @@ mesh = Mesh(config=config)
 
 ## Version
 
-User Guide for JarvisCore v0.3.1
+User Guide for JarvisCore v0.3.2
 
-Last Updated: 2026-02-02
+Last Updated: 2026-02-03

@@ -624,6 +624,155 @@ class Mesh:
         """
         return self._capability_index.get(capability, [])
 
+    # ─────────────────────────────────────────────────────────────────
+    # DIAGNOSTICS
+    # ─────────────────────────────────────────────────────────────────
+
+    def get_diagnostics(self) -> Dict[str, Any]:
+        """
+        Get diagnostic information about the mesh and P2P connectivity.
+
+        Useful for debugging P2P issues, monitoring mesh health,
+        and understanding the current state of the distributed system.
+
+        Returns:
+            Dictionary containing:
+            - local_node: This node's configuration and status
+            - known_peers: List of discovered remote peers
+            - local_agents: List of local agents with capabilities
+            - connectivity_status: Overall health assessment
+            - keepalive_status: Keepalive manager health (if P2P enabled)
+            - swim_status: SWIM protocol status (if P2P enabled)
+            - capability_map: Mapping of capabilities to agent IDs
+
+        Example:
+            diagnostics = mesh.get_diagnostics()
+            print(f"Status: {diagnostics['connectivity_status']}")
+            for peer in diagnostics['known_peers']:
+                print(f"  {peer['role']} at {peer['node_id']}: {peer['status']}")
+        """
+        result = {
+            "local_node": self._get_local_node_info(),
+            "known_peers": self._get_peer_list(),
+            "local_agents": self._get_local_agents_info(),
+            "connectivity_status": self._assess_connectivity_status()
+        }
+
+        # Add P2P-specific diagnostics if coordinator is available
+        if self._p2p_coordinator:
+            result["keepalive_status"] = self._get_keepalive_status()
+            result["swim_status"] = self._get_swim_status()
+            result["capability_map"] = self._get_capability_map()
+
+        return result
+
+    def _get_local_node_info(self) -> Dict[str, Any]:
+        """Get local node information."""
+        info = {
+            "mode": self.mode.value,
+            "started": self._started,
+            "agent_count": len(self.agents)
+        }
+
+        if self._p2p_coordinator and self._p2p_coordinator.swim_manager:
+            addr = self._p2p_coordinator.swim_manager.bind_addr
+            if addr:
+                info["bind_address"] = f"{addr[0]}:{addr[1]}"
+
+        return info
+
+    def _get_peer_list(self) -> List[Dict[str, Any]]:
+        """Get list of known remote peers."""
+        peers = []
+
+        if self._p2p_coordinator:
+            for agent in self._p2p_coordinator.list_remote_agents():
+                peers.append({
+                    "role": agent.get("role", "unknown"),
+                    "agent_id": agent.get("agent_id", "unknown"),
+                    "node_id": agent.get("node_id", "unknown"),
+                    "capabilities": agent.get("capabilities", []),
+                    "status": "connected"
+                })
+
+        return peers
+
+    def _get_local_agents_info(self) -> List[Dict[str, Any]]:
+        """Get information about local agents."""
+        return [
+            {
+                "role": agent.role,
+                "agent_id": agent.agent_id,
+                "capabilities": list(agent.capabilities),
+                "description": getattr(agent, 'description', ''),
+                "has_peers": hasattr(agent, 'peers') and agent.peers is not None
+            }
+            for agent in self.agents
+        ]
+
+    def _assess_connectivity_status(self) -> str:
+        """
+        Assess overall connectivity status.
+
+        Returns:
+            "healthy" - P2P fully operational with peers
+            "isolated" - No peers connected
+            "degraded" - Some connectivity issues detected
+            "not_started" - Mesh not yet started
+            "local_only" - Not in distributed/p2p mode
+        """
+        if not self._started:
+            return "not_started"
+
+        if self.mode == MeshMode.AUTONOMOUS:
+            return "local_only"
+
+        if not self._p2p_coordinator:
+            return "local_only"
+
+        # Check SWIM health
+        if self._p2p_coordinator.swim_manager:
+            if not self._p2p_coordinator.swim_manager.is_healthy():
+                return "degraded"
+
+        # Check for connected peers
+        remote_agents = self._p2p_coordinator.list_remote_agents()
+        if not remote_agents:
+            return "isolated"
+
+        # Check keepalive health if available
+        if hasattr(self._p2p_coordinator, 'keepalive_manager') and self._p2p_coordinator.keepalive_manager:
+            health = self._p2p_coordinator.keepalive_manager.get_health_status()
+            if health.get('circuit_state') == 'OPEN':
+                return "degraded"
+
+        return "healthy"
+
+    def _get_keepalive_status(self) -> Optional[Dict[str, Any]]:
+        """Get keepalive manager status."""
+        if not self._p2p_coordinator:
+            return None
+
+        if hasattr(self._p2p_coordinator, 'keepalive_manager') and self._p2p_coordinator.keepalive_manager:
+            return self._p2p_coordinator.keepalive_manager.get_health_status()
+
+        return None
+
+    def _get_swim_status(self) -> Optional[Dict[str, Any]]:
+        """Get SWIM protocol status."""
+        if not self._p2p_coordinator or not self._p2p_coordinator.swim_manager:
+            return None
+
+        return self._p2p_coordinator.swim_manager.get_status()
+
+    def _get_capability_map(self) -> Dict[str, List[str]]:
+        """Get the capability to agent_id mapping."""
+        if not self._p2p_coordinator:
+            return {}
+
+        # Convert defaultdict to regular dict for serialization
+        return dict(self._p2p_coordinator._capability_map)
+
     def __repr__(self) -> str:
         """String representation of mesh."""
         return (

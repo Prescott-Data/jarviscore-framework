@@ -52,6 +52,7 @@ class IncomingMessage:
         data: Message payload
         correlation_id: ID linking request to response (for request-response pattern)
         timestamp: When the message was sent
+        context: Optional metadata for the message (mission_id, priority, trace_id, etc.)
     """
     sender: str
     sender_node: str
@@ -59,6 +60,7 @@ class IncomingMessage:
     data: Dict[str, Any]
     correlation_id: Optional[str] = None
     timestamp: float = field(default_factory=time.time)
+    context: Optional[Dict[str, Any]] = None
 
     @property
     def is_request(self) -> bool:
@@ -77,6 +79,16 @@ class OutgoingMessage:
     A message to be sent to a peer agent.
 
     Used internally by PeerClient for message construction.
+
+    Attributes:
+        target: Target agent role or ID
+        type: Message type
+        data: Message payload
+        correlation_id: ID linking request to response
+        timestamp: When the message was created
+        sender: Agent ID of sender (filled by PeerClient)
+        sender_node: P2P node ID of sender (filled by PeerClient)
+        context: Optional metadata for the message (mission_id, priority, trace_id, etc.)
     """
     target: str              # Target agent role or ID
     type: MessageType
@@ -85,3 +97,4 @@ class OutgoingMessage:
     timestamp: float = field(default_factory=time.time)
     sender: str = ""         # Filled in by PeerClient
     sender_node: str = ""    # Filled in by PeerClient
+    context: Optional[Dict[str, Any]] = None

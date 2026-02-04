@@ -1,25 +1,30 @@
 """
 CustomAgent + Cognitive Discovery Example
 
-Demonstrates two v0.3.0 features:
+Demonstrates v0.3.0 and v0.3.2 features:
 
 1. CustomAgent - Handler-based P2P agents (no run() loop needed)
    - on_peer_request() handles incoming requests
    - on_peer_notify() handles broadcast notifications
 
-2. Cognitive Discovery - Dynamic peer awareness for LLMs
+2. Cognitive Discovery (v0.3.0) - Dynamic peer awareness for LLMs
    - get_cognitive_context() generates LLM-ready peer descriptions
    - No hardcoded agent names in prompts
    - LLM autonomously decides when to delegate
 
+3. Session Context (v0.3.2) - Request tracking with metadata
+   - Pass context={mission_id, request_id} with peer requests
+   - Track requests across agent boundaries for debugging/tracing
+
 Usage:
-    python examples/listeneragent_cognitive_discovery_example.py
+    python examples/customagent_cognitive_discovery_example.py
 
 Prerequisites:
     - .env file with CLAUDE_API_KEY (or other LLM provider)
 """
 import asyncio
 import sys
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -45,13 +50,21 @@ class AnalystAgent(CustomAgent):
     async def on_peer_request(self, msg):
         """Handle incoming analysis requests."""
         query = msg.data.get("question", msg.data.get("query", ""))
-        print(f"\n[Analyst] Received request: {query[:50]}...")
+
+        # v0.3.2: Access session context for request tracking
+        context = msg.context or {}
+        mission_id = context.get("mission_id", "unknown")
+        request_id = context.get("request_id", "unknown")
+
+        print(f"\n[Analyst] Received request (mission={mission_id[:8]}..., req={request_id[:8]}...)")
+        print(f"[Analyst] Query: {query[:50]}...")
 
         # Simulate analysis (in real usage, this would use an LLM)
         result = {
             "analysis": f"Analysis of '{query}': The data shows positive trends.",
             "confidence": 0.85,
-            "insights": ["Trend is upward", "Growth rate: 15%", "Recommendation: Continue"]
+            "insights": ["Trend is upward", "Growth rate: 15%", "Recommendation: Continue"],
+            "context": {"mission_id": mission_id, "request_id": request_id}  # Echo back for tracing
         }
 
         print(f"[Analyst] Sending response with {len(result['insights'])} insights")
@@ -78,6 +91,9 @@ class CoordinatorAgent(CustomAgent):
     async def setup(self):
         await super().setup()
         self.llm = self._create_llm_client()
+        # v0.3.2: Track missions for context propagation
+        self.mission_id = str(uuid.uuid4())
+        self.request_counter = 0
 
     def _create_llm_client(self):
         """Create LLM client with fallback to mock."""
@@ -167,10 +183,22 @@ Never try to do analysis yourself - always delegate to the analyst."""
             # Mock: simulate LLM deciding to delegate
             if any(word in user_query.lower() for word in ["analyze", "analysis", "statistics", "data"]):
                 print("[Coordinator] Mock LLM decides to delegate to analyst")
+
+                # v0.3.2: Generate request context for tracking
+                self.request_counter += 1
+                request_context = {
+                    "mission_id": self.mission_id,
+                    "request_id": str(uuid.uuid4()),
+                    "request_num": self.request_counter,
+                    "source": "coordinator"
+                }
+                print(f"[Coordinator] Sending with context: mission={self.mission_id[:8]}...")
+
                 response = await self.peers.request(
                     "analyst",
                     {"question": user_query},
-                    timeout=30
+                    timeout=30,
+                    context=request_context  # v0.3.2: Pass context
                 )
                 return f"Based on the analyst's findings: {response.get('analysis', 'No response')}"
             return f"I can help with: {user_query}"
@@ -261,12 +289,24 @@ Never try to do analysis yourself - always delegate to the analyst."""
         role = args.get("role", "")
         question = args.get("question", "")
 
+        # v0.3.2: Generate request context for tracking
+        self.request_counter += 1
+        request_context = {
+            "mission_id": self.mission_id,
+            "request_id": str(uuid.uuid4()),
+            "request_num": self.request_counter,
+            "source": "coordinator",
+            "tool": "ask_peer"
+        }
+
         print(f"[Coordinator] Asking {role}: {question[:50]}...")
+        print(f"[Coordinator] Context: mission={self.mission_id[:8]}..., req_num={self.request_counter}")
 
         response = await self.peers.request(
             role,
             {"question": question},
-            timeout=30
+            timeout=30,
+            context=request_context  # v0.3.2: Pass context
         )
 
         return response
@@ -284,7 +324,8 @@ Never try to do analysis yourself - always delegate to the analyst."""
 
 async def main():
     print("=" * 60)
-    print("LLM Cognitive Discovery Example")
+    print("CustomAgent + Cognitive Discovery + Session Context")
+    print("Features: v0.3.0 Cognitive Discovery, v0.3.2 Session Context")
     print("=" * 60)
 
     # Create mesh with both agents
