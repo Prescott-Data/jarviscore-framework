@@ -423,33 +423,57 @@ if __name__ == "__main__":
         Returns:
             Namespace dict for code execution
         """
-        # Get all built-ins except dangerous ones
+        import builtins as _builtins_module
+
+        # Dangerous functions to exclude
+        dangerous = {'eval', 'exec', 'compile', 'open', 'input', 'file'}
+
+        # Build safe builtins from the builtins module directly
         safe_builtins = {}
-        for name in dir(__builtins__):
+        for name in dir(_builtins_module):
             if name.startswith('_'):
                 continue
-            # Exclude dangerous functions
-            if name in ['eval', 'exec', 'compile', 'open', 'input', 'file']:
+            if name in dangerous:
                 continue
             try:
-                safe_builtins[name] = getattr(__builtins__, name)
+                safe_builtins[name] = getattr(_builtins_module, name)
             except AttributeError:
                 pass
 
-        # Ensure critical built-ins are present
+        # Ensure critical built-ins are present (double-check)
         critical_builtins = [
+            # Core functions
             'print', '__import__', 'len', 'range', 'str', 'int', 'float',
             'list', 'dict', 'set', 'tuple', 'bool', 'type', 'isinstance',
+            # Iteration and aggregation
             'min', 'max', 'sum', 'sorted', 'enumerate', 'zip', 'map', 'filter',
+            'any', 'all', 'reversed', 'iter', 'next', 'slice',
+            # Attribute access
+            'hasattr', 'getattr', 'setattr', 'delattr', 'dir', 'vars',
+            # Math
+            'abs', 'round', 'pow', 'divmod',
+            # String/repr
+            'repr', 'format', 'chr', 'ord', 'ascii', 'hex', 'oct', 'bin',
+            # Type checking
+            'callable', 'issubclass', 'id', 'hash',
+            # Object creation
+            'object', 'super', 'property', 'staticmethod', 'classmethod',
+            # Binary/bytes
+            'bytes', 'bytearray', 'memoryview',
+            # Other types
+            'complex', 'frozenset',
+            # Exceptions
             'Exception', 'ValueError', 'TypeError', 'KeyError', 'IndexError',
-            'NameError', 'AttributeError', 'RuntimeError', 'ZeroDivisionError'
+            'NameError', 'AttributeError', 'RuntimeError', 'ZeroDivisionError',
+            'StopIteration', 'GeneratorExit', 'AssertionError', 'ImportError',
+            'FileNotFoundError', 'IOError', 'OSError', 'NotImplementedError',
         ]
 
         for builtin in critical_builtins:
             if builtin not in safe_builtins:
                 try:
-                    safe_builtins[builtin] = eval(builtin)
-                except:
+                    safe_builtins[builtin] = getattr(_builtins_module, builtin)
+                except AttributeError:
                     logger.warning(f"Could not add built-in: {builtin}")
 
         namespace = {
