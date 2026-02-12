@@ -6,6 +6,10 @@ Provides a single object that gives agents access to:
 - Task information (task description, params)
 - Memory (shared state between steps)
 - Dependencies (check/wait for other steps)
+- Truth (shared facts with evidence and confidence) [v1.0.0]
+- Mailbox (durable peer messaging) [v1.0.0]
+- Tracer (telemetry event emission) [v1.0.0]
+- Human tasks (HITL requests) [v1.0.0]
 
 This is a facade over existing JarvisCore primitives.
 """
@@ -63,6 +67,12 @@ class JarvisContext:
     # Orchestration accessors
     memory: MemoryAccessor = None
     deps: DependencyAccessor = None
+
+    # v1.0.0 additions — all default to None for backwards compatibility
+    truth: Optional[Any] = None       # TruthContext instance
+    mailbox: Optional[Any] = None     # MailboxManager instance
+    tracer: Optional[Any] = None      # TraceManager instance
+    human_tasks: Optional[List[Any]] = None  # Active HumanTask list (HITL)
 
     def previous(self, step_id: str, default: Any = None) -> Any:
         """

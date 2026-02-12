@@ -31,10 +31,19 @@ Example:
 from .jarvis_context import JarvisContext, create_context
 from .memory import MemoryAccessor
 from .dependency import DependencyAccessor
+from .truth import Evidence, TruthFact, TruthContext, AgentOutput
+from .distillation import distill_output, scrub_sensitive, merge_facts
 
 __all__ = [
     'JarvisContext',
     'create_context',
     'MemoryAccessor',
     'DependencyAccessor',
+    'Evidence',
+    'TruthFact',
+    'TruthContext',
+    'AgentOutput',
+    'distill_output',
+    'scrub_sensitive',
+    'merge_facts',
 ]
