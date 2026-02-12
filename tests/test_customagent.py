@@ -110,7 +110,7 @@ class TestCustomAgentExecution:
         with pytest.raises(NotImplementedError) as exc_info:
             await agent.execute_task(task)
 
-        assert "must implement execute_task" in str(exc_info.value)
+        assert "must implement on_peer_request() or execute_task()" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_execute_task_with_optional_cost_tracking(self):

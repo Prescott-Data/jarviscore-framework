@@ -26,10 +26,12 @@ Example:
     ])
 """
 
-from .mocks import MockMesh, MockPeerClient, MockPeerInfo
+from .mocks import MockMesh, MockPeerClient, MockPeerInfo, MockBlobStorage, MockRedisContextStore
 
 __all__ = [
     'MockMesh',
     'MockPeerClient',
     'MockPeerInfo',
+    'MockBlobStorage',
+    'MockRedisContextStore',
 ]

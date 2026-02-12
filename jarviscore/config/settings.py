@@ -90,6 +90,56 @@ class Settings(BaseSettings):
     vllm_endpoint: Optional[str] = None  # Alias
     llm_model: str = "default"
 
+    # === Redis ===
+    redis_url: Optional[str] = None  # redis://host:port/db (takes precedence)
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_password: Optional[str] = None
+    redis_db: int = 0
+    redis_context_ttl_days: int = 7
+
+    # === Blob Storage ===
+    storage_backend: str = "local"  # "local" or "azure"
+    storage_base_path: str = "./blob_storage"
+    azure_storage_connection_string: Optional[str] = None
+    azure_storage_container: str = "jarviscore"
+
+    # === Telemetry ===
+    telemetry_enabled: bool = True
+    telemetry_trace_dir: str = "./traces"
+    prometheus_enabled: bool = False
+    prometheus_port: int = 9090
+
+    # === Kernel (internal to AutoAgent) ===
+    kernel_max_turns: int = 30
+    kernel_max_total_tokens: int = 80000
+    kernel_thinking_budget: int = 56000
+    kernel_action_budget: int = 24000
+    kernel_wall_clock_ms: int = 180000
+
+    # === LLM Model Routing ===
+    claude_task_model: str = "claude-sonnet-4-5"
+    claude_coding_model: str = "claude-opus-4-5"
+
+    # === Mailbox ===
+    mailbox_max_messages: int = 100
+    mailbox_poll_interval: float = 0.5
+
+    # === Function Registry ===
+    registry_verified_threshold: int = 1
+    registry_golden_threshold: int = 5
+    registry_max_cache_size: int = 500
+
+    # === Human-in-the-Loop ===
+    hitl_enabled: bool = False
+    hitl_max_confidence: float = 0.8
+    hitl_min_risk_score: float = 0.7
+
+    # === Browser ===
+    browser_enabled: bool = False
+    browser_headless: bool = True
+    browser_default_viewport: str = "1280x720"
+
     # === Logging ===
     log_level: str = "INFO"
 

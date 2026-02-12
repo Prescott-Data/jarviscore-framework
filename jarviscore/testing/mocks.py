@@ -576,3 +576,100 @@ class MockMesh:
             ],
             "connectivity_status": "mock"
         }
+
+
+# ======================================================================
+# Storage Mocks (v1.0.0)
+# ======================================================================
+
+class MockBlobStorage:
+    """
+    In-memory blob storage for testing.
+
+    Drop-in replacement for LocalBlobStorage/AzureBlobStorage.
+    All data lives in a dict — no filesystem or network needed.
+
+    Example:
+        storage = MockBlobStorage()
+        await storage.save("path/to/file.json", '{"key": "value"}')
+        content = await storage.read("path/to/file.json")
+        assert content == '{"key": "value"}'
+    """
+
+    def __init__(self):
+        self._data: Dict[str, Any] = {}
+
+    async def save(self, path: str, content) -> str:
+        self._data[path] = content
+        return path
+
+    async def read(self, path: str):
+        return self._data.get(path)
+
+    async def list(self, prefix: str) -> list:
+        return sorted(k for k in self._data if k.startswith(prefix))
+
+    async def delete(self, path: str) -> bool:
+        if path in self._data:
+            del self._data[path]
+            return True
+        return False
+
+    async def exists(self, path: str) -> bool:
+        return path in self._data
+
+    async def save_scratchpad(self, workflow_id: str, step_id: str,
+                              content: str) -> str:
+        path = f"workflows/{workflow_id}/scratchpads/{step_id}.md"
+        return await self.save(path, content)
+
+    async def read_scratchpad(self, workflow_id: str,
+                              step_id: str):
+        path = f"workflows/{workflow_id}/scratchpads/{step_id}.md"
+        return await self.read(path)
+
+    async def save_artifact(self, workflow_id: str, step_id: str,
+                            filename: str, content) -> str:
+        path = f"workflows/{workflow_id}/artifacts/{step_id}/{filename}"
+        return await self.save(path, content)
+
+    async def read_artifact(self, workflow_id: str, step_id: str,
+                            filename: str):
+        path = f"workflows/{workflow_id}/artifacts/{step_id}/{filename}"
+        return await self.read(path)
+
+    def clear(self):
+        """Clear all stored data."""
+        self._data.clear()
+
+    @property
+    def stored_paths(self) -> list:
+        """Get all stored paths (useful for test assertions)."""
+        return sorted(self._data.keys())
+
+
+class MockRedisContextStore:
+    """
+    In-memory Redis context store for testing.
+
+    Uses fakeredis under the hood — provides a real Redis-compatible backend
+    without needing a running Redis server.
+
+    Example:
+        store = MockRedisContextStore()
+        store.save_step_output("wf-1", "step-1", output={"result": 42})
+        result = store.get_step_output("wf-1", "step-1")
+        assert result["output"] == {"result": 42}
+    """
+
+    def __init__(self):
+        import fakeredis
+        from jarviscore.storage.redis_store import RedisContextStore
+
+        fake_client = fakeredis.FakeRedis(decode_responses=True)
+        # Build a minimal settings-like object
+        self._store = RedisContextStore(client=fake_client)
+
+    def __getattr__(self, name):
+        """Delegate all method calls to the underlying RedisContextStore."""
+        return getattr(self._store, name)
