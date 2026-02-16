@@ -417,6 +417,40 @@ class RedisContextStore:
         return True
 
     # ------------------------------------------------------------------
+    # Function Registry Index (Cognitive Projection)
+    # ------------------------------------------------------------------
+
+    def save_registry_index(self, index: Dict) -> bool:
+        """Persist registry capability index for shared discovery.
+
+        Stores a compact summary of all registered functions, indexed
+        by system, with capability counts and graduation stage breakdown.
+        Used by the kernel and other agents for function discovery.
+
+        Args:
+            index: Registry index dict with systems, capabilities, stages
+
+        Returns:
+            True if saved successfully
+        """
+        key = "registry:index"
+        self._redis.set(key, json.dumps(index), ex=self._ttl_seconds)
+        logger.debug(f"Registry index saved: {index.get('total_functions', 0)} functions")
+        return True
+
+    def get_registry_index(self) -> Optional[Dict]:
+        """Retrieve registry capability index.
+
+        Returns:
+            Registry index dict, or None if not found
+        """
+        key = "registry:index"
+        data = self._redis.get(key)
+        if data:
+            return json.loads(data)
+        return None
+
+    # ------------------------------------------------------------------
     # Locking (for atomic registry operations)
     # ------------------------------------------------------------------
 

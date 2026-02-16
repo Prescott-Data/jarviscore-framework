@@ -52,10 +52,14 @@ from .result_handler import (
     create_result_handler
 )
 
-# Code Registry
+# Function Registry (graduated, with backward-compatible aliases)
 from .code_registry import (
+    FunctionRegistry,
+    FunctionStatus,
+    create_function_registry,
+    # Backward-compatible aliases
     CodeRegistry,
-    create_code_registry
+    create_code_registry,
 )
 
 __all__ = [
@@ -88,7 +92,11 @@ __all__ = [
     'ErrorCategory',
     'create_result_handler',
 
-    # Code Registry
+    # Function Registry
+    'FunctionRegistry',
+    'FunctionStatus',
+    'create_function_registry',
+    # Backward-compatible aliases
     'CodeRegistry',
     'create_code_registry',
 ]

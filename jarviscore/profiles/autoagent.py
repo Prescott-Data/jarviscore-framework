@@ -4,6 +4,7 @@ AutoAgent - Automated execution profile.
 Framework generates and executes code from natural language prompts.
 User writes just 3 attributes, framework handles everything.
 """
+import re
 from typing import Dict, Any
 from jarviscore.core.profile import Profile
 
@@ -84,7 +85,7 @@ class AutoAgent(Profile):
             create_sandbox_executor,
             create_autonomous_repair,
             create_result_handler,
-            create_code_registry
+            create_function_registry
         )
 
         # 1. Initialize LLM (auto-detects providers)
@@ -114,10 +115,10 @@ class AutoAgent(Profile):
         self._logger.info(f"Initializing result handler (dir: {log_dir})...")
         self.result_handler = create_result_handler(log_dir)
 
-        # 7. Initialize code registry (reusable generated functions)
-        registry_dir = f"{log_dir}/code_registry"
-        self._logger.info(f"Initializing code registry (dir: {registry_dir})...")
-        self.code_registry = create_code_registry(registry_dir)
+        # 7. Initialize function registry (graduated, reusable generated functions)
+        registry_dir = f"{log_dir}/function_registry"
+        self._logger.info(f"Initializing function registry (dir: {registry_dir})...")
+        self.code_registry = create_function_registry(registry_dir)
 
         self._logger.info(f"✓ AutoAgent ready: {self.agent_id}")
 
@@ -228,22 +229,34 @@ class AutoAgent(Profile):
             # Add result_id to response
             result['result_id'] = stored_result['result_id']
 
-            # Register successful code in registry for reuse
+            # Register successful code in function registry for reuse
             if result['status'] == 'success':
-                function_id = self.code_registry.register(
-                    code=code,
-                    agent_id=self.agent_id,
-                    task=task_desc,
-                    capabilities=self.capabilities,
-                    output=result.get('output'),
-                    result_id=result['result_id'],
+                # Generate a function name from task
+                func_name = re.sub(r'[^a-z0-9_]', '_', task_desc.lower())[:50].strip('_')
+                func_name = func_name or f"task_{result['result_id']}"
+
+                registered = self.code_registry.register_function(
+                    function_name=func_name,
+                    function=code,
                     metadata={
-                        'role': self.role,
-                        'execution_time': result.get('execution_time'),
-                        'repairs': repairs_attempted
+                        'agent_id': self.agent_id,
+                        'task': task_desc,
+                        'capabilities': self.capabilities,
+                        'system': task.get('system'),
+                        'description': task_desc,
+                        'strategy': 'sandbox',
+                        'tags': [self.role],
+                        'type': 'utility',
                     }
                 )
-                result['function_id'] = function_id
+                if registered:
+                    # Record first successful execution → auto-promote to VERIFIED
+                    self.code_registry.update_execution_stats(
+                        func_name,
+                        success=True,
+                        execution_time=result.get('execution_time', 0.0),
+                    )
+                result['function_id'] = func_name
                 self._logger.info(f"✓ Task completed successfully (result_id: {result['result_id']}, function_id: {function_id})")
             else:
                 self._logger.error(f"✗ Task failed: {result.get('error')}")
