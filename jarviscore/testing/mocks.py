@@ -503,6 +503,7 @@ class MockMesh:
         self.mode = mode
         self.agents: List[Agent] = []
         self._agent_registry: Dict[str, List[Agent]] = {}
+        self._capability_index: Dict[str, List[Agent]] = {}
         self._started = False
 
     def add(self, agent_class_or_instance, agent_id: str = None, **kwargs) -> Agent:
@@ -518,6 +519,11 @@ class MockMesh:
         if agent.role not in self._agent_registry:
             self._agent_registry[agent.role] = []
         self._agent_registry[agent.role].append(agent)
+
+        for capability in agent.capabilities:
+            if capability not in self._capability_index:
+                self._capability_index[capability] = []
+            self._capability_index[capability].append(agent)
 
         return agent
 
@@ -543,6 +549,10 @@ class MockMesh:
         """Get agent by role."""
         agents = self._agent_registry.get(role, [])
         return agents[0] if agents else None
+
+    def get_agents_by_capability(self, capability: str) -> List[Agent]:
+        """Get all agents with a specific capability."""
+        return self._capability_index.get(capability, [])
 
     def _build_peer_list(self, exclude_agent: Agent) -> List[Dict[str, Any]]:
         """Build peer list excluding the specified agent."""

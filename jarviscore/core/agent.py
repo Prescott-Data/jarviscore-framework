@@ -75,6 +75,9 @@ class Agent(ABC):
         self.peers: Optional['PeerClient'] = None  # Injected by Mesh in p2p mode
         self.shutdown_requested: bool = False  # Set True to stop run() loop
 
+        # Mailbox support (Phase 4) - Injected by Mesh during start()
+        self.mailbox: Optional['MailboxManager'] = None
+
         # Cloud deployment support (standalone mode)
         self._standalone_p2p: Optional['P2PCoordinator'] = None
         self._mesh_connected: bool = False
