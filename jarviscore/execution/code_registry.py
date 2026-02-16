@@ -136,6 +136,11 @@ class FunctionRegistry:
         self.blob_storage = blob_storage
         self.redis_store = redis_store
 
+        # Blob namespace prefix (configurable for multi-tenant isolation)
+        self.registry_blob_prefix = os.environ.get(
+            "FUNCTION_REGISTRY_BLOB_PREFIX", "function_registry"
+        ).strip("/")
+
         # In-memory registries
         self.functions: Dict[str, Optional[Callable]] = {}
         self.function_metadata: Dict[str, Dict[str, Any]] = {}
@@ -672,6 +677,7 @@ class FunctionRegistry:
         # Cache bundle to disk
         bundle_file = self.bundle_cache_path / f"{system_name}_bundle.py"
         bundle_file.write_text(bundle_code)
+        self._upload_registry_path(str(bundle_file))
 
         # Check if all golden + all hashed → cache key
         all_golden = all(
@@ -683,6 +689,7 @@ class FunctionRegistry:
             cache_key = self._compute_bundle_cache_key(system_name, functions)
             cached_file = self.bundle_cache_path / f"{cache_key}.py"
             cached_file.write_text(bundle_code)
+            self._upload_registry_path(str(cached_file))
 
         logger.info(
             f"Created system bundle: {class_name} "
@@ -1010,6 +1017,86 @@ class FunctionRegistry:
     # Blob Storage Sync
     # ─────────────────────────────────────────────────────────────
 
+    def _blob_key_for_local_path(self, local_path: str) -> str:
+        """Map a local filesystem path to its blob storage key.
+
+        Uses registry_blob_prefix to namespace all registry artifacts,
+        enabling multi-tenant isolation when multiple registries share
+        the same blob storage backend.
+
+        Mapping:
+            {metadata_path}/foo.json  → {prefix}/metadata/foo.json
+            {atom_storage_path}/s/f.py → {prefix}/atoms/s/f.py
+            {bundle_cache_path}/b.py  → {prefix}/bundles/b.py
+            {storage_path}/other.py   → {prefix}/flat/other.py
+            unrecognized/file.py      → {prefix}/misc/file.py
+        """
+        local_path = os.path.abspath(local_path)
+        metadata_root = os.path.abspath(str(self.metadata_path))
+        atoms_root = os.path.abspath(str(self.atom_storage_path))
+        bundles_root = os.path.abspath(str(self.bundle_cache_path))
+        flat_root = os.path.abspath(str(self.storage_path))
+
+        if local_path.startswith(metadata_root):
+            rel = os.path.relpath(local_path, metadata_root)
+            return f"{self.registry_blob_prefix}/metadata/{rel.replace(os.sep, '/')}"
+        if local_path.startswith(atoms_root):
+            rel = os.path.relpath(local_path, atoms_root)
+            return f"{self.registry_blob_prefix}/atoms/{rel.replace(os.sep, '/')}"
+        if local_path.startswith(bundles_root):
+            rel = os.path.relpath(local_path, bundles_root)
+            return f"{self.registry_blob_prefix}/bundles/{rel.replace(os.sep, '/')}"
+        if local_path.startswith(flat_root):
+            rel = os.path.relpath(local_path, flat_root)
+            return f"{self.registry_blob_prefix}/flat/{rel.replace(os.sep, '/')}"
+        # Fallback for unrecognized paths
+        return f"{self.registry_blob_prefix}/misc/{os.path.basename(local_path)}"
+
+    def _local_path_for_blob_key(self, blob_name: str) -> Optional[str]:
+        """Reverse-map a blob storage key to its local filesystem path.
+
+        Returns None if the blob key doesn't belong to this registry's prefix.
+        """
+        prefix = f"{self.registry_blob_prefix}/"
+        if not blob_name.startswith(prefix):
+            return None
+        rel = blob_name[len(prefix):]
+        if rel.startswith("metadata/"):
+            return str(self.metadata_path / rel[len("metadata/"):])
+        if rel.startswith("atoms/"):
+            return str(self.atom_storage_path / rel[len("atoms/"):])
+        if rel.startswith("bundles/"):
+            return str(self.bundle_cache_path / rel[len("bundles/"):])
+        if rel.startswith("flat/"):
+            return str(self.storage_path / rel[len("flat/"):])
+        return None
+
+    def _upload_registry_path(self, local_path: str) -> None:
+        """Upload a single local file to blob storage using namespace mapping."""
+        if not self.blob_storage:
+            return
+        try:
+            blob_key = self._blob_key_for_local_path(local_path)
+            content = Path(local_path).read_text()
+            self._run_async(self.blob_storage.save(blob_key, content))
+            logger.debug(f"Blob upload: {blob_key}")
+        except Exception as e:
+            logger.warning(f"Blob upload failed for {local_path}: {e}")
+
+    def _download_registry_path(self, local_path: str) -> None:
+        """Download a single file from blob storage to local path."""
+        if not self.blob_storage:
+            return
+        try:
+            blob_key = self._blob_key_for_local_path(local_path)
+            content = self._run_async(self.blob_storage.read(blob_key))
+            if content is not None:
+                Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(local_path).write_text(content)
+                logger.debug(f"Blob download: {blob_key}")
+        except Exception as e:
+            logger.warning(f"Blob download failed for {local_path}: {e}")
+
     def _upload_to_blob(
         self, function_name: str, code: str, metadata: Dict
     ) -> None:
@@ -1018,67 +1105,55 @@ class FunctionRegistry:
             return
 
         try:
-            system = metadata.get("system") or "_general"
-            version = metadata.get("version", 1)
-
-            # Upload atom
-            atom_blob_path = (
-                f"function_registry/atoms/{system}/"
-                f"{function_name}_v{version}.py"
-            )
-            self._run_async(self.blob_storage.save(atom_blob_path, code))
+            # Upload atom via namespace mapping
+            atom_path = metadata.get("atom_path")
+            if atom_path:
+                self._upload_registry_path(atom_path)
 
             # Upload metadata
-            meta_blob_path = f"function_registry/metadata/{function_name}.json"
-            meta_json = json.dumps(metadata, indent=2, default=str)
-            self._run_async(self.blob_storage.save(meta_blob_path, meta_json))
+            meta_path = str(self.metadata_path / f"{function_name}.json")
+            self._upload_registry_path(meta_path)
 
             logger.debug(f"Uploaded to blob: {function_name}")
         except Exception as e:
             logger.warning(f"Failed to upload {function_name} to blob: {e}")
 
     def _sync_from_blob(self) -> None:
-        """Download missing registry artifacts from blob on startup."""
+        """Download missing registry artifacts from blob on startup.
+
+        Lists all blob keys under this registry's prefix and downloads
+        any that don't have a corresponding local file.
+        """
         if not self.blob_storage:
             return
 
         try:
-            # List metadata in blob
-            blob_metas = self._run_async(
-                self.blob_storage.list("function_registry/metadata/")
+            prefix = f"{self.registry_blob_prefix}/"
+            blob_names = self._run_async(self.blob_storage.list(prefix))
+
+            downloaded = 0
+            for blob_name in blob_names:
+                local_path = self._local_path_for_blob_key(blob_name)
+                if not local_path:
+                    continue
+                if os.path.exists(local_path):
+                    continue
+                # Download missing file
+                content = self._run_async(self.blob_storage.read(blob_name))
+                if content is not None:
+                    Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+                    Path(local_path).write_text(content)
+                    downloaded += 1
+
+            if downloaded:
+                # Reload metadata and rebuild indexes after sync
+                self._load_all_metadata()
+                self._rebuild_indexes()
+
+            logger.info(
+                f"Blob sync complete: downloaded {downloaded} files, "
+                f"{len(self.function_metadata)} functions total"
             )
-
-            for blob_path in blob_metas:
-                func_name = blob_path.split("/")[-1].replace(".json", "")
-                if func_name not in self.function_metadata:
-                    # Download metadata
-                    meta_json = self._run_async(
-                        self.blob_storage.read(blob_path)
-                    )
-                    if meta_json:
-                        metadata = json.loads(meta_json)
-                        self.function_metadata[func_name] = metadata
-
-                        # Download atom
-                        system = metadata.get("system") or "_general"
-                        version = metadata.get("version", 1)
-                        atom_blob = (
-                            f"function_registry/atoms/{system}/"
-                            f"{func_name}_v{version}.py"
-                        )
-                        code = self._run_async(
-                            self.blob_storage.read(atom_blob)
-                        )
-                        if code:
-                            atom_path = self._save_atom(
-                                func_name, code, system, version
-                            )
-                            metadata["atom_path"] = str(atom_path)
-                            self._save_function_metadata(func_name)
-
-            # Rebuild indexes after sync
-            self._rebuild_indexes()
-            logger.info(f"Blob sync complete: {len(self.function_metadata)} functions")
         except Exception as e:
             logger.warning(f"Blob sync failed: {e}")
 

@@ -466,20 +466,20 @@ class TestRedisSync:
 # ═════════════════════════════════════════════════════════════════
 
 class TestBlobSync:
-    """Blob storage sync for distributed persistence."""
+    """Blob storage sync with namespace prefix for distributed persistence."""
 
     def test_blob_upload_on_register(self, registry_with_blob):
-        """Atom + metadata are uploaded to blob on register."""
+        """Atom + metadata are uploaded to blob using namespace prefix."""
         registry, blob = registry_with_blob
 
         registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
-        # Check atom was uploaded
+        # Check atom was uploaded with prefix namespace
         atom_key = "function_registry/atoms/shopify/get_products_v1.py"
         assert atom_key in blob._data
         assert blob._data[atom_key] == SAMPLE_CODE
 
-        # Check metadata was uploaded
+        # Check metadata was uploaded with prefix namespace
         meta_key = "function_registry/metadata/get_products.json"
         assert meta_key in blob._data
         meta = json.loads(blob._data[meta_key])
@@ -525,6 +525,75 @@ class TestBlobSync:
         meta = registry.get_function_metadata("remote_func")
         assert meta["system"] == "remote_system"
         assert meta["registry_stage"] == "verified"
+
+    def test_blob_key_for_local_path(self, registry_with_blob):
+        """Local paths map to correct blob namespace keys."""
+        registry, _ = registry_with_blob
+
+        # Metadata path
+        meta_path = str(registry.metadata_path / "my_func.json")
+        assert registry._blob_key_for_local_path(meta_path) == \
+            "function_registry/metadata/my_func.json"
+
+        # Atom path (with system subdirectory)
+        atom_path = str(registry.atom_storage_path / "shopify" / "get_products_v1.py")
+        assert registry._blob_key_for_local_path(atom_path) == \
+            "function_registry/atoms/shopify/get_products_v1.py"
+
+        # Bundle path
+        bundle_path = str(registry.bundle_cache_path / "shopify_bundle.py")
+        assert registry._blob_key_for_local_path(bundle_path) == \
+            "function_registry/bundles/shopify_bundle.py"
+
+    def test_local_path_for_blob_key(self, registry_with_blob):
+        """Blob keys reverse-map to correct local paths."""
+        registry, _ = registry_with_blob
+
+        # Metadata
+        local = registry._local_path_for_blob_key(
+            "function_registry/metadata/my_func.json"
+        )
+        assert local == str(registry.metadata_path / "my_func.json")
+
+        # Atom
+        local = registry._local_path_for_blob_key(
+            "function_registry/atoms/slack/send_msg_v2.py"
+        )
+        assert local == str(registry.atom_storage_path / "slack" / "send_msg_v2.py")
+
+        # Wrong prefix → None
+        assert registry._local_path_for_blob_key("other_prefix/metadata/f.json") is None
+
+    def test_custom_blob_prefix(self, tmp_path, monkeypatch):
+        """Custom FUNCTION_REGISTRY_BLOB_PREFIX env var changes namespace."""
+        monkeypatch.setenv("FUNCTION_REGISTRY_BLOB_PREFIX", "tenant_a/registry")
+        blob = MockBlobStorage()
+        registry = FunctionRegistry(
+            storage_path=str(tmp_path / "registry"),
+            blob_storage=blob,
+        )
+
+        registry.register_function("my_func", SAMPLE_CODE, SAMPLE_METADATA)
+
+        # Verify uploads use custom prefix
+        assert any(k.startswith("tenant_a/registry/") for k in blob._data)
+        assert "tenant_a/registry/atoms/shopify/my_func_v1.py" in blob._data
+        assert "tenant_a/registry/metadata/my_func.json" in blob._data
+
+    def test_bundle_upload_to_blob(self, registry_with_blob):
+        """System bundles are uploaded to blob storage."""
+        registry, blob = registry_with_blob
+
+        # Register a verified function so bundle has content
+        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.update_execution_stats("get_products", success=True, execution_time=1.0)
+
+        # Create bundle
+        registry.create_system_bundle("shopify")
+
+        # Verify bundle was uploaded
+        bundle_key = "function_registry/bundles/shopify_bundle.py"
+        assert bundle_key in blob._data
 
 
 # ═════════════════════════════════════════════════════════════════
