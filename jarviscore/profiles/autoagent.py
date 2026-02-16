@@ -257,7 +257,7 @@ class AutoAgent(Profile):
                         execution_time=result.get('execution_time', 0.0),
                     )
                 result['function_id'] = func_name
-                self._logger.info(f"✓ Task completed successfully (result_id: {result['result_id']}, function_id: {function_id})")
+                self._logger.info(f"✓ Task completed successfully (result_id: {result['result_id']}, function_id: {func_name})")
             else:
                 self._logger.error(f"✗ Task failed: {result.get('error')}")
 
