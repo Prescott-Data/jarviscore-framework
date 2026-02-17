@@ -44,11 +44,19 @@ class LLMProvider(Enum):
 
 # Token pricing per 1M tokens (updated 2025)
 TOKEN_PRICING = {
-    "gpt-4o": {"input": 3.00, "output": 15.00, "cached": 1.50},
+    # Azure OpenAI models
+    "gpt-4o": {"input": 2.50, "output": 10.00, "cached": 1.25},
+    "gpt-4.1": {"input": 2.00, "output": 8.00, "cached": 0.50},
+    "dromos-gpt-4.1": {"input": 2.00, "output": 8.00, "cached": 0.50},
+    "o1": {"input": 15.00, "output": 60.00, "cached": 7.50},
+    "o3": {"input": 10.00, "output": 40.00, "cached": 2.50},
     "gpt-4": {"input": 30.00, "output": 60.00, "cached": 15.00},
     "gpt-3.5-turbo": {"input": 0.50, "output": 1.50, "cached": 0.25},
+    # Google Gemini models
+    "gemini-2.0-flash": {"input": 0.10, "output": 0.40, "cached": 0.03},
     "gemini-1.5-pro": {"input": 1.25, "output": 5.00, "cached": 0.31},
     "gemini-1.5-flash": {"input": 0.10, "output": 0.30, "cached": 0.03},
+    # Anthropic Claude models
     "claude-opus-4": {"input": 15.00, "output": 75.00, "cached": 3.75},
     "claude-sonnet-4": {"input": 3.00, "output": 15.00, "cached": 0.75},
     "claude-haiku-3.5": {"input": 1.00, "output": 5.00, "cached": 0.25},
@@ -103,34 +111,7 @@ class UnifiedLLMClient:
     def _setup_providers(self):
         """Auto-detect and setup available LLM providers."""
 
-        # 1. Try Claude first (primary provider)
-        if CLAUDE_AVAILABLE:
-            claude_key = self.config.get('claude_api_key') or self.config.get('anthropic_api_key')
-            claude_endpoint = self.config.get('claude_endpoint')
-            if claude_key:
-                try:
-                    # Support custom Claude endpoint (e.g., Azure-hosted Claude)
-                    if claude_endpoint:
-                        self.claude_client = Anthropic(
-                            api_key=claude_key,
-                            base_url=claude_endpoint
-                        )
-                        logger.info(f"✓ Claude provider available with custom endpoint: {claude_endpoint}")
-                    else:
-                        self.claude_client = Anthropic(api_key=claude_key)
-                        logger.info("✓ Claude provider available")
-                    self.provider_order.append(LLMProvider.CLAUDE)
-                except Exception as e:
-                    logger.warning(f"Failed to setup Claude: {e}")
-
-        # 2. Try vLLM (local, free)
-        vllm_endpoint = self.config.get('llm_endpoint') or self.config.get('vllm_endpoint')
-        if vllm_endpoint:
-            self.vllm_endpoint = vllm_endpoint.rstrip('/')
-            self.provider_order.append(LLMProvider.VLLM)
-            logger.info(f"✓ vLLM provider available: {self.vllm_endpoint}")
-
-        # 3. Try Azure OpenAI
+        # 1. Try Azure OpenAI first (primary provider)
         if AZURE_AVAILABLE:
             azure_key = self.config.get('azure_api_key') or self.config.get('azure_openai_key')
             azure_endpoint = self.config.get('azure_endpoint') or self.config.get('azure_openai_endpoint')
@@ -140,13 +121,39 @@ class UnifiedLLMClient:
                     self.azure_client = AsyncAzureOpenAI(
                         api_key=azure_key,
                         azure_endpoint=azure_endpoint,
-                        api_version=self.config.get('azure_api_version', '2024-02-15-preview'),
+                        api_version=self.config.get('azure_api_version', '2025-01-01-preview'),
                         timeout=self.config.get('llm_timeout', 120)
                     )
                     self.provider_order.append(LLMProvider.AZURE)
-                    logger.info("✓ Azure OpenAI provider available")
+                    logger.info(f"✓ Azure OpenAI provider available (primary): {azure_endpoint}")
                 except Exception as e:
                     logger.warning(f"Failed to setup Azure OpenAI: {e}")
+
+        # 2. Try Claude (fallback #1)
+        if CLAUDE_AVAILABLE:
+            claude_key = self.config.get('claude_api_key') or self.config.get('anthropic_api_key')
+            claude_endpoint = self.config.get('claude_endpoint')
+            if claude_key:
+                try:
+                    if claude_endpoint:
+                        self.claude_client = Anthropic(
+                            api_key=claude_key,
+                            base_url=claude_endpoint
+                        )
+                        logger.info(f"✓ Claude provider available (fallback): {claude_endpoint}")
+                    else:
+                        self.claude_client = Anthropic(api_key=claude_key)
+                        logger.info("✓ Claude provider available (fallback)")
+                    self.provider_order.append(LLMProvider.CLAUDE)
+                except Exception as e:
+                    logger.warning(f"Failed to setup Claude: {e}")
+
+        # 3. Try vLLM (local, free)
+        vllm_endpoint = self.config.get('llm_endpoint') or self.config.get('vllm_endpoint')
+        if vllm_endpoint:
+            self.vllm_endpoint = vllm_endpoint.rstrip('/')
+            self.provider_order.append(LLMProvider.VLLM)
+            logger.info(f"✓ vLLM provider available: {self.vllm_endpoint}")
 
         # 4. Try Gemini
         if GEMINI_AVAILABLE:
@@ -276,7 +283,8 @@ class UnifiedLLMClient:
         if not self.azure_client:
             raise RuntimeError("Azure client not initialized")
 
-        deployment = self.config.get('azure_deployment', 'gpt-4o')
+        # Allow model kwarg to override deployment (for kernel model routing)
+        deployment = kwargs.pop('model', None) or self.config.get('azure_deployment', 'gpt-4o')
         start_time = time.time()
 
         response = await self.azure_client.chat.completions.create(
@@ -372,7 +380,7 @@ class UnifiedLLMClient:
             else:
                 conv_messages.append(msg)
 
-        model = self.config.get('claude_model', 'claude-sonnet-4')
+        model = kwargs.pop('model', None) or self.config.get('claude_model', 'claude-sonnet-4')
         start_time = time.time()
 
         # Prepare request kwargs

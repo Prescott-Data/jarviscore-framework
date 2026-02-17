@@ -246,6 +246,7 @@ class FunctionRegistry:
             "strategy": metadata.get("strategy", "sandbox"),
             "agent_id": metadata.get("agent_id"),
             "load_status": "loaded" if function_name in self.functions else "source_only",
+            "oauth_metadata": metadata.get("oauth_metadata"),
         }
 
         # Store in memory
@@ -1256,6 +1257,53 @@ class FunctionRegistry:
         """Generate hash of code for deduplication."""
         normalized = re.sub(r"\s+", " ", code.strip())
         return hashlib.md5(normalized.encode()).hexdigest()
+
+    # ── Auth Extensions (6H) ─────────────────────────────────────
+
+    def get_oauth_metadata(self, function_name: str) -> Optional[Dict]:
+        """Get OAuth requirements for a specific function."""
+        meta = self.get_function_metadata(function_name)
+        if not meta:
+            return None
+        return meta.get("oauth_metadata")
+
+    def get_system_auth_requirements(self, system: str) -> Dict[str, Any]:
+        """
+        Aggregate auth requirements across all functions in a system.
+
+        Scans all functions registered under the system for oauth_metadata
+        and merges their scopes.
+
+        Returns:
+            {"provider": "shopify", "scopes": ["read_products", ...], "auth_type": "oauth2"}
+            or {} if the system needs no auth.
+        """
+        functions = self.get_functions_by_system(system)
+        if not functions:
+            return {}
+
+        provider = None
+        auth_type = None
+        all_scopes: Set[str] = set()
+
+        for func_meta in functions:
+            oauth = func_meta.get("oauth_metadata")
+            if not oauth:
+                continue
+            if not provider:
+                provider = oauth.get("provider", system)
+                auth_type = oauth.get("auth_type", "oauth2")
+            scopes = oauth.get("scopes", [])
+            all_scopes.update(scopes)
+
+        if not provider:
+            return {}
+
+        return {
+            "provider": provider,
+            "scopes": sorted(all_scopes),
+            "auth_type": auth_type or "oauth2",
+        }
 
 
 # ─────────────────────────────────────────────────────────────────

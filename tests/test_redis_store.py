@@ -614,8 +614,8 @@ class TestSettingsIntegration:
     def test_llm_routing_settings(self):
         from jarviscore.config.settings import Settings
         s = Settings()
-        assert s.claude_task_model == "claude-sonnet-4-5"
-        assert s.claude_coding_model == "claude-opus-4-5"
+        assert s.coding_model == "dromos-gpt-4.1"
+        assert s.task_model == "gpt-4o"
 
     def test_hitl_settings(self):
         from jarviscore.config.settings import Settings

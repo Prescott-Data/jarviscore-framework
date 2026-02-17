@@ -769,6 +769,156 @@ class TestMockTestingWorkflow:
 
 
 # =============================================================================
+# TEST: MOCK LLM CLIENT (Phase 6)
+# =============================================================================
+
+class TestMockLLMClient:
+    """Test MockLLMClient for kernel and subagent tests."""
+
+    @pytest.mark.asyncio
+    async def test_returns_queued_responses_in_order(self):
+        """Test responses are returned in FIFO order."""
+        from jarviscore.testing import MockLLMClient
+
+        llm = MockLLMClient(responses=[
+            {"content": "response 1"},
+            {"content": "response 2"},
+        ])
+        r1 = await llm.generate(prompt="q1")
+        r2 = await llm.generate(prompt="q2")
+        assert r1["content"] == "response 1"
+        assert r2["content"] == "response 2"
+
+    @pytest.mark.asyncio
+    async def test_default_response_when_queue_exhausted(self):
+        """Test fallback to default when no more queued responses."""
+        from jarviscore.testing import MockLLMClient
+
+        llm = MockLLMClient(responses=[{"content": "only one"}])
+        await llm.generate(prompt="first")
+        r = await llm.generate(prompt="second")
+        assert "DONE" in r["content"]
+
+    @pytest.mark.asyncio
+    async def test_tracks_all_calls_with_params(self):
+        """Test all calls are recorded with their parameters."""
+        from jarviscore.testing import MockLLMClient
+
+        llm = MockLLMClient()
+        await llm.generate(prompt="hello", temperature=0.5)
+        await llm.generate(messages=[{"role": "user", "content": "hi"}])
+        assert len(llm.calls) == 2
+        assert llm.calls[0]["prompt"] == "hello"
+        assert llm.calls[0]["temperature"] == 0.5
+        assert llm.calls[1]["messages"] == [{"role": "user", "content": "hi"}]
+
+    @pytest.mark.asyncio
+    async def test_model_kwarg_passed_through(self):
+        """Test model kwarg is tracked and reflected in response."""
+        from jarviscore.testing import MockLLMClient
+
+        llm = MockLLMClient(responses=[{"content": "ok"}])
+        r = await llm.generate(prompt="test", model="claude-opus-4-5")
+        assert r["model"] == "claude-opus-4-5"
+        assert llm.calls[0]["model"] == "claude-opus-4-5"
+
+    @pytest.mark.asyncio
+    async def test_response_has_required_shape(self):
+        """Test every response includes content, provider, tokens, cost_usd, model."""
+        from jarviscore.testing import MockLLMClient
+
+        llm = MockLLMClient(responses=[{"content": "minimal"}])
+        r = await llm.generate(prompt="test")
+        assert "content" in r
+        assert "provider" in r
+        assert "tokens" in r
+        assert "cost_usd" in r
+        assert "model" in r
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_calls_and_rewinds_queue(self):
+        """Test reset() clears tracking and resets response index."""
+        from jarviscore.testing import MockLLMClient
+
+        llm = MockLLMClient(responses=[{"content": "a"}, {"content": "b"}])
+        await llm.generate(prompt="1")
+        llm.reset()
+        assert len(llm.calls) == 0
+        r = await llm.generate(prompt="2")
+        assert r["content"] == "a"  # Back to start of queue
+
+
+# =============================================================================
+# TEST: MOCK SANDBOX EXECUTOR (Phase 6)
+# =============================================================================
+
+class TestMockSandboxExecutor:
+    """Test MockSandboxExecutor for kernel and subagent tests."""
+
+    @pytest.mark.asyncio
+    async def test_returns_queued_results_in_order(self):
+        """Test results are returned in FIFO order."""
+        from jarviscore.testing import MockSandboxExecutor
+
+        sandbox = MockSandboxExecutor(responses=[
+            {"status": "success", "output": 42},
+            {"status": "failure", "error": "bad code"},
+        ])
+        r1 = await sandbox.execute("result = 42")
+        r2 = await sandbox.execute("bad code")
+        assert r1["status"] == "success"
+        assert r1["output"] == 42
+        assert r2["status"] == "failure"
+        assert r2["error"] == "bad code"
+
+    @pytest.mark.asyncio
+    async def test_default_success_when_queue_exhausted(self):
+        """Test fallback to success when no more queued responses."""
+        from jarviscore.testing import MockSandboxExecutor
+
+        sandbox = MockSandboxExecutor()
+        r = await sandbox.execute("anything")
+        assert r["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_tracks_all_executions(self):
+        """Test all executions are recorded with parameters."""
+        from jarviscore.testing import MockSandboxExecutor
+
+        sandbox = MockSandboxExecutor()
+        await sandbox.execute("code1", timeout=30)
+        await sandbox.execute("code2", context={"key": "val"})
+        assert len(sandbox.calls) == 2
+        assert sandbox.calls[0]["code"] == "code1"
+        assert sandbox.calls[0]["timeout"] == 30
+        assert sandbox.calls[1]["context"] == {"key": "val"}
+
+    @pytest.mark.asyncio
+    async def test_result_has_required_shape(self):
+        """Test every result includes status, output, error, execution_time."""
+        from jarviscore.testing import MockSandboxExecutor
+
+        sandbox = MockSandboxExecutor()
+        r = await sandbox.execute("pass")
+        assert "status" in r
+        assert "output" in r
+        assert "error" in r
+        assert "execution_time" in r
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_calls_and_rewinds_queue(self):
+        """Test reset() clears tracking and resets response index."""
+        from jarviscore.testing import MockSandboxExecutor
+
+        sandbox = MockSandboxExecutor(responses=[{"status": "failure", "error": "e"}])
+        await sandbox.execute("x")
+        sandbox.reset()
+        assert len(sandbox.calls) == 0
+        r = await sandbox.execute("y")
+        assert r["status"] == "failure"  # Back to start of queue
+
+
+# =============================================================================
 # RUN TESTS
 # =============================================================================
 

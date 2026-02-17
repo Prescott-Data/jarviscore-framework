@@ -118,8 +118,12 @@ class Settings(BaseSettings):
     kernel_wall_clock_ms: int = 180000
 
     # === LLM Model Routing ===
-    claude_task_model: str = "claude-sonnet-4-5"
-    claude_coding_model: str = "claude-opus-4-5"
+    # Azure OpenAI deployments for kernel subagent routing
+    coding_model: str = "dromos-gpt-4.1"  # Heavy lifting: code gen (GPT-4.1)
+    task_model: str = "gpt-4o"            # General: research, communication
+    # Legacy aliases (still work if set)
+    claude_task_model: str = ""
+    claude_coding_model: str = ""
 
     # === Mailbox ===
     mailbox_max_messages: int = 100
@@ -134,6 +138,12 @@ class Settings(BaseSettings):
     hitl_enabled: bool = False
     hitl_max_confidence: float = 0.8
     hitl_min_risk_score: float = 0.7
+
+    # === Auth / Nexus ===
+    auth_mode: str = "development"  # "production" or "development"
+    nexus_gateway_url: Optional[str] = None  # Required for production mode
+    nexus_default_user_id: str = "jarviscore-agent"
+    auth_strategy_cache_ttl: int = 300  # Seconds before re-fetching strategy
 
     # === Browser ===
     browser_enabled: bool = False

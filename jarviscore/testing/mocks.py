@@ -683,3 +683,134 @@ class MockRedisContextStore:
     def __getattr__(self, name):
         """Delegate all method calls to the underlying RedisContextStore."""
         return getattr(self._store, name)
+
+
+# ======================================================================
+# Execution Mocks (Phase 6: Kernel)
+# ======================================================================
+
+class MockLLMClient:
+    """
+    Mock UnifiedLLMClient for kernel and subagent tests.
+
+    Returns canned responses from a queue. Tracks all calls for assertions.
+
+    Example:
+        llm = MockLLMClient(responses=[
+            {"content": "TOOL: generate_code\\nPARAMS: {}"},
+            {"content": "DONE: task complete"},
+        ])
+        result = await llm.generate(prompt="do something")
+        assert result["content"] == "TOOL: generate_code\\nPARAMS: {}"
+        assert len(llm.calls) == 1
+    """
+
+    def __init__(self, responses=None):
+        self.responses = list(responses or [])
+        self.calls: List[Dict[str, Any]] = []
+        self._call_index = 0
+
+        # Default response when queue is exhausted
+        self._default_response = {
+            "content": "DONE: no more responses",
+            "provider": "mock",
+            "tokens": {"input": 10, "output": 20, "total": 30},
+            "cost_usd": 0.0,
+            "model": "mock-model",
+        }
+
+    async def generate(
+        self,
+        prompt: str = "",
+        messages=None,
+        temperature: float = 0.7,
+        max_tokens: int = 4000,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Return next queued response and track the call."""
+        self.calls.append({
+            "prompt": prompt,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            **kwargs,
+        })
+
+        if self._call_index < len(self.responses):
+            response = self.responses[self._call_index]
+            self._call_index += 1
+        else:
+            response = self._default_response
+
+        # Ensure response has required shape
+        base = {
+            "provider": "mock",
+            "tokens": {"input": 10, "output": 20, "total": 30},
+            "cost_usd": 0.0,
+            "model": kwargs.get("model", "mock-model"),
+        }
+        base.update(response)
+        return base
+
+    def reset(self):
+        """Reset call tracking and response index."""
+        self.calls.clear()
+        self._call_index = 0
+
+
+class MockSandboxExecutor:
+    """
+    Mock SandboxExecutor for kernel and subagent tests.
+
+    Returns canned results from a queue. Tracks all executions.
+
+    Example:
+        sandbox = MockSandboxExecutor(responses=[
+            {"status": "success", "output": 42},
+        ])
+        result = await sandbox.execute("result = 42")
+        assert result["status"] == "success"
+        assert sandbox.calls[0]["code"] == "result = 42"
+    """
+
+    def __init__(self, responses=None):
+        self.responses = list(responses or [])
+        self.calls: List[Dict[str, Any]] = []
+        self._call_index = 0
+
+        # Default response
+        self._default_response = {
+            "status": "success",
+            "output": None,
+            "error": None,
+            "execution_time": 0.1,
+        }
+
+    async def execute(self, code: str, timeout=None, context=None) -> Dict[str, Any]:
+        """Return next queued result and track the execution."""
+        self.calls.append({
+            "code": code,
+            "timeout": timeout,
+            "context": context,
+        })
+
+        if self._call_index < len(self.responses):
+            result = self.responses[self._call_index]
+            self._call_index += 1
+        else:
+            result = self._default_response
+
+        # Ensure result has required shape
+        base = {
+            "status": "success",
+            "output": None,
+            "error": None,
+            "execution_time": 0.1,
+        }
+        base.update(result)
+        return base
+
+    def reset(self):
+        """Reset call tracking and response index."""
+        self.calls.clear()
+        self._call_index = 0
