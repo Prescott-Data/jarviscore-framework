@@ -144,6 +144,9 @@ class Settings(BaseSettings):
     nexus_gateway_url: Optional[str] = None  # Required for production mode
     nexus_default_user_id: str = "jarviscore-agent"
     auth_strategy_cache_ttl: int = 300  # Seconds before re-fetching strategy
+    auth_flow_timeout: int = 300  # Max seconds to wait for OAuth consent
+    auth_poll_interval: float = 2.0  # Seconds between status polls
+    auth_open_browser: bool = True  # Try to open system browser for OAuth
 
     # === Browser ===
     browser_enabled: bool = False

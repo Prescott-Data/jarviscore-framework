@@ -6,6 +6,13 @@ Development mode: Tokens from environment variables (no external deps)
 
 The auth manager sits between the kernel and sandbox execution,
 transparently resolving credentials before code runs.
+
+OAuth flow (production, no backend/frontend):
+1. request_connection() → auth_url returned by Dromos Gateway
+2. CLIFlowHandler opens browser + prints URL for user
+3. User completes OAuth consent in browser
+4. Dromos Gateway receives callback, connection → ACTIVE
+5. Framework polls until ACTIVE, then resolves strategy
 """
 
 import logging
@@ -16,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from jarviscore.nexus.client import NexusClient
 from jarviscore.nexus.lifecycle import LifecycleMonitor
 from jarviscore.nexus.models import DynamicStrategy
+from jarviscore.auth.oauth_flow import OAuthFlowHandler, CLIFlowHandler
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +39,26 @@ class AuthenticationManager:
 
     Production mode:
     - Uses NexusClient to connect to Dromos Gateway
-    - Full OAuth2 flow with token refresh
+    - Interactive OAuth flow: opens browser, polls for completion
     - Lifecycle monitoring for connection health
     - Strategy caching with configurable TTL
+
+    Custom flow handlers:
+        manager = AuthenticationManager(config)
+        manager.flow_handler = MySlackFlowHandler()  # sends URL via Slack DM
     """
 
     def __init__(self, config: Dict[str, Any]):
         self.mode = config.get("auth_mode", "development")
         self.user_id = config.get("nexus_default_user_id", "jarviscore-agent")
         self.cache_ttl = config.get("auth_strategy_cache_ttl", 300)
+        self.auth_timeout = config.get("auth_flow_timeout", 300)
+        self.auth_poll_interval = config.get("auth_poll_interval", 2.0)
+
+        # Pluggable OAuth flow handler (CLI by default)
+        self.flow_handler: OAuthFlowHandler = CLIFlowHandler(
+            open_browser=config.get("auth_open_browser", True)
+        )
 
         # Production mode: initialize NexusClient
         self.nexus_client: Optional[NexusClient] = None
@@ -93,7 +112,7 @@ class AuthenticationManager:
             self._strategy_cache[connection_id] = (strategy, time.time())
             return connection_id
 
-        # Production mode
+        # Production mode — interactive OAuth flow
         if not self.nexus_client:
             raise RuntimeError("NexusClient not initialized for production mode")
 
@@ -102,9 +121,27 @@ class AuthenticationManager:
             user_id=uid,
             scopes=scopes,
         )
+
+        # Present auth URL to user (opens browser / prints URL)
+        await self.flow_handler.present_auth_url(auth_url, provider)
+
+        # Wait for user to complete OAuth consent
+        status = await self.flow_handler.wait_for_completion(
+            connection_id=connection_id,
+            check_status_fn=self.nexus_client.check_connection_status,
+            timeout=self.auth_timeout,
+            poll_interval=self.auth_poll_interval,
+        )
+
+        if status != "ACTIVE":
+            raise RuntimeError(
+                f"OAuth flow for {provider} did not complete: {status}. "
+                f"Connection {connection_id} is not active."
+            )
+
         self.connections[provider] = connection_id
 
-        # Start lifecycle monitoring
+        # Start lifecycle monitoring for ongoing health
         if self.lifecycle_monitor:
             await self.lifecycle_monitor.monitor_connection(connection_id)
 

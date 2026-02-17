@@ -2,14 +2,20 @@
 Tests for AuthenticationManager — Dual-mode auth resolution.
 
 Tests dev mode (env vars), production mode (mocked NexusClient),
-strategy caching, resolve_auth_context, and cleanup.
+strategy caching, resolve_auth_context, OAuth flow handlers, and cleanup.
 """
 
+import asyncio
 import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from jarviscore.auth.manager import AuthenticationManager
+from jarviscore.auth.oauth_flow import (
+    CLIFlowHandler,
+    LocalCallbackServer,
+    _CallbackHandler,
+)
 from jarviscore.nexus.models import DynamicStrategy
 
 
@@ -79,10 +85,38 @@ class TestProdMode:
         )
         manager.lifecycle_monitor.monitor_connection = AsyncMock()
 
+        # Mock the flow handler so it doesn't open a browser or poll
+        manager.flow_handler.present_auth_url = AsyncMock()
+        manager.flow_handler.wait_for_completion = AsyncMock(return_value="ACTIVE")
+
         conn_id = await manager.authenticate("shopify", scopes=["read_products"])
         assert conn_id == "conn_prod_1"
         manager.nexus_client.request_connection.assert_called_once()
         manager.lifecycle_monitor.monitor_connection.assert_called_once_with("conn_prod_1")
+
+        # Verify flow handler was invoked
+        manager.flow_handler.present_auth_url.assert_called_once_with(
+            "https://auth.test.com/oauth", "shopify"
+        )
+        manager.flow_handler.wait_for_completion.assert_called_once()
+
+        await manager.close()
+
+    @pytest.mark.asyncio
+    async def test_prod_mode_raises_on_failed_oauth(self):
+        manager = AuthenticationManager({
+            "auth_mode": "production",
+            "nexus_gateway_url": "https://gateway.test.com",
+        })
+
+        manager.nexus_client.request_connection = AsyncMock(
+            return_value=("conn_fail_1", "https://auth.test.com/oauth")
+        )
+        manager.flow_handler.present_auth_url = AsyncMock()
+        manager.flow_handler.wait_for_completion = AsyncMock(return_value="FAILED")
+
+        with pytest.raises(RuntimeError, match="OAuth flow for shopify did not complete"):
+            await manager.authenticate("shopify")
 
         await manager.close()
 
@@ -182,6 +216,143 @@ class TestResolveAuthContext:
         assert result["provider"] == "shopify"
         assert result["strategy_type"] == "api_key"  # dev mode uses api_key
         assert result["access_token"] == "shpat_live_abc"
+
+
+# ── CLIFlowHandler ───────────────────────────────────────────────
+
+class TestCLIFlowHandler:
+
+    @pytest.mark.asyncio
+    async def test_present_auth_url_opens_browser(self, capsys):
+        handler = CLIFlowHandler(open_browser=False)
+        await handler.present_auth_url("https://auth.example.com/oauth", "github")
+
+        captured = capsys.readouterr()
+        assert "Authorization required for: github" in captured.out
+        assert "https://auth.example.com/oauth" in captured.out
+
+    @pytest.mark.asyncio
+    async def test_wait_for_completion_active(self):
+        handler = CLIFlowHandler()
+        check_fn = AsyncMock(return_value="ACTIVE")
+
+        status = await handler.wait_for_completion(
+            connection_id="conn_1",
+            check_status_fn=check_fn,
+            timeout=5,
+            poll_interval=0.01,
+        )
+        assert status == "ACTIVE"
+        check_fn.assert_called_with("conn_1")
+
+    @pytest.mark.asyncio
+    async def test_wait_for_completion_failed(self):
+        handler = CLIFlowHandler()
+        check_fn = AsyncMock(return_value="FAILED")
+
+        status = await handler.wait_for_completion(
+            connection_id="conn_1",
+            check_status_fn=check_fn,
+            timeout=5,
+            poll_interval=0.01,
+        )
+        assert status == "FAILED"
+
+    @pytest.mark.asyncio
+    async def test_wait_for_completion_timeout(self):
+        handler = CLIFlowHandler()
+        check_fn = AsyncMock(return_value="PENDING")
+
+        status = await handler.wait_for_completion(
+            connection_id="conn_1",
+            check_status_fn=check_fn,
+            timeout=0.05,
+            poll_interval=0.01,
+        )
+        assert status == "TIMEOUT"
+
+    @pytest.mark.asyncio
+    async def test_wait_handles_status_check_error(self):
+        handler = CLIFlowHandler()
+        # First call raises, second returns ACTIVE
+        check_fn = AsyncMock(side_effect=[Exception("network error"), "ACTIVE"])
+
+        status = await handler.wait_for_completion(
+            connection_id="conn_1",
+            check_status_fn=check_fn,
+            timeout=5,
+            poll_interval=0.01,
+        )
+        assert status == "ACTIVE"
+
+    @pytest.mark.asyncio
+    async def test_pluggable_flow_handler(self):
+        """AuthenticationManager accepts a custom flow handler."""
+        manager = AuthenticationManager({
+            "auth_mode": "production",
+            "nexus_gateway_url": "https://gateway.test.com",
+        })
+
+        custom_handler = MagicMock()
+        custom_handler.present_auth_url = AsyncMock()
+        custom_handler.wait_for_completion = AsyncMock(return_value="ACTIVE")
+
+        manager.flow_handler = custom_handler
+
+        manager.nexus_client.request_connection = AsyncMock(
+            return_value=("conn_custom", "https://auth.test.com/custom")
+        )
+        manager.lifecycle_monitor.monitor_connection = AsyncMock()
+
+        conn_id = await manager.authenticate("slack")
+        assert conn_id == "conn_custom"
+        custom_handler.present_auth_url.assert_called_once()
+        custom_handler.wait_for_completion.assert_called_once()
+
+        await manager.close()
+
+
+# ── LocalCallbackServer ──────────────────────────────────────────
+
+class TestLocalCallbackServer:
+
+    def test_callback_url(self):
+        server = LocalCallbackServer(port=9999)
+        assert server.callback_url == "http://localhost:9999/callback"
+
+    @pytest.mark.asyncio
+    async def test_wait_for_code_returns_on_auth_code(self):
+        server = LocalCallbackServer(port=9998)
+        # Simulate auth code being set directly
+        _CallbackHandler.auth_code = "test_code_abc"
+        _CallbackHandler.error = None
+
+        code = await server.wait_for_code(timeout=1)
+        assert code == "test_code_abc"
+
+        # Reset class state
+        _CallbackHandler.auth_code = None
+
+    @pytest.mark.asyncio
+    async def test_wait_for_code_returns_none_on_error(self):
+        server = LocalCallbackServer(port=9997)
+        _CallbackHandler.auth_code = None
+        _CallbackHandler.error = "access_denied"
+
+        code = await server.wait_for_code(timeout=1)
+        assert code is None
+
+        # Reset class state
+        _CallbackHandler.error = None
+
+    @pytest.mark.asyncio
+    async def test_wait_for_code_timeout(self):
+        server = LocalCallbackServer(port=9996)
+        _CallbackHandler.auth_code = None
+        _CallbackHandler.error = None
+
+        code = await server.wait_for_code(timeout=0.1)
+        assert code is None
 
 
 # ── Close / Cleanup ──────────────────────────────────────────────
