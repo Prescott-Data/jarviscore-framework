@@ -172,9 +172,10 @@ class AutoAgent(Profile):
             # Note: codegen now returns just code, cost tracked in llm
             self._logger.debug(f"Generated {len(code)} characters of code")
 
-            # Step 2: Execute in sandbox
+            # Step 2: Execute in sandbox (inject context so previous_step_results
+            # and other dep outputs are available as variables in generated code)
             self._logger.info("Step 2: Executing code in sandbox...")
-            result = await self.sandbox.execute(code)
+            result = await self.sandbox.execute(code, context=task.get('context'))
 
             # Step 3: Handle execution failure with autonomous repair
             if result['status'] == 'failure':

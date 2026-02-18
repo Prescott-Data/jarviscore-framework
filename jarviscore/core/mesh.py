@@ -119,6 +119,7 @@ class Mesh:
         self._redis_store = None      # Phase 7D: RedisContextStore (optional)
         self._settings = None         # Phase 9: Settings instance
         self._blob_storage = None     # Phase 9: BlobStorage
+        self._distributed_worker_task = None  # background step claimer (distributed mode)
 
         self._started = False
         self._logger = logging.getLogger(f"jarviscore.mesh")
@@ -333,6 +334,15 @@ class Mesh:
                 f"✓ Prometheus metrics started on port {self._settings.prometheus_port}"
             )
 
+        # Distributed worker: claims pending steps from Redis on behalf of local agents
+        # Agents declare capabilities; the Mesh handles routing — no manual wiring needed
+        if self.mode == MeshMode.DISTRIBUTED and self._redis_store:
+            self._distributed_worker_task = asyncio.create_task(
+                self._run_distributed_worker(),
+                name="distributed-worker",
+            )
+            self._logger.info("✓ Distributed worker started")
+
         self._started = True
         self._logger.info(
             f"Mesh started successfully with {len(self.agents)} agent(s) "
@@ -503,6 +513,15 @@ class Mesh:
             self._auth_manager = None
             self._logger.info("✓ AuthenticationManager stopped")
 
+        # Cancel distributed worker
+        if self._distributed_worker_task and not self._distributed_worker_task.done():
+            self._distributed_worker_task.cancel()
+            try:
+                await self._distributed_worker_task
+            except asyncio.CancelledError:
+                pass
+        self._distributed_worker_task = None
+
         # Phase 9: Clear infrastructure references
         self._blob_storage = None
         self._settings = None
@@ -511,6 +530,98 @@ class Mesh:
         self._logger.info("Mesh stopped successfully")
 
     # ─────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────
+    # Distributed worker (autonomous step claiming across nodes)
+    # ─────────────────────────────────────────────────────────────────
+
+    async def _run_distributed_worker(self) -> None:
+        """
+        Background task: scans active workflows in Redis for pending steps
+        that match this node's agent capabilities, claims them atomically
+        via SETNX, and executes them.
+
+        Agents declare their capabilities via `role` and `capabilities` — the
+        Mesh handles all routing. No manual wiring or step-ID knowledge needed.
+        Runs only in distributed mode when a redis_store is available.
+        """
+        capability_map: Dict[str, Any] = {}
+        for agent in self.agents:
+            for cap in ([agent.role] + list(getattr(agent, "capabilities", []))):
+                if cap and cap not in capability_map:
+                    capability_map[cap] = agent
+
+        if not capability_map:
+            return
+
+        self._logger.info(
+            f"[DistributedWorker] Online | capabilities: {list(capability_map)}"
+        )
+
+        while self._started:
+            try:
+                for workflow_id in self._redis_store.get_active_workflows():
+                    for step_id in self._redis_store.get_all_step_ids(workflow_id):
+                        step_def = self._redis_store.get_step_definition(
+                            workflow_id, step_id
+                        )
+                        if not step_def or step_def.get("status") != "pending":
+                            continue
+                        agent = capability_map.get(step_def.get("agent", ""))
+                        if not agent:
+                            continue
+                        # Respect dependencies — only claim when all deps are completed
+                        if not self._redis_store.are_dependencies_met(workflow_id, step_id):
+                            continue
+                        if self._redis_store.claim_step(
+                            workflow_id, step_id, agent.agent_id
+                        ):
+                            self._logger.info(
+                                f"[DistributedWorker] Claimed '{step_id}' "
+                                f"in '{workflow_id}' → {agent.agent_id}"
+                            )
+                            asyncio.create_task(
+                                self._execute_distributed_step(
+                                    agent, workflow_id, step_id, step_def
+                                ),
+                                name=f"dist-{step_id}",
+                            )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._logger.warning(f"[DistributedWorker] Error: {exc}")
+
+            await asyncio.sleep(2.0)
+
+    async def _execute_distributed_step(
+        self, agent: Any, workflow_id: str, step_id: str, step_def: dict
+    ) -> None:
+        """Execute a claimed distributed step and persist the result to Redis."""
+        task = {
+            "id": step_id,
+            "agent": agent.role,
+            "task": step_def.get("task", ""),
+            "context": {
+                "previous_step_results": {},
+                "workflow_id": workflow_id,
+                "step_id": step_id,
+            },
+        }
+        try:
+            result = await agent.execute_task(task)
+        except Exception as exc:
+            self._logger.error(
+                f"[DistributedWorker] '{step_id}' in '{workflow_id}' failed: {exc}"
+            )
+            self._redis_store.update_step_status(workflow_id, step_id, "failed")
+            return
+
+        self._redis_store.save_step_output(workflow_id, step_id, output=result)
+        self._redis_store.update_step_status(workflow_id, step_id, "completed")
+        s = result.get("status", "?") if isinstance(result, dict) else "done"
+        self._logger.info(
+            f"[DistributedWorker] '{step_id}' in '{workflow_id}' complete (status={s})"
+        )
+
     # Phase 9: Infrastructure helpers
     # ─────────────────────────────────────────────────────────────────
 

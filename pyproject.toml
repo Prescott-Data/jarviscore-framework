@@ -54,16 +54,29 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+redis = [
+    "redis>=4.6.0",
+]
+prometheus = [
+    "prometheus-client>=0.18.0",
+]
+azure = [
+    "azure-storage-blob>=12.19.0",
+]
+browser = [
+    "playwright>=1.40.0",
+]
+full = [
+    "jarviscore-framework[redis,prometheus,azure]",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
+    "fakeredis>=2.0.0",
     "black>=23.0.0",
     "mypy>=1.5.0",
     "ruff>=0.1.0",
-]
-all = [
-    "jarviscore[dev]",
 ]
 
 [project.urls]

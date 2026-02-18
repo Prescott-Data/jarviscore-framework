@@ -22,9 +22,41 @@ Usage:
 
 import logging
 
-from prometheus_client import Counter, Gauge, Histogram
-
 logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------
+# Optional prometheus_client import — no-op stubs when not installed.
+#
+# This guard ensures `import jarviscore` never crashes for developers
+# who haven't installed prometheus-client.  When the package IS
+# installed (e.g. pip install "jarviscore-framework[prometheus]"),
+# full metric collection works transparently.
+# ------------------------------------------------------------------
+
+try:
+    from prometheus_client import Counter, Gauge, Histogram
+    _PROMETHEUS_AVAILABLE = True
+except ImportError:
+    _PROMETHEUS_AVAILABLE = False
+
+    class _NoOpMetric:
+        """Silent no-op that accepts any Counter/Histogram/Gauge call."""
+        def __init__(self, *args, **kwargs):
+            pass
+        def labels(self, **kwargs):
+            return self
+        def inc(self, amount=1):
+            pass
+        def dec(self, amount=1):
+            pass
+        def observe(self, amount):
+            pass
+
+    Counter = Histogram = Gauge = _NoOpMetric  # type: ignore[assignment,misc]
+    logger.debug(
+        "prometheus-client not installed; metrics are no-ops. "
+        "Install with: pip install 'jarviscore-framework[prometheus]'"
+    )
 
 
 # ------------------------------------------------------------------
@@ -177,6 +209,12 @@ def decrement_active_steps() -> None:
 
 def start_prometheus_server(port: int = 9090) -> None:
     """Start the Prometheus metrics HTTP server."""
+    if not _PROMETHEUS_AVAILABLE:
+        logger.warning(
+            "Cannot start Prometheus server: prometheus-client not installed. "
+            "Install with: pip install 'jarviscore-framework[prometheus]'"
+        )
+        return
     from prometheus_client import start_http_server
     try:
         start_http_server(port)

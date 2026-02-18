@@ -148,6 +148,7 @@ class WorkflowEngine:
         # ── Fresh start ──────────────────────────────────────────────
         if self.redis_store:
             self.redis_store.init_workflow_graph(workflow_id, normalized)
+            self.redis_store.register_active_workflow(workflow_id)
 
         state = WorkflowState(
             workflow_id=workflow_id,
@@ -361,6 +362,16 @@ class WorkflowEngine:
         # Find agent
         agent = self.claimer.find_agent(step)
         if not agent:
+            if self.redis_store:
+                # No local agent — reset to "pending" so a distributed node can claim it
+                self.redis_store.update_step_status(workflow_id, step_id, "pending")
+                logger.info(
+                    f"Step {step_id} has no local agent "
+                    f"(requirement: {step.get('agent')}) — waiting for remote node"
+                )
+                result = await self._wait_remote_step(workflow_id, step_id)
+                if result is not None:
+                    return result
             return {
                 "status": "failure",
                 "error": f"No agent found for step {step_id} "
@@ -419,6 +430,45 @@ class WorkflowEngine:
                 logger.warning(f"Broadcast failed for {step_id}: {err}")
 
         return result
+
+    async def _wait_remote_step(
+        self, workflow_id: str, step_id: str, timeout: float = 300.0
+    ) -> Optional[Dict]:
+        """
+        Poll Redis until a remote distributed node completes this step.
+
+        Used when no local agent matches the step requirement. The step
+        definition is already in Redis (from init_workflow_graph); a remote
+        node will discover it, claim it via SETNX, execute it, and write the
+        result. This coroutine polls until "completed" or timeout.
+
+        Returns the step result dict on success, None on timeout.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        logger.info(
+            f"Waiting up to {int(timeout)}s for remote node to complete step {step_id}"
+        )
+        while asyncio.get_event_loop().time() < deadline:
+            status = self.redis_store.get_step_status(workflow_id, step_id)
+            if status == "completed":
+                saved = self.redis_store.get_step_output(workflow_id, step_id)
+                if saved:
+                    # get_step_output returns {"output": result_dict, ...}
+                    return saved.get("output", saved)
+                return {"status": "success", "step_id": step_id}
+            if status == "failed":
+                return {
+                    "status": "failure",
+                    "error": "Remote node reported step failure",
+                    "step_id": step_id,
+                }
+            await asyncio.sleep(2.0)
+
+        logger.warning(
+            f"Timeout ({timeout}s) waiting for remote step {step_id} "
+            f"in workflow {workflow_id}"
+        )
+        return None
 
     # ------------------------------------------------------------------
     # Auth Resolution (Phase 7D)

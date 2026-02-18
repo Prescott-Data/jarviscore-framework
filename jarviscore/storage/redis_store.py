@@ -300,6 +300,31 @@ class RedisContextStore:
             self.update_step_status(workflow_id, step_id, "in_progress")
         return bool(acquired)
 
+    def get_step_definition(self, workflow_id: str, step_id: str) -> Optional[Dict]:
+        """Get full step definition (task, agent, deps) from workflow DAG."""
+        key = f"workflow_graph:{workflow_id}"
+        raw = self._redis.hget(key, step_id)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    def register_active_workflow(self, workflow_id: str) -> None:
+        """Register a workflow as active so distributed workers can discover it."""
+        key = "jarviscore:active_workflows"
+        self._redis.sadd(key, workflow_id)
+        self._redis.expire(key, self._ttl_seconds)
+
+    def get_active_workflows(self) -> List[str]:
+        """Return all active workflow IDs (published by WorkflowEngine on execute())."""
+        return list(self._redis.smembers("jarviscore:active_workflows"))
+
+    def get_all_step_ids(self, workflow_id: str) -> List[str]:
+        """Return all step IDs stored in the workflow DAG hash."""
+        return list(self._redis.hkeys(f"workflow_graph:{workflow_id}"))
+
     # ------------------------------------------------------------------
     # Workflow State (crash recovery)
     # ------------------------------------------------------------------
