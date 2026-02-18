@@ -153,3 +153,73 @@ class MemoryAccessor:
 
     def __repr__(self) -> str:
         return f"<MemoryAccessor keys={self.keys()}>"
+
+
+class RedisMemoryAccessor(MemoryAccessor):
+    """
+    Drop-in replacement for MemoryAccessor backed by RedisContextStore.
+
+    Reads and writes step outputs through Redis instead of the local
+    WorkflowEngine.memory dict. Identical interface to MemoryAccessor —
+    swap it in wherever Redis-backed persistence is needed.
+
+    Example:
+        accessor = RedisMemoryAccessor(redis_store, workflow_id="wf-1")
+        accessor.put("step1", {"result": 42})
+        value = accessor.get("step1")    # → {"result": 42}
+        exists = accessor.has("step1")   # → True
+        all_outputs = accessor.all()     # → {"step1": {"result": 42}}
+    """
+
+    def __init__(self, redis_store, workflow_id: str):
+        super().__init__({})   # Parent memory dict unused
+        self._redis = redis_store
+        self._workflow_id = workflow_id
+
+    def get(self, step_id: str, default: Any = None) -> Any:
+        """Get a step's output from Redis, extracting 'output' key if present."""
+        result = self._redis.get_step_output(self._workflow_id, step_id)
+        if result is None:
+            return default
+        if isinstance(result, dict) and "output" in result:
+            return result["output"]
+        return result
+
+    def get_raw(self, step_id: str, default: Any = None) -> Any:
+        """Get the full step result dict from Redis without extraction."""
+        result = self._redis.get_step_output(self._workflow_id, step_id)
+        return result if result is not None else default
+
+    def put(self, key: str, value: Any) -> None:
+        """Store a value in Redis as a step output."""
+        self._redis.save_step_output(self._workflow_id, key, output=value)
+
+    def has(self, step_id: str) -> bool:
+        """Return True if the step has an output stored in Redis."""
+        return self._redis.get_step_output(self._workflow_id, step_id) is not None
+
+    def keys(self) -> List[str]:
+        """Return all step IDs that have outputs stored in Redis for this workflow."""
+        return self._redis.list_step_output_ids(self._workflow_id)
+
+    def all(self) -> Dict[str, Any]:
+        """Return all step outputs for this workflow with 'output' extracted."""
+        result = {}
+        for step_id in self.keys():
+            result[step_id] = self.get(step_id)
+        return result
+
+    def __contains__(self, step_id: str) -> bool:
+        return self.has(step_id)
+
+    def __getitem__(self, step_id: str) -> Any:
+        return self.get(step_id)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.put(key, value)
+
+    def __len__(self) -> int:
+        return len(self.keys())
+
+    def __repr__(self) -> str:
+        return f"<RedisMemoryAccessor workflow={self._workflow_id}>"

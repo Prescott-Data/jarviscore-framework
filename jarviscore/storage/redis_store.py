@@ -99,6 +99,19 @@ class RedisContextStore:
                 pass
         return result
 
+    def list_step_output_ids(self, workflow_id: str) -> List[str]:
+        """Return all step IDs that have saved outputs for this workflow.
+
+        Uses SCAN (non-blocking) to find keys matching
+        step_output:{workflow_id}:*  and strips the prefix to return
+        just the step_id portion.
+        """
+        prefix = f"step_output:{workflow_id}:"
+        return [
+            k[len(prefix):]
+            for k in self._redis.scan_iter(match=f"{prefix}*")
+        ]
+
     # ------------------------------------------------------------------
     # Shared Context / Truth
     # ------------------------------------------------------------------
@@ -330,6 +343,40 @@ class RedisContextStore:
                     parsed[k] = v
             results.append(parsed)
         return list(reversed(results))  # Chronological order
+
+    def get_ledger_full(self, workflow_id: str) -> List[Dict]:
+        """Read all ledger entries in chronological order (XRANGE *)."""
+        key = f"ledgers:{workflow_id}"
+        entries = self._redis.xrange(key)
+        results = []
+        for entry_id, data in entries:
+            parsed = {"_id": entry_id}
+            for k, v in data.items():
+                try:
+                    parsed[k] = json.loads(v)
+                except (json.JSONDecodeError, TypeError):
+                    parsed[k] = v
+            results.append(parsed)
+        return results
+
+    # ------------------------------------------------------------------
+    # Long-Term Memory (LTM)
+    # ------------------------------------------------------------------
+
+    def save_ltm(self, workflow_id: str, summary: str,
+                 ttl_days: int = 7) -> bool:
+        """Save compressed LTM summary to Redis with configurable TTL."""
+        key = f"ltm:{workflow_id}"
+        self._redis.set(key, summary, ex=ttl_days * 86400)
+        return True
+
+    def load_ltm(self, workflow_id: str) -> Optional[str]:
+        """Load LTM summary from Redis."""
+        key = f"ltm:{workflow_id}"
+        raw = self._redis.get(key)
+        if raw is None:
+            return None
+        return raw if isinstance(raw, str) else raw.decode()
 
     # ------------------------------------------------------------------
     # Checkpoints (per-step state snapshots)

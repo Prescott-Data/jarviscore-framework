@@ -29,15 +29,17 @@ Example:
 """
 
 from .jarvis_context import JarvisContext, create_context
-from .memory import MemoryAccessor
+from .memory import MemoryAccessor, RedisMemoryAccessor
 from .dependency import DependencyAccessor
 from .truth import Evidence, TruthFact, TruthContext, AgentOutput
 from .distillation import distill_output, scrub_sensitive, merge_facts
+from .context_manager import ContextManager, BudgetConfig
 
 __all__ = [
     'JarvisContext',
     'create_context',
     'MemoryAccessor',
+    'RedisMemoryAccessor',
     'DependencyAccessor',
     'Evidence',
     'TruthFact',
@@ -46,4 +48,6 @@ __all__ = [
     'distill_output',
     'scrub_sensitive',
     'merge_facts',
+    'ContextManager',
+    'BudgetConfig',
 ]
