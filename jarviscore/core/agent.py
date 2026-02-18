@@ -78,6 +78,10 @@ class Agent(ABC):
         # Mailbox support (Phase 4) - Injected by Mesh during start()
         self.mailbox: Optional['MailboxManager'] = None
 
+        # Storage infrastructure (injected by Mesh during start()) — Phase 9
+        self._redis_store = None
+        self._blob_storage = None
+
         # Cloud deployment support (standalone mode)
         self._standalone_p2p: Optional['P2PCoordinator'] = None
         self._mesh_connected: bool = False

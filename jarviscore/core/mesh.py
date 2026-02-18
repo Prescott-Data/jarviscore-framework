@@ -117,6 +117,8 @@ class Mesh:
         self._state_manager = None    # Day 3: State management
         self._auth_manager = None     # Phase 7D: AuthenticationManager (optional)
         self._redis_store = None      # Phase 7D: RedisContextStore (optional)
+        self._settings = None         # Phase 9: Settings instance
+        self._blob_storage = None     # Phase 9: BlobStorage
 
         self._started = False
         self._logger = logging.getLogger(f"jarviscore.mesh")
@@ -235,6 +237,16 @@ class Mesh:
 
         self._logger.info("Starting mesh...")
 
+        # Phase 9: Initialise Settings + infrastructure BEFORE agent setup
+        from jarviscore.config.settings import Settings
+        self._settings = Settings()
+        self._redis_store = self._init_redis(self._settings)
+        self._blob_storage = self._init_blob_storage(self._settings)
+
+        # Phase 9: Inject redis, blob, and mailbox into all agents (before setup()
+        # so agents can use their stores inside setup())
+        self._inject_infrastructure()
+
         # Setup all agents
         for agent in self.agents:
             try:
@@ -266,7 +278,7 @@ class Mesh:
             # Announce capabilities to network
             await self._p2p_coordinator.announce_capabilities()
             self._logger.info("✓ Capabilities announced to mesh")
-            
+
             # Request capabilities from existing peers (for late-joiners)
             await self._p2p_coordinator.request_peer_capabilities()
             self._logger.info("✓ Requested capabilities from existing peers")
@@ -275,16 +287,6 @@ class Mesh:
         if self.mode == MeshMode.P2P:
             self._inject_peer_clients()
             self._logger.info("✓ PeerClients injected into agents")
-
-        # Phase 7D: Initialise Redis store (optional)
-        redis_store_url = self.config.get("redis_store_url") or self.config.get("redis_url")
-        if redis_store_url:
-            try:
-                from jarviscore.storage.redis_store import RedisContextStore
-                self._redis_store = RedisContextStore(redis_store_url)
-                self._logger.info("✓ RedisContextStore connected")
-            except Exception as exc:
-                self._logger.warning(f"Redis store init failed (continuing without): {exc}")
 
         # Phase 7D: Initialise AuthenticationManager (optional)
         if self.config.get("auth_mode"):
@@ -318,10 +320,18 @@ class Mesh:
                 mesh=self,
                 p2p_coordinator=self._p2p_coordinator,
                 config=self.config,
-                redis_store=self._redis_store,   # Phase 7D
+                redis_store=self._redis_store,
             )
             await self._workflow_engine.start()
             self._logger.info("✓ Workflow engine started")
+
+        # Phase 9: Start Prometheus metrics server if enabled
+        if self._settings and self._settings.prometheus_enabled:
+            from jarviscore.telemetry.metrics import start_prometheus_server
+            start_prometheus_server(self._settings.prometheus_port)
+            self._logger.info(
+                f"✓ Prometheus metrics started on port {self._settings.prometheus_port}"
+            )
 
         self._started = True
         self._logger.info(
@@ -493,8 +503,73 @@ class Mesh:
             self._auth_manager = None
             self._logger.info("✓ AuthenticationManager stopped")
 
+        # Phase 9: Clear infrastructure references
+        self._blob_storage = None
+        self._settings = None
+
         self._started = False
         self._logger.info("Mesh stopped successfully")
+
+    # ─────────────────────────────────────────────────────────────────
+    # Phase 9: Infrastructure helpers
+    # ─────────────────────────────────────────────────────────────────
+
+    def _init_redis(self, settings):
+        """
+        Init RedisContextStore. Config dict (runtime) overrides Settings (env vars).
+        Returns None gracefully when no URL configured or connection fails.
+        """
+        url = (
+            self.config.get("redis_store_url")
+            or self.config.get("redis_url")
+            or getattr(settings, "redis_url", None)
+        )
+        if not url:
+            return None
+        try:
+            from types import SimpleNamespace
+            from jarviscore.storage.redis_store import RedisContextStore
+            _s = SimpleNamespace(
+                redis_url=url,
+                redis_context_ttl_days=getattr(settings, "redis_context_ttl_days", 7),
+            )
+            store = RedisContextStore(settings=_s)
+            self._logger.info("✓ RedisContextStore connected")
+            return store
+        except Exception as exc:
+            self._logger.warning(f"Redis store init failed (continuing without): {exc}")
+            return None
+
+    def _init_blob_storage(self, settings):
+        """Init BlobStorage from settings. Always succeeds (local backend is default)."""
+        try:
+            from jarviscore.storage import get_blob_storage
+            storage = get_blob_storage(settings)
+            backend = getattr(settings, "storage_backend", "local")
+            self._logger.info(f"✓ BlobStorage initialized ({backend})")
+            return storage
+        except Exception as exc:
+            self._logger.warning(f"BlobStorage init failed (continuing without): {exc}")
+            return None
+
+    def _inject_infrastructure(self):
+        """
+        Inject redis_store, blob_storage, and mailbox into all agents.
+
+        Called during start() before agent setup() so agents can use
+        their stores during initialization.
+        """
+        from jarviscore.mailbox import MailboxManager
+        for agent in self.agents:
+            agent._redis_store = self._redis_store
+            agent._blob_storage = self._blob_storage
+            if self._redis_store:
+                agent.mailbox = MailboxManager(agent.agent_id, self._redis_store)
+        self._logger.info(
+            f"✓ Infrastructure injected into {len(self.agents)} agent(s) "
+            f"(redis={'yes' if self._redis_store else 'no'}, "
+            f"blob={'yes' if self._blob_storage else 'no'})"
+        )
 
     def _inject_peer_clients(self):
         """
