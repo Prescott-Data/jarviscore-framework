@@ -8,6 +8,7 @@ from .engine import WorkflowEngine
 from .claimer import StepClaimer
 from .dependency import DependencyManager
 from .status import StatusManager, StepStatus
+from .state import WorkflowState
 
 __all__ = [
     'WorkflowEngine',
@@ -15,4 +16,5 @@ __all__ = [
     'DependencyManager',
     'StatusManager',
     'StepStatus',
+    'WorkflowState',
 ]

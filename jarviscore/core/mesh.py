@@ -115,6 +115,8 @@ class Mesh:
         self._p2p_coordinator = None  # Day 2: P2P integration
         self._workflow_engine = None  # Day 3: Workflow orchestration
         self._state_manager = None    # Day 3: State management
+        self._auth_manager = None     # Phase 7D: AuthenticationManager (optional)
+        self._redis_store = None      # Phase 7D: RedisContextStore (optional)
 
         self._started = False
         self._logger = logging.getLogger(f"jarviscore.mesh")
@@ -274,6 +276,38 @@ class Mesh:
             self._inject_peer_clients()
             self._logger.info("✓ PeerClients injected into agents")
 
+        # Phase 7D: Initialise Redis store (optional)
+        redis_store_url = self.config.get("redis_store_url") or self.config.get("redis_url")
+        if redis_store_url:
+            try:
+                from jarviscore.storage.redis_store import RedisContextStore
+                self._redis_store = RedisContextStore(redis_store_url)
+                self._logger.info("✓ RedisContextStore connected")
+            except Exception as exc:
+                self._logger.warning(f"Redis store init failed (continuing without): {exc}")
+
+        # Phase 7D: Initialise AuthenticationManager (optional)
+        if self.config.get("auth_mode"):
+            try:
+                from jarviscore.auth.manager import AuthenticationManager
+                self._auth_manager = AuthenticationManager(self.config)
+                self._logger.info(
+                    f"✓ AuthenticationManager started "
+                    f"(mode={self.config['auth_mode']})"
+                )
+            except Exception as exc:
+                self._logger.warning(f"Auth manager init failed (continuing without): {exc}")
+
+        # Phase 7D: Inject auth manager into agents that declare requires_auth
+        if self._auth_manager:
+            injected = 0
+            for agent in self.agents:
+                if getattr(agent, "requires_auth", False):
+                    agent._auth_manager = self._auth_manager
+                    injected += 1
+            if injected:
+                self._logger.info(f"✓ AuthenticationManager injected into {injected} agent(s)")
+
         # Initialize workflow engine (for autonomous and distributed modes)
         if self.mode in (MeshMode.AUTONOMOUS, MeshMode.DISTRIBUTED):
             self._logger.info("Initializing workflow engine...")
@@ -283,7 +317,8 @@ class Mesh:
             self._workflow_engine = WorkflowEngine(
                 mesh=self,
                 p2p_coordinator=self._p2p_coordinator,
-                config=self.config
+                config=self.config,
+                redis_store=self._redis_store,   # Phase 7D
             )
             await self._workflow_engine.start()
             self._logger.info("✓ Workflow engine started")
@@ -448,6 +483,15 @@ class Mesh:
         if self._workflow_engine:
             await self._workflow_engine.stop()
             self._logger.info("✓ Workflow engine stopped")
+
+        # Phase 7D: Cleanup auth manager
+        if self._auth_manager:
+            try:
+                await self._auth_manager.close()
+            except Exception:
+                pass
+            self._auth_manager = None
+            self._logger.info("✓ AuthenticationManager stopped")
 
         self._started = False
         self._logger.info("Mesh stopped successfully")

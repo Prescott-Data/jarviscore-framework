@@ -17,6 +17,7 @@ class StepStatus(Enum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
+    WAITING = "waiting"        # Phase 7A: paused for human input (HITL)
 
 
 class StatusManager:
