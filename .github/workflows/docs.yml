@@ -12,15 +12,21 @@ on:
   workflow_dispatch:   # allow manual trigger from GitHub UI
 
 permissions:
-  contents: write   # needed to push to gh-pages branch
+  contents: read
+  pages: write        # deploy to GitHub Pages
+  id-token: write     # OIDC token for Pages deployment
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # full history needed for git-revision-date plugins
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -30,5 +36,21 @@ jobs:
         # Pin to MkDocs 1.x + Material 9.x — MkDocs 2.0 is incompatible with material theme
         run: pip install "mkdocs<2.0" "mkdocs-material<10"
 
-      - name: Build and deploy to gh-pages
-        run: mkdocs gh-deploy --force --clean
+      - name: Build site
+        run: mkdocs build --clean
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
