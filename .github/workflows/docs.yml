@@ -1,0 +1,34 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'jarviscore/docs/**'
+      - 'README.md'
+      - 'mkdocs.yml'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+permissions:
+  contents: write   # needed to push to gh-pages branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history needed for git-revision-date plugins
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install MkDocs Material
+        # Pin to MkDocs 1.x + Material 9.x — MkDocs 2.0 is incompatible with material theme
+        run: pip install "mkdocs<2.0" "mkdocs-material<10"
+
+      - name: Build and deploy to gh-pages
+        run: mkdocs gh-deploy --force --clean

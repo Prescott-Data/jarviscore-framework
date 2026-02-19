@@ -1,0 +1,76 @@
+site_name: JarvisCore Framework
+site_description: Build autonomous AI agents with P2P mesh networking and full infrastructure stack.
+site_url: https://prescott-data.github.io/jarviscore-framework/
+repo_url: https://github.com/Prescott-Data/jarviscore-framework
+repo_name: Prescott-Data/jarviscore-framework
+edit_uri: edit/main/jarviscore/docs/
+
+docs_dir: jarviscore/docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - toc.integrate
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path: ['.']   # repo root — allows --8<-- "README.md" in index.md
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: GETTING_STARTED.md
+  - Guides:
+      - AutoAgent Guide: AUTOAGENT_GUIDE.md
+      - CustomAgent Guide: CUSTOMAGENT_GUIDE.md
+      - User Guide: USER_GUIDE.md
+  - Reference:
+      - API Reference: API_REFERENCE.md
+      - Configuration: CONFIGURATION.md
+  - Troubleshooting: TROUBLESHOOTING.md
+  - Changelog: CHANGELOG.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Prescott-Data/jarviscore-framework
+      name: JarvisCore on GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/jarviscore-framework/
+      name: JarvisCore on PyPI
