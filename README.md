@@ -214,21 +214,24 @@ JarvisCore is **async-first**. Best experience with async frameworks.
 
 ## Documentation
 
-Documentation is included with the package:
+**[https://prescott-data.github.io/jarviscore-framework/](https://prescott-data.github.io/jarviscore-framework/)**
+
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](https://prescott-data.github.io/jarviscore-framework/GETTING_STARTED/) | 5-minute quickstart |
+| [AutoAgent Guide](https://prescott-data.github.io/jarviscore-framework/AUTOAGENT_GUIDE/) | LLM-powered agents, Kernel, distributed research network |
+| [CustomAgent Guide](https://prescott-data.github.io/jarviscore-framework/CUSTOMAGENT_GUIDE/) | CustomAgent patterns, all phases, production example walkthroughs |
+| [User Guide](https://prescott-data.github.io/jarviscore-framework/USER_GUIDE/) | Complete documentation including Infrastructure & Memory chapter |
+| [API Reference](https://prescott-data.github.io/jarviscore-framework/API_REFERENCE/) | Detailed API docs including Phase 1–9 infrastructure classes |
+| [Configuration](https://prescott-data.github.io/jarviscore-framework/CONFIGURATION/) | Settings reference with phase → env var mapping |
+| [Troubleshooting](https://prescott-data.github.io/jarviscore-framework/TROUBLESHOOTING/) | Common issues and diagnostics |
+| [Changelog](https://prescott-data.github.io/jarviscore-framework/CHANGELOG/) | Full release history |
+
+Docs are also bundled with the package:
 
 ```bash
 python -c "import jarviscore; print(jarviscore.__path__[0] + '/docs')"
 ```
-
-**Available guides:**
-- `GETTING_STARTED.md` — 5-minute quickstart + Phase 1–9 overview
-- `AUTOAGENT_GUIDE.md` — LLM-powered agents, Kernel, distributed research network
-- `CUSTOMAGENT_GUIDE.md` — CustomAgent patterns, all phases, production example walkthroughs
-- `USER_GUIDE.md` — Complete documentation including Infrastructure & Memory chapter
-- `API_REFERENCE.md` — Detailed API docs including Phase 1–9 infrastructure classes
-- `CONFIGURATION.md` — Settings reference with phase → env var mapping
-- `TROUBLESHOOTING.md` — Common issues and diagnostics
-- `CHANGELOG.md` — Full release history
 
 ## Version
 
