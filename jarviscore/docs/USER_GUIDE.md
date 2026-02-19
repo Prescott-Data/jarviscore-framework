@@ -12,21 +12,22 @@ Practical guide to building agent systems with JarvisCore.
 4. [Custom Profile Tutorial](#custom-profile-tutorial)
 5. [CustomAgent Tutorial](#customagent-tutorial)
 6. [Multi-Agent Workflows](#multi-agent-workflows)
-7. [Internet Search](#internet-search)
-8. [Remote Sandbox](#remote-sandbox)
-9. [Result Storage](#result-storage)
-10. [Code Registry](#code-registry)
-11. [FastAPI Integration (v0.3.0)](#fastapi-integration-v030)
-12. [Cloud Deployment (v0.3.0)](#cloud-deployment-v030)
-13. [Cognitive Discovery (v0.3.0)](#cognitive-discovery-v030)
-14. [Session Context (v0.3.2)](#session-context-v032)
-15. [Async Requests (v0.3.2)](#async-requests-v032)
-16. [Load Balancing (v0.3.2)](#load-balancing-v032)
-17. [Mesh Diagnostics (v0.3.2)](#mesh-diagnostics-v032)
-18. [Testing with MockMesh (v0.3.2)](#testing-with-mockmesh-v032)
-19. [Best Practices](#best-practices)
-20. [Common Patterns](#common-patterns)
-21. [Troubleshooting](#troubleshooting)
+7. [Infrastructure & Memory (v0.4.0)](#infrastructure--memory) — Phases 1–9: blob, mailbox, memory, auth, telemetry
+8. [Internet Search](#internet-search)
+9. [Remote Sandbox](#remote-sandbox)
+10. [Result Storage](#result-storage)
+11. [Code Registry](#code-registry)
+12. [FastAPI Integration (v0.3.0)](#fastapi-integration-v030)
+13. [Cloud Deployment (v0.3.0)](#cloud-deployment-v030)
+14. [Cognitive Discovery (v0.3.0)](#cognitive-discovery-v030)
+15. [Session Context (v0.3.2)](#session-context-v032)
+16. [Async Requests (v0.3.2)](#async-requests-v032)
+17. [Load Balancing (v0.3.2)](#load-balancing-v032)
+18. [Mesh Diagnostics (v0.3.2)](#mesh-diagnostics-v032)
+19. [Testing with MockMesh (v0.3.2)](#testing-with-mockmesh-v032)
+20. [Best Practices](#best-practices)
+21. [Common Patterns](#common-patterns)
+22. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -354,6 +355,183 @@ async def data_pipeline():
 
 asyncio.run(data_pipeline())
 ```
+
+---
+
+## Infrastructure & Memory
+
+JarvisCore v0.4.0 ships a full production infrastructure stack. All features degrade
+gracefully when not configured.
+
+### Phase 9 — Auto-Injection Quick Reference
+
+Before every agent's `setup()`, the Mesh injects:
+
+| Attribute | What it is | Requires |
+|-----------|-----------|---------|
+| `self._redis_store` | `RedisContextStore` — step outputs, workflow graph, mailbox, checkpoints | `REDIS_URL` |
+| `self._blob_storage` | `LocalBlobStorage` \| `AzureBlobStorage` — artifact I/O | always present |
+| `self.mailbox` | `MailboxManager` — async inter-agent messaging via Redis Streams | `REDIS_URL` |
+
+```python
+class MyAgent(CustomAgent):
+    async def setup(self):
+        await super().setup()
+        # All injected — use directly, no constructor wiring
+        print(self._redis_store, self._blob_storage, self.mailbox)
+```
+
+---
+
+### Blob Storage
+
+Save and load any artifact — string, bytes, or JSON:
+
+```bash
+STORAGE_BACKEND=local          # default: ./blob_storage/
+STORAGE_BASE_PATH=./blob_storage
+# or: STORAGE_BACKEND=azure with AZURE_STORAGE_CONNECTION_STRING
+```
+
+```python
+# Save
+await self._blob_storage.save("reports/daily-001.md", markdown_text)
+await self._blob_storage.save("data/result.json", json.dumps(data))
+
+# Load
+content = await self._blob_storage.load("reports/daily-001.md")
+data = json.loads(content) if content else {}
+```
+
+Path convention: `{type}/{workflow_id}/{filename}.{ext}`
+
+---
+
+### Mailbox Messaging
+
+Fire-and-forget inter-agent messages via Redis Streams. Messages survive process restarts.
+
+```python
+# Send (fire-and-forget)
+self.mailbox.send(other_agent_id, {"event": "done", "workflow": "wf-001"})
+
+# Drain inbox
+messages = self.mailbox.read(max_messages=10)
+for msg in messages:
+    print(msg["event"])
+```
+
+---
+
+### Prometheus Telemetry
+
+```bash
+PROMETHEUS_ENABLED=true
+PROMETHEUS_PORT=9090
+```
+
+```python
+import time
+from jarviscore.telemetry.metrics import record_step_execution
+
+async def execute_task(self, task):
+    start = time.time()
+    result = self._do_work(task)
+    record_step_execution(time.time() - start, "success")
+    return {"status": "success", "output": result}
+```
+
+Metrics emitted: `jarviscore_step_duration_seconds` (histogram),
+`jarviscore_steps_total` (counter, labelled by status).
+
+---
+
+### Distributed WorkflowEngine
+
+```python
+mesh = Mesh(mode="distributed", config={"redis_url": "redis://localhost:6379/0"})
+results = await mesh.workflow("wf-001", [
+    {"id": "fetch",   "agent": "fetcher",  "task": "Fetch data"},
+    {"id": "analyse", "agent": "analyst",  "task": "Analyse", "depends_on": ["fetch"]},
+])
+```
+
+- DAG persisted to Redis hash `workflow_graph:{wf_id}` — crash recovery on restart
+- Distributed nodes autonomously claim matching steps via atomic SETNX
+- `_wait_remote_step()` polls Redis every 2s until a remote step is `"completed"`
+
+---
+
+### Auth Injection (Nexus)
+
+```bash
+NEXUS_GATEWAY_URL=https://your-dromos-gateway.example.com
+AUTH_MODE=production    # or "mock" for local dev
+```
+
+```python
+class SecureAgent(CustomAgent):
+    requires_auth = True   # → self._auth_manager injected before setup()
+
+    async def execute_task(self, task):
+        if self._auth_manager:
+            result = await self._auth_manager.make_authenticated_request(
+                provider="github", method="GET",
+                url="https://api.github.com/user",
+            )
+```
+
+Full flow: `request_connection → browser OAuth → poll ACTIVE → resolve_strategy → apply header`.
+`_auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set (graceful degradation).
+
+---
+
+### UnifiedMemory
+
+```python
+from jarviscore.memory import UnifiedMemory, RedisMemoryAccessor
+
+# In setup()
+self.memory = UnifiedMemory(
+    workflow_id="wf-001", step_id="analyst", agent_id=self.role,
+    redis_store=self._redis_store, blob_storage=self._blob_storage,
+)
+
+# EpisodicLedger
+await self.memory.episodic.append({"event": "started", "ts": time.time()})
+recent = await self.memory.episodic.tail(5)
+
+# LongTermMemory
+await self.memory.ltm.save_summary("Key findings: ...")
+summary = await self.memory.ltm.load_summary()
+
+# Cross-step accessor — read prior step output without explicit passing
+accessor = RedisMemoryAccessor(self._redis_store, workflow_id="wf-001")
+raw = accessor.get("fetch")
+data = raw.get("output", raw) if isinstance(raw, dict) else {}
+```
+
+---
+
+### Production Examples
+
+All examples require Redis: `docker compose -f docker-compose.infra.yml up -d`
+
+| Example | Mode | Profile | Key phases |
+|---------|------|---------|-----------|
+| Ex1 — Financial Pipeline | autonomous | AutoAgent | 1, 5, 6, 7, 8, 9 |
+| Ex2 — Research Network (4 nodes) | distributed SWIM | AutoAgent | 4, 7, 8, 9 |
+| Ex3 — Support Swarm | p2p | CustomAgent | 1, 4, 7D, 8, 9 |
+| Ex4 — Content Pipeline | distributed | CustomAgent | 1, 4, 5, 7, 8, 9 |
+
+```bash
+python examples/ex1_financial_pipeline.py
+python examples/ex2_synthesizer.py &  # then start nodes 1-3
+python examples/ex3_support_swarm.py
+python examples/ex4_content_pipeline.py
+```
+
+Full walkthroughs: [AUTOAGENT_GUIDE.md](AUTOAGENT_GUIDE.md) • [CUSTOMAGENT_GUIDE.md](CUSTOMAGENT_GUIDE.md)
 
 ---
 

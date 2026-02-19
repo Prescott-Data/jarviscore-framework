@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-02-18
+
+### Added — Infrastructure Stack (Phases 1–9)
+
+#### Phase 1 — Foundation Layer
+- `LocalBlobStorage` / `AzureBlobStorage`: `save(path, data)` / `load(path)` for any artifact
+- `RedisContextStore`: full Redis-backed step output, workflow graph, mailbox, HITL, checkpoint methods
+- `STORAGE_BACKEND=local|azure`, `STORAGE_BASE_PATH`, `REDIS_URL` configuration
+
+#### Phase 2 — Context Distillation
+- `Evidence`, `TruthFact`, `TruthContext`, `AgentOutput` Pydantic models (`context/truth.py`)
+- `distill_output()`, `scrub_sensitive()`, `merge_facts()` utilities (`context/distillation.py`)
+- `ContextManager`: token-budget aware prompt builder (priority stack: mission → plan → scratchpad → LTM → tool history → variables)
+- `JarvisContext` enhanced with `truth`, `mailbox`, `tracer`, `human_tasks` fields
+
+#### Phase 3 — Telemetry / Tracing
+- `TraceEventType` enum: workflow, step, kernel cognition, tool, mailbox, HITL, context events (`telemetry/events.py`)
+- `TraceManager`: three output channels — Redis List (persistent), Redis PubSub (real-time), JSONL (compliance fallback) (`telemetry/tracer.py`)
+- `record_step_execution(duration, status)` — Prometheus histogram + counter; enable via `PROMETHEUS_ENABLED=true`
+
+#### Phase 4 — MailboxManager
+- `self.mailbox.send(target_id, payload)` / `read(max_messages)` for async agent messaging
+- Redis Streams backed; available in all modes when `REDIS_URL` is set
+
+#### Phase 5 — Function Registry
+- `CodeRegistry`: auto-registers successfully executed code per task; promotes to `VERIFIED` on first success
+- Available as `agent.code_registry` in AutoAgent; persisted to `{log_dir}/function_registry/`
+- `update_execution_stats(func_name, success, execution_time)` for graduation tracking
+
+#### Phase 6 — Kernel / SubAgent OODA Loop
+- `Kernel`: replaces AutoAgent's linear codegen→sandbox→repair pipeline with a supervised OODA loop
+- `ExecutionLease`: token/turn/wall-clock budgets per subagent role (`kernel/lease.py`)
+  - Role profiles: `coder` (coding model, 240k tokens), `researcher`, `communicator` (task model)
+- `AgentCognitionManager`: tracks budget spend per phase (DISCOVERY→ANALYSIS→IMPLEMENTATION→COMPLETION), detects spinning (same tool 3+ times), enforces cognitive gate (`kernel/cognition.py`)
+- `BaseSubAgent` + text tool-call protocol (`THOUGHT/TOOL/PARAMS → DONE/RESULT`) (`kernel/subagent.py`)
+- `AdaptiveHITLPolicy` + `HumanTask`: pauses execution for human approval/input when confidence/risk triggers fire (`kernel/hitl.py`)
+- Fast path: simple coding tasks skip full OODA, dispatch directly to coder subagent
+
+#### Phase 7 — Distributed WorkflowEngine
+- WorkflowEngine persists DAG to Redis hash `workflow_graph:{wf_id}` for crash recovery
+- When no local agent matches a step, engine resets status → `"pending"` and polls Redis
+- `Mesh._run_distributed_worker()`: background asyncio task scans `jarviscore:active_workflows`,
+  checks `are_dependencies_met()`, atomically claims steps via SETNX, executes, writes output to Redis
+- `redis_store.register_active_workflow()`, `get_active_workflows()`, `get_all_step_ids()` added
+
+#### Phase 7D — AuthenticationManager (Nexus)
+- Set `requires_auth = True` on any agent; Mesh injects `self._auth_manager` before `setup()`
+- Full NexusClient flow: `request_connection → browser OAuth → poll ACTIVE → resolve_strategy → apply headers`
+- Config: `auth_mode="production"`, `nexus_gateway_url`, `nexus_default_user_id`
+- Graceful degradation: `_auth_manager = None` when `NEXUS_GATEWAY_URL` not set
+
+#### Phase 8 — Memory Architecture
+- `UnifiedMemory(workflow_id, step_id, agent_id, redis_store, blob_storage)`
+- `.episodic` — `EpisodicLedger`: Redis Streams `append(event)` / `tail(count)`
+- `.ltm` — `LongTermMemory`: `save_summary(text)` / `load_summary()` (Redis `ltm:{wf_id}`)
+- `.scratch` — in-memory `WorkingScratchpad`
+- `RedisMemoryAccessor(redis_store, workflow_id).get(step_id)` — reads `step_output:{wf}:{step}`
+
+#### Phase 9 — Mesh Integration + Auto-Injection
+- Before each agent's `setup()`, Mesh injects: `_redis_store`, `_blob_storage`, `mailbox`
+- Prometheus server started automatically when `PROMETHEUS_ENABLED=true`
+- Agents use injected infrastructure directly — zero boilerplate
+
+### Added — Production Examples
+- `examples/ex1_financial_pipeline.py` — AutoAgent autonomous, 3-step financial analysis pipeline (Phases 1, 3, 4, 5, 8, 9)
+- `examples/ex2_synthesizer.py` + `ex2_research_node1/2/3.py` — AutoAgent 4-node SWIM research cluster (Phases 4, 7, 8, 9)
+- `examples/ex3_support_swarm.py` — CustomAgent P2P, 4-agent support routing + Nexus auth (Phases 1, 4, 7D, 8, 9)
+- `examples/ex4_content_pipeline.py` — CustomAgent distributed, content pipeline with LTM (Phases 1, 4, 5, 7, 8, 9)
+
+### Fixed
+- `AutoAgent.execute_task`: pass `context=task.get('context')` to `sandbox.execute()` so
+  LLM-generated code can access `previous_step_results` (previously caused silent synthesis failures)
+- SWIM `load_dotenv()` port contamination: example scripts now hardcode `BIND_PORT` constants
+  instead of `os.getenv()` to prevent `swim/main.py` from overriding ports from `.env`
+
+### Changed
+- Version: 0.3.2 → 0.4.0
+
+---
+
 ## [0.3.2] - 2026-02-03
 
 ### Added

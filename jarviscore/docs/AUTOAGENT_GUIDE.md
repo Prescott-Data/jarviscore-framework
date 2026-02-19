@@ -580,6 +580,253 @@ Everything else stays the same. See [CUSTOMAGENT_GUIDE.md](CUSTOMAGENT_GUIDE.md)
 
 ---
 
+## Phase 9 — Infrastructure Injection in AutoAgent
+
+Before `setup()` runs, the Mesh auto-injects three infrastructure objects onto every
+agent — including AutoAgent. No constructor wiring or boilerplate required:
+
+| Attribute | Type | Requires |
+|-----------|------|---------|
+| `self._redis_store` | `RedisContextStore` | `REDIS_URL` |
+| `self._blob_storage` | `LocalBlobStorage` / `AzureBlobStorage` | always present |
+| `self.mailbox` | `MailboxManager` | `REDIS_URL` |
+
+```python
+from jarviscore.profiles import AutoAgent
+from jarviscore.memory import UnifiedMemory
+import json, time
+
+class ResearchAgent(AutoAgent):
+    role = "researcher"
+    capabilities = ["research"]
+    system_prompt = "Research the topic. Store findings in `result` as a dict."
+
+    async def setup(self):
+        await super().setup()
+        # Phase 9: _redis_store, _blob_storage, mailbox already wired
+        self.memory = UnifiedMemory(
+            workflow_id="research-wf", step_id="research",
+            agent_id=self.role,
+            redis_store=self._redis_store,
+            blob_storage=self._blob_storage,
+        )
+
+    async def execute_task(self, task):
+        result = await super().execute_task(task)
+
+        if result.get("status") == "success":
+            # Phase 1: save output artifact
+            await self._blob_storage.save(
+                f"research/{task.get('id', 'step')}.json",
+                json.dumps(result["output"]),
+            )
+            # Phase 8: log to episodic ledger
+            await self.memory.episodic.append({
+                "step": task.get("id"),
+                "status": "success",
+                "ts": time.time(),
+            })
+
+        return result
+```
+
+---
+
+## Phase 8 — Memory Access in AutoAgent
+
+### UnifiedMemory
+
+```python
+from jarviscore.memory import UnifiedMemory
+
+# In setup() — after super().setup()
+self.memory = UnifiedMemory(
+    workflow_id="wf-001", step_id="analyst",
+    agent_id=self.role,
+    redis_store=self._redis_store,
+    blob_storage=self._blob_storage,
+)
+```
+
+### RedisMemoryAccessor — Reading Prior Step Outputs
+
+AutoAgent steps running under the WorkflowEngine automatically write their output to
+`step_output:{workflow_id}:{step_id}` in Redis. Use `RedisMemoryAccessor` to read
+a prior step's output without re-running it:
+
+```python
+from jarviscore.memory import RedisMemoryAccessor
+
+async def execute_task(self, task):
+    accessor = RedisMemoryAccessor(self._redis_store, workflow_id=task.get("workflow_id"))
+    raw = accessor.get("fetch")                          # reads step_output:wf:fetch
+    prior_data = raw.get("output", raw) if isinstance(raw, dict) else {}
+    # prior_data is now available for LLM-generated code via context injection
+    ...
+```
+
+---
+
+## Context Injection — Why It Matters
+
+### The Critical Line
+
+```python
+result = await self.sandbox.execute(code, context=task.get('context'))
+```
+
+This line (in `AutoAgent.execute_task`) passes the workflow's `context` dict into the
+sandbox namespace before executing LLM-generated code. Without it, `previous_step_results`
+is undefined inside the generated code and any reference raises `NameError`.
+
+### What Happens Without It
+
+The sandbox catches the `NameError` silently and returns an empty / fallback result:
+
+```python
+# LLM generates this code for an analysis step:
+research = context.get('previous_step_results', {}).get('fetch', {})
+result = analyze(research)
+
+# Without context injection:
+# → NameError: name 'context' is not defined
+# → Sandbox catches exception → returns {"status": "success", "output": None}
+# → Silent failure: downstream steps get empty data
+```
+
+### The Diagnostic Tell
+
+If `execution_time ≈ 0.003s` on an analysis step, the generated code failed instantly:
+
+```
+{"status": "success", "execution_time": 0.003, "output": null}
+```
+
+A real LLM-driven computation takes 1–30s depending on complexity. Sub-10ms means the
+code errored before doing any work.
+
+**Fix already applied** in `jarviscore/profiles/autoagent.py` as of v0.4.0 — context is
+always passed. This note exists so you recognise the symptom if you see it in custom sandboxes.
+
+---
+
+## Production Example: Ex1 — Financial Pipeline
+
+**Profile:** AutoAgent | **Mode:** autonomous | **Phases:** 1, 5, 6, 7, 8, 9
+
+### Architecture
+
+```
+MarketDataAgent  ──→  AnalysisAgent  ──→  ReportAgent
+   (fetch)              (analyse)           (report)
+```
+
+Three AutoAgents run sequentially. Each step's output is stored in Redis by the
+WorkflowEngine. The analysis and report agents read prior step outputs via
+`RedisMemoryAccessor`. The final report is saved to blob storage.
+
+### Phases at Work
+
+| Phase | What happens |
+|-------|-------------|
+| 9 | `_redis_store`, `_blob_storage`, `mailbox` injected before each agent's `setup()` |
+| 7 | WorkflowEngine dispatches steps in `depends_on` order; crash recovery via Redis hash |
+| 8 | `UnifiedMemory` logs each step to `EpisodicLedger`; `RedisMemoryAccessor` reads prior outputs |
+| 6 | Kernel routes: fetch → ResearcherSubAgent, analyse → CoderSubAgent, report → CommunicatorSubAgent |
+| 5 | Successful generated functions are graduated to `code_registry` for reuse |
+| 1 | Final report Markdown saved to `blob_storage.save("reports/financial-daily-001.md", ...)` |
+
+### Run
+
+```bash
+docker compose -f docker-compose.infra.yml up -d
+cp .env.example .env   # set CLAUDE_API_KEY and REDIS_URL
+
+python examples/ex1_financial_pipeline.py
+```
+
+### Verify
+
+```bash
+redis-cli hgetall "step_output:financial-daily-001:fetch"
+redis-cli hgetall "step_output:financial-daily-001:analyse"
+cat blob_storage/reports/financial-daily-001.md
+redis-cli xrange ledgers:financial-daily-001 - +
+curl -s http://localhost:9090/metrics | grep jarviscore
+```
+
+Re-run with the same `workflow_id` — already-completed steps are skipped (crash recovery).
+
+---
+
+## Production Example: Ex2 — Distributed Research Network
+
+**Profile:** AutoAgent | **Mode:** distributed (4-node SWIM) | **Phases:** 4, 7, 8, 9
+
+### Architecture
+
+```
+ex2_synthesizer.py    port 7949 (seed, no SEED_NODES)
+ex2_research_node1.py port 7946, SEED_NODES=127.0.0.1:7949  → TechResearcher
+ex2_research_node2.py port 7947, SEED_NODES=127.0.0.1:7949  → MarketResearcher
+ex2_research_node3.py port 7948, SEED_NODES=127.0.0.1:7949  → RegResearcher
+```
+
+ZMQ port = SWIM port + 1000 (e.g. 7949 → 8949).
+
+### How Distributed Step Claiming Works
+
+The synthesizer calls `mesh.workflow(...)` which writes the full DAG to Redis
+(`workflow_graph:{wf_id}` hash). Each node runs `Mesh._run_distributed_worker()` as a
+background asyncio task. The worker:
+
+1. Scans `jarviscore:active_workflows` for workflow IDs
+2. Reads all step definitions from `workflow_graph:{wf_id}`
+3. Filters steps matching its local agents
+4. Calls `are_dependencies_met(step_id)` — skips if deps incomplete
+5. Uses `claim_step(step_id)` — atomic Redis SETNX — only one node wins
+6. Executes the step, writes output + status back to Redis
+7. Synthesizer's engine polls via `_wait_remote_step()` every 2s until `"completed"`
+
+**No `STEP_ID` hardcoding required.** Nodes autonomously claim matching steps.
+
+### Port Hardcoding — Critical Note
+
+`swim/main.py` calls `load_dotenv()` at import time. If your `.env` has `BIND_PORT=7946`,
+every process inherits that value — including the synthesizer. Always hardcode ports in
+example scripts rather than using `os.getenv("BIND_PORT", default)`:
+
+```python
+# Wrong — inherits BIND_PORT from .env
+BIND_PORT = int(os.getenv("BIND_PORT", "7949"))
+
+# Correct — explicit constant per script
+BIND_PORT = 7949   # synthesizer is always 7949
+```
+
+### Run
+
+```bash
+docker compose -f docker-compose.infra.yml up -d
+
+# Start seed first — wait ~2s for SWIM to stabilise
+python examples/ex2_synthesizer.py &       # port 7949
+sleep 2
+python examples/ex2_research_node1.py &    # port 7946
+python examples/ex2_research_node2.py &    # port 7947
+python examples/ex2_research_node3.py &    # port 7948
+```
+
+### Verify
+
+```bash
+redis-cli hgetall "step_output:ai-landscape-q1:tech"
+redis-cli hgetall "step_output:ai-landscape-q1:synth"
+redis-cli xrange ledgers:ai-landscape-q1 - +
+```
+
+---
+
 ## Troubleshooting
 
 **"No LLM providers configured"**

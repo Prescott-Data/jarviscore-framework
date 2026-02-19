@@ -11,21 +11,36 @@ CustomAgent lets you integrate your **existing agent code** with JarvisCore's ne
 
 1. [Prerequisites](#prerequisites)
 2. [Choose Your Mode](#choose-your-mode)
-3. [P2P Mode](#p2p-mode) - Handler-based peer communication
-4. [Distributed Mode](#distributed-mode) - Workflow tasks + P2P
-5. [Cognitive Discovery (v0.3.0)](#cognitive-discovery-v030) - Dynamic peer awareness for LLMs
-6. [FastAPI Integration (v0.3.0)](#fastapi-integration-v030) - 3-line setup with JarvisLifespan
-7. [Framework Integration Patterns](#framework-integration-patterns) - aiohttp, Flask, Django
-8. [Cloud Deployment (v0.3.0)](#cloud-deployment-v030) - Self-registration for containers
-9. [API Reference](#api-reference)
-10. [Multi-Node Deployment](#multi-node-deployment)
-11. [Error Handling](#error-handling)
-12. [Troubleshooting](#troubleshooting)
-13. [Session Context Propagation (v0.3.2)](#session-context-propagation-v032) - Request tracking and metadata
-14. [Async Request Pattern (v0.3.2)](#async-request-pattern-v032) - Non-blocking parallel requests
-15. [Load Balancing Strategies (v0.3.2)](#load-balancing-strategies-v032) - Round-robin and random selection
-16. [Mesh Diagnostics (v0.3.2)](#mesh-diagnostics-v032) - Health monitoring and debugging
-17. [Testing with MockMesh (v0.3.2)](#testing-with-mockmesh-v032) - Unit testing patterns
+
+**v0.4.0 — Infrastructure Stack (Phases 1–9):**
+
+3. [Phase 9 — Auto-Injected Infrastructure](#phase-9--auto-injected-infrastructure) - `_redis_store`, `_blob_storage`, `mailbox` wired before `setup()`
+4. [Phase 1 — Blob Storage](#phase-1--blob-storage) - Save / load artifacts
+5. [Phase 4 — MailboxManager](#phase-4--mailboxmanager) - Async agent-to-agent messaging
+6. [Phase 5 — Prometheus Metrics](#phase-5--prometheus-metrics) - `record_step_execution`
+7. [Phase 7 — Distributed Workflow](#phase-7--distributed-workflow) - Redis DAG, crash recovery
+8. [Phase 7D — Nexus Auth Injection](#phase-7d--nexus-auth-injection) - OAuth via `requires_auth=True`
+9. [Phase 8 — UnifiedMemory](#phase-8--unifiedmemory) - EpisodicLedger, LTM, accessor
+10. [Production Example: Ex3 — Support Swarm](#production-example-ex3--customer-support-swarm) - P2P + Nexus auth walkthrough
+11. [Production Example: Ex4 — Content Pipeline](#production-example-ex4--content-pipeline) - Distributed + LTM walkthrough
+
+**Agent Modes & Patterns:**
+
+12. [P2P Mode](#p2p-mode) - Handler-based peer communication
+13. [Distributed Mode](#distributed-mode) - Workflow tasks + P2P
+14. [Cognitive Discovery (v0.3.0)](#cognitive-discovery-v030) - Dynamic peer awareness for LLMs
+15. [FastAPI Integration (v0.3.0)](#fastapi-integration-v030) - 3-line setup with JarvisLifespan
+16. [Framework Integration Patterns](#framework-integration-patterns) - aiohttp, Flask, Django
+17. [Cloud Deployment (v0.3.0)](#cloud-deployment-v030) - Self-registration for containers
+18. [API Reference](#api-reference)
+19. [Multi-Node Deployment](#multi-node-deployment)
+20. [Error Handling](#error-handling)
+21. [Troubleshooting](#troubleshooting)
+22. [Session Context Propagation (v0.3.2)](#session-context-propagation-v032) - Request tracking and metadata
+23. [Async Request Pattern (v0.3.2)](#async-request-pattern-v032) - Non-blocking parallel requests
+24. [Load Balancing Strategies (v0.3.2)](#load-balancing-strategies-v032) - Round-robin and random selection
+25. [Mesh Diagnostics (v0.3.2)](#mesh-diagnostics-v032) - Health monitoring and debugging
+26. [Testing with MockMesh (v0.3.2)](#testing-with-mockmesh-v032) - Unit testing patterns
 
 ---
 
@@ -116,6 +131,400 @@ class MyLLMClient:
 | **Supports workflows** | No | No | Yes |
 
 > **CustomAgent** includes built-in P2P handlers - just implement `on_peer_request()` and `on_peer_notify()`. No need to write your own `run()` loop.
+
+---
+
+## Phase 9 — Auto-Injected Infrastructure
+
+Before every agent's `setup()` call, the Mesh wires three infrastructure objects directly
+onto the agent instance. **Do not create these in `__init__`** — they are not available
+there. Use them in `setup()` and `execute_task()`.
+
+| Attribute | Type | Available when |
+|-----------|------|---------------|
+| `self._redis_store` | `RedisContextStore` | `REDIS_URL` set |
+| `self._blob_storage` | `LocalBlobStorage` \| `AzureBlobStorage` | always (local is default) |
+| `self.mailbox` | `MailboxManager` | `REDIS_URL` set |
+
+```python
+class MyAgent(CustomAgent):
+    role = "worker"
+    capabilities = ["processing"]
+
+    async def setup(self):
+        await super().setup()
+        # All three are already injected — use them immediately
+        self.memory = UnifiedMemory(
+            workflow_id="my-wf", step_id="worker",
+            agent_id=self.role,
+            redis_store=self._redis_store,
+            blob_storage=self._blob_storage,
+        )
+
+    async def execute_task(self, task):
+        # Phase 1: blob
+        await self._blob_storage.save("output/result.json", json.dumps(result))
+        # Phase 4: mailbox
+        self.mailbox.send(other_agent_id, {"event": "done"})
+        return {"status": "success", "output": result}
+```
+
+**Verification pattern** — confirm injection before a run:
+
+```python
+for agent in mesh.agents:
+    redis_ok  = agent._redis_store  is not None
+    blob_ok   = agent._blob_storage is not None
+    mailbox_ok = agent.mailbox      is not None
+    print(f"{agent.role}: redis={redis_ok} blob={blob_ok} mailbox={mailbox_ok}")
+```
+
+---
+
+## Phase 1 — Blob Storage
+
+`LocalBlobStorage` writes to `./blob_storage/` by default. Switch to Azure via
+`STORAGE_BACKEND=azure`.
+
+```python
+# Save artifacts
+await self._blob_storage.save("research/ai-landscape.json", json.dumps(research))
+await self._blob_storage.save("drafts/article.md",          markdown_text)
+await self._blob_storage.save("escalations/ticket-001.json", json.dumps(record))
+
+# Load artifact
+content = await self._blob_storage.load("research/ai-landscape.json")
+data = json.loads(content) if content else {}
+```
+
+**Path convention:** `{type}/{workflow_id}/{filename}.{ext}`
+
+Examples: `research/wf-001/findings.json`, `reports/daily-001/summary.md`
+
+---
+
+## Phase 4 — MailboxManager
+
+Fire-and-forget messages between agents, backed by Redis Streams.
+
+```python
+# Route a query to a specialist (ex3 gateway pattern)
+self.mailbox.send(technical_agent_id, {
+    "query": "API auth broken",
+    "customer_id": "cust-42",
+})
+
+# Drain inbox
+messages = self.mailbox.read(max_messages=10)
+for msg in messages:
+    query = msg.get("query")
+    # handle it...
+
+# Notification after completing a step (ex4 publisher pattern)
+self.mailbox.send(researcher_agent_id, {"event": "published", "workflow": "content-2026"})
+```
+
+`target_id` is the `agent_id` string (usually `"{role}-{uuid4[:8]}"`).
+Messages survive process restarts when `REDIS_URL` is set.
+
+---
+
+## Phase 5 — Prometheus Metrics
+
+Record step execution time and status at the end of every `execute_task()`:
+
+```python
+import time
+from jarviscore.telemetry.metrics import record_step_execution
+
+async def execute_task(self, task):
+    start = time.time()
+    try:
+        result = self._do_work(task)
+        record_step_execution(time.time() - start, "success")
+        return {"status": "success", "output": result}
+    except Exception as e:
+        record_step_execution(time.time() - start, "failure")
+        return {"status": "failure", "error": str(e)}
+```
+
+Enable metrics: `PROMETHEUS_ENABLED=true`, `PROMETHEUS_PORT=9090`.
+View in Grafana: metric `jarviscore_step_duration_seconds`.
+
+---
+
+## Phase 7 — Distributed Workflow + `depends_on`
+
+```python
+mesh = Mesh(mode="distributed", config={
+    "redis_url": "redis://localhost:6379/0",
+    "bind_port": 7950,
+})
+mesh.add(ResearchAgent)
+mesh.add(WriterAgent)
+await mesh.start()
+
+results = await mesh.workflow("content-2026", [
+    {"id": "research", "agent": "researcher", "task": "Research AI agents"},
+    {"id": "write",    "agent": "writer",     "task": "Write article",
+     "depends_on": ["research"]},
+])
+```
+
+- `depends_on` is a list of step IDs that must complete before this step is dispatched
+- The WorkflowEngine writes the full DAG to Redis hash `workflow_graph:{workflow_id}`
+- **Crash recovery**: restart the process with the same `workflow_id` — completed steps
+  are not re-run; pending steps resume from where they stopped
+
+---
+
+## Phase 7D — Nexus Auth Injection
+
+Set `requires_auth = True` on any `CustomAgent` to receive an injected `_auth_manager`
+before `setup()`:
+
+```python
+class TechnicalAgent(CustomAgent):
+    role = "technical_support"
+    requires_auth = True       # → self._auth_manager injected
+
+    async def execute_task(self, task):
+        if self._auth_manager:   # None when NEXUS_GATEWAY_URL not set
+            result = await self._auth_manager.make_authenticated_request(
+                provider="github",
+                method="GET",
+                url="https://api.github.com/user",
+            )
+        else:
+            result = {"status": "degraded", "note": "no auth configured"}
+        return {"status": "success", "output": result}
+```
+
+Full Nexus flow on first call: `request_connection → browser OAuth →
+poll ACTIVE → resolve_strategy → apply Authorization header`.
+
+Config keys: `auth_mode` (`production`|`mock`), `nexus_gateway_url`,
+`nexus_default_user_id`, `auth_open_browser`.
+
+**Graceful degradation:** always check `if self._auth_manager:` —
+`_auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set.
+
+---
+
+## Phase 8 — UnifiedMemory
+
+```python
+from jarviscore.memory import UnifiedMemory, RedisMemoryAccessor
+
+# In setup()
+self.memory = UnifiedMemory(
+    workflow_id="content-2026", step_id="writer",
+    agent_id=self.role,
+    redis_store=self._redis_store,
+    blob_storage=self._blob_storage,
+)
+
+# EpisodicLedger — append event
+await self.memory.episodic.append({"event": "task_started", "topic": topic, "ts": time.time()})
+
+# EpisodicLedger — read recent events
+recent = await self.memory.episodic.tail(5)
+
+# LongTermMemory — save and load summary
+await self.memory.ltm.save_summary("Style: concise, technical, no jargon.")
+style_notes = await self.memory.ltm.load_summary()
+
+# Compress LTM after publish (saves tokens on next run)
+await self.memory.ltm.save_summary(compressed_summary)
+```
+
+**RedisMemoryAccessor** — read any prior step's output cross-agent:
+
+```python
+accessor = RedisMemoryAccessor(self._redis_store, workflow_id="content-2026")
+raw = accessor.get("research")
+research = raw.get("output", raw) if isinstance(raw, dict) else {}
+# research now has the ResearchAgent's output dict
+```
+
+Redis key: `step_output:{workflow_id}:{step_id}`
+
+---
+
+## Production Example: Ex3 — Customer Support Swarm
+
+**Profile:** CustomAgent | **Mode:** p2p | **Phases:** 1, 4, 7D, 8, 9
+
+### Architecture
+
+```
+GatewayAgent   ──mailbox──→  TechnicalAgent  (requires_auth=True)
+               ──mailbox──→  BillingAgent
+               ──mailbox──→  EscalationAgent ──blob──→ escalation record
+```
+
+Single process, 4 agents, P2P mode. Gateway reads queries and routes via mailbox.
+`TechnicalAgent` exercises the full Nexus OAuth flow.
+
+### Key Agent Patterns
+
+**GatewayAgent — keyword routing via mailbox:**
+
+```python
+class GatewayAgent(CustomAgent):
+    role = "gateway"
+    capabilities = ["routing", "intake"]
+
+    async def execute_task(self, task):
+        query = task.get("task", "")
+        if any(w in query.lower() for w in ["api", "error", "bug", "auth"]):
+            target = self._find_agent("technical_support")
+        elif any(w in query.lower() for w in ["invoice", "billing", "charge"]):
+            target = self._find_agent("billing_support")
+        else:
+            target = self._find_agent("escalation")
+
+        self.mailbox.send(target, {"query": query, "customer_id": task.get("customer_id")})
+        return {"status": "success", "output": f"Routed to {target}"}
+```
+
+**TechnicalAgent — Nexus auth + EpisodicLedger:**
+
+```python
+class TechnicalAgent(CustomAgent):
+    role = "technical_support"
+    requires_auth = True
+
+    async def setup(self):
+        await super().setup()
+        self.memory = UnifiedMemory("support-swarm", self.agent_id,
+                                   self.role, self._redis_store, self._blob_storage)
+
+    async def execute_task(self, task):
+        await self.memory.episodic.append({"query": task.get("task"), "ts": time.time()})
+        if self._auth_manager:
+            api_result = await self._auth_manager.make_authenticated_request(
+                "github", "GET", "https://api.github.com/user")
+        return {"status": "success", "output": f"Resolved: {task.get('task')}"}
+```
+
+**EscalationAgent — blob record for human review:**
+
+```python
+class EscalationAgent(CustomAgent):
+    role = "escalation"
+
+    async def execute_task(self, task):
+        record = {"query": task.get("task"), "ts": time.time(), "needs_human": True}
+        await self._blob_storage.save(
+            f"escalations/support-swarm/{int(time.time())}.json",
+            json.dumps(record),
+        )
+        return {"status": "success", "output": "Escalated and recorded"}
+```
+
+### Run
+
+```bash
+docker compose -f docker-compose.infra.yml up -d
+# Optional: set NEXUS_GATEWAY_URL and AUTH_MODE=production in .env for real OAuth
+python examples/ex3_support_swarm.py
+```
+
+### Verify
+
+```bash
+redis-cli xrange ledgers:support-swarm - +          # episodic events
+ls blob_storage/escalations/support-swarm/          # escalation records
+```
+
+---
+
+## Production Example: Ex4 — Content Pipeline
+
+**Profile:** CustomAgent | **Mode:** distributed | **Phases:** 1, 4, 5, 7, 8, 9
+
+### Architecture
+
+```
+ResearchAgent ──→ WriterAgent ──→ SEOAgent ──→ PublisherAgent
+  (research)        (write)        (seo)         (publish)
+                      ↑ reads research via RedisMemoryAccessor
+                                              ↓ mailbox → ResearchAgent
+                                              ↓ LTM compressed
+```
+
+4-step sequential workflow, single process, distributed mode.
+
+### Key Patterns
+
+**WriterAgent — cross-step data via RedisMemoryAccessor:**
+
+```python
+class WriterAgent(CustomAgent):
+    role = "writer"
+
+    async def setup(self):
+        await super().setup()
+        ltm_notes = (await self._redis_store.get("ltm:content-pipeline")) or ""
+        self._style_notes = ltm_notes
+
+    async def execute_task(self, task):
+        # Read research output from Redis without passing it explicitly
+        accessor = RedisMemoryAccessor(self._redis_store, task.get("workflow_id", "content-pipeline"))
+        raw = accessor.get("research")
+        research = raw.get("output", raw) if isinstance(raw, dict) else {}
+
+        draft = self._write_article(task.get("task"), research, self._style_notes)
+
+        # Save draft to blob
+        path = f"content/drafts/{task.get('task','draft').replace(' ','_')}.md"
+        await self._blob_storage.save(path, draft)
+
+        return {"status": "success", "output": {"draft": draft, "blob_path": path}}
+```
+
+**PublisherAgent — LTM compress + mailbox notify:**
+
+```python
+class PublisherAgent(CustomAgent):
+    role = "publisher"
+
+    async def execute_task(self, task):
+        # ... publish logic ...
+        # Compress LTM for next run
+        await self.memory.ltm.save_summary("Published: AI agents article. Style: concise.")
+        # Notify researcher
+        researcher_id = self._find_agent("researcher")
+        self.mailbox.send(researcher_id, {"event": "published", "workflow": "content-pipeline"})
+        return {"status": "success", "output": "Published"}
+```
+
+### Workflow definition
+
+```python
+await mesh.workflow("content-2026", [
+    {"id": "research", "agent": "researcher", "task": "Research: future of AI agents"},
+    {"id": "write",    "agent": "writer",     "task": "Write article",     "depends_on": ["research"]},
+    {"id": "seo",      "agent": "seo",        "task": "Optimise keywords", "depends_on": ["write"]},
+    {"id": "publish",  "agent": "publisher",  "task": "Publish article",   "depends_on": ["seo"]},
+])
+```
+
+### Run
+
+```bash
+docker compose -f docker-compose.infra.yml up -d
+python examples/ex4_content_pipeline.py
+```
+
+### Verify
+
+```bash
+redis-cli hgetall "step_output:content-2026:research"
+ls blob_storage/content/drafts/
+redis-cli get "ltm:content-pipeline"                # LTM summary after publish
+```
 
 ---
 

@@ -7,15 +7,16 @@ Complete guide to configuring JarvisCore framework.
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
-2. [Environment Variables](#environment-variables)
-3. [LLM Configuration](#llm-configuration)
-4. [Sandbox Configuration](#sandbox-configuration)
-5. [Storage Configuration](#storage-configuration)
-6. [P2P Configuration](#p2p-configuration)
-7. [Execution Settings](#execution-settings)
-8. [Logging Configuration](#logging-configuration)
-9. [Configuration Examples](#configuration-examples)
-10. [Troubleshooting](#troubleshooting)
+2. [Phase → Configuration Quick Reference](#phase--configuration-quick-reference) — v0.4.0 phase-to-env-var mapping
+3. [Environment Variables](#environment-variables)
+4. [LLM Configuration](#llm-configuration)
+5. [Sandbox Configuration](#sandbox-configuration)
+6. [Storage Configuration](#storage-configuration)
+7. [P2P Configuration](#p2p-configuration)
+8. [Execution Settings](#execution-settings)
+9. [Logging Configuration](#logging-configuration)
+10. [Configuration Examples](#configuration-examples)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -45,6 +46,37 @@ CLAUDE_API_KEY=your-anthropic-api-key
 ```
 
 That's it! The framework handles the rest.
+
+---
+
+## Phase → Configuration Quick Reference
+
+Each infrastructure phase is enabled by specific environment variables. All phases
+degrade gracefully when not configured.
+
+| Phase | Feature | Required env vars | Install extras |
+|-------|---------|-------------------|----------------|
+| 1 | Blob storage | `STORAGE_BACKEND=local` (default), `STORAGE_BASE_PATH=./blob_storage` | — |
+| 1 | Azure Blob | `STORAGE_BACKEND=azure`, `AZURE_STORAGE_CONNECTION_STRING` | `pip install "jarviscore-framework[azure]"` |
+| 2 | Context distillation | — | automatic |
+| 3 | Telemetry / tracing | `LOG_LEVEL=DEBUG` (JSONL trace), `PROMETHEUS_ENABLED=true` | `pip install "jarviscore-framework[prometheus]"` |
+| 4 | Mailbox messaging | `REDIS_URL=redis://localhost:6379/0` | `pip install "jarviscore-framework[redis]"` |
+| 5 | Prometheus metrics | `PROMETHEUS_ENABLED=true`, `PROMETHEUS_PORT=9090` | `[prometheus]` |
+| 6 | Kernel / SubAgent OODA | `KERNEL_MAX_TURNS=30`, `KERNEL_MAX_TOTAL_TOKENS=80000` | automatic (AutoAgent) |
+| 7 | Distributed workflow | `REDIS_URL`, `REDIS_CONTEXT_TTL_DAYS=7` | `[redis]` |
+| 7D | Nexus auth | `NEXUS_GATEWAY_URL=https://...`, `AUTH_MODE=production` | — |
+| 8 | UnifiedMemory | `REDIS_URL` | `[redis]` |
+| 9 | Auto-injection | — | automatic |
+
+**Quick install by use case:**
+
+```bash
+pip install jarviscore-framework                          # Zero-infra (LLM + P2P only)
+pip install "jarviscore-framework[redis]"                 # + Mailbox, Memory, Distributed workflow
+pip install "jarviscore-framework[redis,prometheus]"      # + Metrics (Ex1, Ex2, Ex4)
+pip install "jarviscore-framework[redis,prometheus,azure]" # + Azure Blob
+pip install "jarviscore-framework[full]"                  # Everything
+```
 
 ---
 

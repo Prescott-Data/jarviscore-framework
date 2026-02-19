@@ -29,7 +29,17 @@ Complete API documentation for JarvisCore framework components.
    - [CodeRegistry](#coderegistry)
 5. [Orchestration](#orchestration)
    - [WorkflowEngine](#workflowengine)
-6. [Utilities](#utilities)
+6. [Infrastructure & Memory API (v0.4.0)](#infrastructure--memory-api-v040)
+   - [BlobStorage](#blobstorage)
+   - [MailboxManager](#mailboxmanager)
+   - [UnifiedMemory](#unifiedmemory)
+   - [EpisodicLedger](#episodicledger)
+   - [LongTermMemory](#longtermemory)
+   - [WorkingScratchpad](#workingscratchpad)
+   - [RedisMemoryAccessor](#redismemoryaccessor)
+   - [AuthenticationManager](#authenticationmanager-phase-7d)
+   - [record_step_execution](#record_step_execution-phase-5)
+7. [Utilities](#utilities)
    - [InternetSearch](#internetsearch)
    - [UnifiedLLMClient](#unifiedllmclient)
 
@@ -1515,6 +1525,268 @@ task['context'] = {
     'workflow_id': 'pipeline-1',
     'step_id': 'current_step'
 }
+```
+
+---
+
+## Infrastructure & Memory API (v0.4.0)
+
+### BlobStorage
+
+Save and load arbitrary artifacts (string, bytes, JSON) to local filesystem or Azure Blob.
+
+```python
+from jarviscore.storage import LocalBlobStorage, AzureBlobStorage
+
+# LocalBlobStorage — default, writes to STORAGE_BASE_PATH (default: ./blob_storage/)
+storage = LocalBlobStorage(base_path="./blob_storage")
+
+# Auto-injected as agent._blob_storage before setup()
+```
+
+#### `async save(path, data)`
+
+```python
+await agent._blob_storage.save("reports/wf-001/summary.md", markdown_text)
+await agent._blob_storage.save("data/wf-001/result.json", json.dumps(data))
+```
+
+**Parameters:**
+- `path` (str): Relative path within blob storage. Convention: `{type}/{workflow_id}/{filename}.{ext}`
+- `data` (str | bytes): Content to save
+
+#### `async load(path)`
+
+```python
+content = await agent._blob_storage.load("reports/wf-001/summary.md")
+# Returns str | bytes | None (None if path does not exist)
+```
+
+**Config:**
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `STORAGE_BACKEND` | `local` | `local` or `azure` |
+| `STORAGE_BASE_PATH` | `./blob_storage` | Root directory for local storage |
+
+---
+
+### MailboxManager
+
+Async inter-agent messaging via Redis Streams. Auto-injected as `agent.mailbox`.
+
+```python
+# Auto-injected before setup() when REDIS_URL is set
+# agent.mailbox : MailboxManager
+```
+
+#### `send(target_id, message)`
+
+Fire-and-forget message to any agent by its `agent_id`:
+
+```python
+agent.mailbox.send("technical_support-a1b2c3d4", {"query": "API down", "customer_id": "cust-42"})
+```
+
+**Parameters:**
+- `target_id` (str): Recipient's `agent_id` (e.g. `"{role}-{uuid8}"`)
+- `message` (dict): Arbitrary payload
+
+#### `read(max_messages=10)`
+
+Drain the agent's inbox:
+
+```python
+messages = agent.mailbox.read(max_messages=10)
+for msg in messages:
+    # msg is the dict passed to send()
+    print(msg["query"])
+```
+
+**Returns:** `List[dict]`
+
+**Requires:** `REDIS_URL`
+
+---
+
+### UnifiedMemory
+
+Unified memory stack per agent step: episodic ledger + long-term memory + working scratchpad.
+
+```python
+from jarviscore.memory import UnifiedMemory
+
+memory = UnifiedMemory(
+    workflow_id="wf-001",
+    step_id="analyst",
+    agent_id="analyst",
+    redis_store=agent._redis_store,
+    blob_storage=agent._blob_storage,
+)
+```
+
+**Attributes:**
+- `.episodic` → `EpisodicLedger`
+- `.ltm` → `LongTermMemory`
+- `.scratch` → `WorkingScratchpad`
+
+---
+
+### EpisodicLedger
+
+Redis Streams-backed event log per workflow.
+
+```python
+memory.episodic  # EpisodicLedger instance
+```
+
+#### `async append(event)`
+
+```python
+await memory.episodic.append({"event": "task_started", "step": "analyst", "ts": time.time()})
+```
+
+**Parameters:**
+- `event` (dict): Arbitrary event payload. Stored in Redis stream `ledgers:{workflow_id}`
+
+#### `async tail(count)`
+
+```python
+recent = await memory.episodic.tail(5)
+# Returns list of dicts, most-recent first
+```
+
+**Returns:** `List[dict]`
+
+**Redis key:** `ledgers:{workflow_id}` (Redis Stream, XADD / XREVRANGE)
+
+---
+
+### LongTermMemory
+
+Single-key Redis summary per workflow — persists across runs.
+
+```python
+memory.ltm  # LongTermMemory instance
+```
+
+#### `async save_summary(text)`
+
+```python
+await memory.ltm.save_summary("Key findings: AI chip demand up 40% QoQ.")
+```
+
+#### `async load_summary()`
+
+```python
+summary = await memory.ltm.load_summary()  # str | None
+```
+
+**Redis key:** `ltm:{workflow_id}`
+
+---
+
+### WorkingScratchpad
+
+In-memory key/value store (not persisted):
+
+```python
+memory.scratch.set("draft", article_text)
+draft = memory.scratch.get("draft", default="")
+memory.scratch.clear()
+```
+
+---
+
+### RedisMemoryAccessor
+
+Read any prior step's output from Redis without explicit data passing.
+
+```python
+from jarviscore.memory import RedisMemoryAccessor
+
+accessor = RedisMemoryAccessor(agent._redis_store, workflow_id="wf-001")
+```
+
+#### `get(step_id)`
+
+```python
+raw = accessor.get("fetch")
+# raw is the dict stored by WorkflowEngine after the "fetch" step completed
+# Unwrap pattern:
+data = raw.get("output", raw) if isinstance(raw, dict) else {}
+```
+
+**Returns:** `dict | None`
+
+**Redis key read:** `step_output:{workflow_id}:{step_id}`
+
+---
+
+### AuthenticationManager (Phase 7D)
+
+Injected as `agent._auth_manager` when `agent.requires_auth = True` and
+`NEXUS_GATEWAY_URL` is set. `None` otherwise (graceful degradation).
+
+```python
+class SecureAgent(CustomAgent):
+    requires_auth = True  # triggers injection
+```
+
+#### `async make_authenticated_request(provider, method, url, **kwargs)`
+
+```python
+result = await agent._auth_manager.make_authenticated_request(
+    provider="github",
+    method="GET",
+    url="https://api.github.com/user",
+)
+# result: dict with status_code, headers, body
+```
+
+**Full Nexus flow (first call per provider):**
+1. `request_connection(provider, user_id, scopes)` → POST `/v1/request-connection`
+2. `CLIFlowHandler.present_auth_url(auth_url)` → opens browser or prints URL
+3. `wait_for_completion()` → polls `GET /v1/check-connection/{id}` every 2s until `ACTIVE`
+4. `resolve_strategy(connection_id)` → `GET /v1/token/{id}` → `DynamicStrategy`
+5. `apply_strategy_to_request(strategy, method, url)` → injects `Authorization` header
+
+**Config:**
+
+| Key | Description |
+|-----|-------------|
+| `auth_mode` | `"production"` \| `"mock"` |
+| `nexus_gateway_url` | URL of deployed Dromos gateway |
+| `nexus_default_user_id` | User ID sent in connection requests |
+| `auth_open_browser` | `True` (default) — open browser for OAuth consent |
+
+---
+
+### record_step_execution (Phase 5)
+
+```python
+from jarviscore.telemetry.metrics import record_step_execution
+
+record_step_execution(duration: float, status: str) -> None
+```
+
+**Parameters:**
+- `duration` (float): Step execution time in seconds
+- `status` (str): `"success"` or `"failure"`
+
+**Metrics emitted:**
+- `jarviscore_step_duration_seconds` — Histogram, labelled by `status`
+- `jarviscore_steps_total` — Counter, labelled by `status`
+
+**Enable:** `PROMETHEUS_ENABLED=true`, `PROMETHEUS_PORT=9090`
+
+**Guard (when prometheus-client not installed):**
+```python
+try:
+    from prometheus_client import Counter, Histogram
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
 ```
 
 ---

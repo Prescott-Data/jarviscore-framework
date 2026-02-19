@@ -26,6 +26,20 @@ python -m jarviscore.cli.smoketest --verbose
 
 ## Common Issues
 
+1. [Installation Problems](#1-installation-problems)
+2. [LLM Configuration Issues](#2-llm-configuration-issues)
+3. [Execution Errors](#3-execution-errors)
+4. [Workflow Issues](#4-workflow-issues)
+5. [CustomAgent Issues](#5-customagent-issues)
+6. [Environment Issues](#6-environment-issues)
+7. [Sandbox Configuration](#7-sandbox-configuration)
+8. [Infrastructure & Memory Issues (v0.4.0)](#8-infrastructure--memory-issues-v040)
+9. [P2P/Distributed Mode Issues](#9-p2pdistributed-mode-issues)
+10. [Performance Issues](#10-performance-issues)
+11. [Testing Issues](#11-testing-issues)
+
+---
+
 ### 1. Installation Problems
 
 #### Issue: `ModuleNotFoundError: No module named 'jarviscore'`
@@ -320,7 +334,219 @@ python your_script.py
 
 ---
 
-### 8. P2P/Distributed Mode Issues
+### 8. Infrastructure & Memory Issues (v0.4.0)
+
+#### Issue: `self._redis_store` / `self._blob_storage` / `self.mailbox` is `None` after `setup()`
+
+**Cause:** Accessing injected attributes in `__init__` instead of `setup()`, or using a
+Mesh mode that does not start the full infrastructure.
+
+**Solution:**
+```python
+# Wrong — __init__ runs before injection
+class MyAgent(CustomAgent):
+    def __init__(self):
+        self.memory = UnifiedMemory(..., redis_store=self._redis_store)  # None here!
+
+# Correct — setup() runs after injection
+class MyAgent(CustomAgent):
+    async def setup(self):
+        await super().setup()
+        self.memory = UnifiedMemory(..., redis_store=self._redis_store)  # injected ✓
+```
+
+Verify injection after `mesh.start()`:
+```python
+await mesh.start()
+for agent in mesh.agents:
+    print(f"{agent.role}: redis={agent._redis_store is not None} "
+          f"blob={agent._blob_storage is not None} "
+          f"mailbox={agent.mailbox is not None}")
+```
+
+---
+
+#### Issue: `ConnectionError: Redis connection refused` / `Redis unavailable`
+
+**Cause:** Redis is not running, or `REDIS_URL` is not set / incorrect.
+
+**Solution:**
+```bash
+# Start Redis (quickest)
+docker compose -f docker-compose.infra.yml up -d
+
+# Verify Redis is responding
+redis-cli ping   # → PONG
+
+# Check REDIS_URL in .env
+grep REDIS_URL .env   # → REDIS_URL=redis://localhost:6379/0
+```
+
+Required for: mailbox (Phase 4), distributed workflow (Phase 7), UnifiedMemory (Phase 8).
+Without `REDIS_URL`, these degrade gracefully — `_redis_store` / `mailbox` become `None`.
+
+---
+
+#### Issue: Silent task success with `execution_time ≈ 0.003s` and `output: null`
+
+**Cause:** LLM-generated code raised `NameError: name 'context' is not defined`.
+The sandbox catches the exception silently and returns a fallback result. This happens
+when `context=task.get('context')` is not passed to `sandbox.execute()`.
+
+**Diagnostic tell:**
+```json
+{"status": "success", "execution_time": 0.003, "output": null}
+```
+Real LLM-driven computation takes 1–30s. Sub-10ms means the code crashed instantly.
+
+**Solution (v0.4.0 — already fixed):** Confirm `jarviscore/profiles/autoagent.py` has:
+```python
+result = await self.sandbox.execute(code, context=task.get('context'))
+```
+If you have a custom AutoAgent subclass that overrides `execute_task`, ensure you pass
+`context=task.get('context')` when calling `sandbox.execute()`.
+
+**For LLM-generated code that reads prior steps**, use the simple access pattern:
+```python
+# In system_prompt — tell the LLM to use this pattern:
+research = context.get('previous_step_results', {}).get('fetch', {})
+```
+
+---
+
+#### Issue: `BIND_PORT` contamination — Ex2 synthesizer uses wrong port
+
+**Cause:** `swim/main.py` calls `load_dotenv()` at import time. If `.env` has
+`BIND_PORT=7946`, every process that imports jarviscore inherits it — including the
+synthesizer which should be on port 7949.
+
+**Symptom:** All 4 nodes try to bind port 7946; the synthesizer process crashes or
+joins as a regular node instead of the seed.
+
+**Solution:** Always hardcode ports in distributed example scripts:
+```python
+# Wrong — inherits BIND_PORT from .env
+BIND_PORT = int(os.getenv("BIND_PORT", "7949"))
+
+# Correct — explicit constant
+BIND_PORT = 7949   # synthesizer is always 7949
+```
+
+Port reference for Ex2:
+| Script | SWIM port | ZMQ port | Role |
+|--------|-----------|----------|------|
+| `ex2_synthesizer.py` | 7949 | 8949 | Seed (no SEED_NODES) |
+| `ex2_research_node1.py` | 7946 | 8946 | TechResearcher |
+| `ex2_research_node2.py` | 7947 | 8947 | MarketResearcher |
+| `ex2_research_node3.py` | 7948 | 8948 | RegResearcher |
+
+---
+
+#### Issue: Distributed step never starts — stuck in `"pending"` forever
+
+**Cause:** One of: (a) `are_dependencies_met()` returning `False` because a prior step
+never wrote its status to Redis; (b) no node has the matching agent role; (c) the step
+was already claimed by another node.
+
+**Diagnose:**
+```bash
+# See all step statuses for a workflow
+redis-cli hgetall "workflow_graph:your-workflow-id"
+
+# Check what step outputs exist
+redis-cli keys "step_output:your-workflow-id:*"
+
+# Check which workflows are active
+redis-cli smembers "jarviscore:active_workflows"
+```
+
+**Solutions:**
+1. Ensure the prior step completed: its `step_output:wf:step_id` key must exist in Redis
+2. Confirm the node running the expected agent is alive and has joined the cluster
+3. If a step is stuck in `"claimed"` (crashed mid-run), reset it:
+   ```bash
+   redis-cli hset "workflow_graph:wf-id" "step-id:status" "pending"
+   redis-cli del "claim:wf-id:step-id"
+   ```
+
+---
+
+#### Issue: `self._auth_manager` is `None` despite `requires_auth = True`
+
+**Cause:** `NEXUS_GATEWAY_URL` is not set in `.env`. The Mesh only injects
+`AuthenticationManager` when a gateway URL is configured.
+
+**Solution:**
+```bash
+# In .env
+NEXUS_GATEWAY_URL=https://your-dromos-gateway.example.com
+AUTH_MODE=production
+```
+
+For local development without a Nexus gateway, use mock mode:
+```bash
+AUTH_MODE=mock
+```
+
+Or guard the call in your agent:
+```python
+if self._auth_manager:
+    result = await self._auth_manager.make_authenticated_request(...)
+else:
+    # Graceful degradation path
+```
+
+---
+
+#### Issue: `EpisodicLedger.append()` raises / events not appearing in Redis
+
+**Cause:** Redis unavailable, or `UnifiedMemory` initialised without a valid `redis_store`.
+
+**Diagnose:**
+```bash
+redis-cli xrange ledgers:your-workflow-id - +
+# → (empty list) if no events written
+```
+
+**Solution:**
+1. Ensure `REDIS_URL` is set and Redis is reachable
+2. Confirm `UnifiedMemory` is initialised in `setup()` (not `__init__`):
+   ```python
+   async def setup(self):
+       await super().setup()
+       self.memory = UnifiedMemory(
+           workflow_id="wf-001", step_id=self.role,
+           agent_id=self.role,
+           redis_store=self._redis_store,    # must not be None
+           blob_storage=self._blob_storage,
+       )
+   ```
+3. Check `self._redis_store is not None` before init
+
+---
+
+#### Issue: `blob_storage.load()` returns `None` for a path that should exist
+
+**Cause:** (a) Path was saved with a different base; (b) `STORAGE_BASE_PATH` differs
+between save and load runs; (c) file was saved to a different process's working directory.
+
+**Diagnose:**
+```bash
+ls -la blob_storage/
+find blob_storage/ -name "*.json" -o -name "*.md" | head -20
+```
+
+**Solution:**
+- Use consistent path conventions: `{type}/{workflow_id}/{filename}.{ext}`
+- Pin `STORAGE_BASE_PATH` in `.env` rather than relying on the default `./blob_storage`
+- In CI/Docker, use an absolute path:
+  ```bash
+  STORAGE_BASE_PATH=/app/blob_storage
+  ```
+
+---
+
+### 9. P2P / Distributed Mode Issues
 
 #### Issue: `P2P coordinator failed to start`
 
@@ -391,7 +617,7 @@ if agent.peers:
 
 ---
 
-### 9. Performance Issues
+### 10. Performance Issues
 
 #### Issue: Code generation is slow (>10 seconds)
 
@@ -427,7 +653,7 @@ if agent.peers:
 
 ---
 
-### 9. Testing Issues
+### 11. Testing Issues
 
 #### Issue: Smoke test fails but examples work
 
@@ -557,10 +783,10 @@ If significantly slower:
 
 ---
 
-*Last updated: 2026-01-23*
+*Last updated: 2026-02-19*
 
 ---
 
 ## Version
 
-Troubleshooting Guide for JarvisCore v0.3.2
+Troubleshooting Guide for JarvisCore v0.4.0
