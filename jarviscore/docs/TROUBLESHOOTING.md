@@ -414,23 +414,27 @@ research = context.get('previous_step_results', {}).get('fetch', {})
 
 ---
 
-#### Issue: `BIND_PORT` contamination — Ex2 synthesizer uses wrong port
+#### Per-Process Port Configuration — Multi-Node Setup
 
-**Cause:** `swim/main.py` calls `load_dotenv()` at import time. If `.env` has
-`BIND_PORT=7946`, every process that imports jarviscore inherits it — including the
-synthesizer which should be on port 7949.
+In a multi-node deployment each process needs a **unique port**. A single `BIND_PORT`
+value in a shared `.env` file cannot serve four nodes that require four different ports.
 
-**Symptom:** All 4 nodes try to bind port 7946; the synthesizer process crashes or
-joins as a regular node instead of the seed.
-
-**Solution:** Always hardcode ports in distributed example scripts:
+**The right approach — explicit Mesh config dict (recommended for example scripts):**
 ```python
-# Wrong — inherits BIND_PORT from .env
-BIND_PORT = int(os.getenv("BIND_PORT", "7949"))
-
-# Correct — explicit constant
-BIND_PORT = 7949   # synthesizer is always 7949
+# Each script declares its own port as an architecture constant
+BIND_PORT = 7949   # synthesizer — this is its role; the port is part of its identity
+mesh = Mesh(mode="distributed", config={"bind_port": BIND_PORT, ...})
 ```
+
+**The right approach — per-process env var (recommended for production / containers):**
+```bash
+# Set at process launch — not in a shared .env file
+JARVISCORE_BIND_PORT=7949 python ex2_synthesizer.py
+JARVISCORE_BIND_PORT=7946 python ex2_research_node1.py
+```
+
+JarvisCore reads `JARVISCORE_BIND_PORT` (not `BIND_PORT`) to keep per-process port
+config cleanly separated from other shared settings in `.env`.
 
 Port reference for Ex2:
 | Script | SWIM port | ZMQ port | Role |
@@ -439,6 +443,14 @@ Port reference for Ex2:
 | `ex2_research_node1.py` | 7946 | 8946 | TechResearcher |
 | `ex2_research_node2.py` | 7947 | 8947 | MarketResearcher |
 | `ex2_research_node3.py` | 7948 | 8948 | RegResearcher |
+
+**What NOT to do — shared .env for per-process settings:**
+```bash
+# .env — wrong for multi-node
+BIND_PORT=7946   # which node does this belong to?
+```
+All four processes would read the same value. Use the Mesh `config` dict or
+`JARVISCORE_BIND_PORT` set per-process instead.
 
 ---
 

@@ -295,23 +295,36 @@ Configure distributed mesh networking for `p2p` and `distributed` modes.
 
 ### Network Settings (P2P and Distributed)
 
+Per-process P2P settings use `JARVISCORE_` prefix. For multi-node deployments
+set these at process launch (not in a shared `.env`) or pass them explicitly
+in the Mesh `config` dict.
+
 ```bash
-# Bind address and port
-BIND_HOST=0.0.0.0      # Listen on all interfaces
-BIND_PORT=7950         # SWIM protocol port
+# Bind address and port — per-process; ZMQ port = JARVISCORE_BIND_PORT + ZMQ_PORT_OFFSET
+JARVISCORE_BIND_HOST=0.0.0.0    # Listen on all interfaces (default: 127.0.0.1)
+JARVISCORE_BIND_PORT=7950       # SWIM protocol port (default: 7946)
 
 # Node identification
-NODE_NAME=jarviscore-node-1
+JARVISCORE_NODE_NAME=jarviscore-node-1
 
 # Seed nodes (comma-separated) for joining existing cluster
-SEED_NODES=192.168.1.100:7950,192.168.1.101:7950
+JARVISCORE_SEED_NODES=192.168.1.100:7950,192.168.1.101:7950
+```
+
+Preferred for multi-node: pass per-process config directly in code:
+```python
+mesh = Mesh(mode="distributed", config={
+    "bind_host": "0.0.0.0",
+    "bind_port": 7950,
+    "seed_nodes": "192.168.1.100:7950",
+})
 ```
 
 ### Transport Configuration
 
 ```bash
 # ZeroMQ port offset
-ZMQ_PORT_OFFSET=1000   # ZMQ will use BIND_PORT + 1000
+ZMQ_PORT_OFFSET=1000   # ZMQ will use JARVISCORE_BIND_PORT + 1000
 
 # Transport type
 TRANSPORT_TYPE=hybrid  # udp, tcp, or hybrid
@@ -462,9 +475,9 @@ SANDBOX_MODE=remote
 SANDBOX_SERVICE_URL=https://browser-task-executor...
 
 P2P_ENABLED=true
-BIND_HOST=0.0.0.0
-BIND_PORT=7946
-SEED_NODES=192.168.1.100:7946,192.168.1.101:7946
+JARVISCORE_BIND_HOST=0.0.0.0
+JARVISCORE_BIND_PORT=7946
+JARVISCORE_SEED_NODES=192.168.1.100:7946,192.168.1.101:7946
 
 LOG_LEVEL=INFO
 LOG_DIRECTORY=/var/log/jarviscore
@@ -777,11 +790,11 @@ LOG_DIRECTORY=/tmp/jarviscore-logs
 | `LOG_DIRECTORY` | ./logs | Storage directory |
 | `LOG_LEVEL` | INFO | Log verbosity |
 | `P2P_ENABLED` | false | Enable P2P mesh |
-| `NODE_NAME` | jarviscore-node | Node identifier |
-| `BIND_HOST` | 127.0.0.1 | P2P bind address |
-| `BIND_PORT` | 7946 | P2P bind port |
-| `SEED_NODES` | None | Seed nodes (CSV) |
-| `ZMQ_PORT_OFFSET` | 1000 | ZMQ port offset |
+| `JARVISCORE_NODE_NAME` | jarviscore-node | Node identifier |
+| `JARVISCORE_BIND_HOST` | 127.0.0.1 | P2P bind address (per-process) |
+| `JARVISCORE_BIND_PORT` | 7946 | P2P bind port (per-process) |
+| `JARVISCORE_SEED_NODES` | None | Seed nodes CSV (per-process) |
+| `ZMQ_PORT_OFFSET` | 1000 | ZMQ port = bind_port + offset |
 | `TRANSPORT_TYPE` | hybrid | Transport type |
 | `KEEPALIVE_ENABLED` | true | Enable keepalive |
 | `KEEPALIVE_INTERVAL` | 90 | Keepalive interval |

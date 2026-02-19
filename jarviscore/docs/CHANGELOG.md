@@ -79,11 +79,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `AutoAgent.execute_task`: pass `context=task.get('context')` to `sandbox.execute()` so
   LLM-generated code can access `previous_step_results` (previously caused silent synthesis failures)
-- SWIM `load_dotenv()` port contamination: example scripts now hardcode `BIND_PORT` constants
-  instead of `os.getenv()` to prevent `swim/main.py` from overriding ports from `.env`
 
 ### Changed
 - Version: 0.3.2 → 0.4.0
+- **P2P env var namespace**: `bind_port`, `bind_host`, `seed_nodes`, `node_name` now read from
+  `JARVISCORE_BIND_PORT`, `JARVISCORE_BIND_HOST`, `JARVISCORE_SEED_NODES`, `JARVISCORE_NODE_NAME`
+  respectively. This isolates per-process P2P settings from the swim package's own env vars.
+  In a multi-node deployment each node has a unique port — set it explicitly in the Mesh
+  `config` dict or via `JARVISCORE_BIND_PORT` at process launch. Do not set port values in
+  a shared `.env` file.
+- `.env.example`: `BIND_HOST` / `BIND_PORT` replaced with commented `JARVISCORE_BIND_HOST` /
+  `JARVISCORE_BIND_PORT` with guidance on per-process configuration.
 
 ---
 

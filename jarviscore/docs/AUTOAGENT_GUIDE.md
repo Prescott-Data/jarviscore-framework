@@ -790,19 +790,26 @@ background asyncio task. The worker:
 
 **No `STEP_ID` hardcoding required.** Nodes autonomously claim matching steps.
 
-### Port Hardcoding — Critical Note
+### Per-Node Port Configuration
 
-`swim/main.py` calls `load_dotenv()` at import time. If your `.env` has `BIND_PORT=7946`,
-every process inherits that value — including the synthesizer. Always hardcode ports in
-example scripts rather than using `os.getenv("BIND_PORT", default)`:
+In a multi-node setup each process needs a **unique port** — a single value in a
+shared `.env` cannot serve all nodes. JarvisCore reads `JARVISCORE_BIND_PORT`
+(not `BIND_PORT`) to keep per-process P2P config isolated from shared settings.
 
+**Option 1 — explicit constant in script (used in the examples):**
 ```python
-# Wrong — inherits BIND_PORT from .env
-BIND_PORT = int(os.getenv("BIND_PORT", "7949"))
-
-# Correct — explicit constant per script
-BIND_PORT = 7949   # synthesizer is always 7949
+BIND_PORT = 7949   # synthesizer — fixed by architecture
+mesh = Mesh(mode="distributed", config={"bind_port": BIND_PORT, ...})
 ```
+
+**Option 2 — per-process env var at launch (production / containers):**
+```bash
+JARVISCORE_BIND_PORT=7949 python ex2_synthesizer.py
+JARVISCORE_BIND_PORT=7946 python ex2_research_node1.py
+```
+
+Do not set `BIND_PORT` (or `JARVISCORE_BIND_PORT`) in a shared `.env` file for
+multi-node deployments — each node needs its own value.
 
 ### Run
 

@@ -1,44 +1,50 @@
 """
 JarvisCore Framework Configuration
 
-Zero-config with standard environment variables (no prefix needed).
-
 Configuration can be provided via:
-1. Standard environment variables (CLAUDE_API_KEY, AZURE_OPENAI_KEY, etc.)
-2. .env file
-3. Direct config dictionary passed to Mesh
+1. Environment variables / .env file (shared settings: LLM keys, Redis URL, storage)
+2. Direct config dictionary passed to Mesh (always takes precedence)
 
-Example:
-    # Via environment (standard names)
-    export CLAUDE_API_KEY="sk-..."
-    export AZURE_OPENAI_KEY="..."
-    export BIND_HOST="0.0.0.0"
-    export BIND_PORT=7946
+Per-process P2P settings (bind_port, bind_host, seed_nodes) use the JARVISCORE_
+prefix so they never collide with env vars read by the swim package at import time.
+For multi-node deployments these should be set explicitly in each Mesh config dict
+or as per-process env vars — not in a shared .env file.
 
-    # Via config dict
-    config = {
+    # Recommended: explicit per-process config dict
+    mesh = Mesh(mode="distributed", config={
         'bind_host': '0.0.0.0',
-        'bind_port': 7946,
-        'seed_nodes': '192.168.1.100:7946'
-    }
-    mesh = Mesh(mode="distributed", config=config)
+        'bind_port': 7949,
+        'seed_nodes': '127.0.0.1:7949',
+    })
+
+    # Alternative: per-process env vars (set at launch, not in .env)
+    JARVISCORE_BIND_PORT=7949 python ex2_synthesizer.py
+    JARVISCORE_BIND_PORT=7946 python ex2_research_node1.py
 """
 import os
 from typing import Optional
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     """
     Framework configuration with zero-config defaults.
-    Uses standard environment variable names (no JARVISCORE_ prefix).
+
+    P2P bind settings use JARVISCORE_ prefixed env vars to avoid collisions
+    with the swim package which reads BIND_PORT/BIND_HOST from the environment
+    at import time. All other settings retain their standard names.
     """
 
     # === P2P Settings ===
-    node_name: str = "jarviscore-node"
-    bind_host: str = "127.0.0.1"
-    bind_port: int = 7946
-    seed_nodes: str = ""  # Comma-separated "host:port,host:port"
+    # Read from JARVISCORE_* env vars — never from bare BIND_PORT/BIND_HOST
+    # which the swim package may populate from .env at import time.
+    # For multi-node: always pass bind_port explicitly in Mesh config dict.
+    node_name: str = Field("jarviscore-node", validation_alias="jarviscore_node_name")
+    bind_host: str = Field("127.0.0.1",       validation_alias="jarviscore_bind_host")
+    bind_port: int = Field(7946,              validation_alias="jarviscore_bind_port")
+    seed_nodes: str = Field("",               validation_alias="jarviscore_seed_nodes")
+    # Comma-separated "host:port,host:port"
     p2p_enabled: bool = True
     zmq_port_offset: int = 1000
     transport_type: str = "hybrid"  # udp, tcp, or hybrid
