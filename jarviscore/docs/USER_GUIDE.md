@@ -425,24 +425,76 @@ for msg in messages:
 
 ### Prometheus Telemetry
 
+Prometheus support is **optional**. If `prometheus-client` is not installed, all metric
+calls are silent no-ops — nothing fails and no configuration is required. Install it
+only when you want to scrape metrics:
+
 ```bash
-PROMETHEUS_ENABLED=true
-PROMETHEUS_PORT=9090
+pip install "jarviscore[prometheus]"
 ```
+
+Enable and configure via `.env`:
+
+```bash
+PROMETHEUS_ENABLED=true   # default: false
+PROMETHEUS_PORT=9090      # default: 9090
+```
+
+When `PROMETHEUS_ENABLED=true`, the Mesh automatically starts an HTTP metrics server
+on the configured port at `mesh.start()`. No code changes are needed — all built-in
+metrics are collected automatically.
+
+#### Metrics exposed
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `jarviscore_llm_tokens_input_total` | Counter | `provider`, `model` | Total input tokens consumed |
+| `jarviscore_llm_tokens_output_total` | Counter | `provider`, `model` | Total output tokens generated |
+| `jarviscore_llm_cost_dollars_total` | Counter | `provider`, `model` | Total LLM cost in USD |
+| `jarviscore_llm_request_duration_seconds` | Histogram | `provider`, `model` | LLM API call duration |
+| `jarviscore_llm_requests_total` | Counter | `provider`, `model`, `status` | Total LLM requests (success/error) |
+| `jarviscore_workflow_steps_total` | Counter | `status` | Steps completed, labelled by outcome |
+| `jarviscore_step_execution_duration_seconds` | Histogram | `status` | Per-step execution time |
+| `jarviscore_active_workflows` | Gauge | — | Workflows currently running |
+| `jarviscore_active_steps` | Gauge | — | Steps currently executing |
+| `jarviscore_events_emitted_total` | Counter | `event_type` | Trace events emitted |
+
+LLM metrics (`tokens`, `cost`, `duration`) are recorded automatically by the AutoAgent
+code-generation pipeline. Workflow metrics (`steps_total`, `active_workflows`) are
+recorded automatically by the WorkflowEngine.
+
+#### Recording step metrics in CustomAgent
+
+AutoAgent records step metrics automatically. For CustomAgent, call
+`record_step_execution` manually:
 
 ```python
 import time
 from jarviscore.telemetry.metrics import record_step_execution
 
-async def execute_task(self, task):
-    start = time.time()
-    result = self._do_work(task)
-    record_step_execution(time.time() - start, "success")
-    return {"status": "success", "output": result}
+class MyAgent(CustomAgent):
+    async def execute_task(self, task):
+        start = time.time()
+        result = self._do_work(task)
+        record_step_execution(time.time() - start, "completed")
+        return {"status": "success", "output": result}
 ```
 
-Metrics emitted: `jarviscore_step_duration_seconds` (histogram),
-`jarviscore_steps_total` (counter, labelled by status).
+#### Viewing metrics
+
+```bash
+# Raw metrics endpoint
+curl -s http://localhost:9090/metrics | grep jarviscore
+
+# Check active workflows during a run
+curl -s http://localhost:9090/metrics | grep active_workflows
+
+# Token usage by provider
+curl -s http://localhost:9090/metrics | grep llm_tokens
+```
+
+Metrics are in the standard Prometheus text format and can be scraped by any
+Prometheus-compatible system (Prometheus server, Grafana, Datadog Agent, etc.).
 
 ---
 
