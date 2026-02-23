@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Home — Investment Committee{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto space-y-6">
+
+  <h1 class="text-2xl font-bold text-slate-800">Portfolio Overview</h1>
+
+  <!-- Stat cards -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    {% set cards = [
+      ("Total AUM",       "$" + "{:,.0f}".format(portfolio.total_aum),       "bg-blue-600"),
+      ("Available Cash",  "$" + "{:,.0f}".format(portfolio.available_cash),   "bg-emerald-600"),
+      ("Open Positions",  portfolio.holdings | length,                         "bg-violet-600"),
+      ("Last Run",        last_run,                                            "bg-amber-600"),
+    ] %}
+    {% for label, value, color in cards %}
+    <div class="bg-white rounded-xl shadow p-5">
+      <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">{{ label }}</p>
+      <p class="text-xl font-bold text-slate-800">{{ value }}</p>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+    <!-- Sector Exposure -->
+    <div class="bg-white rounded-xl shadow p-5">
+      <h2 class="text-sm font-semibold text-slate-600 uppercase tracking-wide mb-4">Sector Exposure</h2>
+      {% if sector_exp %}
+        {% for sector, pct in sector_exp.items() %}
+        {% set bar_pct = (pct / sector_cap * 100) | round(1) %}
+        <div class="mb-3">
+          <div class="flex justify-between text-xs text-slate-600 mb-1">
+            <span>{{ sector }}</span>
+            <span>{{ "%.1f"|format(pct * 100) }}%</span>
+          </div>
+          <div class="w-full bg-slate-100 rounded-full h-2">
+            <div class="h-2 rounded-full {% if pct / sector_cap > 0.8 %}bg-red-500{% elif pct / sector_cap > 0.6 %}bg-amber-400{% else %}bg-blue-500{% endif %}"
+                 style="width: {{ [bar_pct, 100] | min }}%"></div>
+          </div>
+        </div>
+        {% endfor %}
+        <p class="text-xs text-slate-400 mt-2">Cap: {{ "%.0f"|format(sector_cap * 100) }}%</p>
+      {% else %}
+        <p class="text-sm text-slate-400">No sector data</p>
+      {% endif %}
+    </div>
+
+    <!-- Recent Decisions -->
+    <div class="bg-white rounded-xl shadow p-5">
+      <h2 class="text-sm font-semibold text-slate-600 uppercase tracking-wide mb-4">Recent Decisions</h2>
+      {% if recent_memos %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 border-b">
+            <th class="text-left pb-2">Ticker</th>
+            <th class="text-left pb-2">Action</th>
+            <th class="text-right pb-2">Allocation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for m in recent_memos %}
+          <tr class="border-b border-slate-50 hover:bg-slate-50">
+            <td class="py-2 font-mono font-semibold">{{ m.ticker }}</td>
+            <td class="py-2">
+              <span class="px-2 py-0.5 rounded text-xs font-bold
+                {% if m.action == 'BUY' %}bg-emerald-100 text-emerald-700
+                {% elif m.action == 'HOLD' %}bg-amber-100 text-amber-700
+                {% else %}bg-red-100 text-red-700{% endif %}">
+                {{ m.action }}
+              </span>
+            </td>
+            <td class="py-2 text-right text-slate-600">
+              {% if m.allocation_usd %}${{ "{:,.0f}".format(m.allocation_usd) }}{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <a href="/history" class="block text-xs text-blue-500 hover:underline mt-3">View all →</a>
+      {% else %}
+        <p class="text-sm text-slate-400">No runs yet. <a href="/run" class="text-blue-500 hover:underline">Run a committee ▶</a></p>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- Holdings Table -->
+  <div class="bg-white rounded-xl shadow p-5">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-sm font-semibold text-slate-600 uppercase tracking-wide">Current Holdings</h2>
+      <a href="/portfolio" class="text-xs text-blue-500 hover:underline">Edit →</a>
+    </div>
+    {% if holdings %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-400 border-b">
+            <th class="text-left pb-2">Ticker</th>
+            <th class="text-left pb-2">Sector</th>
+            <th class="text-right pb-2">Value</th>
+            <th class="text-right pb-2">Cost Basis</th>
+            <th class="text-right pb-2">% of AUM</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in holdings %}
+          <tr class="border-b border-slate-50 hover:bg-slate-50">
+            <td class="py-2 font-mono font-semibold">{{ h.ticker }}</td>
+            <td class="py-2 text-slate-500">{{ h.sector }}</td>
+            <td class="py-2 text-right">${{ "{:,.0f}".format(h.value) }}</td>
+            <td class="py-2 text-right text-slate-500">${{ "{:.2f}".format(h.cost_basis) }}</td>
+            <td class="py-2 text-right text-slate-500">{{ "%.1f"|format(h.value / portfolio.total_aum * 100) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <p class="text-sm text-slate-400">No holdings. <a href="/portfolio" class="text-blue-500 hover:underline">Add some →</a></p>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

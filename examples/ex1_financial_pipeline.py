@@ -5,16 +5,16 @@ Profile  : AutoAgent
 Mode     : Autonomous (single process, workflow engine only — no P2P)
 Workflow : fetch → analyse → report  (sequential with depends_on)
 
-Phases exercised
-----------------
-Phase 1  : LocalBlobStorage saves the final Markdown report
-Phase 5  : Prometheus counters (set PROMETHEUS_ENABLED=true in .env)
-Phase 7  : WorkflowEngine reactive dispatch; crash recovery via deterministic
-           workflow_id="financial-daily-001" (re-run skips completed steps)
-Phase 8  : UnifiedMemory (WorkingScratchpad + EpisodicLedger + LTM) initialised
-           in each agent's setup() using Phase-9-injected stores
-Phase 9  : Mesh.start() auto-injects self._redis_store, self._blob_storage,
-           self.mailbox into every agent BEFORE setup() is called
+Infrastructure features exercised
+----------------------------------
+Blob storage    : LocalBlobStorage saves the final Markdown report
+Telemetry       : Prometheus counters (set PROMETHEUS_ENABLED=true in .env)
+Workflow engine : WorkflowEngine reactive dispatch; crash recovery via deterministic
+                  workflow_id="financial-daily-001" (re-run skips completed steps)
+Unified memory  : WorkingScratchpad + EpisodicLedger + LTM initialised in each
+                  agent's setup() using auto-injected stores
+Auto-injection  : Mesh.start() injects self._redis_store, self._blob_storage,
+                  self.mailbox into every agent BEFORE setup() is called
 
 Prerequisites
 -------------
@@ -23,11 +23,13 @@ Prerequisites
     pip install -e ".[redis,prometheus]"
     python examples/ex1_financial_pipeline.py
 
-Verification
-------------
-    redis-cli keys "*financial-daily-001*"
-    ls -la blob_storage/reports/
-    curl -s http://localhost:9090/metrics | grep jarviscore   # if prometheus enabled
+Success criteria
+----------------
+    - All 3 workflow steps complete: fetch → analyse → report
+    - Final report saved to: blob_storage/reports/financial-daily-001/report.md
+    - Console prints workflow result with status="success"
+    - Re-running skips already-completed steps (crash recovery)
+    - redis-cli keys "*financial-daily-001*"  →  shows state + step_output keys
 """
 
 import asyncio

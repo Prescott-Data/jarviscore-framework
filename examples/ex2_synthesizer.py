@@ -26,21 +26,23 @@ How it works
 6. Only then does the synthesizer's WorkflowEngine dispatch "synth"
 7. SynthesizerAgent reads all 3 outputs via context and writes the briefing
 
-Phases exercised (synthesizer)
--------------------------------
-Phase 4  : MailboxManager pings researcher agents before submitting workflow
-Phase 5  : Prometheus metrics across all 4 nodes (active_workflows gauge)
-Phase 7  : DependencyManager._wait_redis() — cross-node dependency resolution
-           WorkflowState crash recovery — re-run skips already-completed steps
-Phase 8  : RedisMemoryAccessor reads tech + market + reg outputs
-           EpisodicLedger + LTM persist briefing summaries
-Phase 9  : Auto-injected redis + blob + mailbox on all nodes
+Infrastructure features exercised (synthesizer)
+------------------------------------------------
+Mailbox         : MailboxManager pings researcher agents before submitting workflow
+Telemetry       : Prometheus metrics across all 4 nodes (active_workflows gauge)
+Workflow engine : DependencyManager cross-node dependency resolution;
+                  WorkflowState crash recovery — re-run skips completed steps
+Unified memory  : RedisMemoryAccessor reads tech + market + reg outputs;
+                  EpisodicLedger + LTM persist briefing summaries
+Auto-injection  : redis + blob + mailbox injected on all nodes
 
-Verification
-------------
-    redis-cli xrange ledgers:ai-landscape-q1 - +      # EpisodicLedger entries
-    redis-cli hgetall step_output:ai-landscape-q1:synth
-    ls blob_storage/reports/ai-landscape-q1.md
+Success criteria
+----------------
+    - 4 nodes discover each other on the SWIM mesh (log: "peer joined")
+    - 3 researcher steps claimed and completed (log: "CLAIMED step_id=tech/market/reg")
+    - Synthesizer step runs after all 3 complete (log: "CLAIMED step_id=synth")
+    - Final briefing saved to: blob_storage/reports/ai-landscape-q1.md
+    - redis-cli hgetall step_output:ai-landscape-q1:synth  →  status=completed
 """
 
 import asyncio

@@ -1,6 +1,6 @@
-site_name: JarvisCore Framework
-site_description: Build autonomous AI agents with P2P mesh networking and full infrastructure stack.
-site_url: https://prescott-data.github.io/jarviscore-framework/
+site_name: JarvisCore
+site_description: Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth.
+site_url: https://jarviscore.developers.prescottdata.io/
 repo_url: https://github.com/Prescott-Data/jarviscore-framework
 repo_name: Prescott-Data/jarviscore-framework
 edit_uri: edit/main/jarviscore/docs/
@@ -56,10 +56,11 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: GETTING_STARTED.md
-  - Guides:
-      - AutoAgent Guide: AUTOAGENT_GUIDE.md
-      - CustomAgent Guide: CUSTOMAGENT_GUIDE.md
-      - User Guide: USER_GUIDE.md
+  - Profiles:
+      - AutoAgent: AUTOAGENT_GUIDE.md
+      - CustomAgent: CUSTOMAGENT_GUIDE.md
+  - User Guide: USER_GUIDE.md
+  - Enterprise: ENTERPRISE.md
   - Reference:
       - API Reference: API_REFERENCE.md
       - Configuration: CONFIGURATION.md

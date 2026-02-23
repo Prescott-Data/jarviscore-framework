@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Portfolio — Investment Committee{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-slate-800">Portfolio Editor</h1>
+    {% if saved %}
+    <span class="text-sm text-emerald-600 font-semibold bg-emerald-50 px-3 py-1 rounded-full">✓ Saved</span>
+    {% endif %}
+    {% if error %}
+    <span class="text-sm text-red-600 font-semibold bg-red-50 px-3 py-1 rounded-full">{{ error }}</span>
+    {% endif %}
+  </div>
+
+  <form method="post" action="/portfolio" id="portfolio-form" class="space-y-6">
+
+    <!-- Mandate Rules -->
+    <div class="bg-white rounded-xl shadow p-5">
+      <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">Mandate Rules</h2>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+
+        {% macro field(name, label, value, type="number") %}
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">{{ label }}</label>
+          <input name="{{ name }}" type="{{ type }}" value="{{ value }}"
+                 class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm
+                        focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+        </div>
+        {% endmacro %}
+
+        {{ field("total_aum",              "Total AUM ($)",          portfolio.total_aum | int) }}
+        {{ field("available_cash",          "Available Cash ($)",     portfolio.available_cash | int) }}
+        {{ field("max_position_usd",        "Max Position ($)",       portfolio.constraints.max_position_usd | int) }}
+        {{ field("sector_cap_pct",          "Sector Cap (%)",         (portfolio.constraints.sector_cap_pct * 100) | round(0) | int) }}
+        {{ field("max_drawdown_pct",        "Max Drawdown (%)",       (portfolio.constraints.max_drawdown_pct * 100) | round(0) | int) }}
+        {{ field("min_daily_volume_usd",    "Min Daily Volume ($)",   portfolio.constraints.min_daily_volume_usd | int) }}
+      </div>
+    </div>
+
+    <!-- Holdings -->
+    <div class="bg-white rounded-xl shadow p-5">
+      <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">Holdings</h2>
+
+      <div id="holdings-table" class="space-y-2 mb-3">
+        <div class="grid grid-cols-12 gap-2 text-xs text-slate-400 px-2">
+          <span class="col-span-2">Ticker</span>
+          <span class="col-span-3">Sector</span>
+          <span class="col-span-3">Value ($)</span>
+          <span class="col-span-3">Cost Basis ($)</span>
+          <span class="col-span-1"></span>
+        </div>
+
+        {% for h in holdings %}
+        <div class="holding-row grid grid-cols-12 gap-2 items-center">
+          <input name="h_ticker"     value="{{ h.ticker }}"
+                 class="col-span-2 border border-slate-200 rounded px-2 py-1.5 text-sm font-mono uppercase
+                        focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+          <select name="h_sector"
+                  class="col-span-3 border border-slate-200 rounded px-2 py-1.5 text-sm
+                         focus:outline-none focus:ring-2 focus:ring-blue-400">
+            {% for s in sectors %}
+            <option value="{{ s }}" {% if h.sector == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+          <input name="h_value"      value="{{ h.value | int }}" type="number"
+                 class="col-span-3 border border-slate-200 rounded px-2 py-1.5 text-sm holding-value
+                        focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+          <input name="h_cost_basis" value="{{ h.cost_basis }}" type="number" step="0.01"
+                 class="col-span-3 border border-slate-200 rounded px-2 py-1.5 text-sm
+                        focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+          <button type="button" onclick="removeRow(this)"
+                  class="col-span-1 text-red-400 hover:text-red-600 text-lg leading-none">✕</button>
+        </div>
+        {% endfor %}
+      </div>
+
+      <button type="button" onclick="addHoldingRow()"
+              class="text-sm text-blue-600 hover:text-blue-800 font-medium">+ Add Holding</button>
+
+      <!-- Live sector exposure -->
+      <div class="mt-4 pt-4 border-t border-slate-100">
+        <p class="text-xs text-slate-500 uppercase tracking-wide mb-2">Sector Exposure (live)</p>
+        <div id="sector-preview" class="flex flex-wrap gap-3 text-xs text-slate-600"></div>
+      </div>
+    </div>
+
+    <!-- Restricted Tickers -->
+    <div class="bg-white rounded-xl shadow p-5">
+      <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Restricted Tickers</h2>
+      <input name="restricted_tickers"
+             value="{{ portfolio.constraints.restricted_tickers | join(', ') }}"
+             placeholder="e.g. TSLA, GME"
+             class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+      <p class="text-xs text-slate-400 mt-1">Comma-separated. Committee will flag these as ineligible.</p>
+    </div>
+
+    <!-- Raw JSON toggle -->
+    <div class="bg-white rounded-xl shadow p-5">
+      <button type="button" onclick="toggleJson()"
+              class="text-sm font-semibold text-slate-600 hover:text-slate-800 flex items-center gap-2">
+        <span id="json-toggle-icon">▶</span> Raw JSON Editor
+      </button>
+      <div id="json-editor" class="hidden mt-4 space-y-3">
+        <textarea name="raw_json" id="raw-json-area" rows="20"
+                  class="w-full font-mono text-xs border border-slate-200 rounded-lg p-3
+                         focus:outline-none focus:ring-2 focus:ring-blue-500">{{ raw_json }}</textarea>
+        <div class="flex gap-2">
+          <button type="button" onclick="validateJson()"
+                  class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-1.5 rounded-lg transition-colors">
+            Validate
+          </button>
+          <span id="json-validate-msg" class="text-xs py-1.5"></span>
+        </div>
+        <p class="text-xs text-slate-400">
+          Editing raw JSON and saving will overwrite all form fields above.
+          Sector exposure is recalculated automatically on save.
+        </p>
+      </div>
+    </div>
+
+    <div class="flex gap-3">
+      <button type="submit"
+              class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2.5
+                     rounded-lg text-sm transition-colors">
+        Save & Apply
+      </button>
+      <a href="/"
+         class="bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium px-5 py-2.5
+                rounded-lg text-sm transition-colors">
+        Cancel
+      </a>
+    </div>
+
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  initPortfolioEditor({{ (portfolio.total_aum) | int }}, {{ (portfolio.constraints.sector_cap_pct) }});
+</script>
+{% endblock %}

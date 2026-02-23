@@ -12,7 +12,7 @@ Practical guide to building agent systems with JarvisCore.
 4. [Custom Profile Tutorial](#custom-profile-tutorial)
 5. [CustomAgent Tutorial](#customagent-tutorial)
 6. [Multi-Agent Workflows](#multi-agent-workflows)
-7. [Infrastructure & Memory (v0.4.0)](#infrastructure--memory) — Phases 1–9: blob, mailbox, memory, auth, telemetry
+7. [Infrastructure & Memory (v0.4.0)](#infrastructure--memory) — blob, mailbox, memory, auth, telemetry
 8. [Internet Search](#internet-search)
 9. [Remote Sandbox](#remote-sandbox)
 10. [Result Storage](#result-storage)
@@ -363,7 +363,7 @@ asyncio.run(data_pipeline())
 JarvisCore v0.4.0 ships a full production infrastructure stack. All features degrade
 gracefully when not configured.
 
-### Phase 9 — Auto-Injection Quick Reference
+### Auto-Injection Quick Reference
 
 Before every agent's `setup()`, the Mesh injects:
 
@@ -462,7 +462,7 @@ results = await mesh.workflow("wf-001", [
 
 ---
 
-### Auth Injection (Nexus)
+### Auth Injection (Nexus OSS)
 
 ```bash
 NEXUS_GATEWAY_URL=https://your-dromos-gateway.example.com
@@ -481,7 +481,7 @@ class SecureAgent(CustomAgent):
             )
 ```
 
-Full flow: `request_connection → browser OAuth → poll ACTIVE → resolve_strategy → apply header`.
+Full Nexus OSS flow: `request_connection → browser OAuth → poll ACTIVE → resolve_strategy → apply header`.
 `_auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set (graceful degradation).
 
 ---
@@ -517,12 +517,12 @@ data = raw.get("output", raw) if isinstance(raw, dict) else {}
 
 All examples require Redis: `docker compose -f docker-compose.infra.yml up -d`
 
-| Example | Mode | Profile | Key phases |
-|---------|------|---------|-----------|
-| Ex1 — Financial Pipeline | autonomous | AutoAgent | 1, 5, 6, 7, 8, 9 |
-| Ex2 — Research Network (4 nodes) | distributed SWIM | AutoAgent | 4, 7, 8, 9 |
-| Ex3 — Support Swarm | p2p | CustomAgent | 1, 4, 7D, 8, 9 |
-| Ex4 — Content Pipeline | distributed | CustomAgent | 1, 4, 5, 7, 8, 9 |
+| Example | Mode | Profile |
+|---------|------|---------|
+| Ex1 — Financial Pipeline | autonomous | AutoAgent |
+| Ex2 — Research Network (4 nodes) | distributed | AutoAgent |
+| Ex3 — Support Swarm | p2p | CustomAgent |
+| Ex4 — Content Pipeline | distributed | CustomAgent |
 
 ```bash
 python examples/ex1_financial_pipeline.py
@@ -1363,6 +1363,6 @@ mesh = Mesh(config=config)
 
 ## Version
 
-User Guide for JarvisCore v0.3.2
+User Guide for JarvisCore v0.4.0
 
 Last Updated: 2026-02-03

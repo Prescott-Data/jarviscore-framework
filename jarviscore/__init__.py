@@ -60,9 +60,9 @@ Quick Start (CustomAgent - distributed mode):
     results = await mesh.workflow("demo", [{"agent": "processor", "task": "hello"}])
 """
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 __author__ = "JarvisCore Contributors"
-__license__ = "MIT"
+__license__ = "Apache-2.0"
 
 # Core classes
 from jarviscore.core.agent import Agent

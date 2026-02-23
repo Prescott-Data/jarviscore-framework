@@ -382,14 +382,14 @@ redis-cli ping   # → PONG
 grep REDIS_URL .env   # → REDIS_URL=redis://localhost:6379/0
 ```
 
-Required for: mailbox (Phase 4), distributed workflow (Phase 7), UnifiedMemory (Phase 8).
+Required for: mailbox, distributed workflow, and UnifiedMemory.
 Without `REDIS_URL`, these degrade gracefully — `_redis_store` / `mailbox` become `None`.
 
 ---
 
 #### Issue: Silent task success with `execution_time ≈ 0.003s` and `output: null`
 
-**Cause:** LLM-generated code raised `NameError: name 'context' is not defined`.
+**Cause:** Agent-generated function tool raised `NameError: name 'context' is not defined`.
 The sandbox catches the exception silently and returns a fallback result. This happens
 when `context=task.get('context')` is not passed to `sandbox.execute()`.
 
@@ -406,7 +406,7 @@ result = await self.sandbox.execute(code, context=task.get('context'))
 If you have a custom AutoAgent subclass that overrides `execute_task`, ensure you pass
 `context=task.get('context')` when calling `sandbox.execute()`.
 
-**For LLM-generated code that reads prior steps**, use the simple access pattern:
+**For agent-generated function tools that read prior steps**, use the simple access pattern:
 ```python
 # In system_prompt — tell the LLM to use this pattern:
 research = context.get('previous_step_results', {}).get('fetch', {})

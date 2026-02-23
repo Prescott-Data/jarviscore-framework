@@ -1,0 +1,52 @@
+/* Investment Committee Dashboard — style.css */
+
+/* Step tile states */
+.step-pending {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.step-running {
+  border-color: #3b82f6;
+  background: #eff6ff;
+  color: #1d4ed8;
+  animation: pulse-border 1.2s ease-in-out infinite;
+}
+
+.step-done {
+  border-color: #10b981;
+  background: #f0fdf4;
+  color: #065f46;
+  border-style: solid;
+}
+
+.step-failed, .step-error {
+  border-color: #ef4444;
+  background: #fef2f2;
+  color: #991b1b;
+  border-style: solid;
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: #3b82f6; }
+  50%       { border-color: #93c5fd; }
+}
+
+/* Memo rendered content */
+.memo-content h1 { font-size: 1.25rem; font-weight: 700; margin: 1rem 0 0.5rem; color: #1e293b; }
+.memo-content h2 { font-size: 1rem;    font-weight: 600; margin: 0.875rem 0 0.375rem; color: #334155; border-bottom: 1px solid #e2e8f0; padding-bottom: 2px; }
+.memo-content p  { font-size: 0.875rem; color: #475569; margin-bottom: 0.5rem; line-height: 1.6; }
+.memo-content strong { font-weight: 600; color: #1e293b; }
+.memo-content table  { width: 100%; border-collapse: collapse; font-size: 0.8125rem; margin: 0.5rem 0; }
+.memo-content th, .memo-content td { padding: 0.375rem 0.75rem; border: 1px solid #e2e8f0; text-align: left; }
+.memo-content th { background: #f8fafc; font-weight: 600; color: #475569; }
+.memo-content ul, .memo-content ol { padding-left: 1.25rem; font-size: 0.875rem; color: #475569; }
+.memo-content li { margin-bottom: 0.2rem; }
+.memo-content code { background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.8rem; color: #be185d; }
+
+/* Scrollbar (webkit) */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }

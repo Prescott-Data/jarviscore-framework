@@ -12,16 +12,16 @@ CustomAgent lets you integrate your **existing agent code** with JarvisCore's ne
 1. [Prerequisites](#prerequisites)
 2. [Choose Your Mode](#choose-your-mode)
 
-**v0.4.0 — Infrastructure Stack (Phases 1–9):**
+**v0.4.0 — Infrastructure Stack:**
 
-3. [Phase 9 — Auto-Injected Infrastructure](#phase-9--auto-injected-infrastructure) - `_redis_store`, `_blob_storage`, `mailbox` wired before `setup()`
-4. [Phase 1 — Blob Storage](#phase-1--blob-storage) - Save / load artifacts
-5. [Phase 4 — MailboxManager](#phase-4--mailboxmanager) - Async agent-to-agent messaging
-6. [Phase 5 — Prometheus Metrics](#phase-5--prometheus-metrics) - `record_step_execution`
-7. [Phase 7 — Distributed Workflow](#phase-7--distributed-workflow) - Redis DAG, crash recovery
-8. [Phase 7D — Nexus Auth Injection](#phase-7d--nexus-auth-injection) - OAuth via `requires_auth=True`
-9. [Phase 8 — UnifiedMemory](#phase-8--unifiedmemory) - EpisodicLedger, LTM, accessor
-10. [Production Example: Ex3 — Support Swarm](#production-example-ex3--customer-support-swarm) - P2P + Nexus auth walkthrough
+3. [Auto-Injected Infrastructure](#auto-injected-infrastructure) - `_redis_store`, `_blob_storage`, `mailbox` wired before `setup()`
+4. [Blob Storage](#blob-storage) - Save / load artifacts
+5. [MailboxManager](#mailboxmanager) - Async agent-to-agent messaging
+6. [Prometheus Metrics](#prometheus-metrics) - `record_step_execution`
+7. [Distributed Workflow](#distributed-workflow--depends_on) - Redis DAG, crash recovery
+8. [Nexus OSS Auth Injection](#nexus-oss-auth-injection) - OAuth via `requires_auth=True`
+9. [UnifiedMemory](#unifiedmemory) - EpisodicLedger, LTM, accessor
+10. [Production Example: Ex3 — Support Swarm](#production-example-ex3--customer-support-swarm) - P2P + Nexus OSS auth walkthrough
 11. [Production Example: Ex4 — Content Pipeline](#production-example-ex4--content-pipeline) - Distributed + LTM walkthrough
 
 **Agent Modes & Patterns:**
@@ -134,7 +134,7 @@ class MyLLMClient:
 
 ---
 
-## Phase 9 — Auto-Injected Infrastructure
+## Auto-Injected Infrastructure
 
 Before every agent's `setup()` call, the Mesh wires three infrastructure objects directly
 onto the agent instance. **Do not create these in `__init__`** — they are not available
@@ -162,9 +162,9 @@ class MyAgent(CustomAgent):
         )
 
     async def execute_task(self, task):
-        # Phase 1: blob
+        # Blob storage:
         await self._blob_storage.save("output/result.json", json.dumps(result))
-        # Phase 4: mailbox
+        # Mailbox:
         self.mailbox.send(other_agent_id, {"event": "done"})
         return {"status": "success", "output": result}
 ```
@@ -181,7 +181,7 @@ for agent in mesh.agents:
 
 ---
 
-## Phase 1 — Blob Storage
+## Blob Storage
 
 `LocalBlobStorage` writes to `./blob_storage/` by default. Switch to Azure via
 `STORAGE_BACKEND=azure`.
@@ -203,7 +203,7 @@ Examples: `research/wf-001/findings.json`, `reports/daily-001/summary.md`
 
 ---
 
-## Phase 4 — MailboxManager
+## MailboxManager
 
 Fire-and-forget messages between agents, backed by Redis Streams.
 
@@ -229,7 +229,7 @@ Messages survive process restarts when `REDIS_URL` is set.
 
 ---
 
-## Phase 5 — Prometheus Metrics
+## Prometheus Metrics
 
 Record step execution time and status at the end of every `execute_task()`:
 
@@ -253,7 +253,7 @@ View in Grafana: metric `jarviscore_step_duration_seconds`.
 
 ---
 
-## Phase 7 — Distributed Workflow + `depends_on`
+## Distributed Workflow + `depends_on`
 
 ```python
 mesh = Mesh(mode="distributed", config={
@@ -278,7 +278,7 @@ results = await mesh.workflow("content-2026", [
 
 ---
 
-## Phase 7D — Nexus Auth Injection
+## Nexus OSS Auth Injection
 
 Set `requires_auth = True` on any `CustomAgent` to receive an injected `_auth_manager`
 before `setup()`:
@@ -300,7 +300,7 @@ class TechnicalAgent(CustomAgent):
         return {"status": "success", "output": result}
 ```
 
-Full Nexus flow on first call: `request_connection → browser OAuth →
+Full Nexus OSS flow on first call: `request_connection → browser OAuth →
 poll ACTIVE → resolve_strategy → apply Authorization header`.
 
 Config keys: `auth_mode` (`production`|`mock`), `nexus_gateway_url`,
@@ -311,7 +311,7 @@ Config keys: `auth_mode` (`production`|`mock`), `nexus_gateway_url`,
 
 ---
 
-## Phase 8 — UnifiedMemory
+## UnifiedMemory
 
 ```python
 from jarviscore.memory import UnifiedMemory, RedisMemoryAccessor
@@ -633,7 +633,7 @@ class ResearcherAgent(CustomAgent):
 ```
 **Problems**: Manual loops, boilerplate, error-prone
 
-#### ✅ NEW Pattern (Recommended)
+#### ✅ Updated Pattern
 ```python
 # agents.py (MODERN VERSION)
 from jarviscore.profiles import CustomAgent
@@ -1208,7 +1208,7 @@ async def run(self):
 
 CustomAgent includes built-in handlers for P2P communication - just implement the handlers you need.
 
-### Handler-Based P2P (Recommended)
+### Handler-Based P2P
 
 ```python
 from jarviscore.profiles import CustomAgent
@@ -3025,4 +3025,4 @@ For complete, runnable examples, see:
 
 ---
 
-*CustomAgent Guide - JarvisCore Framework v0.3.2*
+*CustomAgent Guide - JarvisCore v0.4.0*

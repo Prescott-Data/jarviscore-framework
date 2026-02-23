@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jarviscore-framework"
 version = "0.4.0"
-description = "Build autonomous AI agents in 3 lines of code. Production-ready orchestration with P2P mesh networking."
+description = "Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+license = {text = "Apache-2.0"}
 authors = [
     {name = "Ruth Mutua", email = "mutuandinda82@gmail.com"},
     {name = "Muyukani Kizito", email = "muyukani@prescottdata.io"}
@@ -18,8 +18,9 @@ maintainers = [
 ]
 keywords = ["agents", "p2p", "llm", "distributed", "workflow", "orchestration"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -81,7 +82,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/Prescott-Data/jarviscore-framework"
-Documentation = "https://github.com/Prescott-Data/jarviscore-framework/tree/main/jarviscore/docs"
+Documentation = "https://prescott-data.github.io/jarviscore-framework/"
 Repository = "https://github.com/Prescott-Data/jarviscore-framework"
 Issues = "https://github.com/Prescott-Data/jarviscore-framework/issues"
 

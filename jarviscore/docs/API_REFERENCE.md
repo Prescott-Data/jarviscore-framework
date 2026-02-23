@@ -1,6 +1,6 @@
 # JarvisCore API Reference
 
-Complete API documentation for JarvisCore framework components.
+Complete API documentation for JarvisCore components.
 
 ---
 
@@ -37,8 +37,8 @@ Complete API documentation for JarvisCore framework components.
    - [LongTermMemory](#longtermemory)
    - [WorkingScratchpad](#workingscratchpad)
    - [RedisMemoryAccessor](#redismemoryaccessor)
-   - [AuthenticationManager](#authenticationmanager-phase-7d)
-   - [record_step_execution](#record_step_execution-phase-5)
+   - [AuthenticationManager](#authenticationmanager)
+   - [record_step_execution](#record_step_execution)
 7. [Utilities](#utilities)
    - [InternetSearch](#internetsearch)
    - [UnifiedLLMClient](#unifiedllmclient)
@@ -307,7 +307,7 @@ async def teardown(self):
 
 ### AutoAgent
 
-Zero-config autonomous agent with LLM-powered code generation.
+Autonomous agent profile that auto-generates and executes function tools under Kernel supervision.
 
 #### Class: `AutoAgent(Profile)`
 
@@ -1723,7 +1723,7 @@ data = raw.get("output", raw) if isinstance(raw, dict) else {}
 
 ---
 
-### AuthenticationManager (Phase 7D)
+### AuthenticationManager
 
 Injected as `agent._auth_manager` when `agent.requires_auth = True` and
 `NEXUS_GATEWAY_URL` is set. `None` otherwise (graceful degradation).
@@ -1762,7 +1762,7 @@ result = await agent._auth_manager.make_authenticated_request(
 
 ---
 
-### record_step_execution (Phase 5)
+### record_step_execution
 
 ```python
 from jarviscore.telemetry.metrics import record_step_execution
@@ -2234,6 +2234,6 @@ async def test_processor_delegates_to_analyst():
 
 ## Version
 
-API Reference for JarvisCore v0.3.2
+API Reference for JarvisCore v0.4.0
 
 Last Updated: 2026-02-03

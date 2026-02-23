@@ -283,62 +283,11 @@ asyncio.run(main())
 
 ---
 
-## Step 6: CustomAgent + FastAPI (API-First)
+## Integrations
 
-Building an API where agents run in the background? JarvisCore makes it easy.
+JarvisCore is **async-first**. Use `jarviscore.integrations` to serve agents over HTTP or integrate with existing frameworks.
 
-### FastAPI Integration (3 Lines)
-
-```python
-from fastapi import FastAPI, Request
-from jarviscore.profiles import CustomAgent
-from jarviscore.integrations.fastapi import JarvisLifespan
-
-
-class ProcessorAgent(CustomAgent):
-    role = "processor"
-    capabilities = ["data_processing"]
-
-    async def on_peer_request(self, msg):
-        """Handle requests from other agents in the mesh."""
-        return {"processed": msg.data.get("task", "").upper()}
-
-
-# Create agent and integrate with FastAPI
-agent = ProcessorAgent()
-app = FastAPI(lifespan=JarvisLifespan(agent, mode="p2p", bind_port=7950))
-
-
-@app.post("/process")
-async def process(data: dict, request: Request):
-    # Access your agent from the request
-    agent = request.app.state.jarvis_agents["processor"]
-    # Call another agent in the mesh
-    result = await agent.peers.request("analyst", {"task": data.get("task")})
-    return result
-
-
-@app.get("/peers")
-async def list_peers(request: Request):
-    agent = request.app.state.jarvis_agents["processor"]
-    return {"peers": agent.peers.list_peers()}
-```
-
-Run with: `uvicorn myapp:app --host 0.0.0.0 --port 8000`
-
-**What you get:**
-- HTTP endpoints (FastAPI routes) as primary interface
-- P2P mesh participation in background
-- Auto message dispatch to handlers
-- Graceful startup/shutdown handled by JarvisLifespan
-
----
-
-## Step 7: Framework Integration Patterns
-
-JarvisCore is **async-first**. Here's how to integrate with different frameworks:
-
-### Pattern 1: FastAPI (Recommended)
+### FastAPI
 
 ```python
 from fastapi import FastAPI
@@ -658,25 +607,25 @@ cat logs/<agent>/<latest>.json
 
 ---
 
-## Infrastructure Stack (Phases 1–9)
+## Infrastructure Stack
 
 JarvisCore v0.4.0 ships a full production infrastructure stack. All features are
 opt-in via environment variables and degrade gracefully when not configured.
 
-### Phase Quick Reference
+### Quick Reference
 
-| Phase | Feature | One-line description | Enabled by |
-|-------|---------|----------------------|------------|
-| 1 | Blob storage | Save / load artifacts (local or Azure) | `STORAGE_BACKEND=local` (default) |
-| 2 | Context distillation | `TruthContext` / `TruthFact` / `Evidence` models | automatic |
-| 3 | Telemetry / tracing | `TraceManager` (Redis + JSONL), Prometheus metrics | `PROMETHEUS_ENABLED=true` |
-| 4 | Mailbox messaging | Async agent-to-agent messages via Redis Streams | `REDIS_URL` |
-| 5 | Function registry | Graduated/verified generated functions (AutoAgent) | automatic (AutoAgent) |
-| 6 | Kernel / SubAgent | OODA loop, coder/researcher/communicator routing | automatic (AutoAgent) |
-| 7 | Distributed workflow | Redis DAG, crash recovery, remote step dispatch | `REDIS_URL` |
-| 7D | Nexus auth | Full OAuth flow injected via `requires_auth=True` | `NEXUS_GATEWAY_URL` |
-| 8 | UnifiedMemory | EpisodicLedger, LTM, WorkingScratchpad, accessor | `REDIS_URL` |
-| 9 | Auto-injection | `_redis_store`, `_blob_storage`, `mailbox` wired before `setup()` | automatic |
+| Feature | One-line description | Enabled by |
+|---------|----------------------|------------|
+| Blob storage | Save / load artifacts (local or Azure) | `STORAGE_BACKEND=local` (default) |
+| Context distillation | `TruthContext` / `TruthFact` / `Evidence` models | automatic |
+| Telemetry / tracing | `TraceManager` (Redis + JSONL), Prometheus metrics | `PROMETHEUS_ENABLED=true` |
+| Mailbox messaging | Async agent-to-agent messages via Redis Streams | `REDIS_URL` |
+| Function registry | Graduated/verified agent-generated function tools (AutoAgent) | automatic (AutoAgent) |
+| Kernel / SubAgent | OODA loop, coder/researcher/communicator routing | automatic (AutoAgent) |
+| Distributed workflow | Redis DAG, crash recovery, remote step dispatch | `REDIS_URL` |
+| Nexus OSS auth | Full OAuth flow injected via `requires_auth=True` | `NEXUS_GATEWAY_URL` |
+| UnifiedMemory | EpisodicLedger, LTM, WorkingScratchpad, accessor | `REDIS_URL` |
+| Auto-injection | `_redis_store`, `_blob_storage`, `mailbox` wired before `setup()` | automatic |
 
 **Infrastructure quick-start:**
 
@@ -690,7 +639,7 @@ pip install "jarviscore-framework[redis,prometheus]"
 
 ---
 
-### Phase 9 — Auto-Injection Pattern
+### Auto-Injection Pattern
 
 Before every agent's `setup()` call, the Mesh wires three infrastructure objects
 directly onto the agent. No constructor boilerplate needed:
@@ -705,7 +654,7 @@ class MyAgent(CustomAgent):
 
     async def setup(self):
         await super().setup()
-        # Phase 9: _redis_store, _blob_storage, mailbox already injected
+        # All infrastructure already injected — no __init__ wiring needed
         self.memory = UnifiedMemory(
             workflow_id="my-workflow", step_id="worker",
             agent_id=self.role,
@@ -716,7 +665,7 @@ class MyAgent(CustomAgent):
 
 ---
 
-### Phase 1 — Blob Storage
+### Blob Storage
 
 Save and load any artifact (string, bytes, JSON):
 
@@ -733,7 +682,7 @@ Path convention: `{type}/{workflow_id}/{filename}.{ext}`
 
 ---
 
-### Phase 4 — Mailbox Messaging
+### Mailbox Messaging
 
 Fire-and-forget messages between agents backed by Redis Streams:
 
@@ -749,7 +698,7 @@ for msg in messages:
 
 ---
 
-### Phase 8 — UnifiedMemory + EpisodicLedger
+### UnifiedMemory + EpisodicLedger
 
 Full memory stack per agent:
 
@@ -777,7 +726,7 @@ summary = await self.memory.ltm.load_summary()
 
 ---
 
-### Phase 8 — RedisMemoryAccessor (Cross-Step Reads)
+### RedisMemoryAccessor (Cross-Step Reads)
 
 Read any prior step's output from Redis without passing data manually:
 
@@ -791,7 +740,7 @@ research = raw.get("output", raw) if isinstance(raw, dict) else {}
 
 ---
 
-### Phase 7D — Nexus Auth Injection
+### Nexus OSS Auth Injection
 
 Set `requires_auth = True` on any agent to receive an injected `_auth_manager`:
 
@@ -822,12 +771,12 @@ docker compose -f docker-compose.infra.yml up -d
 cp .env.example .env   # set your LLM API key
 ```
 
-| Example | Mode | Profile | Key phases |
-|---------|------|---------|-----------|
-| Ex1 — Financial Pipeline | autonomous | AutoAgent | 1, 5, 6, 7, 8, 9 |
-| Ex2 — Research Network (4 nodes) | distributed SWIM | AutoAgent | 4, 7, 8, 9 |
-| Ex3 — Support Swarm | p2p | CustomAgent | 1, 4, 7D, 8, 9 |
-| Ex4 — Content Pipeline | distributed | CustomAgent | 1, 4, 5, 7, 8, 9 |
+| Example | Mode | Profile |
+|---------|------|---------|
+| Ex1 — Financial Pipeline | autonomous | AutoAgent |
+| Ex2 — Research Network (4 nodes) | distributed | AutoAgent |
+| Ex3 — Support Swarm | p2p | CustomAgent |
+| Ex4 — Content Pipeline | distributed | CustomAgent |
 
 ```bash
 # Ex1: Financial pipeline (single process, ~60s)
@@ -839,7 +788,7 @@ python examples/ex2_research_node1.py &    # port 7946
 python examples/ex2_research_node2.py &    # port 7947
 python examples/ex2_research_node3.py &    # port 7948
 
-# Ex3: Customer support swarm (P2P + optional Nexus auth)
+# Ex3: Customer support swarm (P2P + optional Nexus OSS auth)
 python examples/ex3_support_swarm.py
 
 # Ex4: Content pipeline with LTM (~90s)

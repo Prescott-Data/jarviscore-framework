@@ -1,0 +1,25 @@
+{
+  "total_aum": 10000000,
+  "available_cash": 3500000,
+  "constraints": {
+    "max_position_pct": 0.30,
+    "max_position_usd": 3000000,
+    "sector_cap_pct": 0.40,
+    "max_drawdown_pct": 0.20,
+    "min_daily_volume_usd": 1000000,
+    "min_market_cap_usd": 5000000000,
+    "allowed_asset_classes": ["equity"],
+    "restricted_tickers": []
+  },
+  "holdings": {
+    "MSFT": {"value": 850000, "sector": "Technology", "cost_basis": 310.0},
+    "GOOGL": {"value": 620000, "sector": "Technology", "cost_basis": 140.0},
+    "JPM":  {"value": 430000, "sector": "Financials",  "cost_basis": 185.0},
+    "UNH":  {"value": 380000, "sector": "Healthcare",  "cost_basis": 520.0}
+  },
+  "sector_exposure": {
+    "Technology": 0.147,
+    "Financials": 0.043,
+    "Healthcare": 0.038
+  }
+}
