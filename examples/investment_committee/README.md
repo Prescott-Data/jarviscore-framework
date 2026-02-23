@@ -6,55 +6,7 @@ Each run produces a formal markdown memo. Institutional memory (LTM) compounds a
 
 ---
 
-## Quick Start
-
-```bash
-# Prerequisites: Redis running, .env configured with LLM API key
-source venv/bin/activate
-
-# Single analyst, fast check
-python committee.py --mode quick --ticker AAPL
-
-# Full 7-agent committee
-python committee.py --mode full --ticker NVDA --amount 1500000
-
-# Repeat ticker — KnowledgeAgent will find prior memos
-python committee.py --mode full --ticker NVDA --amount 1500000
-
-# Sector cap stress test
-python committee.py --mode full --ticker AMD --amount 2000000
-```
-
----
-
-## Project Structure
-
-```
-investment_committee/
-├── PLAN.md                    # Original implementation plan
-├── README.md                  # This file
-├── committee.py               # Entry point — Mesh setup + workflow runner
-├── portfolio.json             # $10M mandate, holdings, sector exposure
-├── requirements.txt
-├── .env                       # LLM API key + REDIS_URL
-├── venv/                      # Python 3.12 virtualenv
-├── data/
-│   └── memos/                 # Memo archive (YYYYMMDD_HHMM_{TICKER}_{ACTION}.md)
-└── agents/
-    ├── base.py                # CommitteeAutoAgent — shared base for all AutoAgents
-    ├── __init__.py
-    ├── market_analyst.py      # AutoAgent
-    ├── financial_analyst.py   # AutoAgent
-    ├── technical_analyst.py   # AutoAgent
-    ├── risk_officer.py        # AutoAgent
-    ├── knowledge_agent.py     # CustomAgent
-    ├── memo_writer.py         # AutoAgent
-    └── committee_chair.py     # CustomAgent
-```
-
----
-
-## Workflow DAG
+## How It Works
 
 ```
 Step 1 — Parallel (no dependencies):
@@ -73,8 +25,156 @@ Step 4 — depends on memo_draft:
   └── final_decision       → CommitteeChairAgent
 ```
 
-The engine executes independent steps in parallel (Steps 1), then gates the
-remaining steps on their declared dependencies.
+The engine executes independent steps in parallel, then gates each subsequent
+step on its declared dependencies. The final output is a markdown investment memo
+written to `data/memos/YYYYMMDD_HHMM_{TICKER}_{ACTION}.md`.
+
+---
+
+## Running Without the Dashboard (CLI)
+
+This is the core example. No dashboard needed — results are written to `data/memos/`.
+
+### Prerequisites
+
+- Python 3.10+
+- Redis running on `localhost:6379`
+- `ANTHROPIC_API_KEY` (or another supported LLM provider key)
+
+### Setup
+
+```bash
+# From the investment_committee directory
+pip install -r requirements.txt
+
+# Copy and fill in your keys
+cp .env.example .env
+# Edit .env: set ANTHROPIC_API_KEY and REDIS_URL
+```
+
+### Run
+
+```bash
+# Single analyst, fast check
+python committee.py --mode quick --ticker AAPL
+
+# Full 7-agent committee
+python committee.py --mode full --ticker NVDA --amount 1500000
+
+# Repeat ticker — KnowledgeAgent will find and surface prior memos
+python committee.py --mode full --ticker NVDA --amount 1500000
+
+# Sector cap stress test
+python committee.py --mode full --ticker AMD --amount 2000000
+```
+
+### Expected Output
+
+```
+  ┌─ COMMITTEE DECISION ──────────────────────────────────────────────────
+  │  Ticker:     NVDA
+  │  Action:     BUY
+  │  Amount:     $1,500,000
+  │  Conviction: HIGH
+  │  Risk:       MEDIUM
+  └───────────────────────────────────────────────────────────────────────
+
+Memo saved → data/memos/20260223_1430_NVDA_BUY.md
+```
+
+The memo contains the full analysis from all 7 agents — market, fundamental,
+technical, risk, prior research, and the chair's final rationale.
+
+---
+
+## Web Dashboard (Optional)
+
+The dashboard is a separate FastAPI app that provides a browser UI for triggering
+runs and reading memos. It is **not required** to run the committee — `committee.py`
+works entirely standalone.
+
+The dashboard and `committee.py` share the same Redis instance and `data/memos/`
+directory, so memos produced by the CLI are immediately visible in the UI.
+
+### Run Locally
+
+```bash
+# Terminal 1 — start the dashboard (port 8004)
+python dashboard.py
+
+# Terminal 2 — run the committee as normal (CLI still works alongside the dashboard)
+python committee.py --mode full --ticker AAPL --amount 1000000
+```
+
+Open `http://localhost:8004` to view the portfolio, trigger runs from the UI,
+and browse memos with rendered markdown.
+
+### Dashboard Pages
+
+| Route | Description |
+|---|---|
+| `/` | Portfolio overview — holdings, sector exposure, AUM |
+| `/run` | Trigger a new committee run from the browser |
+| `/memos` | Browse all saved memos |
+| `/history` | Decision history and outcome log |
+| `/system` | Redis health, workflow state, LTM summary |
+
+---
+
+## Docker (Dashboard + Redis Together)
+
+`docker-compose.yml` packages the dashboard and a dedicated Redis instance
+into a single stack. The committee CLI (`committee.py`) is not included in the
+container — it is intended to run on the host, connecting to the containerised Redis.
+
+```bash
+# Start Redis (port 6380) and dashboard (port 8004)
+docker compose up -d
+
+# Point the CLI at the containerised Redis
+REDIS_URL=redis://localhost:6380/0 python committee.py --mode full --ticker NVDA --amount 1500000
+```
+
+> Redis is exposed on port **6380** (not 6379) to avoid colliding with any
+> existing local Redis instance.
+
+### Stop and clean up
+
+```bash
+docker compose down          # stop containers, keep volumes
+docker compose down -v       # stop and remove all volumes (wipes memos + LTM)
+```
+
+---
+
+## Project Structure
+
+```
+investment_committee/
+├── README.md
+├── committee.py               # Entry point — Mesh setup + workflow runner (CLI)
+├── dashboard.py               # Optional web UI — FastAPI on port 8004
+├── portfolio.json             # $10M mandate, holdings, sector exposure
+├── requirements.txt
+├── .env.example               # Copy to .env and fill in your keys
+├── Dockerfile                 # Builds the dashboard container
+├── docker-compose.yml         # Redis + dashboard stack
+├── supervisord.conf           # Process manager used inside the container
+├── static/                    # Dashboard CSS + JS
+├── templates/                 # Jinja2 HTML templates
+├── data/
+│   └── memos/                 # Memo archive — created at runtime (gitignored)
+└── agents/
+    ├── base.py                # CommitteeAutoAgent — shared base for all AutoAgents
+    ├── __init__.py
+    ├── market_analyst.py      # AutoAgent
+    ├── financial_analyst.py   # AutoAgent
+    ├── technical_analyst.py   # AutoAgent
+    ├── risk_officer.py        # AutoAgent
+    ├── knowledge_agent.py     # CustomAgent
+    ├── memo_writer.py         # AutoAgent
+    └── committee_chair.py     # CustomAgent
+```
 
 ---
 
@@ -240,7 +340,8 @@ Persists step state to Redis (`step_output:*`, `workflow_state:*`, `workflow_gra
 for crash recovery.
 
 ### AutoAgent (`jarviscore.profiles.AutoAgent`)
-LLM-driven code-generation profile. Given a task description and system prompt, it:
+Agent profile that auto-generates and executes function tools under Kernel supervision.
+Given a task description and system prompt, it:
 1. Calls `codegen.generate()` → produces Python code
 2. Runs code in `sandbox.execute()` → captures `result` variable (or return value of `async def main()`)
 3. On failure, calls `repair.repair_with_retries()` (up to 3 attempts)
@@ -251,7 +352,7 @@ The sandbox injects `task["context"]` keys as namespace variables, so
 generated code.
 
 ### CustomAgent (`jarviscore.profiles.CustomAgent`)
-Deterministic Python profile. No LLM, no sandbox. Implements `execute_task(task)`
+Deterministic Python profile. No code generation, no sandbox. Implements `execute_task(task)`
 directly. Used for agents with rule-based logic (KnowledgeAgent, CommitteeChair)
 where predictability matters more than flexibility.
 
@@ -276,161 +377,27 @@ self.memory = UnifiedMemory(
 
 ---
 
-## Why Blob Storage Only Has Summary
+## LTM & Institutional Memory
 
-This is an intentional architectural choice, not a limitation.
-
-The three memory tiers have distinct responsibilities:
-
-**Episodic Ledger** (Redis Stream `ledgers:{workflow_id}`) owns the raw
-chronological record — every append is an atomic XADD. It preserves full event
-history and is the source of truth.
-
-**LTM** is a *compression* layer, not a *storage* layer. Its job is to distil
-the episodic ledger into a bounded-size semantic digest that can fit in an LLM
-prompt without blowing the context window. Full structured data would defeat
-this purpose — a 50-run workflow's ledger could have thousands of entries; a
-summary is always ~200 tokens.
-
-Blob storage in LTM holds `workflows/{wf_id}/ltm/summary.txt` — the durable
-cold-cache copy of the Redis LTM string. Redis has a 7-day TTL; blob has no
-expiry. When Redis misses, LTM reads from blob and rehydrates Redis. This
-dual-write pattern means the summary survives Redis restarts, TTL expiry, and
-cluster failures.
-
-**Full structured data lives elsewhere:**
-- Per-step outputs → `step_output:*` Redis hashes (workflow engine)
-- Working notes → `workflows/{wf_id}/scratchpads/` blob files
-- Commit history → `data/memos/` (our own archive, outside the framework)
-
----
-
-## Issues Encountered & Fixes
-
-### Issue 1 — `mesh.workflow()` does not accept `context=` keyword argument
-
-**Symptom:** `TypeError: Mesh.workflow() got an unexpected keyword argument 'context'`
-
-**Root cause:** `mesh.workflow(workflow_id, steps)` only accepts two positional
-arguments. There is no mechanism to pass workflow-level variables (ticker, amount,
-mandate, portfolio) through the public API.
-
-**What we tried first:** Passing `context=context` directly — rejected at runtime.
-
-**Fix:** Each step definition is built dynamically with a `"params"` key containing
-the workflow-level variables:
+The `KnowledgeAgent` loads a cross-run LTM summary at `setup()` time:
 ```python
-params = {"ticker": ticker, "amount": amount, "mandate": ..., "portfolio": ...}
-steps = [{**s, "params": params} for s in base_steps]
-```
-The `WorkflowEngine` preserves all step keys in `task = step.copy()`, so `params`
-survives and is readable inside each agent's `execute_task`. A shared base class
-(`CommitteeAutoAgent`) merges `task["params"]` into `task["context"]` before the
-sandbox runs, making `ticker`, `amount` etc. available as direct variables in
-LLM-generated code.
-
----
-
-### Issue 2 — `mesh.workflow()` returns a list, not a dict
-
-**Symptom:** `AttributeError: 'list' object has no attribute 'get'`
-
-**Root cause:** The engine returns results in step-definition order as a Python list.
-The plan assumed a dict keyed by step ID.
-
-**Fix:** `_index_results(results, steps)` matches each result to its step ID using
-position index as fallback (successful results have no `step_id` field — only
-failures do):
-```python
-def _index_results(results, steps) -> dict:
-    for i, r in enumerate(results):
-        sid = r.get("step_id") or (steps[i].get("id") if i < len(steps) else None)
-        if sid:
-            by_id[sid] = r
+prior = await self.memory.ltm.load_summary()
 ```
 
----
-
-### Issue 3 — `numpy.bool_` not JSON-serializable, crashes Redis save
-
-**Symptom:** `TypeError: Object of type bool is not JSON serializable` inside
-`redis_store.save_step_output()` when saving TechnicalAnalyst or MarketAnalyst results.
-
-**Root cause:** pandas/numpy boolean comparisons (`current > ma50`, `ma50 > ma200`)
-return `numpy.bool_` objects. The class name in CPython is `'bool'`, but the standard
-`json` encoder does not recognise it as a Python `bool`. The framework calls
-`json.dumps(output)` with no custom encoder.
-
-**Fix:** `CommitteeAutoAgent.execute_task()` sanitises the output dict after the
-sandbox returns, recursively converting all numpy scalar types to Python natives:
+The `CommitteeChairAgent` writes a one-line learning after each decision:
 ```python
-def _to_python(obj):
-    if isinstance(obj, np.bool_):   return bool(obj)
-    if isinstance(obj, np.integer): return int(obj)
-    if isinstance(obj, np.floating): return float(obj)
-    if isinstance(obj, np.ndarray): return obj.tolist()
-    if isinstance(obj, dict):  return {k: _to_python(v) for k, v in obj.items()}
-    if isinstance(obj, list):  return [_to_python(v) for v in obj]
-    return obj
+await self.memory.ltm.save_summary(
+    f"2026-02-19: NVDA → HOLD ($750,000, conviction=MEDIUM, fin_score=7.0)"
+)
 ```
 
----
+LTM uses a dual-write strategy:
+- **Redis** (`ltm:committee`, 7-day TTL) — fast hot path
+- **Blob** (`workflows/committee/ltm/summary.txt`) — durable cold path, survives TTL
 
-### Issue 4 — CommitteeChair cannot see individual step results
-
-**Symptom:** Chair produced PASS with `fin_score=5, mandate=fail` even when memo
-showed score 7.0 and mandate PASS.
-
-**Root cause:** `final_decision` only declares `depends_on: ["memo_draft"]`.
-The engine therefore only puts `memo_draft` in `task["context"]["previous_step_results"]`.
-The Chair was trying to read `risk_assessment`, `financial_analysis`, `technical_analysis`
-directly from `previous_step_results` — those keys didn't exist, so it got empty
-dicts and fell through to defaults.
-
-**Fix:** The `MemoWriterAgent` already aggregates all analysis into a `scores` dict
-in its output. The Chair now reads from that pre-aggregated structure:
-```python
-memo_entry = prev.get("memo_draft") or {}
-memo  = memo_entry.get("output") or {}
-scores = memo.get("scores") or {}
-
-fin_score   = scores.get("fundamental") or 5
-tech_signal = scores.get("technical") or "neutral"
-risk_rating = scores.get("risk_rating") or "HIGH"
-mandate_ok  = memo.get("mandate_pass", False)
-```
-This eliminates the need to add all steps to `depends_on` (which would be redundant
-since memo_writer already read them all).
-
----
-
-### Issue 5 — `task["context"]` overwritten by the engine, params not reaching sandbox
-
-**Symptom:** Variables like `ticker` and `amount` were `NameError` in LLM-generated
-code despite being passed as workflow context.
-
-**Root cause:** The `WorkflowEngine._execute_step()` always sets:
-```python
-task["context"] = {
-    "previous_step_results": dep_outputs,
-    "workflow_id": workflow_id,
-    "step_id": step_id,
-}
-```
-This overwrites any `"context"` key already in the step dict. Only these three
-variables reach the sandbox namespace.
-
-**Fix:** Same as Issue 1 — inject via `step["params"]` and merge in the base class:
-```python
-class CommitteeAutoAgent(AutoAgent):
-    async def execute_task(self, task):
-        ctx = task.setdefault("context", {})
-        ctx.update(task.get("params", {}))          # merge params → context
-        result = await super().execute_task(task)   # sandbox now sees ticker, amount, etc.
-        if isinstance(result.get("output"), dict):
-            result["output"] = _to_python(result["output"])
-        return result
-```
+On the second run for the same ticker, the KnowledgeAgent will surface both:
+1. Prior memos scanned from `data/memos/` (file-system archive)
+2. Institutional learnings from LTM (compressed decision history)
 
 ---
 
@@ -450,30 +417,6 @@ Otherwise
 
 ---
 
-## LTM & Institutional Memory
-
-The `KnowledgeAgent` loads a cross-run LTM summary at `setup()` time:
-```python
-prior = await self.memory.ltm.load_summary()
-```
-
-The `CommitteeChairAgent` writes a one-line learning after each decision:
-```python
-await self.memory.ltm.save_summary(
-    f"2026-02-19: NVDA → HOLD ($750,000, conviction=MEDIUM, fin_score=7.0)"
-)
-```
-
-LTM uses a dual-write strategy:
-- **Redis** (`ltm:committee`, 7-day TTL) — fast hot path
-- **Blob** (`workflows/committee/ltm/summary.txt`) — durable cold path, survives TTL
-
-On the second run for the same ticker, the KnowledgeAgent will include both:
-1. Prior memos scanned from `data/memos/` (file-system archive)
-2. Institutional learnings from LTM (compressed decision history)
-
----
-
 ## Redis Keys Created Per Run
 
 | Key Pattern | Type | Content |
@@ -484,22 +427,3 @@ On the second run for the same ticker, the KnowledgeAgent will include both:
 | `ledgers:committee` | Stream | Episodic event log (KnowledgeAgent) |
 | `ltm:committee` | String | LTM summary (Chair → LTM) |
 
----
-
-## Environment
-
-```bash
-# .env keys needed
-ANTHROPIC_API_KEY=sk-ant-...   # or AZURE_API_KEY / GEMINI_API_KEY
-REDIS_URL=redis://localhost:6379/0
-
-# Start Redis
-docker compose -f /home/mutua/Documents/P2P/jarviscore/docker-compose.infra.yml up -d redis
-
-# Verify setup
-venv/bin/python -c "from jarviscore import Mesh; import yfinance; print('OK')"
-```
-
----
-
-*JarvisCore Investment Committee — v0.4.0 | Built 2026-02-19*
