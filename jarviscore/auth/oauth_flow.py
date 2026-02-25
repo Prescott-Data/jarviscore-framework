@@ -104,11 +104,20 @@ class CLIFlowHandler(OAuthFlowHandler):
         check_status_fn,
         timeout: float = 300,
         poll_interval: float = 2.0,
+        failed_grace_period: float = 120.0,
     ) -> str:
-        """Poll connection status until ACTIVE or timeout."""
+        """
+        Poll connection status until ACTIVE or timeout.
+
+        failed_grace_period: seconds to keep polling even when gateway
+        returns FAILED, to work around gateways that map "token not yet
+        available" (HTTP 403 from broker) as FAILED instead of PENDING.
+        After the grace period, a persistent FAILED is treated as terminal.
+        """
         try:
             elapsed = 0.0
             last_status = "PENDING"
+            first_failed_at: Optional[float] = None
 
             while elapsed < timeout:
                 try:
@@ -127,9 +136,24 @@ class CLIFlowHandler(OAuthFlowHandler):
                     print(f"  ✓ Authorization complete!")
                     return status
 
-                if status in ("REVOKED", "EXPIRED", "FAILED"):
+                if status in ("REVOKED", "EXPIRED"):
                     print(f"  ✗ Authorization failed: {status}")
                     return status
+
+                if status == "FAILED":
+                    if first_failed_at is None:
+                        first_failed_at = elapsed
+                        logger.debug(
+                            f"Gateway returned FAILED at t={elapsed:.0f}s; "
+                            f"will keep polling for {failed_grace_period:.0f}s grace period"
+                        )
+                    if elapsed - first_failed_at >= failed_grace_period:
+                        print(f"  ✗ Authorization failed: FAILED")
+                        return status
+                    # Still within grace window — OAuth may not be complete yet
+                else:
+                    # Status recovered from FAILED; reset the grace timer
+                    first_failed_at = None
 
                 if status == "ATTENTION":
                     print(f"  ! Re-authorization may be needed")

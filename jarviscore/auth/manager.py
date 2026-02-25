@@ -20,6 +20,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
+
 from jarviscore.nexus.client import NexusClient
 from jarviscore.nexus.lifecycle import LifecycleMonitor
 from jarviscore.nexus.models import DynamicStrategy
