@@ -3025,4 +3025,4 @@ For complete, runnable examples, see:
 
 ---
 
-*CustomAgent Guide - JarvisCore v0.4.0*
+*CustomAgent Guide - JarvisCore v1.0.0*

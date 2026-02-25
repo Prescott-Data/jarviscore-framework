@@ -1,109 +1,108 @@
 # JarvisCore Enterprise
 
-JarvisCore is open source (Apache 2.0) and built to help teams orchestrate multi-agent systems with peer-to-peer coordination, workflows, unified memory, and Nexus OSS-native auth.
+JarvisCore is open source (Apache 2.0). You can self-host it, run it on any cloud, and operate it entirely on your own infrastructure — forever, for free.
 
-JarvisCore Enterprise adds the controls, security, and operational guarantees required for regulated environments and large deployments — without restricting the OSS core.
-
----
-
-## What stays open source
-
-JarvisCore OSS includes the core framework primitives needed to build and run real multi-agent systems:
-
-- Multi-agent orchestration and workflow execution (dependencies, retries, crash recovery)
-- P2P mesh networking (agent discovery and coordination)
-- Unified memory primitives (episodic and long-term patterns, pluggable backends)
-- Context distillation models for shared knowledge
-- Basic telemetry/tracing and local-first observability
-- FastAPI integration and deployment primitives
-- Nexus OSS Protocol support (protocol and SDK remain open)
-
-If you can build your system with standard infrastructure and you do not need org-wide governance controls, JarvisCore OSS is enough.
+**JarvisCore Enterprise** is a different thing: it is a **managed deployment service**. Prescott Data runs, operates, and supports JarvisCore for you — the same way MongoDB Atlas runs MongoDB or Redis Cloud runs Redis. You get the same open-source framework, deployed and maintained by the team that built it, with the operational guarantees, security controls, and support SLAs that regulated and production-critical environments require.
 
 ---
 
-## What Enterprise adds
+## The model
 
-### 1. Identity, Access & Governance (Nexus Enterprise)
-
-Nexus OSS Protocol remains open source. Enterprise adds the identity and governance layer required by real organisations:
-
-- SSO / SAML / OIDC federation
-- SCIM provisioning and deprovisioning
-- Org / workspace RBAC (agents, tools, data sources, workflows)
-- Policy packs (least-privilege defaults, approval gates, environment rules)
-- Audit exports (SIEM-ready) and identity event trails
-- Advanced token lifecycle controls (rotation, revocation workflows, service accounts)
-
-### 2. Infrastructure Stack Hardening
-
-JarvisCore auto-injects the infrastructure stack for every agent at runtime. Enterprise hardens it:
-
-- Secrets managers (Vault / KMS / HSM integrations)
-- Hardened blob storage with encryption, lifecycle rules, and retention policies
-- Multi-tenant isolation and environment segmentation (dev / stage / prod)
-- Compliance controls (data residency options, retention policies, export controls)
-
-### 3. UnifiedMemory Hardening
-
-Enterprise extends memory from "works" to "safe at scale":
-
-- PII controls (redaction, classification, field-level controls)
-- Encryption at rest and in transit, with optional customer-managed keys
-- Retention and deletion workflows (including right-to-delete patterns)
-- Lineage and provenance metadata for memory writes and reads
-- Workspace- and tenant-isolated memory partitions
-
-### 4. Observability, Tracing & Compliance
-
-Enterprise makes telemetry production-grade:
-
-- OpenTelemetry export (metrics / traces / logs)
-- SIEM integrations and audit-grade event streams
-- Long retention, searchable traces, workflow replay tooling
-- Compliance-grade logging policies and redaction controls
-
-### 5. Deployment & Ops Controls (Docker / Kubernetes)
-
-Enterprise adds guardrails for fleet-scale agent operations:
-
-- RBAC for deployments and runtime operations
-- Policy gates (signed images, approved tools and connectors, environment allowlists)
-- Multi-cluster controls and safe rollout strategies
-- Supply chain checks and break-glass operational controls
+| | JarvisCore OSS | JarvisCore Enterprise |
+|---|---|---|
+| **Who runs it** | You | Prescott Data |
+| **Deployment** | Self-managed | Fully managed, hosted |
+| **Licensing** | Apache 2.0, free | Commercial agreement |
+| **SLA / uptime** | — | 99.9 % uptime guarantee |
+| **Support** | Community (GitHub Issues) | Dedicated engineering, SLA response |
+| **Security controls** | Framework defaults | Enterprise hardening (see below) |
+| **Data isolation** | You configure it | Enforced at infrastructure layer |
 
 ---
 
-## Community vs Enterprise
+## What Enterprise covers
 
-| Capability | JarvisCore OSS | JarvisCore Enterprise |
-|-----------|:--------------:|:---------------------:|
-| P2P mesh + agent discovery | ✅ | ✅ |
-| Workflow orchestration + crash recovery | ✅ | ✅ |
-| Unified memory primitives | ✅ | ✅ |
-| Nexus OSS Protocol support | ✅ | ✅ |
-| Basic telemetry and local observability | ✅ | ✅ |
-| SSO / SAML / SCIM | — | ✅ |
-| Org / workspace RBAC + policy packs | — | ✅ |
-| Secrets manager + KMS / HSM integrations | — | ✅ |
-| PII controls + retention / deletion workflows | — | ✅ |
-| OTel / SIEM exports + audit-grade tracing | — | ✅ |
-| Deployment RBAC + policy gates | — | ✅ |
+### 1. Managed Deployment
+
+Prescott Data provisions, configures, and operates the full JarvisCore stack — agents, mesh, Redis, blob storage, and observability — on your chosen cloud (AWS, Azure, GCP) or in your private network.
+
+- Zero-ops onboarding: your team connects to a running system
+- Automated patching, upgrades, and dependency management
+- Capacity planning and scaling handled on your behalf
+- Private networking, VPC peering, or on-premises deployment
+- Kubernetes-native deployment with Helm charts and operators
+
+### 2. Security & Authentication
+
+- SSO / SAML / OIDC federation with your identity provider
+- SCIM provisioning and automatic deprovisioning
+- Role-based access control (RBAC) across agents, tools, data sources, and workflows
+- Secrets management via Vault, AWS KMS, Azure Key Vault, or GCP KMS
+- Encryption at rest and in transit; customer-managed key (BYOK) option
+- Audit-grade event logs, exportable to your SIEM
+
+### 3. Tenant Isolation
+
+Multi-agent systems often serve multiple business units, customers, or environments. Enterprise enforces strict isolation at every layer:
+
+- Workspace-level separation: each tenant's agents, workflows, and memory are fully partitioned
+- Network isolation: no shared data paths between tenants
+- Per-tenant encryption keys
+- Separate Redis namespaces and blob storage prefixes enforced at the platform layer, not application code
+- Verified separation: available on request as part of the security review pack
+
+### 4. Data Privacy & Compliance
+
+- PII detection and redaction controls on agent inputs, outputs, and memory writes
+- Field-level encryption for sensitive workflow data
+- Configurable data residency: choose the region where data is stored and processed
+- Retention policies and deletion workflows (including right-to-delete / GDPR patterns)
+- Lineage and provenance metadata on all memory reads and writes
+- Compliance documentation: SOC 2 Type II report, architecture overview, threat model — available under NDA
+
+### 5. Observability & Tracing
+
+- OpenTelemetry export: metrics, traces, and logs to your existing stack (Datadog, Grafana, Splunk, etc.)
+- SIEM-ready audit streams with tamper-evident event records
+- Long-retention, searchable traces and workflow replay tooling
+- Prometheus metrics aggregated across all nodes
+
+### 6. Support & SLAs
+
+| Plan | Response time | Coverage |
+|------|--------------|----------|
+| **Standard** | Next business day | Business hours |
+| **Professional** | 4 hours | 24 × 5 |
+| **Enterprise** | 1 hour | 24 × 7 × 365 |
+
+All paid plans include a named support engineer, direct Slack or Teams channel, and quarterly architecture reviews.
 
 ---
 
-## How teams typically adopt
+## Who Enterprise is for
 
-1. **Start with JarvisCore OSS** to build and validate workflows.
-2. **Move to Enterprise** when you need SSO, governance, compliance controls, hardened infrastructure, or multi-team operational safety.
-3. Optionally use a **managed control plane** for faster production rollout.
+Enterprise is the right choice when one or more of these apply:
+
+- **You don't want to run infrastructure.** Your team should build agent systems, not operate Redis clusters and blob storage.
+- **You have compliance requirements.** SOC 2, GDPR, HIPAA, or internal data governance policies that require audited, isolated, documented deployments.
+- **You need guaranteed uptime.** Your agent workflows are in the critical path of production systems.
+- **You operate at multi-tenant scale.** Multiple business units or customers need strict separation without running separate deployments.
+- **You need a support SLA.** Production incidents need a response time guarantee and a human who knows your deployment.
+
+---
+
+## How teams typically start
+
+1. **Build with JarvisCore OSS.** All framework primitives are available and unrestricted. Validate your architecture on your own infrastructure.
+2. **Move to Enterprise** when operational burden, compliance requirements, or uptime SLAs become the constraint — not features.
+3. Onboarding typically takes **1–2 weeks** from signed agreement to a running managed environment.
 
 ---
 
 ## Talk to us
 
-If you need SSO / RBAC / audit logs, secrets management, PII controls, or deployment governance, JarvisCore Enterprise is designed for that.
+Enterprise access, pricing, and the security review pack (architecture overview, threat model, deployment reference) are available on request.
 
-**Request Enterprise access or pricing:** info@prescottdata.io
+**Contact:** jarviscore-enterprise@prescottdata.io
 
-A security review pack is available on request: architecture overview, threat model, and deployment reference.
+If you have a specific compliance framework or deployment requirement, include it in your first message — it helps us prepare the right materials.

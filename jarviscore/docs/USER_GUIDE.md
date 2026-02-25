@@ -125,7 +125,7 @@ asyncio.run(main())
 
 ### The Mesh
 
-The **Mesh** is your control center. It manages agents and orchestrates workflows.
+The **Mesh** is the runtime that wires everything together. You create one Mesh per process, configure its mode, register agent classes with `mesh.add()`, then call `await mesh.start()` to initialise them. The Mesh routes each workflow step to the right agent, injects infrastructure (Redis store, blob storage, mailbox) before `setup()` runs, and manages the full agent lifecycle — from startup through teardown.
 
 ```python
 # Autonomous mode (single machine, workflow engine only)
@@ -147,7 +147,9 @@ mesh = Mesh(mode="distributed", config={'bind_port': 7950})
 
 ### Agents
 
-**Agents** are workers that execute tasks. JarvisCore offers three profiles:
+**Agents** are workers that execute tasks. Each agent has a `role` (a unique string identifier), a list of `capabilities`, and belongs to a Profile that determines how it runs.
+
+A **Profile** is the execution contract an agent fulfills. You subclass a Profile, set its class attributes, and pass the class to `mesh.add()` — the Mesh instantiates and manages it. JarvisCore offers two profiles:
 
 | Profile | Best For | How It Works |
 |---------|----------|--------------|
@@ -158,7 +160,7 @@ See [AutoAgent Guide](AUTOAGENT_GUIDE.md) and [CustomAgent Guide](CUSTOMAGENT_GU
 
 ### Workflows
 
-**Workflows** are sequences of tasks with dependencies:
+A **Workflow** is a list of steps — each step names an agent by role or capability, plus a task description. Steps that declare `depends_on` wait for those dependencies to complete before starting; independent steps run in parallel. Each completed step's output is forwarded automatically to dependent steps via `task['context']['previous_step_results']`, so agents can build on each other's work without manual wiring.
 
 ```python
 await mesh.workflow("pipeline-id", [
@@ -360,7 +362,7 @@ asyncio.run(data_pipeline())
 
 ## Infrastructure & Memory
 
-JarvisCore v0.4.0 ships a full production infrastructure stack. All features degrade
+JarvisCore v1.0.0 ships a full production infrastructure stack. All features degrade
 gracefully when not configured.
 
 ### Auto-Injection Quick Reference
@@ -1415,6 +1417,6 @@ mesh = Mesh(config=config)
 
 ## Version
 
-User Guide for JarvisCore v0.4.0
+User Guide for JarvisCore v1.0.0
 
 Last Updated: 2026-02-03

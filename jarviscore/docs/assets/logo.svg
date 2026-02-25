@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 100" fill="none">
+  <!--
+    JarvisCore logomark — approximate vector recreation.
+    Two strokes on transparent background:
+      1. ~260° oval arc (counterclockwise), gap at lower-right
+      2. J diagonal stroke: upper-right → through oval centre → hooks right at bottom
+  -->
+
+  <!-- Oval arc: ellipse centre (40,50) rx=22 ry=32, sweep CCW, 260° -->
+  <path
+    d="M 54 26 A 22 32 0 1 0 54 74"
+    stroke="#39FF14"
+    stroke-width="6"
+    stroke-linecap="round"
+    fill="none"
+  />
+
+  <!-- J stroke: start upper-right, diagonal through centre, hook right at bottom -->
+  <path
+    d="M 54 26 C 46 42 28 60 24 76 C 22 88 36 94 50 90"
+    stroke="#39FF14"
+    stroke-width="6"
+    stroke-linecap="round"
+    fill="none"
+  />
+</svg>

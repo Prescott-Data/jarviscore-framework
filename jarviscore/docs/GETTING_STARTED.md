@@ -8,12 +8,16 @@ Build your first AI agent in 5 minutes!
 
 ### Profiles (How agents execute)
 
+A **Profile** is the execution contract your agent fulfills — it defines how tasks are processed. **AutoAgent** delegates execution to an LLM: you write a system prompt, and the framework generates and runs the code. **CustomAgent** runs code you write directly, with no LLM required for task execution — ideal for integrating existing logic or frameworks.
+
 | Profile | Best For | LLM Required |
 |---------|----------|--------------|
 | **AutoAgent** | Rapid prototyping, LLM generates code from prompts | Yes |
 | **CustomAgent** | Your own code with P2P handlers or workflow tasks | Optional |
 
 ### Execution Modes (How agents are orchestrated)
+
+A **Mode** controls which infrastructure components the Mesh starts. Choose based on where your agents run and how they communicate: a single process, peer-to-peer across processes on the same or different machines, or fully distributed across nodes with Redis-backed coordination.
 
 | Mode | Use Case | Start Here |
 |------|----------|------------|
@@ -609,7 +613,7 @@ cat logs/<agent>/<latest>.json
 
 ## Infrastructure Stack
 
-JarvisCore v0.4.0 ships a full production infrastructure stack. All features are
+JarvisCore v1.0.0 ships a full production infrastructure stack. All features are
 opt-in via environment variables and degrade gracefully when not configured.
 
 ### Quick Reference

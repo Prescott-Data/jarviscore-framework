@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "0.4.0"
+version = "1.0.0"
 description = "Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -82,7 +82,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/Prescott-Data/jarviscore-framework"
-Documentation = "https://prescott-data.github.io/jarviscore-framework/"
+Documentation = "https://jarviscore.developers.prescottdata.io/"
 Repository = "https://github.com/Prescott-Data/jarviscore-framework"
 Issues = "https://github.com/Prescott-Data/jarviscore-framework/issues"
 

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.0] - 2026-02-25
+
+### Changed
+- Version: 0.4.0 → 1.0.0 — stable public release
+- Documentation URL updated to custom domain: `https://jarviscore.developers.prescottdata.io/`
+
+### Added
+- Apache 2.0 license (replaces MIT); `CLA/INDIVIDUAL.md`, `CLA/CORPORATE.md`, `TRADEMARK.md`
+- `CONTRIBUTING.md` with CLA links, ruff tooling, PR checklist
+- `CODE_OF_CONDUCT.md` community standards
+- `ENTERPRISE.md` — OSS vs Enterprise comparison
+- `examples/investment_committee/` — 7-agent multi-step workflow with web dashboard (AutoAgent + CustomAgent,
+  parallel step execution, LTM institutional memory, FastAPI dashboard on port 8004)
+
+---
+
 ## [0.4.0] - 2026-02-18
 
 ### Added — Infrastructure Stack (Phases 1–9)
