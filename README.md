@@ -238,4 +238,4 @@ python -c "import jarviscore; print(jarviscore.__path__[0] + '/docs')"
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE) for details.
+Apache 2.0 — see [LICENSE](https://github.com/Prescott-Data/jarviscore-framework/blob/main/LICENSE) for details.
