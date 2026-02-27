@@ -1,5 +1,5 @@
 """
-Trace Event Types for JarvisCore v1.0.0.
+Trace Event Types for JarvisCore v1.0.1.
 
 Every significant action in the framework emits a typed trace event.
 These flow through TraceManager to Redis (real-time + persistent)

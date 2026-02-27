@@ -60,7 +60,7 @@ Quick Start (CustomAgent - distributed mode):
     results = await mesh.workflow("demo", [{"agent": "processor", "task": "hello"}])
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __author__ = "JarvisCore Contributors"
 __license__ = "Apache-2.0"
 

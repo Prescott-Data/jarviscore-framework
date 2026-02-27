@@ -1,5 +1,5 @@
 """
-Truth Models for JarvisCore v1.0.0.
+Truth Models for JarvisCore v1.0.1.
 
 Typed contracts for shared knowledge between agents:
 - Evidence: A confidence-scored pointer to supporting data

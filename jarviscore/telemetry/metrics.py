@@ -1,5 +1,5 @@
 """
-Prometheus Metrics for JarvisCore v1.0.0.
+Prometheus Metrics for JarvisCore v1.0.1.
 
 Exposes counters, histograms, and gauges for:
 - LLM usage (tokens, cost, duration per provider/model)

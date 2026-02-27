@@ -1,5 +1,5 @@
 """
-Redis Context Store for JarvisCore v1.0.0.
+Redis Context Store for JarvisCore v1.0.1.
 
 Provides durable state for: step outputs, shared context/truth, mailbox,
 workflow DAG, episodic ledger, checkpoints, trace events, and HITL requests.

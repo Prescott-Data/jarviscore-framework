@@ -1,5 +1,5 @@
 """
-Natural Language Mailboxes for JarvisCore v1.0.0.
+Natural Language Mailboxes for JarvisCore v1.0.1.
 
 High-level API for agent-to-agent messaging with capability-based
 routing. Built on top of RedisContextStore mailbox primitives (Phase 1).

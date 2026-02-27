@@ -1417,6 +1417,6 @@ mesh = Mesh(config=config)
 
 ## Version
 
-User Guide for JarvisCore v1.0.0
+User Guide for JarvisCore v1.0.1
 
 Last Updated: 2026-02-03
