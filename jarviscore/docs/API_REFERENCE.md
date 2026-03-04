@@ -2234,6 +2234,6 @@ async def test_processor_delegates_to_analyst():
 
 ## Version
 
-API Reference for JarvisCore v1.0.1
+API Reference for JarvisCore v1.0.2
 
-Last Updated: 2026-02-03
+Last Updated: 2026-03-04

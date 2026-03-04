@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.2] - 2026-03-04
+
+### Fixed
+- **P2P Keepalive Spam Prevention**: Added exponential backoff mechanism (45s default) to prevent continuous keepalive attempts when peers are unavailable or network has connectivity issues
+- **Remote Agent Discovery Bug**: Fixed `PeerClient.list_roles()` to include remote agents from SWIM mesh, not just local agents. Previously only checked local agent registry, missing agents discovered via P2P network
+- **Single-Node Graceful Degradation**: Added `allow_zero_peers` flag (default: True) to recognize single-node runs as valid state without triggering failure warnings
+
+### Changed
+- Increased `ask_peer` timeout from 600s (10 minutes) to 7200s (2 hours) to support long-running database queries and complex analysis tasks
+- Enhanced keepalive manager with consecutive failure tracking and backoff-until timestamp for better network resilience
+- Improved keepalive logging to distinguish between expected zero-peer state and actual failures
+
+### Added
+- `P2P_KEEPALIVE_FAILURE_BACKOFF_SECONDS` config parameter (default: 45) for keepalive retry backoff
+- `P2P_ALLOW_ZERO_PEERS` config parameter (default: True) for single-node development/testing
+
+---
+
 ## [1.0.1] - 2026-02-27
 
 ### Fixed

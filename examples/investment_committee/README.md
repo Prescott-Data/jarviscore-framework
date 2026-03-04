@@ -1,6 +1,6 @@
 # Investment Committee — Multi-Agent System
 
-A 7-agent investment committee built on **JarvisCore v1.0.1** that evaluates public-equity
+A 7-agent investment committee built on **JarvisCore v1.0.2** that evaluates public-equity
 opportunities and produces auditable allocation decisions for a $10M portfolio.
 Each run produces a formal markdown memo. Institutional memory (LTM) compounds across runs.
 

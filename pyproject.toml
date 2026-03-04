@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "1.0.1"
+version = "1.0.2"
 description = "Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth."
 readme = "README.md"
 requires-python = ">=3.10"
