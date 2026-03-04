@@ -376,10 +376,19 @@ class PeerClient:
             # ["scout", "analyst", "reporter"]
         """
         roles = set()
+        # Check local agents
         for role_name, agents in self._agent_registry.items():
             for agent in agents:
                 if agent.agent_id != self._agent_id:
                     roles.add(role_name)
+        
+        # BUG FIX: Also check remote agents from SWIM mesh
+        if self._coordinator and hasattr(self._coordinator, '_remote_agent_registry'):
+            remote_registry = self._coordinator._remote_agent_registry
+            for agent_id, info in remote_registry.items():
+                if agent_id != self._agent_id:  # Exclude self
+                    roles.add(info.get('role'))
+        
         return sorted(list(roles))
 
     def list_peers(self) -> List[Dict[str, Any]]:
