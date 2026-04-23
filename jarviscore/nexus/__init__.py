@@ -15,6 +15,7 @@ from .models import ConnectionRequest, DynamicStrategy, ConnectionStatus
 from .client import NexusClient
 from .lifecycle import LifecycleMonitor
 from .call_proxy import NexusCallProxy
+from .store import NexusLocalStore, get_store
 from .providers import (
     PROVIDER_CATALOG,
     get_provider,
@@ -30,6 +31,8 @@ __all__ = [
     "NexusClient",
     "LifecycleMonitor",
     "NexusCallProxy",
+    "NexusLocalStore",
+    "get_store",
     "PROVIDER_CATALOG",
     "get_provider",
     "get_scopes",

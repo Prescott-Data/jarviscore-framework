@@ -86,17 +86,56 @@ class NexusCallProxy:
         Raises RuntimeError only on internal proxy failure (no connection, no Nexus).
         """
         from jarviscore.nexus.client import NexusClient
+        from jarviscore.nexus.store import get_store
 
+        strategy = None
+        request_kwargs = None
+
+        # ── Try auth_manager (gateway mode) first ─────────────────────────────
         try:
             strategy = await self._auth.resolve_strategy(connection_id)
-        except Exception as exc:
-            raise RuntimeError(
-                f"NexusCallProxy: could not resolve strategy for connection {connection_id!r}: {exc}"
-            ) from exc
+            request_kwargs = NexusClient.apply_strategy_to_request(
+                strategy, method, url, headers=headers, **kwargs
+            )
+        except Exception as gateway_exc:
+            logger.debug(
+                "NexusCallProxy: gateway resolve failed for %r (%s) — "
+                "falling back to local credential store",
+                connection_id, gateway_exc,
+            )
 
-        request_kwargs = NexusClient.apply_strategy_to_request(
-            strategy, method, url, headers=headers, **kwargs
-        )
+        # ── Local store fallback (zero-dep mode) ──────────────────────────────
+        if request_kwargs is None:
+            store = get_store()
+            # connection_id is treated as provider name in local mode
+            provider = connection_id.split(":")[0].lower()   # e.g. "github:user123" → "github"
+            auth_info = store.build_auth_info(provider)
+            if not auth_info:
+                raise RuntimeError(
+                    f"NexusCallProxy: no credentials found for {connection_id!r}. "
+                    f"Run: python -m jarviscore.cli nexus register {provider} --client-id=... --client-secret=..."
+                )
+            # Build the httpx request with auth injected directly from auth_info
+            merged_headers = dict(headers or {})
+            auth_type = store.get(provider).get("auth_type", "")
+            if auth_type == "oauth2":
+                token = auth_info.get("access_token", "")
+                merged_headers["Authorization"] = f"Bearer {token}"
+            elif auth_type == "api_key":
+                # For Stripe-style Bearer, X-Api-Key, or Authorization: Bearer
+                api_key = auth_info.get("api_key", "")
+                merged_headers["Authorization"] = f"Bearer {api_key}"
+            elif auth_type == "basic_auth":
+                import base64 as _b64
+                cred = f"{auth_info.get('username','')}:{auth_info.get('password','')}"
+                encoded = _b64.b64encode(cred.encode()).decode()
+                merged_headers["Authorization"] = f"Basic {encoded}"
+            request_kwargs = {
+                "method":  method.upper(),
+                "url":     url,
+                "headers": merged_headers,
+                **kwargs,
+            }
         request_kwargs.setdefault("timeout", timeout)
 
         async with httpx.AsyncClient() as client:

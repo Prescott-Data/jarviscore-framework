@@ -155,8 +155,9 @@ def cmd_up(args):
 
 
 def cmd_register(args):
-    """Register a provider's credentials with the Nexus Broker."""
+    """Register a provider's credentials — local store or gateway."""
     from jarviscore.nexus.providers import get_provider, get_auth_type, PROVIDER_CATALOG
+    from jarviscore.nexus.store import get_store
 
     provider = args.provider.lower()
     catalog_entry = get_provider(provider)
@@ -168,110 +169,120 @@ def cmd_register(args):
         sys.exit(1)
 
     auth_type = get_auth_type(provider)
-    gateway_url = _gateway_url()
-    if not gateway_url:
-        print(_err("NEXUS_GATEWAY_URL is not set. Cannot reach Nexus Gateway."))
-        print(_info("Set NEXUS_GATEWAY_URL in your .env, or run: python -m jarviscore.cli nexus up"))
-        sys.exit(1)
-
     label = catalog_entry.get("label", provider)
-    print(_bold(f"\nRegistering {label} ({auth_type}) with Nexus...\n"))
 
-    # Build registration payload based on auth type
+    # Build credentials dict based on auth type
     if auth_type == "oauth2":
         if not args.client_id or not args.client_secret:
             print(_err(f"{label} requires --client-id and --client-secret"))
-            print(_info("  Get these from the provider's developer console:"))
             _print_console_url(provider)
             sys.exit(1)
-        payload = {
-            "provider": provider,
-            "auth_type": "oauth2",
-            "client_id": args.client_id,
+        credentials = {
+            "auth_type":     "oauth2",
+            "client_id":     args.client_id,
             "client_secret": args.client_secret,
-            "scopes": catalog_entry.get("scopes", []),
+            "scopes":        catalog_entry.get("scopes", []),
         }
-
     elif auth_type == "api_key":
-        api_key = args.api_key or args.client_id  # accept --api-key or --client-id
+        api_key = args.api_key or args.client_id
         if not api_key:
             print(_err(f"{label} requires --api-key"))
-            print(_info("  Get your API key from the provider's dashboard"))
             _print_console_url(provider)
             sys.exit(1)
-        payload = {
-            "provider": provider,
-            "auth_type": "api_key",
-            "api_key": api_key,
-        }
-
+        credentials = {"auth_type": "api_key", "api_key": api_key}
     elif auth_type == "basic_auth":
         if not args.client_id or not args.client_secret:
-            print(_err(f"{label} requires --client-id (username) and --client-secret (password/API token)"))
+            print(_err(f"{label} requires --client-id (username) and --client-secret (token)"))
             sys.exit(1)
-        payload = {
-            "provider": provider,
+        credentials = {
             "auth_type": "basic_auth",
-            "username": args.client_id,
-            "password": args.client_secret,
+            "username":  args.client_id,
+            "password":  args.client_secret,
         }
     else:
         print(_err(f"Unsupported auth_type: {auth_type}"))
         sys.exit(1)
 
-    # POST to Nexus Gateway's provider registration endpoint
-    import urllib.request, urllib.error
-    try:
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(
-            f"{gateway_url}/v1/register-provider",
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        resp = urllib.request.urlopen(req, timeout=10)
-        body = json.loads(resp.read())
-        print(_ok(f"{label} registered successfully"))
-        print(_info(f"  Provider ID: {body.get('provider_id', provider)}"))
-        print()
-        print("  To connect an agent to this provider, the agent will automatically")
-        print(f"  use 'nexus_call()' for all {label} API calls.")
-        print()
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()
-        print(_err(f"Registration failed (HTTP {e.code}): {body}"))
-        sys.exit(1)
-    except Exception as e:
-        print(_err(f"Could not reach gateway at {gateway_url}: {e}"))
-        print(_info("  Is Nexus running? Try: python -m jarviscore.cli nexus up"))
-        sys.exit(1)
+    gateway_url = _gateway_url()
+
+    if gateway_url:
+        # ── Gateway mode: POST to running Nexus Gateway ──────────────────────
+        import urllib.request, urllib.error
+        print(_bold(f"\nRegistering {label} ({auth_type}) with Nexus Gateway...\n"))
+        try:
+            payload = json.dumps({"provider": provider, **credentials}).encode()
+            req = urllib.request.Request(
+                f"{gateway_url}/v1/register-provider",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            resp = urllib.request.urlopen(req, timeout=10)
+            body = json.loads(resp.read())
+            print(_ok(f"{label} registered with gateway"))
+            print(_info(f"  Provider ID: {body.get('provider_id', provider)}"))
+        except urllib.error.HTTPError as e:
+            print(_err(f"Gateway registration failed (HTTP {e.code}): {e.read().decode()}"))
+            sys.exit(1)
+        except Exception as e:
+            print(_warn(f"Gateway unreachable ({e}) — falling back to local store"))
+            _register_local(get_store(), provider, label, auth_type, credentials)
+    else:
+        # ── Local store mode: zero-dep encrypted file ─────────────────────────
+        _register_local(get_store(), provider, label, auth_type, credentials)
+
+
+def _register_local(store, provider, label, auth_type, credentials):
+    """Write credentials to the local encrypted store."""
+    store.register(provider, credentials)
+    print(_bold(f"\nRegistering {label} ({auth_type})...\n"))
+    print(_ok(f"{label} registered in local credential store"))
+    print(_info(f"  Stored at: {store._path}"))
+    print(_info( "  Credentials are AES-256-GCM encrypted at rest"))
+    print()
+    print(f"  Agents can now call {label} APIs via nexus_call() — no further setup needed.")
+    print()
 
 
 def cmd_list(args):
-    """List providers registered in the Nexus Gateway."""
-    gateway_url = _gateway_url()
-    if not gateway_url:
-        print(_err("NEXUS_GATEWAY_URL is not set."))
-        sys.exit(1)
+    """List registered providers — from local store and/or gateway."""
+    from jarviscore.nexus.store import get_store
 
     print(_bold("\nRegistered Providers\n"))
 
-    import urllib.request, urllib.error
-    try:
-        req = urllib.request.urlopen(f"{gateway_url}/v1/providers", timeout=10)
-        providers = json.loads(req.read())
-        if not providers:
-            print(_warn("No providers registered yet."))
-            print(_info("  Register one: python -m jarviscore.cli nexus register github --client-id=... --client-secret=..."))
-        else:
-            for p in providers:
-                name = p.get("provider", p.get("name", "?"))
-                atype = p.get("auth_type", "?")
-                print(f"  {_ok(name):<40} {atype}")
+    # Always show local store first
+    store = get_store()
+    local = store.get_summary()
+    if local:
+        print(_bold("  Local store:"))
+        for entry in local:
+            name   = entry["provider"]
+            atype  = entry["auth_type"]
+            masked = entry["client_id"]
+            reg    = entry["registered_at"][:10]
+            print(f"  {_ok(name):<30} {atype:<12} id={masked}  ({reg})")
         print()
-    except Exception as e:
-        print(_err(f"Could not reach gateway: {e}"))
-        sys.exit(1)
+    else:
+        print(_warn("  No providers in local store."))
+        print(_info("  Register one: python -m jarviscore.cli nexus register github --client-id=... --client-secret=..."))
+        print()
+
+    # If gateway is configured, also show gateway providers
+    gateway_url = _gateway_url()
+    if gateway_url:
+        import urllib.request, urllib.error
+        try:
+            req = urllib.request.urlopen(f"{gateway_url}/v1/providers", timeout=5)
+            providers = json.loads(req.read())
+            if providers:
+                print(_bold("  Gateway providers:"))
+                for p in providers:
+                    name = p.get("provider", p.get("name", "?"))
+                    atype = p.get("auth_type", "?")
+                    print(f"  {_ok(name):<30} {atype}")
+                print()
+        except Exception:
+            pass  # gateway optional — don't fail if unreachable
 
 
 def cmd_test(args):
