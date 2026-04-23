@@ -168,7 +168,7 @@ Synthesize and report:
     # ─────────────────────────────────────────────────────────────
 
     def _tool_search_registry(
-        self, query: str, system: Optional[str] = None
+        self, query: str, system: Optional[str] = None, **kwargs,
     ) -> Dict[str, Any]:
         """Search the function registry for relevant code."""
         if not self.code_registry:
@@ -187,7 +187,7 @@ Synthesize and report:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    async def _tool_web_search(self, query: str) -> Dict[str, Any]:
+    async def _tool_web_search(self, query: str, **kwargs) -> Dict[str, Any]:
         """Search the web for information."""
         if not self.search_client:
             return {"status": "unavailable", "results": [],
@@ -204,7 +204,7 @@ Synthesize and report:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    async def _tool_read_url(self, url: str) -> Dict[str, Any]:
+    async def _tool_read_url(self, url: str, **kwargs) -> Dict[str, Any]:
         """Read content from a URL (with session-scoped dedup)."""
         if not self.search_client:
             return {"status": "unavailable", "content": ""}
@@ -218,17 +218,35 @@ Synthesize and report:
             }
 
         try:
-            content = self.search_client.read_url(url)
-            if hasattr(content, "__await__"):
-                content = await content
+            # InternetSearch provides extract_content(), not read_url()
+            result = self.search_client.extract_content(url, max_length=8000)
+            if hasattr(result, "__await__"):
+                result = await result
+
             self._read_urls.add(url)
             source = f"url::{url}"
             if source not in self._sources:
                 self._sources.append(source)
-            # Truncate very large pages
-            if isinstance(content, str) and len(content) > 8000:
-                content = content[:8000] + "\n\n... [truncated — page too large. Use note_finding to record key facts.]"
-            return {"status": "success", "content": content}
+
+            # extract_content returns {"url", "title", "content", "success", "word_count"}
+            if isinstance(result, dict):
+                if result.get("success"):
+                    content = result.get("content", "")
+                    title = result.get("title", "")
+                    return {
+                        "status": "success",
+                        "title": title,
+                        "content": content,
+                        "word_count": result.get("word_count", 0),
+                    }
+                else:
+                    return {"status": "error", "error": result.get("error", "Extraction failed")}
+            else:
+                # Fallback: raw string content
+                content = str(result)
+                if len(content) > 8000:
+                    content = content[:8000] + "\n\n... [truncated]"
+                return {"status": "success", "content": content}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -237,6 +255,7 @@ Synthesize and report:
         path: str,
         offset: int = 0,
         limit: int = 200,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Read a local file with pagination.
 
@@ -276,6 +295,7 @@ Synthesize and report:
         self,
         pattern: str,
         path: str = ".",
+        **kwargs,
     ) -> Dict[str, Any]:
         """Search codebase for a pattern using simple string matching.
 
@@ -325,7 +345,7 @@ Synthesize and report:
             return {"status": "error", "error": str(e)}
 
     def _tool_note_finding(
-        self, finding: str, source: str, confidence: float = 0.5
+        self, finding: str, source: str, confidence: float = 0.5, **kwargs,
     ) -> Dict[str, Any]:
         """Record a research finding with source attribution."""
         entry = {
@@ -339,7 +359,7 @@ Synthesize and report:
             self._sources.append(source)
         return {"recorded": True, "index": entry["index"], "total_findings": len(self._findings)}
 
-    def _tool_check_sufficiency(self) -> Dict[str, Any]:
+    def _tool_check_sufficiency(self, **kwargs) -> Dict[str, Any]:
         """Check if research has gathered enough information."""
         has_enough_sources = len(self._sources) >= _MIN_SOURCES_FOR_SUFFICIENT
         has_enough_facts = len(self._findings) >= _MIN_FACTS_FOR_SUFFICIENT

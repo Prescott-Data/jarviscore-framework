@@ -46,7 +46,22 @@ class InternetSearch:
     async def initialize(self):
         """Initialize HTTP session (auto-called on first use)."""
         if self.session is None or self.session.closed:
+            # Build SSL context — macOS Python 3.9 often lacks certifi
+            import ssl
+            ssl_ctx = None
+            try:
+                import certifi
+                ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            except (ImportError, Exception):
+                # Fallback: lenient SSL context (still encrypted, skips cert verify)
+                ssl_ctx = ssl.create_default_context()
+                ssl_ctx.check_hostname = False
+                ssl_ctx.verify_mode = ssl.CERT_NONE
+                logger.debug("SSL: using lenient context (certifi unavailable)")
+
+            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
             self.session = aiohttp.ClientSession(
+                connector=connector,
                 timeout=aiohttp.ClientTimeout(total=30),
                 headers={
                     "User-Agent": self.user_agent,

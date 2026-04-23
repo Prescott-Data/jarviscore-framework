@@ -831,7 +831,34 @@ class Mesh:
         ``AutoAgent`` (which always runs in autonomous mode on Sky Team)
         now gets a fully functional ``self.peers`` client.
         """
-        from jarviscore.p2p import PeerClient
+        try:
+            from jarviscore.p2p import PeerClient
+        except (ImportError, TypeError) as exc:
+            # TypeError: Python 3.9 SWIM uses kw_only=True (3.10+ only).
+            # ImportError: p2p deps not installed.
+            # Fall back: load peer_client.py directly via importlib to bypass
+            # the package __init__.py which chains to SWIM.
+            self._logger.warning(
+                "P2P PeerClient unavailable (%s: %s) — using local-only peer stubs",
+                type(exc).__name__, exc,
+            )
+            import importlib.util as _ilu
+            import pathlib as _pl
+            _pc_path = _pl.Path(__file__).parent.parent / "p2p" / "peer_client.py"
+            _spec = _ilu.spec_from_file_location("jarviscore.p2p.peer_client", str(_pc_path))
+            _mod = _ilu.module_from_spec(_spec)
+
+            # peer_client.py imports .messages — load that first the same way
+            _msg_path = _pl.Path(__file__).parent.parent / "p2p" / "messages.py"
+            _msg_spec = _ilu.spec_from_file_location("jarviscore.p2p.messages", str(_msg_path))
+            _msg_mod = _ilu.module_from_spec(_msg_spec)
+            import sys as _sys
+            _sys.modules["jarviscore.p2p.messages"] = _msg_mod
+            _msg_spec.loader.exec_module(_msg_mod)
+
+            _sys.modules["jarviscore.p2p.peer_client"] = _mod
+            _spec.loader.exec_module(_mod)
+            PeerClient = _mod.PeerClient
 
         is_p2p = self.mode == MeshMode.P2P
 

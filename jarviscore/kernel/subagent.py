@@ -128,6 +128,18 @@ class BaseSubAgent(ABC):
         ...
 
     # ──────────────────────────────────────────────────────────────────────
+    # Lifecycle hooks — override in subclasses for setup/teardown
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def _pre_run_hook(self, state) -> None:
+        """Called before the OODA loop starts. Override for resource setup (e.g. browser)."""
+        pass
+
+    async def _post_run_hook(self) -> None:
+        """Called after the OODA loop exits (even on exception). Override for cleanup."""
+        pass
+
+    # ──────────────────────────────────────────────────────────────────────
     # Prompt Building
     # ──────────────────────────────────────────────────────────────────────
 

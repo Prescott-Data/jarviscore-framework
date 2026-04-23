@@ -165,3 +165,44 @@ at Prescott Data for Finance and Marketing operations (Team Treasury + Team Sign
 - **Status**: Fixed
 - **OSS push**: Yes (all changes are generic framework improvements, no proprietary logic)
 
+---
+
+### [RESOLVE-008] Component audit + bug fixes: Researcher, Web Search, Coder, Browser
+- **Date**: 2026-04-23
+- **Triggered by**: Post-OODA-loop mesh startup dogfood run — need to harden all 4 execution components
+- **Component**: `kernel/defaults/researcher.py`, `kernel/defaults/coder.py`, `kernel/defaults/communicator.py`, `execution/search.py`, `kernel/defaults/browser.py` [NEW]
+- **Root causes found**:
+  1. **`researcher._tool_read_url` called `search_client.read_url(url)` — method doesn't exist**. `InternetSearch` has `extract_content(url)` returning a full dict `{success, content, title, word_count}`, not `read_url()`. Every researcher attempt to read a URL was silently failing.
+  2. **All tool methods missing `**kwargs`** — LLM occasionally passes extra parameters (e.g., `raw=True`, `encoding="utf-8"`) that crash the tool dispatch with `TypeError: unexpected keyword argument`. Proven in live run: `send_to_peer` crashed with `raw` kwarg.
+  3. **`execution/search.py` SSL failure on macOS** — Python 3.9 on macOS Command Line Tools lacks certifi root certs. `aiohttp` connections to DuckDuckGo failed with `SSLCertVerificationError`. Added `ssl.create_default_context()` with certifi fallback and lenient mode.
+  4. **Browser automation did not exist** — `settings.py` had `browser_enabled`, `browser_headless` flags but no implementation. The Kernel only knew 3 roles (coder, researcher, communicator).
+- **Fixes**:
+  - `researcher.py`: `read_url` → calls `extract_content()` and handles dict return correctly
+  - `researcher.py`, `coder.py`, `communicator.py`: All tool methods now accept `**kwargs`
+  - `search.py`: SSL context with certifi + lenient fallback via `aiohttp.TCPConnector`
+  - `kernel/defaults/browser.py` [NEW]: `BrowserSubAgent` with 14 Playwright tools:
+    - `navigate`, `click`, `type_text`, `get_text`, `get_attribute`
+    - `screenshot`, `wait_for`, `evaluate`, `get_links`
+    - `fill_form`, `select_option`, `scroll`, `get_cookies`, `close_page`
+    - Graceful degradation when Playwright not installed (returns install instructions)
+    - Browser lifecycle tied to `run()` — opens before OODA loop, closes in `finally`
+  - `kernel/lease.py`: Added `browser` role profile (5-min wall clock, 20-turn fuse)
+  - `kernel/kernel.py`: Added `_BROWSER_KEYWORDS`, classifier routes to `browser`, `_create_subagent` factory creates `BrowserSubAgent`
+  - `kernel/subagent.py`: Added `_pre_run_hook()` / `_post_run_hook()` no-op stubs to `BaseSubAgent`
+- **Verified**: 5-point import + classification test suite passes cleanly
+  - All 4 subagents import without error
+  - Task classifier routes correctly for all 4 roles
+  - `extract_content()` exists, `read_url()` correctly absent (was a phantom API)
+  - Lease profiles include `browser`
+- **Status**: Fixed
+- **OSS push**: Yes
+
+---
+
+### [ISSUE-006] Playwright not installed in dev environment
+- **Discovered**: 2026-04-23
+- **Severity**: Low (browser role disabled, not crash — graceful degradation works)
+- **Component**: `kernel/defaults/browser.py`
+- **Description**: `PLAYWRIGHT_AVAILABLE=False` because `playwright` not installed. Browser tasks will fail gracefully with an install message, not a crash.
+- **Fix**: `pip install playwright && playwright install chromium`
+- **Status**: Open — install separately when browser automation is needed

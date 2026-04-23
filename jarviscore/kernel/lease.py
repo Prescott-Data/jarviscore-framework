@@ -41,6 +41,14 @@ ROLE_LEASE_PROFILES: Dict[str, Dict[str, Any]] = {
         "emergency_turn_fuse": 14,
         "model_tier": "task",
     },
+    "browser": {
+        "thinking_budget": 60_000,
+        "action_budget": 60_000,
+        "max_total_tokens": 120_000,
+        "wall_clock_ms": 300_000,  # 5 min — page loads are slow
+        "emergency_turn_fuse": 20,
+        "model_tier": "task",
+    },
 }
 
 

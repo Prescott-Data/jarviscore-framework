@@ -246,6 +246,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         self,
         task: str = "",
         system: Optional[str] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Registry-first reuse check."""
         if not self.code_registry:
@@ -294,6 +295,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         self,
         code: str,
         system: Optional[str] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Record + validate a code candidate."""
         self._has_written_code = True  # Unlock delegate_research gate
@@ -354,7 +356,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
     # Tool: validate_code
     # ─────────────────────────────────────────────────────────────
 
-    def _tool_validate_code(self, code: str) -> Dict[str, Any]:
+    def _tool_validate_code(self, code: str, **kwargs) -> Dict[str, Any]:
         """Explicit validation — syntax check + full ValidationLayer."""
         try:
             ast.parse(code)
@@ -387,6 +389,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         self,
         candidate_id: Optional[int] = None,
         code: Optional[str] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Execute code in the sandbox."""
         if not self.sandbox:
@@ -506,6 +509,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         system: Optional[str] = None,
         capabilities: Optional[List[str]] = None,
         description: str = "",
+        **kwargs,
     ) -> Dict[str, Any]:
         """Promote a successfully executed candidate to the FunctionRegistry."""
         if not self.code_registry:
@@ -565,6 +569,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         self,
         question: str,
         context: str = "",
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         Delegate a question to the researcher subagent.

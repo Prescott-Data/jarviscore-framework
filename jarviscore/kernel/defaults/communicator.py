@@ -193,6 +193,7 @@ Your job: transform raw data into clear, actionable output for your audience.
         peer_role: str,
         message: str,
         priority: str = "normal",
+        **kwargs,  # absorb unexpected LLM params
     ) -> Dict[str, Any]:
         """Send a message to a peer agent via the mailbox."""
         if not self.mailbox:
@@ -219,6 +220,7 @@ Your job: transform raw data into clear, actionable output for your audience.
         path: str,
         content: str,
         mode: str = "w",
+        **kwargs,
     ) -> Dict[str, Any]:
         """Write content to a file.
 
@@ -248,7 +250,7 @@ Your job: transform raw data into clear, actionable output for your audience.
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    def _tool_read_file(self, path: str) -> Dict[str, Any]:
+    def _tool_read_file(self, path: str, **kwargs) -> Dict[str, Any]:
         """Read content from a file."""
         try:
             if not os.path.exists(path):
@@ -278,6 +280,7 @@ Your job: transform raw data into clear, actionable output for your audience.
         self,
         path: str = ".",
         pattern: Optional[str] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """List files in a directory, optionally filtered by pattern."""
         try:

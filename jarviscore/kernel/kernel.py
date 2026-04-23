@@ -42,6 +42,13 @@ _COMMUNICATION_KEYWORDS = frozenset({
     "email", "message", "communicate", "format",
 })
 
+# Keywords that suggest a task requires a real browser (JS, auth, interactive UI)
+_BROWSER_KEYWORDS = frozenset({
+    "browser", "click", "navigate", "screenshot", "fill form",
+    "login to", "log in to", "scrape", "automate", "playwright",
+    "selenium", "headless", "web automation", "interact with",
+})
+
 # Minimum registry confidence to skip code generation
 _REGISTRY_REUSE_SCORE_THRESHOLD = 2  # semantic_search score units
 
@@ -123,7 +130,7 @@ class Kernel:
         This lets agents like Sentinel (always researcher) and Quill (always
         communicator) skip keyword guessing and route correctly every time.
 
-        Returns: "coder", "researcher", or "communicator"
+        Returns: "coder", "researcher", "communicator", or "browser"
         """
         # Check for agent-declared default role (from enriched context set by kernel)
         if context and context.get("_agent_default_kernel_role"):
@@ -131,6 +138,16 @@ class Kernel:
 
         lower = task.lower()
         words = lower.split()
+
+        # Browser tasks take highest priority — real browser needed
+        for kw in _BROWSER_KEYWORDS:
+            kw_words = kw.split()
+            if len(kw_words) == 1:
+                if kw in words:
+                    return "browser"
+            else:
+                if kw in lower:
+                    return "browser"
 
         # Check for communication keywords (word-level match to avoid
         # substring false positives like "format" in "information")
@@ -183,6 +200,7 @@ class Kernel:
             CoderSubAgent,
             ResearcherSubAgent,
             CommunicatorSubAgent,
+            BrowserSubAgent,
         )
 
         if role == "coder":
@@ -209,6 +227,15 @@ class Kernel:
                 agent_id=agent_id,
                 llm_client=self.llm_client,
                 mailbox=self.mailbox,
+                redis_store=self.redis_store,
+                blob_storage=self.blob_storage,
+            )
+        elif role == "browser":
+            return BrowserSubAgent(
+                agent_id=agent_id,
+                llm_client=self.llm_client,
+                headless=self.config.get("browser_headless", True),
+                viewport=None,  # uses BrowserSubAgent default 1280x720
                 redis_store=self.redis_store,
                 blob_storage=self.blob_storage,
             )
