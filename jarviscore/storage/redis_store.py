@@ -12,6 +12,13 @@ from typing import Any, Dict, List, Optional
 
 import redis
 
+from jarviscore.contracts.hitl import (
+    HITLRequest,
+    HITLResolution,
+    HITLStatus,
+    normalize_hitl_decision,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -473,13 +480,13 @@ class RedisContextStore:
     def resolve_hitl_request(self, workflow_id: str, step_id: str,
                              decision: str, responder: str = "",
                              comment: str = "") -> bool:
-        """Record human decision on a HITL request."""
+        """Record human decision on a HITL request (legacy untyped API)."""
         key = f"hitl_request:{workflow_id}:{step_id}"
         if not self._redis.exists(key):
             return False
         updates = {
-            "status": "resolved",
-            "decision": decision,
+            "status": HITLStatus.resolved.value,
+            "decision": normalize_hitl_decision(decision).value,
             "responder": responder,
             "comment": comment,
             "resolved_at": str(time.time()),
@@ -487,6 +494,35 @@ class RedisContextStore:
         self._redis.hset(key, mapping=updates)
         logger.info(f"HITL resolved: {workflow_id}/{step_id} -> {decision}")
         return True
+
+    # ── Typed HITL API (preferred) ────────────────────────────────────────────
+
+    def create_hitl_request_typed(self, request: HITLRequest) -> HITLRequest:
+        """
+        Persist a typed HITLRequest to Redis.
+
+        Preferred over create_hitl_request() — validates the contract before
+        writing and returns the persisted object with any defaults applied.
+        """
+        key = f"hitl_request:{request.workflow_id}:{request.step_id}"
+        self._redis.hset(key, mapping=request.to_redis_mapping())
+        self._redis.expire(key, self._ttl_seconds)
+        logger.info(f"HITL request created (typed): {request.request_id}")
+        return request
+
+    def get_hitl_resolution(self, workflow_id: str,
+                            step_id: str) -> Optional[HITLResolution]:
+        """
+        Return a typed HITLResolution if the request has been resolved.
+
+        Returns None if the request is still pending, not found, or expired.
+        This is the typed counterpart to get_hitl_request() — preferred for
+        kernel polling.
+        """
+        raw = self.get_hitl_request(workflow_id, step_id)
+        if not raw:
+            return None
+        return HITLResolution.from_raw(raw)
 
     # ------------------------------------------------------------------
     # Function Registry Index (Cognitive Projection)
