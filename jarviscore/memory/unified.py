@@ -49,6 +49,7 @@ class UnifiedMemory:
         agent_id: str,
         redis_store=None,
         blob_storage=None,
+        athena_client=None,   # Optional AthenaClient — enables 4th memory tier
     ):
         self._wf = workflow_id
         self._step = step_id
@@ -68,16 +69,43 @@ class UnifiedMemory:
             if (redis_store and blob_storage) else None
         )
 
+        # ── Tier 4: Athena MemOS (optional) ──────────────────────────────────
+        # AthenaMemory bridges this session to Athena's STM/MTM/LTM pipeline.
+        # Created lazily via AthenaMemory.create() (async) the first time
+        # get_athena_memory() is awaited. Stored after first creation.
+        self._athena_client = athena_client              # the HTTP client
+        self._athena_memory = None                       # AthenaMemory instance (set lazily)
+
         tiers = [
             "scratchpad" if self.working else None,
             "episodic" if self.episodic else None,
             "ltm" if self.ltm else None,
+            "athena" if athena_client else None,
         ]
         active = [t for t in tiers if t]
         logger.info(
             f"UnifiedMemory initialised for {workflow_id}/{step_id} "
             f"(active tiers: {active or ['none']})"
         )
+
+    async def _get_athena_memory(self):
+        """Lazy init: create AthenaMemory on first access. Thread-safe for async."""
+        if self._athena_memory is not None:
+            return self._athena_memory
+        if self._athena_client is None:
+            return None
+        try:
+            from .athena_memory import AthenaMemory
+            self._athena_memory = await AthenaMemory.create(
+                agent_id=self._agent,
+                client=self._athena_client,
+                redis_store=self._redis,
+            )
+        except Exception as exc:
+            logger.warning("[UnifiedMemory] Athena init failed (non-fatal): %s", exc)
+            self._athena_client = None   # disable so we don't retry on every turn
+        return self._athena_memory
+
 
     async def log_turn(
         self,
@@ -88,7 +116,12 @@ class UnifiedMemory:
         tokens: int = 0,
     ) -> None:
         """
-        Record a single OODA loop turn to scratchpad + episodic ledger.
+        Record a single OODA loop turn to all active memory tiers.
+
+        Tiers written (when available):
+          - WorkingScratchpad (blob) — working notes for this step
+          - EpisodicLedger (Redis Stream) — full chronological history
+          - AthenaMemory (Athena STM) — semantically searchable cross-session
 
         Args:
             turn_id: Unique identifier for this turn (e.g. "t1", "t2")
@@ -111,6 +144,18 @@ class UnifiedMemory:
 
         if self.episodic:
             await self.episodic.append(entry)
+
+        # ── Tier 4: Athena STM write ──────────────────────────────────────────
+        am = await self._get_athena_memory()
+        if am:
+            try:
+                if thought:
+                    await am.record_thought(thought[:500])
+                outcome = f"{action}: {result[:300]}" if result else action
+                await am.record_action(outcome)
+            except Exception as exc:
+                logger.debug("[UnifiedMemory] Athena log_turn write failed (non-fatal): %s", exc)
+
 
     async def save_checkpoint(self, state_json: str) -> None:
         """
@@ -139,22 +184,21 @@ class UnifiedMemory:
         Assemble a context bundle for Kernel cold-start / crash recovery.
 
         Returns a dict containing:
-          ltm_summary   — compressed long-term summary (str or None)
-          recent_turns  — last N episodic entries (list)
-          checkpoint    — last saved Kernel state JSON (str or None)
-          scratchpad    — current working notes in markdown (str or "")
+          ltm_summary    — compressed long-term summary (str or None)
+          recent_turns   — last N episodic entries (list)
+          checkpoint     — last saved Kernel state JSON (str or None)
+          scratchpad     — current working notes in markdown (str or "")
+          athena_context — STM events + MTM chains from Athena (dict or None)
 
         Args:
             ledger_tail: How many recent episodic entries to include.
-
-        Returns:
-            Dict with keys: ltm_summary, recent_turns, checkpoint, scratchpad
         """
         bundle: Dict[str, Any] = {
             "ltm_summary": None,
             "recent_turns": [],
             "checkpoint": None,
             "scratchpad": "",
+            "athena_context": None,
         }
 
         if self.ltm:
@@ -168,10 +212,19 @@ class UnifiedMemory:
         if self.working:
             bundle["scratchpad"] = await self.working.get_notes()
 
+        # ── Tier 4: Athena context pull ───────────────────────────────────────
+        am = await self._get_athena_memory()
+        if am:
+            try:
+                bundle["athena_context"] = await am.get_memory_context(limit=15)
+            except Exception as exc:
+                logger.debug("[UnifiedMemory] Athena rehydrate failed (non-fatal): %s", exc)
+
         logger.info(
             f"Rehydrated bundle for {self._wf}/{self._step}: "
             f"ltm={'yes' if bundle['ltm_summary'] else 'no'}, "
             f"turns={len(bundle['recent_turns'])}, "
-            f"checkpoint={'yes' if bundle['checkpoint'] else 'no'}"
+            f"checkpoint={'yes' if bundle['checkpoint'] else 'no'}, "
+            f"athena={'yes' if bundle['athena_context'] else 'no'}"
         )
         return bundle

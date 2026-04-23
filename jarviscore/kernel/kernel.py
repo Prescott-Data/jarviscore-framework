@@ -245,22 +245,36 @@ class Kernel:
     def _create_memory(self, workflow_id: str, step_id: str, agent_id: str):
         """Create a UnifiedMemory instance for the current step.
 
+        Includes Athena as Tier 4 when ATHENA_URL is configured in settings.
         Returns None if neither Redis nor blob storage is available.
         Graceful degradation — the OODA loop works without memory.
         """
         try:
             from jarviscore.memory.unified import UnifiedMemory
             if self.redis_store or self.blob_storage:
+                # Try to get AthenaClient from settings
+                athena_client = None
+                try:
+                    from jarviscore.config.settings import get_settings
+                    from jarviscore.memory.athena_client import AthenaClient
+                    _settings = get_settings()
+                    if getattr(_settings, "athena_url", None):
+                        athena_client = AthenaClient.from_env()
+                except Exception:
+                    pass   # Athena not configured — no Tier 4
+
                 return UnifiedMemory(
                     workflow_id=workflow_id,
                     step_id=step_id,
                     agent_id=agent_id,
                     redis_store=self.redis_store,
                     blob_storage=self.blob_storage,
+                    athena_client=athena_client,
                 )
         except ImportError:
             logger.debug("[Kernel] UnifiedMemory not available — running without memory")
         return None
+
 
     def _create_context_manager(self, role: str) -> ContextManager:
         """Create a ContextManager with role-appropriate budget config."""
@@ -432,7 +446,19 @@ class Kernel:
             # Create memory (graceful degradation if no Redis/blob)
             memory = self._create_memory(workflow_id, step_id, agent_id)
 
-            # Create context manager with role-appropriate budget
+            # ── Inject Athena memory context into enriched_context ──────────────
+            # Agents see their cross-session STM + MTM chains before deciding.
+            # This is what gives them continuity across shifts and sessions.
+            if memory is not None:
+                try:
+                    bundle = await memory.rehydrate_bundle(ledger_tail=5)
+                    if bundle.get("athena_context"):
+                        enriched_context["_athena_memory"] = bundle["athena_context"]
+                    if bundle.get("ltm_summary"):
+                        enriched_context["_ltm_summary"] = bundle["ltm_summary"]
+                except Exception as _me:
+                    logger.debug("[Kernel] Memory rehydration failed (non-fatal): %s", _me)
+
             ctx_manager = self._create_context_manager(role)
 
             # 3. ACT: create (or reuse) subagent and dispatch
