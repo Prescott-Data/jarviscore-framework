@@ -206,3 +206,121 @@ at Prescott Data for Finance and Marketing operations (Team Treasury + Team Sign
 - **Description**: `PLAYWRIGHT_AVAILABLE=False` because `playwright` not installed. Browser tasks will fail gracefully with an install message, not a crash.
 - **Fix**: `pip install playwright && playwright install chromium`
 - **Status**: Open — install separately when browser automation is needed
+
+---
+
+### [RESOLVE-009] Gemini Grounded Search + Trace Streaming + Chat SSE
+- **Resolved**: 2026-04-23
+- **Commit**: `e3d1693` (dogfood/internal-agents)
+- **Severity**: Major — blocked production-quality web search + UI trace visibility
+- **Components**: `execution/search.py`, `kernel/tracing.py` (new), `kernel/subagent.py`, `kernel/kernel.py`, `integrations/chat.py` (new), `config/settings.py`
+
+#### Root Causes
+1. **Search**: `InternetSearch` used only DuckDuckGo, which rate-limits aggressively and returns low-quality results. No fallback, no quality ranking.
+2. **Traces**: OODA loop emitted zero structured events — agent reasoning, tool calls, and LLM latency were entirely invisible to the UI. Only the final `AgentOutput` made it out.
+3. **Chat**: No HTTP endpoint existed to issue a task from the chat UI and receive a response. Agents could only be driven programmatically.
+
+#### Fixes Applied
+
+**1. Multi-provider InternetSearch (`execution/search.py` — full rewrite)**
+
+Implements the CA's proven provider-ranking architecture (OSS-clean port):
+
+| Provider | Weight | Auth | Notes |
+|---|---|---|---|
+| Google Grounded Search (Gemini) | **1.4** | `GEMINI_API_KEY` or Vertex AI | Primary — highest quality |
+| Serper (Google Search API) | **1.2** | `SERPER_API_KEY` | Optional secondary |
+| DuckDuckGo Lite | **1.0** | none | Always-on fallback |
+| Wikipedia REST | **0.6** | none | Academic fallback |
+
+- All 4 providers run in **parallel** (`asyncio.gather` with 6s timeout per provider)
+- `CircuitBreaker` per provider: 5 failures → OPEN, 60s recovery → HALF_OPEN/CLOSED
+- `_search_google_grounded()`: uses `genai.Client` in `asyncio.to_thread`, extracts `grounding_chunks` + `grounding_supports` as structured results, 3-retry on 429/503
+- `_rank_results()`: keyword overlap bonus + PDF bonus + provider weight → sorted dedup list
+- `extract_content()` + `search_and_extract()` unchanged
+
+**2. TraceManager (`kernel/tracing.py` — new file)**
+
+Real-time agent trace streaming for UI observability:
+```
+OODA loop → TraceManager.log_event()
+               ├── Redis List   traces:{wf}:{step}   (7-day TTL, queryable)
+               ├── Redis PubSub trace_events:{wf}     (real-time → SSE)
+               └── File         traces/{mission}.jsonl (debug fallback)
+```
+
+Event types: `step_start`, `thinking`, `tool_start`, `tool_result`, `llm_request`, `llm_response`, `step_complete`
+
+Secret scrubbing on all values. `_NoOpTrace` provides zero-overhead fallback when Redis is absent.
+
+**3. OODA loop wiring (`kernel/subagent.py`)**
+
+`run(trace=None)` — `TraceManager` injected by Kernel, `_NoOpTrace` by default:
+- `log_llm_request()` — before LLM call
+- `log_llm_response()` — after LLM returns (with latency_ms)
+- `log_thinking()` — on every **THOUGHT** block parsed
+- `log_tool_start()` — before tool dispatch
+- `log_tool_result()` — after tool returns (success + error)
+- `log_step_complete()` — on DONE, convergence stall, LLM failure, and turn fuse
+
+**4. Kernel wiring (`kernel/kernel.py`)**
+
+`TraceManager(workflow_id, step_id)` created at top of `execute()`, before dispatch loop. Passed as `trace=_kernel_trace` to `subagent.run()`. Falls back to `_NoOpTrace` on any init error (non-fatal).
+
+**5. Chat + SSE endpoints (`integrations/chat.py` — new file)**
+
+```
+POST /chat
+  Body: {message, workflow_id?, agent_id?, system_prompt?, context?}
+  Auto-routes: research/browse/code/communicate via Kernel classifier
+  Returns: {workflow_id, step_id, status, answer, sources, tokens, elapsed_ms}
+
+GET /chat/stream/{workflow_id}
+  Content-Type: text/event-stream (SSE)
+  - Catch-up replay of all buffered events on connect
+  - Non-blocking Redis PubSub poll (100ms interval)
+  - Heartbeat keep-alive comments (:)
+  - Auto-close on step_complete event or client disconnect
+
+GET /chat/history/{workflow_id}/{step_id}
+  Returns full event log for replay (Redis → file fallback)
+```
+
+Example client wiring:
+```js
+const es = new EventSource(`/chat/stream/${workflowId}`)
+es.onmessage = (e) => {
+    const evt = JSON.parse(e.data)
+    if (evt.type === 'thinking')     renderThought(evt.data.thought)
+    if (evt.type === 'tool_start')   renderToolCall(evt.data)
+    if (evt.type === 'tool_result')  renderToolResult(evt.data)
+    if (evt.type === 'step_complete') { renderAnswer(evt.data.summary); es.close() }
+}
+```
+
+**6. Settings (`config/settings.py`)**
+
+New env vars: `GEMINI_API_KEY`, `GEMINI_GROUNDING_API_KEY`, `GEMINI_GROUNDING_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `SERPER_API_KEY`
+
+#### Verification
+All import/structural checks passed (`python3 -c "..."` suite — 5 components, all ✅):
+- CircuitBreaker open/close logic
+- _NoOpTrace no-crash guarantee
+- `run(trace=)` param present on BaseSubAgent
+- `create_chat_router` exported from integrations package
+- Gemini + Serper settings present in Settings
+
+#### Required Env Vars
+```env
+# Primary search (at least one)
+GEMINI_API_KEY=your-gemini-api-key          # OR use GOOGLE_CLOUD_PROJECT for Vertex AI
+GEMINI_GROUNDING_API_KEY=...                # wins over GEMINI_API_KEY for search
+
+# Secondary search (optional but recommended)
+SERPER_API_KEY=your-serper-dev-key
+
+# Required for live traces
+REDIS_URL=redis://localhost:6379
+```
+
+- **Status**: ✅ Resolved
