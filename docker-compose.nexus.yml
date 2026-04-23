@@ -1,0 +1,95 @@
+# docker-compose.nexus.yml
+#
+# JarvisCore — Local Nexus Development Stack
+# ===========================================
+# Spins up the Nexus Broker + Gateway locally for developing connected-app
+# features without needing a production Nexus deployment.
+#
+# Usage:
+#   docker compose -f docker-compose.nexus.yml up -d
+#
+# Then set in your .env:
+#   NEXUS_GATEWAY_URL=http://localhost:8090
+#   NEXUS_RETURN_URL=http://localhost:8000/oauth/callback
+#
+# The Broker (port 8080) handles OAuth callbacks from providers.
+# The Gateway (port 8090) is what JarvisCore talks to.
+# You do NOT need to talk to the Broker directly — JarvisCore handles that.
+#
+# Reference: https://github.com/Prescott-Data/nexus-framework
+
+version: "3.9"
+
+services:
+  # ── Nexus Broker ────────────────────────────────────────────────────────────
+  # Handles OAuth 2.0 flows: redirects users to providers, receives callbacks,
+  # encrypts tokens, stores them. Agents never talk to this directly.
+  nexus-broker:
+    image: ghcr.io/prescott-data/nexus-broker:latest
+    container_name: nexus-broker
+    ports:
+      - "8080:8080"
+    environment:
+      # Master encryption key for token storage — change this in production
+      NEXUS_ENCRYPTION_KEY: ${NEXUS_ENCRYPTION_KEY:-dev-only-change-in-production-32x}
+      # Internal API key the Gateway uses to talk to the Broker
+      NEXUS_BROKER_API_KEY: ${NEXUS_BROKER_API_KEY:-dev-broker-api-key-change-in-prod}
+      # Database for connection storage
+      DATABASE_URL: postgresql://nexus:nexus@nexus-db:5432/nexus
+      # The URL the Broker will redirect users back to after OAuth consent.
+      # Must match NEXUS_RETURN_URL in your JarvisCore .env.
+      DEFAULT_RETURN_URL: ${NEXUS_RETURN_URL:-http://localhost:8000/oauth/callback}
+    depends_on:
+      nexus-db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Nexus Gateway ───────────────────────────────────────────────────────────
+  # The control + data plane that JarvisCore talks to.
+  # Proxies token requests to the Broker, resolves strategies.
+  # This is what NEXUS_GATEWAY_URL points to.
+  nexus-gateway:
+    image: ghcr.io/prescott-data/nexus-gateway:latest
+    container_name: nexus-gateway
+    ports:
+      - "8090:8090"
+    environment:
+      NEXUS_BROKER_URL: http://nexus-broker:8080
+      NEXUS_BROKER_API_KEY: ${NEXUS_BROKER_API_KEY:-dev-broker-api-key-change-in-prod}
+      DATABASE_URL: postgresql://nexus:nexus@nexus-db:5432/nexus
+      GATEWAY_PORT: 8090
+    depends_on:
+      nexus-broker:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Nexus Database ──────────────────────────────────────────────────────────
+  nexus-db:
+    image: postgres:16-alpine
+    container_name: nexus-db
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+      POSTGRES_DB: nexus
+    volumes:
+      - nexus_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  nexus_db_data:
+    name: jarviscore_nexus_db

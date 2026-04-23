@@ -62,12 +62,6 @@ class AuthenticationManager:
 
     def __init__(self, config: Dict[str, Any]):
         gateway_url = config.get("nexus_gateway_url")
-        if not gateway_url:
-            raise ValueError(
-                "nexus_gateway_url is required for AuthenticationManager. "
-                "Set NEXUS_GATEWAY_URL in your .env file. "
-                "JarvisCore requires Nexus for all auth — there is no bypass mode."
-            )
 
         self.user_id = config.get("nexus_default_user_id", "jarviscore-agent")
         self.cache_ttl = config.get("auth_strategy_cache_ttl", 300)
@@ -78,9 +72,20 @@ class AuthenticationManager:
             "http://localhost:8000/oauth/callback",
         )
 
-        # Nexus clients
-        self.nexus_client = NexusClient(gateway_url)
-        self.lifecycle_monitor = LifecycleMonitor(self.nexus_client)
+        # Nexus clients — only instantiated when gateway_url is provided.
+        # Agents that never call authenticate() don't need Nexus at all.
+        self.nexus_client: Optional[NexusClient] = None
+        self.lifecycle_monitor: Optional[LifecycleMonitor] = None
+        if gateway_url:
+            self.nexus_client = NexusClient(gateway_url)
+            self.lifecycle_monitor = LifecycleMonitor(self.nexus_client)
+        else:
+            logger.debug(
+                "AuthenticationManager: NEXUS_GATEWAY_URL not set. "
+                "Connected-app calls will raise at runtime. "
+                "Set NEXUS_GATEWAY_URL to enable Nexus auth, or run "
+                "'docker compose -f docker-compose.nexus.yml up' for local dev."
+            )
 
         # Pluggable OAuth flow handler (CLI by default)
         self.flow_handler: OAuthFlowHandler = CLIFlowHandler(
@@ -91,7 +96,6 @@ class AuthenticationManager:
         self._connections: Dict[str, str] = {}
 
         # _strategy_cache is package-private — only NexusCallProxy reads it
-        # (via resolve_strategy). Agents never call resolve_strategy directly.
         self._strategy_cache: Dict[str, Tuple[DynamicStrategy, float]] = {}
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -127,8 +131,16 @@ class AuthenticationManager:
             Store this; never store tokens.
 
         Raises:
+            RuntimeError if NEXUS_GATEWAY_URL is not configured.
             RuntimeError if the OAuth flow fails or times out.
         """
+        if not self.nexus_client:
+            raise RuntimeError(
+                f"Cannot authenticate provider {provider!r}: NEXUS_GATEWAY_URL is not configured. "
+                "Add NEXUS_GATEWAY_URL=<url> to your .env file. "
+                "For local development, run: docker compose -f docker-compose.nexus.yml up"
+            )
+
         if provider in self._connections:
             return self._connections[provider]
 
