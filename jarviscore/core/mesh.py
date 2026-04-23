@@ -817,11 +817,11 @@ class Mesh:
           agent._redis_store   — RedisContextStore (or None)
           agent._blob_storage  — BlobStorage (or None)
           agent.mailbox        — MailboxManager (always, file-backed if no Redis)
-          agent.hitl           — HITLQueue (always, writes to warden_inbox/)
+          agent.hitl           — HITLQueue (always, writes to hitl_inbox/)
         """
         from jarviscore.mailbox import MailboxManager
 
-        # Resolve warden_inbox path from config or use package-relative default
+        # Resolve hitl_inbox path from config or use package-relative default
         inbox_dir = self.config.get("hitl_inbox_dir", None)
 
         # Lazy-import HITLQueue (ships separately — not in jarviscore core;
@@ -885,7 +885,7 @@ class Mesh:
         agents (e.g., Sentinel delegating to Coder) without SWIM.
 
         This fixes Dogfooding Issue #13: ``ask_peer`` was P2P-only.
-        ``AutoAgent`` (which always runs in autonomous mode on Sky Team)
+        ``AutoAgent`` (which always runs in autonomous mode)
         now gets a fully functional ``self.peers`` client.
         """
         try:
@@ -1191,7 +1191,7 @@ class Mesh:
                 to="coder",
                 task="Generate the Q2 investor deck as a branded PPTX",
                 context={
-                    "brief": compass_brief,
+                    "brief": team_brief,
                     "output_filename": "quarterly_report_q2.pptx",
                 },
             )
