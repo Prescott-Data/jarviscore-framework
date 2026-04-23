@@ -79,8 +79,10 @@ class Agent(ABC):
         self.mailbox: Optional['MailboxManager'] = None
 
         # Storage infrastructure (injected by Mesh during start()) — Phase 9
-        self._redis_store = None
-        self._blob_storage = None
+        self._redis_store    = None
+        self._blob_storage   = None
+        self._nexus_store    = None   # NexusLocalStore — credential vault (always available)
+        self._athena_client  = None   # AthenaClient — when ATHENA_URL set
 
         # Cloud deployment support (standalone mode)
         self._standalone_p2p: Optional['P2PCoordinator'] = None

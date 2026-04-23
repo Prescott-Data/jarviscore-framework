@@ -15,6 +15,8 @@ Capabilities (auto-detected, always accurate after start()):
   "redis"             — RedisContextStore connected
   "blob"              — BlobStorage connected
   "auth"              — AuthenticationManager active
+  "nexus"             — NexusLocalStore ready (always — zero dep)
+  "athena"            — AthenaClient connected (when ATHENA_URL set)
   "prometheus"        — Metrics server running
 
 Usage:
@@ -164,6 +166,8 @@ class Mesh:
         self._redis_store     = None
         self._settings        = None
         self._blob_storage    = None
+        self._nexus_store     = None   # NexusLocalStore — always available, zero dep
+        self._athena_client   = None   # AthenaClient — when ATHENA_URL set
         self._distributed_worker_task = None
         self._agent_run_tasks: List[asyncio.Task] = []
 
@@ -297,11 +301,21 @@ class Mesh:
         self._redis_store = self._init_redis(self._settings)
         self._blob_storage = self._init_blob_storage(self._settings)
 
+        # Nexus: always available (local encrypted store, zero dep)
+        self._nexus_store = self._init_nexus()
+
+        # Athena: optional, when ATHENA_URL is set
+        self._athena_client = self._init_athena(self._settings)
+
         if self._redis_store:
             self._capabilities.add("redis")
             self._capabilities.add("peer_distributed")
         if self._blob_storage:
             self._capabilities.add("blob")
+        if self._nexus_store:
+            self._capabilities.add("nexus")
+        if self._athena_client:
+            self._capabilities.add("athena")
 
         # ── 2. Infrastructure injection into agents ───────────────────────────
         # Must happen before agent.setup() so agents can use stores during setup
@@ -720,6 +734,47 @@ class Mesh:
             self._logger.warning(f"BlobStorage init failed (continuing without): {exc}")
             return None
 
+    def _init_nexus(self):
+        """
+        Init NexusLocalStore — the built-in credential vault.
+
+        Always succeeds (zero external dependencies). Credentials are stored
+        at ~/.jarviscore/nexus.enc, AES-256-GCM encrypted.
+
+        Agents access via self._nexus_store.build_auth_info(provider) or
+        through nexus_call() which the Kernel injects into the sandbox.
+        """
+        try:
+            from jarviscore.nexus.store import NexusLocalStore
+            store = NexusLocalStore()
+            registered = store.list()
+            self._logger.info(
+                "✓ Nexus credential store ready (%d provider%s registered)",
+                len(registered), "s" if len(registered) != 1 else "",
+            )
+            return store
+        except Exception as exc:
+            self._logger.warning("Nexus store init failed (continuing without): %s", exc)
+            return None
+
+    def _init_athena(self, settings):
+        """
+        Init AthenaClient — optional remote memory OS.
+
+        Returns None gracefully when ATHENA_URL is not set.
+        When connected, agents get cross-session semantic memory via
+        self._athena_client. UnifiedMemory uses this as its 4th tier.
+        """
+        try:
+            from jarviscore.memory.athena_client import AthenaClient
+            client = AthenaClient.from_env()
+            if client:
+                self._logger.info("✓ Athena memory client connected")
+            return client
+        except Exception as exc:
+            self._logger.debug("Athena client init skipped: %s", exc)
+            return None
+
     def _resolve_auto_mode(self) -> "MeshMode":
         """
         Detect the best operational mode from the live environment.
@@ -783,8 +838,10 @@ class Mesh:
             _HITLQueue = None
 
         for agent in self.agents:
-            agent._redis_store = self._redis_store
-            agent._blob_storage = self._blob_storage
+            agent._redis_store   = self._redis_store
+            agent._blob_storage  = self._blob_storage
+            agent._nexus_store   = self._nexus_store    # always set (NexusLocalStore)
+            agent._athena_client = self._athena_client  # set when ATHENA_URL configured
 
             # Mailbox: use Redis when available, local-only otherwise
             if self._redis_store:
