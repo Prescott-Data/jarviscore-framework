@@ -65,6 +65,10 @@ class AutoAgent(Profile):
         self.repair = None
         self._kernel = None  # Production Kernel (registry-first → coder → research-on-failure)
 
+        # ── Agent intelligence: profile block prepended to system prompt ──
+        # Loaded lazily in setup() from jarviscore/profiles/agents/{role}.yaml
+        self._profile_block: str = ""
+
     async def setup(self):
         """
         Initialize LLM and execution components with ZERO CONFIG.
@@ -76,6 +80,7 @@ class AutoAgent(Profile):
         - Sandbox executor with timeout
         - Autonomous repair system
         - Kernel: production routing pipeline
+        - AgentProfile: role intelligence injected into system prompt
         """
         await super().setup()
 
@@ -83,6 +88,25 @@ class AutoAgent(Profile):
         self._logger.info(f"  Role: {self.role}")
         self._logger.info(f"  Capabilities: {self.capabilities}")
         self._logger.info(f"  System Prompt: {self.system_prompt[:50]}...")
+
+        # ── Load agent intelligence profile ─────────────────────────────────────
+        # Loads jarviscore/profiles/agents/{role}.yaml if it exists.
+        # Graceful no-op if PyYAML not installed or profile file absent.
+        try:
+            from jarviscore.profiles.agent_profile import AgentProfile
+            profile = AgentProfile.load(self.role)
+            if profile:
+                self._profile_block = profile.to_prompt_block()
+                self._logger.info(
+                    "[AutoAgent] Loaded intelligence profile for role=%s "
+                    "(%d SOPs, %d owns)",
+                    self.role, len(profile.sops), len(profile.owns)
+                )
+            else:
+                self._logger.debug("[AutoAgent] No intelligence profile for role=%s", self.role)
+        except Exception as _pe:
+            self._logger.debug("[AutoAgent] Profile load failed (non-fatal): %s", _pe)
+
 
         # Get config from mesh (or use empty dict)
         config = self._mesh.config if self._mesh else {}
@@ -184,6 +208,13 @@ class AutoAgent(Profile):
         task_desc = task.get('task', '') if isinstance(task, dict) else str(task)
         self._logger.info(f"[AutoAgent] Executing via Kernel: {task_desc[:100]}...")
 
+        # ── Build effective system prompt = profile intelligence + role prompt ──
+        effective_system_prompt = (
+            f"{self._profile_block}\n\n---\n\n{self.system_prompt}"
+            if self._profile_block
+            else self.system_prompt
+        )
+
         # ── Kernel path (production pipeline) ────────────────────────────────
         if self._kernel is not None:
             # Lazily wire Mesh-injected auth into the Kernel.
@@ -198,7 +229,7 @@ class AutoAgent(Profile):
             try:
                 output = await self._kernel.execute(
                     task=task_desc,
-                    system_prompt=self.system_prompt,
+                    system_prompt=effective_system_prompt,
                     context=task.get('context') if isinstance(task, dict) else None,
                     agent_id=self.agent_id,
                     agent_default_role=self.default_kernel_role,
@@ -265,7 +296,7 @@ class AutoAgent(Profile):
         try:
             code_result = await self.codegen.generate(
                 task=task,
-                system_prompt=self.system_prompt,
+                system_prompt=effective_system_prompt,
                 context=task.get('context') if isinstance(task, dict) else None,
                 enable_search=True,
             )
@@ -283,7 +314,7 @@ class AutoAgent(Profile):
                     code=exec_code,
                     error=Exception(result.get('error', 'Unknown error')),
                     task=task,
-                    system_prompt=self.system_prompt,
+                    system_prompt=effective_system_prompt,
                     executor=self.sandbox,
                 )
                 result = repair_result
