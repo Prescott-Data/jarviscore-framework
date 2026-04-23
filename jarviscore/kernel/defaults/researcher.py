@@ -1,21 +1,29 @@
 """
-6F: ResearcherSubAgent — Information gathering and research specialist.
+ResearcherSubAgent — Information gathering and research specialist.
 
-The researcher searches for information, reads documentation, and
-synthesizes findings into structured results.
+Doctrine:
+  The researcher follows a 4-phase protocol:
+  1. SEARCHING — casting a wide net across registry, web, and codebase
+  2. EXTRACTING — deep-reading specific URLs and documents
+  3. VERIFYING — confirming findings against multiple sources
+  4. DONE — synthesizing results into structured output
 
-Design decisions (from IA/CA analysis):
-- Adopted: Phase-based tool contracts (CA — prevents tool misuse loops)
-- Adopted: Multi-escalation search (IA — web_search → read_url → registry)
-- Adopted: Research sufficiency check (avoiding IA's gap — explicit verification)
-- Avoided: No research sufficiency check (IA bug — we add explicit sufficiency tracking)
-- Avoided: Tight validation coupling (IA bug — keep validation simple)
+  Evidence contract: the researcher CANNOT exit without actionable findings.
+  If no findings, it must explain what was searched and what was not found.
+
+Design principles:
+  - Phase-based tool contracts (prevents tool misuse loops)
+  - Multi-escalation search (registry → web → read_url → codebase)
+  - Research sufficiency check (explicit verification before DONE)
+  - URL content caching (don't read the same URL twice within a session)
 """
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from jarviscore.kernel.subagent import BaseSubAgent
+from jarviscore.kernel.state import KernelState
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +40,59 @@ class ResearcherSubAgent(BaseSubAgent):
     - search_registry: Search the function registry for existing code (thinking)
     - web_search: Search the web for information (thinking)
     - read_url: Read content from a URL (thinking)
+    - read_file: Read a local file with pagination (thinking)
+    - grep_codebase: Search codebase for patterns (thinking)
     - note_finding: Record a research finding with source (thinking)
     - check_sufficiency: Verify if research is sufficient to answer (thinking)
 
     The researcher gathers information from multiple sources, tracks
     findings with provenance, and checks sufficiency before declaring done.
-    Each finding is recorded with its source for evidence tracking.
     """
+
+    SYSTEM_PROMPT = """\
+You are a RESEARCH SPECIALIST in a multi-agent orchestration framework.
+Your job: find accurate, actionable information from real sources. Not opinions. Not guesses. EVIDENCE.
+
+## 4-PHASE PROTOCOL (follow in order)
+
+### Phase 1: SEARCHING
+Cast a wide net. Use multiple search strategies:
+- search_registry for existing working code/functions
+- web_search for external documentation and APIs
+- grep_codebase for patterns in the local codebase
+Goal: identify the 2-3 most promising leads.
+
+### Phase 2: EXTRACTING
+Deep-read the best leads:
+- read_url to extract full content from web pages
+- read_file to read local documentation/code files
+- note_finding to record each discovered fact with its source
+Goal: extract specific, usable information (endpoints, schemas, auth methods, code patterns).
+
+### Phase 3: VERIFYING
+Cross-reference findings:
+- check_sufficiency to verify you have enough information
+- If insufficient, go back to Phase 1 with refined queries
+Goal: ensure findings are accurate and complete.
+
+### Phase 4: DONE
+Synthesize and report:
+- DONE summary must include ALL findings with sources
+- RESULT must contain structured data (API specs, code patterns, etc.)
+- If you found NOTHING useful, say so explicitly — don't fabricate
+
+## CRITICAL RULES
+
+1. **EVIDENCE OR NOTHING** — Every finding must have a source. No guessing.
+2. **CITE SOURCES** — Use note_finding for every useful piece of information.
+3. **NO PREMATURE DONE** — Do NOT call DONE until check_sufficiency passes.
+4. **DEPTH OVER BREADTH** — 2 deep, verified findings > 10 shallow ones.
+5. **STRUCTURED OUTPUT** — RESULT should contain structured data the coder can use:
+   - API specs: {"endpoint": "...", "method": "...", "auth": "...", "params": {...}}
+   - Code patterns: {"pattern": "...", "example": "...", "source": "..."}
+6. **REPORT FAILURES** — If you searched and found nothing, report what you searched
+   and what was not found. This is valuable information for the caller.
+"""
 
     def __init__(
         self,
@@ -53,6 +107,7 @@ class ResearcherSubAgent(BaseSubAgent):
         self.code_registry = code_registry
         self._findings: List[Dict[str, Any]] = []
         self._sources: List[str] = []
+        self._read_urls: set = set()  # URL content cache (dedup)
         super().__init__(
             agent_id=agent_id,
             role="researcher",
@@ -62,21 +117,7 @@ class ResearcherSubAgent(BaseSubAgent):
         )
 
     def get_system_prompt(self) -> str:
-        return (
-            "You are a research specialist. You gather information from multiple "
-            "sources, verify findings, and synthesize structured results.\n\n"
-            "Workflow:\n"
-            "1. Search the registry for existing relevant code/functions\n"
-            "2. Use web_search for external information if needed\n"
-            "3. Use read_url to dig deeper into specific sources\n"
-            "4. Record each finding with note_finding\n"
-            "5. Use check_sufficiency to verify you have enough information\n"
-            "6. Only DONE when sufficiency check passes\n\n"
-            "Rules:\n"
-            "- Always cite your sources\n"
-            "- Record at least one finding before declaring done\n"
-            "- Check sufficiency before finishing"
-        )
+        return self.SYSTEM_PROMPT
 
     def setup_tools(self) -> None:
         self.register_tool(
@@ -98,6 +139,18 @@ class ResearcherSubAgent(BaseSubAgent):
             phase="thinking",
         )
         self.register_tool(
+            "read_file",
+            self._tool_read_file,
+            "Read a local file with pagination. Params: {\"path\": \"<file_path>\", \"offset\": 0, \"limit\": 200}",
+            phase="thinking",
+        )
+        self.register_tool(
+            "grep_codebase",
+            self._tool_grep_codebase,
+            "Search codebase for a pattern. Params: {\"pattern\": \"<search pattern>\", \"path\": \"<optional dir>\"}",
+            phase="thinking",
+        )
+        self.register_tool(
             "note_finding",
             self._tool_note_finding,
             "Record a finding. Params: {\"finding\": \"<text>\", \"source\": \"<source>\", \"confidence\": 0.8}",
@@ -109,6 +162,10 @@ class ResearcherSubAgent(BaseSubAgent):
             "Check if research is sufficient. Params: {}",
             phase="thinking",
         )
+
+    # ─────────────────────────────────────────────────────────────
+    # Tools
+    # ─────────────────────────────────────────────────────────────
 
     def _tool_search_registry(
         self, query: str, system: Optional[str] = None
@@ -133,7 +190,8 @@ class ResearcherSubAgent(BaseSubAgent):
     async def _tool_web_search(self, query: str) -> Dict[str, Any]:
         """Search the web for information."""
         if not self.search_client:
-            return {"status": "unavailable", "results": []}
+            return {"status": "unavailable", "results": [],
+                    "message": "No search client configured. Try read_file or grep_codebase instead."}
 
         try:
             results = self.search_client.search(query)
@@ -147,18 +205,122 @@ class ResearcherSubAgent(BaseSubAgent):
             return {"status": "error", "error": str(e)}
 
     async def _tool_read_url(self, url: str) -> Dict[str, Any]:
-        """Read content from a URL."""
+        """Read content from a URL (with session-scoped dedup)."""
         if not self.search_client:
             return {"status": "unavailable", "content": ""}
+
+        # Dedup: don't read the same URL twice in one session
+        if url in self._read_urls:
+            return {
+                "status": "cached",
+                "content": "",
+                "message": f"URL already read in this session. Use note_finding to record what you found."
+            }
 
         try:
             content = self.search_client.read_url(url)
             if hasattr(content, "__await__"):
                 content = await content
+            self._read_urls.add(url)
             source = f"url::{url}"
             if source not in self._sources:
                 self._sources.append(source)
+            # Truncate very large pages
+            if isinstance(content, str) and len(content) > 8000:
+                content = content[:8000] + "\n\n... [truncated — page too large. Use note_finding to record key facts.]"
             return {"status": "success", "content": content}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    def _tool_read_file(
+        self,
+        path: str,
+        offset: int = 0,
+        limit: int = 200,
+    ) -> Dict[str, Any]:
+        """Read a local file with pagination.
+
+        Returns lines from offset to offset+limit. Use offset to paginate
+        through large files.
+        """
+        try:
+            if not os.path.exists(path):
+                return {"status": "error", "error": f"File not found: {path}"}
+            if not os.path.isfile(path):
+                return {"status": "error", "error": f"Not a file: {path}"}
+
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+
+            total_lines = len(lines)
+            selected = lines[offset:offset + limit]
+            content = "".join(selected)
+
+            source = f"file::{path}"
+            if source not in self._sources:
+                self._sources.append(source)
+
+            return {
+                "status": "success",
+                "content": content,
+                "total_lines": total_lines,
+                "offset": offset,
+                "limit": limit,
+                "has_more": (offset + limit) < total_lines,
+                "next_offset": offset + limit if (offset + limit) < total_lines else None,
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    def _tool_grep_codebase(
+        self,
+        pattern: str,
+        path: str = ".",
+    ) -> Dict[str, Any]:
+        """Search codebase for a pattern using simple string matching.
+
+        Returns matching file paths and line numbers. Limited to 20 results.
+        """
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["grep", "-rnI", "--include=*.py", "-l", pattern, path],
+                capture_output=True, text=True, timeout=10,
+            )
+            files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()][:20]
+
+            if not files:
+                return {"status": "success", "matches": [], "message": "No matches found."}
+
+            # Get context lines for top 5 matches
+            matches = []
+            for filepath in files[:5]:
+                try:
+                    ctx_result = subprocess.run(
+                        ["grep", "-n", pattern, filepath],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    lines = ctx_result.stdout.strip().split("\n")[:5]
+                    matches.append({
+                        "file": filepath,
+                        "lines": lines,
+                    })
+                except Exception:
+                    matches.append({"file": filepath, "lines": []})
+
+            source = f"grep::{pattern}"
+            if source not in self._sources:
+                self._sources.append(source)
+
+            return {
+                "status": "success",
+                "total_files": len(files),
+                "matches": matches,
+            }
+        except FileNotFoundError:
+            return {"status": "error", "error": "grep not available on this system"}
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "error": "Search timed out"}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -183,12 +345,22 @@ class ResearcherSubAgent(BaseSubAgent):
         has_enough_facts = len(self._findings) >= _MIN_FACTS_FOR_SUFFICIENT
         sufficient = has_enough_sources and has_enough_facts
 
+        guidance = ""
+        if not sufficient:
+            if not has_enough_sources:
+                guidance += f"Need {_MIN_SOURCES_FOR_SUFFICIENT - len(self._sources)} more source(s). "
+            if not has_enough_facts:
+                guidance += f"Need {_MIN_FACTS_FOR_SUFFICIENT - len(self._findings)} more finding(s). "
+            guidance += "Go back to Phase 1 (SEARCHING) with refined queries."
+        else:
+            guidance = "Research is sufficient. You may call DONE with your findings."
+
         return {
             "sufficient": sufficient,
             "sources_count": len(self._sources),
             "findings_count": len(self._findings),
-            "sources_needed": max(0, _MIN_SOURCES_FOR_SUFFICIENT - len(self._sources)),
-            "findings_needed": max(0, _MIN_FACTS_FOR_SUFFICIENT - len(self._findings)),
+            "sources": self._sources,
+            "guidance": guidance,
         }
 
     @property
@@ -201,8 +373,9 @@ class ResearcherSubAgent(BaseSubAgent):
         """All sources consulted during this run."""
         return list(self._sources)
 
-    async def run(self, task, context=None, max_turns=8, model=None):
-        """Run with fresh findings."""
+    async def run(self, task, context=None, max_turns=15, model=None, **kwargs):
+        """Run with fresh findings and URL cache."""
         self._findings = []
         self._sources = []
-        return await super().run(task, context, max_turns, model)
+        self._read_urls = set()
+        return await super().run(task, context, max_turns, model, **kwargs)

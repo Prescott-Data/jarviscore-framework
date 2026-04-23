@@ -1,15 +1,18 @@
 """
-6H.3: LifecycleMonitor — Background connection health monitoring.
+LifecycleMonitor — Background connection health monitoring for Nexus.
 
 Responsibilities:
-- Proactive token refresh before expiry
-- ATTENTION state detection (re-auth needed)
-- Terminal state cleanup (REVOKED, EXPIRED, FAILED)
+- Proactive token refresh before expiry (via Gateway POST /v1/refresh/{id})
+- ATTENTION state detection (re-auth needed — notify the human)
+- Terminal state cleanup (REVOKED, EXPIRED, FAILED — stop monitoring)
+
+The monitor runs as async tasks — one per connection — polling the Gateway
+for status and triggering refresh when tokens approach expiry.
 """
 
 import asyncio
 import logging
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from .client import NexusClient
 
@@ -22,15 +25,27 @@ class LifecycleMonitor:
     """
     Background async monitor for Nexus connection health.
 
-    Periodically checks connection status and triggers:
-    - Token refresh when nearing expiry
-    - Alerts on ATTENTION state (re-auth needed)
-    - Cleanup on terminal states (REVOKED, EXPIRED, FAILED)
+    Periodically checks connection status via the Nexus Gateway and:
+    - Proactively refreshes tokens before they expire
+    - Logs warnings on ATTENTION state (user must re-consent)
+    - Stops monitoring on terminal states
+
+    Usage:
+        monitor = LifecycleMonitor(nexus_client)
+        await monitor.monitor_connection("conn_abc123")
+        # ... runs in background ...
+        await monitor.stop_all()
     """
 
-    def __init__(self, nexus_client: NexusClient, check_interval: int = 60):
+    def __init__(
+        self,
+        nexus_client: NexusClient,
+        check_interval: int = 60,
+        on_attention: Optional[Callable[[str], None]] = None,
+    ):
         self.nexus_client = nexus_client
         self.check_interval = check_interval
+        self.on_attention = on_attention  # Optional callback when re-auth needed
         self._tasks: Dict[str, asyncio.Task] = {}
         self._health: Dict[str, Dict] = {}
 
@@ -38,8 +53,10 @@ class LifecycleMonitor:
         """
         Start monitoring a connection. Runs as a background asyncio task.
 
-        The task polls connection status at check_interval and updates
-        health records.
+        The task polls connection status at check_interval and:
+        - Refreshes tokens proactively when nearing expiry
+        - Triggers on_attention callback when user action is needed
+        - Auto-stops on terminal states
         """
         if connection_id in self._tasks:
             logger.warning(f"Already monitoring connection {connection_id}")
@@ -67,14 +84,31 @@ class LifecycleMonitor:
                         "error": None,
                     }
 
+                    if status == "ACTIVE":
+                        # Proactively refresh to keep tokens warm
+                        try:
+                            await self.nexus_client.refresh_connection(connection_id)
+                        except Exception as refresh_err:
+                            # Refresh failures are non-fatal — token may still be valid
+                            logger.debug(
+                                f"Proactive refresh for {connection_id} skipped: {refresh_err}"
+                            )
+
                     if status == "ATTENTION":
                         logger.warning(
-                            f"Connection {connection_id} needs re-authentication"
+                            f"Connection {connection_id} needs re-authentication. "
+                            f"The user must complete a new OAuth handshake."
                         )
+                        if self.on_attention:
+                            try:
+                                self.on_attention(connection_id)
+                            except Exception:
+                                pass
 
                     if status in _TERMINAL_STATES:
                         logger.info(
-                            f"Connection {connection_id} reached terminal state: {status}"
+                            f"Connection {connection_id} reached terminal state: {status}. "
+                            f"Stopping monitor."
                         )
                         break
 

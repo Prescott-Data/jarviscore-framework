@@ -25,6 +25,7 @@ class AutoAgent(Profile):
     - Meta-cognition (detect spinning, paralysis)
     - Token budget tracking
     - Cost tracking per task
+    - Kernel: Registry-first routing + ValidationLayer + Research-on-failure
 
     Example:
         class ScraperAgent(AutoAgent):
@@ -41,6 +42,13 @@ class AutoAgent(Profile):
     # Additional user-defined attribute (beyond Agent base class)
     system_prompt: str = None
 
+    # Optional: declare which kernel subagent role this agent should always use.
+    # Overrides the keyword classifier in Kernel._classify_task().
+    # Values: "coder" | "researcher" | "communicator" | None (auto-classify)
+    # Example: class Sentinel(AutoAgent): default_kernel_role = "researcher"
+    # Fix for Dogfooding Issue #2.
+    default_kernel_role: str = None
+
     def __init__(self, agent_id=None):
         super().__init__(agent_id)
 
@@ -50,11 +58,12 @@ class AutoAgent(Profile):
                 f"Example: system_prompt = 'You are an expert...'"
             )
 
-        # Execution components (initialized in setup() on Day 4)
+        # Execution components (initialized in setup())
         self.llm = None
         self.codegen = None
         self.sandbox = None
         self.repair = None
+        self._kernel = None  # Production Kernel (registry-first → coder → research-on-failure)
 
     async def setup(self):
         """
@@ -66,6 +75,7 @@ class AutoAgent(Profile):
         - Code generator with search injection
         - Sandbox executor with timeout
         - Autonomous repair system
+        - Kernel: production routing pipeline
         """
         await super().setup()
 
@@ -120,130 +130,205 @@ class AutoAgent(Profile):
         self._logger.info(f"Initializing function registry (dir: {registry_dir})...")
         self.code_registry = create_function_registry(registry_dir)
 
+        # 8. Initialize Kernel — production routing:
+        #    Registry-first (Option A) → Coder with ValidationLayer (Option B)
+        #    → Research-on-failure only (Option C)
+        #    Matches integration-agent staging pipeline.
+        from jarviscore.kernel.kernel import Kernel
+        self._logger.info("Initializing Kernel (registry-first routing + ValidationLayer)...")
+        self._kernel = Kernel(
+            llm_client=self.llm,
+            sandbox=self.sandbox,
+            code_registry=self.code_registry,
+            search_client=self.search,
+            redis_store=getattr(self, '_redis_store', None),
+            blob_storage=getattr(self, '_blob_storage', None),
+            config=config,
+        )
+
+        # NOTE: AuthenticationManager is NOT created here.
+        # The Mesh owns auth — it creates AuthenticationManager from mesh config
+        # and injects it as self._auth_manager on agents with requires_auth=True.
+        # Injection happens AFTER setup() completes (see mesh.py:292-312).
+        # The Kernel receives _auth_manager lazily at execute_task() time.
+
         self._logger.info(f"✓ AutoAgent ready: {self.agent_id}")
 
     async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute task via LLM code generation with automatic repair.
+        Execute task through the production Kernel pipeline.
 
-        Pipeline:
-        1. Generate Python code from natural language task
-        2. Execute code in sandbox
-        3. If fails → autonomous repair (up to 3 attempts)
-        4. Return result with tokens/cost
+        Pipeline (matches integration-agent staging branch):
+        1. Registry-first: check FunctionRegistry for verified function (Option A)
+        2. Coder writes from training knowledge + ValidationLayer gate (Option B)
+        3. Sandbox execution — real test
+        4. Research-on-failure ONLY (Option C) — researcher fires with real error
+        5. Auto-register success in FunctionRegistry (CANDIDATE → VERIFIED → GOLDEN)
+
+        Falls back to legacy direct codegen pipeline if Kernel unavailable.
 
         Args:
             task: Task specification with 'task' key (natural language)
 
         Returns:
             {
-                "status": "success" | "failure",
-                "output": Any,  # Task result
-                "error": str,   # Error if failed
-                "tokens": {...},  # Token usage
+                "status": "success" | "failure" | "yield",
+                "output": Any,
+                "error": str,
+                "tokens": {...},
                 "cost_usd": float,
-                "code": str,    # Generated code
-                "repairs": int  # Number of repair attempts
+                "function_id": str,
+                "repairs": int,
             }
-
-        Example:
-            result = await agent.execute_task({
-                "task": "Calculate factorial of 10"
-            })
         """
-        task_desc = task.get('task', '')
-        self._logger.info(f"[AutoAgent] Executing: {task_desc[:80]}...")
+        task_desc = task.get('task', '') if isinstance(task, dict) else str(task)
+        self._logger.info(f"[AutoAgent] Executing via Kernel: {task_desc[:100]}...")
+
+        # ── Kernel path (production pipeline) ────────────────────────────────
+        if self._kernel is not None:
+            # Lazily wire Mesh-injected auth into the Kernel.
+            # _auth_manager is set by the Mesh AFTER setup() on agents with
+            # requires_auth=True.  We forward it to the Kernel each call so the
+            # CoderSubAgent can resolve credentials before sandbox execution.
+            auth_mgr = getattr(self, '_auth_manager', None)
+            if auth_mgr and self._kernel.auth_manager is not auth_mgr:
+                self._kernel.auth_manager = auth_mgr
+                self._logger.debug("Forwarded Mesh _auth_manager → Kernel")
+
+            try:
+                output = await self._kernel.execute(
+                    task=task_desc,
+                    system_prompt=self.system_prompt,
+                    context=task.get('context') if isinstance(task, dict) else None,
+                    agent_id=self.agent_id,
+                    agent_default_role=self.default_kernel_role,
+                )
+
+                meta = output.metadata or {}
+                result = {
+                    "status": output.status,
+                    "output": output.payload,
+                    "error": None if output.status == "success" else output.summary,
+                    "tokens": meta.get("tokens", {"input": 0, "output": 0, "total": 0}),
+                    "cost_usd": meta.get("cost_usd", 0.0),
+                    "repairs": 0,
+                    "agent_id": self.agent_id,
+                    "role": self.role,
+                    "function_id": meta.get("function_id"),
+                    "dispatches": meta.get("dispatches", []),
+                }
+
+                if hasattr(self, 'result_handler') and self.result_handler:
+                    stored = self.result_handler.process_result(
+                        agent_id=self.agent_id,
+                        task=task_desc,
+                        code="(via Kernel)",
+                        output=output.payload,
+                        status=output.status,
+                        error=result["error"],
+                        execution_time=meta.get("elapsed_ms", 0) / 1000,
+                        tokens=meta.get("tokens"),
+                        cost_usd=meta.get("cost_usd"),
+                        repairs=0,
+                        metadata={
+                            "role": self.role,
+                            "capabilities": self.capabilities,
+                            "pipeline": "kernel",
+                        }
+                    )
+                    result["result_id"] = stored.get("result_id")
+
+                if output.status == "success":
+                    self._logger.info(
+                        "✓ Kernel execution succeeded (agent=%s, dispatches=%d)",
+                        self.agent_id, len(meta.get("dispatches", []))
+                    )
+                else:
+                    self._logger.warning("✗ Kernel execution: %s", output.summary)
+
+                return result
+
+            except Exception as exc:
+                self._logger.error(
+                    "Kernel raised exception — falling back to legacy pipeline: %s", exc,
+                    exc_info=True,
+                )
+                # Fall through to legacy pipeline
+
+        # ── Legacy pipeline (fallback if Kernel unavailable or crashed) ────────
+        self._logger.warning("[AutoAgent] Using legacy direct-codegen pipeline for %s", self.agent_id)
 
         total_tokens = {"input": 0, "output": 0, "total": 0}
         total_cost = 0.0
         repairs_attempted = 0
 
         try:
-            # Step 1: Generate code from natural language
-            self._logger.info("Step 1: Generating code...")
-            code = await self.codegen.generate(
+            code_result = await self.codegen.generate(
                 task=task,
                 system_prompt=self.system_prompt,
-                context=task.get('context'),  # Dependencies from previous steps
-                enable_search=True
+                context=task.get('context') if isinstance(task, dict) else None,
+                enable_search=True,
+            )
+            exec_code = code_result if isinstance(code_result, str) else getattr(code_result, 'code', str(code_result))
+            self._logger.debug(f"Generated {len(exec_code)} chars of code")
+
+            result = await self.sandbox.execute(
+                exec_code,
+                context=task.get('context') if isinstance(task, dict) else None,
             )
 
-            # Track generation cost (from LLM response)
-            # Note: codegen now returns just code, cost tracked in llm
-            self._logger.debug(f"Generated {len(code)} characters of code")
-
-            # Step 2: Execute in sandbox (inject context so previous_step_results
-            # and other dep outputs are available as variables in generated code)
-            self._logger.info("Step 2: Executing code in sandbox...")
-            result = await self.sandbox.execute(code, context=task.get('context'))
-
-            # Step 3: Handle execution failure with autonomous repair
             if result['status'] == 'failure':
-                self._logger.warning(f"Execution failed: {result.get('error')}")
-                self._logger.info("Step 3: Attempting autonomous repair...")
-
-                # Use repair system with automatic retries
+                self._logger.info("Attempting autonomous repair...")
                 repair_result = await self.repair.repair_with_retries(
-                    code=code,
+                    code=exec_code,
                     error=Exception(result.get('error', 'Unknown error')),
                     task=task,
                     system_prompt=self.system_prompt,
-                    executor=self.sandbox
+                    executor=self.sandbox,
                 )
-
-                # Update result and track repairs
                 result = repair_result
                 repairs_attempted = len(repair_result.get('attempts', []))
-                self._logger.info(f"Repair attempts: {repairs_attempted}")
 
-            # Enrich result with metadata
-            result['code'] = code
+            result['code'] = exec_code
             result['repairs'] = repairs_attempted
             result['agent_id'] = self.agent_id
             result['role'] = self.role
-
-            # Add token/cost info if not already present
             if 'tokens' not in result:
                 result['tokens'] = total_tokens
             if 'cost_usd' not in result:
                 result['cost_usd'] = total_cost
 
-            # Store result to file system + in-memory cache
-            stored_result = self.result_handler.process_result(
-                agent_id=self.agent_id,
-                task=task_desc,
-                code=code,
-                output=result.get('output'),
-                status=result['status'],
-                error=result.get('error'),
-                execution_time=result.get('execution_time'),
-                tokens=result.get('tokens'),
-                cost_usd=result.get('cost_usd'),
-                repairs=repairs_attempted,
-                metadata={
-                    'role': self.role,
-                    'capabilities': self.capabilities,
-                    'system_prompt': self.system_prompt[:100]  # First 100 chars
-                }
-            )
+            if hasattr(self, 'result_handler') and self.result_handler:
+                stored = self.result_handler.process_result(
+                    agent_id=self.agent_id,
+                    task=task_desc,
+                    code=exec_code,
+                    output=result.get('output'),
+                    status=result['status'],
+                    error=result.get('error'),
+                    execution_time=result.get('execution_time'),
+                    tokens=result.get('tokens'),
+                    cost_usd=result.get('cost_usd'),
+                    repairs=repairs_attempted,
+                    metadata={
+                        'role': self.role,
+                        'capabilities': self.capabilities,
+                        'pipeline': 'legacy',
+                    },
+                )
+                result['result_id'] = stored.get('result_id')
 
-            # Add result_id to response
-            result['result_id'] = stored_result['result_id']
-
-            # Register successful code in function registry for reuse
-            if result['status'] == 'success':
-                # Generate a function name from task
+            if result['status'] == 'success' and hasattr(self, 'code_registry') and self.code_registry:
                 func_name = re.sub(r'[^a-z0-9_]', '_', task_desc.lower())[:50].strip('_')
-                func_name = func_name or f"task_{result['result_id']}"
-
+                func_name = func_name or f"task_{result.get('result_id', 'unknown')}"
                 registered = self.code_registry.register_function(
                     function_name=func_name,
-                    function=code,
+                    function=exec_code,
                     metadata={
                         'agent_id': self.agent_id,
                         'task': task_desc,
                         'capabilities': self.capabilities,
-                        'system': task.get('system'),
+                        'system': task.get('system') if isinstance(task, dict) else None,
                         'description': task_desc,
                         'strategy': 'sandbox',
                         'tags': [self.role],
@@ -251,14 +336,13 @@ class AutoAgent(Profile):
                     }
                 )
                 if registered:
-                    # Record first successful execution → auto-promote to VERIFIED
                     self.code_registry.update_execution_stats(
                         func_name,
                         success=True,
                         execution_time=result.get('execution_time', 0.0),
                     )
                 result['function_id'] = func_name
-                self._logger.info(f"✓ Task completed successfully (result_id: {result['result_id']}, function_id: {func_name})")
+                self._logger.info(f"✓ Task completed (legacy, function_id: {func_name})")
             else:
                 self._logger.error(f"✗ Task failed: {result.get('error')}")
 
@@ -274,5 +358,5 @@ class AutoAgent(Profile):
                 "role": self.role,
                 "repairs": repairs_attempted,
                 "tokens": total_tokens,
-                "cost_usd": total_cost
+                "cost_usd": total_cost,
             }

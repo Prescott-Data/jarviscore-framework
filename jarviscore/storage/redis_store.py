@@ -127,7 +127,7 @@ class RedisContextStore:
             self._redis.hset(key, mapping=flat)
             self._redis.expire(key, self._ttl_seconds)
         if source:
-            self._redis.hset(f"{key}:sources", source, json.dumps(list(updates.keys())))
+            self._redis.hset(f"{key}:sources", mapping={source: json.dumps(list(updates.keys()))})
         return True
 
     def merge_shared_facts(self, workflow_id: str, facts: Dict,
@@ -136,11 +136,11 @@ class RedisContextStore:
         key = f"shared_facts:{workflow_id}"
         for fact_key, fact_value in facts.items():
             serialized = json.dumps(fact_value) if not isinstance(fact_value, str) else fact_value
-            self._redis.hset(key, fact_key, serialized)
+            self._redis.hset(key, mapping={fact_key: serialized})
         self._redis.expire(key, self._ttl_seconds)
         if source:
             meta_key = f"{key}:sources"
-            self._redis.hset(meta_key, source, json.dumps(list(facts.keys())))
+            self._redis.hset(meta_key, mapping={source: json.dumps(list(facts.keys()))})
             self._redis.expire(meta_key, self._ttl_seconds)
         return True
 
@@ -267,7 +267,7 @@ class RedisContextStore:
             data = {}
         data["status"] = status
         data["updated_at"] = time.time()
-        self._redis.hset(key, step_id, json.dumps(data))
+        self._redis.hset(key, mapping={step_id: json.dumps(data)})
         return True
 
     def are_dependencies_met(self, workflow_id: str, step_id: str) -> bool:

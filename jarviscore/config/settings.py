@@ -145,13 +145,14 @@ class Settings(BaseSettings):
     hitl_max_confidence: float = 0.8
     hitl_min_risk_score: float = 0.7
 
-    # === Auth / Nexus ===
+    # === Auth / Nexus (github.com/Prescott-Data/nexus-framework) ===
     auth_mode: str = "development"  # "production" or "development"
-    nexus_gateway_url: Optional[str] = None  # Required for production mode
+    nexus_gateway_url: Optional[str] = None  # Nexus Gateway URL (required for production)
+    nexus_return_url: str = "http://localhost:8000/oauth/callback"  # Broker redirects here after consent
     nexus_default_user_id: str = "jarviscore-agent"
-    auth_strategy_cache_ttl: int = 300  # Seconds before re-fetching strategy
+    auth_strategy_cache_ttl: int = 300  # Seconds before re-fetching strategy from Gateway
     auth_flow_timeout: int = 300  # Max seconds to wait for OAuth consent
-    auth_poll_interval: float = 2.0  # Seconds between status polls
+    auth_poll_interval: float = 2.0  # Seconds between Gateway status polls
     auth_open_browser: bool = True  # Try to open system browser for OAuth
 
     # === Browser ===

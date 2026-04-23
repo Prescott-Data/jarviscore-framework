@@ -1,8 +1,12 @@
 """
-Nexus Protocol — Client-side integration with Dromos Gateway.
+Nexus Protocol — Client-side integration with the Nexus Gateway.
 
-Provides authenticated access to external services via:
-- NexusClient: HTTP client for Dromos Gateway REST API
+The Nexus Framework (github.com/Prescott-Data/nexus-framework) is Prescott Data's
+provider-agnostic OAuth 2.0 / OIDC integration layer. JarvisCore communicates
+exclusively with the Nexus Gateway — never with the Broker or providers directly.
+
+Components:
+- NexusClient: HTTP client for the Nexus Gateway REST API
 - LifecycleMonitor: Background connection health monitoring
 - Models: Pydantic models for connection/strategy data
 """

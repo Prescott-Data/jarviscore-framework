@@ -1,18 +1,19 @@
 """
-6H.4: AuthenticationManager — Dual-mode auth resolution.
+AuthenticationManager — Dual-mode auth resolution for the kernel execution pipeline.
 
-Production mode: NexusClient → Dromos Gateway → DynamicStrategy
+Production mode: NexusClient → Nexus Gateway → DynamicStrategy
 Development mode: Tokens from environment variables (no external deps)
 
 The auth manager sits between the kernel and sandbox execution,
 transparently resolving credentials before code runs.
 
-OAuth flow (production, no backend/frontend):
-1. request_connection() → auth_url returned by Dromos Gateway
+Production OAuth flow:
+1. request_connection() → auth_url returned by Nexus Gateway
 2. CLIFlowHandler opens browser + prints URL for user
 3. User completes OAuth consent in browser
-4. Dromos Gateway receives callback, connection → ACTIVE
-5. Framework polls until ACTIVE, then resolves strategy
+4. Nexus Broker receives callback, encrypts tokens, connection → ACTIVE
+5. Framework polls Gateway until ACTIVE, then resolves strategy
+6. LifecycleMonitor runs in background for health + proactive refresh
 """
 
 import logging
@@ -40,9 +41,9 @@ class AuthenticationManager:
     - Returns DynamicStrategy with type="api_key"
 
     Production mode:
-    - Uses NexusClient to connect to Dromos Gateway
+    - Uses NexusClient to connect to Nexus Gateway
     - Interactive OAuth flow: opens browser, polls for completion
-    - Lifecycle monitoring for connection health
+    - Lifecycle monitoring for connection health + proactive refresh
     - Strategy caching with configurable TTL
 
     Custom flow handlers:
@@ -57,6 +58,13 @@ class AuthenticationManager:
         self.auth_timeout = config.get("auth_flow_timeout", 300)
         self.auth_poll_interval = config.get("auth_poll_interval", 2.0)
 
+        # The return_url for OAuth callbacks — must point to the dashboard,
+        # NOT to the Nexus Broker. The Broker redirects here after consent.
+        self.return_url = config.get(
+            "nexus_return_url",
+            "http://localhost:8000/oauth/callback"
+        )
+
         # Pluggable OAuth flow handler (CLI by default)
         self.flow_handler: OAuthFlowHandler = CLIFlowHandler(
             open_browser=config.get("auth_open_browser", True)
@@ -69,7 +77,8 @@ class AuthenticationManager:
             gateway_url = config.get("nexus_gateway_url")
             if not gateway_url:
                 raise ValueError(
-                    "nexus_gateway_url is required for production auth mode"
+                    "nexus_gateway_url is required for production auth mode. "
+                    "Set NEXUS_GATEWAY_URL in your .env or config."
                 )
             self.nexus_client = NexusClient(gateway_url)
             self.lifecycle_monitor = LifecycleMonitor(self.nexus_client)
@@ -91,7 +100,7 @@ class AuthenticationManager:
         Production mode: Nexus handshake → connection_id (cached per provider).
 
         Returns:
-            connection_id string
+            connection_id string (opaque handle — never store tokens directly)
         """
         # Return cached connection if available
         if provider in self.connections:
@@ -114,7 +123,7 @@ class AuthenticationManager:
             self._strategy_cache[connection_id] = (strategy, time.time())
             return connection_id
 
-        # Production mode — interactive OAuth flow
+        # Production mode — interactive OAuth flow via Nexus Gateway
         if not self.nexus_client:
             raise RuntimeError("NexusClient not initialized for production mode")
 
@@ -122,6 +131,7 @@ class AuthenticationManager:
             provider=provider,
             user_id=uid,
             scopes=scopes,
+            return_url=self.return_url,
         )
 
         # Present auth URL to user (opens browser / prints URL)
@@ -154,7 +164,7 @@ class AuthenticationManager:
         """
         Resolve a DynamicStrategy for a connection, with caching.
 
-        Checks cache first. If cache miss or expired, fetches from gateway.
+        Checks cache first. If cache miss or expired, fetches from Nexus Gateway.
         """
         # Check cache
         if connection_id in self._strategy_cache:
@@ -165,7 +175,7 @@ class AuthenticationManager:
 
         # Cache miss or expired — fetch fresh
         if self.mode == "development":
-            # Dev mode: recreate from env (shouldn't normally reach here)
+            # Dev mode: recreate from env
             provider = connection_id.split("_")[1] if "_" in connection_id else "unknown"
             env_key = f"{provider.upper()}_TOKEN"
             token = os.environ.get(env_key, "")
@@ -191,7 +201,7 @@ class AuthenticationManager:
 
         Steps:
         1. Query registry for system auth requirements
-        2. Authenticate with the required provider
+        2. Authenticate with the required provider via Nexus
         3. Resolve strategy (cached with TTL)
         4. Return auth_context dict
 
@@ -214,10 +224,10 @@ class AuthenticationManager:
         provider = requirements.get("provider", system)
         scopes = requirements.get("scopes", [])
 
-        # Authenticate
+        # Authenticate via Nexus
         connection_id = await self.authenticate(provider, scopes=scopes)
 
-        # Resolve strategy
+        # Resolve strategy from Nexus Gateway
         strategy = await self.resolve_strategy(connection_id)
 
         # Build auth context for sandbox
@@ -245,9 +255,10 @@ class AuthenticationManager:
         **kwargs,
     ) -> Dict[str, Any]:
         """
-        Make an HTTP request with auth headers applied via strategy.
+        Make an HTTP request with auth headers applied via Nexus strategy.
 
-        Auto-retries once on 401 (refreshes strategy cache).
+        Auto-retries once on 401: invalidates strategy cache, forces a fresh
+        token fetch from Nexus Gateway, then retries the request.
         """
         connection_id = await self.authenticate(provider)
         strategy = await self.resolve_strategy(connection_id)
@@ -259,10 +270,15 @@ class AuthenticationManager:
         async with httpx.AsyncClient() as client:
             response = await client.request(**request_kwargs)
 
-            # Auto-retry on 401
+            # Auto-retry on 401 — token may have been revoked/expired
             if response.status_code == 401:
-                logger.info(f"Got 401 for {provider}, refreshing strategy...")
-                # Invalidate cache
+                logger.info(f"Got 401 for {provider}, refreshing via Nexus Gateway...")
+                # Force refresh via Gateway
+                try:
+                    await self.nexus_client.refresh_connection(connection_id)
+                except Exception as e:
+                    logger.warning(f"Refresh request failed: {e}")
+                # Invalidate cache and re-resolve
                 self._strategy_cache.pop(connection_id, None)
                 strategy = await self.resolve_strategy(connection_id)
                 request_kwargs = NexusClient.apply_strategy_to_request(
@@ -277,7 +293,7 @@ class AuthenticationManager:
             }
 
     async def close(self):
-        """Cleanup: stop lifecycle monitor, close nexus client."""
+        """Cleanup: stop lifecycle monitor, close Nexus client."""
         if self.lifecycle_monitor:
             await self.lifecycle_monitor.stop_all()
         if self.nexus_client:

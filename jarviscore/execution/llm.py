@@ -178,7 +178,7 @@ class UnifiedLLMClient:
 
     async def generate(
         self,
-        prompt: str,
+        prompt: Optional[str] = None,
         messages: Optional[List[Dict]] = None,
         temperature: float = 0.7,
         max_tokens: int = 4000,
@@ -287,12 +287,17 @@ class UnifiedLLMClient:
         deployment = kwargs.pop('model', None) or self.config.get('azure_deployment', 'gpt-4o')
         start_time = time.time()
 
-        response = await self.azure_client.chat.completions.create(
-            model=deployment,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
+        # gpt-5.x models only support temperature=1 (default)
+        # Strip unsupported temperature to avoid API errors
+        call_kwargs = {
+            "model": deployment,
+            "messages": messages,
+            "max_completion_tokens": max_tokens,  # gpt-5.x requires max_completion_tokens
+        }
+        if not deployment.startswith("gpt-5"):
+            call_kwargs["temperature"] = temperature
+
+        response = await self.azure_client.chat.completions.create(**call_kwargs)
 
         duration = time.time() - start_time
         content = response.choices[0].message.content

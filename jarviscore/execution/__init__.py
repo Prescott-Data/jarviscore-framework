@@ -28,7 +28,19 @@ from .search import (
 # Code Generator
 from .generator import (
     CodeGenerator,
+    GeneratedCode,
     create_code_generator
+)
+
+# Validation Layer
+from .validation import (
+    ValidationLayer,
+    ValidationResult,
+    ValidationIssue,
+    Severity,
+    StaticValidator,
+    SecurityValidator,
+    HTTPContractEnforcer,
 )
 
 # Sandbox Executor
@@ -36,6 +48,17 @@ from .sandbox import (
     SandboxExecutor,
     ExecutionTimeout,
     create_sandbox_executor
+)
+
+# Coder Sandbox (file-capable, subprocess-aware — for Coder agent only)
+from .coder_sandbox import (
+    CoderSandbox,
+    CoderResult,
+    BashExecutor,
+    GitHelper,
+    BashPermissionError,
+    CODER_GENERATION_SYSTEM_PROMPT,
+    create_coder_sandbox,
 )
 
 # Autonomous Repair
@@ -75,12 +98,31 @@ __all__ = [
 
     # Generator
     'CodeGenerator',
+    'GeneratedCode',
     'create_code_generator',
 
-    # Sandbox
+    # Validation
+    'ValidationLayer',
+    'ValidationResult',
+    'ValidationIssue',
+    'Severity',
+    'StaticValidator',
+    'SecurityValidator',
+    'HTTPContractEnforcer',
+
+    # Sandbox (API-safe, no file access)
     'SandboxExecutor',
     'ExecutionTimeout',
     'create_sandbox_executor',
+
+    # Coder Sandbox (file + subprocess access, Coder agent only)
+    'CoderSandbox',
+    'CoderResult',
+    'BashExecutor',
+    'GitHelper',
+    'BashPermissionError',
+    'CODER_GENERATION_SYSTEM_PROMPT',
+    'create_coder_sandbox',
 
     # Repair
     'AutonomousRepair',
