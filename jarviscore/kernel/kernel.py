@@ -375,6 +375,17 @@ class Kernel:
         workflow_id = context.get("workflow_id", "unknown") if context else "unknown"
         step_id = context.get("step_id", f"step_{int(time.time())}") if context else f"step_{int(time.time())}"
 
+        # Create TraceManager for real-time streaming to UI
+        from jarviscore.kernel.tracing import TraceManager, create_noop_trace
+        try:
+            _kernel_trace = TraceManager(
+                workflow_id=workflow_id,
+                step_id=step_id,
+            )
+        except Exception as _te:
+            logger.debug("[Kernel] TraceManager init failed (non-fatal): %s", _te)
+            _kernel_trace = create_noop_trace()
+
         for dispatch_num in range(max_dispatches):
             # ─────────────────────────────────────────────────────
             # OPTION A: Registry-first fast path
@@ -482,6 +493,7 @@ class Kernel:
                 cognition=cognition,
                 context_manager=ctx_manager,
                 memory=memory,
+                trace=_kernel_trace,
             )
 
             # Track costs

@@ -184,6 +184,7 @@ class BaseSubAgent(ABC):
         cognition: Optional[AgentCognitionManager] = None,
         context_manager=None,
         memory=None,
+        trace=None,  # Optional[TraceManager] — injected by Kernel
     ) -> AgentOutput:
         """
         Execute the subagent's task via the OODA loop.
@@ -234,6 +235,9 @@ class BaseSubAgent(ABC):
         # Pre-run hook — subclasses can do deterministic pre-flight work
         await self._pre_run_hook(state)
 
+        # ── TraceManager: use injected trace or no-op ──
+        from jarviscore.kernel.tracing import create_noop_trace
+        _trace = trace if trace is not None else create_noop_trace()
         total_tokens = {"input": 0, "output": 0, "total": 0}
         total_cost = 0.0
         system_prompt = self._build_system_prompt()
@@ -286,10 +290,13 @@ class BaseSubAgent(ABC):
                 {"role": "user", "content": user_prompt},
             ]
 
+            _trace.log_llm_request(system_prompt[:300], user_prompt[:500])
+
             kwargs = {}
             if model:
                 kwargs["model"] = model
 
+            _llm_t0 = __import__('time').monotonic()
             try:
                 llm_result = await self.llm_client.generate(
                     messages=messages, **kwargs
@@ -298,6 +305,7 @@ class BaseSubAgent(ABC):
                 logger.error(f"[{self.role}] LLM call failed on turn {turn}: {e}")
                 state.retry_count += 1
                 if state.retry_count > state.max_retries:
+                    _trace.log_step_complete(False, f"LLM call failed: {e}")
                     return AgentOutput(
                         status="failure",
                         summary=f"LLM call failed: {e}",
@@ -313,6 +321,7 @@ class BaseSubAgent(ABC):
             total_tokens["output"] += tokens.get("output", 0)
             total_tokens["total"] += tokens.get("total", 0)
             total_cost += llm_result.get("cost_usd", 0.0)
+            _trace.log_llm_response(content[:500], round((__import__('time').monotonic() - _llm_t0) * 1000, 1))
             llm_tokens_this_turn = tokens.get("total", 0)
             state.tokens_used = total_tokens["total"]
 
@@ -331,12 +340,16 @@ class BaseSubAgent(ABC):
             if parsed["type"] == "done":
                 state.status = "completed"
                 state.output = parsed.get("result")
+                thought = parsed.get("thought", "")
+                if thought:
+                    _trace.log_thinking(thought)
                 trajectory.append({
                     "turn": turn,
                     "type": "done",
-                    "thought": parsed.get("thought", ""),
+                    "thought": thought,
                     "summary": parsed["summary"],
                 })
+                _trace.log_step_complete(True, parsed["summary"])
                 self._cognition.track_usage("done", tokens=llm_tokens_this_turn)
 
                 # Log turn to memory
@@ -389,6 +402,12 @@ class BaseSubAgent(ABC):
                     "status": "pending",
                 }
 
+                # Emit thinking + tool_start trace events
+                thought = parsed.get("thought", "")
+                if thought:
+                    _trace.log_thinking(thought)
+                _trace.log_tool_start(tool_name, tool_params)
+
                 tool_result = await self._execute_tool(tool_name, tool_params)
                 turn_log["result"] = str(tool_result)[:500]
 
@@ -405,11 +424,13 @@ class BaseSubAgent(ABC):
                 if tool_result.get("status") == "error":
                     turn_log["status"] = "error"
                     turn_log["error"] = tool_result.get("error", "")
+                    _trace.log_tool_result(tool_name, tool_result, error=tool_result.get("error"))
                     self._cognition.record_failure(
                         tool_name, tool_params, error=tool_result.get("error"),
                     )
                 else:
                     turn_log["status"] = "success"
+                    _trace.log_tool_result(tool_name, tool_result)
 
                 # ── Check convergence stall ──
                 stall = self._cognition.convergence.evaluate(tool_name, tool_result)
@@ -418,6 +439,7 @@ class BaseSubAgent(ABC):
                     logger.warning(f"[{self.role}] Convergence stall: {stall_reason}")
                     state.add_thought(f"[CONVERGENCE] {stall_reason}")
                     trajectory.append(turn_log)
+                    _trace.log_step_complete(False, stall_reason)
                     return AgentOutput(
                         status=stall.get("action", "yield"),
                         summary=stall_reason,
@@ -468,6 +490,7 @@ class BaseSubAgent(ABC):
             )
 
         # Max turns reached (emergency fuse)
+        _trace.log_step_complete(False, f"Emergency turn fuse reached ({max_turns} turns)")
         return AgentOutput(
             status="yield",
             summary=f"Emergency turn fuse reached ({max_turns} turns)",

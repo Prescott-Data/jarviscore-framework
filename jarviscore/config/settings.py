@@ -160,6 +160,18 @@ class Settings(BaseSettings):
     browser_headless: bool = True
     browser_default_viewport: str = "1280x720"
 
+    # === Search Providers ===
+    # Gemini Grounded Search (primary): set GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT
+    gemini_api_key: Optional[str] = None
+    gemini_grounding_api_key: Optional[str] = None
+    gemini_grounding_model: str = "gemini-2.5-flash"
+    google_cloud_project: Optional[str] = None
+    google_cloud_location: str = "global"
+
+    # Serper (secondary Google Search via serper.dev, optional)
+    serper_api_key: Optional[str] = None
+
+
     # === Logging ===
     log_level: str = "INFO"
 
