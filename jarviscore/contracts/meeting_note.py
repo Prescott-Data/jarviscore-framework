@@ -8,7 +8,7 @@ Every meeting note written to disk (meetings/*.json) or returned from
 norm dict aliasing in app.py and gives agents a typed output shape.
 
 Supported meeting types:
-    shift_kickoff  — daily shift briefing (Compass-led)
+    shift_kickoff  — daily shift briefing
     standup        — async agent status update
     scrum          — cross-team sprint sync
     retro          — retrospective
@@ -68,8 +68,7 @@ class MeetingNote(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     title: str
     type: str = MeetingType.general.value   # stored as string for JSON compat
-    team: str = "signal"                     # signal | treasury | founder
-
+    team: str = ""
     # ── When / Who ────────────────────────────────────────────────────────────
     date: str = Field(
         default_factory=lambda: datetime.date.today().isoformat()
@@ -126,7 +125,7 @@ class MeetingNoteCreate(BaseModel):
     """
     title: str
     type: str = MeetingType.general.value
-    team: str = "signal"
+    team: str = ""
     date: Optional[str] = None
     participants: List[str] = Field(default_factory=list)
     agenda: List[str] = Field(default_factory=list)
@@ -175,7 +174,7 @@ def normalise_meeting(raw: Dict[str, Any]) -> Dict[str, Any]:
         "id":                raw.get("id", ""),
         "title":             raw.get("title", "Untitled Meeting"),
         "type":              raw.get("type", MeetingType.general.value),
-        "team":              raw.get("team", "signal"),
+        "team":              raw.get("team", ""),
         "date":              raw.get("date", ""),
         "participants":      raw.get("participants") or raw.get("attendees") or [],
         "agenda":            raw.get("agenda", []),

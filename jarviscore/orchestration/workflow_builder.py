@@ -14,11 +14,11 @@ Usage (inside any agent):
 
     wf = (
         WorkflowBuilder()
-        .step("intel",  "sentinel", "Scan East Africa AI news and competitor moves")
-        .step("angle",  "compass",  "Set content angle from: {intel.result}", depends_on=["intel"])
-        .step("draft",  "quill",    "Draft LinkedIn post on: {angle.result}", depends_on=["angle"])
-        .step("qa",     "warden",   "QA draft for brand voice", depends_on=["draft"])
-        .build(title="Content pipeline: AI in Africa", team="signal")
+        .step("research", "researcher", "Gather market data on topic X")
+        .step("analyse",  "analyst",    "Analyse findings: {research.result}", depends_on=["research"])
+        .step("draft",    "writer",     "Draft report from: {analyse.result}", depends_on=["analyse"])
+        .step("review",   "reviewer",   "QA the draft for accuracy",           depends_on=["draft"])
+        .build(title="Research-to-report pipeline", team="my-team")
     )
 
     workflow_id = await wf.register(redis_store)
@@ -297,10 +297,10 @@ class WorkflowBuilder:
     Example:
         wf = (
             WorkflowBuilder()
-            .step("intel", "sentinel", "Scan competitor releases this week")
-            .step("draft", "quill", "Draft a response post on: {intel.result}", depends_on=["intel"])
-            .step("qa",    "warden", "QA the draft", depends_on=["draft"])
-            .build(title="Competitor response pipeline", team="signal")
+            .step("research", "researcher", "Gather latest data on topic X")
+            .step("draft",    "writer",     "Draft report from: {research.result}", depends_on=["research"])
+            .step("review",   "reviewer",   "QA the draft",                         depends_on=["draft"])
+            .build(title="Research pipeline", team="my-team")
         )
         workflow_id = await wf.register(redis_store)
         results = await wf.execute(mesh)
@@ -322,7 +322,7 @@ class WorkflowBuilder:
 
         Args:
             step_id:    Unique step identifier (used for {step_id.result} references)
-            agent:      Agent role to dispatch this step to (e.g., "sentinel", "quill")
+            agent:      Agent role to dispatch this step to (e.g., "researcher", "writer")
             task:       Natural language task description. Can reference prior step results
                         using {step_id.result} syntax.
             depends_on: List of step_ids that must succeed before this step runs.
@@ -351,7 +351,7 @@ class WorkflowBuilder:
 
         Args:
             title: Human-readable workflow name (shown in dashboard)
-            team:  Team identifier, e.g. "signal", "treasury"
+            team:  Optional team identifier for grouping workflows
 
         Returns:
             Workflow instance ready for register() and execute()

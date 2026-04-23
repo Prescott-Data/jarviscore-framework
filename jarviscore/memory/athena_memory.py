@@ -13,7 +13,7 @@ Integration with UnifiedMemory:
     mem = UnifiedMemory(
         workflow_id="wf-1",
         step_id="step2",
-        agent_id="compass",
+        agent_id="my-agent",
         redis_store=redis_store,
         blob_storage=blob_storage,
         athena_client=AthenaClient.from_env(),   # ← new optional kwarg
@@ -51,7 +51,7 @@ class AthenaMemory:
       - Emit domain-level observations (task assigned, meeting noted, HITL resolved)
 
     Lifecycle:
-        am = await AthenaMemory.create("compass", athena_client, redis_store)
+        am = await AthenaMemory.create("my-agent", athena_client, redis_store)
         await am.record_thought("Analysing SEO gaps on prescottdata.io")
         await am.record_action("Assigned task: SEO audit", {"task_id": "xyz"})
         ctx = await am.get_memory_context()
@@ -80,7 +80,7 @@ class AthenaMemory:
         Factory: creates or reuses an Athena session for this agent.
 
         Args:
-            agent_id:    Unique stable agent name (e.g. "compass")
+            agent_id:    Unique stable agent name (e.g. "researcher")
             client:      Initialised AthenaClient
             redis_store: Optional — caches session_id so it survives restarts
             metadata:    Tags forwarded to Athena session on creation

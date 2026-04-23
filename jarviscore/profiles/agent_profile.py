@@ -15,7 +15,7 @@ This is what gives each agent its autonomous operational intelligence:
 
 Usage:
     # In AutoAgent.setup():
-    profile = AgentProfile.load("compass")
+    profile = AgentProfile.load("researcher")
     self._profile_block = profile.to_prompt_block()
 
     # In execute_task(), prepend to system_prompt:
@@ -39,7 +39,7 @@ class AgentProfile:
     Structured role intelligence for a JarvisCore agent.
 
     Attributes:
-        role:                 Full role name, e.g. "Compass — Sky Team Lead"
+        role:                 Full role name, e.g. "Researcher — Data Intelligence Agent"
         expertise:            Domain areas this agent is authoritative on
         sops:                 Standing operating procedures (ordered)
         domain_facts:         Static facts about the org/context
@@ -74,7 +74,7 @@ class AgentProfile:
         Load an agent profile from a YAML file.
 
         Args:
-            role_name: The agent's role slug, e.g. "compass", "ingram"
+            role_name: The agent's role slug, e.g. "researcher", "analyst"
 
         Returns:
             AgentProfile, or None if no profile found (graceful degradation).
@@ -134,7 +134,7 @@ class AgentProfile:
             parts.append("")
 
         if self.owns:
-            parts.append("### What You Own (produce these every shift)")
+            parts.append("### What You Own")
             for item in self.owns:
                 parts.append(f"- {item}")
             parts.append("")

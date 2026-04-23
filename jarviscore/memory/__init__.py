@@ -19,8 +19,8 @@ Integration:
 
     # Full Athena memory (requires ATHENA_URL)
     athena = get_athena_client()
-    am = await AthenaMemory.create("compass", athena, redis_store)
-    await am.on_task_assigned("t1", "SEO audit", "compass")
+    am = await AthenaMemory.create("my-agent", athena, redis_store)
+    await am.on_task_assigned("t1", "analyse data", "my-agent")
     ctx = await am.get_memory_context()
 """
 
@@ -56,7 +56,7 @@ def get_athena_client(settings=None) -> "AthenaClient | None":
 
         athena = get_athena_client()
         if athena:
-            am = await AthenaMemory.create("compass", athena, redis_store)
+            am = await AthenaMemory.create("my-agent", athena, redis_store)
     """
     if settings is None:
         try:
@@ -73,6 +73,6 @@ def get_athena_client(settings=None) -> "AthenaClient | None":
     if not url:
         return None
 
-    tenant = getattr(settings, "athena_tenant_id", "prescott")
+    tenant = getattr(settings, "athena_tenant_id", "default")
     timeout = getattr(settings, "athena_http_timeout", 10.0)
     return AthenaClient(base_url=url, tenant_id=tenant, timeout=timeout)

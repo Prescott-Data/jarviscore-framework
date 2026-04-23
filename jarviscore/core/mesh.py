@@ -824,7 +824,7 @@ class Mesh:
         # Resolve warden_inbox path from config or use package-relative default
         inbox_dir = self.config.get("hitl_inbox_dir", None)
 
-        # Lazy-import HITLQueue (lives in prescott-internal-agents for now;
+        # Lazy-import HITLQueue (ships separately — not in jarviscore core;
         # will move into jarviscore.hitl when promoted to the framework)
         try:
             import importlib, sys
@@ -832,7 +832,7 @@ class Mesh:
             try:
                 from jarviscore.hitl import HITLQueue as _HITLQueue
             except ImportError:
-                # Fall back to prescott-internal-agents location
+                # Fall back to application-level location
                 from services.hitl import HITLQueue as _HITLQueue
         except ImportError:
             _HITLQueue = None
@@ -1192,7 +1192,7 @@ class Mesh:
                 task="Generate the Q2 investor deck as a branded PPTX",
                 context={
                     "brief": compass_brief,
-                    "output_filename": "prescott_q2_2026.pptx",
+                    "output_filename": "quarterly_report_q2.pptx",
                 },
             )
             pptx_path = result["files_created"][0]

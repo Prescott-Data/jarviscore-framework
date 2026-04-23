@@ -163,7 +163,7 @@ class Settings(BaseSettings):
     # Blob LTM (EpisodicLedger + LongTermMemory). Setting ATHENA_URL upgrades
     # all agents to full three-tier memory automatically.
     athena_url: Optional[str] = None           # ATHENA_URL — e.g. http://localhost:8080
-    athena_tenant_id: str = "prescott"          # Namespace for multi-tenant Athena deployments
+    athena_tenant_id: str = "default"          # Namespace for multi-tenant Athena deployments
     athena_http_timeout: float = 10.0           # Seconds before Athena HTTP call times out
     athena_session_ttl_days: int = 30           # How long session_id is cached in Redis
 

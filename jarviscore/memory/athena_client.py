@@ -12,7 +12,7 @@ It adds zero dependencies — httpx is already in jarviscore core.
 
 Configuration:
     ATHENA_URL=http://localhost:8080   (required to enable Athena)
-    ATHENA_TENANT_ID=prescott          (default: "prescott")
+    ATHENA_TENANT_ID=my-app          (default: "default")
 
 Graceful degradation:
     If ATHENA_URL is not set, all methods return empty/None and log a
@@ -60,17 +60,17 @@ class AthenaClient:
     All methods are coroutines and safe to call concurrently.
 
     Example:
-        client = AthenaClient("http://localhost:8080", tenant_id="prescott")
-        session_id = await client.create_session("compass", {"team": "signal"})
+        client = AthenaClient("http://localhost:8080", tenant_id="my-app")
+        session_id = await client.create_session("researcher-agent", {"team": "data"})
         await client.store_event(session_id, "agent", "action",
-                                 "Assigned task: SEO audit", {"task_id": "abc"})
+                                 "Assigned task: market analysis", {"task_id": "abc"})
         ctx = await client.get_context(session_id)
     """
 
     def __init__(
         self,
         base_url: str,
-        tenant_id: str = "prescott",
+        tenant_id: str = "default",
         timeout: float = 10.0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
@@ -98,7 +98,7 @@ class AthenaClient:
                 "Set ATHENA_URL=http://localhost:8080 to enable."
             )
             return None
-        tenant = os.getenv("ATHENA_TENANT_ID", "prescott")
+        tenant = os.getenv("ATHENA_TENANT_ID", "default")
         return cls(base_url=url, tenant_id=tenant)
 
     async def _http(self) :
@@ -132,8 +132,8 @@ class AthenaClient:
         heat scoring and MTM promotion work correctly across restarts.
 
         Args:
-            agent_id:  Unique agent identifier (e.g. "compass", "quill")
-            metadata:  Optional k/v tags (e.g. {"team": "signal"})
+            agent_id:  Unique agent identifier (e.g. "researcher", "analyst")
+            metadata:  Optional k/v tags (e.g. {"team": "data"})
 
         Returns:
             Athena session_id string, or None on failure.

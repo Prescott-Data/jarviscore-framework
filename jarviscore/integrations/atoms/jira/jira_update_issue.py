@@ -18,7 +18,7 @@ def jira_update_issue(auth_info: dict, issue_key: str, fields: dict) -> dict:
     import requests
     domain = auth_info.get("domain", "").rstrip("/")
     if not domain:
-        return {"success": False, "issue_key": issue_key, "data": None, "error": "auth_info must include domain (e.g. prescott-data.atlassian.net)"}
+        return {"success": False, "issue_key": issue_key, "data": None, "error": "auth_info must include domain (e.g. your-domain.atlassian.net)"}
 
     try:
         access_token = _get_nexus_token(auth_info)

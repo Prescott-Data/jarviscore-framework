@@ -239,7 +239,7 @@ def seed_registry(
                 "type": "api",
                 "tags": [system, meta["category"]],
                 "strategy": "sandbox",
-                "source": "collabra_import" if meta["status"] == "verified" else "prescott_authored",
+                "source": "collabra_import" if meta["status"] == "verified" else "framework_authored",
             }
 
             try:

@@ -18,7 +18,7 @@ def jira_get_project(auth_info: dict, project_key: str) -> dict:
     import requests
     domain = auth_info.get("domain", "").rstrip("/")
     if not domain:
-        return {"success": False, "data": None, "error": "auth_info must include domain (e.g. prescott-data.atlassian.net)"}
+        return {"success": False, "data": None, "error": "auth_info must include domain (e.g. your-domain.atlassian.net)"}
 
     try:
         access_token = _get_nexus_token(auth_info)

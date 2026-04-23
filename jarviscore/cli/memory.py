@@ -9,8 +9,8 @@ Commands:
 
 Usage:
     python -m jarviscore.cli memory status
-    python -m jarviscore.cli memory context --agent compass
-    python -m jarviscore.cli memory search --agent compass --query "seo audit"
+    python -m jarviscore.cli memory context --agent my-agent
+    python -m jarviscore.cli memory search --agent my-agent --query "analyse market data"
     python -m jarviscore.cli memory up
 """
 
@@ -255,7 +255,7 @@ def run(argv: Optional[list] = None) -> None:
 
     # context
     p_ctx = sub.add_parser("context", help="Dump recent memory for an agent")
-    p_ctx.add_argument("--agent", required=True, help="Agent name (e.g. compass)")
+    p_ctx.add_argument("--agent", required=True, help="Agent name (e.g. researcher)")
     p_ctx.add_argument("--limit", type=int, default=20, help="Max STM events")
 
     # search

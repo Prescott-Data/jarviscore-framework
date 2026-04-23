@@ -1,4 +1,4 @@
-def brevo_send_email(auth_info: dict, to: str, subject: str, body: str, from_email: str = "agents@prescottdata.io", from_name: str = "Prescott AI") -> dict:
+def brevo_send_email(auth_info: dict, to: str, subject: str, body: str, from_email: str = "agents@example.com", from_name: str = "AI Agent") -> dict:
     import requests
     _h = {"api-key": auth_info.get("api_key", ""), "Content-Type": "application/json"}
     payload = {

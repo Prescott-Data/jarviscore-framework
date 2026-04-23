@@ -21,7 +21,7 @@ Usage:
         step_id=state.step_id,
         type=HITLType.approval,
         description="Approve outbound email before sending",
-        targets=["warden", "muyukani"],
+        targets=["reviewer", "founder"],
         channels=["dashboard", "slack"],
         payload={"draft": email_draft},
     )
@@ -125,7 +125,7 @@ class HITLPolicy(BaseModel):
     {
         "hitl": {
             "required": true,
-            "targets": ["warden", "muyukani"],
+            "targets": ["reviewer", "founder"],
             "channels": ["dashboard", "slack"],
             "policy": {"type": "any_of"}
         }
