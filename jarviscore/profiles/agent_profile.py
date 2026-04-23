@@ -3,18 +3,26 @@ jarviscore.profiles.agent_profile
 ===================================
 AgentProfile — typed role intelligence contract for JarvisCore agents.
 
-Loaded from YAML files at jarviscore/profiles/agents/{role_name}.yaml
-and injected into the agent's system prompt at AutoAgent.setup().
+Loaded from YAML files in a directory resolved as follows (first match wins):
+  1. $JARVISCORE_PROFILES_DIR/{role_name}.yaml   — set by your application
+  2. jarviscore/profiles/agents/{role_name}.yaml  — bundled fallback (example only)
+
+Application repos should set JARVISCORE_PROFILES_DIR to their own profiles
+directory so agents get the right domain intelligence without modifying
+the framework package.
 
 This is what gives each agent its autonomous operational intelligence:
-  - What they own (artifacts to produce every shift)
+  - What they own (artifacts to produce)
   - SOPs (standing operating procedures — what to do without being told)
   - Expertise (domain knowledge to ground their reasoning)
   - Escalation rules (when and who to HITL)
   - Default kernel role (so the Kernel routes instantly without classification)
 
 Usage:
-    # In AutoAgent.setup():
+    # Set in your .env or shell:
+    # JARVISCORE_PROFILES_DIR=/path/to/yourapp/profiles/agents
+
+    # AutoAgent.setup() calls this automatically:
     profile = AgentProfile.load("researcher")
     self._profile_block = profile.to_prompt_block()
 
@@ -30,8 +38,12 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Location of all agent YAML profiles
-_PROFILES_DIR = Path(__file__).parent / "agents"
+# Profile directory resolution:
+#   1. JARVISCORE_PROFILES_DIR env var (set by the application repo)
+#   2. Bundled fallback: jarviscore/profiles/agents/ (example.yaml only)
+_PROFILES_DIR = Path(
+    os.environ.get("JARVISCORE_PROFILES_DIR", "")
+) if os.environ.get("JARVISCORE_PROFILES_DIR") else Path(__file__).parent / "agents"
 
 
 class AgentProfile:
