@@ -73,6 +73,18 @@ PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
             "workflow",
         ],
     },
+    "bitbucket": {
+        "auth_type": "oauth2",
+        "label": "Bitbucket",
+        "category": "development",
+        "scopes": [
+            "repository",
+            "repository:write",
+            "pullrequest",
+            "pullrequest:write",
+            "account",
+        ],
+    },
     "linear": {
         "auth_type": "oauth2",
         "label": "Linear",
@@ -122,6 +134,31 @@ PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
         "auth_type": "api_key",
         "label": "Airtable",
         "category": "productivity",
+    },
+
+    # ── Social & Content ─────────────────────────────────────────────────────
+    "x": {
+        "auth_type": "oauth2",
+        "label": "X (Twitter)",
+        "category": "social",
+        "scopes": [
+            "tweet.read",
+            "tweet.write",
+            "users.read",
+            "offline.access",
+        ],
+    },
+    "linkedin": {
+        "auth_type": "oauth2",
+        "label": "LinkedIn",
+        "category": "social",
+        "scopes": [
+            "openid",
+            "profile",
+            "email",
+            "w_member_social",
+            "r_organization_social",
+        ],
     },
 
     # ── CRM & Sales ──────────────────────────────────────────────────────────
