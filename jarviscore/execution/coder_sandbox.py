@@ -722,14 +722,19 @@ def create_coder_sandbox(
     workspace_dir: Optional[Path] = None,
     timeout: int = 300,
     bash_timeout: int = 120,
+    nexus_call_proxy=None,  # Optional[NexusCallProxy] — wires nexus_call() into sandbox
 ) -> CoderSandbox:
     """
     Create a CoderSandbox scoped to the given workspace directory.
 
     Args:
-        workspace_dir: Root directory for file operations. Defaults to cwd.
-        timeout: Max Python execution time in seconds.
-        bash_timeout: Max shell command time in seconds.
+        workspace_dir:    Root directory for file operations. Defaults to cwd.
+        timeout:          Max Python execution time in seconds.
+        bash_timeout:     Max shell command time in seconds.
+        nexus_call_proxy: NexusCallProxy instance. When provided, sandbox code
+                          can call nexus_call(method, url) to make authenticated
+                          API calls through Nexus. If None, nexus_call() raises
+                          a RuntimeError with instructions.
 
     Returns:
         CoderSandbox instance.
@@ -738,4 +743,5 @@ def create_coder_sandbox(
         workspace_dir=workspace_dir,
         timeout=timeout,
         bash_timeout=bash_timeout,
+        nexus_call_proxy=nexus_call_proxy,
     )
