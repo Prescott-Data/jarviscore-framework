@@ -113,9 +113,31 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
    - If code failed: say exactly what went wrong and what you tried
    - NEVER claim success without execution evidence
 
-7. **AUTH HANDLING** — Never hardcode tokens:
-   - Use auth dict from sandbox namespace: access_token = auth.get("access_token")
-   - If auth is missing/expired, report auth_required in your DONE summary
+
+7. **AUTH / NEXUS STANDARD** — ALL provider API calls MUST use `nexus_call()`:
+
+   ```python
+   # ✅ CORRECT — all auth handled by Nexus, no credentials in code
+   response = await nexus_call("GET", "https://api.github.com/repos/my-org/my-repo")
+   response = await nexus_call("POST", "https://api.stripe.com/v1/charges",
+                               json={"amount": 1000, "currency": "usd"})
+   response = await nexus_call("GET", "https://api.notion.com/v1/databases/{id}/query")
+
+   if not response["ok"]:
+       raise RuntimeError(f"API call failed: {response['status_code']} {response['body']}")
+   data = response["json"]
+   ```
+
+   ```python
+   # ❌ FORBIDDEN — never use requests/httpx directly for provider APIs
+   import requests
+   headers = {"Authorization": "Bearer ..."}  # VIOLATION — agent must never see credentials
+   ```
+
+   - `nexus_call(method, url, **kwargs)` is always available in the sandbox
+   - It returns `{"ok": bool, "status_code": int, "body": str, "json": Any}`
+   - If it raises RuntimeError, declare `auth_required=True` in your DONE summary
+   - NEVER read `auth`, `token`, `api_key`, `access_token`, or any credential variable
 
 8. **OUTPUT CONTRACT** — Store final result in 'result' variable:
    result = {"success": True, "data": <your_data>}
@@ -430,39 +452,23 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
             except Exception as exc:
                 logger.warning("CoderSubAgent: bundle injection failed — %s", exc)
 
-        # Build execution context (auth credentials)
+        # Build execution context — safe task metadata only.
+        # Credentials are NEVER injected here. The sandbox receives
+        # _nexus_connection_id (opaque) via _run_context, which is then
+        # used exclusively by nexus_call() inside the sandbox.
         exec_context: Dict[str, Any] = {}
-
-        auth_creds = None
         if hasattr(self, '_run_context') and self._run_context:
-            auth_creds = self._run_context.get("_auth_credentials")
-
-        if not auth_creds and self.auth_manager and candidate and candidate.get("system"):
-            try:
-                conn_id = await self.auth_manager.authenticate(
-                    provider=candidate["system"],
-                )
-                strategy = await self.auth_manager.resolve_strategy(conn_id)
-                auth_creds = {
-                    "provider": candidate["system"],
-                    "strategy_type": strategy.type,
-                }
-                if strategy.type == "oauth2":
-                    auth_creds["access_token"] = strategy.credentials.get("access_token", "")
-                elif strategy.type == "api_key":
-                    auth_creds["access_token"] = strategy.credentials.get("api_key", "")
-                elif strategy.type == "basic_auth":
-                    auth_creds["username"] = strategy.credentials.get("username", "")
-                    auth_creds["password"] = strategy.credentials.get("password", "")
-            except Exception as auth_exc:
-                logger.warning("CoderSubAgent: AuthManager failed: %s", auth_exc)
-
-        if auth_creds:
-            exec_context["auth"] = auth_creds
+            SAFE_KEYS = {"task", "system", "workflow_id", "step_id",
+                         "prior_outputs", "registry_candidate", "_hint",
+                         "_nexus_connection_id", "_nexus_provider"}
+            for k in SAFE_KEYS:
+                if k in self._run_context:
+                    exec_context[k] = self._run_context[k]
 
         start_ts = time.time()
         result = await self.sandbox.execute(exec_code, context=exec_context or None)
         exec_time = time.time() - start_ts
+
 
         # Classify auth errors
         if result.get("status") == "failure" and result.get("error"):

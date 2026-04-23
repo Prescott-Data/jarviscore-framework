@@ -14,6 +14,14 @@ Components:
 from .models import ConnectionRequest, DynamicStrategy, ConnectionStatus
 from .client import NexusClient
 from .lifecycle import LifecycleMonitor
+from .call_proxy import NexusCallProxy
+from .providers import (
+    PROVIDER_CATALOG,
+    get_provider,
+    get_scopes,
+    get_auth_type,
+    list_providers,
+)
 
 __all__ = [
     "ConnectionRequest",
@@ -21,4 +29,10 @@ __all__ = [
     "ConnectionStatus",
     "NexusClient",
     "LifecycleMonitor",
+    "NexusCallProxy",
+    "PROVIDER_CATALOG",
+    "get_provider",
+    "get_scopes",
+    "get_auth_type",
+    "list_providers",
 ]

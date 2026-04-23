@@ -448,7 +448,8 @@ class Kernel:
             if agent_default_role:
                 enriched_context["_agent_default_kernel_role"] = agent_default_role
 
-            # Resolve auth via Mesh-injected AuthManager for coding tasks.
+            # Wire Nexus connection — agents receive connection_id only, never credentials.
+            # NexusCallProxy (injected into CoderSandbox) is the sole credential boundary.
             if role == "coder" and self.auth_manager:
                 system_name = (
                     enriched_context.get("system")
@@ -456,33 +457,21 @@ class Kernel:
                 )
                 if system_name:
                     try:
-                        conn_id = await self.auth_manager.authenticate(
-                            provider=system_name,
-                        )
-                        strategy = await self.auth_manager.resolve_strategy(conn_id)
-                        auth_creds = {
-                            "provider": system_name,
-                            "strategy_type": strategy.type,
-                        }
-                        if strategy.type == "oauth2":
-                            auth_creds["access_token"] = strategy.credentials.get("access_token", "")
-                        elif strategy.type == "api_key":
-                            auth_creds["access_token"] = strategy.credentials.get("api_key", "")
-                        elif strategy.type == "basic_auth":
-                            auth_creds["username"] = strategy.credentials.get("username", "")
-                            auth_creds["password"] = strategy.credentials.get("password", "")
-
-                        enriched_context["_auth_credentials"] = auth_creds
+                        conn_id = await self.auth_manager.get_connection_id(system_name)
+                        # Only the opaque handle goes into context — NEVER tokens or keys
+                        enriched_context["_nexus_connection_id"] = conn_id
+                        enriched_context["_nexus_provider"] = system_name
                         logger.info(
-                            "[Kernel] Auth resolved for system=%s strategy=%s",
-                            system_name, strategy.type,
+                            "[Kernel] Nexus connection_id tagged for system=%s",
+                            system_name,
                         )
                     except Exception as auth_exc:
                         logger.warning(
-                            "[Kernel] AuthManager.authenticate failed for system=%s — "
-                            "proceeding without auth: %s",
+                            "[Kernel] Nexus connection unavailable for system=%s "
+                            "(set NEXUS_GATEWAY_URL): %s",
                             system_name, auth_exc,
                         )
+
 
             # ── Dispatch subagent with full infrastructure ──
             output = await subagent.run(

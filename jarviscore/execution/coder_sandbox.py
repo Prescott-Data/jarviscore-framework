@@ -290,22 +290,17 @@ class CoderSandbox:
     this sandbox *intentionally grants* those capabilities — scoped to
     workspace_dir and gated by the bash allow-list.
 
-    Usage:
-        sandbox = CoderSandbox(
-            workspace_dir=Path("/Users/.../prescott-internal-agents"),
-            timeout=300,
-        )
-        result = await sandbox.execute(generated_code)
-        print(result.files_created)   # ["reports/q1.pptx"]
-        print(result.git_branch)      # "feat/seo-2026-04-21"
-
     Namespace injected into generated code:
         - workspace      : Path — the allowed working directory
         - bash(cmd)      : BashExecutor call — controlled subprocess
         - git            : GitHelper — high-level git ops
+        - nexus_call     : async fn(method, url, **kwargs) → HTTP response via Nexus
         - Path           : pathlib.Path — for path manipulation
         - common libs    : json, os, re, datetime, dataclasses, etc.
         - blob_path(name): helper to get a path inside workspace/output/
+
+    Agents NEVER see raw credentials — nexus_call() internally resolves
+    the DynamicStrategy via NexusCallProxy.
     """
 
     def __init__(
@@ -314,6 +309,7 @@ class CoderSandbox:
         timeout: int = 300,
         bash_timeout: int = 120,
         output_subdir: str = "output",
+        nexus_call_proxy=None,  # Optional[NexusCallProxy]
     ):
         self.workspace = Path(workspace_dir) if workspace_dir else Path.cwd()
         self.timeout = timeout
@@ -322,10 +318,11 @@ class CoderSandbox:
 
         self._bash = BashExecutor(self.workspace, timeout=bash_timeout)
         self._git = GitHelper(self._bash, self.workspace)
+        self._nexus_call_proxy = nexus_call_proxy  # NexusCallProxy | None
 
         logger.info(
-            "CoderSandbox initialized: workspace=%s, timeout=%ds",
-            self.workspace, timeout,
+            "CoderSandbox initialized: workspace=%s timeout=%ds nexus=%s",
+            self.workspace, timeout, nexus_call_proxy is not None,
         )
 
     # ─────────────────────────────────────────────────────────────
@@ -494,8 +491,11 @@ class CoderSandbox:
     def _build_namespace(self, context: Optional[Dict]) -> Dict:
         """
         Build the execution namespace with all Coder capabilities injected.
+
+        Security: context is NOT blindly injected. Only safe, non-credential
+        values are explicitly extracted and placed in the namespace.
+        Credentials NEVER appear here — nexus_call() is the credential boundary.
         """
-        # Standard library modules — full access (no api-sandbox restrictions)
         import builtins
         import datetime
         import hashlib
@@ -520,8 +520,8 @@ class CoderSandbox:
             return p
 
         namespace = {
-            "__builtins__": builtins,   # Full builtins — open, exec, etc. all available
-            "result": None,             # Coder MUST set this
+            "__builtins__": builtins,
+            "result": None,
 
             # Workspace helpers
             "workspace": workspace,
@@ -547,9 +547,37 @@ class CoderSandbox:
             "textwrap": textwrap,
         }
 
-        # Context from calling agent (e.g. task brief, prior step outputs)
+        # ── nexus_call: the ONLY way to call provider APIs ──────────────
+        # Resolves credentials internally via NexusCallProxy.
+        # Sandbox code sees nexus_call(method, url, **kwargs) → response dict.
+        # Credentials are NEVER in the namespace.
+        _conn_id = (context or {}).get("_nexus_connection_id") if context else None
+        if self._nexus_call_proxy and _conn_id:
+            from jarviscore.nexus.call_proxy import NexusCallProxy
+            namespace["nexus_call"] = NexusCallProxy.make_nexus_call_fn(
+                self._nexus_call_proxy, _conn_id
+            )
+        else:
+            # No Nexus connection available — inject a stub that raises clearly
+            async def _nexus_unavailable(method: str, url: str, **kwargs):
+                raise RuntimeError(
+                    "nexus_call is not available: no Nexus connection_id for this task. "
+                    "Ensure NEXUS_GATEWAY_URL is set and the agent task specifies a 'system'."
+                )
+            namespace["nexus_call"] = _nexus_unavailable
+
+        # ── Safe context injection (explicit allowlist) ──────────────────
+        # Only non-credential task metadata is passed into the sandbox.
+        # _nexus_connection_id, _nexus_provider, and any other _ keys are
+        # intentionally excluded to prevent accidental credential logging.
         if context:
-            namespace.update(context)
+            SAFE_CONTEXT_KEYS = {
+                "task", "system", "workflow_id", "step_id",
+                "prior_outputs", "registry_candidate", "_hint",
+            }
+            for k, v in context.items():
+                if k in SAFE_CONTEXT_KEYS:
+                    namespace[k] = v
 
         return namespace
 
