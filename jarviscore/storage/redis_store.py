@@ -300,10 +300,11 @@ class RedisContextStore:
                    agent_id: str) -> bool:
         """Atomically claim a step for an agent (prevents double-execution)."""
         lock_key = f"step_lock:{workflow_id}:{step_id}"
-        # SETNX-based atomic claim
-        acquired = self._redis.set(lock_key, agent_id, nx=True,
-                                   ex=self._ttl_seconds)
+        # redis-py >=7.x rejects SET NX EX in one call — split into two:
+        # SET key value NX (atomic claim), then EXPIRE only if acquired.
+        acquired = self._redis.set(lock_key, agent_id, nx=True)
         if acquired:
+            self._redis.expire(lock_key, self._ttl_seconds)
             self.update_step_status(workflow_id, step_id, "in_progress")
         return bool(acquired)
 
