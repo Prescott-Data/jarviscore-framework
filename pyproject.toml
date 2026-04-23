@@ -70,9 +70,15 @@ azure = [
 browser = [
     "playwright>=1.40.0",
 ]
+memory-athena = [
+    # Zero extra Python deps — Athena is called over HTTP.
+    # httpx is already in core. Install Athena itself separately:
+    #   cd /path/to/athena && docker compose -f docker-compose.local.yml up -d
+    # Then set: ATHENA_URL=http://localhost:8080
+]
 # Everything — production deployment with all capabilities
 full = [
-    "jarviscore-framework[p2p,web,redis,prometheus,azure]",
+    "jarviscore-framework[p2p,web,redis,prometheus,azure,memory-athena]",
 ]
 dev = [
     "jarviscore-framework[p2p,web,redis]",

@@ -157,6 +157,16 @@ class Settings(BaseSettings):
     auth_poll_interval: float = 2.0      # Seconds between Gateway status polls
     auth_open_browser: bool = True       # Try to open system browser for OAuth flows
 
+    # === Memory / Athena (github.com/Prescott-Data/athena) ===
+    # Athena is the ONLY persistent memory path — STM, MTM, and LTM graph.
+    # When ATHENA_URL is not set, JarvisCore falls back to Redis-only episodic +
+    # Blob LTM (EpisodicLedger + LongTermMemory). Setting ATHENA_URL upgrades
+    # all agents to full three-tier memory automatically.
+    athena_url: Optional[str] = None           # ATHENA_URL — e.g. http://localhost:8080
+    athena_tenant_id: str = "prescott"          # Namespace for multi-tenant Athena deployments
+    athena_http_timeout: float = 10.0           # Seconds before Athena HTTP call times out
+    athena_session_ttl_days: int = 30           # How long session_id is cached in Redis
+
 
     # === Browser ===
     browser_enabled: bool = False
