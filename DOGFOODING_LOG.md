@@ -324,3 +324,104 @@ REDIS_URL=redis://localhost:6379
 ```
 
 - **Status**: ✅ Resolved
+
+---
+
+### [RESOLVE-010] Canonical Pydantic contracts — replaced loose dicts across all data boundaries
+- **Date**: 2026-04-23
+- **Commits**: `7ecaf21` (jarviscore-framework)
+- **Severity**: Major — tasks/meetings/HITL crossed system boundaries as raw dicts with no validation
+- **Components**: `jarviscore/contracts/` (new package), `jarviscore/kernel/hitl.py`, `jarviscore/storage/redis_store.py`, `prescott-internal-agents/dashboard/app.py`
+
+#### Contracts added
+
+| File | Models |
+|---|---|
+| `contracts/meeting_note.py` | `MeetingNote`, `MeetingNoteCreate`, `DiscussionEntry`, `ActionItem`, `MeetingType`, `normalise_meeting()` |
+| `contracts/task.py` | `Task`, `TaskCreate`, `TaskUpdate`, `TaskStatus`, `TaskPriority` |
+| `contracts/hitl.py` | `HITLRequest`, `HITLResolution`, `HITLPolicy`, `HITLDecision`, `HITLStatus`, `normalize_hitl_decision()` |
+
+#### Key fixes
+- `HumanTask = HITLRequest` alias: backward-compat for all existing kernel code
+- `create_hitl_request_typed()` / `get_hitl_resolution()` in `RedisContextStore`: typed reads/writes instead of raw dicts
+- `dashboard/app.py`: `_normalise_meeting()` delegates to `_contract_normalise_meeting()` (fixed name collision bug that caused recursive crash — see ISSUE-007 below)
+- **Verified**: 10/10 contract checks pass (instantiation, alias, enum defaults, Redis mapping, decision normalization, is_approved/is_rejected)
+
+#### ISSUE found during this work
+- `_normalise_meeting` imported as `_normalise_meeting` then a local function of the same name shadowed it → infinite recursion → all meetings disappeared from dashboard. Fixed by renaming import alias to `_contract_normalise_meeting`.
+
+- **Status**: ✅ Resolved
+
+---
+
+### [RESOLVE-011] Meeting notes — proper glassmorphism overlay modal
+- **Date**: 2026-04-23
+- **Commits**: `942ef5d` (prescott-internal-agents)
+- **Severity**: UX — "View Full Meeting Notes" injected a card below the list; no backdrop, required scrolling, looked broken
+- **Component**: `dashboard/static/index.html`
+
+#### Fix
+- Replaced DOM-injection pattern with `#meeting-notes-modal` using same `glass-modal-overlay` system as the Create Task modal
+- `showMeeting()` rewritten: opens overlay → fetches → renders sections: participants (avatar chips), agenda, summary, full markdown report, discussion log (grid layout), resolutions (dot rows), action items (owner/task/deadline grid)
+- Closes on ✕ button, backdrop click, or Escape key
+- No garish inline colors — subtle accent dots only, monochrome palette
+- All `mn-*` CSS classes added for modal-specific layout
+
+- **Status**: ✅ Resolved
+
+---
+
+### [RESOLVE-012] Athena MemOS integration into jarviscore.memory
+- **Date**: 2026-04-23
+- **Commits**: `2a33c7c` (jarviscore-framework)
+- **Severity**: Enhancement — agents had no persistent episodic/LTM memory beyond per-workflow Redis streams
+- **Components**: `jarviscore/memory/` (extended), `jarviscore/config/settings.py`, `jarviscore/cli/memory.py` (new)
+
+#### Architecture decision
+Athena goes in **core** (same layer as Nexus, not a separate ext package) because it calls an HTTP service — `httpx` is already a hard dep. Zero new Python dependencies.
+
+#### What was built
+
+| File | Purpose |
+|---|---|
+| `memory/athena_client.py` | Async HTTP wrapper for Athena REST API: `create_session`, `get_or_create_session`, `store_event`, `get_context`, `search_memory`, `get_heat_metrics`, `health_check` |
+| `memory/athena_memory.py` | `AthenaMemory` per-agent bridge: session lifecycle, typed event writes, domain events (`on_task_assigned`, `on_task_completed`, `on_meeting_noted`, `on_hitl_resolved`, `on_task_deleted`) |
+| `memory/__init__.py` | Exports `AthenaClient`, `AthenaMemory`, `get_athena_client()` factory |
+| `config/settings.py` | `ATHENA_URL`, `ATHENA_TENANT_ID`, `ATHENA_HTTP_TIMEOUT` |
+| `cli/memory.py` | `status` · `context --agent` · `search --agent --query` · `up` subcommands |
+| `pyproject.toml` | `[memory-athena]` optional extra documented (zero actual new deps) |
+
+#### Activation
+```env
+ATHENA_URL=http://localhost:8080   # set to enable; graceful no-op if absent
+```
+
+#### Feedback items for Athena team (dogfooding)
+- REST API response shape for `GET /context` needs to be documented — field names differ from proto (`events` vs `stmEvents`, `chains` vs `mtmChains`). Client normalises both.
+- `GET /health` dependency map keys should be standardised (`ok`/`healthy`/`pass`/`UP` all observed across services).
+- Session creation should accept `agent_id` as a first-class field (not just metadata) for easier lookup.
+
+- **Status**: ✅ Resolved — dogfooding started, feedback items logged above
+
+---
+
+### [RESOLVE-013] Delete endpoints + UI for meetings, tasks, and warden items
+- **Date**: 2026-04-23
+- **Commits**: `b3024df` (prescott-internal-agents)
+- **Severity**: Major — no way to remove stale data; tasks survived in agent queues after being discarded
+- **Component**: `dashboard/app.py`, `dashboard/static/index.html`
+
+#### Endpoints added
+
+| Endpoint | Storage purged |
+|---|---|
+| `DELETE /api/meetings/{id}` | File + `meeting:{id}` Redis key + pub event |
+| `DELETE /api/tasks/{id}` | File + agent queue file + `task:{id}` Redis hash + `lrem tasks:{assignee}` list + `channel:tasks:{assignee}` pub so **online agents immediately drop the task** |
+| `DELETE /api/warden/{id}` | File + `warden:{id}` Redis key + pub event |
+
+#### UI
+- Meeting timeline: trash icon on each card (hover turns red, optimistic fade → DOM remove)
+- Warden review canvas: Delete button alongside Approve / Decline; closes canvas and reloads inbox on success
+- Task cards: `deleteTask()` already wired to task board
+
+- **Status**: ✅ Resolved
