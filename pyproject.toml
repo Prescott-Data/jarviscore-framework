@@ -115,6 +115,8 @@ jarviscore = [
     # Nexus local-stack data — bundled so pip install users don't need the repo
     "nexus/_data/docker-compose.nexus.yml",
     "nexus/_data/001_initial_schema.sql",
+    # Athena MemOS local-stack compose — bundled for same reason
+    "memory/_data/docker-compose.athena.yml",
 ]
 
 [tool.pytest.ini_options]

@@ -15,28 +15,32 @@ import sys
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python -m jarviscore.cli <command>")
+        print("Usage: jarviscore <command>")
         print("\nAvailable commands:")
+        print("  nexus      - Manage Nexus auth (init, register, status, list, test)")
+        print("  memory     - Manage Athena MemOS (init, status, context, search)")
         print("  check      - Health check and validation")
         print("  smoketest  - Quick smoke test")
-        print("  nexus      - Manage Nexus auth infrastructure (status, up, register, list, test)")
         sys.exit(1)
 
     command = sys.argv[1]
     sys.argv = [sys.argv[0]] + sys.argv[2:]  # Remove command from argv
 
-    if command == 'check':
+    if command == 'nexus':
+        from .nexus import main as nexus_main
+        nexus_main()
+    elif command == 'memory':
+        from .memory import run as memory_main
+        memory_main()
+    elif command == 'check':
         from .check import main as check_main
         check_main()
     elif command == 'smoketest':
         from .smoketest import main as smoketest_main
         smoketest_main()
-    elif command == 'nexus':
-        from .nexus import main as nexus_main
-        nexus_main()
     else:
         print(f"Unknown command: {command}")
-        print("\nAvailable commands: check, smoketest, nexus")
+        print("\nAvailable commands: nexus, memory, check, smoketest")
         sys.exit(1)
 
 if __name__ == '__main__':

@@ -1,0 +1,246 @@
+# docker-compose.athena.yml
+#
+# JarvisCore — Athena MemOS Local Development Stack
+# ==================================================
+# Spins up the full Athena memory operating system locally so agents can
+# use persistent STM / MTM / LTM memory without a production deployment.
+#
+# Usage (via CLI — recommended):
+#   jarviscore memory init
+#
+# Or manually:
+#   ATHENA_BUILD_CONTEXT=/path/to/athena \
+#   docker compose -f docker-compose.athena.yml up -d --build
+#
+# Required environment variables (set by `jarviscore memory init`):
+#   ATHENA_BUILD_CONTEXT   — absolute path to the athena repo clone
+#   ATHENA_LLM_API_KEY     — Gemini / OpenAI API key for MTM summarisation
+#
+# ── ARCHITECTURE ─────────────────────────────────────────────────────────────
+#   athena         (:8080)  — Go memory server (STM→MTM→LTM pipeline)
+#   redis          (:6379)  — STM hot cache
+#   mongodb        (:27017) — STM durable + MTM chain store
+#   milvus         (:19530) — MTM vector similarity search
+#   etcd           (:2379)  — Milvus metadata store
+#   minio          (:9000)  — Milvus blob store
+#   arangodb       (:8529)  — LTM knowledge graph
+#
+# ── NO PUBLISHED IMAGE YET ───────────────────────────────────────────────────
+# Athena is built from source using the local repo clone.
+# Once ghcr.io/prescott-data/athena:latest is published, swap:
+#   image: ghcr.io/prescott-data/athena:latest
+# for:
+#   build:
+#     context: ${ATHENA_BUILD_CONTEXT}
+#     dockerfile: Dockerfile
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+  # ── Athena Memory Server ────────────────────────────────────────────────────
+  athena:
+    build:
+      context: ${ATHENA_BUILD_CONTEXT:?Run 'jarviscore memory init' or set ATHENA_BUILD_CONTEXT}
+      dockerfile: Dockerfile
+    image: athena-memos:local
+    container_name: athena
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      APP_ENV: local
+
+      # LLM — used for MTM chain summarisation. Injected by `memory init`.
+      LLM_PROVIDER: ${ATHENA_LLM_PROVIDER:-gemini}
+      LLM_API_KEY: ${ATHENA_LLM_API_KEY:?Set ATHENA_LLM_API_KEY or run 'jarviscore memory init'}
+      LLM_MODEL_NAME: ${ATHENA_LLM_MODEL:-gemini-2.0-flash}
+      EMBEDDING_MODEL_NAME: ${ATHENA_EMBEDDING_MODEL:-gemini-embedding-001}
+
+      # MongoDB
+      MONGO_URI: "mongodb://admin:admin123@mongodb:27017/memory_os?authSource=admin"
+      MONGO_DB: memory_os
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: devpassword
+      REDIS_DB: 0
+      CACHE_TTL: 3600
+
+      # Milvus
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      MILVUS_DATABASE: default
+
+      # ArangoDB
+      ARANGODB_URL: http://arangodb:8529
+      ARANGODB_USER: root
+      ARANGODB_PASSWORD: athena_dev
+      ARANGODB_DATABASE: athena_ltm
+
+      # Blob
+      BLOB_PROVIDER: minio
+      BLOB_ENDPOINT: minio:9000
+      BLOB_BUCKET: athena-blobs
+      BLOB_ACCESS_KEY: minioadmin
+      BLOB_SECRET_KEY: minioadmin
+      BLOB_USE_SSL: "false"
+
+      # Workers
+      ENABLE_MEMORY_WORKERS: "true"
+      MEMORY_WORKER_COUNT: 2
+      LOG_LEVEL: info
+
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_started
+      milvus:
+        condition: service_started
+      arangodb:
+        condition: service_started
+    networks:
+      - athena_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+  # ── Redis — STM hot cache ────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: athena-redis
+    ports:
+      - "6380:6379"   # 6380 on host to avoid conflict with jarviscore redis
+    command: redis-server --appendonly yes --requirepass devpassword
+    volumes:
+      - athena_redis_data:/data
+    networks:
+      - athena_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "devpassword", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── MongoDB — STM durable + MTM chains ──────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: athena-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: admin123
+      MONGO_INITDB_DATABASE: memory_os
+    volumes:
+      - athena_mongodb_data:/data/db
+      - ${ATHENA_BUILD_CONTEXT:-.}/mongo-init/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    networks:
+      - athena_net
+    restart: unless-stopped
+
+  # ── etcd — Milvus metadata ───────────────────────────────────────────────────
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.16
+    container_name: athena-etcd
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    volumes:
+      - athena_etcd_data:/etcd
+    networks:
+      - athena_net
+
+  # ── MinIO — Milvus blob store ────────────────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2024-01-01T16-36-33Z
+    container_name: athena-minio
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    command: minio server /minio_data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - athena_minio_data:/minio_data
+    networks:
+      - athena_net
+
+  minio-setup:
+    image: minio/mc
+    container_name: athena-minio-setup
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+        /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin;
+        /usr/bin/mc mb myminio/athena-blobs || true;
+        /usr/bin/mc policy set public myminio/athena-blobs;
+        exit 0;
+      "
+    networks:
+      - athena_net
+
+  # ── Milvus — MTM vector search ───────────────────────────────────────────────
+  milvus:
+    image: milvusdb/milvus:v2.3.4
+    container_name: athena-milvus
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - athena_milvus_data:/var/lib/milvus
+    depends_on:
+      - etcd
+      - minio
+    networks:
+      - athena_net
+
+  # ── ArangoDB — LTM knowledge graph ──────────────────────────────────────────
+  arangodb:
+    image: arangodb:latest
+    container_name: athena-arangodb
+    ports:
+      - "8529:8529"
+    environment:
+      ARANGO_ROOT_PASSWORD: athena_dev
+    volumes:
+      - athena_arangodb_data:/var/lib/arangodb3
+    networks:
+      - athena_net
+    restart: unless-stopped
+
+networks:
+  athena_net:
+    # Reuses the jarviscore infra network if running. Created automatically otherwise.
+    name: jarviscore-framework_default
+    driver: bridge
+
+volumes:
+  athena_redis_data:
+    name: athena_redis
+  athena_mongodb_data:
+    name: athena_mongodb
+  athena_etcd_data:
+    name: athena_etcd
+  athena_minio_data:
+    name: athena_minio
+  athena_milvus_data:
+    name: athena_milvus
+  athena_arangodb_data:
+    name: athena_arangodb
