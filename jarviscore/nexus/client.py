@@ -19,10 +19,17 @@ Data Plane (runtime token usage):
 
 Strategy Application:
 - apply_strategy_to_request(): Inject auth headers into outgoing HTTP requests
+
+IMPORTANT — user_id must be a UUID:
+    The Nexus Gateway uses user_id as the workspace_id in broker calls.
+    If you pass a non-UUID string (e.g. "alice"), it is automatically
+    converted to a deterministic UUID5 derived from the string.
+    Use the same user_id string consistently — it always maps to the same UUID.
 """
 
 import base64
 import logging
+import uuid as _uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -52,6 +59,28 @@ class NexusClient:
 
     # ── Control Plane ─────────────────────────────────────────────
 
+    @staticmethod
+    def _ensure_uuid(user_id: str) -> str:
+        """
+        Ensure user_id is a valid UUID string.
+
+        The Nexus Gateway uses user_id as workspace_id in broker calls,
+        which requires a UUID. If a non-UUID string is passed (e.g. "alice"),
+        it is converted to a deterministic UUID5 so the same string always
+        maps to the same workspace.
+        """
+        try:
+            _uuid.UUID(user_id)   # already a valid UUID
+            return user_id
+        except ValueError:
+            # Derive a stable UUID5 from the string
+            stable = str(_uuid.uuid5(_uuid.NAMESPACE_DNS, user_id))
+            logger.debug(
+                "[NexusClient] user_id %r is not a UUID — using deterministic UUID5: %s",
+                user_id, stable,
+            )
+            return stable
+
     async def request_connection(
         self,
         provider: str,
@@ -69,9 +98,18 @@ class NexusClient:
         redirect the user back after consent. Never use the Broker port (8080)
         as a return_url.
 
+        user_id — can be any string (e.g. "muyukani") or a UUID. Non-UUID
+        strings are automatically converted to a deterministic UUID5 so they
+        are consistent across calls. The Gateway uses user_id as workspace_id
+        in broker calls.
+
         Returns:
             (connection_id, auth_url) tuple.
             Store the connection_id; never store tokens.
+
+        Raises:
+            ValueError if return_url is not set.
+            httpx.HTTPStatusError on unexpected errors (not 200 or 409).
         """
         if return_url is None:
             raise ValueError(
@@ -81,13 +119,28 @@ class NexusClient:
             )
 
         payload = ConnectionRequest(
-            user_id=user_id,
+            user_id=self._ensure_uuid(user_id),
             provider_name=provider,
             scopes=scopes,
             return_url=return_url,
         ).model_dump()
 
         response = await self.client.post("/v1/request-connection", json=payload)
+
+        if response.status_code == 409:
+            # Existing pending connection — extract auth_url from response if present
+            data = response.json()
+            auth_url = data.get("authUrl") or data.get("auth_url") or data.get("redirect_url")
+            conn_id = data.get("connection_id") or data.get("connectionId")
+            if auth_url and conn_id:
+                logger.info(
+                    "[NexusClient] Existing pending connection for provider=%s conn_id=%s",
+                    provider, conn_id,
+                )
+                return conn_id, auth_url
+            # If 409 doesn't include a reusable auth URL, re-raise as an error
+            response.raise_for_status()
+
         response.raise_for_status()
         data = response.json()
         return data["connection_id"], data["authUrl"]

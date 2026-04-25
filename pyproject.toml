@@ -100,8 +100,22 @@ Issues = "https://github.com/Prescott-Data/jarviscore-framework/issues"
 [tool.setuptools]
 packages = {find = {}}
 
+[project.scripts]
+# After `pip install jarviscore-framework`, these are available as CLI commands:
+#   nexus init
+#   nexus register github --client-id=... --client-secret=...
+#   nexus status / nexus up / nexus list / nexus test
+jarviscore = "jarviscore.cli.__main__:main"
+
 [tool.setuptools.package-data]
-jarviscore = ["docs/*.md", "data/.env.example", "data/examples/*.py"]
+jarviscore = [
+    "docs/*.md",
+    "data/.env.example",
+    "data/examples/*.py",
+    # Nexus local-stack data — bundled so pip install users don't need the repo
+    "nexus/_data/docker-compose.nexus.yml",
+    "nexus/_data/001_initial_schema.sql",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
