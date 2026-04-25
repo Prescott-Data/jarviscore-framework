@@ -62,6 +62,23 @@ from jarviscore.profiles.customagent import CustomAgent
 from jarviscore.adapter import jarvis_agent, wrap
 from jarviscore.context import JarvisContext, MemoryAccessor, DependencyAccessor
 
+# Long-horizon planning (lazy import — requires no extra dependencies)
+try:
+    from jarviscore.planning import (
+        GoalExecution,
+        PlannedStep,
+        StepEvaluation,
+        CompletedStep,
+        Planner,
+        PlannerError,
+        StepEvaluator,
+        EvaluatorError,
+    )
+except Exception:  # noqa: BLE001
+    GoalExecution = None   # type: ignore
+    Planner = None         # type: ignore
+    StepEvaluator = None   # type: ignore
+
 # P2P Direct Communication (optional — requires `pip install jarviscore-framework[p2p]`)
 # These are injected into agents at start() time when available.
 try:
@@ -102,4 +119,14 @@ __all__ = [
     "PeerTool",
     "PeerInfo",
     "IncomingMessage",
+
+    # Long-horizon planning
+    "GoalExecution",
+    "PlannedStep",
+    "StepEvaluation",
+    "CompletedStep",
+    "Planner",
+    "PlannerError",
+    "StepEvaluator",
+    "EvaluatorError",
 ]

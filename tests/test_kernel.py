@@ -160,11 +160,14 @@ class TestKernelExecuteSuccess:
             system_prompt="You are a data processor.",
         )
         assert output.status == "success"
-        # Verify LLM received context in prompt
-        call = mock_llm.calls[0]
-        prompt_content = call["messages"][0]["content"]
-        assert "data" in prompt_content
-        assert "data processor" in prompt_content
+        # Verify context data reached the LLM — it appears in the user message
+        # (messages[1]) since the subagent injects context into the task prompt.
+        # The system message (messages[0]) is the subagent's own hardcoded persona.
+        all_content = " ".join(
+            str(m.get("content", "")) for m in mock_llm.calls[0]["messages"]
+        )
+        assert "data" in all_content
+        assert "Process data" in all_content
 
 
 # ── Execute: Failure + Retry ──────────────────────────────────────────

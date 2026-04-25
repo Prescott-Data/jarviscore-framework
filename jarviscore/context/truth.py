@@ -146,3 +146,21 @@ class AgentOutput(BaseModel):
     summary: str = ""
     trajectory: List[Dict[str, Any]] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    def distilled_facts(self) -> Dict[str, Any]:
+        """
+        Return structured facts distilled from this output by the Kernel.
+
+        Facts are keyed by name and carry value, confidence, source, and
+        evidence. Available after the Kernel's distillation pass runs
+        (always on successful dispatches).
+
+        Returns an empty dict if distillation did not run (e.g. failure,
+        yield, or no payload).
+
+        Example:
+            output = await agent.execute_task({"task": "fetch API schema"})
+            facts = output.distilled_facts()
+            auth_method = facts.get("auth_method", {}).get("value")
+        """
+        return self.metadata.get("distilled_facts", {})

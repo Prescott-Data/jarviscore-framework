@@ -421,7 +421,75 @@ ATHENA_URL=http://localhost:8080   # set to enable; graceful no-op if absent
 
 #### UI
 - Meeting timeline: trash icon on each card (hover turns red, optimistic fade → DOM remove)
-- Warden review canvas: Delete button alongside Approve / Decline; closes canvas and reloads inbox on success
 - Task cards: `deleteTask()` already wired to task board
+
+- **Status**: ✅ Resolved
+
+---
+
+### [RESOLVE-014] Sky Team agents upgraded to goal-oriented autonomous execution
+- **Date**: 2026-04-24
+- **Components**:
+  - `prescott-internal-agents/agents/signal.py`
+  - `prescott-internal-agents/agents/treasury.py`
+- **Root cause**: All Sky Team agents called `execute_task()` with kitchen-sink task strings — 4-6 numbered sub-tasks jammed into a single OODA loop. If sub-task 3 of 5 failed (e.g., wrong JSON format, write_file error), sub-tasks 4-5 silently never executed. No verification, no replanning, no retry. The Planner, Evaluator, and TruthContext built in previous sessions were not being used.
+
+#### Problem (Compass shift kickoff — before)
+```python
+# One OODA loop tries to: read blockers → read 5 queues → write meeting JSON
+# → write 5 task files → return summary. Fails at step 3? Steps 4-5 never run.
+await self.execute_task({
+    "task": "1. Read blockers.md. 2. Read task queues. 3. Write meeting JSON. 4. Write task files. 5. Return."
+})
+```
+
+#### Fix — two changes per goal-oriented agent
+
+**1. `goal_oriented = True`** → routes all `execute_task()` calls through Plan-Execute-Evaluate. Planner decomposes goal → ExecEngine runs each step → StepEvaluator verifies → Replanner fires on failure.
+
+**2. Task strings rewritten: numbered instructions → clean goal statements.** Goal states the outcome. Planner creates the step sequence. `context` dict carries structured planning state instead of being embedded in the prompt string.
+
+```python
+# After (Compass shift kickoff)
+await self.execute_task({
+    "task": f"Run the Sky Team shift kickoff for {now.strftime('%A, %B %d, %Y')}.\n\nSHIFT BRIEF:\n{brief_text}",
+    "type": "shift_orientation",
+    "context": {
+        "agents": ["sentinel", "quill", "warden", "outpost", "envoy"],
+        "meeting_id": f"signal-kickoff-{now.date()}",
+        "meetings_dir": "meetings/",
+        "tasks_dir": "tasks/",
+        "blockers_file": "knowledge/ops/blockers.md",
+    },
+})
+```
+
+#### Agents upgraded
+
+| Agent | Team | goal_oriented | Rationale |
+|---|---|---|---|
+| Compass | Signal | ✅ | Shift kickoff, standup, scrum, EOD review, calendar audit — all multi-step |
+| Quill | Signal | ✅ | Draft = read brief → write → revise → save |
+| Warden | Signal | ✅ | QA = read item → apply 7 checks → verdict → escalate |
+| Dispatch | Signal | ✅ | Distribution = format per channel → attempt API → stage if blocked |
+| Sentinel | Signal | ✅ | Intel scan = min 5 searches → synthesize → write report → update wikis |
+| Outpost | Signal | ✅ | Outreach = research target → find hook → draft → Warden gate |
+| Envoy | Signal | ✅ | IR materials = gather financials → verify claims → draft → flag for sign-off |
+| Runway | Treasury | ✅ | Burn analysis = read Ledger+Kodi → model → scenarios → alerts |
+| Folio | Treasury | ✅ | Reports = compile from 4 upstream agents → P&L → cash flow → balance sheet → briefing |
+| Vault | Treasury | ✅ | Fundraising = research investors → score → model scenarios → audit data room |
+| Ingram | Treasury | ○ single-shot | Atomic: given a file, parse it. No multi-step needed. |
+| Tally | Treasury | ○ single-shot | Atomic: given transactions, classify them. |
+| Ledger | Treasury | ○ single-shot | Atomic: given 2 account sets, reconcile them. |
+| Kodi | Treasury | ○ single-shot | Atomic: given financials, compute tax obligations. |
+
+#### Verification
+```
+✅ goal_oriented  Compass   ✅ goal_oriented  Quill    ✅ goal_oriented  Warden
+✅ goal_oriented  Dispatch  ✅ goal_oriented  Sentinel ✅ goal_oriented  Outpost  ✅ goal_oriented  Envoy
+✅ goal_oriented  Runway    ✅ goal_oriented  Folio    ✅ goal_oriented  Vault
+○  single-shot   Ingram    ○  single-shot   Tally    ○  single-shot   Ledger   ○  single-shot   Kodi
+All agents imported successfully.
+```
 
 - **Status**: ✅ Resolved

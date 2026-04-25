@@ -197,8 +197,9 @@ class TraceManager:
         }
     )
     _SECRET_PATTERN = re.compile(
-        r"(?i)(authorization)\s*[:=]\s*bearer\s+[A-Za-z0-9\-._~+/]+=*|"
-        r"(?i)(access_token|refresh_token|id_token|api_key|secret|password|token)\s*[:=]\s*['\"]?[^'\"\s,}]+"
+        r"(authorization)\s*[:=]\s*bearer\s+[A-Za-z0-9\-._~+/]+=*|"
+        r"(access_token|refresh_token|id_token|api_key|secret|password|token)\s*[:=]\s*['\"]?[^'\"\s,}]+",
+        re.IGNORECASE,
     )
 
     def _scrub(self, value: Any) -> Any:

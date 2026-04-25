@@ -511,13 +511,31 @@ class Kernel:
                 trace=_kernel_trace,
             )
 
-            # Track costs
+            # ── Track costs ──────────────────────────────────────────────────
             meta = output.metadata or {}
             tokens = meta.get("tokens", {})
             total_tokens["input"] += tokens.get("input", 0)
             total_tokens["output"] += tokens.get("output", 0)
             total_tokens["total"] += tokens.get("total", 0)
             total_cost += meta.get("cost_usd", 0.0)
+
+            # ── Distil output into typed TruthFacts ──────────────────────────
+            # This runs on every successful dispatch so that execute_goal()
+            # and any caller that wants structured facts can read them from
+            # output.metadata["distilled_facts"] without re-parsing the payload.
+            if output.status == "success" and output.payload is not None:
+                try:
+                    from jarviscore.context.distillation import distill_output as _distill
+                    _distilled = _distill(
+                        raw_output=output.payload,
+                        source=f"{agent_id}:{step_id}:{role}",
+                        confidence=0.8,
+                    )
+                    output.metadata["distilled_facts"] = {
+                        k: v.model_dump() for k, v in _distilled.items()
+                    }
+                except Exception as _de:
+                    logger.debug("[Kernel] Distillation failed (non-fatal): %s", _de)
 
             dispatch_record = {
                 "dispatch": dispatch_num + 1,
@@ -542,6 +560,7 @@ class Kernel:
                         "cost_usd": total_cost,
                         "dispatches": dispatches,
                         "elapsed_ms": (time.time() - start_time) * 1000,
+                        "distilled_facts": output.metadata.get("distilled_facts", {}),
                     },
                 )
 

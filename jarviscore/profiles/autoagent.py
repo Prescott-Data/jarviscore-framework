@@ -3,9 +3,14 @@ AutoAgent - Automated execution profile.
 
 Framework generates and executes code from natural language prompts.
 User writes just 3 attributes, framework handles everything.
+
+For long-horizon autonomous work, set goal_oriented = True on your
+subclass — all tasks will be routed through the Plan → Execute → Evaluate
+loop automatically. The execute_task() contract is unchanged.
 """
 import re
-from typing import Dict, Any
+import time
+from typing import Any, Dict, List, Optional
 from jarviscore.core.profile import Profile
 
 
@@ -46,8 +51,31 @@ class AutoAgent(Profile):
     # Overrides the keyword classifier in Kernel._classify_task().
     # Values: "coder" | "researcher" | "communicator" | None (auto-classify)
     # Example: class Sentinel(AutoAgent): default_kernel_role = "researcher"
-    # Fix for Dogfooding Issue #2.
     default_kernel_role: str = None
+
+    # ── Long-horizon execution mode ──────────────────────────────────────────
+    # Set goal_oriented = True on your AutoAgent subclass to route ALL tasks
+    # through the Plan → Execute → Evaluate loop automatically.
+    #
+    # When False (default), execute_task() runs a single OODA loop — correct
+    # for bounded, atomic tasks.
+    #
+    # When True, the SAME execute_task() call the developer already makes is
+    # routed internally through Plan-Execute. The developer writes NOTHING
+    # extra — just sets this flag and the framework handles the rest.
+    #
+    # The execute_task() response envelope is preserved:
+    #   result["status"]           — "success" | "failure" | "hitl"
+    #   result["output"]           — final synthesised output
+    #   result["goal_execution"]  — summary dict (steps, facts, elapsed)
+    #
+    # Example:
+    #     class ResearchAgent(AutoAgent):
+    #         role = "researcher"
+    #         capabilities = ["research", "analysis"]
+    #         system_prompt = "You are a market researcher..."
+    #         goal_oriented = True   # ← that's it. framework does the rest.
+    goal_oriented: bool = False
 
     def __init__(self, agent_id=None):
         super().__init__(agent_id)
@@ -207,6 +235,27 @@ class AutoAgent(Profile):
         """
         task_desc = task.get('task', '') if isinstance(task, dict) else str(task)
         self._logger.info(f"[AutoAgent] Executing via Kernel: {task_desc[:100]}...")
+
+        # ── Goal-oriented routing ─────────────────────────────────────────────
+        # If goal_oriented=True, every task is a goal — route to execute_goal().
+        if self.goal_oriented:
+            ctx = task.get('context', {}) if isinstance(task, dict) else {}
+            execution = await self.execute_goal(
+                goal=task_desc,
+                context=ctx,
+            )
+            # Wrap GoalExecution in the standard execute_task() response envelope
+            return {
+                "status": execution.status if execution.status != "complete" else "success",
+                "output": execution.result,
+                "error": execution.error,
+                "agent_id": self.agent_id,
+                "role": self.role,
+                "goal_execution": execution.to_summary_dict(),
+                "tokens": {},
+                "cost_usd": 0.0,
+                "repairs": 0,
+            }
 
         # ── Build effective system prompt = profile intelligence + role prompt ──
         effective_system_prompt = (
@@ -391,3 +440,273 @@ class AutoAgent(Profile):
                 "tokens": total_tokens,
                 "cost_usd": total_cost,
             }
+
+    # ── Long-horizon goal execution ───────────────────────────────────────────
+
+    async def execute_goal(
+        self,
+        goal: str,
+        context: Optional[Dict[str, Any]] = None,
+        max_steps: int = 15,
+        max_replan_attempts: int = 2,
+    ) -> "GoalExecution":
+        """
+        Internal method — driven by execute_task() when goal_oriented = True.
+
+        Executes a goal via the Plan → Execute → Evaluate loop. Developers
+        do NOT call this directly. The entry point is always execute_task()
+        with a standard task dict — the framework routes internally based on
+        the goal_oriented class attribute.
+
+        Developer contract (unchanged):
+            class MyAgent(AutoAgent):
+                role = "researcher"
+                capabilities = ["research", "analysis"]
+                system_prompt = "You are a market researcher..."
+                goal_oriented = True   # ← only thing a dev adds
+
+            # Called exactly as before — no API change:
+            result = await mesh.workflow("research", [{
+                "agent": "researcher",
+                "task": "Produce EV market analysis"
+            }])
+            result["status"]          # "success" | "failure" | "hitl"
+            result["output"]          # final synthesised answer
+            result["goal_execution"]  # summary dict: steps, facts, elapsed
+
+        Framework internals (for framework contributors):
+            The GoalExecution object carries the live TruthContext (all facts
+            accumulated across steps) and the full step history. These are
+            summarised into the standard execute_task() envelope before returning.
+
+        Args:
+            goal:                 Natural language goal string (from execute_task).
+            context:              Initial context dict (from the task dict).
+            max_steps:            Hard ceiling on steps (safety guard, default 15).
+            max_replan_attempts:  Max replanning cycles before failing (default 2).
+
+        Returns:
+            GoalExecution — summarised into execute_task() response by the caller.
+        """
+        if self._kernel is None:
+            raise RuntimeError(
+                f"{self.__class__.__name__}.execute_goal() called before setup(). "
+                "Call await agent.setup() first."
+            )
+
+        from jarviscore.planning.goal_context import GoalExecution
+        from jarviscore.planning.planner import Planner, PlannerError
+        from jarviscore.planning.evaluator import StepEvaluator, EvaluatorError
+        from jarviscore.context.distillation import merge_facts
+
+        self._logger.info(
+            "[AutoAgent] execute_goal started: goal=%s (max_steps=%d)",
+            goal[:100], max_steps,
+        )
+
+        effective_system_prompt = (
+            f"{self._profile_block}\n\n---\n\n{self.system_prompt}"
+            if self._profile_block else self.system_prompt
+        )
+
+        # Shared planner and evaluator — stateless, reused across steps
+        planner = Planner(self.llm, system_prompt_excerpt=self.system_prompt[:400])
+        evaluator = StepEvaluator(self.llm)
+
+        # The live execution state — carries the TruthContext across all steps
+        execution = GoalExecution(goal=goal, agent_id=self.agent_id)
+        replan_count = 0
+        steps_run = 0
+
+        # ── Phase 1: Plan ─────────────────────────────────────────────────────
+        execution.status = "planning"
+        try:
+            execution.plan = await planner.plan(
+                goal=goal,
+                goal_execution=execution,
+                context=context,
+            )
+        except PlannerError as exc:
+            self._logger.error("[AutoAgent] Planning failed: %s", exc)
+            execution.status = "failed"
+            execution.error = f"Planning failed: {exc}"
+            execution.completed_at = time.time()
+            return execution
+
+        self._logger.info(
+            "[AutoAgent] Plan ready: %d steps", len(execution.plan)
+        )
+        execution.status = "executing"
+
+        # ── Phase 2: Execute → Evaluate → loop ───────────────────────────────
+        remaining = list(execution.plan)
+
+        while remaining and steps_run < max_steps:
+            step = remaining.pop(0)
+            steps_run += 1
+
+            self._logger.info(
+                "[AutoAgent] Executing step %d/%d: %s [%s]",
+                steps_run, len(execution.plan), step.step_id, step.task[:80],
+            )
+
+            # Build enriched context: accumulated facts + step metadata
+            step_ctx = execution.context_for_next_step(base_context=context)
+            step_ctx.update(step.to_context_extras())
+
+            # ── Execute step via Kernel (full OODA) ───────────────────────────
+            step_start = time.time()
+            try:
+                auth_mgr = getattr(self, '_auth_manager', None)
+                if auth_mgr and self._kernel.auth_manager is not auth_mgr:
+                    self._kernel.auth_manager = auth_mgr
+
+                output = await self._kernel.execute(
+                    task=step.task,
+                    system_prompt=effective_system_prompt,
+                    context=step_ctx,
+                    agent_id=self.agent_id,
+                    agent_default_role=step.subagent_hint or self.default_kernel_role,
+                )
+            except Exception as exc:
+                self._logger.error(
+                    "[AutoAgent] Kernel raised on step %s: %s", step.step_id, exc
+                )
+                execution.status = "failed"
+                execution.error = f"Kernel exception on step {step.step_id}: {exc}"
+                execution.completed_at = time.time()
+                return execution
+
+            elapsed = (time.time() - step_start) * 1000
+
+            # ── Promote goal-scoped scratchpad entries into TruthContext ──────
+            if self._kernel.blob_storage:
+                try:
+                    from jarviscore.memory.scratchpad import WorkingScratchpad
+                    pad = WorkingScratchpad(
+                        self._kernel.blob_storage,
+                        workflow_id=step_ctx.get("workflow_id", execution.goal_id),
+                        step_id=step.step_id,
+                        role=self.role,
+                    )
+                    await pad.promote_to_truth(execution.truth, source=step.step_id)
+                except Exception as _se:
+                    self._logger.debug(
+                        "[AutoAgent] Scratchpad promote failed (non-fatal): %s", _se
+                    )
+
+            # ── Evaluate step ─────────────────────────────────────────────────
+            try:
+                evaluation = await evaluator.evaluate(step, output, execution)
+            except EvaluatorError as exc:
+                self._logger.error(
+                    "[AutoAgent] Evaluation failed on step %s: %s", step.step_id, exc
+                )
+                execution.status = "failed"
+                execution.error = f"Evaluation error on step {step.step_id}: {exc}"
+                execution.completed_at = time.time()
+                return execution
+
+            # Record: merges distilled_facts + evaluator findings into truth
+            execution.record_completed(step, output, evaluation, elapsed)
+
+            self._logger.info(
+                "[AutoAgent] Step %s: verdict=%s (confidence=%.2f) — %s",
+                step.step_id, evaluation.verdict, evaluation.confidence,
+                evaluation.evaluator_note[:120],
+            )
+
+            # ── Handle verdict ────────────────────────────────────────────────
+            if evaluation.needs_hitl:
+                execution.status = "hitl"
+                execution.error = evaluation.evaluator_note
+                execution.completed_at = time.time()
+                self._logger.warning(
+                    "[AutoAgent] Goal execution paused for HITL: %s",
+                    evaluation.evaluator_note,
+                )
+                return execution
+
+            if evaluation.needs_replan:
+                if replan_count >= max_replan_attempts:
+                    self._logger.error(
+                        "[AutoAgent] Max replan attempts (%d) reached. Failing goal.",
+                        max_replan_attempts,
+                    )
+                    execution.status = "failed"
+                    execution.error = (
+                        f"Max replan attempts ({max_replan_attempts}) reached. "
+                        f"Last failure: {evaluation.evaluator_note}"
+                    )
+                    execution.completed_at = time.time()
+                    return execution
+
+                replan_count += 1
+                self._logger.info(
+                    "[AutoAgent] Replanning (attempt %d/%d): %s",
+                    replan_count, max_replan_attempts, evaluation.evaluator_note,
+                )
+                try:
+                    completed_step = execution.completed[-1]
+                    revised = await planner.replan(
+                        goal_execution=execution,
+                        failed_step=completed_step,
+                        reason=evaluation.evaluator_note,
+                    )
+                    execution.plan_revision += 1
+                    remaining = revised   # replace remaining steps with revised plan
+                    execution.plan = [cs.step for cs in execution.completed] + revised
+                    self._logger.info(
+                        "[AutoAgent] Revised plan: %d remaining steps", len(revised)
+                    )
+                except PlannerError as pe:
+                    self._logger.error("[AutoAgent] Replanning failed: %s", pe)
+                    execution.status = "failed"
+                    execution.error = f"Replanning failed: {pe}"
+                    execution.completed_at = time.time()
+                    return execution
+
+                continue  # proceed with revised plan
+
+        # ── Phase 3: Safety check ─────────────────────────────────────────────
+        if steps_run >= max_steps and remaining:
+            self._logger.warning(
+                "[AutoAgent] max_steps=%d reached with %d steps still remaining.",
+                max_steps, len(remaining),
+            )
+            execution.status = "blocked"
+            execution.error = (
+                f"Goal execution stopped at max_steps={max_steps}. "
+                f"{len(remaining)} steps were not executed."
+            )
+            execution.completed_at = time.time()
+            return execution
+
+        # ── Phase 4: Synthesise final result ──────────────────────────────────
+        execution.status = "complete"
+        execution.completed_at = time.time()
+
+        # Final result = last step's output summary + high-confidence facts
+        if execution.completed:
+            last = execution.completed[-1]
+            last_summary = getattr(last.output, "summary", "") or ""
+            high_conf = execution.truth.high_confidence_facts(threshold=0.7)
+            facts_str = (
+                "\n".join(f"- {k}: {v.value}" for k, v in high_conf.items())
+                if high_conf else ""
+            )
+            execution.result = (
+                f"{last_summary}\n\n{facts_str}".strip()
+                if facts_str else last_summary
+            )
+        else:
+            execution.result = "Goal completed with no steps executed."
+
+        self._logger.info(
+            "[AutoAgent] Goal complete: %d steps, %d facts, %.0fms | %s",
+            execution.steps_completed,
+            len(execution.truth.facts),
+            execution.elapsed_ms,
+            goal[:80],
+        )
+        return execution
