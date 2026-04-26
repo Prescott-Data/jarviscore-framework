@@ -33,7 +33,39 @@ from dataclasses import dataclass, field
 from uuid import uuid4
 
 from jarviscore.core.agent import Agent
-from jarviscore.p2p.messages import PeerInfo, IncomingMessage, MessageType
+
+# P2P messages — optional dep; provide stubs if not installed
+try:
+    from jarviscore.p2p.messages import PeerInfo, IncomingMessage, MessageType
+except Exception:  # noqa: BLE001
+    from dataclasses import dataclass as _dc
+    from enum import Enum as _Enum
+
+    @_dc
+    class PeerInfo:  # type: ignore
+        agent_id: str = ""
+        role: str = ""
+        capabilities: list = None
+        node_id: str = ""
+        status: str = "alive"
+        def __post_init__(self):
+            if self.capabilities is None:
+                self.capabilities = []
+
+    @_dc
+    class IncomingMessage:  # type: ignore
+        sender: str = ""
+        sender_node: str = ""
+        type: str = ""
+        data: dict = None
+        correlation_id: str = None
+        context: dict = None
+
+    class MessageType(_Enum):  # type: ignore
+        NOTIFY = "notify"
+        REQUEST = "request"
+        RESPONSE = "response"
+        BROADCAST = "broadcast"
 
 
 @dataclass
