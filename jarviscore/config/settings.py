@@ -70,6 +70,17 @@ class Settings(BaseSettings):
     # === LLM Configuration ===
     llm_timeout: float = 120.0
     llm_temperature: float = 0.7
+    # Max concurrent LLM calls across the whole process (0 = unlimited).
+    # Set to match your deployment's RPM ÷ expected_avg_call_seconds.
+    # e.g. RPM=60, avg_latency=5s → 60/12 = 5 concurrent max.
+    # Prevents thundering-herd 429s in multi-agent deployments.
+    llm_max_concurrent: int = 0  # 0 = unlimited (backward-compatible default)
+    # 429 retry backoff: max retries before giving up on a rate-limited provider.
+    # Delay formula: min(base_delay * 2^attempt, 60s).
+    llm_max_retries_429: int = 4
+    llm_429_base_delay: float = 2.0
+
+
 
     # Claude
     claude_api_key: Optional[str] = None

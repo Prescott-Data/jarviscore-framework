@@ -11,6 +11,31 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# ─── Global LLM concurrency limiter ──────────────────────────────────────────
+# Shared across ALL UnifiedLLMClient instances in the process.
+# Prevents thundering-herd 429s when many agents fire LLM calls simultaneously.
+# Value is set once at first client construction from LLM_MAX_CONCURRENT env var
+# (0 = unlimited). Applications should not touch this directly.
+_LLM_SEMAPHORE: Optional[asyncio.Semaphore] = None
+_LLM_SEMAPHORE_LIMIT: int = 0  # 0 = not yet initialised
+
+
+def _get_llm_semaphore(max_concurrent: int) -> Optional[asyncio.Semaphore]:
+    """Return (and lazily create) the process-wide LLM concurrency semaphore."""
+    global _LLM_SEMAPHORE, _LLM_SEMAPHORE_LIMIT
+    if max_concurrent <= 0:
+        return None  # unlimited — no semaphore needed
+    if _LLM_SEMAPHORE is None or _LLM_SEMAPHORE_LIMIT != max_concurrent:
+        _LLM_SEMAPHORE = asyncio.Semaphore(max_concurrent)
+        _LLM_SEMAPHORE_LIMIT = max_concurrent
+        logger.info(
+            "LLM concurrency limiter active: max %d concurrent calls "
+            "(set LLM_MAX_CONCURRENT=0 to disable)",
+            max_concurrent,
+        )
+    return _LLM_SEMAPHORE
+
+
 # Try importing optional LLM SDKs
 try:
     from google import genai
@@ -107,6 +132,11 @@ class UnifiedLLMClient:
         self._setup_providers()
 
         logger.info(f"LLM Client initialized with providers: {[p.value for p in self.provider_order]}")
+
+        # Concurrency limiter — reads LLM_MAX_CONCURRENT from config (env var)
+        max_concurrent = int(self.config.get("llm_max_concurrent", 0))
+        self._semaphore = _get_llm_semaphore(max_concurrent)
+
 
     def _setup_providers(self):
         """Auto-detect and setup available LLM providers."""
@@ -207,31 +237,72 @@ class UnifiedLLMClient:
         if not messages:
             messages = [{"role": "user", "content": prompt}]
 
-        # Try each provider in order
+        # Acquire concurrency slot before dispatching to any provider.
+        # _semaphore is None when LLM_MAX_CONCURRENT=0 (unlimited).
+        if self._semaphore:
+            async with self._semaphore:
+                return await self._generate_inner(messages, temperature, max_tokens, **kwargs)
+        return await self._generate_inner(messages, temperature, max_tokens, **kwargs)
+
+
+
+    async def _generate_inner(
+        self,
+        messages: List[Dict],
+        temperature: float,
+        max_tokens: int,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Inner generate — actual provider dispatch, called under semaphore.
+
+        On 429 rate-limit responses, retries the same provider with exponential
+        backoff (2 * 2^attempt seconds, capped at 60s) up to LLM_MAX_RETRIES_429
+        attempts before moving to the next provider.
+        """
+        max_429_retries = int(self.config.get("llm_max_retries_429", 4))
+        base_delay = float(self.config.get("llm_429_base_delay", 2.0))
         last_error = None
+
         for provider in self.provider_order:
-            try:
-                logger.debug(f"Trying provider: {provider.value}")
+            for attempt in range(max_429_retries + 1):
+                try:
+                    logger.debug(f"Trying provider: {provider.value} (attempt {attempt})")
+                    if provider == LLMProvider.VLLM:
+                        return await self._call_vllm(messages, temperature, max_tokens, **kwargs)
+                    elif provider == LLMProvider.AZURE:
+                        return await self._call_azure(messages, temperature, max_tokens, **kwargs)
+                    elif provider == LLMProvider.GEMINI:
+                        return await self._call_gemini(messages, temperature, max_tokens, **kwargs)
+                    elif provider == LLMProvider.CLAUDE:
+                        return await self._call_claude(messages, temperature, max_tokens, **kwargs)
+                except Exception as e:
+                    error_str = str(e)
+                    is_rate_limit = (
+                        "429" in error_str
+                        or "too_many_requests" in error_str.lower()
+                        or "rate limit" in error_str.lower()
+                    )
+                    if is_rate_limit and attempt < max_429_retries:
+                        delay = min(base_delay * (2 ** attempt), 60.0)
+                        logger.warning(
+                            f"Provider {provider.value} rate-limited (429). "
+                            f"Retry {attempt + 1}/{max_429_retries} in {delay:.1f}s"
+                        )
+                        await asyncio.sleep(delay)
+                        last_error = e
+                        continue  # retry same provider
+                    else:
+                        last_error = e
+                        logger.warning(f"Provider {provider.value} failed: {e}")
+                        break  # move to next provider
 
-                if provider == LLMProvider.VLLM:
-                    return await self._call_vllm(messages, temperature, max_tokens, **kwargs)
-                elif provider == LLMProvider.AZURE:
-                    return await self._call_azure(messages, temperature, max_tokens, **kwargs)
-                elif provider == LLMProvider.GEMINI:
-                    return await self._call_gemini(messages, temperature, max_tokens, **kwargs)
-                elif provider == LLMProvider.CLAUDE:
-                    return await self._call_claude(messages, temperature, max_tokens, **kwargs)
-
-            except Exception as e:
-                last_error = e
-                logger.warning(f"Provider {provider.value} failed: {e}")
-                continue
-
-        # All providers failed
         raise RuntimeError(
             f"All LLM providers failed. Last error: {last_error}\n"
             f"Tried: {[p.value for p in self.provider_order]}"
         )
+
+
+
 
     async def _call_vllm(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
         """Call vLLM endpoint."""
