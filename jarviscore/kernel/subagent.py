@@ -86,6 +86,7 @@ class BaseSubAgent(ABC):
         redis_store=None,
         blob_storage=None,
         search_client=None,
+        code_registry=None,
     ):
         self.agent_id = agent_id
         self.role = role
@@ -93,6 +94,7 @@ class BaseSubAgent(ABC):
         self.redis_store = redis_store
         self.blob_storage = blob_storage
         self.search_client = search_client
+        self.code_registry = code_registry
         self._tools: Dict[str, ToolDefinition] = {}
 
         # Cognition infrastructure — reset per run() call
