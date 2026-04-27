@@ -199,6 +199,25 @@ class AutoAgent(Profile):
             config=config,
         )
 
+        # 9. Wire AdaptiveHITLPolicy from mesh config if enabled.
+        #    The Kernel's execute() checks self.hitl_policy.should_escalate()
+        #    on every dispatch — no agent code required.
+        if config.get("hitl_enabled", False):
+            try:
+                from jarviscore.kernel.hitl import AdaptiveHITLPolicy
+                self._kernel.hitl_policy = AdaptiveHITLPolicy(
+                    enabled=True,
+                    max_confidence=config.get("hitl_max_confidence", 0.8),
+                    min_risk_score=config.get("hitl_min_risk_score", 0.7),
+                )
+                self._logger.info(
+                    "AdaptiveHITLPolicy enabled (max_confidence=%.2f, min_risk=%.2f)",
+                    config.get("hitl_max_confidence", 0.8),
+                    config.get("hitl_min_risk_score", 0.7),
+                )
+            except ImportError:
+                self._logger.debug("AdaptiveHITLPolicy import failed — HITL adaptive escalation disabled")
+
         # NOTE: AuthenticationManager is NOT created here.
         # The Mesh owns auth — it creates AuthenticationManager from mesh config
         # and injects it as self._auth_manager on agents with requires_auth=True.
