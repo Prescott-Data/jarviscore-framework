@@ -95,8 +95,17 @@ class KernelState(BaseModel):
     output: Optional[Any] = None
 
     # ──────────────────────────────────────────────────────────────
-    # Mutation Methods
+    # Backward-compat aliases
     # ──────────────────────────────────────────────────────────────
+
+    @property
+    def input_data(self) -> Dict[str, Any]:
+        """Alias for context — ResearcherSubAgent uses state.input_data to
+        access the kernel's enriched context dict (provider, credentials, etc).
+        This field was renamed context in a prior refactor; keep both names live
+        so the researcher code doesn't need to be mass-patched."""
+        return self.context
+
 
     def add_tool_result(
         self,
