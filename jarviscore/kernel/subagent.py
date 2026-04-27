@@ -85,12 +85,14 @@ class BaseSubAgent(ABC):
         llm_client,
         redis_store=None,
         blob_storage=None,
+        search_client=None,
     ):
         self.agent_id = agent_id
         self.role = role
         self.llm_client = llm_client
         self.redis_store = redis_store
         self.blob_storage = blob_storage
+        self.search_client = search_client
         self._tools: Dict[str, ToolDefinition] = {}
 
         # Cognition infrastructure — reset per run() call
