@@ -8,6 +8,7 @@ For long-horizon autonomous work, set goal_oriented = True on your
 subclass — all tasks will be routed through the Plan → Execute → Evaluate
 loop automatically. The execute_task() contract is unchanged.
 """
+import os
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -103,7 +104,7 @@ class AutoAgent(Profile):
 
         Framework auto-detects available LLM providers and sets up:
         - LLM client (tries vLLM → Azure → Gemini → Claude)
-        - Internet search (DuckDuckGo, no API key needed)
+        - Internet search (SearXNG metasearch, no API key needed)
         - Code generator with search injection
         - Sandbox executor with timeout
         - Autonomous repair system
@@ -448,7 +449,7 @@ class AutoAgent(Profile):
         goal: str,
         context: Optional[Dict[str, Any]] = None,
         max_steps: int = 15,
-        max_replan_attempts: int = 2,
+        max_replan_attempts: int = int(os.environ.get("MAX_REPLAN_ATTEMPTS", "4")),
     ) -> "GoalExecution":
         """
         Internal method — driven by execute_task() when goal_oriented = True.
@@ -483,7 +484,8 @@ class AutoAgent(Profile):
             goal:                 Natural language goal string (from execute_task).
             context:              Initial context dict (from the task dict).
             max_steps:            Hard ceiling on steps (safety guard, default 15).
-            max_replan_attempts:  Max replanning cycles before failing (default 2).
+            max_replan_attempts:  Max replanning cycles before failing (default 4,
+                                  override with MAX_REPLAN_ATTEMPTS env var).
 
         Returns:
             GoalExecution — summarised into execute_task() response by the caller.
@@ -625,6 +627,31 @@ class AutoAgent(Profile):
                     "[AutoAgent] Goal execution paused for HITL: %s",
                     evaluation.evaluator_note,
                 )
+                # Surface the HITL request on the dashboard via the injected queue.
+                # self.hitl is always available (injected by Mesh at start time).
+                _hitl = getattr(self, "hitl", None)
+                if _hitl is not None:
+                    try:
+                        _hitl.request(
+                            title=f"{self.role}: human review needed — {step.task[:80]}",
+                            content=(
+                                f"**Goal:** {goal}\n\n"
+                                f"**Step:** {step.task}\n\n"
+                                f"**Why HITL:** {evaluation.evaluator_note}\n\n"
+                                f"**Confidence:** {evaluation.confidence:.0%}"
+                            ),
+                            urgency="normal",
+                            context={
+                                "goal": goal,
+                                "step_id": step.step_id,
+                                "step_task": step.task,
+                                "evaluator_note": evaluation.evaluator_note,
+                                "confidence": evaluation.confidence,
+                                "agent_id": self.agent_id,
+                            },
+                        )
+                    except Exception as _he:
+                        self._logger.warning("[AutoAgent] hitl.request() failed (non-fatal): %s", _he)
                 return execution
 
             if evaluation.needs_replan:
