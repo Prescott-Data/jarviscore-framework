@@ -4,7 +4,7 @@ Internet Search — Multi-provider web search with content extraction.
 Provider hierarchy (by relevance weight):
   1. Google Grounded Search via Gemini (weight 1.4) — primary when creds available
   2. Serper / Google Search API         (weight 1.2) — optional SERPER_API_KEY
-  3. DuckDuckGo Lite POST               (weight 1.0) — always-on fallback
+  3. SearXNG self-hosted metasearch     (weight 1.1) — free, aggregates Google/Bing
   4. Wikipedia REST API                 (weight 0.6) — academic fallback
 
 All providers run in parallel (asyncio.gather) with per-provider circuit breakers
@@ -17,6 +17,7 @@ Required env vars (Gemini grounded — primary):
 
 Optional env vars:
   SERPER_API_KEY            Serper.dev API key (Google Search)
+  SEARXNG_INSTANCE_URL      Self-hosted SearXNG URL (default: http://localhost:8080)
 """
 import asyncio
 import logging
@@ -89,7 +90,7 @@ class InternetSearch:
     Multi-provider internet search with content extraction.
 
     Primary provider: Google Grounded Search via Gemini (no-quota grounding).
-    Fallbacks: Serper → DuckDuckGo → Wikipedia.
+    Fallbacks: Serper → SearXNG → Wikipedia.
 
     All providers run in parallel; results are ranked, deduped, and returned
     in score order. A provider failure never blocks other providers.
@@ -124,6 +125,9 @@ class InternetSearch:
         )
 
         self.circuit_breaker = CircuitBreaker()
+
+        # SearXNG (free, self-hosted metasearch)
+        self.searxng_url = os.environ.get("SEARXNG_INSTANCE_URL", "http://localhost:8080")
 
     # ──────────────────────────────────────────────────────────────────────
     # Session lifecycle
@@ -211,9 +215,9 @@ class InternetSearch:
         if self.serper_api_key and "serper" not in skip:
             provider_tasks.append(self._search_serper(query, max_results=max_results))
 
-        # 3. DuckDuckGo (always-on fallback)
-        if "duckduckgo" not in skip:
-            provider_tasks.append(self._search_duckduckgo(query, max_results=max_results))
+        # 3. SearXNG (free metasearch fallback)
+        if "searxng" not in skip:
+            provider_tasks.append(self._search_searxng(query, max_results=max_results))
 
         # 4. Wikipedia (academic fallback)
         if "wikipedia" not in skip:
@@ -450,78 +454,70 @@ class InternetSearch:
         return []
 
     # ──────────────────────────────────────────────────────────────────────
-    # Provider: DuckDuckGo Lite
+    # Provider: SearXNG (self-hosted metasearch)
     # ──────────────────────────────────────────────────────────────────────
 
-    async def _search_duckduckgo(
+    async def _search_searxng(
         self, query: str, max_results: int = 10
     ) -> List[Dict[str, Any]]:
-        """Search via DuckDuckGo Lite POST endpoint (no API key required)."""
-        if self.circuit_breaker.is_open("duckduckgo"):
+        """Search via a self-hosted SearXNG instance (JSON API).
+
+        SearXNG is a free, open-source metasearch engine that aggregates
+        results from Google, Bing, DuckDuckGo, and dozens of other engines.
+        No API key required — just a running instance.
+
+        Requires:
+            SEARXNG_INSTANCE_URL  (default: http://localhost:8080)
+        """
+        if self.circuit_breaker.is_open("searxng"):
             return []
 
         try:
-            url = "https://lite.duckduckgo.com/lite/"
-            payload = {"q": query}
-            headers = {
-                "User-Agent": self.user_agent,
-                "Content-Type": "application/x-www-form-urlencoded",
+            url = f"{self.searxng_url.rstrip('/')}/search"
+            params = {
+                "q": query,
+                "format": "json",
+                "categories": "general",
+                "language": "en",
+                "pageno": 1,
             }
 
             last_status = 0
-            html = ""
             for attempt in range(2):
                 try:
-                    async with self._session.post(
+                    async with self._session.get(
                         url,
-                        data=payload,
-                        headers=headers,
+                        params=params,
                         timeout=aiohttp.ClientTimeout(total=10),
                     ) as response:
                         last_status = response.status
-                        html = await response.text()
                         if response.status == 200:
-                            break
+                            data = await response.json()
+                            self.circuit_breaker.record_success("searxng")
+                            results = [
+                                {
+                                    "title": item.get("title", ""),
+                                    "snippet": item.get("content", ""),
+                                    "url": item.get("url", ""),
+                                    "source": "searxng",
+                                    "engine": item.get("engine", ""),
+                                }
+                                for item in data.get("results", [])[:max_results]
+                            ]
+                            logger.info("SearXNG: %d results", len(results))
+                            return results
                         if response.status in (429, 503, 504):
                             await asyncio.sleep(1.0 * (2 ** attempt))
                             continue
-                except Exception as e:
-                    html = str(e)
+                except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
+                    logger.warning("SearXNG connection attempt %d failed: %s", attempt + 1, e)
                     await asyncio.sleep(1.0 * (2 ** attempt))
 
-            if last_status == 200 and html:
-                self.circuit_breaker.record_success("duckduckgo")
-                soup = BeautifulSoup(html, "html.parser")
-                results = []
-                for tr in soup.find_all("tr"):
-                    td = tr.find("td", class_="result-snippet")
-                    if td:
-                        snippet = td.text.strip()
-                        prev_tr = tr.find_previous_sibling("tr")
-                        if prev_tr:
-                            a_tag = prev_tr.find("a", class_="result-url") or prev_tr.find("a")
-                            if a_tag:
-                                link = a_tag.get("href", "")
-                                if link.startswith("//"):
-                                    link = "https:" + link
-                                results.append(
-                                    {
-                                        "title": a_tag.text.strip(),
-                                        "snippet": snippet,
-                                        "url": link,
-                                        "source": "duckduckgo",
-                                    }
-                                )
-                                if len(results) >= max_results:
-                                    break
-                logger.info("DuckDuckGo: %d results", len(results))
-                return results
-
-            logger.warning("DuckDuckGo: HTTP %d", last_status)
-            self.circuit_breaker.record_failure("duckduckgo")
+            logger.warning("SearXNG: HTTP %d", last_status)
+            self.circuit_breaker.record_failure("searxng")
         except Exception as exc:
-            logger.error("DuckDuckGo search failed: %s", exc)
-            self.circuit_breaker.record_failure("duckduckgo")
+            logger.error("SearXNG search failed: %s", exc)
+            self.circuit_breaker.record_failure("searxng")
         return []
 
     # ──────────────────────────────────────────────────────────────────────
@@ -575,14 +571,14 @@ class InternetSearch:
         Score, dedup, and rank results.
 
         Weights mirror CA's proven ranking:
-          google_grounded=1.4  serper=1.2  duckduckgo=1.0  wikipedia=0.6
+          google_grounded=1.4  serper=1.2  searxng=1.1  wikipedia=0.6
         Plus keyword overlap bonus (0.05 per matching token) and PDF bonus (0.1).
         """
         tokens = set(re.findall(r"[a-z0-9]+", query.lower()))
         weights = {
             "google_grounded": 1.4,
             "serper": 1.2,
-            "duckduckgo": 1.0,
+            "searxng": 1.1,
             "wikipedia": 0.6,
         }
 

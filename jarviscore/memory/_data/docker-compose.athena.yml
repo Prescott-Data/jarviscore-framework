@@ -48,44 +48,46 @@ services:
     ports:
       - "8080:8080"
     environment:
-      PORT: 8080
+      MEMORY_OS_PORT: 8080
       APP_ENV: local
 
-      # LLM — used for MTM chain summarisation. Injected by `memory init`.
+      # LLM — used for MTM chain summarisation
       LLM_PROVIDER: ${ATHENA_LLM_PROVIDER:-gemini}
       LLM_API_KEY: ${ATHENA_LLM_API_KEY:?Set ATHENA_LLM_API_KEY or run 'jarviscore memory init'}
       LLM_MODEL_NAME: ${ATHENA_LLM_MODEL:-gemini-2.0-flash}
       EMBEDDING_MODEL_NAME: ${ATHENA_EMBEDDING_MODEL:-gemini-embedding-001}
+      # Azure OpenAI (needed when LLM_PROVIDER=azure)
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
 
-      # MongoDB
+      # MongoDB — both prefixed (config.go) and unprefixed (cache layer)
+      MEMORY_OS_MONGODB_URI: "mongodb://admin:admin123@mongodb:27017/memory_os?authSource=admin"
+      MEMORY_OS_MONGODB_DATABASE: memory_os
       MONGO_URI: "mongodb://admin:admin123@mongodb:27017/memory_os?authSource=admin"
       MONGO_DB: memory_os
 
-      # Redis
+      # Redis — both prefixed (config.go) and unprefixed (cache/redis.go)
+      MEMORY_OS_REDIS_HOST: redis
+      MEMORY_OS_REDIS_PORT: 6379
+      MEMORY_OS_REDIS_PASSWORD: devpassword
+      MEMORY_OS_REDIS_DB: 0
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: devpassword
       REDIS_DB: 0
       CACHE_TTL: 3600
 
-      # Milvus
+      # Milvus — both prefixed and unprefixed
+      MEMORY_OS_MILVUS_HOST: milvus
+      MEMORY_OS_MILVUS_PORT: 19530
       MILVUS_HOST: milvus
       MILVUS_PORT: 19530
-      MILVUS_DATABASE: default
 
-      # ArangoDB
+      # ArangoDB — LTM knowledge graph (read by cmd/memory-server/main.go)
       ARANGODB_URL: http://arangodb:8529
       ARANGODB_USER: root
       ARANGODB_PASSWORD: athena_dev
       ARANGODB_DATABASE: athena_ltm
-
-      # Blob
-      BLOB_PROVIDER: minio
-      BLOB_ENDPOINT: minio:9000
-      BLOB_BUCKET: athena-blobs
-      BLOB_ACCESS_KEY: minioadmin
-      BLOB_SECRET_KEY: minioadmin
-      BLOB_USE_SSL: "false"
 
       # Workers
       ENABLE_MEMORY_WORKERS: "true"
@@ -227,8 +229,7 @@ services:
 
 networks:
   athena_net:
-    # Reuses the jarviscore infra network if running. Created automatically otherwise.
-    name: jarviscore-framework_default
+    name: athena_memory_net
     driver: bridge
 
 volumes:

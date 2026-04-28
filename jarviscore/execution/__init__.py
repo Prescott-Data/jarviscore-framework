@@ -3,7 +3,7 @@ Execution Engine - Complete code generation and execution pipeline
 
 Zero-config components:
 - UnifiedLLMClient: Multi-provider LLM (vLLM, Azure, Gemini, Claude)
-- InternetSearch: Web search and content extraction (DuckDuckGo)
+- InternetSearch: Web search and content extraction (SearXNG + Google Grounded)
 - CodeGenerator: Natural language → Python code
 - SandboxExecutor: Safe code execution with limits
 - AutonomousRepair: Automatic error fixing

@@ -824,16 +824,9 @@ class Mesh:
         # Resolve hitl_inbox path from config or use package-relative default
         inbox_dir = self.config.get("hitl_inbox_dir", None)
 
-        # Lazy-import HITLQueue (ships separately — not in jarviscore core;
-        # will move into jarviscore.hitl when promoted to the framework)
+        # Import framework-native HITLQueue
         try:
-            import importlib, sys
-            # Try framework-native location first (future)
-            try:
-                from jarviscore.hitl import HITLQueue as _HITLQueue
-            except ImportError:
-                # Fall back to application-level location
-                from services.hitl import HITLQueue as _HITLQueue
+            from jarviscore.hitl import HITLQueue as _HITLQueue
         except ImportError:
             _HITLQueue = None
 
@@ -1027,18 +1020,36 @@ class Mesh:
 
     async def _run_agent_loop(self, agent: Agent):
         """
-        Run a single agent's loop with error handling.
+        Run a single agent's loop with crash-restart supervision.
 
-        Wraps the agent's run() method to catch and log errors.
+        If an agent's run() raises, this supervisor logs the error and
+        restarts it with exponential backoff — the other agents in the
+        mesh are unaffected.  Only asyncio.CancelledError (intentional
+        mesh shutdown) propagates upward.
+
+        This mirrors the _safe_run() pattern that exists in the agent
+        layer (signal.py) but was never wired into mesh.run_forever().
         """
-        try:
-            await agent.run()
-        except asyncio.CancelledError:
-            self._logger.debug(f"Agent {agent.agent_id} loop cancelled")
-            raise
-        except Exception as e:
-            self._logger.error(f"Agent {agent.agent_id} loop error: {e}")
-            raise
+        backoff = 5
+        max_backoff = 120
+        while self._started:
+            try:
+                await agent.run()
+                self._logger.info(
+                    f"Agent {agent.agent_id} run() returned normally — exiting supervisor"
+                )
+                break  # clean exit — agent chose to stop
+            except asyncio.CancelledError:
+                self._logger.debug(f"Agent {agent.agent_id} loop cancelled")
+                raise
+            except Exception as e:
+                self._logger.error(
+                    f"Agent {agent.agent_id} loop crashed "
+                    f"({type(e).__name__}: {e}) — restarting in {backoff}s"
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+
 
     def _find_agent_for_step(self, step: Dict[str, Any]) -> Optional[Agent]:
         """

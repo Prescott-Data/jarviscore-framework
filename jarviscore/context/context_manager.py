@@ -212,7 +212,32 @@ class ContextManager:
             lines.append("Rule: if tool+params already failed recently, choose a different strategy.")
             _add_block("\n".join(lines))
 
-        # ═══ BLOCK 3: INPUT CONTEXT (High Priority) ═══
+        # ═══ BLOCK 3: KNOWLEDGE ACCUMULATOR (High Priority) ═══
+        # Surfaces accumulated research findings and API specs so the agent
+        # can see what it has already discovered — prevents blind re-searching.
+        findings = state.internal_variables.get("research_findings", [])
+        api_specs_accum = state.internal_variables.get("api_specs", [])
+        if findings or api_specs_accum:
+            kb_block = "## WHAT I KNOW SO FAR\n"
+            if isinstance(api_specs_accum, list) and api_specs_accum:
+                kb_block += f"**API Specs Extracted:** {len(api_specs_accum)} endpoint(s)\n"
+                for spec in api_specs_accum[-8:]:
+                    if not isinstance(spec, dict):
+                        continue
+                    method = spec.get("method", "?")
+                    path = spec.get("path") or spec.get("url") or "?"
+                    summary_text = spec.get("summary", "")[:80]
+                    kb_block += f"  - `{method} {path}` — {summary_text}\n"
+            if isinstance(findings, list) and findings:
+                kb_block += f"**Research Findings:** {len(findings)} item(s)\n"
+                for finding in findings[-5:]:
+                    if isinstance(finding, dict):
+                        kb_block += f"  - {str(finding.get('summary', finding.get('content_preview', finding)))[:200]}\n"
+                    else:
+                        kb_block += f"  - {str(finding)[:200]}\n"
+            _add_block(kb_block, max_tokens=4000)
+
+        # ═══ BLOCK 4: INPUT CONTEXT (High Priority) ═══
         if state.context:
             input_block = "## INPUT CONTEXT\n"
             # Prior step outputs get highest priority
@@ -235,14 +260,14 @@ class ContextManager:
                     input_block += f"- `{k}`: {val_str}\n"
             _add_block(input_block, max_tokens=8000)
 
-        # ═══ BLOCK 4: BELIEF STATE (Medium Priority) ═══
+        # ═══ BLOCK 5: BELIEF STATE (Medium Priority) ═══
         if state.belief_state:
             belief_block = "## BELIEF STATE\n"
             for k, v in list(state.belief_state.items())[:10]:
                 belief_block += f"- `{k}`: {str(v)[:200]}\n"
             _add_block(belief_block, max_tokens=1000)
 
-        # ═══ BLOCK 5: SCRATCHPAD / THOUGHTS (Medium Priority) ═══
+        # ═══ BLOCK 6: SCRATCHPAD / THOUGHTS (Medium Priority) ═══
         thoughts_content = ""
         if state.thoughts:
             thoughts_content = "\n".join(f"- {t}" for t in state.thoughts[-10:])
@@ -251,7 +276,7 @@ class ContextManager:
         if thoughts_content.strip():
             _add_block(f"## WORKING MEMORY\n{thoughts_content.strip()}", max_tokens=3000)
 
-        # ═══ BLOCK 6: LONG-TERM MEMORY (Medium Priority) ═══
+        # ═══ BLOCK 7: LONG-TERM MEMORY (Medium Priority) ═══
         ltm = state.internal_variables.get("long_term_memory", [])
         if ltm:
             ltm_block = "## LONG-TERM MEMORY (Compressed History)\n"
@@ -262,7 +287,7 @@ class ContextManager:
                     ltm_block += f"- {str(item)[:200]}\n"
             _add_block(ltm_block, max_tokens=2000)
 
-        # ═══ BLOCK 7: TOOL HISTORY (Sliding Window) ═══
+        # ═══ BLOCK 8: TOOL HISTORY (Sliding Window) ═══
         history_budget = min(self.config.history_limit, budget - used - 2000)
         if history_budget > 0 and state.tool_history:
             history_block, history_tokens = self._format_tool_history(
@@ -272,11 +297,12 @@ class ContextManager:
                 blocks.append(history_block)
                 used += history_tokens
 
-        # ═══ BLOCK 8: VARIABLES (Fill Remaining) ═══
+        # ═══ BLOCK 9: VARIABLES (Fill Remaining) ═══
         remaining = budget - used
         if remaining > 500 and state.internal_variables:
             vars_block = "## INTERNAL STATE\n"
-            skip_var_keys = {"long_term_memory", "research_findings", "failure_ledger"}
+            # Skip keys that are surfaced by dedicated blocks above
+            skip_var_keys = {"long_term_memory", "research_findings", "api_specs", "failure_ledger"}
             for key, value in list(state.internal_variables.items())[:10]:
                 if key in skip_var_keys or key.startswith("_"):
                     continue
@@ -316,12 +342,12 @@ class ContextManager:
         for turn in reversed(history[-20:]):
             if hasattr(turn, "tool_name"):
                 # KernelState.ToolResult model
-                output_str = str(turn.tool_output)[:400]
-                if len(str(turn.tool_output)) > 400:
+                output_str = str(turn.tool_output)[:600]
+                if len(str(turn.tool_output)) > 600:
                     output_str += "…"
                 entry = (
                     f"**{turn.tool_name}** [{turn.status}]\n"
-                    f"  Input: {json.dumps(turn.tool_input, default=str)[:300]}\n"
+                    f"  Input: {json.dumps(turn.tool_input, default=str)[:600]}\n"
                     f"  Output: {output_str}"
                 )
                 if turn.error:

@@ -141,10 +141,10 @@ class AthenaClient:
         try:
             http = await self._http()
             payload: Dict[str, Any] = {
+                "tenant_id": self._tenant_id,
                 "user_id": agent_id,
                 "metadata": {
                     "agent_id": agent_id,
-                    "tenant_id": self._tenant_id,
                     "origin_service": "jarviscore",
                     **(metadata or {}),
                 },
@@ -235,19 +235,17 @@ class AthenaClient:
             http = await self._http()
             payload: Dict[str, Any] = {
                 "session_id": session_id,
-                "events": [{
-                    "role": role,
-                    "type": event_type,
-                    "content": content,
-                    "metadata": {
-                        "tenant_id": self._tenant_id,
-                        "origin_service": "jarviscore",
-                        **(metadata or {}),
-                    },
-                }],
+                "role": role,
+                "type": event_type,
+                "content": content,
+                "metadata": {
+                    "tenant_id": self._tenant_id,
+                    "origin_service": "jarviscore",
+                    **(metadata or {}),
+                },
             }
             resp = await http.post(
-                f"/api/v1/sessions/{session_id}/interactions", json=payload
+                f"/api/v1/sessions/{session_id}/events", json=payload
             )
             resp.raise_for_status()
             return True
@@ -357,9 +355,20 @@ class AthenaClient:
         Check Athena's health and dependency status.
 
         Returns dict with status + per-dependency health (Redis, MongoDB, Milvus, ArangoDB).
+        Tries the REST health endpoint first (/health), then falls back to
+        the gRPC gateway endpoint (/api/v1/health).
         """
         try:
             http = await self._http()
+            # REST health endpoint (primary — always implemented)
+            resp = await http.get("/health")
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            pass
+        try:
+            http = await self._http()
+            # gRPC gateway health endpoint (fallback)
             resp = await http.get("/api/v1/health")
             resp.raise_for_status()
             return resp.json()

@@ -2,7 +2,7 @@
 Research Agent Example - Internet Search & Data Extraction
 
 Demonstrates AutoAgent with internet search capabilities.
-Agent automatically gets access to web search tools (DuckDuckGo).
+Agent automatically gets access to web search tools (SearXNG metasearch).
 
 Usage:
     python examples/research_agent_example.py

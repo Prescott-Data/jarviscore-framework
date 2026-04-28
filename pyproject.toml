@@ -70,6 +70,17 @@ azure = [
 browser = [
     "playwright>=1.40.0",
 ]
+# RAG — local vector search + embedding for evidence-backed research
+rag = [
+    "faiss-cpu>=1.7.4",
+    "sentence-transformers>=2.2.0",
+]
+# Research — full researcher stack (search + RAG + browser)
+# Installs everything the ResearcherSubAgent needs for 1:1 IA parity.
+research = [
+    "jarviscore-framework[browser,rag]",
+    "beautifulsoup4>=4.12.0",
+]
 memory-athena = [
     # Zero extra Python deps — Athena is called over HTTP.
     # httpx is already in core. Install Athena itself separately:
@@ -78,7 +89,7 @@ memory-athena = [
 ]
 # Everything — production deployment with all capabilities
 full = [
-    "jarviscore-framework[p2p,web,redis,prometheus,azure,memory-athena]",
+    "jarviscore-framework[p2p,web,redis,prometheus,azure,browser,rag,research,memory-athena]",
 ]
 dev = [
     "jarviscore-framework[p2p,web,redis]",

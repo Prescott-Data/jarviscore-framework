@@ -160,6 +160,124 @@ class FunctionRegistry:
         )
 
     # ─────────────────────────────────────────────────────────────
+    # Naming Conventions & Validation
+    # ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _clean_name_component(name: str) -> str:
+        """Clean and normalize a name component for use in function names.
+
+        Ported from IA CodeGenerator._clean_name_component().
+
+        Args:
+            name: Raw name component (e.g., "Airtable", "create-table!")
+
+        Returns:
+            Cleaned lowercase snake_case string, or empty string if invalid
+        """
+        if not name or name.lower() == "none" or name.strip() == "":
+            return ""
+
+        cleaned = re.sub(r"[^a-zA-Z0-9_]", "_", name.lower())
+        cleaned = re.sub(r"_+", "_", cleaned)
+        cleaned = cleaned.strip("_")
+
+        # Ensure it starts with a letter
+        if cleaned and not cleaned[0].isalpha():
+            cleaned = "f_" + cleaned
+
+        return cleaned
+
+    @classmethod
+    def validate_function_name(
+        cls, name: str, system: Optional[str] = None
+    ) -> str:
+        """Validate and normalize a function name to `{system}_{action}` format.
+
+        If `system` is provided and the name doesn't start with `{system}_`,
+        the system prefix is prepended (soft correction). The name is also
+        cleaned of invalid characters.
+
+        Args:
+            name: Raw function name from the LLM
+            system: Optional system/provider tag (e.g., "airtable", "slack")
+
+        Returns:
+            Validated and possibly corrected function name
+        """
+        cleaned = cls._clean_name_component(name)
+        if not cleaned:
+            cleaned = "unnamed_function"
+
+        if system:
+            system_clean = cls._clean_name_component(system)
+            if system_clean and not cleaned.startswith(f"{system_clean}_"):
+                old_name = cleaned
+                cleaned = f"{system_clean}_{cleaned}"
+                logger.warning(
+                    "Registry naming: auto-prefixed '%s' → '%s' "
+                    "(system=%s)",
+                    old_name,
+                    cleaned,
+                    system_clean,
+                )
+
+        return cleaned
+
+    @classmethod
+    def generate_function_name(
+        cls,
+        system: str,
+        action: str,
+        description: Optional[str] = None,
+    ) -> str:
+        """Generate a deterministic `{system}_{action}` function name.
+
+        Ported from IA CodeGenerator.generate_function_name().
+
+        Args:
+            system: Provider/system name (e.g., "airtable", "google")
+            action: Action verb (e.g., "create_table", "list_users")
+            description: Optional task description for fallback name extraction
+
+        Returns:
+            A clean `{system}_{action}` function name
+        """
+        system_clean = cls._clean_name_component(system)
+        action_clean = cls._clean_name_component(action)
+
+        if system_clean and action_clean:
+            return f"{system_clean}_{action_clean}"
+
+        # Fallback: extract from description
+        if description:
+            words = re.findall(r"\b[a-zA-Z][a-zA-Z0-9_]+\b", description.lower())
+            stop_words = {
+                "the", "a", "an", "and", "or", "but", "in", "on",
+                "at", "to", "for", "with", "by", "about", "as",
+            }
+            filtered = [w for w in words if w not in stop_words and len(w) > 2]
+
+            if system_clean and not action_clean and filtered:
+                for word in filtered:
+                    if word != system_clean:
+                        return f"{system_clean}_{word}"
+
+            if action_clean and not system_clean and filtered:
+                for word in filtered:
+                    if word != action_clean:
+                        return f"{word}_{action_clean}"
+
+            if not system_clean and not action_clean and len(filtered) >= 2:
+                return "_".join(filtered[:3])
+
+        # Absolute fallback with UUID
+        import uuid
+        prefix = system_clean or action_clean or "auto_function"
+        unique_id = str(uuid.uuid4())[:8]
+        return f"{prefix}_{unique_id}"
+
+    # ─────────────────────────────────────────────────────────────
     # Registration & Retrieval
     # ─────────────────────────────────────────────────────────────
 
@@ -191,6 +309,34 @@ class FunctionRegistry:
             True if registered successfully
         """
         metadata = metadata or {}
+
+        # ── Naming enforcement ──
+        # Soft-correct function_name to {system}_{action} convention.
+        # Existing atoms with legacy names are NOT rejected — only new
+        # registrations get auto-prefixed and warned.
+        raw_system = metadata.get("system") or metadata.get("domain")
+        corrected_name = self.validate_function_name(function_name, raw_system)
+        if corrected_name != function_name:
+            logger.info(
+                "Registry soft-corrected function name: '%s' → '%s'",
+                function_name,
+                corrected_name,
+            )
+            function_name = corrected_name
+
+        # ── Metadata completeness warnings ──
+        if not metadata.get("description"):
+            logger.warning(
+                "register_function('%s'): no description provided — "
+                "consider adding one for discoverability.",
+                function_name,
+            )
+        if not metadata.get("capabilities"):
+            logger.warning(
+                "register_function('%s'): no capabilities provided — "
+                "function won't appear in capability-based searches.",
+                function_name,
+            )
 
         # Extract source code
         if callable(function):
