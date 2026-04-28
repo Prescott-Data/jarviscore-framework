@@ -210,6 +210,7 @@ class Kernel:
                 sandbox=self.sandbox,
                 code_registry=self.code_registry,
                 auth_manager=self.auth_manager,  # Nexus auth wiring
+                search_client=self.search_client,  # Self-research tools
                 redis_store=self.redis_store,
                 blob_storage=self.blob_storage,
             )
@@ -463,7 +464,7 @@ class Kernel:
 
             # 3. ACT: create (or reuse) subagent and dispatch
             subagent = self._get_or_create_subagent(
-                role, f"{agent_id}_{role}_{dispatch_num}", step_id
+                role, agent_id, step_id
             )
 
             # Build enriched context with system prompt
@@ -591,7 +592,7 @@ class Kernel:
                     (output.summary or "")[:200],
                 )
                 research_agent = self._get_or_create_subagent(
-                    "researcher", f"{agent_id}_researcher_{dispatch_num}", step_id
+                    "researcher", agent_id, step_id
                 )
                 research_task = (
                     f"Research the API documentation needed to fix this error:\n"
@@ -656,10 +657,16 @@ class Kernel:
 
             # Check HITL policy for escalation
             if self.hitl_policy:
+                # Derive confidence and risk from actual trajectory —
+                # first-dispatch failure is very different from third-dispatch failure.
+                dispatch_confidence = max(0.1, 1.0 - (dispatch_num * 0.25))
+                tokens_spent = total_tokens.get("total", 0)
+                risk_from_spend = min(0.9, tokens_spent / 200_000)
+
                 should_escalate, reason = self.hitl_policy.should_escalate(
                     reason_code="execution_failure",
-                    confidence=0.3,
-                    risk_score=0.5,
+                    confidence=dispatch_confidence,
+                    risk_score=risk_from_spend,
                 )
                 if should_escalate:
                     self._cleanup_step(step_id)

@@ -22,7 +22,7 @@ ROLE_LEASE_PROFILES: Dict[str, Dict[str, Any]] = {
         "action_budget": 108_000,
         "max_total_tokens": 240_000,
         "wall_clock_ms": 240_000,
-        "emergency_turn_fuse": 24,
+        "emergency_turn_fuse": 32,
         "model_tier": "coding",
     },
     "researcher": {
@@ -30,7 +30,7 @@ ROLE_LEASE_PROFILES: Dict[str, Dict[str, Any]] = {
         "action_budget": 60_000,
         "max_total_tokens": 240_000,
         "wall_clock_ms": 240_000,
-        "emergency_turn_fuse": 28,
+        "emergency_turn_fuse": 36,
         "model_tier": "task",
     },
     "communicator": {
@@ -38,7 +38,7 @@ ROLE_LEASE_PROFILES: Dict[str, Dict[str, Any]] = {
         "action_budget": 48_000,
         "max_total_tokens": 120_000,
         "wall_clock_ms": 120_000,
-        "emergency_turn_fuse": 14,
+        "emergency_turn_fuse": 18,
         "model_tier": "task",
     },
     "browser": {
@@ -46,7 +46,7 @@ ROLE_LEASE_PROFILES: Dict[str, Dict[str, Any]] = {
         "action_budget": 60_000,
         "max_total_tokens": 120_000,
         "wall_clock_ms": 300_000,  # 5 min — page loads are slow
-        "emergency_turn_fuse": 20,
+        "emergency_turn_fuse": 28,
         "model_tier": "task",
     },
 }
@@ -72,7 +72,7 @@ class ExecutionLease:
     thinking_budget: int = 56_000
     action_budget: int = 24_000
     wall_clock_ms: int = 180_000
-    emergency_turn_fuse: int = 30
+    emergency_turn_fuse: int = 36
     model_tier: str = "task"
 
     # Mutable tracking

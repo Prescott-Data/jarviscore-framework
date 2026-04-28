@@ -26,6 +26,19 @@ OODA Loop Architecture:
     - ExecutionLease budget (thinking + action tokens, wall clock, turn fuse)
     - ConvergenceGovernor (stagnation, same-tool streak, equivalent outcomes)
     - FailureLedger (fingerprint-based repeat-action blocking)
+    - EpistemicLedger (search/URL dedup, knowledge plateau detection)
+
+    Subclass hooks (all have safe defaults):
+    - _pre_run_hook()       — one-time setup before the loop starts
+    - _pre_execute_hook()   — gate tool calls (e.g. research phase gating)
+    - _can_complete()       — gate DONE signals (e.g. evidence quality check)
+
+    Exit paths:
+    - parsed["type"] == "done"  — LLM signals completion (subject to _can_complete)
+    - state.status == "completed" — tool-driven exit (e.g. publish_research_findings)
+    - Lease/budget exhaustion   — emergency yield
+    - Convergence stall         — post-pivot yield
+    - Emergency turn fuse       — max_turns reached
 """
 
 import json
@@ -37,6 +50,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.kernel.cognition import AgentCognitionManager, ConvergenceGovernor, FailureLedger
+from jarviscore.kernel.epistemic import EpistemicLedger
 from jarviscore.kernel.state import KernelState, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -164,16 +178,22 @@ class BaseSubAgent(ABC):
         """Build the user prompt for a single OODA turn.
 
         Combines the context block (from ContextManager) with the
-        decision contract.
+        Epistemic Decision Contract — a structured self-assessment
+        that forces the LLM to reason about gaps before acting.
         """
-        return (
-            f"{context_block}\n\n"
-            f"---\n"
-            f"**ROLE: {self.role.upper()} AGENT**\n\n"
-            f"**DECISION:**\n"
-            f"Decide the next action to complete your mission.\n"
-            f"Use the text protocol above (THOUGHT/TOOL/PARAMS or THOUGHT/DONE/RESULT)."
+        parts = [context_block, "\n---"]
+        parts.append(f"**ROLE: {self.role.upper()} AGENT** | Turn {state.turn}")
+
+        # Epistemic Decision Contract — forces self-assessment
+        parts.append(
+            "**DECISION CONTRACT (follow this structure in your THOUGHT):**\n"
+            "1. **KNOWN:** What have I established so far? (refer to WHAT I KNOW SO FAR above)\n"
+            "2. **GAP:** What specific information am I still missing?\n"
+            "3. **STRATEGY:** What is the most efficient next step to close the gap?\n"
+            "4. **EXIT CHECK:** Do I have enough to produce a useful result? If yes, call DONE.\n\n"
+            "Then emit your TOOL/PARAMS or DONE/RESULT."
         )
+        return "\n\n".join(parts)
 
     # ──────────────────────────────────────────────────────────────────────
     # OODA Loop
@@ -246,6 +266,14 @@ class BaseSubAgent(ABC):
         total_cost = 0.0
         system_prompt = self._build_system_prompt()
 
+        # Rolling conversation history for multi-turn LLM continuity
+        # (prevents amnesia — the LLM sees its own prior reasoning)
+        conversation_history: List[Dict[str, str]] = []
+
+        # Epistemic consistency enforcement — blocks redundant searches/URLs
+        # before they execute (deterministic, unlike prompt-based nudges)
+        _epistemic = EpistemicLedger()
+
         for turn in range(max_turns):
             state.turn = turn
 
@@ -289,10 +317,12 @@ class BaseSubAgent(ABC):
 
             # ═══ 3. DECIDE — LLM call ═══
             user_prompt = self._build_user_prompt(state, context_block)
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
+            messages = [{"role": "system", "content": system_prompt}]
+            # Thread prior turns as assistant/user pairs (last 10 for continuity)
+            for hist_entry in conversation_history[-10:]:
+                messages.append({"role": "assistant", "content": hist_entry["assistant"]})
+                messages.append({"role": "user", "content": hist_entry["observation"]})
+            messages.append({"role": "user", "content": user_prompt})
 
             _trace.log_llm_request(system_prompt[:300], user_prompt[:500])
 
@@ -342,6 +372,26 @@ class BaseSubAgent(ABC):
 
             # ═══ Handle DONE ═══
             if parsed["type"] == "done":
+                # ── Done-gate: subclasses can reject premature completion ──
+                can_exit, reject_reason = self._can_complete(state, parsed)
+                if not can_exit:
+                    logger.info(
+                        f"[{self.role}] Done rejected: {reject_reason}"
+                    )
+                    state.add_thought(
+                        f"[DONE_GATE] Cannot complete yet: {reject_reason}. "
+                        f"Continue working."
+                    )
+                    conversation_history.append({
+                        "assistant": content,
+                        "observation": (
+                            f"[Turn {turn}] DONE rejected: {reject_reason}\n"
+                            f"You must address this before calling DONE again."
+                        ),
+                    })
+                    self._cognition.track_usage("done", tokens=llm_tokens_this_turn)
+                    continue
+
                 state.status = "completed"
                 state.output = parsed.get("result")
                 thought = parsed.get("thought", "")
@@ -396,6 +446,66 @@ class BaseSubAgent(ABC):
                     )
                     continue
 
+                # ── Epistemic consistency check ──
+                # Blocks redundant searches and URL re-reads BEFORE execution.
+                # Unlike the convergence governor (which reacts after stalls),
+                # this prevents the wasteful action from happening at all.
+                _ep_verdict = _epistemic.validate_action(
+                    tool_name, tool_params, turn, state
+                )
+                if _ep_verdict.action == "redirect":
+                    logger.info(
+                        f"[{self.role}] Epistemic redirect: {_ep_verdict.reason}"
+                    )
+                    state.add_thought(f"[EPISTEMIC] {_ep_verdict.injection}")
+                    state.add_tool_result(
+                        tool_name, tool_params,
+                        {"status": "blocked", "reason": _ep_verdict.reason},
+                        error=_ep_verdict.reason,
+                    )
+                    trajectory.append({
+                        "turn": turn, "type": "epistemic_redirect",
+                        "tool": tool_name, "reason": _ep_verdict.reason,
+                    })
+                    conversation_history.append({
+                        "assistant": content,
+                        "observation": (
+                            f"[Turn {turn}] BLOCKED by epistemic ledger: "
+                            f"{_ep_verdict.reason}\n{_ep_verdict.injection}"
+                        ),
+                    })
+                    continue
+
+                # ── Pre-execute hook: subclass-level gating ──
+                # Subclasses override _pre_execute_hook to enforce constraints
+                # (e.g. researcher phase gating). If it returns a dict, that
+                # dict is used as the tool result and execution is skipped.
+                hook_result = await self._pre_execute_hook(
+                    tool_name, tool_params, state
+                )
+                if hook_result is not None:
+                    logger.info(
+                        f"[{self.role}] Pre-execute hook blocked '{tool_name}': "
+                        f"{str(hook_result)[:200]}"
+                    )
+                    state.add_tool_result(
+                        tool_name, tool_params, hook_result,
+                        error=hook_result.get("error") if isinstance(hook_result, dict) else None,
+                    )
+                    trajectory.append({
+                        "turn": turn, "type": "pre_execute_block",
+                        "tool": tool_name,
+                        "reason": hook_result.get("error", "blocked by pre-execute hook"),
+                    })
+                    conversation_history.append({
+                        "assistant": content,
+                        "observation": (
+                            f"[Turn {turn}] Tool '{tool_name}' blocked by pre-execute hook: "
+                            f"{str(hook_result)[:500]}"
+                        ),
+                    })
+                    continue
+
                 # Execute tool
                 turn_log: Dict[str, Any] = {
                     "turn": turn,
@@ -419,6 +529,14 @@ class BaseSubAgent(ABC):
                 error_str = tool_result.get("error") if isinstance(tool_result, dict) else None
                 state.add_tool_result(tool_name, tool_params, tool_result, error=error_str)
 
+                # ── Record in epistemic ledger + check knowledge plateau ──
+                _epistemic.record_outcome(
+                    tool_name, tool_params, tool_result, turn, state
+                )
+                _plateau_signal = _epistemic.check_plateau(state, turn)
+                if _plateau_signal:
+                    state.add_thought(f"[EPISTEMIC] {_plateau_signal}")
+
                 # ── Track usage + convergence ──
                 self._cognition.track_usage(
                     tool_name, tokens=llm_tokens_this_turn, tool_output=tool_result,
@@ -436,27 +554,75 @@ class BaseSubAgent(ABC):
                     turn_log["status"] = "success"
                     _trace.log_tool_result(tool_name, tool_result)
 
-                # ── Check convergence stall ──
-                stall = self._cognition.convergence.evaluate(tool_name, tool_result)
+                # ── Check convergence stall (already evaluated inside track_usage) ──
+                stall = self._cognition.check_stall_verdict()
                 if stall:
-                    stall_reason = stall.get("reason", "Convergence stall")
-                    logger.warning(f"[{self.role}] Convergence stall: {stall_reason}")
-                    state.add_thought(f"[CONVERGENCE] {stall_reason}")
-                    trajectory.append(turn_log)
-                    _trace.log_step_complete(False, stall_reason)
-                    return AgentOutput(
-                        status=stall.get("action", "yield"),
-                        summary=stall_reason,
-                        payload=state.get_final_output(),
-                        trajectory=trajectory,
-                        metadata={
-                            "tokens": total_tokens, "cost_usd": total_cost,
-                            "typed_outcome": stall.get("typed_outcome"),
-                            "cognition": self._cognition.get_budget_summary(),
-                        },
-                    )
+                    if not state.internal_variables.get("_pivot_attempted"):
+                        # Grant ONE pivot turn — inject strategic redirect
+                        state.internal_variables["_pivot_attempted"] = True
+                        state.add_thought(
+                            "[STRATEGIC PIVOT] You are repeating the same approach "
+                            "without making progress. You MUST try a completely "
+                            "different strategy this turn. Consider: different tool, "
+                            "different parameters, or call DONE with partial results."
+                        )
+                        # Reset governor streaks to allow one more turn
+                        self._cognition.convergence._same_tool_streak = 0
+                        self._cognition.convergence._equiv_streak = 0
+                        self._cognition.convergence._last_verdict = None
+                        logger.info(
+                            f"[{self.role}] Strategic pivot granted — "
+                            f"resetting convergence for one more turn"
+                        )
+                        trajectory.append(turn_log)
+                        # Record conversation for continuity through the pivot
+                        observation = (
+                            f"Tool '{tool_name}' returned: "
+                            f"{str(tool_result)[:800]}"
+                        )
+                        conversation_history.append({
+                            "assistant": content,
+                            "observation": observation,
+                        })
+                        continue
+                    else:
+                        # Pivot was already attempted — escalate now
+                        stall_reason = stall.get("reason", "Convergence stall")
+                        logger.warning(
+                            f"[{self.role}] Convergence stall (post-pivot): "
+                            f"{stall_reason}"
+                        )
+                        state.add_thought(f"[CONVERGENCE] {stall_reason}")
+                        trajectory.append(turn_log)
+                        _trace.log_step_complete(False, stall_reason)
+                        return AgentOutput(
+                            status=stall.get("action", "yield"),
+                            summary=stall_reason,
+                            payload=state.get_final_output(),
+                            trajectory=trajectory,
+                            metadata={
+                                "tokens": total_tokens, "cost_usd": total_cost,
+                                "typed_outcome": stall.get("typed_outcome"),
+                                "cognition": self._cognition.get_budget_summary(),
+                            },
+                        )
 
                 trajectory.append(turn_log)
+
+                # Record conversation history for multi-turn LLM continuity
+                # Structured turn digest instead of raw output — helps the LLM
+                # retain what was learned and reason about strategy changes.
+                result_str = str(tool_result)[:800]
+                observation = (
+                    f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}):\n"
+                    f"{result_str}\n\n"
+                    f"Reflect: What new information does this provide? "
+                    f"Does it change your strategy?"
+                )
+                conversation_history.append({
+                    "assistant": content,
+                    "observation": observation,
+                })
 
                 # Log turn to memory
                 if memory:
@@ -476,6 +642,27 @@ class BaseSubAgent(ABC):
                         await memory.save_checkpoint(state.model_dump_json())
                     except Exception as e:
                         logger.debug(f"Checkpoint save failed: {e}")
+
+                # ── State-driven exit ──
+                # Tools like publish_research_findings set state.status = "completed"
+                # to signal they've produced a final result. This check makes that
+                # a first-class exit path — no separate DONE emission needed.
+                if getattr(state, "status", None) == "completed":
+                    summary = (
+                        f"Completed via tool '{tool_name}' "
+                        f"(state-driven exit on turn {turn})"
+                    )
+                    _trace.log_step_complete(True, summary)
+                    return AgentOutput(
+                        status="success",
+                        payload=tool_result,
+                        summary=summary,
+                        trajectory=trajectory,
+                        metadata={
+                            "tokens": total_tokens, "cost_usd": total_cost,
+                            "exit_type": "state_driven",
+                        },
+                    )
 
                 continue
 
@@ -507,7 +694,7 @@ class BaseSubAgent(ABC):
         )
 
     # ──────────────────────────────────────────────────────────────────────
-    # Pre-run Hook (overridable by subclasses)
+    # Subclass Hooks (overridable)
     # ──────────────────────────────────────────────────────────────────────
 
     async def _pre_run_hook(self, state: KernelState) -> None:
@@ -518,6 +705,39 @@ class BaseSubAgent(ABC):
         """
         pass
 
+    async def _pre_execute_hook(
+        self,
+        tool_name: str,
+        params: Dict[str, Any],
+        state: KernelState,
+    ) -> Optional[Dict[str, Any]]:
+        """Called before tool execution — subclass gate point.
+
+        If this returns a dict, that dict is used as the tool result and
+        the actual tool is NOT executed. This enables subclass-specific
+        enforcement (e.g. research phase gating, tool allowlists).
+
+        If this returns None, the tool executes normally.
+
+        Default: always allow (returns None).
+        """
+        return None
+
+    def _can_complete(
+        self,
+        state: KernelState,
+        parsed: Dict[str, Any],
+    ) -> tuple:
+        """Called before accepting a DONE signal — subclass gate point.
+
+        Returns (True, "") to allow completion, or (False, reason) to
+        reject it. On rejection the loop continues — the LLM sees the
+        reason and must address it before calling DONE again.
+
+        Default: always allow.
+        """
+        return (True, "")
+
     # ──────────────────────────────────────────────────────────────────────
     # Tool Execution
     # ──────────────────────────────────────────────────────────────────────
@@ -527,6 +747,31 @@ class BaseSubAgent(ABC):
         tool = self._tools.get(tool_name)
         if not tool:
             return {"status": "error", "error": f"Unknown tool: {tool_name}", "available": self.tool_names}
+
+        # Guard: if params are the {"raw": ...} fallback from _parse_response
+        # (line 592), don't unpack them as kwargs — the tool won't accept a
+        # 'raw' argument and will crash with "unexpected keyword argument".
+        if "raw" in params and len(params) == 1:
+            import inspect
+            try:
+                sig = inspect.signature(tool.func)
+                expected = [p for p in sig.parameters if p != "self"]
+            except (ValueError, TypeError):
+                expected = ["(could not inspect)"]
+            logger.warning(
+                f"[{self.role}] Tool '{tool_name}' received malformed params "
+                f"(JSON parse failed). Expected: {expected}"
+            )
+            return {
+                "status": "error",
+                "error": (
+                    f"Could not parse your PARAMS as valid JSON. "
+                    f"Tool '{tool_name}' expects these parameters: {expected}. "
+                    f"Please re-emit TOOL/PARAMS with a valid JSON object."
+                ),
+                "semantic_error": "MALFORMED_PARAMS",
+                "expected_params": expected,
+            }
 
         try:
             result = tool.func(**params)

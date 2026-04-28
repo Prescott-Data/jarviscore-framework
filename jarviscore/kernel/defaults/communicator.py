@@ -136,11 +136,23 @@ Your job: transform raw data into clear, actionable output for your audience.
 
     def _tool_draft_message(
         self,
-        content: str,
+        content: str = "",
         audience: str = "technical",
         format: str = "plain",
+        **kwargs,  # absorb unexpected LLM params
     ) -> Dict[str, Any]:
         """Draft a message for a target audience."""
+        # LLM key-name variance: absorb common alternatives
+        if not content:
+            content = (
+                kwargs.get("text", "")
+                or kwargs.get("body", "")
+                or kwargs.get("message", "")
+                or kwargs.get("msg", "")
+            )
+        if not content:
+            return {"status": "error", "error": "Missing content — provide the message text"}
+
         draft = {
             "version": len(self._drafts) + 1,
             "content": content,
@@ -152,9 +164,10 @@ Your job: transform raw data into clear, actionable output for your audience.
 
     def _tool_format_report(
         self,
-        title: str,
+        title: str = "",
         sections: Optional[List[Dict[str, str]]] = None,
         format: str = "markdown",
+        **kwargs,  # absorb unexpected LLM params
     ) -> Dict[str, Any]:
         """Format structured data into a report."""
         sections = sections or []
@@ -190,12 +203,34 @@ Your job: transform raw data into clear, actionable output for your audience.
 
     async def _tool_send_to_peer(
         self,
-        peer_role: str,
-        message: str,
+        peer_role: str = "",
+        message: str = "",
         priority: str = "normal",
         **kwargs,  # absorb unexpected LLM params
     ) -> Dict[str, Any]:
         """Send a message to a peer agent via the mailbox."""
+        # LLMs frequently use alternate key names — absorb common variations
+        if not peer_role:
+            peer_role = (
+                kwargs.get("role", "")
+                or kwargs.get("target", "")
+                or kwargs.get("peer", "")
+                or kwargs.get("recipient", "")
+                or kwargs.get("to", "")
+            )
+        if not message:
+            message = (
+                kwargs.get("content", "")
+                or kwargs.get("text", "")
+                or kwargs.get("body", "")
+                or kwargs.get("msg", "")
+            )
+
+        if not peer_role:
+            return {"status": "error", "error": "Missing peer_role — specify which agent to message"}
+        if not message:
+            return {"status": "error", "error": "Missing message — specify what to send"}
+
         if not self.mailbox:
             return {"status": "error", "error": "No mailbox configured"}
 

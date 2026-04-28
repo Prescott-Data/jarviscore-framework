@@ -63,16 +63,13 @@ ACTION_TOOLS = frozenset({
     "done",
 })
 
-# Spinning detection: N consecutive identical tool calls
-_SPIN_THRESHOLD = 3
-
-# Analysis paralysis: N consecutive thinking-only tools without any action
-_PARALYSIS_THRESHOLD = 5
+# (Legacy _SPIN_THRESHOLD and _PARALYSIS_THRESHOLD removed in Phase 2.
+#  The ConvergenceGovernor handles all stall detection now.)
 
 # Convergence governor defaults (all env-overridable)
-_CONV_MAX_STAGNANT_TURNS = int(os.getenv("CONVERGENCE_MAX_STAGNANT_TURNS", "4"))
-_CONV_MAX_SAME_TOOL_STREAK = int(os.getenv("CONVERGENCE_MAX_SAME_TOOL_STREAK", "3"))
-_CONV_MAX_EQUIV_STREAK = int(os.getenv("CONVERGENCE_MAX_EQUIVALENT_ACTION_STREAK", "3"))
+_CONV_MAX_STAGNANT_TURNS = int(os.getenv("CONVERGENCE_MAX_STAGNANT_TURNS", "6"))
+_CONV_MAX_SAME_TOOL_STREAK = int(os.getenv("CONVERGENCE_MAX_SAME_TOOL_STREAK", "5"))
+_CONV_MAX_EQUIV_STREAK = int(os.getenv("CONVERGENCE_MAX_EQUIVALENT_ACTION_STREAK", "4"))
 _CONV_MIN_PROGRESS_SCORE = float(os.getenv("CONVERGENCE_MIN_PROGRESS_SCORE", "1.0"))
 _CONV_STALL_ACTION = os.getenv("CONVERGENCE_STALL_ACTION", "yield").strip().lower()
 
@@ -118,6 +115,7 @@ class ConvergenceGovernor:
         self._last_outcome_sig: Optional[str] = None
         self._stagnant_turns: int = 0
         self._turn: int = 0
+        self._last_verdict: Optional[Dict[str, Any]] = None
 
     @staticmethod
     def _progress_score(tool_output: Any) -> float:
@@ -212,6 +210,7 @@ class ConvergenceGovernor:
             tripped.append(f"stagnant_turns={self._stagnant_turns}")
 
         if not tripped:
+            self._last_verdict = None
             return None
 
         reason = (
@@ -222,26 +221,40 @@ class ConvergenceGovernor:
             "YIELD_CONVERGENCE_STALL" if self.stall_action == "yield"
             else "FAIL_CONVERGENCE_STALL"
         )
-        return {"action": self.stall_action, "reason": reason, "typed_outcome": typed_outcome}
+        verdict = {"action": self.stall_action, "reason": reason, "typed_outcome": typed_outcome}
+        self._last_verdict = verdict
+        return verdict
+
+    def check_stall_verdict(self) -> Optional[Dict[str, Any]]:
+        """Return the cached stall verdict from the most recent evaluate() call.
+
+        This avoids double-evaluation — callers can check the verdict
+        without re-running evaluate() and double-counting streaks.
+        """
+        return self._last_verdict
 
     def get_intervention(self) -> Optional[str]:
-        """Return a soft ⚠️ warning string for injection into the next LLM prompt, if warranted."""
+        """Return a coaching message if the agent's trajectory suggests it
+        should reconsider its approach. Uses informational tone — the agent
+        decides what to do with the signal."""
         if self._same_tool_streak >= self.max_same_tool_streak:
             return (
-                f"⚠️ CONVERGENCE WARNING: You have called '{self._last_tool}' "
-                f"{self._same_tool_streak} times in a row without meaningful new results. "
-                f"Try a different tool or approach — or call DONE if you have enough to work with."
+                f"You have called '{self._last_tool}' {self._same_tool_streak} times "
+                f"consecutively. Each call returned similar results. Consider: "
+                f"(1) trying a different tool, (2) adjusting your parameters, or "
+                f"(3) synthesizing the results you already have."
             )
         if self._equiv_streak >= self.max_equiv_streak:
             return (
-                f"⚠️ CONVERGENCE WARNING: Your last {self._equiv_streak} tool calls produced "
-                f"the same outcome. You are not making progress. Switch strategy or call DONE."
+                f"Your last {self._equiv_streak} tool calls produced equivalent "
+                f"outcomes. A different approach may yield new information, or you "
+                f"may already have what you need to produce a result."
             )
         if self._stagnant_turns >= self.max_stagnant_turns:
             return (
-                f"⚠️ CONVERGENCE WARNING: {self._stagnant_turns} consecutive turns with no "
-                f"meaningful progress. Reassess your approach entirely or call DONE with "
-                f"what you have."
+                f"{self._stagnant_turns} consecutive turns without new results. "
+                f"Consider stepping back to re-evaluate your strategy, or "
+                f"synthesize what you have into a partial result."
             )
         return None
 
@@ -443,13 +456,14 @@ class FailureLedger:
 
 class AgentCognitionManager:
     """
-    Tracks cognitive budget, phase transitions, and safety guards.
+    Tracks cognitive budget, phase transitions, and convergence.
 
     Usage:
         cognition = AgentCognitionManager(lease)
         cognition.track_usage("web_search", tokens=500)
-        if cognition.detect_spinning("web_search"):
-            # Inject warning into prompt
+        stall = cognition.check_stall_verdict()
+        if stall:
+            # Agent is stalling — inject coaching or escalate
         if not cognition.should_continue():
             # Budget exhausted — stop
     """
@@ -463,7 +477,7 @@ class AgentCognitionManager:
     ):
         self.lease = lease
         self._tool_history: List[str] = []
-        self._recent_tools: deque = deque(maxlen=_SPIN_THRESHOLD)
+        self._recent_tools: deque = deque(maxlen=6)  # diagnostic window
         self._has_acted: bool = False
         self._phase: AgentPhase = AgentPhase.DISCOVERY
         self._done_called: bool = False
@@ -563,14 +577,16 @@ class AgentCognitionManager:
         return not self.lease.is_expired()
 
     def detect_spinning(self, tool_name: str) -> bool:
-        """
-        Detect if the same tool has been called N+ times consecutively.
+        """Legacy spinning check — DEPRECATED.
 
-        Call this AFTER track_usage() to check the latest state.
+        Use check_stall_verdict() instead, which provides richer
+        diagnostics via the ConvergenceGovernor.
+
+        Kept for backward compatibility with existing tests.
         """
-        if len(self._recent_tools) < _SPIN_THRESHOLD:
+        if len(self._recent_tools) < 3:
             return False
-        return all(t == tool_name for t in self._recent_tools)
+        return all(t == tool_name for t in list(self._recent_tools)[-3:])
 
     def detect_premature_done(self, has_acted: bool = None) -> bool:
         """
@@ -589,18 +605,16 @@ class AgentCognitionManager:
 
     def get_intervention(self) -> Optional[str]:
         """
-        Return a warning message if the agent needs course correction.
+        Return a coaching message if the agent should reconsider its approach.
 
         Priority order (highest first):
         1. Budget exhaustion (thinking 80%+ used, nothing produced yet)
-        2. Convergence Governor warning (stall / same-tool / equiv-outcome)
-        3. Analysis paralysis (N thinking tools called, never acted)
-        4. Spinning (same tool N times) — legacy, now also caught by Governor
-        5. Low remaining budget
+        2. Convergence Governor coaching (stall / same-tool / equiv-outcome)
+        3. Low remaining budget
 
         Returns None if no intervention is needed.
         """
-        # 1. Force action when thinking budget nearly exhausted and nothing produced
+        # 1. Nudge when thinking budget mostly consumed without output
         thinking_pct = (
             self.lease.thinking_used / self.lease.thinking_budget
             if getattr(self.lease, "thinking_budget", 0) > 0
@@ -608,41 +622,24 @@ class AgentCognitionManager:
         )
         if thinking_pct >= 0.80 and not self._has_acted:
             return (
-                "⚠️ BUDGET ALERT: You have used 80%+ of your thinking budget without "
-                "producing any output. You MUST call DONE now with the context you have. "
-                "Perfect is the enemy of done — produce a result with what you know."
+                "You have used most of your research budget without producing "
+                "output yet. Focus on synthesizing what you've gathered so far "
+                "into a clear result."
             )
 
-        # 2. Convergence Governor
+        # 2. Convergence Governor — single source of truth for stall detection
         conv_warning = self.convergence.get_intervention()
         if conv_warning:
             return conv_warning
 
-        # 3. Analysis paralysis
-        if self._thinking_only_streak >= _PARALYSIS_THRESHOLD and not self._has_acted:
-            return (
-                f"⚠️ ANALYSIS PARALYSIS: You have called {self._thinking_only_streak} "
-                f"thinking-only tools in a row without ever taking action. "
-                f"You have sufficient context — call DONE now with your findings."
-            )
-
-        # 4. Spin (legacy path — caught by Governor too, kept for direct callers)
-        if len(self._recent_tools) >= _SPIN_THRESHOLD:
-            last_tool = self._recent_tools[-1]
-            if all(t == last_tool for t in self._recent_tools):
-                return (
-                    f"⚠️ SPINNING: You have called '{last_tool}' {_SPIN_THRESHOLD} times "
-                    f"in a row. Try a different approach or call DONE if you have a result."
-                )
-
-        # 5. Low budget
+        # 3. Low budget awareness
         total_remaining = self.lease.remaining_total()
         total_budget = self.lease.max_total_tokens
         if total_budget > 0 and total_remaining / total_budget < 0.10:
             return (
-                f"⚠️ LOW BUDGET: Only {total_remaining} tokens remaining "
+                f"About {total_remaining} tokens remaining "
                 f"({total_remaining / total_budget:.0%} of budget). "
-                f"Wrap up and call DONE soon."
+                f"Consider wrapping up with what you have."
             )
 
         return None
@@ -680,6 +677,14 @@ class AgentCognitionManager:
         Can also be called explicitly if caller wants the stall verdict object.
         """
         return self.convergence.evaluate(tool_name, tool_output)
+
+    def check_stall_verdict(self) -> Optional[Dict[str, Any]]:
+        """Return cached stall verdict from the most recent evaluate() call.
+
+        This avoids re-running evaluate() and double-counting streaks.
+        The verdict is set by track_usage() → convergence.evaluate().
+        """
+        return self.convergence.check_stall_verdict()
 
     def get_budget_summary(self) -> Dict[str, Any]:
         """Return a summary for prompt injection."""

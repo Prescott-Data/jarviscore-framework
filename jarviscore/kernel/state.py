@@ -148,6 +148,14 @@ class KernelState(BaseModel):
         if len(self.thoughts) > 20:
             self.thoughts = self.thoughts[-20:]
 
+    def update_epistemic_state(self, key: str, value: Any) -> None:
+        """Update belief state with a discovered fact or constraint.
+
+        Called by subagent tools after successful data extraction to
+        populate the BELIEF STATE context block visible to the LLM.
+        """
+        self.belief_state[key] = value
+
     def get_last_tool_result(self) -> Optional[ToolResult]:
         """Return the most recent tool result, or None."""
         return self.tool_history[-1] if self.tool_history else None

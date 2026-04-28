@@ -517,27 +517,44 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             )
         return None
 
-    async def _act(self, state, decision: Dict[str, Any], cognition):
-        tool_name = decision.get("tool") or "unknown"
+    async def _pre_execute_hook(
+        self,
+        tool_name: str,
+        params: Dict[str, Any],
+        state: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Enforce research phase-tool contract before execution.
+
+        Checks whether the requested tool is allowed in the current
+        research phase. If not, returns an error dict (which the base
+        loop uses as the tool result, skipping actual execution).
+        """
         violation = self._check_phase_tool_contract(str(tool_name))
         if violation:
-            params = decision.get("parameters", {}) if isinstance(decision, dict) else {}
             state.add_thought(f"[RESEARCH_CONTRACT] {violation}")
-            state.add_tool_result(str(tool_name), params, None, violation)
             self.tracer.log_tool_start(str(tool_name), params)
             self.tracer.log_tool_result(str(tool_name), None, violation)
-            return
-        await super()._act(state, decision, cognition)
+            return {
+                "status": "error",
+                "error": violation,
+                "semantic_error": "PHASE_TOOL_CONTRACT_VIOLATION",
+            }
+        return None
 
-    def _can_complete(self, state, params: Dict[str, Any]) -> Tuple[bool, str]:
-        base_ok, base_reason = super()._can_complete(state, params)
+    def _can_complete(self, state, parsed: Dict[str, Any]) -> Tuple[bool, str]:
+        """Reject premature DONE if no meaningful research has been done."""
+        base_ok, base_reason = super()._can_complete(state, parsed)
         if not base_ok:
             return base_ok, base_reason
+        # Extract result/params from the parsed DONE signal
+        params = parsed.get("result") or {}
+        if not isinstance(params, dict):
+            params = {}
         meaningful_research = any(
             t.status == "success" and t.tool_name in {"read_web_content", "browser_get_text", "browser_get_page_text", "rag_query", "read_file", "extract_api_details"}
             for t in state.tool_history
         )
-        if not meaningful_research and not (params and (params.get("evidence") or params.get("summary"))):
+        if not meaningful_research and not (params.get("evidence") or params.get("summary")):
             return False, "Research completion requires at least one successful content/evidence tool result"
         valid, reason, _ = self._validate_done_payload(state, params)
         if not valid:
@@ -1829,6 +1846,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         url_ids: Optional[List[str]] = None,
         max_content_length: Optional[int] = None,
         auto_escalate: bool = True,
+        **kwargs,  # absorb unexpected LLM-generated args (e.g. raw=True)
     ) -> Dict[str, Any]:
         """
         Fast HTTP ingestion for URLs.
@@ -2347,6 +2365,14 @@ DOCUMENTATION TEXT:
                     "type": "api_extraction",
                     "timestamp": asyncio.get_event_loop().time(),
                 })
+                # Update belief state so the epistemic context is available
+                self.current_state.update_epistemic_state(
+                    "api_specs_count",
+                    len(self.current_state.internal_variables.get("api_specs", []))
+                )
+                self.current_state.update_epistemic_state(
+                    "last_extraction_source", text[:100]
+                )
 
         self.tracer.log_tool_result("extract_api_details", {"specs_extracted": spec_count})
         return result
@@ -2362,6 +2388,7 @@ DOCUMENTATION TEXT:
         file_glob: str = "*.py",
         max_results: int = 50,
         context_lines: int = 2,
+        **kwargs,  # absorb unexpected LLM-generated args (e.g. raw=True)
     ) -> Dict[str, Any]:
         """
         Deterministic text/regex search of the local codebase.
@@ -3169,7 +3196,7 @@ DOCUMENTATION TEXT:
         max_turns: Optional[int] = None,
         **kwargs,  # absorb model=, cognition=, context_manager=, memory=, trace= from Kernel
     ):
-        output = await super().run(task, context, max_turns=max_turns)
+        output = await super().run(task, context, max_turns=max_turns, **kwargs)
         try:
             self.tracer.log_event("research_run_summary", self._build_research_trace_summary(output))
         except Exception as exc:

@@ -3,15 +3,16 @@ CoderSubAgent — Production-grade code generation and execution specialist.
 
 Doctrine:
   1. CODE FROM KNOWLEDGE FIRST — write code from training data, don't research first
-  2. FALLBACK LADDER — write_code → quick search on concrete unknown → delegate_research
+  2. FALLBACK LADDER — write_code → quick_api_search on concrete unknown → check_registry → delegate_research
   3. SAFETY FIRST — try/except everywhere, never fail silently
   4. DIAGNOSE BEFORE RETRY — form a hypothesis about WHY before next attempt
   5. VERIFY BEFORE DONE — must have evidence the function works (execution output)
   6. REPORT FAITHFULLY — if code failed, say so in the summary
   7. NO SCOPE CREEP — do exactly what was asked, nothing more
   8. RESPECT AUTH — never hardcode tokens; use auth dict from namespace
-  9. REGISTER SUCCESS — promote working code to FunctionRegistry
+  9. REGISTER SUCCESS — promote working code to FunctionRegistry with {system}_{action} naming
   10. ASK FOR HELP — delegate_research when stuck, not when lazy
+  11. REGISTRY NAMING — all registered functions MUST follow {system}_{action} convention
 """
 
 import ast
@@ -87,10 +88,11 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
 
 2. **FALLBACK LADDER** (follow in order):
    a. write_code → Use your training knowledge to write code directly
-   b. If execution fails with a CONCRETE unknown (e.g. wrong endpoint, unknown field):
-      Use check_registry to search for existing working functions
-   c. If still stuck after 2 failed attempts: call delegate_research as LAST RESORT
-   NEVER call delegate_research before attempting to write code first.
+   b. If execution fails with a CONCRETE unknown (wrong endpoint, unknown field, unexpected response shape):
+      Use quick_api_search or read_api_docs to look up the specific detail you need
+   c. If still stuck: check_registry to search for existing working functions
+   d. If stuck after 2 failed attempts + self-research: call delegate_research as ABSOLUTE LAST RESORT
+   NEVER call delegate_research before attempting to write code AND self-research first.
 
 3. **SAFETY FIRST** — Every function must:
    - Wrap external calls in try/except
@@ -148,15 +150,25 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
 10. **NO SCOPE CREEP** — Do exactly what was asked. If the task says "fetch user list",
     don't also build a caching layer and a retry system.
 
+11. **REGISTRY NAMING** — When calling register_function:
+    - function_name MUST follow {system}_{action} format (e.g., "airtable_create_table")
+    - system parameter is REQUIRED (e.g., "airtable", "slack", "github")
+    - description is REQUIRED (what the function does)
+    - capabilities must include at least one tag
+    Example: register_function(function_name="airtable_create_table",
+                               system="airtable",
+                               capabilities=["create_table"],
+                               description="Create a new table in Airtable")
+
 ## WORKFLOW
 
 1. check_registry — always check first. Reuse verified functions when available.
 2. write_code — write your Python function.
 3. execute_code — run in sandbox with the candidate_id from write_code.
 4. If success → register_function → DONE.
-5. If failure → read error, diagnose, fix, re-execute (max 2 repairs).
+5. If failure → read error, diagnose, quick_api_search/read_api_docs if concrete unknown, fix, re-execute (max 2 repairs).
 6. If auth error → DONE with auth_required note.
-7. If stuck after repairs → delegate_research (LAST RESORT).
+7. If stuck after repairs + self-research → delegate_research (ABSOLUTE LAST RESORT).
 """
 
     def __init__(
@@ -167,6 +179,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         code_registry=None,
         code_generator=None,
         auth_manager=None,
+        search_client=None,
         redis_store=None,
         blob_storage=None,
         max_repair_attempts: int = 2,
@@ -175,6 +188,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         self.code_registry = code_registry
         self.code_generator = code_generator
         self.auth_manager = auth_manager
+        self.search_client = search_client
         self.max_repair_attempts = max_repair_attempts
 
         # CandidateStore — versioned in-memory record of each code attempt
@@ -182,6 +196,9 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
 
         # Hard gate flag — delegate_research blocked until first write_code
         self._has_written_code: bool = False
+
+        # URL content cache — session-scoped dedup for read_api_docs
+        self._read_urls: set = set()
 
         super().__init__(
             agent_id=agent_id,
@@ -227,6 +244,27 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
             phase="thinking",
         )
         self.register_tool(
+            "quick_api_search",
+            self._tool_quick_api_search,
+            (
+                "Fast-twitch web search for API documentation when you hit a CONCRETE unknown "
+                "(wrong endpoint, missing field, unexpected response). Max 3 results. "
+                "Use ONLY after writing code and getting a specific error. "
+                "Params: {\"query\": \"<search terms>\"}"
+            ),
+            phase="thinking",
+        )
+        self.register_tool(
+            "read_api_docs",
+            self._tool_read_api_docs,
+            (
+                "Read content from a single API documentation URL (Swagger, OpenAPI, reference). "
+                "Truncated to 10KB. Each URL can only be read once per session. "
+                "Params: {\"url\": \"<url>\"}"
+            ),
+            phase="thinking",
+        )
+        self.register_tool(
             "execute_code",
             self._tool_execute_code,
             (
@@ -242,7 +280,8 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
             (
                 "Register a successfully executed function in the FunctionRegistry. "
                 "Call ONLY after execute_code returns status=success. "
-                "Params: {\"function_name\": \"<name>\", \"candidate_id\": <int>, "
+                "function_name MUST follow {system}_{action} format. "
+                "Params: {\"function_name\": \"<system_action>\", \"candidate_id\": <int>, "
                 "\"system\": \"<provider>\", \"capabilities\": [\"...\"], "
                 "\"description\": \"<what it does>\"}"
             ),
@@ -252,8 +291,9 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
             "delegate_research",
             self._tool_delegate_research,
             (
-                "LAST RESORT — delegate to the researcher when you are stuck after multiple "
-                "failed attempts. HARD GATE: you MUST call write_code at least once before "
+                "ABSOLUTE LAST RESORT — delegate to the researcher when you are stuck after multiple "
+                "failed attempts AND self-research via quick_api_search/read_api_docs. "
+                "HARD GATE: you MUST call write_code at least once before "
                 "this tool becomes available. "
                 "Params: {\"question\": \"<what you need to know>\", \"context\": \"<what you've tried>\"}"
             ),
@@ -531,6 +571,24 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         if not final_code:
             return {"status": "error", "error": "No code to register."}
 
+        # ── Naming enforcement (Coder-side) ──
+        # The registry also does soft-correction, but the Coder should use
+        # the correct {system}_{action} convention from the start.
+        if system:
+            from jarviscore.execution.code_registry import FunctionRegistry
+            function_name = FunctionRegistry.validate_function_name(
+                function_name, system
+            )
+
+        if not description:
+            return {
+                "status": "error",
+                "error": (
+                    "description is REQUIRED for register_function. "
+                    "Provide a brief description of what the function does."
+                ),
+            }
+
         metadata = {
             "system": system,
             "capabilities": capabilities or [],
@@ -610,6 +668,176 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         }
 
     # ─────────────────────────────────────────────────────────────
+    # Tool: quick_api_search (Self-Research)
+    # ─────────────────────────────────────────────────────────────
+
+    async def _tool_quick_api_search(
+        self,
+        query: str,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Fast-twitch web search for API documentation.
+
+        Restricted to 3 results to prevent context bloat. Smart truncation
+        to ~8KB around query keywords. Ported from IA CoderAgent's
+        quick_internet_search pattern.
+        """
+        if not self.search_client:
+            return {
+                "status": "unavailable",
+                "message": (
+                    "No search_client configured. Try check_registry "
+                    "or delegate_research instead."
+                ),
+            }
+
+        logger.info("[CODER] quick_api_search: %s", query)
+
+        try:
+            results = self.search_client.search(query, max_results=3)
+            if hasattr(results, "__await__"):
+                results = await results
+
+            # If search_client supports extract_content, get the first result's content
+            extracted = {}
+            if hasattr(self.search_client, "extract_content") and results:
+                first_url = None
+                if isinstance(results, list) and results:
+                    first_url = results[0].get("url") if isinstance(results[0], dict) else None
+                elif isinstance(results, dict):
+                    items = results.get("results", results.get("search_results", []))
+                    if items and isinstance(items, list):
+                        first_url = items[0].get("url") if isinstance(items[0], dict) else None
+
+                if first_url:
+                    try:
+                        content_result = self.search_client.extract_content(
+                            first_url, max_length=10000
+                        )
+                        if hasattr(content_result, "__await__"):
+                            content_result = await content_result
+
+                        if isinstance(content_result, dict) and content_result.get("success"):
+                            content = content_result.get("content", "")
+
+                            # Smart truncation: find the most keyword-dense 8KB window
+                            if content and len(content) > 8000:
+                                keywords = [
+                                    w.lower()
+                                    for w in query.split()
+                                    if len(w) > 3
+                                    and w.lower()
+                                    not in {
+                                        "how", "the", "and", "for", "with",
+                                        "api", "rest", "what", "does",
+                                    }
+                                ]
+                                best_idx, max_matches = 0, 0
+                                chunk_size = 4000
+                                for i in range(0, len(content) - chunk_size, chunk_size // 2):
+                                    chunk = content[i : i + chunk_size].lower()
+                                    matches = sum(1 for k in keywords if k in chunk)
+                                    if matches > max_matches:
+                                        max_matches = matches
+                                        best_idx = i
+
+                                start = max(0, best_idx - 2000)
+                                end = min(len(content), start + 8000)
+                                prefix = "... [TRUNCATED] ...\n" if start > 0 else ""
+                                suffix = "\n... [TRUNCATED]" if end < len(content) else ""
+                                content = prefix + content[start:end] + suffix
+
+                            extracted = {
+                                "url": first_url,
+                                "title": content_result.get("title", ""),
+                                "content": content,
+                            }
+                    except Exception as exc:
+                        logger.debug("quick_api_search extract_content failed: %s", exc)
+
+            return {
+                "status": "success",
+                "query": query,
+                "snippets": results if isinstance(results, list) else [],
+                "extracted_content": extracted,
+            }
+
+        except Exception as exc:
+            logger.warning("quick_api_search failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+
+    # ─────────────────────────────────────────────────────────────
+    # Tool: read_api_docs (Self-Research)
+    # ─────────────────────────────────────────────────────────────
+
+    async def _tool_read_api_docs(
+        self,
+        url: str,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Read content from a single API documentation URL.
+
+        Session-scoped dedup prevents re-reading the same URL. Content
+        truncated to 10KB. Ported from ResearcherSubAgent._tool_read_url.
+        """
+        if not self.search_client:
+            return {
+                "status": "unavailable",
+                "message": "No search_client configured.",
+            }
+
+        # Session dedup — don't re-read within the same run
+        if url in self._read_urls:
+            return {
+                "status": "cached",
+                "message": (
+                    f"URL already read in this session. "
+                    "Use the information from the previous read."
+                ),
+            }
+
+        logger.info("[CODER] read_api_docs: %s", url)
+
+        try:
+            if not hasattr(self.search_client, "extract_content"):
+                return {
+                    "status": "unavailable",
+                    "message": "search_client does not support extract_content().",
+                }
+
+            result = self.search_client.extract_content(url, max_length=12000)
+            if hasattr(result, "__await__"):
+                result = await result
+
+            self._read_urls.add(url)
+
+            if isinstance(result, dict):
+                if result.get("success"):
+                    content = result.get("content", "")
+                    if len(content) > 10000:
+                        content = content[:10000] + "\n\n... [truncated at 10KB]"
+                    return {
+                        "status": "success",
+                        "title": result.get("title", ""),
+                        "content": content,
+                        "word_count": result.get("word_count", 0),
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "error": result.get("error", "Extraction failed"),
+                    }
+            else:
+                content = str(result)
+                if len(content) > 10000:
+                    content = content[:10000] + "\n\n... [truncated at 10KB]"
+                return {"status": "success", "content": content}
+
+        except Exception as exc:
+            logger.warning("read_api_docs failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+
+    # ─────────────────────────────────────────────────────────────
     # Candidate Store Helpers
     # ─────────────────────────────────────────────────────────────
 
@@ -633,6 +861,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         """Fresh candidate list per run — no state bleed between tasks."""
         self._candidates = []
         self._has_written_code = False
+        self._read_urls = set()
         self._run_context = context or {}
         try:
             return await super().run(task, context, max_turns, model, **kwargs)
