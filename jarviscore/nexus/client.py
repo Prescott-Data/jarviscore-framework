@@ -1,8 +1,7 @@
 """
 NexusClient — HTTP client for the Nexus Gateway REST API.
 
-JarvisCore's Python integration with the Nexus Framework
-(github.com/Prescott-Data/nexus-framework).
+JarvisCore's Python integration with the Nexus Framework.
 
 The Nexus Framework provides provider-agnostic, secure OAuth 2.0 / OIDC
 connection management. JarvisCore communicates exclusively with the
@@ -98,7 +97,7 @@ class NexusClient:
         redirect the user back after consent. Never use the Broker port (8080)
         as a return_url.
 
-        user_id — can be any string (e.g. "muyukani") or a UUID. Non-UUID
+        user_id — can be any string (e.g. "alice") or a UUID. Non-UUID
         strings are automatically converted to a deterministic UUID5 so they
         are consistent across calls. The Gateway uses user_id as workspace_id
         in broker calls.

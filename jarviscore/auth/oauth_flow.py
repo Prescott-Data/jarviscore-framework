@@ -9,7 +9,7 @@ Handles the interactive OAuth consent flow:
 
 Pluggable: users can replace the default CLIFlowHandler with their own
 (e.g., SlackFlowHandler that sends the URL via DM and waits for webhook,
-or DashboardFlowHandler that renders the URL in the Prescott dashboard).
+or DashboardFlowHandler that renders the URL in the application dashboard).
 
 IMPORTANT: The local callback server port must NOT be 8080 — that port
 belongs to the Nexus Broker. Use a different port (default: 8000) or

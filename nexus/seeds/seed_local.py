@@ -14,7 +14,7 @@ Usage:
 
     # Or with explicit connection string:
     DATABASE_URL="postgresql://nexus:nexus@localhost:5432/nexus?sslmode=disable" \\
-    python nexus/seeds/seed_local.py --user-id muyukani
+    python nexus/seeds/seed_local.py --user-id your-user-id
 
 What this does:
   1. Reads provider credentials from ~/.jarviscore/nexus.enc (the local store).
@@ -182,8 +182,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Seed local Nexus broker DB")
     parser.add_argument(
         "--user-id",
-        default=os.environ.get("NEXUS_USER_ID", "muyukani"),
-        help="User ID (arbitrary string or UUID). Converted to stable UUID5 workspace. Default: muyukani",
+        default=os.environ.get("NEXUS_USER_ID", "jarviscore-user"),
+        help="User ID (arbitrary string or UUID). Converted to stable UUID5 workspace. Default: jarviscore-user",
     )
     parser.add_argument(
         "--db-url",

@@ -244,7 +244,7 @@ def _find_athena_repo() -> Optional[Path]:
         if (p / "Dockerfile").exists():
             return p
 
-    # 2. ~/athena (where Prescott devs always have it)
+    # 2. ~/athena (common default location)
     home_path = Path.home() / "athena"
     if (home_path / "Dockerfile").exists():
         return home_path
@@ -298,8 +298,8 @@ def cmd_init(_args: argparse.Namespace) -> None:
     if not athena_dir:
         _err("Athena source repo not found.")
         print()
-        print("  Clone it first:")
-        print("    git clone git@github.com:Prescott-Data/athena.git ~/athena")
+        print("  Clone the Athena repo first:")
+        print("    git clone <athena-repo-url> ~/athena")
         print()
         print("  Or set ATHENA_DIR to point at your clone:")
         print("    export ATHENA_DIR=/path/to/athena")
@@ -382,7 +382,7 @@ def cmd_init(_args: argparse.Namespace) -> None:
     jarviscore memory context --agent <agent-name>
     jarviscore memory search  --agent <agent-name> --query "market research"
 
-  When Prescott publishes the Docker image, swap to:
+  When a pre-built Docker image is available, swap to:
     jarviscore memory pull     # (coming soon)
 """)
 

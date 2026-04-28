@@ -4,7 +4,7 @@ Nexus Protocol models — Pydantic models for Nexus Gateway integration.
 These models define the data structures exchanged between JarvisCore
 and the Nexus Gateway for OAuth/auth connection management.
 
-Reference: github.com/Prescott-Data/nexus-framework
+Reference: Nexus Framework documentation
 """
 
 from datetime import datetime, timezone

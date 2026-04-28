@@ -264,7 +264,7 @@ class GitHelper:
 
     def describe_pr(self, title: str, body: str) -> Dict[str, Any]:
         """
-        Returns a PR description dict (for Muyukani to open manually or
+        Returns a PR description dict (for the user to open manually or
         for gh CLI if available).
         """
         branch = self.current_branch()

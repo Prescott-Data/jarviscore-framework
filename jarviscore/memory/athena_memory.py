@@ -52,7 +52,7 @@ class AthenaMemory:
 
     Lifecycle:
         am = await AthenaMemory.create("my-agent", athena_client, redis_store)
-        await am.record_thought("Analysing SEO gaps on prescottdata.io")
+        await am.record_thought("Analysing SEO gaps on example.com/docs")
         await am.record_action("Assigned task: SEO audit", {"task_id": "xyz"})
         ctx = await am.get_memory_context()
         # ctx["stm_events"] and ctx["mtm_chains"] injected into agent run

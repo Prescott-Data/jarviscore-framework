@@ -3,7 +3,7 @@ jarviscore.integrations.seed_registry
 ========================================
 Bulk-registers all 18 connected-app atom functions into the JarvisCore
 FunctionRegistry so CoderSubAgent can JIT-compile {System}Capabilities
-bundles for any of the Sky platform's provider integrations.
+bundles for any of the connected-app provider integrations.
 
 Run once on startup, or call seed_registry() programmatically:
 
@@ -15,7 +15,7 @@ Run once on startup, or call seed_registry() programmatically:
     print(report)
 
 Sources:
-  - 7 providers imported from collabra-function-registry (verified stage)
+  - 7 providers imported from external verified registry (verified stage)
   - 11 providers written as new atoms (candidate stage, promote after first use)
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ _ATOMS_DIR = Path(__file__).parent / "atoms"
 # ─────────────────────────────────────────────────────────────────────────────
 
 PROVIDER_META: Dict[str, Dict[str, Any]] = {
-    # ── FROM COLLABRA (verified — production-tested) ──────────────────────────
+    # ── EXTERNALLY VERIFIED (production-tested) ──────────────────────────
     "slack": {
         "category": "communication",
         "auth_type": "oauth2",
@@ -239,7 +239,7 @@ def seed_registry(
                 "type": "api",
                 "tags": [system, meta["category"]],
                 "strategy": "sandbox",
-                "source": "collabra_import" if meta["status"] == "verified" else "framework_authored",
+                "source": "external_import" if meta["status"] == "verified" else "framework_authored",
             }
 
             try:
@@ -249,7 +249,7 @@ def seed_registry(
                     metadata=atom_meta,
                 )
                 if success:
-                    # Collabra atoms start as verified, new ones as candidate
+                    # External atoms start as verified, new ones as candidate
                     if meta["status"] == "verified":
                         registry.update_function_metadata(function_name, {
                             "registry_stage": "verified",

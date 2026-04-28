@@ -1,30 +1,13 @@
 """
-jarviscore.contracts — Canonical data contracts for all framework entities.
+jarviscore.contracts — Framework-level data contracts.
 
-Every object that crosses a boundary (file → API, agent → kernel, Redis → UI)
-must be validated against one of these models.
+Only contracts that are GENERIC to any multi-agent orchestration system
+belong here. Domain-specific schemas (meetings, tasks, etc.) belong in
+the consuming application's domain layer (e.g., your_app/contracts/).
 
 Importing:
-    from jarviscore.contracts import MeetingNote, Task, TaskCreate, TaskStatus
     from jarviscore.contracts import HITLRequest, HITLResolution, HITLPolicy, HITLDecision
-    from jarviscore.contracts import HumanTask, AdaptiveHITLPolicy   # kernel-facing
 """
-
-from .meeting_note import (
-    MeetingNote,
-    MeetingNoteCreate,
-    DiscussionEntry,
-    ActionItem,
-    MeetingType,
-)
-
-from .task import (
-    Task,
-    TaskCreate,
-    TaskUpdate,
-    TaskStatus,
-    TaskPriority,
-)
 
 from .hitl import (
     HITLRequest,
@@ -39,19 +22,7 @@ from .hitl import (
 )
 
 __all__ = [
-    # Meeting Notes
-    "MeetingNote",
-    "MeetingNoteCreate",
-    "DiscussionEntry",
-    "ActionItem",
-    "MeetingType",
-    # Tasks
-    "Task",
-    "TaskCreate",
-    "TaskUpdate",
-    "TaskStatus",
-    "TaskPriority",
-    # HITL
+    # HITL (Human-in-the-Loop) — core framework primitive
     "HITLRequest",
     "HITLResolution",
     "HITLPolicy",

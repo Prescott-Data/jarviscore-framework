@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     hitl_max_confidence: float = 0.8
     hitl_min_risk_score: float = 0.7
 
-    # === Auth / Nexus (github.com/Prescott-Data/nexus-framework) ===
+    # === Auth / Nexus ===
     # Nexus is the ONLY auth path — there is no dev-mode bypass.
     # All credential types (OAuth, api_key, basic_auth) go through Nexus.
     # Set NEXUS_GATEWAY_URL to enable any connected-app functionality.
@@ -168,7 +168,7 @@ class Settings(BaseSettings):
     auth_poll_interval: float = 2.0      # Seconds between Gateway status polls
     auth_open_browser: bool = True       # Try to open system browser for OAuth flows
 
-    # === Memory / Athena (github.com/Prescott-Data/athena) ===
+    # === Memory / Athena ===
     # Athena is the ONLY persistent memory path — STM, MTM, and LTM graph.
     # When ATHENA_URL is not set, JarvisCore falls back to Redis-only episodic +
     # Blob LTM (EpisodicLedger + LongTermMemory). Setting ATHENA_URL upgrades

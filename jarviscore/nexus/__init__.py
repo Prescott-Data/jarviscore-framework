@@ -1,9 +1,9 @@
 """
 Nexus Protocol — Client-side integration with the Nexus Gateway.
 
-The Nexus Framework (github.com/Prescott-Data/nexus-framework) is Prescott Data's
-provider-agnostic OAuth 2.0 / OIDC integration layer. JarvisCore communicates
-exclusively with the Nexus Gateway — never with the Broker or providers directly.
+The Nexus Framework is a provider-agnostic OAuth 2.0 / OIDC integration layer.
+JarvisCore communicates exclusively with the Nexus Gateway — never with
+the Broker or providers directly.
 
 Components:
 - NexusClient: HTTP client for the Nexus Gateway REST API
