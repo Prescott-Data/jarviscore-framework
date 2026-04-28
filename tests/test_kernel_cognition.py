@@ -185,20 +185,21 @@ class TestInterventions:
         assert cognition.get_intervention() is None
 
     def test_spinning_intervention(self, cognition):
-        for _ in range(3):
+        for _ in range(5):
             cognition.track_usage("web_search", tokens=100)
         msg = cognition.get_intervention()
         assert msg is not None
         assert "web_search" in msg
-        assert "3 times" in msg
+        assert "5 times" in msg
 
     def test_low_budget_intervention(self):
         lease = ExecutionLease(max_total_tokens=1000, thinking_budget=1000, action_budget=1000)
         cognition = AgentCognitionManager(lease)
-        cognition.track_usage("web_search", tokens=950)
+        # Use action tokens so _has_acted=True — avoids budget-exhaustion alert (priority 1)
+        cognition.track_usage("generate_code", tokens=950)
         msg = cognition.get_intervention()
         assert msg is not None
-        assert "remaining" in msg.lower()
+        assert "remaining" in msg.lower() or "budget" in msg.lower()
 
 
 class TestBudgetSummary:

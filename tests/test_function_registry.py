@@ -70,7 +70,7 @@ def registry_with_blob(tmp_path):
     ), blob
 
 
-SAMPLE_CODE = "def get_products():\n    return [1, 2, 3]\n"
+SAMPLE_CODE = "def shopify_get_products():\n    return [1, 2, 3]\n"
 SAMPLE_METADATA = {
     "system": "shopify",
     "capabilities": ["product_lookup", "inventory"],
@@ -117,14 +117,14 @@ class TestRegistration:
 
     def test_register_function_returns_true(self, registry):
         """Successful registration returns True."""
-        result = registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        result = registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
         assert result is True
 
     def test_register_stores_atom_file(self, registry):
         """Code is stored as an immutable atom file."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
-        metadata = registry.get_function_metadata("get_products")
+        metadata = registry.get_function_metadata("shopify_get_products")
         atom_path = Path(metadata["atom_path"])
         assert atom_path.exists()
         assert atom_path.read_text() == SAMPLE_CODE
@@ -132,15 +132,15 @@ class TestRegistration:
 
     def test_register_stores_metadata_json(self, registry):
         """Metadata JSON is saved with all required fields."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
-        meta_file = registry.metadata_path / "get_products.json"
+        meta_file = registry.metadata_path / "shopify_get_products.json"
         assert meta_file.exists()
 
         with open(meta_file) as f:
             saved = json.load(f)
 
-        assert saved["function_name"] == "get_products"
+        assert saved["function_name"] == "shopify_get_products"
         assert saved["system"] == "shopify"
         assert saved["capabilities"] == ["product_lookup", "inventory"]
         assert saved["version"] == 1
@@ -151,9 +151,9 @@ class TestRegistration:
 
     def test_register_initial_status_is_candidate(self, registry):
         """New functions start as CANDIDATE with zero success count."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
-        metadata = registry.get_function_metadata("get_products")
+        metadata = registry.get_function_metadata("shopify_get_products")
         assert metadata["registry_stage"] == "candidate"
         assert metadata["success_count"] == 0
         assert metadata["execution_count"] == 0
@@ -169,43 +169,43 @@ class TestGraduation:
 
     def test_update_execution_stats_increments_count(self, registry):
         """success_count and execution_count go up."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
-        registry.update_execution_stats("get_products", success=True, execution_time=1.0)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.update_execution_stats("shopify_get_products", success=True, execution_time=1.0)
 
-        metadata = registry.get_function_metadata("get_products")
+        metadata = registry.get_function_metadata("shopify_get_products")
         assert metadata["execution_count"] == 1
         assert metadata["success_count"] == 1
         assert metadata["average_execution_time"] == 1.0
 
     def test_auto_promote_to_verified(self, registry):
         """After 1 success → VERIFIED."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
-        assert registry.get_function_metadata("get_products")["registry_stage"] == "candidate"
+        assert registry.get_function_metadata("shopify_get_products")["registry_stage"] == "candidate"
 
-        registry.update_execution_stats("get_products", success=True, execution_time=1.0)
+        registry.update_execution_stats("shopify_get_products", success=True, execution_time=1.0)
 
-        metadata = registry.get_function_metadata("get_products")
+        metadata = registry.get_function_metadata("shopify_get_products")
         assert metadata["registry_stage"] == "verified"
         assert metadata["success_count"] == 1
 
     def test_auto_promote_to_golden(self, registry):
         """After 5 successes → GOLDEN."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
         for i in range(5):
-            registry.update_execution_stats("get_products", success=True, execution_time=1.0)
+            registry.update_execution_stats("shopify_get_products", success=True, execution_time=1.0)
 
-        metadata = registry.get_function_metadata("get_products")
+        metadata = registry.get_function_metadata("shopify_get_products")
         assert metadata["registry_stage"] == "golden"
         assert metadata["success_count"] == 5
 
     def test_failure_does_not_promote(self, registry):
         """Failure increments failure_count but doesn't promote."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
-        registry.update_execution_stats("get_products", success=False, execution_time=2.0)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.update_execution_stats("shopify_get_products", success=False, execution_time=2.0)
 
-        metadata = registry.get_function_metadata("get_products")
+        metadata = registry.get_function_metadata("shopify_get_products")
         assert metadata["registry_stage"] == "candidate"
         assert metadata["failure_count"] == 1
         assert metadata["success_count"] == 0
@@ -221,14 +221,14 @@ class TestAtomVersioning:
 
     def test_atom_versioning(self, registry):
         """Re-registering creates a new version atom."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
-        v1_meta = registry.get_function_metadata("get_products")
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        v1_meta = registry.get_function_metadata("shopify_get_products")
         assert v1_meta["version"] == 1
 
         # Re-register with updated code
-        new_code = "def get_products():\n    return [4, 5, 6]\n"
-        registry.register_function("get_products", new_code, SAMPLE_METADATA)
-        v2_meta = registry.get_function_metadata("get_products")
+        new_code = "def shopify_get_products():\n    return [4, 5, 6]\n"
+        registry.register_function("shopify_get_products", new_code, SAMPLE_METADATA)
+        v2_meta = registry.get_function_metadata("shopify_get_products")
         assert v2_meta["version"] == 2
 
         # Both atom files exist (immutable)
@@ -240,9 +240,9 @@ class TestAtomVersioning:
 
     def test_atom_hash_integrity(self, registry):
         """SHA256 hash is stored and matches file content."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
-        metadata = registry.get_function_metadata("get_products")
+        metadata = registry.get_function_metadata("shopify_get_products")
         stored_hash = metadata["atom_hash"]
 
         # Compute expected hash
@@ -253,10 +253,10 @@ class TestAtomVersioning:
 
     def test_verify_atom_integrity(self, registry):
         """Integrity check passes for valid atoms."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
-        metadata = registry.get_function_metadata("get_products")
-        assert registry._verify_atom_integrity("get_products", metadata["atom_path"])
+        metadata = registry.get_function_metadata("shopify_get_products")
+        assert registry._verify_atom_integrity("shopify_get_products", metadata["atom_path"])
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -268,17 +268,17 @@ class TestMultiIndexSearch:
 
     def _register_test_functions(self, registry):
         """Register multiple functions for search testing."""
-        registry.register_function("get_products", SAMPLE_CODE, {
+        registry.register_function("shopify_get_products", SAMPLE_CODE, {
             "system": "shopify",
             "capabilities": ["product_lookup"],
             "description": "Get products",
         })
-        registry.register_function("create_order", "def create_order(): pass\n", {
+        registry.register_function("shopify_create_order", "def shopify_create_order(): pass\n", {
             "system": "shopify",
             "capabilities": ["order_management"],
             "description": "Create order",
         })
-        registry.register_function("send_message", "def send_message(): pass\n", {
+        registry.register_function("slack_send_message", "def slack_send_message(): pass\n", {
             "system": "slack",
             "capabilities": ["messaging"],
             "description": "Send Slack message",
@@ -291,7 +291,7 @@ class TestMultiIndexSearch:
         shopify_funcs = registry.get_functions_by_system("shopify")
         assert len(shopify_funcs) == 2
         names = {f["function_name"] for f in shopify_funcs}
-        assert names == {"get_products", "create_order"}
+        assert names == {"shopify_get_products", "shopify_create_order"}
 
     def test_get_functions_by_capability(self, registry):
         """Finds functions with a specific capability."""
@@ -299,19 +299,19 @@ class TestMultiIndexSearch:
 
         results = registry.get_functions_by_capability("messaging")
         assert len(results) == 1
-        assert results[0]["function_name"] == "send_message"
+        assert results[0]["function_name"] == "slack_send_message"
 
     def test_search_with_status_filter(self, registry):
         """Filters by graduation status."""
         self._register_test_functions(registry)
 
-        # Promote get_products to verified
-        registry.update_execution_stats("get_products", success=True, execution_time=1.0)
+        # Promote shopify_get_products to verified
+        registry.update_execution_stats("shopify_get_products", success=True, execution_time=1.0)
 
         # Search for verified only
         results = registry.search(status="verified")
         assert len(results) == 1
-        assert results[0]["function_name"] == "get_products"
+        assert results[0]["function_name"] == "shopify_get_products"
 
         # Search for candidates only
         candidates = registry.search(status="candidate")
@@ -324,12 +324,12 @@ class TestMultiIndexSearch:
         # Search for "slack"
         results = registry.semantic_search("slack")
         assert len(results) >= 1
-        assert results[0]["function_name"] == "send_message"
+        assert results[0]["function_name"] == "slack_send_message"
 
         # Search for "products"
         results = registry.semantic_search("products")
         assert len(results) >= 1
-        assert results[0]["function_name"] == "get_products"
+        assert results[0]["function_name"] == "shopify_get_products"
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -341,20 +341,20 @@ class TestSystemBundles:
 
     def test_create_system_bundle(self, registry):
         """Generates a {System}Capabilities class."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
         # Promote to verified so it appears in bundle
-        registry.update_execution_stats("get_products", success=True, execution_time=1.0)
+        registry.update_execution_stats("shopify_get_products", success=True, execution_time=1.0)
 
         bundle = registry.create_system_bundle("shopify")
         assert bundle is not None
         assert "class ShopifyCapabilities:" in bundle
-        assert "def get_products" in bundle
+        assert "def shopify_get_products" in bundle
         assert "get_capabilities" in bundle
         assert "describe_capabilities" in bundle
 
     def test_bundle_excludes_candidates(self, registry):
         """Only verified/golden functions in bundle by default."""
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
         # No promotion → still candidate
         bundle = registry.create_system_bundle("shopify")
@@ -363,18 +363,19 @@ class TestSystemBundles:
         # Include candidates explicitly
         bundle = registry.create_system_bundle("shopify", include_candidates=True)
         assert bundle is not None
-        assert "def get_products" in bundle
+        assert "def shopify_get_products" in bundle
 
     def test_detect_system_dependencies(self, registry):
         """Parses {System}Capabilities patterns in code."""
-        registry.register_function("get_products", SAMPLE_CODE, {
+        registry.register_function("shopify_get_products", SAMPLE_CODE, {
             "system": "shopify",
             "capabilities": ["product_lookup"],
+            "description": "Get products",
         })
 
         code = """
 caps = ShopifyCapabilities()
-products = caps.get_products()
+products = caps.shopify_get_products()
 """
         systems = registry.detect_system_dependencies(code)
         assert "shopify" in systems
@@ -389,40 +390,45 @@ class TestDependencyGraph:
 
     def test_get_dependency_graph(self, registry):
         """Returns correct dependency DAG."""
-        registry.register_function("fetch_data", "def fetch_data(): pass\n", {
+        registry.register_function("shopify_fetch_data", "def shopify_fetch_data(): pass\n", {
             "system": "shopify",
             "capabilities": ["data"],
+            "description": "Fetch data from Shopify",
         })
-        registry.register_function("process_data", "def process_data(): pass\n", {
+        registry.register_function("shopify_process_data", "def shopify_process_data(): pass\n", {
             "system": "shopify",
             "capabilities": ["processing"],
-            "dependencies": ["fetch_data"],
+            "description": "Process Shopify data",
+            "dependencies": ["shopify_fetch_data"],
         })
 
-        graph = registry.get_dependency_graph(["fetch_data", "process_data"])
-        assert graph["fetch_data"] == []
-        assert graph["process_data"] == ["fetch_data"]
+        graph = registry.get_dependency_graph(["shopify_fetch_data", "shopify_process_data"])
+        assert graph["shopify_fetch_data"] == []
+        assert graph["shopify_process_data"] == ["shopify_fetch_data"]
 
     def test_resolve_execution_plan(self, registry):
         """Topological sort puts dependencies first."""
-        registry.register_function("fetch_data", "def fetch_data(): pass\n", {
+        registry.register_function("shopify_fetch_data", "def shopify_fetch_data(): pass\n", {
             "system": "shopify",
             "capabilities": ["data"],
+            "description": "Fetch data",
         })
-        registry.register_function("process_data", "def process_data(): pass\n", {
+        registry.register_function("shopify_process_data", "def shopify_process_data(): pass\n", {
             "system": "shopify",
             "capabilities": ["processing"],
-            "dependencies": ["fetch_data"],
+            "description": "Process data",
+            "dependencies": ["shopify_fetch_data"],
         })
-        registry.register_function("report", "def report(): pass\n", {
+        registry.register_function("shopify_report", "def shopify_report(): pass\n", {
             "system": "shopify",
             "capabilities": ["reporting"],
-            "dependencies": ["process_data"],
+            "description": "Generate Shopify report",
+            "dependencies": ["shopify_process_data"],
         })
 
-        plan = registry.resolve_execution_plan(["report", "process_data", "fetch_data"])
-        assert plan.index("fetch_data") < plan.index("process_data")
-        assert plan.index("process_data") < plan.index("report")
+        plan = registry.resolve_execution_plan(["shopify_report", "shopify_process_data", "shopify_fetch_data"])
+        assert plan.index("shopify_fetch_data") < plan.index("shopify_process_data")
+        assert plan.index("shopify_process_data") < plan.index("shopify_report")
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -436,7 +442,7 @@ class TestRedisSync:
         """Index is pushed to Redis with correct structure."""
         registry, store = registry_with_redis
 
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
         index = store.get_registry_index()
         assert index is not None
@@ -449,8 +455,8 @@ class TestRedisSync:
         """Per-system stage counts are present in the Redis index."""
         registry, store = registry_with_redis
 
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
-        registry.update_execution_stats("get_products", success=True, execution_time=1.0)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.update_execution_stats("shopify_get_products", success=True, execution_time=1.0)
 
         index = store.get_registry_index()
         shopify = index["systems"]["shopify"]
@@ -458,7 +464,7 @@ class TestRedisSync:
         assert shopify["stages"]["verified"] == 1
         assert shopify["stages"]["candidate"] == 0
         assert "product_lookup" in shopify["capabilities"]
-        assert "get_products" in shopify["functions"]
+        assert "shopify_get_products" in shopify["functions"]
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -472,18 +478,18 @@ class TestBlobSync:
         """Atom + metadata are uploaded to blob using namespace prefix."""
         registry, blob = registry_with_blob
 
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
 
         # Check atom was uploaded with prefix namespace
-        atom_key = "function_registry/atoms/shopify/get_products_v1.py"
+        atom_key = "function_registry/atoms/shopify/shopify_get_products_v1.py"
         assert atom_key in blob._data
         assert blob._data[atom_key] == SAMPLE_CODE
 
         # Check metadata was uploaded with prefix namespace
-        meta_key = "function_registry/metadata/get_products.json"
+        meta_key = "function_registry/metadata/shopify_get_products.json"
         assert meta_key in blob._data
         meta = json.loads(blob._data[meta_key])
-        assert meta["function_name"] == "get_products"
+        assert meta["function_name"] == "shopify_get_products"
         assert meta["system"] == "shopify"
 
     def test_blob_sync_on_startup(self, tmp_path):
@@ -493,7 +499,7 @@ class TestBlobSync:
         # Pre-populate blob with a function
         import asyncio
         metadata = {
-            "function_name": "remote_func",
+            "function_name": "remote_system_remote_func",
             "system": "remote_system",
             "capabilities": ["remote_cap"],
             "version": 1,
@@ -505,12 +511,12 @@ class TestBlobSync:
             "failure_count": 0,
         }
         asyncio.run(blob.save(
-            "function_registry/metadata/remote_func.json",
+            "function_registry/metadata/remote_system_remote_func.json",
             json.dumps(metadata),
         ))
         asyncio.run(blob.save(
-            "function_registry/atoms/remote_system/remote_func_v1.py",
-            "def remote_func(): return 'from blob'\n",
+            "function_registry/atoms/remote_system/remote_system_remote_func_v1.py",
+            "def remote_system_remote_func(): return 'from blob'\n",
         ))
 
         # Create registry and trigger blob sync
@@ -521,8 +527,8 @@ class TestBlobSync:
         registry._sync_from_blob()
 
         # Verify function was synced
-        assert registry.has_function("remote_func")
-        meta = registry.get_function_metadata("remote_func")
+        assert registry.has_function("remote_system_remote_func")
+        meta = registry.get_function_metadata("remote_system_remote_func")
         assert meta["system"] == "remote_system"
         assert meta["registry_stage"] == "verified"
 
@@ -573,20 +579,20 @@ class TestBlobSync:
             blob_storage=blob,
         )
 
-        registry.register_function("my_func", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.register_function("shopify_my_func", SAMPLE_CODE, SAMPLE_METADATA)
 
         # Verify uploads use custom prefix
         assert any(k.startswith("tenant_a/registry/") for k in blob._data)
-        assert "tenant_a/registry/atoms/shopify/my_func_v1.py" in blob._data
-        assert "tenant_a/registry/metadata/my_func.json" in blob._data
+        assert "tenant_a/registry/atoms/shopify/shopify_my_func_v1.py" in blob._data
+        assert "tenant_a/registry/metadata/shopify_my_func.json" in blob._data
 
     def test_bundle_upload_to_blob(self, registry_with_blob):
         """System bundles are uploaded to blob storage."""
         registry, blob = registry_with_blob
 
         # Register a verified function so bundle has content
-        registry.register_function("get_products", SAMPLE_CODE, SAMPLE_METADATA)
-        registry.update_execution_stats("get_products", success=True, execution_time=1.0)
+        registry.register_function("shopify_get_products", SAMPLE_CODE, SAMPLE_METADATA)
+        registry.update_execution_stats("shopify_get_products", success=True, execution_time=1.0)
 
         # Create bundle
         registry.create_system_bundle("shopify")

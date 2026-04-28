@@ -26,7 +26,7 @@ class TestExecutionLeaseDefaults:
         assert lease.thinking_budget == 56_000
         assert lease.action_budget == 24_000
         assert lease.wall_clock_ms == 180_000
-        assert lease.emergency_turn_fuse == 30
+        assert lease.emergency_turn_fuse == 36
         assert lease.model_tier == "task"
         assert lease.thinking_used == 0
         assert lease.action_used == 0
@@ -52,7 +52,7 @@ class TestExecutionLeaseRoleProfiles:
         assert lease.action_budget == 108_000
         assert lease.max_total_tokens == 240_000
         assert lease.wall_clock_ms == 240_000
-        assert lease.emergency_turn_fuse == 24
+        assert lease.emergency_turn_fuse == 32
         assert lease.model_tier == "coding"
 
     def test_researcher_profile(self):
@@ -67,7 +67,7 @@ class TestExecutionLeaseRoleProfiles:
         assert lease.action_budget == 48_000
         assert lease.max_total_tokens == 120_000
         assert lease.wall_clock_ms == 120_000
-        assert lease.emergency_turn_fuse == 14
+        assert lease.emergency_turn_fuse == 18
 
     def test_unknown_role_raises(self):
         with pytest.raises(KeyError, match="Unknown role"):
@@ -172,7 +172,7 @@ class TestExecutionLeaseSummary:
         assert s["action"]["used"] == 2000
         assert s["total"]["used"] == 7000
         assert s["turns"]["used"] == 1
-        assert s["turns"]["fuse"] == 24
+        assert s["turns"]["fuse"] == 32
         assert s["model_tier"] == "coding"
         assert s["expired"] is False
 

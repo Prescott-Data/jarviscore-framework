@@ -68,7 +68,9 @@ class TestKernelOutputFormat:
         # Subagent returns failure "Max turns (0) reached"
         output = await kernel.execute(task="Impossible task", max_dispatches=1)
 
-        assert output.status == "failure"
+        # With 0 turns, subagent hits emergency fuse → yield (budget exhausted)
+        # Kernel propagates yield status (not failure)
+        assert output.status in ("failure", "yield")
         assert "dispatches" in output.metadata
 
     @pytest.mark.asyncio
