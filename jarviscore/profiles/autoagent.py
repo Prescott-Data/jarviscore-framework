@@ -15,7 +15,10 @@ from typing import Any, Dict, List, Optional
 from jarviscore.core.profile import Profile
 
 
+
+
 class AutoAgent(Profile):
+
     """
     Automated execution profile.
 
@@ -254,6 +257,7 @@ class AutoAgent(Profile):
             }
         """
         task_desc = task.get('task', '') if isinstance(task, dict) else str(task)
+
         self._logger.info(f"[AutoAgent] Executing via Kernel: {task_desc[:100]}...")
 
         # ── Goal-oriented routing ─────────────────────────────────────────────
@@ -296,10 +300,11 @@ class AutoAgent(Profile):
                 self._logger.debug("Forwarded Mesh _auth_manager → Kernel")
 
             try:
+                kernel_ctx = task.get('context') if isinstance(task, dict) else None
                 output = await self._kernel.execute(
                     task=task_desc,
                     system_prompt=effective_system_prompt,
-                    context=task.get('context') if isinstance(task, dict) else None,
+                    context=kernel_ctx,
                     agent_id=self.agent_id,
                     agent_default_role=self.default_kernel_role,
                 )
@@ -468,7 +473,7 @@ class AutoAgent(Profile):
         goal: str,
         context: Optional[Dict[str, Any]] = None,
         max_steps: int = 15,
-        max_replan_attempts: int = int(os.environ.get("MAX_REPLAN_ATTEMPTS", "4")),
+        max_replan_attempts: Optional[int] = None,
     ) -> "GoalExecution":
         """
         Internal method — driven by execute_task() when goal_oriented = True.
@@ -503,12 +508,15 @@ class AutoAgent(Profile):
             goal:                 Natural language goal string (from execute_task).
             context:              Initial context dict (from the task dict).
             max_steps:            Hard ceiling on steps (safety guard, default 15).
-            max_replan_attempts:  Max replanning cycles before failing (default 4,
+            max_replan_attempts:  Max replanning cycles before failing (default 8,
                                   override with MAX_REPLAN_ATTEMPTS env var).
 
         Returns:
             GoalExecution — summarised into execute_task() response by the caller.
         """
+        # Resolve at call-time so .env / dotenv loaders are respected
+        if max_replan_attempts is None:
+            max_replan_attempts = int(os.environ.get("MAX_REPLAN_ATTEMPTS", "8"))
         if self._kernel is None:
             raise RuntimeError(
                 f"{self.__class__.__name__}.execute_goal() called before setup(). "
@@ -646,16 +654,18 @@ class AutoAgent(Profile):
                     "[AutoAgent] Goal execution paused for HITL: %s",
                     evaluation.evaluator_note,
                 )
-                # Surface the HITL request on the dashboard via the injected queue.
-                # self.hitl is always available (injected by Mesh at start time).
+                # Submit via the native HITLQueue (injected by Mesh).
+                # The queue handles content truncation and typed persistence.
                 _hitl = getattr(self, "hitl", None)
                 if _hitl is not None:
+                    display_name = self.__class__.__name__
                     try:
                         _hitl.request(
-                            title=f"{self.role}: human review needed — {step.task[:80]}",
+                            title=f"{display_name}: human review needed — {step.task[:80]}",
                             content=(
-                                f"**Goal:** {goal}\n\n"
-                                f"**Step:** {step.task}\n\n"
+                                f"**Agent:** {display_name} (`{self.agent_id}`)\n\n"
+                                f"**Goal:** {goal[:500]}\n\n"
+                                f"**Step:** `{step.step_id}` — {step.task[:500]}\n\n"
                                 f"**Why HITL:** {evaluation.evaluator_note}\n\n"
                                 f"**Confidence:** {evaluation.confidence:.0%}"
                             ),
@@ -667,6 +677,7 @@ class AutoAgent(Profile):
                                 "evaluator_note": evaluation.evaluator_note,
                                 "confidence": evaluation.confidence,
                                 "agent_id": self.agent_id,
+                                "display_name": display_name,
                             },
                         )
                     except Exception as _he:
