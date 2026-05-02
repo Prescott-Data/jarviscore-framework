@@ -341,24 +341,31 @@ class UnifiedLLMClient:
             "duration_seconds": duration
         }
 
-    async def _call_gemini(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
-        """Call Google Gemini using the new google.genai SDK."""
-        if not self.gemini_client:
-            raise RuntimeError("Gemini client not initialized")
+    async def _call_genai_client(
+        self,
+        client,
+        model_name: str,
+        prompt: str,
+        temperature: float,
+        max_tokens: int,
+        provider_label: str,
+        default_pricing: Dict,
+    ) -> Dict:
+        """
+        Shared helper for google.genai generate_content calls (Gemini and Vertex AI).
 
-        # Convert messages to Gemini format
-        prompt = self._messages_to_prompt(messages)
-
+        Handles the request, usage extraction, token estimation fallback, and cost
+        calculation so both paths stay consistent.
+        """
         start_time = time.time()
 
-        # Use the new async API via client.aio.models
-        response = await self.gemini_client.aio.models.generate_content(
-            model=self.gemini_model,
+        response = await client.aio.models.generate_content(
+            model=model_name,
             contents=prompt,
             config={
                 "temperature": temperature,
-                "max_output_tokens": max_tokens
-            }
+                "max_output_tokens": max_tokens,
+            },
         )
         duration = time.time() - start_time
 
@@ -370,26 +377,40 @@ class UnifiedLLMClient:
             input_tokens = getattr(usage_metadata, 'prompt_token_count', 0)
             output_tokens = getattr(usage_metadata, 'candidates_token_count', 0)
         else:
-            # Estimate tokens (fallback)
             input_tokens = int(len(prompt.split()) * 1.3)
             output_tokens = int(len(content.split()) * 1.3)
 
-        model_name = self.gemini_model
-        pricing = TOKEN_PRICING.get(model_name, {"input": 0.10, "output": 0.30})
+        pricing = TOKEN_PRICING.get(model_name, default_pricing)
         cost = (input_tokens * pricing['input'] + output_tokens * pricing['output']) / 1_000_000
 
         return {
             "content": content,
-            "provider": "gemini",
+            "provider": provider_label,
             "tokens": {
                 "input": int(input_tokens),
                 "output": int(output_tokens),
-                "total": int(input_tokens + output_tokens)
+                "total": int(input_tokens + output_tokens),
             },
             "cost_usd": cost,
             "model": model_name,
-            "duration_seconds": duration
+            "duration_seconds": duration,
         }
+
+    async def _call_gemini(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
+        """Call Google Gemini using the new google.genai SDK."""
+        if not self.gemini_client:
+            raise RuntimeError("Gemini client not initialized")
+
+        prompt = self._messages_to_prompt(messages)
+        return await self._call_genai_client(
+            client=self.gemini_client,
+            model_name=self.gemini_model,
+            prompt=prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            provider_label="gemini",
+            default_pricing={"input": 0.10, "output": 0.30},
+        )
 
     async def _call_vertex_ai(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
         """Call Gemini via Vertex AI using Application Default Credentials."""
@@ -397,44 +418,15 @@ class UnifiedLLMClient:
             raise RuntimeError("Vertex AI client not initialized")
 
         prompt = self._messages_to_prompt(messages)
-        start_time = time.time()
-
-        response = await self.vertex_ai_client.aio.models.generate_content(
-            model=self.vertex_ai_model,
-            contents=prompt,
-            config={
-                "temperature": temperature,
-                "max_output_tokens": max_tokens
-            }
+        return await self._call_genai_client(
+            client=self.vertex_ai_client,
+            model_name=self.vertex_ai_model,
+            prompt=prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            provider_label="vertex_ai",
+            default_pricing={"input": 0.15, "output": 0.60},
         )
-        duration = time.time() - start_time
-        content = response.text
-
-        # Get usage metadata if available, otherwise estimate
-        usage_metadata = getattr(response, 'usage_metadata', None)
-        if usage_metadata:
-            input_tokens = getattr(usage_metadata, 'prompt_token_count', 0)
-            output_tokens = getattr(usage_metadata, 'candidates_token_count', 0)
-        else:
-            input_tokens = int(len(prompt.split()) * 1.3)
-            output_tokens = int(len(content.split()) * 1.3)
-
-        model_name = self.vertex_ai_model
-        pricing = TOKEN_PRICING.get(model_name, {"input": 0.15, "output": 0.60})
-        cost = (input_tokens * pricing['input'] + output_tokens * pricing['output']) / 1_000_000
-
-        return {
-            "content": content,
-            "provider": "vertex_ai",
-            "tokens": {
-                "input": int(input_tokens),
-                "output": int(output_tokens),
-                "total": int(input_tokens + output_tokens)
-            },
-            "cost_usd": cost,
-            "model": model_name,
-            "duration_seconds": duration
-        }
 
     async def _call_claude(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
         """Call Anthropic Claude."""
