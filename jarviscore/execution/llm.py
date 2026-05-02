@@ -1,6 +1,6 @@
 """
 Unified LLM Client - All providers in one file with zero-config setup
-Supports: vLLM, Azure OpenAI, Gemini, Claude with automatic fallback
+Supports: vLLM, Azure OpenAI, Gemini, Vertex AI, Claude with automatic fallback
 """
 import asyncio
 import aiohttp
@@ -39,6 +39,7 @@ class LLMProvider(Enum):
     VLLM = "vllm"
     AZURE = "azure"
     GEMINI = "gemini"
+    VERTEX_AI = "vertex_ai"
     CLAUDE = "claude"
 
 
@@ -56,6 +57,9 @@ TOKEN_PRICING = {
     "gemini-2.0-flash": {"input": 0.10, "output": 0.40, "cached": 0.03},
     "gemini-1.5-pro": {"input": 1.25, "output": 5.00, "cached": 0.31},
     "gemini-1.5-flash": {"input": 0.10, "output": 0.30, "cached": 0.03},
+    # Vertex AI (same models, same pricing — accessed via ADC instead of API key)
+    "gemini-2.5-flash": {"input": 0.15, "output": 0.60, "cached": 0.04},
+    "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "cached": 0.31},
     # Anthropic Claude models
     "claude-opus-4": {"input": 15.00, "output": 75.00, "cached": 3.75},
     "claude-sonnet-4": {"input": 3.00, "output": 15.00, "cached": 0.75},
@@ -98,6 +102,7 @@ class UnifiedLLMClient:
         self.vllm_endpoint = None
         self.azure_client = None
         self.gemini_client = None
+        self.vertex_ai_client = None
         self.claude_client = None
 
         # Provider order (tries in this sequence)
@@ -155,7 +160,7 @@ class UnifiedLLMClient:
             self.provider_order.append(LLMProvider.VLLM)
             logger.info(f"✓ vLLM provider available: {self.vllm_endpoint}")
 
-        # 4. Try Gemini
+        # 4. Try Gemini (API key auth)
         if GEMINI_AVAILABLE:
             gemini_key = self.config.get('gemini_api_key')
             if gemini_key:
@@ -167,12 +172,30 @@ class UnifiedLLMClient:
                 except Exception as e:
                     logger.warning(f"Failed to setup Gemini: {e}")
 
+        # 5. Try Vertex AI (GCP-native, uses Application Default Credentials)
+        if GEMINI_AVAILABLE:
+            vertex_enabled = self.config.get('vertex_ai_enabled', False)
+            vertex_project = self.config.get('vertex_ai_project')
+            if vertex_enabled and vertex_project:
+                try:
+                    self.vertex_ai_client = genai.Client(
+                        vertexai=True,
+                        project=vertex_project,
+                        location=self.config.get('vertex_ai_location', 'us-central1'),
+                    )
+                    self.vertex_ai_model = self.config.get('vertex_ai_model', 'gemini-2.5-flash')
+                    self.provider_order.append(LLMProvider.VERTEX_AI)
+                    logger.info(f"✓ Vertex AI provider available: {self.vertex_ai_model} (project: {vertex_project})")
+                except Exception as e:
+                    logger.warning(f"Failed to setup Vertex AI: {e}")
+
         if not self.provider_order:
             logger.warning(
                 "⚠️  No LLM providers configured! Set at least one:\n"
                 "  - llm_endpoint for vLLM\n"
                 "  - azure_api_key + azure_endpoint for Azure\n"
                 "  - gemini_api_key for Gemini\n"
+                "  - vertex_ai_enabled + vertex_ai_project for Vertex AI\n"
                 "  - claude_api_key for Claude"
             )
 
@@ -219,6 +242,8 @@ class UnifiedLLMClient:
                     return await self._call_azure(messages, temperature, max_tokens, **kwargs)
                 elif provider == LLMProvider.GEMINI:
                     return await self._call_gemini(messages, temperature, max_tokens, **kwargs)
+                elif provider == LLMProvider.VERTEX_AI:
+                    return await self._call_vertex_ai(messages, temperature, max_tokens, **kwargs)
                 elif provider == LLMProvider.CLAUDE:
                     return await self._call_claude(messages, temperature, max_tokens, **kwargs)
 
@@ -356,6 +381,51 @@ class UnifiedLLMClient:
         return {
             "content": content,
             "provider": "gemini",
+            "tokens": {
+                "input": int(input_tokens),
+                "output": int(output_tokens),
+                "total": int(input_tokens + output_tokens)
+            },
+            "cost_usd": cost,
+            "model": model_name,
+            "duration_seconds": duration
+        }
+
+    async def _call_vertex_ai(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
+        """Call Gemini via Vertex AI using Application Default Credentials."""
+        if not self.vertex_ai_client:
+            raise RuntimeError("Vertex AI client not initialized")
+
+        prompt = self._messages_to_prompt(messages)
+        start_time = time.time()
+
+        response = await self.vertex_ai_client.aio.models.generate_content(
+            model=self.vertex_ai_model,
+            contents=prompt,
+            config={
+                "temperature": temperature,
+                "max_output_tokens": max_tokens
+            }
+        )
+        duration = time.time() - start_time
+        content = response.text
+
+        # Get usage metadata if available, otherwise estimate
+        usage_metadata = getattr(response, 'usage_metadata', None)
+        if usage_metadata:
+            input_tokens = getattr(usage_metadata, 'prompt_token_count', 0)
+            output_tokens = getattr(usage_metadata, 'candidates_token_count', 0)
+        else:
+            input_tokens = int(len(prompt.split()) * 1.3)
+            output_tokens = int(len(content.split()) * 1.3)
+
+        model_name = self.vertex_ai_model
+        pricing = TOKEN_PRICING.get(model_name, {"input": 0.15, "output": 0.60})
+        cost = (input_tokens * pricing['input'] + output_tokens * pricing['output']) / 1_000_000
+
+        return {
+            "content": content,
+            "provider": "vertex_ai",
             "tokens": {
                 "input": int(input_tokens),
                 "output": int(output_tokens),
