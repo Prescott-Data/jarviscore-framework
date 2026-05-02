@@ -356,6 +356,17 @@ class UnifiedLLMClient:
 
         Handles the request, usage extraction, token estimation fallback, and cost
         calculation so both paths stay consistent.
+
+        Args:
+            client: A ``genai.Client`` instance (standard or Vertex AI).
+            model_name: Model identifier string (e.g. ``"gemini-2.5-flash"``).
+            prompt: Plain-text prompt to send.
+            temperature: Sampling temperature (0–1).
+            max_tokens: Maximum tokens to generate.
+            provider_label: Value for the ``"provider"`` key in the returned dict.
+            default_pricing: Fallback pricing dict used when *model_name* is not
+                found in ``TOKEN_PRICING``.  Must contain ``"input"`` and
+                ``"output"`` keys (cost per 1M tokens).
         """
         start_time = time.time()
 

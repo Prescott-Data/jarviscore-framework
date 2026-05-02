@@ -7,6 +7,7 @@ Tests the fallback order: Claude → Azure → Gemini → Vertex AI → vLLM
 import asyncio
 import os
 from unittest.mock import MagicMock, patch, AsyncMock
+import jarviscore.execution.llm as _llm_module
 from jarviscore.execution.llm import UnifiedLLMClient, LLMProvider
 
 
@@ -154,8 +155,6 @@ async def test_gemini_fallback():
 # ---------------------------------------------------------------------------
 # Vertex AI provider tests (use mocks — no real GCP credentials required)
 # ---------------------------------------------------------------------------
-
-import jarviscore.execution.llm as _llm_module
 
 
 def _vertex_config(**overrides):
