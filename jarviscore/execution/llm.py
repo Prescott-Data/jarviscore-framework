@@ -220,7 +220,7 @@ class UnifiedLLMClient:
         Returns:
             {
                 "content": "generated text",
-                "provider": "vllm|azure|gemini|claude",
+                "provider": "vllm|azure|gemini|vertex_ai|claude",
                 "tokens": {"input": 100, "output": 200, "total": 300},
                 "cost_usd": 0.015,
                 "model": "gpt-4o"
