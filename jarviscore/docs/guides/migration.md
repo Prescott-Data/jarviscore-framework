@@ -7,7 +7,7 @@ icon: material/swap-horizontal
 This guide covers migrating an existing multi-agent system to JarvisCore from **CrewAI** or **LangGraph**. Each section maps the source framework's concepts to their JarvisCore equivalents and provides a before/after code translation.
 
 > [!IMPORTANT]
-> This guide reflects CrewAI ≥ 0.28 and LangGraph ≥ 0.1. If you are on an earlier version, some API names may differ. Verify against your installed version's docs before migrating.
+> This guide reflects **CrewAI ≥ 1.14** and **LangGraph ≥ 1.1**. If you are migrating from an earlier 0.x release, some of their internal API names may differ significantly. Verify against your installed version's documentation before migrating.
 
 ---
 
