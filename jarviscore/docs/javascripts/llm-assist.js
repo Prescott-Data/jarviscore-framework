@@ -5,6 +5,9 @@ function initLLMWidget() {
   // Skip if already injected (instant navigation guard)
   if (contentInner.querySelector('.jc-llm-widget')) return;
 
+  // Skip on pages with hero (like the welcome page) to prevent layout overlap
+  if (contentInner.querySelector('.jc-hero')) return;
+
   // Hide ALL existing MkDocs action buttons (edit + view source)
   var allButtons = contentInner.querySelectorAll('.md-content__button');
   var rawUrl = window.location.href;
@@ -79,6 +82,16 @@ function initLLMWidget() {
       if (!r.ok) throw new Error('fetch failed');
       return r.text();
     }).then(callback).catch(function() {
+      // Temporary fallback for testing before PR is merged
+      if (rawUrl.includes('/main/')) {
+        var altUrl = rawUrl.replace('/main/', '/feat/jarviscore-release-v1.0.3/');
+        return fetch(altUrl).then(function(r2) {
+          if (!r2.ok) throw new Error('alt fetch failed');
+          return r2.text();
+        }).then(callback);
+      }
+      throw new Error('no branch fallback');
+    }).catch(function() {
       callback(document.querySelector('.md-content').innerText);
     });
   }
