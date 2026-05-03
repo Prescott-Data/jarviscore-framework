@@ -387,7 +387,7 @@ class UnifiedLLMClient:
         }
         tools = kwargs.get('tools', None)
         if tools:
-            gen_kwargs["tools"] = tools
+            gen_kwargs["config"]["tools"] = tools
 
         response = await client.aio.models.generate_content(**gen_kwargs)
         duration = time.time() - start_time
