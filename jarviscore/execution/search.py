@@ -48,7 +48,7 @@ class CircuitBreaker:
     call closes it again.
     """
 
-    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 60):
+    def __init__(self, failure_threshold: int = 8, recovery_timeout: int = 300):
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self._failures: Dict[str, int] = {}

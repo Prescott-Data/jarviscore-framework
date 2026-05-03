@@ -317,24 +317,40 @@ class MailboxManager:
 
     def _flatten(self, raw_messages: List[dict]) -> List[dict]:
         """
-        Flatten Redis mailbox entries into clean envelopes.
+        Normalise Redis mailbox entries into clean envelopes.
 
-        Redis stores: {"message": <envelope>, "timestamp": <float>}
-        We return the envelope with timestamp promoted into it.
+        Current schema (flat — redis_store v1.0.2+):
+            Each entry IS the envelope:
+            { "sender": "...", "message": {...}, "timestamp": <float>, ... }
+
+        Legacy schema (pre-v1.0.2, outer wrapper):
+            { "message": <envelope>, "timestamp": <float> }
+
+        Both are handled transparently so queues written before the schema
+        migration continue to work until they drain naturally.
         """
         result = []
         for entry in raw_messages:
-            envelope = entry.get("message", {})
-            if isinstance(envelope, dict):
-                # Promote Redis-level timestamp into envelope
-                if "timestamp" not in envelope:
-                    envelope["timestamp"] = entry.get("timestamp", 0)
-                result.append(envelope)
-            else:
-                # Non-dict message — wrap it
+            if not isinstance(entry, dict):
+                # Completely malformed — wrap defensively
                 result.append({
                     "sender": "unknown",
-                    "message": envelope,
-                    "timestamp": entry.get("timestamp", 0),
+                    "message": entry,
+                    "timestamp": 0,
                 })
+                continue
+
+            # Detect legacy double-nested format:
+            # outer "message" is a dict that itself contains a "sender" key,
+            # meaning it IS an envelope, not a payload.
+            inner = entry.get("message")
+            if isinstance(inner, dict) and "sender" in inner:
+                # Legacy: strip outer wrapper, promote timestamp
+                if "timestamp" not in inner:
+                    inner["timestamp"] = entry.get("timestamp", 0)
+                result.append(inner)
+            else:
+                # Flat schema (current): entry is already the envelope
+                result.append(entry)
+
         return result

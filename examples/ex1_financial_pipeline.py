@@ -217,11 +217,9 @@ async def main():
     print("AutoAgent | Autonomous Mode | Phases 1, 5, 7, 8, 9")
     print("=" * 70)
 
-    # ── Mesh setup ────────────────────────────────────────────────────────────
-    # redis_url in config dict takes priority over REDIS_URL env var (Phase 9)
-    # Prometheus is controlled by PROMETHEUS_ENABLED / PROMETHEUS_PORT in .env
+    # Mesh auto-detects infrastructure at start() — no mode= needed.
+    # Redis is injected if REDIS_URL is set (or passed explicitly here).
     mesh = Mesh(
-        mode="autonomous",
         config={
             "redis_url": REDIS_URL,
         },

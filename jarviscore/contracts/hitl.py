@@ -75,6 +75,34 @@ class HITLType(str, Enum):
     notification  = "notification"    # inform only, no action required
 
 
+class HITLCategory(str, Enum):
+    """
+    The ONLY valid reasons an agent may escalate to human review.
+
+    Anything outside these three categories must be handled autonomously.
+    Agents that call hitl.request() without a valid category will be rejected
+    at the queue layer.
+
+    auth_required   — A credential, token, or Nexus connection is missing or
+                      has expired. The agent cannot authenticate to proceed.
+                      Example: Nexus returns 401, .env key absent, OAuth expired.
+
+    data_required   — Critical input data is missing and CANNOT be obtained
+                      via API, scraping, or any autonomous means. Only the
+                      founder can supply it (e.g. bank statement CSV, private
+                      contract text, unreleased pricing).
+
+    critical_action — The next action is irreversible, financially material,
+                      or reputationally sensitive enough that the agent should
+                      not execute without explicit founder sign-off.
+                      Example: sending an investor email, publishing a press
+                      release, making a payment, deleting production data.
+    """
+    auth_required   = "auth_required"
+    data_required   = "data_required"
+    critical_action = "critical_action"
+
+
 class HITLStatus(str, Enum):
     """Lifecycle state of a HITL request."""
     pending   = "pending"
@@ -159,6 +187,10 @@ class HITLRequest(BaseModel):
 
     type: HITLType = HITLType.approval
     status: HITLStatus = HITLStatus.pending
+
+    # Mandatory: why this escalation is valid. Must be one of the three
+    # permitted categories — queue.py rejects requests without a valid one.
+    category: HITLCategory = HITLCategory.critical_action
 
     description: str = ""
     payload: Dict[str, Any] = Field(default_factory=dict)

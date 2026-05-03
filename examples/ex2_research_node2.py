@@ -83,10 +83,11 @@ async def main():
     print("AutoAgent | Distributed Mode | Port 7947 → Seed 7949")
     print("=" * 70)
 
+    # P2P mesh auto-activates when bind_port + seed_nodes are set in config.
     mesh = Mesh(
-        mode="distributed",
         config={
             "redis_url": REDIS_URL,
+            "p2p_enabled": True,
             "bind_host": "127.0.0.1",
             "bind_port": BIND_PORT,
             "seed_nodes": SEED_NODES,

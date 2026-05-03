@@ -98,7 +98,7 @@ class Settings(BaseSettings):
 
     # Gemini
     gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-1.5-flash"
+    gemini_model: str = "gemini-2.0-flash"
     gemini_temperature: float = 0.1
     gemini_timeout: float = 30.0
 
@@ -135,9 +135,26 @@ class Settings(BaseSettings):
     kernel_wall_clock_ms: int = 180000
 
     # === LLM Model Routing ===
-    # Azure OpenAI deployments for kernel subagent routing
-    coding_model: str = "dromos-gpt-4.1"  # Heavy lifting: code gen (GPT-4.1)
-    task_model: str = "gpt-4o"            # General: research, communication
+    # Azure OpenAI deployments for kernel subagent routing.
+    #
+    # Two-tier (default — always works):
+    #   coding_model  → CoderSubAgent (code generation)
+    #   task_model    → Researcher, Communicator, Browser
+    #
+    # Multi-tier (optional — pass complexity= in workflow task dicts):
+    #   task_model_nano     → fast + cheap  (classify, summarise, route)
+    #   task_model_standard → general tasks (default when complexity unset)
+    #   task_model_heavy    → deep reasoning, long context, planning
+    #
+    # Example usage in workflow:
+    #   {"agent": "researcher", "task": "...", "complexity": "heavy"}
+    #
+    # Falls back to task_model when a tier-specific setting is not configured.
+    coding_model: str = "dromos-gpt-4.1"       # Heavy lifting: code gen (GPT-4.1)
+    task_model: str = "gpt-4o"                 # General: research, communication
+    task_model_nano: Optional[str] = None      # TASK_MODEL_NANO — fast/cheap tier
+    task_model_standard: Optional[str] = None  # TASK_MODEL_STANDARD — default tier
+    task_model_heavy: Optional[str] = None     # TASK_MODEL_HEAVY — deep reasoning
     # Legacy aliases (still work if set)
     claude_task_model: str = ""
     claude_coding_model: str = ""

@@ -442,10 +442,11 @@ async def main():
     print("CustomAgent | Distributed Mode | Phases 1, 4, 5, 7, 8, 9")
     print("=" * 70)
 
+    # P2P mesh auto-activates when p2p_enabled + bind_port are set in config.
     mesh = Mesh(
-        mode="distributed",
         config={
             "redis_url": REDIS_URL,
+            "p2p_enabled": True,
             "bind_host": "127.0.0.1",
             "bind_port": 7955,
             "node_name": "content-pipeline-node",

@@ -106,20 +106,44 @@ class Kernel:
         # Subagent cache — reuse within same workflow step
         self._subagent_cache: Dict[str, Any] = {}
 
-    def _get_model_for_tier(self, tier: str) -> Optional[str]:
+    def _get_model_for_tier(self, tier: str, complexity: Optional[str] = None) -> Optional[str]:
         """Resolve model name from tier using config.
 
-        Checks generic settings first (coding_model, task_model),
-        falls back to legacy claude-specific settings for backward compat.
+        For the coding tier, returns coding_model.
+        For the task tier, respects an optional complexity hint:
+          - "nano"     → task_model_nano     (fast/cheap)
+          - "standard" → task_model_standard (general, default)
+          - "heavy"    → task_model_heavy    (deep reasoning)
+        Falls back to task_model / coding_model if tier-specific setting unset.
+        Legacy claude-specific settings are checked last for backward compat.
         """
         if tier == "coding":
-            return (self.config.get("coding_model")
-                    or self.config.get("claude_coding_model")
-                    or None)
+            return (
+                self.config.get("coding_model")
+                or self.config.get("claude_coding_model")
+                or None
+            )
         elif tier == "task":
-            return (self.config.get("task_model")
-                    or self.config.get("claude_task_model")
-                    or None)
+            # Multi-tier resolution: complexity hint → specific setting → base task_model
+            if complexity == "nano":
+                resolved = self.config.get("task_model_nano")
+                if resolved:
+                    return resolved
+            elif complexity == "heavy":
+                resolved = self.config.get("task_model_heavy")
+                if resolved:
+                    return resolved
+            elif complexity == "standard":
+                resolved = self.config.get("task_model_standard")
+                if resolved:
+                    return resolved
+            # Fallback to 2-tier base
+            return (
+                self.config.get("task_model_standard")  # prefer standard if set, even without hint
+                or self.config.get("task_model")
+                or self.config.get("claude_task_model")
+                or None
+            )
         return None
 
     def _classify_task(self, task: str, context: Optional[Dict] = None) -> str:
@@ -436,7 +460,10 @@ class Kernel:
                 workflow_id=workflow_id,
                 redis_store=self.redis_store,
             )
-            model = self._get_model_for_tier(lease.model_tier)
+            model = self._get_model_for_tier(
+                lease.model_tier,
+                complexity=context.get("complexity") if context else None,
+            )
 
             # Calculate max turns from lease
             max_turns = min(
@@ -655,11 +682,18 @@ class Kernel:
                     },
                 )
 
-            # Check HITL policy for escalation
-            if self.hitl_policy:
-                # Derive confidence and risk from actual trajectory —
-                # first-dispatch failure is very different from third-dispatch failure.
-                dispatch_confidence = max(0.1, 1.0 - (dispatch_num * 0.25))
+            # Check HITL policy for escalation — only on the FINAL dispatch.
+            # Intermediate failures should be retried (possibly with research
+            # findings), not dumped to human review.  Goal-oriented agents get
+            # their recovery from the Planner's replan loop; premature HITL
+            # escalation short-circuits that and floods the review queue.
+            is_final_dispatch = (dispatch_num == max_dispatches - 1)
+            if self.hitl_policy and is_final_dispatch:
+                # Gentler confidence decay: 0.15 per dispatch instead of 0.25.
+                # dispatch 0 → 0.85, dispatch 1 → 0.70, dispatch 2 → 0.55.
+                # This gives the retry loop room to succeed before the
+                # confidence drops below the escalation threshold.
+                dispatch_confidence = max(0.1, 1.0 - (dispatch_num * 0.15))
                 tokens_spent = total_tokens.get("total", 0)
                 risk_from_spend = min(0.9, tokens_spent / 200_000)
 

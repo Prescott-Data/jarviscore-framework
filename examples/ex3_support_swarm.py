@@ -379,10 +379,11 @@ async def main():
     print(f"[Config] REDIS_URL         = {REDIS_URL}")
 
     # ── Mesh setup ────────────────────────────────────────────────────────────
+    # P2P mesh auto-activates when p2p_enabled + bind_port are set in config.
     mesh = Mesh(
-        mode="p2p",
         config={
             "redis_url": REDIS_URL,
+            "p2p_enabled": True,
             "bind_host": "127.0.0.1",
             "bind_port": 7960,
             "node_name": "support-swarm",

@@ -331,6 +331,11 @@ class Mesh:
                 raise
 
         # ── 4. P2P coordinator (when SWIM is configured) ──────────────────────
+        # Merge Settings.p2p_enabled → config so P2P_ENABLED=true in .env works
+        # without requiring the developer to pass config={"p2p_enabled": True} to Mesh().
+        if self._settings and getattr(self._settings, "p2p_enabled", False):
+            self.config.setdefault("p2p_enabled", True)
+
         if self.config.get("p2p_enabled", False):
             self._logger.info("Initializing P2P coordinator (SWIM)...")
             try:
@@ -435,7 +440,7 @@ class Mesh:
         steps: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        Execute a multi-step workflow (autonomous mode only).
+        Execute a multi-step workflow.
 
         Args:
             workflow_id: Unique workflow identifier (for crash recovery)
@@ -1252,6 +1257,52 @@ class Mesh:
             payload["context"] = context
 
         return await agent.execute_task(payload)
+
+    async def run_task(
+        self,
+        agent: str = "",
+        agent_role: str = "",
+        task: str = "",
+        context: Optional[Dict[str, Any]] = None,
+        complexity: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Dispatch a single task to an agent by role.
+
+        This is the primary user-facing API for running a task on a specific
+        agent.  It wraps ``delegate()`` with a friendlier signature and adds
+        support for the ``complexity`` parameter (multi-tier model routing).
+
+        Args:
+            agent:      Agent role name (e.g. ``"researcher"``).
+            agent_role: Alias for ``agent`` — used internally by WorkflowBuilder.
+            task:       Natural language task description.
+            context:    Optional dict merged into the task payload.
+            complexity: Optional model tier hint: ``"nano"``, ``"standard"``,
+                        or ``"heavy"``.  Passed through to the Kernel via
+                        context so it selects the appropriate LLM model.
+
+        Returns:
+            The result dict from the agent's ``execute_task()`` — always
+            contains at least ``{"status": "success"|"failure", ...}``.
+
+        Example::
+
+            result = await mesh.run_task(
+                agent="analyst",
+                task="Summarise the following paragraph in one sentence.",
+                complexity="nano",
+            )
+        """
+        role = agent or agent_role
+        if not role:
+            raise ValueError("run_task() requires 'agent' or 'agent_role'.")
+
+        ctx = dict(context) if context else {}
+        if complexity:
+            ctx["complexity"] = complexity
+
+        return await self.delegate(to=role, task=task, context=ctx or None)
 
     # ─────────────────────────────────────────────────────────────────
     # DIAGNOSTICS

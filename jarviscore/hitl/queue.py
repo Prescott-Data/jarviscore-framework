@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from jarviscore.contracts.hitl import (
+    HITLCategory,
     HITLRequest,
     HITLResolution,
     HITLStatus,
@@ -116,19 +117,30 @@ class HITLQueue:
         content: str,
         urgency: str = "normal",
         context: Optional[Dict[str, Any]] = None,
+        category: str = "",
     ) -> str:
         """
         Submit a human review request.
 
-        Persists to both flat file (always) and Redis (when available).
-        Content and context values are truncated to prevent payload bloat.
+        CATEGORY IS REQUIRED and must be one of the three permitted values:
+
+          auth_required   — Nexus/API credentials missing or expired.
+          data_required   — Critical data only the founder can supply.
+          critical_action — Irreversible or sensitive action needing sign-off.
+
+        Any other reason (output quality checks, self-validation, content
+        completeness doubts, "the output looked truncated", etc.) is NOT
+        a valid escalation.  Agents must handle those autonomously.
+        Passing an invalid category raises ValueError so the agent is forced
+        to reconsider before the item reaches the founder's inbox.
 
         Args:
-            title:    Short headline shown in the review list (≤ 120 chars)
+            title:    Headline shown in the review list — never truncated, keep it descriptive
             content:  Full details for the reviewer — markdown supported
             urgency:  One of "low", "normal", "high", "critical"
             context:  Arbitrary dict for structured metadata (file paths,
                       downstream actions, agent state snapshots, etc.)
+            category: One of "auth_required", "data_required", "critical_action"
 
         Returns:
             request_id: Unique identifier for this review request.
@@ -136,18 +148,33 @@ class HITLQueue:
 
         Raises:
             ValueError: If urgency is not one of the valid levels
+            ValueError: If category is not one of the three permitted values
         """
         if urgency not in self.VALID_URGENCY:
             raise ValueError(
                 f"Invalid urgency '{urgency}'. Must be one of: {self.VALID_URGENCY}"
             )
 
+        # ── Category gate — hard enforcement ────────────────────────────────
+        valid_categories = {c.value for c in HITLCategory}
+        if category not in valid_categories:
+            raise ValueError(
+                f"Invalid HITL category '{category}'. "
+                f"Permitted values: {sorted(valid_categories)}. "
+                "Only escalate for auth failures, missing founder-supplied data, "
+                "or irreversible/sensitive actions. "
+                "Everything else must be handled autonomously."
+            )
+        hitl_category = HITLCategory(category)
+
         ts = time.strftime("%Y%m%d-%H%M%S")
         request_id = f"hitl-{ts}-{uuid.uuid4().hex[:8]}"
         now_iso = time.strftime("%Y-%m-%dT%H:%M:%S")
 
         # ── Apply content guards ─────────────────────────────────────────────
-        safe_title = (title or "")[:120]
+        # Titles are labels — never truncated. Content/context are size-guarded
+        # to prevent multi-KB data dumps from polluting the review UI.
+        safe_title = (title or "").strip()
         safe_content = _truncate(content or "", MAX_CONTENT_CHARS)
         safe_context = self._truncate_context(context or {})
 
@@ -158,10 +185,12 @@ class HITLQueue:
             step_id=safe_context.get("step_id", request_id),
             type=HITLType.approval,
             status=HITLStatus.pending,
+            category=hitl_category,
             description=safe_content,
             payload={
                 "title": safe_title,
                 "urgency": urgency,
+                "category": hitl_category.value,
                 "content": safe_content,
             },
             targets=["founder"],
@@ -175,7 +204,7 @@ class HITLQueue:
 
         # ── Persist to flat file (always) ────────────────────────────────────
         self._write_file(request_id, hitl_request, safe_title, safe_content,
-                         urgency, safe_context, now_iso)
+                         urgency, hitl_category.value, safe_context, now_iso)
 
         # ── Persist to Redis (when available) ────────────────────────────────
         if self._redis_store:
@@ -187,8 +216,8 @@ class HITLQueue:
                 )
 
         self._logger.info(
-            "HITL request submitted: id=%s urgency=%s title=%r",
-            request_id, urgency, safe_title[:60],
+            "HITL request submitted: id=%s category=%s urgency=%s title=%r",
+            request_id, hitl_category.value, urgency, safe_title[:60],
         )
         return request_id
 
@@ -347,6 +376,7 @@ class HITLQueue:
         title: str,
         content: str,
         urgency: str,
+        category: str,
         context: Dict[str, Any],
         created_at: str,
     ) -> None:
@@ -357,6 +387,7 @@ class HITLQueue:
             "title": title,
             "content": content,
             "urgency": urgency,
+            "category": category,
             "context": context,
             "created_at": created_at,
             "status": "pending",

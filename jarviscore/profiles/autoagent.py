@@ -48,38 +48,79 @@ class AutoAgent(Profile):
         # That's it! Framework handles execution automatically.
     """
 
-    # Additional user-defined attribute (beyond Agent base class)
+    # ── Required class attributes ────────────────────────────────────────────
+    # Every AutoAgent subclass must define these three.
+    # role and capabilities are declared on the Agent base class.
     system_prompt: str = None
 
-    # Optional: declare which kernel subagent role this agent should always use.
-    # Overrides the keyword classifier in Kernel._classify_task().
-    # Values: "coder" | "researcher" | "communicator" | None (auto-classify)
-    # Example: class Sentinel(AutoAgent): default_kernel_role = "researcher"
-    default_kernel_role: str = None
+    # ── Optional capabilities — full reference ───────────────────────────────
+    #
+    # ┌─────────────────────────────┬──────────┬──────────────────────────────────────────────────────┐
+    # │ Knob                        │ Where    │ What it does                                         │
+    # ├─────────────────────────────┼──────────┼──────────────────────────────────────────────────────┤
+    # │ goal_oriented = True        │ class    │ Routes all tasks through Plan→Execute→Evaluate loop  │
+    # │ default_kernel_role = "..." │ class    │ Fallback role when Planner emits subagent_hint: null │
+    # │ requires_auth = True        │ class    │ Mesh injects _auth_manager (Nexus-backed credentials)│
+    # │ complexity = "nano|heavy"   │ task     │ Per-task model tier hint passed in the workflow dict │
+    # │ HITL_ENABLED=true           │ .env     │ AdaptiveHITLPolicy — escalates on low-confidence     │
+    # │ BROWSER_ENABLED=true        │ .env     │ Activates BrowserSubAgent for web-automation tasks   │
+    # │ MAX_GOAL_STEPS=N            │ .env     │ Override step ceiling for goal_oriented agents        │
+    # │ MAX_REPLAN_ATTEMPTS=N       │ .env     │ Override max replanning cycles before failing         │
+    # └─────────────────────────────┴──────────┴──────────────────────────────────────────────────────┘
 
-    # ── Long-horizon execution mode ──────────────────────────────────────────
-    # Set goal_oriented = True on your AutoAgent subclass to route ALL tasks
-    # through the Plan → Execute → Evaluate loop automatically.
+    # ── goal_oriented ────────────────────────────────────────────────────────
+    # Routes every execute_task() call through the Plan → Execute → Evaluate
+    # loop. The Planner generates a DAG of steps, each with an explicit
+    # subagent_hint; the Kernel executes steps in order with full OODA context
+    # and TruthContext state persisted across steps.
     #
-    # When False (default), execute_task() runs a single OODA loop — correct
-    # for bounded, atomic tasks.
+    # When False (default): single OODA loop — correct for bounded atomic tasks.
+    # When True: same execute_task() call, same response envelope. No API change.
     #
-    # When True, the SAME execute_task() call the developer already makes is
-    # routed internally through Plan-Execute. The developer writes NOTHING
-    # extra — just sets this flag and the framework handles the rest.
-    #
-    # The execute_task() response envelope is preserved:
-    #   result["status"]           — "success" | "failure" | "hitl"
-    #   result["output"]           — final synthesised output
-    #   result["goal_execution"]  — summary dict (steps, facts, elapsed)
+    #   result["status"]          — "success" | "failure" | "hitl"
+    #   result["output"]          — final synthesised answer
+    #   result["goal_execution"]  — summary dict (steps, facts, elapsed_ms)
     #
     # Example:
     #     class ResearchAgent(AutoAgent):
     #         role = "researcher"
     #         capabilities = ["research", "analysis"]
     #         system_prompt = "You are a market researcher..."
-    #         goal_oriented = True   # ← that's it. framework does the rest.
+    #         goal_oriented = True   # ← that's it. framework handles the rest.
     goal_oriented: bool = False
+
+    # ── default_kernel_role ──────────────────────────────────────────────────
+    # Declare this agent's fixed subagent role for the Planner null-hint case.
+    #
+    # In goal_oriented mode the Planner assigns a subagent_hint to every step
+    # ("coder", "researcher", "communicator", "browser"). This attribute is the
+    # agent-level fallback used when the Planner returns subagent_hint: null.
+    #
+    # Use this on SPECIALIST agents where every task always uses the same role,
+    # so the Planner null-hint path also routes correctly.
+    # Leave None for generalist agents — the Planner handles routing per step.
+    #
+    # Values: "coder" | "researcher" | "communicator" | "browser" | None
+    # Example:
+    #     class SlackNotifier(AutoAgent):
+    #         default_kernel_role = "communicator"  # always sends, never codes
+    default_kernel_role: str = None
+
+    # ── requires_auth ────────────────────────────────────────────────────────
+    # Set True on agents that call third-party services (GitHub, Jira, Slack…).
+    #
+    # When True, the Mesh creates an AuthenticationManager from the Nexus
+    # gateway config and injects it as self._auth_manager AFTER setup().
+    # The Kernel then wires NexusCallProxy into the sandbox so LLM-generated
+    # code gets resolved credentials without ever seeing raw tokens.
+    #
+    # Requires NEXUS_GATEWAY_URL in .env (see: jarviscore nexus status).
+    # No-op when Nexus is not configured — agent runs without auth injection.
+    #
+    # Example:
+    #     class GithubAgent(AutoAgent):
+    #         requires_auth = True   # Mesh injects _auth_manager before first task
+    requires_auth: bool = False
 
     def __init__(self, agent_id=None):
         super().__init__(agent_id)
@@ -472,7 +513,7 @@ class AutoAgent(Profile):
         self,
         goal: str,
         context: Optional[Dict[str, Any]] = None,
-        max_steps: int = 15,
+        max_steps: int = 30,
         max_replan_attempts: Optional[int] = None,
     ) -> "GoalExecution":
         """
@@ -507,7 +548,8 @@ class AutoAgent(Profile):
         Args:
             goal:                 Natural language goal string (from execute_task).
             context:              Initial context dict (from the task dict).
-            max_steps:            Hard ceiling on steps (safety guard, default 15).
+            max_steps:            Hard ceiling on steps (safety guard, default 30).
+                                  Override via MAX_GOAL_STEPS env var.
             max_replan_attempts:  Max replanning cycles before failing (default 8,
                                   override with MAX_REPLAN_ATTEMPTS env var).
 
@@ -517,6 +559,10 @@ class AutoAgent(Profile):
         # Resolve at call-time so .env / dotenv loaders are respected
         if max_replan_attempts is None:
             max_replan_attempts = int(os.environ.get("MAX_REPLAN_ATTEMPTS", "8"))
+        # Allow env override of step ceiling without code changes
+        env_max_steps = os.environ.get("MAX_GOAL_STEPS")
+        if env_max_steps:
+            max_steps = int(env_max_steps)
         if self._kernel is None:
             raise RuntimeError(
                 f"{self.__class__.__name__}.execute_goal() called before setup(). "
@@ -647,6 +693,12 @@ class AutoAgent(Profile):
 
             # ── Handle verdict ────────────────────────────────────────────────
             if evaluation.needs_hitl:
+                # Audit log: only genuine HITL escalations reach here now
+                # (routine budget yields are downgraded to partial by evaluator)
+                self._logger.info(
+                    "[AutoAgent] HITL escalation — cause: %s",
+                    evaluation.evaluator_note[:200],
+                )
                 execution.status = "hitl"
                 execution.error = evaluation.evaluator_note
                 execution.completed_at = time.time()
@@ -661,7 +713,7 @@ class AutoAgent(Profile):
                     display_name = self.__class__.__name__
                     try:
                         _hitl.request(
-                            title=f"{display_name}: human review needed — {step.task[:80]}",
+                            title=f"{display_name}: human review needed — {step.task[:200]}",
                             content=(
                                 f"**Agent:** {display_name} (`{self.agent_id}`)\n\n"
                                 f"**Goal:** {goal[:500]}\n\n"

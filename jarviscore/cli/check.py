@@ -210,11 +210,21 @@ class HealthChecker:
                 azure_endpoint=os.getenv('AZURE_ENDPOINT')
             )
 
-            response = await client.chat.completions.create(
-                model=os.getenv('AZURE_DEPLOYMENT', 'gpt-4o'),
-                messages=[{"role": "user", "content": "Reply with just 'OK'"}],
-                max_tokens=10
-            )
+            deployment = os.getenv('AZURE_DEPLOYMENT', 'gpt-4o')
+            try:
+                # gpt-5.x+ models require max_completion_tokens, not max_tokens
+                response = await client.chat.completions.create(
+                    model=deployment,
+                    messages=[{"role": "user", "content": "Reply with just 'OK'"}],
+                    max_completion_tokens=10,
+                )
+            except Exception:
+                # Fall back to max_tokens for older deployments (gpt-4o, gpt-4)
+                response = await client.chat.completions.create(
+                    model=deployment,
+                    messages=[{"role": "user", "content": "Reply with just 'OK'"}],
+                    max_tokens=10,
+                )
 
             return response.choices[0].message.content.strip().upper() == 'OK'
 
@@ -294,8 +304,8 @@ class HealthChecker:
             print("\n" + "="*70)
             print("  Next Steps")
             print("="*70)
-            print("\n1. Initialize project (creates .env.example and examples):")
-            print("   python -m jarviscore.cli.scaffold --examples")
+            print("\n1. Initialize project:")
+            print("   jarviscore init")
             print("\n2. Configure your environment:")
             print("   cp .env.example .env")
             print("   # Edit .env and add one of:")
@@ -304,18 +314,18 @@ class HealthChecker:
             print("   #   GEMINI_API_KEY=...")
             print("   #   LLM_ENDPOINT=http://localhost:8000 (for local vLLM)")
             print("\n3. Run health check again:")
-            print("   python -m jarviscore.cli.check --validate-llm")
-            print("\n4. Try the smoke test:")
-            print("   python -m jarviscore.cli.smoketest")
+            print("   jarviscore check --validate-llm")
+            print("\n4. Try the quickstart:")
+            print("   python examples/quickstart.py")
             print()
 
             return False
 
         print("\n✓ All checks passed! Ready to use JarvisCore.\n")
         print("Next steps:")
-        print("  1. Run smoke test: python -m jarviscore.cli.smoketest")
-        print("  2. Get examples:   python -m jarviscore.cli.scaffold --examples")
-        print("  3. Try example:    python examples/calculator_agent_example.py")
+        print("  1. Run smoke test:    jarviscore smoketest")
+        print("  2. Try quickstart:    python examples/quickstart.py")
+        print("  3. Full example set:  jarviscore init --examples")
         print()
 
         return True

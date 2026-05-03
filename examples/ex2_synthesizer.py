@@ -131,10 +131,11 @@ Start order:
 Workflow submits after a 10s wait for nodes to join SWIM cluster.
 """)
 
+    # This is the SWIM seed node — p2p_enabled activates P2P, no seed_nodes needed.
     mesh = Mesh(
-        mode="distributed",
         config={
             "redis_url": REDIS_URL,
+            "p2p_enabled": True,
             "bind_host": "127.0.0.1",
             "bind_port": BIND_PORT,
             "node_name": "synthesizer-seed",

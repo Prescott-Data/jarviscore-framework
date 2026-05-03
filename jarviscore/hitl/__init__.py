@@ -28,6 +28,7 @@ Contracts re-exported for convenience::
 """
 
 from jarviscore.contracts.hitl import (
+    HITLCategory,
     HITLDecision,
     HITLPolicy,
     HITLRequest,
@@ -44,6 +45,7 @@ __all__ = [
     # Queue (the main thing agents use)
     "HITLQueue",
     # Contracts (re-exported for convenience)
+    "HITLCategory",
     "HITLDecision",
     "HITLPolicy",
     "HITLRequest",

@@ -66,6 +66,116 @@ _THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGH
 _JSON_BLOCK_PATTERN = re.compile(r"\{[^{}]*\"tool\"\s*:", re.DOTALL)
 
 
+def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """Extract the first complete JSON object from *text* using brace-counting.
+
+    Handles multi-line JSON (e.g. when a ``code`` param contains literal
+    newlines) which would break the naive ``split("\\n")[0]`` approach.
+    Returns the parsed dict, or None if no valid JSON object is found.
+
+    String-aware: braces inside quoted strings are ignored so that code
+    like ``{"code": "if x > 0: {print('yes')}"}`` parses correctly.
+
+    If the initial ``json.loads`` fails (typically because the LLM emitted
+    literal newlines/tabs inside JSON string values), the function repairs
+    the JSON by escaping unescaped control characters within strings and
+    retries the parse.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    end = start
+
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    else:
+        # Never closed — incomplete JSON
+        return None
+
+    candidate = text[start:end]
+
+    # Fast path: valid JSON as-is
+    try:
+        return json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Repair path: escape raw newlines/tabs/carriage-returns inside strings.
+    # LLMs frequently emit multi-line code values with literal newlines
+    # instead of \\n escape sequences, producing invalid JSON.
+    repaired = _repair_json_strings(candidate)
+    try:
+        return json.loads(repaired)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _repair_json_strings(text: str) -> str:
+    """Escape unescaped control characters (newlines, tabs) inside JSON string values.
+
+    Walks the JSON text character-by-character, tracking whether we're inside
+    a string literal. When a raw \\n, \\r, or \\t is found inside a string,
+    it's replaced with the JSON escape sequence.
+    """
+    out: list[str] = []
+    in_string = False
+    escape_next = False
+
+    for ch in text:
+        if escape_next:
+            out.append(ch)
+            escape_next = False
+            continue
+
+        if ch == "\\":
+            out.append(ch)
+            escape_next = True
+            continue
+
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+
+        if in_string:
+            if ch == "\n":
+                out.append("\\n")
+                continue
+            if ch == "\r":
+                out.append("\\r")
+                continue
+            if ch == "\t":
+                out.append("\\t")
+                continue
+
+        out.append(ch)
+
+    return "".join(out)
+
+
+
 class ToolDefinition:
     """A registered tool available to a subagent."""
 
@@ -830,11 +940,17 @@ class BaseSubAgent(ABC):
             params_match = _PARAMS_PATTERN.search(content)
             if params_match:
                 params_str = params_match.group(1).strip()
-                # Extract just the first JSON object/line
-                try:
-                    params = json.loads(params_str.split("\n")[0])
-                except (json.JSONDecodeError, ValueError):
-                    params = {"raw": params_str}
+                # Try parsing the full JSON object using brace-counting.
+                # The LLM often emits multi-line JSON (e.g. write_code with
+                # code containing literal newlines), so split("\n")[0] would
+                # truncate the JSON and cause a parse failure.
+                params = _extract_json_object(params_str)
+                if params is None:
+                    # Fallback: try first line (works for simple single-line params)
+                    try:
+                        params = json.loads(params_str.split("\n")[0])
+                    except (json.JSONDecodeError, ValueError):
+                        params = {"raw": params_str}
             return {"type": "tool", "thought": thought, "tool": tool_name, "params": params}
 
         # ── JSON protocol fallback ──

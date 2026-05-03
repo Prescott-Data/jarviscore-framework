@@ -120,6 +120,33 @@ class StepEvaluator:
             )
 
         if output_status == "yield":
+            # ── Triage: routine budget yields vs genuine HITL needs ────────
+            # Budget exhaustion is a normal operational event — the agent
+            # simply ran out of tokens/turns/time.  Treat as partial success
+            # so the goal loop replans with simpler steps instead of pausing
+            # for human review.
+            #
+            # Only convergence stalls (agent tried different strategies and
+            # still can't make progress) warrant genuine HITL escalation.
+            meta = getattr(output, "metadata", None) or {}
+            typed_outcome = meta.get("typed_outcome", "")
+            _ROUTINE_YIELDS = {
+                "YIELD_BUDGET_EXHAUSTED",
+                "YIELD_LEASE_EXHAUSTED",
+                "YIELD_EMERGENCY_TURN_FUSE",
+            }
+            if typed_outcome in _ROUTINE_YIELDS:
+                return StepEvaluation(
+                    verdict="partial",
+                    confidence=0.80,
+                    evaluator_note=(
+                        f"Step yielded due to routine budget limit "
+                        f"({typed_outcome}). Partial output available: "
+                        f"{getattr(output, 'summary', 'yield triggered')}"
+                    ),
+                    additional_findings={},
+                )
+            # Genuine HITL: convergence stall or unknown yield reason
             return StepEvaluation(
                 verdict="hitl",
                 confidence=0.98,

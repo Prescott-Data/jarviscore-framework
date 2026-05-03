@@ -381,9 +381,13 @@ class WorkflowEngine:
 
         logger.info(f"Step {step_id} claimed by {agent.agent_id}")
 
-        # Build task dict with dependency context
+        # Build task dict — merge caller-provided context with engine metadata.
+        # Callers may pass context in step["context"] (e.g. knowledge_context,
+        # config overrides). Preserve it; engine keys take precedence on conflict.
         task = step.copy()
+        caller_ctx = task.get("context", {}) if isinstance(task.get("context"), dict) else {}
         task["context"] = {
+            **caller_ctx,
             "previous_step_results": dep_outputs,
             "workflow_id": workflow_id,
             "step_id": step_id,

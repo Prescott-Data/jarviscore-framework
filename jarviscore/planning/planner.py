@@ -36,9 +36,29 @@ logger = logging.getLogger(__name__)
 
 # ── Prompt constants ──────────────────────────────────────────────────────────
 
+_VALID_HINTS = frozenset({"coder", "researcher", "communicator", "browser"})
+
+# Common LLM-hallucinated hints → closest valid role.
+# Prevents noisy "Unknown subagent_hint" warnings and gives better routing.
+_HINT_ALIASES: Dict[str, str] = {
+    "analyst":       "researcher",
+    "data_analyst":  "researcher",
+    "data":          "researcher",
+    "investigator":  "researcher",
+    "writer":        "communicator",
+    "author":        "communicator",
+    "editor":        "communicator",
+    "developer":     "coder",
+    "programmer":    "coder",
+    "engineer":      "coder",
+    "scraper":       "browser",
+    "crawler":       "browser",
+    "web":           "browser",
+}
+
 _SUBAGENT_GUIDE = """\
 Available subagent types (set subagent_hint to route directly):
-- "researcher"   : web search, document retrieval, data gathering, investigation
+- "researcher"   : web search, document retrieval, data gathering, investigation, analysis
 - "coder"        : code generation, data processing, API calls, file I/O, computation
 - "communicator" : drafting text, reports, emails, structured documents
 - "browser"      : web automation, form filling, UI interaction, screenshots
@@ -336,11 +356,20 @@ class Planner:
             hint = item.get("subagent_hint")
             if hint in (None, "null", ""):
                 hint = None
-            elif hint not in ("coder", "researcher", "communicator", "browser"):
-                logger.warning(
-                    "[Planner] Unknown subagent_hint %r in step %d — ignoring", hint, i
-                )
-                hint = None
+            elif hint not in _VALID_HINTS:
+                # Try alias map before discarding
+                alias = _HINT_ALIASES.get(hint.lower() if isinstance(hint, str) else "")
+                if alias:
+                    logger.info(
+                        "[Planner] Remapped subagent_hint %r → %r in step %d",
+                        hint, alias, i,
+                    )
+                    hint = alias
+                else:
+                    logger.warning(
+                        "[Planner] Unknown subagent_hint %r in step %d — ignoring", hint, i
+                    )
+                    hint = None
 
             step_id = item.get("step_id") or f"step_{i+1:02d}_{uuid.uuid4().hex[:4]}"
             steps.append(PlannedStep(
