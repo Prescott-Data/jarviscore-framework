@@ -58,8 +58,11 @@ TOKEN_PRICING = {
     "gemini-1.5-pro": {"input": 1.25, "output": 5.00, "cached": 0.31},
     "gemini-1.5-flash": {"input": 0.10, "output": 0.30, "cached": 0.03},
     # Vertex AI (same models, same pricing — accessed via ADC instead of API key)
+    # Vertex AI (same models, same pricing — accessed via ADC instead of API key)
     "gemini-2.5-flash": {"input": 0.15, "output": 0.60, "cached": 0.04},
     "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "cached": 0.31},
+    "gemini-3.1-pro": {"input": 1.25, "output": 10.00, "cached": 0.31},
+    "gemini-3.1-pro-preview": {"input": 1.25, "output": 10.00, "cached": 0.31},
     # Anthropic Claude models
     "claude-opus-4": {"input": 15.00, "output": 75.00, "cached": 3.75},
     "claude-sonnet-4": {"input": 3.00, "output": 15.00, "cached": 0.75},
@@ -350,6 +353,7 @@ class UnifiedLLMClient:
         max_tokens: int,
         provider_label: str,
         default_pricing: Dict,
+        **kwargs,
     ) -> Dict:
         """
         Shared helper for google.genai generate_content calls (Gemini and Vertex AI).
@@ -367,20 +371,38 @@ class UnifiedLLMClient:
             default_pricing: Fallback pricing dict used when *model_name* is not
                 found in ``TOKEN_PRICING``.  Must contain ``"input"`` and
                 ``"output"`` keys (cost per 1M tokens).
+            **kwargs: Additional arguments forwarded to generate_content
+                (e.g. ``tools`` for function-calling support).
         """
         start_time = time.time()
 
-        response = await client.aio.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config={
+        # Build generate_content kwargs, forwarding tools if provided
+        gen_kwargs = {
+            "model": model_name,
+            "contents": prompt,
+            "config": {
                 "temperature": temperature,
                 "max_output_tokens": max_tokens,
             },
-        )
+        }
+        tools = kwargs.get('tools', None)
+        if tools:
+            gen_kwargs["tools"] = tools
+
+        response = await client.aio.models.generate_content(**gen_kwargs)
         duration = time.time() - start_time
 
-        content = response.text
+        # Check if the model responded with tool calls instead of text
+        tool_calls = []
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    tool_calls.append({
+                        "name": part.function_call.name,
+                        "args": dict(part.function_call.args) if part.function_call.args else {}
+                    })
+
+        content = response.text if not tool_calls else ""
 
         # Get usage metadata if available, otherwise estimate
         usage_metadata = getattr(response, 'usage_metadata', None)
@@ -389,7 +411,7 @@ class UnifiedLLMClient:
             output_tokens = getattr(usage_metadata, 'candidates_token_count', 0)
         else:
             input_tokens = int(len(prompt.split()) * 1.3)
-            output_tokens = int(len(content.split()) * 1.3)
+            output_tokens = int(len(content.split()) * 1.3) if content else 0
 
         pricing = TOKEN_PRICING.get(model_name, default_pricing)
         cost = (input_tokens * pricing['input'] + output_tokens * pricing['output']) / 1_000_000
@@ -397,6 +419,7 @@ class UnifiedLLMClient:
         return {
             "content": content,
             "provider": provider_label,
+            "tool_calls": tool_calls,
             "tokens": {
                 "input": int(input_tokens),
                 "output": int(output_tokens),
@@ -437,6 +460,7 @@ class UnifiedLLMClient:
             max_tokens=max_tokens,
             provider_label="vertex_ai",
             default_pricing={"input": 0.15, "output": 0.60},
+            **kwargs,
         )
 
     async def _call_claude(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
