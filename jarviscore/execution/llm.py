@@ -344,6 +344,46 @@ class UnifiedLLMClient:
             "duration_seconds": duration
         }
 
+    @staticmethod
+    def _normalize_tools_for_gemini(tools) -> list:
+        """Auto-detect and convert tool schemas to Gemini function_declarations format.
+
+        Accepts three input shapes:
+        1. Already Gemini-native (list of dicts with 'function_declarations' key) → pass through.
+        2. Anthropic / JarvisCore PeerTool style (list of dicts with 'input_schema' key)
+           → rename 'input_schema' to 'parameters' and wrap in function_declarations.
+        3. Flat list of dicts with 'name'+'parameters' already → wrap in function_declarations.
+
+        This eliminates the need for consumers to write format adapters.
+        """
+        if not tools:
+            return tools
+
+        # Case 1: Already wrapped in function_declarations (Gemini-native)
+        if isinstance(tools, list) and tools and isinstance(tools[0], dict):
+            if "function_declarations" in tools[0]:
+                return tools
+
+        # Unwrap if nested
+        raw_schemas = tools if isinstance(tools, list) else [tools]
+
+        converted = []
+        for schema in raw_schemas:
+            if not isinstance(schema, dict):
+                continue
+            # Case 2: Anthropic / PeerTool format (has 'input_schema')
+            if "input_schema" in schema:
+                converted.append({
+                    "name": schema.get("name"),
+                    "description": schema.get("description", ""),
+                    "parameters": schema["input_schema"],
+                })
+            else:
+                # Case 3: Already has 'name' + 'parameters' (or unknown) → pass as-is
+                converted.append(schema)
+
+        return [{"function_declarations": converted}] if converted else tools
+
     async def _call_genai_client(
         self,
         client,
@@ -387,7 +427,7 @@ class UnifiedLLMClient:
         }
         tools = kwargs.get('tools', None)
         if tools:
-            gen_kwargs["config"]["tools"] = tools
+            gen_kwargs["config"]["tools"] = self._normalize_tools_for_gemini(tools)
 
         response = await client.aio.models.generate_content(**gen_kwargs)
         duration = time.time() - start_time
