@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JarvisCore — Brand Palette</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f5f5f7;
+      color: #1a1a1a;
+      padding: 60px 40px;
+    }
+
+    .page-title {
+      font-size: 2.5rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 8px;
+    }
+    .page-subtitle {
+      font-size: 1rem;
+      font-weight: 400;
+      color: #6b7280;
+      margin-bottom: 60px;
+    }
+
+    /* ── Section ── */
+    .section {
+      margin-bottom: 64px;
+    }
+    .section-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #9ca3af;
+      margin-bottom: 24px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    /* ── Logo Grid ── */
+    .logo-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 24px;
+    }
+
+    .logo-card {
+      border-radius: 16px;
+      padding: 48px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      min-height: 200px;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .logo-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.12);
+    }
+
+    .logo-card img {
+      max-width: 100%;
+      max-height: 120px;
+      object-fit: contain;
+    }
+
+    .logo-card .card-label {
+      position: absolute;
+      bottom: 12px;
+      left: 16px;
+      font-size: 0.65rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      opacity: 0.5;
+    }
+    .logo-card .card-file {
+      position: absolute;
+      bottom: 12px;
+      right: 16px;
+      font-size: 0.6rem;
+      font-weight: 400;
+      font-family: 'JetBrains Mono', monospace;
+      opacity: 0.35;
+    }
+
+    /* Background variants */
+    .bg-light {
+      background: #FFFFFF;
+      border: 1px solid #e5e7eb;
+    }
+    .bg-light .card-label,
+    .bg-light .card-file { color: #1a1a1a; }
+
+    .bg-dark {
+      background: #292929;
+    }
+    .bg-dark .card-label,
+    .bg-dark .card-file { color: #ffffff; }
+
+    .bg-brand {
+      background: linear-gradient(135deg, #0533AC 0%, #0971EE 50%, #023DF3 100%);
+    }
+    .bg-brand .card-label,
+    .bg-brand .card-file { color: #ffffff; }
+
+    .bg-gradient {
+      background: linear-gradient(135deg, #35B0FE 0%, #2457F7 35%, #443ACC 68%, #752CEA 100%);
+    }
+    .bg-gradient .card-label,
+    .bg-gradient .card-file { color: #ffffff; }
+
+    /* ── Color Swatches ── */
+    .swatch-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+    }
+    .swatch {
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #e5e7eb;
+    }
+    .swatch-color {
+      height: 100px;
+      display: flex;
+      align-items: flex-end;
+      padding: 10px 14px;
+    }
+    .swatch-info {
+      padding: 12px 14px;
+      background: #fff;
+    }
+    .swatch-name {
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .swatch-hex {
+      font-size: 0.7rem;
+      color: #9ca3af;
+      font-family: monospace;
+    }
+
+    /* ── Gradient Swatches ── */
+    .gradient-card {
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #e5e7eb;
+    }
+    .gradient-strip {
+      height: 80px;
+    }
+    .gradient-info {
+      padding: 12px 14px;
+      background: #fff;
+    }
+    .gradient-name {
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .gradient-stops {
+      font-size: 0.65rem;
+      color: #9ca3af;
+      font-family: monospace;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+
+  <h1 class="page-title">JarvisCore</h1>
+  <p class="page-subtitle">Brand Identity Palette — Logos, Colors & Usage Guidelines</p>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- MONOGRAM ONLY                                   -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="section">
+    <h2 class="section-title">Monogram — No Background</h2>
+    <div class="logo-grid">
+      <div class="logo-card bg-light">
+        <img src="../svg/monogram-brand.svg" alt="Monogram Brand Blue">
+        <span class="card-label">Brand Blue</span>
+        <span class="card-file">monogram-brand.svg</span>
+      </div>
+      <div class="logo-card bg-light">
+        <img src="../svg/monogram-black.svg" alt="Monogram Black">
+        <span class="card-label">Positive / Black</span>
+        <span class="card-file">monogram-black.svg</span>
+      </div>
+      <div class="logo-card bg-light">
+        <img src="../svg/monogram-purple.svg" alt="Monogram Purple">
+        <span class="card-label">UI Purple</span>
+        <span class="card-file">monogram-purple.svg</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Monogram — On Backgrounds</h2>
+    <div class="logo-grid">
+      <div class="logo-card bg-dark">
+        <img src="../svg/monogram-white.svg" alt="Monogram White on Dark">
+        <span class="card-label">Negative / Dark</span>
+        <span class="card-file">monogram-white.svg</span>
+      </div>
+      <div class="logo-card bg-brand">
+        <img src="../svg/monogram-white.svg" alt="Monogram White on Brand">
+        <span class="card-label">Negative / Brand Gradient</span>
+        <span class="card-file">monogram-white.svg</span>
+      </div>
+      <div class="logo-card bg-gradient">
+        <img src="../svg/monogram-white.svg" alt="Monogram White on Gradient">
+        <span class="card-label">Negative / UI Brand Gradient</span>
+        <span class="card-file">monogram-white.svg</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- WORDMARK ONLY                                    -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="section">
+    <h2 class="section-title">Wordmark — No Background</h2>
+    <div class="logo-grid">
+      <div class="logo-card bg-light">
+        <img src="../svg/wordmark-brand.svg" alt="Wordmark Brand Blue">
+        <span class="card-label">Brand Blue</span>
+        <span class="card-file">wordmark-brand.svg</span>
+      </div>
+      <div class="logo-card bg-light">
+        <img src="../svg/wordmark-black.svg" alt="Wordmark Black">
+        <span class="card-label">Positive / Black</span>
+        <span class="card-file">wordmark-black.svg</span>
+      </div>
+      <div class="logo-card bg-light">
+        <img src="../svg/wordmark-purple.svg" alt="Wordmark Purple">
+        <span class="card-label">UI Purple</span>
+        <span class="card-file">wordmark-purple.svg</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Wordmark — On Backgrounds</h2>
+    <div class="logo-grid">
+      <div class="logo-card bg-dark">
+        <img src="../svg/wordmark-white.svg" alt="Wordmark White on Dark">
+        <span class="card-label">Negative / Dark</span>
+        <span class="card-file">wordmark-white.svg</span>
+      </div>
+      <div class="logo-card bg-brand">
+        <img src="../svg/wordmark-white.svg" alt="Wordmark White on Brand">
+        <span class="card-label">Negative / Brand Gradient</span>
+        <span class="card-file">wordmark-white.svg</span>
+      </div>
+      <div class="logo-card bg-gradient">
+        <img src="../svg/wordmark-white.svg" alt="Wordmark White on Gradient">
+        <span class="card-label">Negative / UI Brand Gradient</span>
+        <span class="card-file">wordmark-white.svg</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- COMBINATION MARK (Monogram + Wordmark)           -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="section">
+    <h2 class="section-title">Monogram + Wordmark — No Background</h2>
+    <div class="logo-grid">
+      <div class="logo-card bg-light">
+        <img src="../svg/combo-brand.svg" alt="Combo Brand Blue">
+        <span class="card-label">Brand Blue</span>
+        <span class="card-file">combo-brand.svg</span>
+      </div>
+      <div class="logo-card bg-light">
+        <img src="../svg/combo-black.svg" alt="Combo Black">
+        <span class="card-label">Positive / Black</span>
+        <span class="card-file">combo-black.svg</span>
+      </div>
+      <div class="logo-card bg-light">
+        <img src="../svg/combo-purple.svg" alt="Combo Purple">
+        <span class="card-label">UI Purple</span>
+        <span class="card-file">combo-purple.svg</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Monogram + Wordmark — On Backgrounds</h2>
+    <div class="logo-grid">
+      <div class="logo-card bg-dark">
+        <img src="../svg/combo-white.svg" alt="Combo White on Dark">
+        <span class="card-label">Negative / Dark</span>
+        <span class="card-file">combo-white.svg</span>
+      </div>
+      <div class="logo-card bg-brand">
+        <img src="../svg/combo-white.svg" alt="Combo White on Brand">
+        <span class="card-label">Negative / Brand Gradient</span>
+        <span class="card-file">combo-white.svg</span>
+      </div>
+      <div class="logo-card bg-gradient">
+        <img src="../svg/combo-white.svg" alt="Combo White on Gradient">
+        <span class="card-label">Negative / UI Brand Gradient</span>
+        <span class="card-file">combo-white.svg</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- COLOR PALETTE                                    -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="section">
+    <h2 class="section-title">Color Library</h2>
+    <div class="swatch-grid">
+      <div class="swatch">
+        <div class="swatch-color" style="background: #FFFFFF; border-bottom: 1px solid #e5e7eb;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">UI Light</div>
+          <div class="swatch-hex">#FFFFFF</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background: #292929;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">UI Dark</div>
+          <div class="swatch-hex">#292929</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background: #1758F5;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">UI Blue</div>
+          <div class="swatch-hex">#1758F5</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background: #4951F3;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">UI Purple</div>
+          <div class="swatch-hex">#4951F3</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Gradients</h2>
+    <div class="swatch-grid">
+      <div class="gradient-card">
+        <div class="gradient-strip" style="background: linear-gradient(135deg, #0533AC 0%, #0971EE 50%, #023DF3 100%);"></div>
+        <div class="gradient-info">
+          <div class="gradient-name">Brand Gradient</div>
+          <div class="gradient-stops">#0533AC → #0971EE → #023DF3</div>
+        </div>
+      </div>
+      <div class="gradient-card">
+        <div class="gradient-strip" style="background: linear-gradient(135deg, #1758F5 0%, #0CF0E3 75%, #00B9FC 100%);"></div>
+        <div class="gradient-info">
+          <div class="gradient-name">UI Gradient Linear</div>
+          <div class="gradient-stops">#1758F5 → #0CF0E3 → #00B9FC</div>
+        </div>
+      </div>
+      <div class="gradient-card">
+        <div class="gradient-strip" style="background: linear-gradient(135deg, #22EA57 0%, #10AD51 100%);"></div>
+        <div class="gradient-info">
+          <div class="gradient-name">UI Green Gradient</div>
+          <div class="gradient-stops">#22EA57 → #10AD51</div>
+        </div>
+      </div>
+      <div class="gradient-card">
+        <div class="gradient-strip" style="background: linear-gradient(135deg, #35B0FE 0%, #2457F7 35%, #443ACC 68%, #752CEA 100%);"></div>
+        <div class="gradient-info">
+          <div class="gradient-name">UI Brand Gradient</div>
+          <div class="gradient-stops">#35B0FE → #2457F7 → #443ACC → #752CEA</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
