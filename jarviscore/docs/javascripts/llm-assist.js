@@ -5,9 +5,6 @@ function initLLMWidget() {
   // Skip if already injected (instant navigation guard)
   if (contentInner.querySelector('.jc-llm-widget')) return;
 
-  // Skip on pages with hero (like the welcome page) to prevent layout overlap
-  if (contentInner.querySelector('.jc-hero')) return;
-
   // Hide ALL existing MkDocs action buttons (edit + view source)
   var allButtons = contentInner.querySelectorAll('.md-content__button');
   var rawUrl = window.location.href;
