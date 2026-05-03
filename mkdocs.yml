@@ -10,35 +10,50 @@ site_dir: site
 
 theme:
   name: material
-  logo: assets/logo.png
-  favicon: assets/logo.png
+  custom_dir: overrides
+  logo: assets/wordmark-brand.svg
+  favicon: assets/monogram-brand.svg
+  font:
+    text: Inter
+    code: JetBrains Mono
   palette:
     - scheme: default
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
-        icon: material/brightness-7
+        icon: material/weather-night
         name: Switch to dark mode
     - scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
-        icon: material/brightness-4
+        icon: material/weather-sunny
         name: Switch to light mode
   features:
+    - navigation.instant
+    - navigation.instant.progress
     - navigation.tabs
     - navigation.tabs.sticky
     - navigation.sections
-    - navigation.expand
+    - navigation.indexes
+    - navigation.path
     - navigation.top
+    - navigation.footer
+    - toc.follow
     - search.highlight
     - search.share
+    - search.suggest
     - content.code.copy
     - content.code.annotate
-    - toc.integrate
+    - content.tooltips
+
 
 extra_css:
   - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/header.js
+  - javascripts/llm-assist.js
 
 plugins:
   - search
@@ -49,34 +64,80 @@ markdown_extensions:
   - pymdownx.superfences
   - pymdownx.highlight:
       anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets:
-      base_path: ['.']   # repo root — allows --8<-- "README.md" in index.md
+      base_path: ['.']
   - pymdownx.tabbed:
       alternate_style: true
   - tables
   - toc:
       permalink: true
+  - attr_list
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 nav:
-  - Home: index.md
-  - Getting Started: GETTING_STARTED.md
-  - Profiles:
-      - AutoAgent: AUTOAGENT_GUIDE.md
-      - CustomAgent: CUSTOMAGENT_GUIDE.md
-  - User Guide: USER_GUIDE.md
-  - Enterprise: ENTERPRISE.md
+  - Welcome:
+      - Overview: index.md
+      - Website: https://developers.prescottdata.io
+      - Community: https://discord.gg/jarviscore
+      - Blog: https://developers.prescottdata.io/blog
+  - Getting Started: getting-started.md
+  - Concepts:
+      - Architecture: concepts/architecture.md
+      - Memory: concepts/memory.md
+      - Agent Personas: concepts/agent-personas.md
+      - P2P Communication: concepts/p2p.md
+      - System Bundles & Atoms: concepts/system-bundles.md
+      - Nexus: concepts/nexus.md
+  - Guides:
+      - AutoAgent: guides/autoagent.md
+      - CustomAgent: guides/customagent.md
+      - FastAPI: guides/fastapi.md
+      - Workflow DAGs: guides/workflows.md
+      - HITL Escalation: guides/hitl.md
+      - Nexus Credentials: guides/nexus.md
+      - Knowledge Base: guides/knowledge-base.md
+      - Chat Endpoint: guides/chat.md
+      - Internet Search: guides/internet-search.md
+      - Observability: guides/observability.md
+      - Integrations: guides/integrations.md
+      - System Prompts: guides/system-prompts.md
+      - Testing: guides/testing.md
+      - Migration: guides/migration.md
+  - Examples:
+      - Overview: examples/index.md
+      - Financial Pipeline: examples/financial-pipeline.md
+      - Research Network: examples/research-network.md
+      - Support Swarm: examples/support-swarm.md
+      - Content Pipeline: examples/content-pipeline.md
+      - Investment Committee: examples/investment-committee.md
   - Reference:
-      - API Reference: API_REFERENCE.md
-      - Configuration: CONFIGURATION.md
-  - Troubleshooting: TROUBLESHOOTING.md
-  - Changelog: CHANGELOG.md
+      - Configuration: reference/configuration.md
+      - CLI Reference: reference/cli.md
+      - Troubleshooting: TROUBLESHOOTING.md
+      - Changelog: CHANGELOG.md
+  - Enterprise: infrastructure/enterprise.md
 
 extra:
+  version: "1.0.3"
   social:
+    - icon: material/web
+      link: https://developers.prescottdata.io
+      name: JarvisCore Website
+    - icon: fontawesome/brands/x-twitter
+      link: https://x.com/prescottdata
+      name: Prescott Data on X
+    - icon: fontawesome/brands/linkedin
+      link: https://linkedin.com/company/jarviscore
+      name: JarvisCore on LinkedIn
     - icon: fontawesome/brands/github
       link: https://github.com/Prescott-Data/jarviscore-framework
       name: JarvisCore on GitHub
-    - icon: fontawesome/brands/python
-      link: https://pypi.org/project/jarviscore-framework/
-      name: JarvisCore on PyPI
+    - icon: fontawesome/brands/discord
+      link: https://discord.gg/vNPYxp6V7
+      name: Join our Discord
