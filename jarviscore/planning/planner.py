@@ -45,9 +45,13 @@ _HINT_ALIASES: Dict[str, str] = {
     "data_analyst":  "researcher",
     "data":          "researcher",
     "investigator":  "researcher",
+    "architect":     "researcher",   # goal_oriented planning sessions emit this
+    "strategist":    "researcher",
+    "planner":       "researcher",
     "writer":        "communicator",
     "author":        "communicator",
     "editor":        "communicator",
+    "reporter":      "communicator",
     "developer":     "coder",
     "programmer":    "coder",
     "engineer":      "coder",

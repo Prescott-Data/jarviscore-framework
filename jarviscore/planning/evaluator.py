@@ -235,6 +235,12 @@ class StepEvaluator:
         """
         Parse LLM JSON response into StepEvaluation.
         Raises EvaluatorError if the response is invalid or verdict is unrecognised.
+
+        Tries three strategies in order:
+          1. Direct JSON parse
+          2. Extract balanced { } block from prose (handles markdown wrappers)
+          3. Natural-language verdict detection (✅/❌ / pass/fail prose)
+        Only raises EvaluatorError if all three fail.
         """
         content = content.strip()
 
@@ -246,14 +252,78 @@ class StepEvaluator:
                 if not line.strip().startswith("```")
             ).strip()
 
+        # ── Strategy 1: direct JSON parse ─────────────────────────────────────
+        parsed = None
         try:
             parsed = json.loads(content)
-        except json.JSONDecodeError as exc:
+        except json.JSONDecodeError:
+            pass
+
+        # ── Strategy 2: extract balanced { } block from prose ─────────────────
+        # Handles models that return markdown evaluation prose containing JSON.
+        if parsed is None:
+            brace_start = content.find("{")
+            if brace_start != -1:
+                depth = 0
+                brace_end = brace_start
+                for i, ch in enumerate(content[brace_start:], start=brace_start):
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            brace_end = i
+                            break
+                candidate = content[brace_start: brace_end + 1]
+                try:
+                    parsed = json.loads(candidate)
+                except json.JSONDecodeError:
+                    pass
+
+        # ── Strategy 3: natural-language verdict detection ────────────────────
+        # Handles Azure GPT returning "✅ PASS" / "❌ FAIL" markdown prose.
+        if parsed is None:
+            lower = content.lower()
+            if any(s in lower for s in ("✅", "pass", "met the success", "criterion met", "criterion is met")):
+                logger.info(
+                    "[Evaluator] Prose PASS detected for step %s — treating as pass",
+                    step.step_id,
+                )
+                return StepEvaluation(
+                    verdict="pass",
+                    confidence=0.7,
+                    evaluator_note=content[:300],
+                    additional_findings={},
+                )
+            if any(s in lower for s in ("❌", "did not meet", "not met", "criterion not met")):
+                logger.info(
+                    "[Evaluator] Prose FAIL detected for step %s — treating as fail",
+                    step.step_id,
+                )
+                return StepEvaluation(
+                    verdict="fail",
+                    confidence=0.7,
+                    evaluator_note=content[:300],
+                    additional_findings={},
+                )
+            if any(s in lower for s in ("partial", "partially met", "some criteria")):
+                logger.info(
+                    "[Evaluator] Prose PARTIAL detected for step %s — treating as partial",
+                    step.step_id,
+                )
+                return StepEvaluation(
+                    verdict="partial",
+                    confidence=0.6,
+                    evaluator_note=content[:300],
+                    additional_findings={},
+                )
+
+        if parsed is None:
             raise EvaluatorError(
                 f"Evaluator response is not valid JSON.\n"
-                f"JSON error: {exc}\n"
                 f"Response (first 400 chars):\n{content[:400]}"
-            ) from exc
+            )
+
 
         if not isinstance(parsed, dict):
             raise EvaluatorError(
