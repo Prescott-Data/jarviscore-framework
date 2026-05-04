@@ -116,6 +116,10 @@ auth_info = store.build_auth_info("github")
 
 The local encrypted store handles credentials for single-developer and small team use. For multi-user deployments where agents act on behalf of individual users (each with their own OAuth tokens), the **Nexus Gateway** provides full OAuth flow management.
 
+> [!NOTE]
+> **The two modes are not mutually exclusive — the CLI chooses automatically.**
+> When you run `jarviscore nexus register`, the CLI checks whether `NEXUS_GATEWAY_URL` is set and reachable. If it is, credentials are registered with the gateway. If it is not set, or if the gateway is unreachable, credentials are written to the local store (`~/.jarviscore/nexus.enc`) and a warning is printed. You can start without a gateway and migrate to one later — the local store keeps working regardless.
+
 The gateway is managed entirely via the `jarviscore` CLI — no separate install required. It runs as a Docker-composed stack. Set it up once per environment:
 
 ```bash

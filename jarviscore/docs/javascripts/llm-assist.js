@@ -7,10 +7,10 @@ function initLLMWidget() {
 
   // Hide ALL existing MkDocs action buttons (edit + view source)
   var allButtons = contentInner.querySelectorAll('.md-content__button');
-  var rawUrl = window.location.href;
+  var rawUrl = null;  // resolved below — never default to the HTML page URL
   allButtons.forEach(function(btn) {
     if (btn.tagName === 'A' && btn.href) {
-      // Prefer the edit button URL for raw markdown
+      // Prefer the edit button URL for raw markdown (GitHub-hosted docs)
       var u = btn.href
         .replace('github.com', 'raw.githubusercontent.com')
         .replace('/edit/', '/')
@@ -19,6 +19,17 @@ function initLLMWidget() {
     }
     btn.style.display = 'none';
   });
+
+  // Local dev fallback: derive the .md source path from the current URL.
+  // MkDocs serves /foo/bar/ from docs/foo/bar.md (or docs/foo/bar/index.md).
+  // We try both candidates and use whichever responds with 2xx.
+  if (!rawUrl && window.location.hostname === 'localhost') {
+    var pathname = window.location.pathname.replace(/\/$/, '') || '/index';
+    // Strip the MkDocs base path if any (works for root-served sites)
+    rawUrl = '/docs' + pathname + '.md';
+    // Store the fallback candidate — getText() will try index.md variant if needed
+    window._jcMdPathBase = pathname;
+  }
 
   var icons = {
     copy: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
@@ -75,22 +86,52 @@ function initLLMWidget() {
   container.appendChild(dropdown);
 
   function getText(callback) {
-    fetch(rawUrl).then(function(r) {
-      if (!r.ok) throw new Error('fetch failed');
-      return r.text();
-    }).then(callback).catch(function() {
-      // Temporary fallback for testing before PR is merged
-      if (rawUrl.includes('/main/')) {
-        var altUrl = rawUrl.replace('/main/', '/feat/jarviscore-release-v1.0.3/');
-        return fetch(altUrl).then(function(r2) {
-          if (!r2.ok) throw new Error('alt fetch failed');
-          return r2.text();
-        }).then(callback);
+    // Primary: read from the raw markdown embedded by the MkDocs hook.
+    // This works on localhost and production with zero fetch/CORS issues.
+    var embedded = document.getElementById('jc-page-source');
+    if (embedded) {
+      var src = embedded.textContent || embedded.innerHTML || '';
+      if (src.trim()) {
+        callback(src);
+        return;
       }
-      throw new Error('no branch fallback');
-    }).catch(function() {
-      callback(document.querySelector('.md-content').innerText);
-    });
+    }
+
+    // Fallback: fetch from GitHub raw source (production, when hook is not active)
+    if (!rawUrl) {
+      var article = document.querySelector('article') || document.querySelector('.md-content');
+      callback(article ? article.innerText : '(no content)');
+      return;
+    }
+
+    var candidates = [rawUrl];
+    if (window.location.hostname === 'localhost' && window._jcMdPathBase) {
+      candidates.push('/docs' + window._jcMdPathBase + '/index.md');
+    }
+    if (rawUrl.includes('raw.githubusercontent.com') && rawUrl.includes('/main/')) {
+      candidates.push(rawUrl.replace('/main/', '/feat/jarviscore-release-v1.0.3/'));
+    }
+
+    function tryNext(urls) {
+      if (!urls.length) {
+        var article = document.querySelector('article') || document.querySelector('.md-content');
+        callback(article ? article.innerText : '(no content)');
+        return;
+      }
+      var url = urls.shift();
+      fetch(url).then(function(r) {
+        if (!r.ok) throw new Error('not ok');
+        return r.text();
+      }).then(function(text) {
+        if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) {
+          tryNext(urls);
+        } else {
+          callback(text);
+        }
+      }).catch(function() { tryNext(urls); });
+    }
+
+    tryNext(candidates);
   }
 
   function fetchAndCopy() {

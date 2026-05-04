@@ -81,7 +81,6 @@ class JarvisLifespan:
     def __init__(
         self,
         agents: Union['Agent', List['Agent']],
-        mode: str = "p2p",
         **mesh_config
     ):
         """
@@ -89,11 +88,9 @@ class JarvisLifespan:
 
         Args:
             agents: Single agent or list of agents to run
-            mode: Mesh mode ("p2p", "distributed", "autonomous")
-            **mesh_config: Additional Mesh configuration
+            **mesh_config: Additional Mesh configuration forwarded to Mesh(config=...)
         """
         self.agents = agents if isinstance(agents, list) else [agents]
-        self.mode = mode
         self.mesh_config = mesh_config
         self.mesh = None
         self._background_tasks: List[asyncio.Task] = []
@@ -112,10 +109,11 @@ class JarvisLifespan:
         # ─────────────────────────────────────────────────────────────
         # STARTUP
         # ─────────────────────────────────────────────────────────────
-        logger.info(f"JarvisLifespan: Starting mesh in {self.mode} mode...")
+        logger.info("JarvisLifespan: Starting mesh...")
 
         # 1. Create mesh with provided configuration
-        self.mesh = Mesh(mode=self.mode, config=self.mesh_config)
+        # Mode is intentionally not passed — Mesh auto-detects infrastructure at start() time.
+        self.mesh = Mesh(config=self.mesh_config)
 
         # 2. Register all agents with the mesh
         self._nodes = []
@@ -195,7 +193,6 @@ class JarvisLifespan:
 
 def create_jarvis_app(
     agent: 'Agent',
-    mode: str = "p2p",
     title: str = "JarvisCore Agent",
     description: str = "API powered by JarvisCore",
     version: str = "1.0.0",
@@ -207,13 +204,15 @@ def create_jarvis_app(
     Convenience function for simple single-agent deployments.
     For more control, use JarvisLifespan directly.
 
+    The Mesh auto-detects its operational mode from available infrastructure
+    at startup — no mode argument is needed or accepted.
+
     Args:
         agent: Agent instance to run
-        mode: Mesh mode ("p2p", "distributed", "autonomous")
         title: FastAPI app title
         description: FastAPI app description
         version: API version
-        **mesh_config: Mesh configuration options
+        **mesh_config: Mesh configuration options (e.g. redis_url, p2p_enabled)
 
     Returns:
         Configured FastAPI app with JarvisCore integration
@@ -229,7 +228,7 @@ def create_jarvis_app(
             async def on_peer_request(self, msg):
                 return {"result": "processed"}
 
-        app = create_jarvis_app(MyAgent(), mode="p2p", bind_port=7950)
+        app = create_jarvis_app(MyAgent(), bind_port=7950)
 
         @app.get("/health")
         async def health():
@@ -243,5 +242,5 @@ def create_jarvis_app(
         title=title,
         description=description,
         version=version,
-        lifespan=JarvisLifespan(agent, mode=mode, **mesh_config)
+        lifespan=JarvisLifespan(agent, **mesh_config)
     )

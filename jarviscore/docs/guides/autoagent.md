@@ -263,9 +263,9 @@ print(step["metadata"]["tokens"])
 ---
 
 
-## Multi-Tier Model Routing
+## Model Routing
 
-Configure the LLM per task via the `complexity` hint in the step definition:
+JarvisCore routes each sub-agent dispatch to a capability tier — `nano`, `standard`, or `heavy` — based on the role and an optional per-step hint. Pass `complexity` in a workflow step to override the default for that dispatch:
 
 ```python
 results = await mesh.workflow("task-001", [
@@ -274,16 +274,7 @@ results = await mesh.workflow("task-001", [
 ])
 ```
 
-Configure the models in your `.env`:
-
-```bash title=".env"
-TASK_MODEL_NANO=gemini-2.0-flash
-TASK_MODEL_STANDARD=claude-sonnet-4
-TASK_MODEL_HEAVY=claude-opus-4
-CODING_MODEL=claude-sonnet-4
-```
-
-When `complexity` is omitted, the standard tier is used.
+When `complexity` is omitted, the role's built-in default applies — `communicator` defaults to `nano`, `researcher` and `browser` default to `standard`. See [Model Routing](../concepts/model-routing.md) for the full tier configuration, fallback chain, and provider compatibility reference.
 
 ---
 

@@ -8,6 +8,9 @@ edit_uri: edit/main/jarviscore/docs/
 docs_dir: jarviscore/docs
 site_dir: site
 
+hooks:
+  - hooks/embed_markdown.py
+
 theme:
   name: material
   custom_dir: overrides
@@ -89,6 +92,9 @@ nav:
   - Getting Started: getting-started.md
   - Concepts:
       - Architecture: concepts/architecture.md
+      - Agents: concepts/agents.md
+      - Planning: concepts/planning.md
+      - Model Routing: concepts/model-routing.md
       - Memory: concepts/memory.md
       - Agent Personas: concepts/agent-personas.md
       - P2P Communication: concepts/p2p.md
@@ -97,6 +103,8 @@ nav:
   - Guides:
       - AutoAgent: guides/autoagent.md
       - CustomAgent: guides/customagent.md
+      - Adapters: guides/adapters.md
+      - Custom Sub-agents: guides/custom-subagents.md
       - FastAPI: guides/fastapi.md
       - Workflow DAGs: guides/workflows.md
       - HITL Escalation: guides/hitl.md
@@ -104,6 +112,7 @@ nav:
       - Knowledge Base: guides/knowledge-base.md
       - Chat Endpoint: guides/chat.md
       - Internet Search: guides/internet-search.md
+      - Browser Automation: guides/browser-automation.md
       - Observability: guides/observability.md
       - Integrations: guides/integrations.md
       - System Prompts: guides/system-prompts.md
@@ -118,6 +127,8 @@ nav:
       - Investment Committee: examples/investment-committee.md
   - Reference:
       - Configuration: reference/configuration.md
+      - Agent API: reference/agent-api.md
+      - Chat API: reference/chat-api.md
       - CLI Reference: reference/cli.md
       - Troubleshooting: TROUBLESHOOTING.md
       - Changelog: CHANGELOG.md

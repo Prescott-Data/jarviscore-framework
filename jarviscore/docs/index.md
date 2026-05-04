@@ -141,9 +141,10 @@ If you are new to JarvisCore, read in this order:
 
 1. [Architecture Overview](concepts/architecture.md) — the mental model for the framework
 2. [Getting Started](getting-started.md) — installation, configuration, and your first agent
-3. [Memory](concepts/memory.md) — how agents maintain and recover context
-4. [Agent Personas](concepts/agent-personas.md) — how profiles shape autonomous behaviour
-5. [P2P Communication](concepts/p2p.md) — how agents discover and message one another
+3. [Agents](concepts/agents.md) — what an agent is, its identity and lifecycle
+4. [Memory](concepts/memory.md) — how agents maintain and recover context
+5. [Agent Personas](concepts/agent-personas.md) — how profiles shape autonomous behaviour
+6. [P2P Communication](concepts/p2p.md) — how agents discover and message one another
 
 If you are evaluating for a specific use case:
 

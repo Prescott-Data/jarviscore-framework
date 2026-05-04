@@ -2089,3 +2089,39 @@ body,
   visibility: hidden !important;
   pointer-events: none !important;
 }
+
+/* ============================================================
+   HTTP METHOD BADGES  — Chat API & any endpoint reference page
+   Use in markdown as: <span class="jc-http-post">POST</span>
+   or wrap the heading: ## <span class="jc-http-get">GET</span> /chat/stream/{workflow_id}
+   ============================================================ */
+
+.jc-http-get,
+.jc-http-post,
+.jc-http-put,
+.jc-http-patch,
+.jc-http-delete {
+  display: inline-block;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  vertical-align: middle;
+  line-height: 1.5;
+  position: relative;
+  top: -1px;
+}
+
+.jc-http-get    { background: rgba(12, 197, 114, 0.12); color: #0a9e5c; border: 1px solid rgba(12, 197, 114, 0.30); }
+.jc-http-post   { background: rgba(23, 88, 245, 0.10);  color: var(--jc-brand); border: 1px solid rgba(23, 88, 245, 0.25); }
+.jc-http-put    { background: rgba(232, 163, 2, 0.12);  color: #b07d00; border: 1px solid rgba(232, 163, 2, 0.30); }
+.jc-http-patch  { background: rgba(73, 81, 243, 0.10);  color: var(--jc-purple); border: 1px solid rgba(73, 81, 243, 0.25); }
+.jc-http-delete { background: rgba(220, 38, 38, 0.10);  color: #b91c1c; border: 1px solid rgba(220, 38, 38, 0.25); }
+
+[data-md-color-scheme="slate"] .jc-http-get    { background: rgba(12, 197, 114, 0.15); color: #34d27a; border-color: rgba(12, 197, 114, 0.25); }
+[data-md-color-scheme="slate"] .jc-http-post   { background: rgba(23, 88, 245, 0.15);  color: var(--jc-brand-light); border-color: rgba(53, 176, 254, 0.25); }
+[data-md-color-scheme="slate"] .jc-http-put    { background: rgba(232, 163, 2, 0.15);  color: #f0b429; border-color: rgba(232, 163, 2, 0.25); }
+[data-md-color-scheme="slate"] .jc-http-patch  { background: rgba(73, 81, 243, 0.15);  color: #818cf8; border-color: rgba(73, 81, 243, 0.25); }
+[data-md-color-scheme="slate"] .jc-http-delete { background: rgba(220, 38, 38, 0.15);  color: #f87171; border-color: rgba(220, 38, 38, 0.25); }

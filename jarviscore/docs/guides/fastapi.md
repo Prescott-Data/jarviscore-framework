@@ -118,7 +118,6 @@ from agents.processor import ProcessorAgent
 
 app = create_jarvis_app(
     ProcessorAgent(),
-    mode="p2p",
     bind_port=7950,
     title="Processor API",
     description="API powered by JarvisCore",

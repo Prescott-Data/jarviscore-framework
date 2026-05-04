@@ -142,7 +142,9 @@ You can implement custom sub-agents by subclassing `BaseSubAgent`. Custom sub-ag
 
 If you are new to JarvisCore, follow this reading order:
 
-1. [Memory](./memory.md) — understand how agents persist and retrieve context.
-2. [Agent Personas](./agent-personas.md) — understand how profiles shape agent behaviour.
-3. [P2P Communication](./p2p.md) — understand how agents communicate across a mesh.
-4. Then proceed to the [Getting Started guide](../getting-started.md) to write your first agent.
+1. [Agents](./agents.md) — what an agent is, its identity, lifecycle, and the two execution models.
+2. [Model Routing](./model-routing.md) — understand how LLM calls are routed to the right model tier.
+3. [Memory](./memory.md) — understand how agents persist and retrieve context.
+4. [Agent Personas](./agent-personas.md) — understand how profiles shape agent behaviour.
+5. [P2P Communication](./p2p.md) — understand how agents communicate across a mesh.
+6. Then proceed to the [Getting Started guide](../getting-started.md) to write your first agent.
