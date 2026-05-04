@@ -77,8 +77,16 @@ Each element must have exactly these fields:
   "task"              : "<complete, self-contained task the agent can act on immediately>",
   "success_criterion" : "<concrete, observable condition that means this step is done>",
   "expected_findings" : ["<snake_case key this step should produce>", ...],
-  "subagent_hint"     : "<coder|researcher|communicator|browser|null>"
+  "subagent_hint"     : "<MUST be exactly one of: researcher, coder, communicator, browser, null>"
 }
+
+CRITICAL — subagent_hint rules:
+  "researcher"   → web search, analysis, investigation, strategy, planning, architecture
+  "coder"        → code generation, data processing, computation, API calls, file I/O
+  "communicator" → drafting text, reports, emails, documents, writing
+  "browser"      → web automation, form filling, UI interaction, screenshots
+  null           → let the kernel decide automatically
+  NO other values are accepted. Do not invent new types (e.g. 'analyst', 'architect', 'writer').
 
 Rules:
 - 3 to 10 steps. No more. Each step must be atomic and clearly bounded.
@@ -361,8 +369,9 @@ class Planner:
             if hint in (None, "null", ""):
                 hint = None
             elif hint not in _VALID_HINTS:
-                # Try alias map before discarding
-                alias = _HINT_ALIASES.get(hint.lower() if isinstance(hint, str) else "")
+                hint_lower = hint.lower() if isinstance(hint, str) else ""
+                # 1. Fast-path: known alias map
+                alias = _HINT_ALIASES.get(hint_lower)
                 if alias:
                     logger.info(
                         "[Planner] Remapped subagent_hint %r → %r in step %d",
@@ -370,10 +379,26 @@ class Planner:
                     )
                     hint = alias
                 else:
-                    logger.warning(
-                        "[Planner] Unknown subagent_hint %r in step %d — ignoring", hint, i
+                    # 2. Semantic fallback: find closest valid type by string similarity
+                    # so unknown hints are never silently dropped to null
+                    import difflib
+                    matches = difflib.get_close_matches(
+                        hint_lower, _VALID_HINTS, n=1, cutoff=0.4
                     )
-                    hint = None
+                    if matches:
+                        logger.info(
+                            "[Planner] Unknown subagent_hint %r — fuzzy matched to %r in step %d",
+                            hint, matches[0], i,
+                        )
+                        hint = matches[0]
+                    else:
+                        # 3. Last resort: let kernel auto-classify from task text
+                        logger.debug(
+                            "[Planner] Unknown subagent_hint %r in step %d — "
+                            "no alias or fuzzy match found, kernel will auto-classify",
+                            hint, i,
+                        )
+                        hint = None
 
             step_id = item.get("step_id") or f"step_{i+1:02d}_{uuid.uuid4().hex[:4]}"
             steps.append(PlannedStep(
