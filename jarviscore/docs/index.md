@@ -21,11 +21,11 @@ JarvisCore is a Python framework for production multi-agent AI. Peer-to-peer coo
 <div class="jc-stats" markdown>
 <div class="jc-stat" markdown>
 <span class="jc-stat-value">46</span>
-<span class="jc-stat-label">Integration Bundles</span>
+<span class="jc-stat-label">Service Integrations</span>
 </div>
 <div class="jc-stat" markdown>
 <span class="jc-stat-value">237+</span>
-<span class="jc-stat-label">Versioned Atoms</span>
+<span class="jc-stat-label">Prebuilt Actions</span>
 </div>
 <div class="jc-stat" markdown>
 <span class="jc-stat-value">4-tier</span>
@@ -69,9 +69,9 @@ Agents discover and message each other via a `PeerClient` API. Routing, request-
 <div class="jc-card" markdown>
 <span class="jc-card-label">Integrations</span>
 
-### 46 system bundles
+### 46 service integrations
 
-Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and 40 more. 237+ versioned atoms your agents can call directly. No wrapper code required.
+Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and 40 more. 237+ prebuilt actions your agents can call directly — no glue code, no auth wiring.
 
 [Browse integrations →](guides/integrations.md)
 </div>
