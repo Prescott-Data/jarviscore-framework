@@ -1,3 +1,7 @@
+---
+icon: material/key-variant
+---
+
 # Nexus: Credential Management
 
 Nexus is JarvisCore's credential management system — and an [open-source framework in its own right](https://github.com/Prescott-Data/nexus-framework). It solves the N+1 auth glue-code problem: instead of writing authentication logic for each of the 46 integrations, agents call every provider through a single `nexus_call` interface and Nexus handles credential resolution, token refresh, and auth strategy selection transparently.
@@ -116,6 +120,8 @@ The local encrypted store handles credentials for single-developer and small tea
 > [!NOTE]
 > **The two modes are not mutually exclusive — the CLI chooses automatically.**
 > When you run `jarviscore nexus register`, the CLI checks whether `NEXUS_GATEWAY_URL` is set and reachable. If it is, credentials are registered with the gateway. If it is not set, or if the gateway is unreachable, credentials are written to the local store (`~/.jarviscore/nexus.enc`) and a warning is printed. You can start without a gateway and migrate to one later — the local store keeps working regardless.
+
+
 
 The gateway is managed entirely via the `jarviscore` CLI — no separate install required. It runs as a Docker-composed stack. Set it up once per environment:
 
