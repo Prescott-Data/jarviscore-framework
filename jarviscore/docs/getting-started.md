@@ -20,28 +20,68 @@ JarvisCore requires Python 3.10 or later. No infrastructure is required to run a
 pip install jarviscore-framework
 ```
 
-To install optional extras for specific infrastructure integrations:
+To install optional extras for specific capabilities:
+
+=== "P2P Mesh"
+    ```bash
+    pip install "jarviscore-framework[p2p]"
+    ```
+    Enables distributed multi-node agent deployments via the SWIM gossip protocol and ZMQ transport. Required when `P2P_ENABLED=true`.
+
+=== "Web"
+    ```bash
+    pip install "jarviscore-framework[web]"
+    ```
+    Adds FastAPI, Uvicorn, and BeautifulSoup4. Required to run the built-in dashboard, chat endpoints, and FastAPI integration.
 
 === "Redis"
     ```bash
     pip install "jarviscore-framework[redis]"
     ```
-
-=== "Azure Blob Storage"
-    ```bash
-    pip install "jarviscore-framework[azure]"
-    ```
+    Enables distributed workflows, cross-session agent state, and peer routing via Redis. Required when `REDIS_URL` is set.
 
 === "Browser Automation"
     ```bash
     pip install "jarviscore-framework[browser]"
     playwright install chromium
     ```
+    Enables `BrowserSubAgent` and Playwright-based web interaction tools. Required when `BROWSER_ENABLED=true`.
+
+=== "RAG"
+    ```bash
+    pip install "jarviscore-framework[rag]"
+    ```
+    Adds local vector search (FAISS) and sentence-transformers for embedding-backed research and knowledge retrieval.
+
+=== "Research"
+    ```bash
+    pip install "jarviscore-framework[research]"
+    ```
+    Full researcher stack — installs `browser` + `rag` + BeautifulSoup4. Everything `ResearcherSubAgent` needs for deep web research.
+
+=== "Athena Memory"
+    ```bash
+    pip install "jarviscore-framework[memory-athena]"
+    ```
+    No extra Python dependencies. Athena is called over HTTP. Run the Athena service separately, then set `ATHENA_URL=http://localhost:8080`.
+
+=== "Azure Blob Storage"
+    ```bash
+    pip install "jarviscore-framework[azure]"
+    ```
+    Adds the Azure Storage Blob client for the registry storage backend and `azure_storage` atoms.
 
 === "Prometheus Metrics"
     ```bash
     pip install "jarviscore-framework[prometheus]"
     ```
+    Exposes a `/metrics` endpoint for operational dashboards and alerting.
+
+=== "Full"
+    ```bash
+    pip install "jarviscore-framework[full]"
+    ```
+    Installs every optional dependency — use for production deployments where you need all capabilities enabled.
 
 ---
 
