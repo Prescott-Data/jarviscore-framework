@@ -8,7 +8,7 @@ icon: material/home
 
 # Build autonomous multi-agent systems
 
-JarvisCore is a Python framework for production multi-agent AI. Peer-to-peer coordination, composable memory, 19 built-in integration bundles, and full observability — from a single agent to a fleet.
+JarvisCore is a Python framework for production multi-agent AI. Peer-to-peer coordination, composable memory, 46 service integrations, and full observability — from a single agent to a fleet.
 
 <div class="jc-cta-text" markdown>
 [Get started](getting-started.md) [Reference](reference/configuration.md) [View Changelog](CHANGELOG.md)
