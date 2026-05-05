@@ -233,6 +233,7 @@ The tier system works with any provider that implements this interface. Complexi
 
 ## Further Reading
 
+- [Language Models](./language-models.md) — LLM roles, the completion interface, and CUA vs multimodal for browser automation
 - [Architecture Overview](./architecture.md) — how the Kernel, sub-agents, and ExecutionLease fit together
 - [AutoAgent Guide](../guides/autoagent.md) — `complexity` overrides and execution budgets
 - [Configuration Reference](../reference/configuration.md) — all environment variables including LLM tier keys

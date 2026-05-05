@@ -94,6 +94,7 @@ nav:
       - Architecture: concepts/architecture.md
       - Agents: concepts/agents.md
       - Planning: concepts/planning.md
+      - Language Models: concepts/language-models.md
       - Model Routing: concepts/model-routing.md
       - Memory: concepts/memory.md
       - Agent Personas: concepts/agent-personas.md
