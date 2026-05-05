@@ -215,6 +215,7 @@ Required only when agents call third-party services (GitHub, Slack, Jira, Stripe
 | Variable | Default | Description |
 |---|---|---|
 | `NEXUS_GATEWAY_URL` | — | Gateway URL, e.g. `http://localhost:8090` |
+| `NEXUS_BROKER_URL` | — | Broker URL, e.g. `http://localhost:8080`. Used by dashboard and SDK to POST credentials directly to the Broker's `/auth/capture-credential` endpoint for non-OAuth providers. |
 | `NEXUS_RETURN_URL` | `http://localhost:8000/oauth/callback` | OAuth callback URL; the Nexus broker redirects here after consent. |
 | `NEXUS_DEFAULT_USER_ID` | `jarviscore-agent` | User identity passed to Nexus for credential lookups. |
 | `AUTH_STRATEGY_CACHE_TTL` | `300` | Seconds before the resolved auth strategy is re-fetched from the Gateway. |

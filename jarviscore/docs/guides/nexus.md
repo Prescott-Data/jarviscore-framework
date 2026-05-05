@@ -146,6 +146,59 @@ jarviscore nexus status
 
 ---
 
+## Gateway API Contract
+
+When `NEXUS_GATEWAY_URL` is set, the CLI registers providers by calling the Gateway directly. You should not need to call this manually — `jarviscore nexus register` handles it — but the contract is documented here for completeness.
+
+**Register a provider:** `POST /v1/providers`
+
+The payload must wrap all fields in a `profile` object and use `name` (not `provider`) as the identifier:
+
+=== "OAuth2"
+
+    ```json
+    {
+      "profile": {
+        "name": "github",
+        "auth_type": "oauth2",
+        "client_id": "YOUR_CLIENT_ID",
+        "client_secret": "YOUR_CLIENT_SECRET",
+        "scopes": ["repo", "read:user"],
+        "auth_url": "https://github.com/login/oauth/authorize",
+        "token_url": "https://github.com/login/oauth/access_token"
+      }
+    }
+    ```
+
+=== "API Key"
+
+    ```json
+    {
+      "profile": {
+        "name": "stripe",
+        "auth_type": "api_key",
+        "params": {
+          "credential_schema": {
+            "type": "object",
+            "required": ["api_key"],
+            "properties": {
+              "api_key": { "type": "string", "title": "API Key" }
+            }
+          }
+        }
+      }
+    }
+    ```
+
+**List registered providers:** `GET /v1/providers`
+
+**Check gateway health:** `GET /health`
+
+> [!NOTE]
+> All examples assume `http://localhost:8090` — the default local Docker stack started by `jarviscore nexus init`. Substitute your own Gateway URL in production. **Do not point developers at a third-party hosted gateway** — each team runs their own Nexus stack.
+
+---
+
 ## Handling Auth Failures in Agents
 
 When a credential is missing or expired, the correct pattern is to escalate via HITL rather than failing silently:
