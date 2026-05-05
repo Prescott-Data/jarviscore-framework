@@ -12,6 +12,8 @@ Usage:
     jarviscore nexus list
     jarviscore nexus test github
     jarviscore memory init
+    jarviscore atom test --bundle slack --mode dry-run
+    jarviscore atom list
 """
 
 import sys
@@ -26,6 +28,7 @@ def main():
         print("  smoketest  - Quick smoke test")
         print("  nexus      - Manage Nexus auth (init, register, status, list, test)")
         print("  memory     - Manage Athena MemOS (init, status, context, search)")
+        print("  atom       - Validate, test, and list integration atoms")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -46,9 +49,12 @@ def main():
     elif command == 'smoketest':
         from .smoketest import main as smoketest_main
         smoketest_main()
+    elif command == 'atom':
+        from .atom import main as atom_main
+        atom_main()
     else:
         print(f"Unknown command: {command}")
-        print("\nAvailable commands: init, check, smoketest, nexus, memory")
+        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom")
         sys.exit(1)
 
 

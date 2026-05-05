@@ -116,6 +116,7 @@ nav:
       - Browser Automation: guides/browser-automation.md
       - Observability: guides/observability.md
       - Integrations: guides/integrations.md
+      - Testing Atoms: guides/testing-atoms.md
       - System Prompts: guides/system-prompts.md
       - Testing: guides/testing.md
       - Migration: guides/migration.md
