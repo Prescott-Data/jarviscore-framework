@@ -802,11 +802,21 @@ See the [Nexus Credentials guide](nexus.md) for the full setup flow.
 
 ## Building Custom Atoms
 
-Write an atom as a plain Python function. Return a dict.
+An atom is a plain Python function that follows a strict contract. The function name must match the filename, the first parameter must be `auth_info: dict` (Nexus injects credentials here), and it must return a `dict`.
 
 ```python
 def linear_close_issue(auth_info: dict, issue_id: str, comment: str = "") -> dict:
-    """Close an issue in Linear with an optional comment."""
+    """
+    Close an issue in Linear with an optional comment.
+
+    Args:
+        auth_info: Injected by Nexus — contains the Linear API token.
+        issue_id:  Linear issue ID (e.g. 'ENG-123').
+        comment:   Optional comment to post before closing.
+
+    Returns:
+        {"success": bool, "issue_id": str}
+    """
     import httpx
     headers = {"Authorization": auth_info["token"]}
     r = httpx.patch(
@@ -817,27 +827,25 @@ def linear_close_issue(auth_info: dict, issue_id: str, comment: str = "") -> dic
     return {"success": r.status_code == 200, "issue_id": issue_id}
 ```
 
-Register it with the seed registry by adding:
+**The atom contract checklist:**
 
-1. The atom file at `jarviscore/integrations/atoms/{provider}/{function_name}.py`
-2. A provider entry in `jarviscore/integrations/seed_registry.py`
-3. Documentation in this file
+- Filename stem == function name (`linear_close_issue.py` → `def linear_close_issue(...)`)
+- First parameter is `auth_info: dict` — never rename this, never move it
+- Return annotation is `-> dict` — wrap list payloads: `{"items": [...]}`
+- Has a docstring describing parameters and the return dict
+- No `subprocess`, `pickle`, `eval`, `exec` — atoms run inside the agent sandbox
+
+**To register the atom:**
+
+1. Place the file at `jarviscore/integrations/atoms/<provider>/<function_name>.py`
+2. Add a provider entry in `jarviscore/integrations/seed_registry.py` with `stage: "candidate"`
+3. Add the atom to the Bundle Catalog table in this file
+
+**To test and promote it:**
+
+Use the `jarviscore atom` CLI to validate structure before touching a live API, then run the integration check once credentials are registered. See the full workflow in [Testing Atoms →](testing-atoms.md)
 
 To contribute an atom to the framework, open a pull request to [jarviscore-framework](https://github.com/Prescott-Data/jarviscore-framework).
-
----
-
-## Atom Graduation
-
-Every atom moves through a three-stage quality pipeline automatically:
-
-| Stage | Meaning |
-|---|---|
-| `CANDIDATE` | Just registered or generated. Not yet executed. |
-| `VERIFIED` | At least one successful sandbox execution. |
-| `GOLDEN` | Five or more successful executions. Always tried first. |
-
-Atoms ported from the Collabra production registry start at `VERIFIED`. Atoms you write and register manually start at `CANDIDATE` and are promoted after their first successful run.
 
 ---
 
