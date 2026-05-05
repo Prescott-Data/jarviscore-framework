@@ -2170,6 +2170,18 @@ body,
   /* Do NOT add display:flex — it breaks Material's block layout */
 }
 
+/* Nav title labels (e.g. "GUIDES", "TABLE OF CONTENTS") are sticky by default
+   in Material but have a transparent background. Items scrolling beneath them
+   bleed through the text. Give them a solid opaque background to occlude them. */
+.md-sidebar .md-nav__title {
+  background: #ffffff !important;
+  z-index: 10;
+}
+
+[data-md-color-scheme="slate"] .md-sidebar .md-nav__title {
+  background: #161618 !important;
+}
+
 /* Sidebar-specific scrollbar: narrow and subtle */
 .md-sidebar__scrollwrap::-webkit-scrollbar {
   width: 4px;
