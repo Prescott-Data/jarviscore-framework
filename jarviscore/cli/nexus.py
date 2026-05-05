@@ -317,9 +317,43 @@ def cmd_register(args):
         import urllib.request, urllib.error
         print(_bold(f"\nRegistering {label} ({auth_type}) with Nexus Gateway...\n"))
         try:
-            payload = json.dumps({"provider": provider, **credentials}).encode()
+            # Nexus Gateway API: POST /v1/providers
+            # Payload must be wrapped in a `profile` object with `name` (not `provider`).
+            # Reference: nexus-framework/docs/PROVIDER_REGISTRATION_GUIDE.md
+            profile: dict = {"name": provider, "auth_type": auth_type}
+            if auth_type == "oauth2":
+                profile["client_id"]     = credentials["client_id"]
+                profile["client_secret"] = credentials["client_secret"]
+                profile["scopes"]        = credentials.get("scopes", [])
+                # auth_url / token_url / user_info_endpoint come from _data.PROVIDER_URLS
+                from jarviscore.nexus._data import PROVIDER_URLS
+                urls = PROVIDER_URLS.get(provider, {})
+                if urls.get("auth_url"):     profile["auth_url"]            = urls["auth_url"]
+                if urls.get("token_url"):    profile["token_url"]           = urls["token_url"]
+                if urls.get("user_info"):    profile["user_info_endpoint"]  = urls["user_info"]
+            elif auth_type == "api_key":
+                profile["params"] = {
+                    "credential_schema": {
+                        "type": "object",
+                        "required": ["api_key"],
+                        "properties": {"api_key": {"type": "string", "title": "API Key"}},
+                    }
+                }
+            elif auth_type == "basic_auth":
+                profile["params"] = {
+                    "credential_schema": {
+                        "type": "object",
+                        "required": ["username", "password"],
+                        "properties": {
+                            "username": {"type": "string", "title": "Username"},
+                            "password": {"type": "string", "title": "Password", "format": "password"},
+                        },
+                    }
+                }
+
+            payload = json.dumps({"profile": profile}).encode()
             req = urllib.request.Request(
-                f"{gateway_url}/v1/register-provider",
+                f"{gateway_url}/v1/providers",
                 data=payload,
                 headers={"Content-Type": "application/json"},
                 method="POST",
@@ -327,7 +361,7 @@ def cmd_register(args):
             resp = urllib.request.urlopen(req, timeout=10)
             body = json.loads(resp.read())
             print(_ok(f"{label} registered with gateway"))
-            print(_info(f"  Provider ID: {body.get('provider_id', provider)}"))
+            print(_info(f"  Provider ID: {body.get('id', body.get('provider_id', provider))}"))
         except urllib.error.HTTPError as e:
             print(_err(f"Gateway registration failed (HTTP {e.code}): {e.read().decode()}"))
             sys.exit(1)

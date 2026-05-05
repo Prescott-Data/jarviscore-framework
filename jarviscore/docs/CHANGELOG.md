@@ -4,13 +4,19 @@ hide:
   - toc
 ---
 
+# Changelog
+
+All notable changes to JarvisCore Framework are documented here. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
 <div class="changelog-release" markdown>
 
 ## 1.0.3 <span class="changelog-date">2026-05-03</span>
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">
-<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+<a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
 </div>
 <a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.0.3" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
 </div>
@@ -46,12 +52,6 @@ hide:
 - CLI references updated from `python -m jarviscore.cli.*` to the `jarviscore` entry-point CLI.
 
 </div>
-
----
-
-# Changelog
-
-All notable changes to JarvisCore Framework are documented here. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
