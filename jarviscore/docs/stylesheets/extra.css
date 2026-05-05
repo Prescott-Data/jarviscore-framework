@@ -2158,79 +2158,19 @@ body,
 
 /* ============================================================
    SIDEBAR SCROLL FIX
-   Fixes:
-   - TOC "TABLE OF CONTENTS" label drifting into the middle of the list
-   - Left nav section labels overlapping the first nav items
-   - Sidebar content not scrolling independently on long pages
-   - TOC items becoming unreachable when the list overflows the viewport
+   Gives both sidebars independent scrolling on long pages without
+   interfering with Material's layout or nav label positioning.
    ============================================================ */
 
-/* ── Both sidebars: ensure the scroll wrapper fills its sticky column
-   and scrolls independently of the page. Material sets position:sticky
-   on .md-sidebar; the scrollwrap must fill that space and overflow. ── */
+/* Both sidebars: independent scroll within the sticky column */
 .md-sidebar__scrollwrap {
   overflow-y: auto;
   overflow-x: hidden;
-  /* Ensure it fills the sticky sidebar column */
-  height: 100%;
-  /* Smooth inertia scrolling on iOS/macOS */
   -webkit-overflow-scrolling: touch;
-  /* Prevent margin collapse from pushing the label down */
-  display: flex;
-  flex-direction: column;
+  /* Do NOT add display:flex — it breaks Material's block layout */
 }
 
-/* ── Left sidebar: pin the section-title label at the top of its
-   scroll container so it never drifts into the list. ── */
-.md-sidebar--primary .md-nav__title {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  /* Explicit opaque white — var(--md-default-bg-color) resolves transparent in some builds */
-  background: #ffffff !important;
-  padding-top: 0.6rem;
-  padding-bottom: 0.25rem;
-}
-
-[data-md-color-scheme="slate"] .md-sidebar--primary .md-nav__title {
-  background: #0c0c0e !important;
-}
-
-/* ── Right sidebar (TOC): same treatment — sticky label, scrollable list.
-   Material renders the TOC inside .md-sidebar--secondary. ── */
-.md-sidebar--secondary .md-sidebar__scrollwrap {
-  padding-top: 0;
-}
-
-.md-sidebar--secondary .md-nav__title {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: #ffffff !important;
-  padding-top: 0.6rem;
-  padding-bottom: 0.25rem;
-  border-bottom: 1px solid var(--jc-border);
-  margin-bottom: 0.25rem;
-}
-
-[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__title {
-  background: #0c0c0e !important;
-  border-bottom-color: var(--jc-border);
-}
-
-/* ── TOC list: allow it to grow and scroll within the sidebar.
-   Without this, the list pushes past the viewport and items at the
-   bottom are unreachable because the sidebar itself doesn't scroll. ── */
-.md-sidebar--secondary .md-nav--secondary {
-  overflow-y: auto;
-  overflow-x: hidden;
-  -webkit-overflow-scrolling: touch;
-}
-
-/* ── Restore scrollbar visibility on both sidebars.
-   The global ::-webkit-scrollbar rule sets width:6px which is fine,
-   but the thumb opacity:0.5 on the thumb element is not a valid CSS
-   property for pseudo-elements — use rgba opacity instead. ── */
+/* Sidebar-specific scrollbar: narrow and subtle */
 .md-sidebar__scrollwrap::-webkit-scrollbar {
   width: 4px;
 }
@@ -2246,10 +2186,5 @@ body,
 
 .md-sidebar__scrollwrap::-webkit-scrollbar-thumb:hover {
   background: rgba(23, 88, 245, 0.5);
-}
-
-/* ── Prevent the left sidebar bottom padding from creating dead scroll space ── */
-.md-sidebar--primary .md-sidebar__scrollwrap {
-  padding-bottom: 3rem;
 }
 
