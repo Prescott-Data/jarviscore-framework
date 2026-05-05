@@ -1,12 +1,9 @@
----
-icon: material/key-variant
----
-
 # Nexus: Credential Management
 
-Nexus is JarvisCore's credential management system — and an [open-source framework in its own right](https://github.com/Prescott-Data/nexus-framework). It gives agents a secure way to call third-party services — GitHub, Slack, Stripe, and others — without embedding credentials in source code or exposing them to agent reasoning.
+Nexus is JarvisCore's credential management system — and an [open-source framework in its own right](https://github.com/Prescott-Data/nexus-framework). It solves the N+1 auth glue-code problem: instead of writing authentication logic for each of the 46 integrations, agents call every provider through a single `nexus_call` interface and Nexus handles credential resolution, token refresh, and auth strategy selection transparently.
 
-Credentials are encrypted at rest using AES-256-GCM and are never returned to agent code. Agents receive only a sanitised `auth_info` dict at call time.
+> [!NOTE]
+> This page is the operational reference — CLI commands, encryption details, and the Gateway API contract. For the conceptual model (why Nexus exists, how `NexusCallProxy` works, and the security design), see [Nexus: Credential Federation](../concepts/nexus.md).
 
 ---
 
