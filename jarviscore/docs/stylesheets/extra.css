@@ -2125,3 +2125,23 @@ body,
 [data-md-color-scheme="slate"] .jc-http-put    { background: rgba(232, 163, 2, 0.15);  color: #f0b429; border-color: rgba(232, 163, 2, 0.25); }
 [data-md-color-scheme="slate"] .jc-http-patch  { background: rgba(73, 81, 243, 0.15);  color: #818cf8; border-color: rgba(73, 81, 243, 0.25); }
 [data-md-color-scheme="slate"] .jc-http-delete { background: rgba(220, 38, 38, 0.15);  color: #f87171; border-color: rgba(220, 38, 38, 0.25); }
+/* ============================================================
+   INTEGRATIONS PAGE — Category heading colour
+   h3 = top-level category (Communication, Productivity, ERP…)
+   h4 = individual provider within that category
+   ============================================================ */
+
+/* Target the integrations guide specifically */
+[data-md-component="content"] .md-content h3 {
+  color: var(--jc-brand);
+  border-left: 3px solid var(--jc-brand);
+  padding-left: 0.65rem;
+  margin-top: 2.2rem;
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+}
+
+[data-md-color-scheme="slate"] [data-md-component="content"] .md-content h3 {
+  color: var(--jc-brand-light);
+  border-left-color: var(--jc-brand-light);
+}
