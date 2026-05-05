@@ -19,6 +19,7 @@ Commands:
   smoketest   Run a quick inference test
   nexus       Manage credential infrastructure
   memory      Manage agent memory infrastructure
+  atom        Validate, test, and list integration atoms
 ```
 
 ---
@@ -279,3 +280,97 @@ jarviscore memory search --agent researcher --query "market analysis findings"
 | `--limit` | `int` | `5` | Maximum number of results to return |
 
 Results include a similarity score, the source memory tier (STM or MTM), and a content preview.
+
+---
+
+## jarviscore atom
+
+Developer tooling for validating, testing, and inspecting integration atoms. Use this whenever you add a custom atom to a bundle before marking it as `verified` in `seed_registry.py`.
+
+### atom test
+
+Runs structural or live-connection checks against one or more atoms.
+
+```bash
+jarviscore atom test --bundle <bundle> --mode <dry-run|integration> [options]
+```
+
+| Option | Description |
+|---|---|
+| `--bundle` | Bundle name to test (e.g. `slack`, `github`, `stripe`) |
+| `--atom` | Test a single atom instead of the whole bundle |
+| `--mode` | `dry-run` (default) or `integration` |
+| `--connection-id` | Nexus connection handle — required for `integration` mode |
+| `--nexus-url` | Gateway URL (defaults to `NEXUS_GATEWAY_URL` or `http://localhost:8090`) |
+| `--all` | Test every atom across all bundles — `dry-run` only |
+
+**Dry-run mode** — structural checks only, no network required:
+
+```bash
+# Check all atoms in the slack bundle
+jarviscore atom test --bundle slack --mode dry-run
+
+# Check a single atom
+jarviscore atom test --bundle slack --atom slack_send_message --mode dry-run
+
+# Check every atom across all 46 bundles
+jarviscore atom test --mode dry-run --all
+```
+
+Dry-run validates:
+
+| Check | What it validates |
+|---|---|
+| File exists | `integrations/atoms/<bundle>/<atom>.py` is present |
+| Valid Python | File parses without a `SyntaxError` |
+| Function name | Top-level function name matches filename stem |
+| Signature | First parameter is `auth_info: dict` |
+| Return type | Return annotation is `-> dict` |
+| Docstring | Function has a docstring |
+| Return statement | At least one `return` with a value |
+| Forbidden usage | No `subprocess`, `pickle`, `ctypes`, `eval`, `exec` |
+
+**Integration mode** — passes dry-run, then verifies a Nexus `connection_id` resolves:
+
+```bash
+jarviscore atom test \
+    --bundle github \
+    --connection-id abc123 \
+    --mode integration
+```
+
+The integration check does not call the provider API — it confirms the Nexus Gateway is reachable and the `connection_id` resolves to a token payload. API behaviour must be verified manually.
+
+!!! note "Gateway required for integration mode"
+    `--mode integration` requires `NEXUS_GATEWAY_URL` to be set and the Nexus stack to be running. Use `jarviscore nexus status` to confirm the gateway is healthy first.
+
+### atom list
+
+Lists all registered atom bundles and their atoms.
+
+```bash
+# All bundles
+jarviscore atom list
+
+# Single bundle
+jarviscore atom list --bundle slack
+```
+
+Example output:
+
+```
+JarvisCore Atom Registry
+jarviscore/integrations/atoms
+
+  slack  (6 atoms)
+    · slack_add_reaction
+    · slack_get_messages
+    · slack_get_user
+    · slack_list_channels
+    · slack_list_users
+    · slack_send_message
+
+46 bundles  ·  237 atoms total
+```
+
+See [Testing Atoms](../guides/testing-atoms.md) for the full workflow — from writing a new atom to promoting it to `verified`.
