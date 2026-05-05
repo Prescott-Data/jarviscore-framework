@@ -2155,3 +2155,103 @@ body,
 [data-md-color-scheme="slate"] .jc-http-put    { background: rgba(232, 163, 2, 0.15);  color: #f0b429; border-color: rgba(232, 163, 2, 0.25); }
 [data-md-color-scheme="slate"] .jc-http-patch  { background: rgba(73, 81, 243, 0.15);  color: #818cf8; border-color: rgba(73, 81, 243, 0.25); }
 [data-md-color-scheme="slate"] .jc-http-delete { background: rgba(220, 38, 38, 0.15);  color: #f87171; border-color: rgba(220, 38, 38, 0.25); }
+
+/* ============================================================
+   SIDEBAR SCROLL FIX
+   Fixes:
+   - TOC "TABLE OF CONTENTS" label drifting into the middle of the list
+   - Left nav section labels overlapping the first nav items
+   - Sidebar content not scrolling independently on long pages
+   - TOC items becoming unreachable when the list overflows the viewport
+   ============================================================ */
+
+/* ── Both sidebars: ensure the scroll wrapper fills its sticky column
+   and scrolls independently of the page. Material sets position:sticky
+   on .md-sidebar; the scrollwrap must fill that space and overflow. ── */
+.md-sidebar__scrollwrap {
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Ensure it fills the sticky sidebar column */
+  height: 100%;
+  /* Smooth inertia scrolling on iOS/macOS */
+  -webkit-overflow-scrolling: touch;
+  /* Prevent margin collapse from pushing the label down */
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Left sidebar: pin the section-title label at the top of its
+   scroll container so it never drifts into the list. ── */
+.md-sidebar--primary .md-nav__title {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  /* Match the sidebar background so it occludes items scrolling beneath */
+  background: var(--md-default-bg-color);
+  /* Narrow padding — just enough breathing room without pushing items down */
+  padding-top: 0.6rem;
+  padding-bottom: 0.25rem;
+}
+
+[data-md-color-scheme="slate"] .md-sidebar--primary .md-nav__title {
+  background: var(--md-default-bg-color);
+}
+
+/* ── Right sidebar (TOC): same treatment — sticky label, scrollable list.
+   Material renders the TOC inside .md-sidebar--secondary. ── */
+.md-sidebar--secondary .md-sidebar__scrollwrap {
+  padding-top: 0;
+}
+
+.md-sidebar--secondary .md-nav__title {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--md-default-bg-color);
+  padding-top: 0.6rem;
+  padding-bottom: 0.25rem;
+  /* Slight bottom border to separate label from the list */
+  border-bottom: 1px solid var(--jc-border);
+  margin-bottom: 0.25rem;
+}
+
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__title {
+  background: var(--md-default-bg-color);
+  border-bottom-color: var(--jc-border);
+}
+
+/* ── TOC list: allow it to grow and scroll within the sidebar.
+   Without this, the list pushes past the viewport and items at the
+   bottom are unreachable because the sidebar itself doesn't scroll. ── */
+.md-sidebar--secondary .md-nav--secondary {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Restore scrollbar visibility on both sidebars.
+   The global ::-webkit-scrollbar rule sets width:6px which is fine,
+   but the thumb opacity:0.5 on the thumb element is not a valid CSS
+   property for pseudo-elements — use rgba opacity instead. ── */
+.md-sidebar__scrollwrap::-webkit-scrollbar {
+  width: 4px;
+}
+
+.md-sidebar__scrollwrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.md-sidebar__scrollwrap::-webkit-scrollbar-thumb {
+  background: rgba(23, 88, 245, 0.25);
+  border-radius: 99px;
+}
+
+.md-sidebar__scrollwrap::-webkit-scrollbar-thumb:hover {
+  background: rgba(23, 88, 245, 0.5);
+}
+
+/* ── Prevent the left sidebar bottom padding from creating dead scroll space ── */
+.md-sidebar--primary .md-sidebar__scrollwrap {
+  padding-bottom: 3rem;
+}
+
