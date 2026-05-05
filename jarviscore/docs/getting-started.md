@@ -10,7 +10,14 @@ This guide takes you from a fresh Python environment to a running JarvisCore age
 
 ## Requirements
 
-JarvisCore requires Python 3.10 or later. No infrastructure is required to run a minimal agent: the first working example in this guide uses only an LLM API key.
+JarvisCore requires Python 3.10 or later. No infrastructure is required to run a minimal agent — the first working example in this guide uses only an LLM API key.
+
+**Optional: Docker** is required for two capabilities:
+
+- `jarviscore nexus up` — starts the local Nexus broker and gateway for OAuth2 credential management
+- `jarviscore-framework[browser]` — Playwright runs in a Docker-managed Chromium for browser automation
+
+If you are not using Nexus or browser automation, Docker is not needed.
 
 ---
 
