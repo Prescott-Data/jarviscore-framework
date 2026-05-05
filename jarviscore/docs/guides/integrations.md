@@ -8,24 +8,53 @@ JarvisCore ships with **46 built-in system bundles** covering 237+ discrete, ver
 
 ---
 
-## Using Atoms
+## How Atoms Work
 
-Atoms are registered automatically at framework startup via `seed_registry`. Reference them by name in your `system_prompt`:
+Atoms are **pre-loaded into the FunctionRegistry** at startup via `seed_registry`, and from that point forward the Kernel's **Option A semantic search** handles discovery automatically. You do not enumerate atom names in your agent code or prompt.
+
+### The auto-pick flow
+
+When a task arrives, before generating any code the Kernel searches the registry semantically:
+
+```
+Task: "Send a Slack notification to #ops"
+  → Kernel Option A: semantic_search("Send a Slack notification")
+  → Finds: slack_send_message (stage=verified, score=4.2)
+  → Injects code directly into sandbox — skips code generation entirely
+```
+
+If the search finds a `verified` or `golden` match above the confidence threshold, the Kernel reuses it. If not, `CoderSubAgent` generates fresh code.
+
+### What devs actually write
+
+An agent that calls Slack, Jira, and Notion needs nothing special — just a clear `system_prompt`:
 
 ```python
 from jarviscore import AutoAgent
 
 class OpsAgent(AutoAgent):
     role = "ops"
-    capabilities = ["slack", "jira", "notion"]
     system_prompt = """
-    You have access to Slack, Jira, and Notion atoms.
-    Use slack_send_message to notify the team.
-    Use jira_create_issue to open tickets.
-    Use notion_create_page to document findings.
-    Always store your final result in `result`.
+    You are an operations agent. You send Slack notifications,
+    open Jira tickets, and document findings in Notion.
     """
 ```
+
+The Kernel auto-picks the right atom when the task matches. The `capabilities` field on an agent is **descriptive metadata** — it does not control which atoms are loaded.
+
+### Seeding the registry
+
+`seed_registry` runs automatically when the framework initialises. All 46 bundles are seeded into the registry on first startup. You can also call it manually:
+
+```python
+from jarviscore.integrations.seed_registry import seed_registry
+from jarviscore.execution.code_registry import FunctionRegistry
+
+registry = FunctionRegistry()
+seed_registry(registry)
+```
+
+This is only needed if you are initialising a registry outside the normal agent lifecycle (e.g. in a standalone script or test fixture).
 
 ---
 
