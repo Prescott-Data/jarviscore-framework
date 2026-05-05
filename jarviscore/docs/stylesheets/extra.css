@@ -2186,15 +2186,14 @@ body,
   position: sticky;
   top: 0;
   z-index: 10;
-  /* Match the sidebar background so it occludes items scrolling beneath */
-  background: var(--md-default-bg-color);
-  /* Narrow padding — just enough breathing room without pushing items down */
+  /* Explicit opaque white — var(--md-default-bg-color) resolves transparent in some builds */
+  background: #ffffff !important;
   padding-top: 0.6rem;
   padding-bottom: 0.25rem;
 }
 
 [data-md-color-scheme="slate"] .md-sidebar--primary .md-nav__title {
-  background: var(--md-default-bg-color);
+  background: #0c0c0e !important;
 }
 
 /* ── Right sidebar (TOC): same treatment — sticky label, scrollable list.
@@ -2207,16 +2206,15 @@ body,
   position: sticky;
   top: 0;
   z-index: 10;
-  background: var(--md-default-bg-color);
+  background: #ffffff !important;
   padding-top: 0.6rem;
   padding-bottom: 0.25rem;
-  /* Slight bottom border to separate label from the list */
   border-bottom: 1px solid var(--jc-border);
   margin-bottom: 0.25rem;
 }
 
 [data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__title {
-  background: var(--md-default-bg-color);
+  background: #0c0c0e !important;
   border-bottom-color: var(--jc-border);
 }
 
