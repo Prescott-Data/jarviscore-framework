@@ -802,7 +802,7 @@ See the [Nexus Credentials guide](nexus.md) for the full setup flow.
 
 ## Building Custom Atoms
 
-An atom is a plain Python function that follows a strict contract. The function name must match the filename, the first parameter must be `auth_info: dict` (Nexus injects credentials here), and it must return a `dict`.
+An atom is a plain Python function that follows a strict contract. The function name must match the filename, the first parameter must be `auth_info: dict` because Nexus injects credentials via this parameter, and the function must return a `dict`.
 
 ```python
 def linear_close_issue(auth_info: dict, issue_id: str, comment: str = "") -> dict:
@@ -810,7 +810,7 @@ def linear_close_issue(auth_info: dict, issue_id: str, comment: str = "") -> dic
     Close an issue in Linear with an optional comment.
 
     Args:
-        auth_info: Injected by Nexus — contains the Linear API token.
+        auth_info: Injected by Nexus. Contains the Linear API token.
         issue_id:  Linear issue ID (e.g. 'ENG-123').
         comment:   Optional comment to post before closing.
 
@@ -827,13 +827,13 @@ def linear_close_issue(auth_info: dict, issue_id: str, comment: str = "") -> dic
     return {"success": r.status_code == 200, "issue_id": issue_id}
 ```
 
-**The atom contract checklist:**
+**The atom contract:**
 
-- Filename stem == function name (`linear_close_issue.py` → `def linear_close_issue(...)`)
-- First parameter is `auth_info: dict` — never rename this, never move it
-- Return annotation is `-> dict` — wrap list payloads: `{"items": [...]}`
-- Has a docstring describing parameters and the return dict
-- No `subprocess`, `pickle`, `eval`, `exec` — atoms run inside the agent sandbox
+1. The filename stem must equal the function name. The file `linear_close_issue.py` must contain `def linear_close_issue(...)`.
+2. The first parameter must be `auth_info: dict`. Do not rename it and do not move it to a different position.
+3. The return annotation must be `-> dict`. If your payload is list-shaped, wrap it: `{"items": [...]}`.
+4. The function must have a docstring that describes its parameters and the structure of the return dict.
+5. The following imports and builtins are forbidden because atoms run inside the agent sandbox: `subprocess`, `pickle`, `eval`, and `exec`.
 
 **To register the atom:**
 
@@ -843,7 +843,7 @@ def linear_close_issue(auth_info: dict, issue_id: str, comment: str = "") -> dic
 
 **To test and promote it:**
 
-Use the `jarviscore atom` CLI to validate structure before touching a live API, then run the integration check once credentials are registered. See the full workflow in [Testing Atoms →](testing-atoms.md)
+Use the `jarviscore atom` CLI to validate the atom's structure before making any live API calls. Once credentials are registered, run the integration check. The full step-by-step workflow is covered in [Testing Atoms](testing-atoms.md).
 
 To contribute an atom to the framework, open a pull request to [jarviscore-framework](https://github.com/Prescott-Data/jarviscore-framework).
 
