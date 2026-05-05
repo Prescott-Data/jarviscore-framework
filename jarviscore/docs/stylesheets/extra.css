@@ -68,19 +68,49 @@ body,
   text-rendering: optimizeLegibility;
 }
 
-/* Heading scale — preserved, only tighten body copy below */
-.md-content h1 {
+/* ── Heading scale & site-wide colour hierarchy ───────────────────────────
+   H1 — page title        → default (dark/white per scheme), large + bold
+   H2 — section grouper  → brand blue + left border accent
+   H3 — sub-section       → brand-light blue
+   H4 — individual item   → slightly muted, normal weight
+   ─────────────────────────────────────────────────────────────────────── */
+
+.md-typeset h1 {
   font-weight: 700;
   letter-spacing: -0.025em;
 }
 
-.md-content h2 {
+.md-typeset h2 {
   font-weight: 600;
   letter-spacing: -0.015em;
+  color: var(--jc-brand);
+  border-left: 3px solid var(--jc-brand);
+  padding-left: 0.7rem;
+  margin-top: 2rem;
 }
 
-.md-content h3 {
+.md-typeset h3 {
   font-weight: 600;
+  color: var(--jc-brand-light);
+}
+
+.md-typeset h4 {
+  font-weight: 500;
+  color: var(--jc-text-muted);
+}
+
+/* Dark mode heading colours */
+[data-md-color-scheme="slate"] .md-typeset h2 {
+  color: var(--jc-brand-light);
+  border-left-color: var(--jc-brand-light);
+}
+
+[data-md-color-scheme="slate"] .md-typeset h3 {
+  color: #7ec8f8;
+}
+
+[data-md-color-scheme="slate"] .md-typeset h4 {
+  color: var(--jc-text-muted);
 }
 
 /* ── Body copy density — tight prose ── */
@@ -2125,23 +2155,3 @@ body,
 [data-md-color-scheme="slate"] .jc-http-put    { background: rgba(232, 163, 2, 0.15);  color: #f0b429; border-color: rgba(232, 163, 2, 0.25); }
 [data-md-color-scheme="slate"] .jc-http-patch  { background: rgba(73, 81, 243, 0.15);  color: #818cf8; border-color: rgba(73, 81, 243, 0.25); }
 [data-md-color-scheme="slate"] .jc-http-delete { background: rgba(220, 38, 38, 0.15);  color: #f87171; border-color: rgba(220, 38, 38, 0.25); }
-/* ============================================================
-   INTEGRATIONS PAGE — Category heading colour
-   h3 = top-level category (Communication, Productivity, ERP…)
-   h4 = individual provider within that category
-   ============================================================ */
-
-/* Target the integrations guide specifically */
-[data-md-component="content"] .md-content h3 {
-  color: var(--jc-brand);
-  border-left: 3px solid var(--jc-brand);
-  padding-left: 0.65rem;
-  margin-top: 2.2rem;
-  font-size: 1.05rem;
-  letter-spacing: 0.01em;
-}
-
-[data-md-color-scheme="slate"] [data-md-component="content"] .md-content h3 {
-  color: var(--jc-brand-light);
-  border-left-color: var(--jc-brand-light);
-}
