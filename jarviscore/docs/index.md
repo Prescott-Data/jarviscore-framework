@@ -20,11 +20,11 @@ JarvisCore is a Python framework for production multi-agent AI. Peer-to-peer coo
 
 <div class="jc-stats" markdown>
 <div class="jc-stat" markdown>
-<span class="jc-stat-value">19</span>
+<span class="jc-stat-value">46</span>
 <span class="jc-stat-label">Integration Bundles</span>
 </div>
 <div class="jc-stat" markdown>
-<span class="jc-stat-value">~77</span>
+<span class="jc-stat-value">237+</span>
 <span class="jc-stat-label">Versioned Atoms</span>
 </div>
 <div class="jc-stat" markdown>
@@ -69,11 +69,21 @@ Agents discover and message each other via a `PeerClient` API. Routing, request-
 <div class="jc-card" markdown>
 <span class="jc-card-label">Integrations</span>
 
-### 19 system bundles
+### 46 system bundles
 
-Slack, GitHub, Notion, Salesforce, Stripe, and 14 more. ~77 versioned atoms your agents can call directly. No wrapper code required.
+Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and 40 more. 237+ versioned atoms your agents can call directly. No wrapper code required.
 
 [Browse integrations →](guides/integrations.md)
+</div>
+
+<div class="jc-card" markdown>
+<span class="jc-card-label">Auth</span>
+
+### Nexus credential layer
+
+Agents call third-party APIs without ever touching raw credentials. OAuth2, API keys, and basic auth — all managed by Nexus and kept out of agent reasoning.
+
+[Nexus guide →](guides/nexus.md)
 </div>
 
 <div class="jc-card" markdown>
@@ -139,12 +149,12 @@ asyncio.run(main())
 
 If you are new to JarvisCore, read in this order:
 
-1. [Architecture Overview](concepts/architecture.md) — the mental model for the framework
-2. [Getting Started](getting-started.md) — installation, configuration, and your first agent
+1. [Getting Started](getting-started.md) — install, configure, and run your first agent
+2. [Architecture Overview](concepts/architecture.md) — the mental model for how the framework fits together
 3. [Agents](concepts/agents.md) — what an agent is, its identity and lifecycle
-4. [Memory](concepts/memory.md) — how agents maintain and recover context
-5. [Agent Personas](concepts/agent-personas.md) — how profiles shape autonomous behaviour
-6. [P2P Communication](concepts/p2p.md) — how agents discover and message one another
+4. [Language Models](concepts/language-models.md) — how JarvisCore uses multiple LLMs simultaneously
+5. [Memory](concepts/memory.md) — how agents maintain and recover context
+6. [Agent Personas](concepts/agent-personas.md) — how profiles shape autonomous behaviour
 
 If you are evaluating for a specific use case:
 

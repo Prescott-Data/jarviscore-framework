@@ -1,9 +1,9 @@
 """
 jarviscore.integrations.seed_registry
 ========================================
-Bulk-registers all 18 connected-app atom functions into the JarvisCore
-FunctionRegistry so CoderSubAgent can JIT-compile {System}Capabilities
-bundles for any of the connected-app provider integrations.
+Bulk-registers all 47 connected-app system bundles (~310 atoms) into the
+JarvisCore FunctionRegistry so CoderSubAgent can JIT-compile
+{System}Capabilities bundles on demand.
 
 Run once on startup, or call seed_registry() programmatically:
 
@@ -15,8 +15,9 @@ Run once on startup, or call seed_registry() programmatically:
     print(report)
 
 Sources:
-  - 7 providers imported from external verified registry (verified stage)
-  - 11 providers written as new atoms (candidate stage, promote after first use)
+  - 7 providers originally authored in JarvisCore (verified)
+  - 12 providers authored as JarvisCore candidate atoms
+  - 28 providers ported from the Collabra production function registry (verified)
 """
 from __future__ import annotations
 
@@ -154,6 +155,170 @@ PROVIDER_META: Dict[str, Dict[str, Any]] = {
         "auth_type": "api_key",
         "status": "candidate",
         "capabilities": ["web_search", "news_search"],
+    },
+
+    # ── COLLABRA REGISTRY (production-verified, ported 2026-05-05) ───────────
+    "zoom": {
+        "category": "communication",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["meetings", "users", "recordings"],
+    },
+    "discord": {
+        "category": "communication",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["messages", "channels", "users"],
+    },
+    "webex": {
+        "category": "communication",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["messages", "rooms", "users"],
+    },
+    "msgraph": {
+        "category": "communication",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["email", "calendar", "teams_chat", "files"],
+    },
+    "confluence": {
+        "category": "productivity",
+        "auth_type": "basic_auth",
+        "status": "verified",
+        "capabilities": ["pages", "spaces", "search"],
+    },
+    "clickup": {
+        "category": "productivity",
+        "auth_type": "api_key",
+        "status": "verified",
+        "capabilities": ["tasks", "lists", "spaces"],
+    },
+    "todoist": {
+        "category": "productivity",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["tasks", "projects", "sections"],
+    },
+    "dropbox": {
+        "category": "productivity",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["files", "folders", "sharing"],
+    },
+    "youtube": {
+        "category": "content",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["videos", "playlists", "channels"],
+    },
+    "reddit": {
+        "category": "content",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["posts", "subreddits", "comments"],
+    },
+    "twitter": {
+        "category": "content",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["tweets", "likes", "replies"],
+    },
+    "linkedin": {
+        "category": "content",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["posts", "profile", "connections"],
+    },
+    "linkedin_ads": {
+        "category": "advertising",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["campaigns", "creatives", "analytics"],
+    },
+    "dynamics": {
+        "category": "crm",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["accounts", "contacts", "opportunities"],
+    },
+    "oracle_cx": {
+        "category": "crm",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["accounts", "contacts", "leads"],
+    },
+    "netsuite": {
+        "category": "erp",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["invoices", "vendors", "customers", "items"],
+    },
+    "odoo": {
+        "category": "erp",
+        "auth_type": "api_key",
+        "status": "verified",
+        "capabilities": ["leads", "employees", "invoices"],
+    },
+    "sap": {
+        "category": "erp",
+        "auth_type": "basic_auth",
+        "status": "verified",
+        "capabilities": ["purchase_orders", "sales_orders", "vendors"],
+    },
+    "oracle_erp": {
+        "category": "erp",
+        "auth_type": "basic_auth",
+        "status": "verified",
+        "capabilities": ["invoices", "journals", "purchase_orders"],
+    },
+    "freshbooks": {
+        "category": "finance",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["invoices", "clients", "expenses"],
+    },
+    "zoho_books": {
+        "category": "finance",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["invoices", "customers", "bills"],
+    },
+    "zoho_people": {
+        "category": "hr",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["employees", "forms", "attendance"],
+    },
+    "zoho_shifts": {
+        "category": "hr",
+        "auth_type": "oauth2",
+        "status": "verified",
+        "capabilities": ["shifts", "schedules"],
+    },
+    "bamboo": {
+        "category": "devops",
+        "auth_type": "api_key",
+        "status": "verified",
+        "capabilities": ["builds", "plans", "deployments"],
+    },
+    "azure_storage": {
+        "category": "storage",
+        "auth_type": "api_key",
+        "status": "verified",
+        "capabilities": ["blobs", "containers", "files"],
+    },
+    "openmrs": {
+        "category": "healthcare",
+        "auth_type": "basic_auth",
+        "status": "verified",
+        "capabilities": ["patients", "encounters", "observations"],
+    },
+    "kra": {
+        "category": "government",
+        "auth_type": "api_key",
+        "status": "verified",
+        "capabilities": ["pin_check", "tax_obligations", "compliance"],
     },
 }
 
