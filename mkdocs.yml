@@ -119,6 +119,7 @@ nav:
       - Testing Atoms: guides/testing-atoms.md
       - System Prompts: guides/system-prompts.md
       - Testing: guides/testing.md
+      - Production Deployment: guides/production.md
       - Migration: guides/migration.md
   - Examples:
       - Overview: examples/index.md
