@@ -745,7 +745,7 @@ body,
 
 /* Sidebar container */
 .md-sidebar--primary .md-sidebar__scrollwrap {
-  padding: 0.5rem 0 2rem;
+  padding: 0.15rem 0 2rem;
 }
 
 /* Top-level section labels (nav titles like "Getting Started") */
@@ -2167,20 +2167,50 @@ body,
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  /* Do NOT add display:flex — it breaks Material's block layout */
 }
 
-/* Nav title labels (e.g. "GUIDES", "TABLE OF CONTENTS") are sticky by default
-   in Material but have a transparent background. Items scrolling beneath them
-   bleed through the text. Give them a solid opaque background to occlude them. */
-.md-sidebar .md-nav__title {
-  background: #ffffff !important;
-  z-index: 10;
+/* ── TOC (right) sidebar: sticky label occlusion.
+   Material sets position:sticky + background on .md-nav--secondary .md-nav__title
+   inside @media (min-width:60em), but uses var(--md-default-bg-color) which may
+   resolve transparent with custom palettes. Override with explicit colors and
+   Material's own box-shadow halo trick. ── */
+@media screen and (min-width: 60em) {
+  .md-nav--secondary .md-nav__title {
+    background: #ffffff !important;
+    box-shadow: 0 0 .4rem .4rem #ffffff !important;
+    position: sticky;
+    top: 0;
+    z-index: 11;
+  }
 }
 
-[data-md-color-scheme="slate"] .md-sidebar .md-nav__title {
+[data-md-color-scheme="slate"] .md-nav--secondary .md-nav__title {
   background: #161618 !important;
+  box-shadow: 0 0 .4rem .4rem #161618 !important;
 }
+
+/* ── Left sidebar: sticky label occlusion.
+   Material sets position:sticky + background on .md-nav--primary .md-nav__title
+   inside @media (min-width:76.25em). Same override pattern. ── */
+@media screen and (min-width: 76.25em) {
+  .md-nav--primary .md-nav__title {
+    background: #ffffff !important;
+    box-shadow: 0 0 .4rem .4rem #ffffff !important;
+    position: sticky;
+    top: 0;
+    z-index: 11;
+  }
+  
+  .md-nav--primary .md-nav__title[for="__drawer"] {
+    display: none;
+  }
+}
+
+[data-md-color-scheme="slate"] .md-nav--primary .md-nav__title {
+  background: #161618 !important;
+  box-shadow: 0 0 .4rem .4rem #161618 !important;
+}
+
 
 /* Sidebar-specific scrollbar: narrow and subtle */
 .md-sidebar__scrollwrap::-webkit-scrollbar {
