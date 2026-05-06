@@ -1,5 +1,5 @@
 """
-Telemetry package for JarvisCore v1.0.0.
+Telemetry package for JarvisCore v1.0.1.
 
 Provides three layers of observability:
 - TraceManager: Event recording to Redis + JSONL

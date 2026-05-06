@@ -75,12 +75,16 @@ class P2PKeepaliveManager:
         self.timeout = config.get('P2P_KEEPALIVE_TIMEOUT', 10)  # 10s timeout
         self.activity_suppress_window = config.get('P2P_ACTIVITY_SUPPRESS_WINDOW', 60)  # 60s
         self.circuit_half_open_interval = config.get('P2P_CIRCUIT_HALF_OPEN_INTERVAL', 30)  # 30s aggressive
+        self.failure_backoff_seconds = config.get('P2P_KEEPALIVE_FAILURE_BACKOFF_SECONDS', 45)
+        self.allow_zero_peers = config.get('P2P_ALLOW_ZERO_PEERS', True)
         
         # State tracking
         self.last_p2p_activity = time.time()  # Track any P2P activity
         self.last_keepalive_sent = 0.0
         self.pending_keepalives: Dict[str, float] = {}  # peer_id -> sent_time
         self.circuit_state = CircuitState.UNKNOWN
+        self.failure_backoff_until = 0.0
+        self.consecutive_send_failures = 0
         
         # Metrics
         self.metrics = KeepaliveMetrics()
@@ -153,6 +157,14 @@ class P2PKeepaliveManager:
         if time_since_activity < self.activity_suppress_window:
             logger.debug(f"P2P_KEEPALIVE ({self.agent_id}): Suppressed - recent activity "
                         f"{time_since_activity:.1f}s ago")
+            self.metrics.suppressed_count += 1
+            return False
+        if current_time < self.failure_backoff_until:
+            logger.debug(
+                "P2P_KEEPALIVE (%s): Suppressed by failure backoff %.1fs remaining",
+                self.agent_id,
+                self.failure_backoff_until - current_time,
+            )
             self.metrics.suppressed_count += 1
             return False
         
@@ -233,13 +245,31 @@ class P2PKeepaliveManager:
                 if success_count > 0:
                     self.last_keepalive_sent = current_time
                     self.metrics.keepalives_sent += 1
+                    self.consecutive_send_failures = 0
                     logger.debug(f"P2P_KEEPALIVE ({self.agent_id}): Sent keepalive to {success_count} peers")
+                elif success_count == 0 and self.allow_zero_peers:
+                    # Zero peers is an expected degraded state in single-node runs.
+                    # Do not enter failure backoff loops for this case.
+                    logger.debug(
+                        "P2P_KEEPALIVE (%s): No peers currently connected; keepalive skipped without penalty",
+                        self.agent_id,
+                    )
                 else:
-                    logger.warning(f"P2P_KEEPALIVE ({self.agent_id}): Failed to send keepalive to any peer")
+                    self.consecutive_send_failures += 1
+                    self.failure_backoff_until = time.time() + self.failure_backoff_seconds
+                    logger.warning(
+                        "P2P_KEEPALIVE (%s): KEEPALIVE_BROADCAST_FAILED; "
+                        "backing off for %ss (consecutive_failures=%s)",
+                        self.agent_id,
+                        self.failure_backoff_seconds,
+                        self.consecutive_send_failures,
+                    )
             else:
                 logger.warning(f"P2P_KEEPALIVE ({self.agent_id}): No broadcast callback available")
                 
         except Exception as e:
+            self.consecutive_send_failures += 1
+            self.failure_backoff_until = time.time() + self.failure_backoff_seconds
             logger.error(f"P2P_KEEPALIVE ({self.agent_id}): Error sending keepalive: {e}")
     
     async def handle_keepalive_received(self, sender_zmq_id: str, message: Dict[str, Any]):

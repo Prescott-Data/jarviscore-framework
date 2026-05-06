@@ -12,7 +12,7 @@ Practical guide to building agent systems with JarvisCore.
 4. [Custom Profile Tutorial](#custom-profile-tutorial)
 5. [CustomAgent Tutorial](#customagent-tutorial)
 6. [Multi-Agent Workflows](#multi-agent-workflows)
-7. [Infrastructure & Memory (v0.4.0)](#infrastructure--memory) — Phases 1–9: blob, mailbox, memory, auth, telemetry
+7. [Infrastructure & Memory (v0.4.0)](#infrastructure--memory) — blob, mailbox, memory, auth, telemetry
 8. [Internet Search](#internet-search)
 9. [Remote Sandbox](#remote-sandbox)
 10. [Result Storage](#result-storage)
@@ -125,7 +125,7 @@ asyncio.run(main())
 
 ### The Mesh
 
-The **Mesh** is your control center. It manages agents and orchestrates workflows.
+The **Mesh** is the runtime that wires everything together. You create one Mesh per process, configure its mode, register agent classes with `mesh.add()`, then call `await mesh.start()` to initialise them. The Mesh routes each workflow step to the right agent, injects infrastructure (Redis store, blob storage, mailbox) before `setup()` runs, and manages the full agent lifecycle — from startup through teardown.
 
 ```python
 # Autonomous mode (single machine, workflow engine only)
@@ -147,7 +147,9 @@ mesh = Mesh(mode="distributed", config={'bind_port': 7950})
 
 ### Agents
 
-**Agents** are workers that execute tasks. JarvisCore offers three profiles:
+**Agents** are workers that execute tasks. Each agent has a `role` (a unique string identifier), a list of `capabilities`, and belongs to a Profile that determines how it runs.
+
+A **Profile** is the execution contract an agent fulfills. You subclass a Profile, set its class attributes, and pass the class to `mesh.add()` — the Mesh instantiates and manages it. JarvisCore offers two profiles:
 
 | Profile | Best For | How It Works |
 |---------|----------|--------------|
@@ -158,7 +160,7 @@ See [AutoAgent Guide](AUTOAGENT_GUIDE.md) and [CustomAgent Guide](CUSTOMAGENT_GU
 
 ### Workflows
 
-**Workflows** are sequences of tasks with dependencies:
+A **Workflow** is a list of steps — each step names an agent by role or capability, plus a task description. Steps that declare `depends_on` wait for those dependencies to complete before starting; independent steps run in parallel. Each completed step's output is forwarded automatically to dependent steps via `task['context']['previous_step_results']`, so agents can build on each other's work without manual wiring.
 
 ```python
 await mesh.workflow("pipeline-id", [
@@ -360,10 +362,10 @@ asyncio.run(data_pipeline())
 
 ## Infrastructure & Memory
 
-JarvisCore v0.4.0 ships a full production infrastructure stack. All features degrade
+JarvisCore v1.0.0 ships a full production infrastructure stack. All features degrade
 gracefully when not configured.
 
-### Phase 9 — Auto-Injection Quick Reference
+### Auto-Injection Quick Reference
 
 Before every agent's `setup()`, the Mesh injects:
 
@@ -425,24 +427,76 @@ for msg in messages:
 
 ### Prometheus Telemetry
 
+Prometheus support is **optional**. If `prometheus-client` is not installed, all metric
+calls are silent no-ops — nothing fails and no configuration is required. Install it
+only when you want to scrape metrics:
+
 ```bash
-PROMETHEUS_ENABLED=true
-PROMETHEUS_PORT=9090
+pip install "jarviscore[prometheus]"
 ```
+
+Enable and configure via `.env`:
+
+```bash
+PROMETHEUS_ENABLED=true   # default: false
+PROMETHEUS_PORT=9090      # default: 9090
+```
+
+When `PROMETHEUS_ENABLED=true`, the Mesh automatically starts an HTTP metrics server
+on the configured port at `mesh.start()`. No code changes are needed — all built-in
+metrics are collected automatically.
+
+#### Metrics exposed
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `jarviscore_llm_tokens_input_total` | Counter | `provider`, `model` | Total input tokens consumed |
+| `jarviscore_llm_tokens_output_total` | Counter | `provider`, `model` | Total output tokens generated |
+| `jarviscore_llm_cost_dollars_total` | Counter | `provider`, `model` | Total LLM cost in USD |
+| `jarviscore_llm_request_duration_seconds` | Histogram | `provider`, `model` | LLM API call duration |
+| `jarviscore_llm_requests_total` | Counter | `provider`, `model`, `status` | Total LLM requests (success/error) |
+| `jarviscore_workflow_steps_total` | Counter | `status` | Steps completed, labelled by outcome |
+| `jarviscore_step_execution_duration_seconds` | Histogram | `status` | Per-step execution time |
+| `jarviscore_active_workflows` | Gauge | — | Workflows currently running |
+| `jarviscore_active_steps` | Gauge | — | Steps currently executing |
+| `jarviscore_events_emitted_total` | Counter | `event_type` | Trace events emitted |
+
+LLM metrics (`tokens`, `cost`, `duration`) are recorded automatically by the AutoAgent
+code-generation pipeline. Workflow metrics (`steps_total`, `active_workflows`) are
+recorded automatically by the WorkflowEngine.
+
+#### Recording step metrics in CustomAgent
+
+AutoAgent records step metrics automatically. For CustomAgent, call
+`record_step_execution` manually:
 
 ```python
 import time
 from jarviscore.telemetry.metrics import record_step_execution
 
-async def execute_task(self, task):
-    start = time.time()
-    result = self._do_work(task)
-    record_step_execution(time.time() - start, "success")
-    return {"status": "success", "output": result}
+class MyAgent(CustomAgent):
+    async def execute_task(self, task):
+        start = time.time()
+        result = self._do_work(task)
+        record_step_execution(time.time() - start, "completed")
+        return {"status": "success", "output": result}
 ```
 
-Metrics emitted: `jarviscore_step_duration_seconds` (histogram),
-`jarviscore_steps_total` (counter, labelled by status).
+#### Viewing metrics
+
+```bash
+# Raw metrics endpoint
+curl -s http://localhost:9090/metrics | grep jarviscore
+
+# Check active workflows during a run
+curl -s http://localhost:9090/metrics | grep active_workflows
+
+# Token usage by provider
+curl -s http://localhost:9090/metrics | grep llm_tokens
+```
+
+Metrics are in the standard Prometheus text format and can be scraped by any
+Prometheus-compatible system (Prometheus server, Grafana, Datadog Agent, etc.).
 
 ---
 
@@ -462,7 +516,7 @@ results = await mesh.workflow("wf-001", [
 
 ---
 
-### Auth Injection (Nexus)
+### Auth Injection (Nexus OSS)
 
 ```bash
 NEXUS_GATEWAY_URL=https://your-dromos-gateway.example.com
@@ -481,7 +535,7 @@ class SecureAgent(CustomAgent):
             )
 ```
 
-Full flow: `request_connection → browser OAuth → poll ACTIVE → resolve_strategy → apply header`.
+Full Nexus OSS flow: `request_connection → browser OAuth → poll ACTIVE → resolve_strategy → apply header`.
 `_auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set (graceful degradation).
 
 ---
@@ -517,12 +571,12 @@ data = raw.get("output", raw) if isinstance(raw, dict) else {}
 
 All examples require Redis: `docker compose -f docker-compose.infra.yml up -d`
 
-| Example | Mode | Profile | Key phases |
-|---------|------|---------|-----------|
-| Ex1 — Financial Pipeline | autonomous | AutoAgent | 1, 5, 6, 7, 8, 9 |
-| Ex2 — Research Network (4 nodes) | distributed SWIM | AutoAgent | 4, 7, 8, 9 |
-| Ex3 — Support Swarm | p2p | CustomAgent | 1, 4, 7D, 8, 9 |
-| Ex4 — Content Pipeline | distributed | CustomAgent | 1, 4, 5, 7, 8, 9 |
+| Example | Mode | Profile |
+|---------|------|---------|
+| Ex1 — Financial Pipeline | autonomous | AutoAgent |
+| Ex2 — Research Network (4 nodes) | distributed | AutoAgent |
+| Ex3 — Support Swarm | p2p | CustomAgent |
+| Ex4 — Content Pipeline | distributed | CustomAgent |
 
 ```bash
 python examples/ex1_financial_pipeline.py
@@ -1363,6 +1417,6 @@ mesh = Mesh(config=config)
 
 ## Version
 
-User Guide for JarvisCore v0.3.2
+User Guide for JarvisCore v1.0.2
 
-Last Updated: 2026-02-03
+Last Updated: 2026-03-04

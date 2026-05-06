@@ -829,6 +829,6 @@ LOG_DIRECTORY=/tmp/jarviscore-logs
 
 ## Version
 
-Configuration Guide for JarvisCore v0.3.2
+Configuration Guide for JarvisCore v1.0.2
 
-Last Updated: 2026-01-23
+Last Updated: 2026-03-04

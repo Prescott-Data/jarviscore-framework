@@ -427,7 +427,7 @@ When agents need access to external tools (databases, APIs, files), you inject t
 
 ```python
 def inject_tools_into_agent(agent, my_database):
-    """Make external tools available to LLM-generated code."""
+    """Make external tools available to agent-generated function tools."""
     original_execute = agent.sandbox.execute
     original_execute_task = agent.execute_task
     agent._current_task_context = {}
@@ -492,8 +492,8 @@ Every `agent.execute_task()` call returns a dict:
 ```python
 {
     "status": "success",           # "success" or "failure"
-    "output": {...},               # The value stored in `result` by LLM-generated code
-    "code": "result = ...",        # The Python code the LLM generated
+    "output": {...},               # The value stored in `result` by the agent-generated function tool
+    "code": "result = ...",        # The function tool code the agent generated
     "repairs": 0,                  # Number of auto-repair attempts (0 = worked first try)
     "execution_time": 3.14,        # Seconds
     "tokens": {...},               # Token usage breakdown
@@ -580,7 +580,7 @@ Everything else stays the same. See [CUSTOMAGENT_GUIDE.md](CUSTOMAGENT_GUIDE.md)
 
 ---
 
-## Phase 9 — Infrastructure Injection in AutoAgent
+## Infrastructure Injection in AutoAgent
 
 Before `setup()` runs, the Mesh auto-injects three infrastructure objects onto every
 agent — including AutoAgent. No constructor wiring or boilerplate required:
@@ -603,7 +603,7 @@ class ResearchAgent(AutoAgent):
 
     async def setup(self):
         await super().setup()
-        # Phase 9: _redis_store, _blob_storage, mailbox already wired
+        # All infrastructure already wired — no __init__ boilerplate needed
         self.memory = UnifiedMemory(
             workflow_id="research-wf", step_id="research",
             agent_id=self.role,
@@ -615,12 +615,12 @@ class ResearchAgent(AutoAgent):
         result = await super().execute_task(task)
 
         if result.get("status") == "success":
-            # Phase 1: save output artifact
+            # Save output artifact
             await self._blob_storage.save(
                 f"research/{task.get('id', 'step')}.json",
                 json.dumps(result["output"]),
             )
-            # Phase 8: log to episodic ledger
+            # Log to episodic ledger
             await self.memory.episodic.append({
                 "step": task.get("id"),
                 "status": "success",
@@ -632,7 +632,7 @@ class ResearchAgent(AutoAgent):
 
 ---
 
-## Phase 8 — Memory Access in AutoAgent
+## Memory Access in AutoAgent
 
 ### UnifiedMemory
 
@@ -661,7 +661,7 @@ async def execute_task(self, task):
     accessor = RedisMemoryAccessor(self._redis_store, workflow_id=task.get("workflow_id"))
     raw = accessor.get("fetch")                          # reads step_output:wf:fetch
     prior_data = raw.get("output", raw) if isinstance(raw, dict) else {}
-    # prior_data is now available for LLM-generated code via context injection
+    # prior_data is now available for agent-generated function tools via context injection
     ...
 ```
 
@@ -676,7 +676,7 @@ result = await self.sandbox.execute(code, context=task.get('context'))
 ```
 
 This line (in `AutoAgent.execute_task`) passes the workflow's `context` dict into the
-sandbox namespace before executing LLM-generated code. Without it, `previous_step_results`
+sandbox namespace before executing agent-generated function tools. Without it, `previous_step_results`
 is undefined inside the generated code and any reference raises `NameError`.
 
 ### What Happens Without It
@@ -761,7 +761,7 @@ Re-run with the same `workflow_id` — already-completed steps are skipped (cras
 
 ## Production Example: Ex2 — Distributed Research Network
 
-**Profile:** AutoAgent | **Mode:** distributed (4-node SWIM) | **Phases:** 4, 7, 8, 9
+**Profile:** AutoAgent | **Mode:** distributed (4-node)
 
 ### Architecture
 

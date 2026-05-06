@@ -1,6 +1,6 @@
 # JarvisCore API Reference
 
-Complete API documentation for JarvisCore framework components.
+Complete API documentation for JarvisCore components.
 
 ---
 
@@ -37,8 +37,8 @@ Complete API documentation for JarvisCore framework components.
    - [LongTermMemory](#longtermemory)
    - [WorkingScratchpad](#workingscratchpad)
    - [RedisMemoryAccessor](#redismemoryaccessor)
-   - [AuthenticationManager](#authenticationmanager-phase-7d)
-   - [record_step_execution](#record_step_execution-phase-5)
+   - [AuthenticationManager](#authenticationmanager)
+   - [record_step_execution](#record_step_execution)
 7. [Utilities](#utilities)
    - [InternetSearch](#internetsearch)
    - [UnifiedLLMClient](#unifiedllmclient)
@@ -49,7 +49,7 @@ Complete API documentation for JarvisCore framework components.
 
 ### Mesh
 
-The central orchestrator for managing agents and workflows.
+The central orchestrator for managing agents and workflows. Every JarvisCore application creates exactly one Mesh per process. It is responsible for starting and stopping agents, injecting infrastructure (Redis store, blob storage, mailbox) before each agent's `setup()` runs, routing workflow steps to the correct agent by role or capability, and optionally activating the P2P coordinator for multi-node communication.
 
 #### Class: `Mesh`
 
@@ -307,7 +307,7 @@ async def teardown(self):
 
 ### AutoAgent
 
-Zero-config autonomous agent with LLM-powered code generation.
+Autonomous agent profile that auto-generates and executes function tools under Kernel supervision. You define three class attributes — `role`, `capabilities`, and `system_prompt` — and the framework handles the rest: calling the LLM to write code, executing it in a sandboxed environment, auto-repairing failures, and storing results. No manual code generation or sandbox management needed.
 
 #### Class: `AutoAgent(Profile)`
 
@@ -548,7 +548,7 @@ all_memory = ctx.memory.all()
 
 ### CustomAgent
 
-Flexible agent profile for integrating external frameworks.
+Flexible agent profile for integrating existing code, frameworks, or deterministic logic. You implement `execute_task()` for workflow steps, `on_peer_request()` for P2P messaging, or both. No LLM or sandbox is required — CustomAgent simply calls the methods you define and returns whatever you return. Infrastructure (Redis store, blob storage, mailbox) is auto-injected before `setup()` runs.
 
 #### Class: `CustomAgent(Profile)`
 
@@ -1170,7 +1170,7 @@ code = await codegen.generate(
 
 ### SandboxExecutor
 
-Safe code execution with resource limits and remote execution support.
+The sandbox is the isolated Python environment where AutoAgent-generated code runs. It restricts available builtins and imports, injects workflow context as namespace variables, and captures the `result` variable as the step's output. It supports two modes: `local` (in-process, fast, for development) and `remote` (Azure Container Apps, full process isolation for production).
 
 #### Class: `SandboxExecutor`
 
@@ -1723,7 +1723,7 @@ data = raw.get("output", raw) if isinstance(raw, dict) else {}
 
 ---
 
-### AuthenticationManager (Phase 7D)
+### AuthenticationManager
 
 Injected as `agent._auth_manager` when `agent.requires_auth = True` and
 `NEXUS_GATEWAY_URL` is set. `None` otherwise (graceful degradation).
@@ -1762,7 +1762,7 @@ result = await agent._auth_manager.make_authenticated_request(
 
 ---
 
-### record_step_execution (Phase 5)
+### record_step_execution
 
 ```python
 from jarviscore.telemetry.metrics import record_step_execution
@@ -2234,6 +2234,6 @@ async def test_processor_delegates_to_analyst():
 
 ## Version
 
-API Reference for JarvisCore v0.3.2
+API Reference for JarvisCore v1.0.2
 
-Last Updated: 2026-02-03
+Last Updated: 2026-03-04

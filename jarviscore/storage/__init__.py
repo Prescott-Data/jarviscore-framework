@@ -1,5 +1,5 @@
 """
-Storage layer for JarvisCore v1.0.0.
+Storage layer for JarvisCore v1.0.1.
 
 Provides abstract blob storage and Redis context store.
 

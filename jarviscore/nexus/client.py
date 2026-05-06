@@ -66,7 +66,7 @@ class NexusClient:
         response = await self.client.post("/v1/request-connection", json=payload)
         response.raise_for_status()
         data = response.json()
-        return data["connection_id"], data["auth_url"]
+        return data["connection_id"], data["authUrl"]
 
     async def check_connection_status(self, connection_id: str) -> str:
         """
@@ -82,7 +82,7 @@ class NexusClient:
         )
         response.raise_for_status()
         data = response.json()
-        return data["status"]
+        return data["status"].upper()
 
     # ── Data Plane ────────────────────────────────────────────────
 

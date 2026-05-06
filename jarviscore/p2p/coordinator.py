@@ -98,6 +98,8 @@ class P2PCoordinator:
             'P2P_KEEPALIVE_INTERVAL': self.config.get('keepalive_interval', 90),
             'P2P_KEEPALIVE_TIMEOUT': self.config.get('keepalive_timeout', 10),
             'P2P_ACTIVITY_SUPPRESS_WINDOW': self.config.get('activity_suppress_window', 60),
+            'P2P_KEEPALIVE_FAILURE_BACKOFF_SECONDS': self.config.get('keepalive_failure_backoff_seconds', 45),
+            'P2P_ALLOW_ZERO_PEERS': self.config.get('allow_zero_peers', True),
         }
         self.keepalive_manager = P2PKeepaliveManager(
             agent_id=self._get_node_id(),

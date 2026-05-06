@@ -3,11 +3,11 @@ Example 3 — Real-Time Customer Support Swarm
 =============================================
 Profile  : CustomAgent
 Mode     : P2P (SWIM discovery + ZMQ messaging, no workflow engine)
-Auth     : Production mode — tests the REAL Nexus protocol end-to-end
+Auth     : Production mode — tests the REAL Nexus OSS protocol end-to-end
 
 What this example proves
 ------------------------
-This is the primary test of the deployed Dromos / Nexus gateway. Running it
+This is the primary test of the deployed Dromos / Nexus OSS gateway. Running it
 exercises the full NexusClient protocol stack:
 
   1. NexusClient.request_connection(provider, user_id, scopes)
@@ -49,14 +49,22 @@ Agents
   BillingAgent     — no auth (verify _auth_manager is None)
   EscalationAgent  — no auth; handles unresolved cases
 
-Phases exercised
+Infrastructure features exercised
+----------------------------------
+P2P mesh        : SWIM discovery — all 4 agents discover each other
+Mailbox         : GatewayAgent routes queries via mailbox.send()
+Nexus OSS auth  : AuthenticationManager(mode="production") injected into TechnicalAgent;
+                  full NexusClient request_connection → poll → resolve flow tested
+Unified memory  : UnifiedMemory per agent; EpisodicLedger records every interaction
+Auto-injection  : redis + blob + mailbox injected before each agent's setup()
+
+Success criteria
 ----------------
-Phase 2  : SWIM P2P (all 4 agents discover each other)
-Phase 4  : MailboxManager — GatewayAgent routes queries via mailbox.send()
-Phase 7D : AuthenticationManager(mode="production") injected into TechnicalAgent;
-           full NexusClient request_connection → poll → resolve flow tested
-Phase 8  : UnifiedMemory per agent; EpisodicLedger records every interaction
-Phase 9  : Auto-injected redis + blob + mailbox before each agent's setup()
+    - 4 agents discover each other (log: "mesh stabilised, peers=3")
+    - GatewayAgent routes query to TechnicalAgent via mailbox
+    - TechnicalAgent completes Nexus OSS OAuth flow (_auth_manager active)
+    - EscalationAgent handles unresolved cases (escalation saved to blob_storage/)
+    - No ERROR lines in output (auth degradation is logged as WARNING, not ERROR)
 """
 
 import asyncio

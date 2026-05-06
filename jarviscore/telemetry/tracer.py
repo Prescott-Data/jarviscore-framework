@@ -1,5 +1,5 @@
 """
-TraceManager for JarvisCore v1.0.0.
+TraceManager for JarvisCore v1.0.1.
 
 Three output channels for every trace event:
 1. Redis List — persistent, replayable (key: traces:{workflow_id}:{step_id})

@@ -109,7 +109,7 @@ class PeerTool:
                         "role": {
                             "type": "string",
                             "description": "The role of the agent to ask",
-                            "enum": active_roles if active_roles else ["none"]
+                            "enum": active_roles if active_roles else []
                         },
                         "question": {
                             "type": "string",
@@ -188,11 +188,11 @@ class PeerTool:
         self._logger.info(f"ask_peer: Attempting to contact role='{role}'")
         
         # Send request (request() will handle resolution of local/remote peers)
-        # Use 10min timeout to allow analyst time to query database and analyze
+        # Use 2 hour timeout to allow analyst time for complex queries and analysis
         response = await self._peers.request(
             role,
             {"query": question, "from": self._peers.my_role},
-            timeout=600.0
+            timeout=7200.0
         )
         
         self._logger.info(f"ask_peer: Got response: {response}")

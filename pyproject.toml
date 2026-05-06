@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "0.4.0"
-description = "Build autonomous AI agents in 3 lines of code. Production-ready orchestration with P2P mesh networking."
+version = "1.0.2"
+description = "Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+license = {text = "Apache-2.0"}
 authors = [
     {name = "Ruth Mutua", email = "mutuandinda82@gmail.com"},
     {name = "Muyukani Kizito", email = "muyukani@prescottdata.io"}
@@ -18,8 +18,9 @@ maintainers = [
 ]
 keywords = ["agents", "p2p", "llm", "distributed", "workflow", "orchestration"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -27,49 +28,54 @@ classifiers = [
 ]
 
 dependencies = [
-    # Core framework
+    # Core framework — schema, config, HTTP
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-
-    # P2P networking (required for all modes)
-    "swim-p2p",
-    "pyzmq",
-
-    # Configuration
     "python-dotenv>=1.0.0",
-
-    # Web/HTTP
-    "aiohttp>=3.9.0",
-    "beautifulsoup4>=4.12.0",
-    "fastapi>=0.104.0",
-    "uvicorn>=0.29.0",
-
-    # LLM Providers (at least one required for AutoAgent)
-    "anthropic>=0.18.0",
-    "openai>=1.0.0",
-    "google-genai>=1.0.0",
-
-    # Utilities
     "httpx>=0.25.0",
+    "aiohttp>=3.9.0",
+
+    # LLM Providers — the engine. Always available, zero-config.
+    # Developer picks which provider to use via env vars, not pip extras.
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+    "google-genai>=1.0.0",
 ]
 
 [project.optional-dependencies]
+# P2P mesh — SWIM gossip protocol + ZMQ transport for multi-node deployments
+p2p = [
+    "swim-p2p",
+    "pyzmq",
+]
+# Web serving — FastAPI integration, dashboard, chat endpoints
+web = [
+    "fastapi>=0.104.0",
+    "uvicorn>=0.29.0",
+    "beautifulsoup4>=4.12.0",
+]
+# Redis — distributed workflows, cross-session state, peer routing
 redis = [
     "redis>=4.6.0",
 ]
+# Prometheus — metrics and observability
 prometheus = [
     "prometheus-client>=0.18.0",
 ]
+# Azure — blob storage backend
 azure = [
     "azure-storage-blob>=12.19.0",
 ]
+# Browser — Playwright-based web interaction tools
 browser = [
     "playwright>=1.40.0",
 ]
+# Everything — production deployment with all capabilities
 full = [
-    "jarviscore-framework[redis,prometheus,azure]",
+    "jarviscore-framework[p2p,web,redis,prometheus,azure]",
 ]
 dev = [
+    "jarviscore-framework[p2p,web,redis]",
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
@@ -81,7 +87,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/Prescott-Data/jarviscore-framework"
-Documentation = "https://github.com/Prescott-Data/jarviscore-framework/tree/main/jarviscore/docs"
+Documentation = "https://jarviscore.developers.prescottdata.io/"
 Repository = "https://github.com/Prescott-Data/jarviscore-framework"
 Issues = "https://github.com/Prescott-Data/jarviscore-framework/issues"
 

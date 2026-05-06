@@ -70,9 +70,14 @@ class CLIFlowHandler(OAuthFlowHandler):
 
     def __init__(self, open_browser: bool = True):
         self.open_browser = open_browser
+        self._callback_server: Optional[LocalCallbackServer] = None
 
     async def present_auth_url(self, auth_url: str, provider: str) -> None:
         """Open browser and print URL as fallback."""
+        # Start local server to receive the OAuth redirect
+        self._callback_server = LocalCallbackServer(port=8080)
+        self._callback_server.start()
+
         print(f"\n{'='*60}")
         print(f"  Authorization required for: {provider}")
         print(f"{'='*60}")
@@ -99,40 +104,69 @@ class CLIFlowHandler(OAuthFlowHandler):
         check_status_fn,
         timeout: float = 300,
         poll_interval: float = 2.0,
+        failed_grace_period: float = 120.0,
     ) -> str:
-        """Poll connection status until ACTIVE or timeout."""
-        elapsed = 0.0
-        last_status = "PENDING"
+        """
+        Poll connection status until ACTIVE or timeout.
 
-        while elapsed < timeout:
-            try:
-                status = await check_status_fn(connection_id)
-            except Exception as e:
-                logger.warning(f"Status check failed: {e}")
+        failed_grace_period: seconds to keep polling even when gateway
+        returns FAILED, to work around gateways that map "token not yet
+        available" (HTTP 403 from broker) as FAILED instead of PENDING.
+        After the grace period, a persistent FAILED is treated as terminal.
+        """
+        try:
+            elapsed = 0.0
+            last_status = "PENDING"
+            first_failed_at: Optional[float] = None
+
+            while elapsed < timeout:
+                try:
+                    status = await check_status_fn(connection_id)
+                except Exception as e:
+                    logger.warning(f"Status check failed: {e}")
+                    await asyncio.sleep(poll_interval)
+                    elapsed += poll_interval
+                    continue
+
+                if status != last_status:
+                    logger.info(f"Connection {connection_id}: {last_status} → {status}")
+                    last_status = status
+
+                if status == "ACTIVE":
+                    print(f"  ✓ Authorization complete!")
+                    return status
+
+                if status in ("REVOKED", "EXPIRED"):
+                    print(f"  ✗ Authorization failed: {status}")
+                    return status
+
+                if status == "FAILED":
+                    if first_failed_at is None:
+                        first_failed_at = elapsed
+                        logger.debug(
+                            f"Gateway returned FAILED at t={elapsed:.0f}s; "
+                            f"will keep polling for {failed_grace_period:.0f}s grace period"
+                        )
+                    if elapsed - first_failed_at >= failed_grace_period:
+                        print(f"  ✗ Authorization failed: FAILED")
+                        return status
+                    # Still within grace window — OAuth may not be complete yet
+                else:
+                    # Status recovered from FAILED; reset the grace timer
+                    first_failed_at = None
+
+                if status == "ATTENTION":
+                    print(f"  ! Re-authorization may be needed")
+
                 await asyncio.sleep(poll_interval)
                 elapsed += poll_interval
-                continue
 
-            if status != last_status:
-                logger.info(f"Connection {connection_id}: {last_status} → {status}")
-                last_status = status
-
-            if status == "ACTIVE":
-                print(f"  ✓ Authorization complete!")
-                return status
-
-            if status in ("REVOKED", "EXPIRED", "FAILED"):
-                print(f"  ✗ Authorization failed: {status}")
-                return status
-
-            if status == "ATTENTION":
-                print(f"  ! Re-authorization may be needed")
-
-            await asyncio.sleep(poll_interval)
-            elapsed += poll_interval
-
-        print(f"  ✗ Authorization timed out after {timeout}s")
-        return "TIMEOUT"
+            print(f"  ✗ Authorization timed out after {timeout}s")
+            return "TIMEOUT"
+        finally:
+            if self._callback_server:
+                self._callback_server.stop()
+                self._callback_server = None
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -147,6 +181,17 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
         if "code" in params:
             _CallbackHandler.auth_code = params["code"][0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(
+                b"<html><body><h2>Authorization successful!</h2>"
+                b"<p>You can close this tab and return to the terminal.</p>"
+                b"</body></html>"
+            )
+        elif "connection_id" in params and params.get("status", [""])[0] == "success":
+            # Dromos broker callback: ?connection_id=...&provider=...&status=success
+            _CallbackHandler.auth_code = params["connection_id"][0]
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()

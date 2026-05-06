@@ -1,5 +1,5 @@
 """
-Memory module for JarvisCore v1.0.0.
+Memory module for JarvisCore v1.0.1.
 
 Three-tier memory architecture used by the Kernel across OODA loop turns:
 

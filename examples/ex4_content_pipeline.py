@@ -9,19 +9,18 @@ This example shows CustomAgent in workflow mode: agents implement execute_task()
 directly with pure Python logic — no LLM code generation. Cross-step data flows
 through RedisMemoryAccessor, which reads step outputs stored by the WorkflowEngine.
 
-Phases exercised
-----------------
-Phase 1  : LocalBlobStorage saves drafts, SEO metadata, and final article at
-           each stage. Blob paths are predictable for CI/CD verification.
-Phase 4  : MailboxManager — PublisherAgent sends completion notification to
-           ResearcherAgent on publish.
-Phase 5  : record_step_execution() called per step; Prometheus histogram visible.
-Phase 7  : Reactive WorkflowEngine dispatches steps in dependency order;
-           WorkflowState serialised to Redis between steps for crash recovery.
-Phase 8  : UnifiedMemory per agent; RedisMemoryAccessor used by WriterAgent and
-           SEOAgent to read previous step outputs; LongTermMemory.compress()
-           called after publish to update style notes for future runs.
-Phase 9  : Auto-injected self._redis_store, self._blob_storage, self.mailbox.
+Infrastructure features exercised
+----------------------------------
+Blob storage    : LocalBlobStorage saves drafts, SEO metadata, and final article
+                  at each stage. Blob paths are predictable for CI/CD verification.
+Mailbox         : PublisherAgent sends completion notification to ResearcherAgent.
+Telemetry       : record_step_execution() called per step; Prometheus histogram visible.
+Workflow engine : Reactive WorkflowEngine dispatches steps in dependency order;
+                  WorkflowState serialised to Redis between steps for crash recovery.
+Unified memory  : RedisMemoryAccessor used by WriterAgent and SEOAgent to read
+                  previous step outputs; LongTermMemory.compress() called after
+                  publish to update style notes for future runs.
+Auto-injection  : Auto-injected self._redis_store, self._blob_storage, self.mailbox.
 
 Prerequisites
 -------------
@@ -30,11 +29,14 @@ Prerequisites
     pip install -e ".[redis,prometheus]"
     python examples/ex4_content_pipeline.py
 
-Verification
-------------
-    redis-cli keys "*content-pipeline*"
-    ls -la blob_storage/content/
-    redis-cli get ltm:content-pipeline      # LTM summary after publish
+Success criteria
+----------------
+    - All 4 workflow steps complete: research → write → seo → publish
+    - Draft saved to:    blob_storage/content/content-pipeline/draft.md
+    - SEO saved to:      blob_storage/content/content-pipeline/seo.json
+    - Article saved to:  blob_storage/content/content-pipeline/article.md
+    - LTM updated:       redis-cli get ltm:content-pipeline  →  non-empty
+    - Mailbox event received by ResearcherAgent (log: "published event received")
 """
 
 import asyncio
@@ -296,7 +298,7 @@ class SEOAgent(CustomAgent):
             keyword_density[kw] = round(count / max(word_count, 1) * 100, 2)
 
         seo_metadata = {
-            "title_tag": f"{TOPIC} | JarvisCore Framework",
+            "title_tag": f"{TOPIC} | JarvisCore",
             "meta_description": (
                 "Discover how AI agents are reshaping software in 2026. "
                 "Learn about autonomous agents, multi-agent collaboration, "

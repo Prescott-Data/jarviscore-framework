@@ -60,9 +60,9 @@ Quick Start (CustomAgent - distributed mode):
     results = await mesh.workflow("demo", [{"agent": "processor", "task": "hello"}])
 """
 
-__version__ = "0.3.2"
+__version__ = "1.0.2"
 __author__ = "JarvisCore Contributors"
-__license__ = "MIT"
+__license__ = "Apache-2.0"
 
 # Core classes
 from jarviscore.core.agent import Agent
@@ -77,8 +77,15 @@ from jarviscore.profiles.customagent import CustomAgent
 from jarviscore.adapter import jarvis_agent, wrap
 from jarviscore.context import JarvisContext, MemoryAccessor, DependencyAccessor
 
-# P2P Direct Communication
-from jarviscore.p2p import PeerClient, PeerTool, PeerInfo, IncomingMessage
+# P2P Direct Communication (optional — requires `pip install jarviscore-framework[p2p]`)
+# These are injected into agents at start() time when available.
+try:
+    from jarviscore.p2p import PeerClient, PeerTool, PeerInfo, IncomingMessage
+except Exception:  # noqa: BLE001  (swim-p2p + pyzmq may not be installed)
+    PeerClient = None      # type: ignore
+    PeerTool = None        # type: ignore
+    PeerInfo = None        # type: ignore
+    IncomingMessage = None # type: ignore
 
 # Alias for p2p mode agents
 JarvisAgent = Agent  # Use this for agents with run() loops

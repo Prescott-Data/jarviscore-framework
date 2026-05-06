@@ -8,7 +8,9 @@ import asyncio
 import os
 from unittest.mock import MagicMock, patch, AsyncMock
 import jarviscore.execution.llm as _llm_module
-from jarviscore.execution.llm import UnifiedLLMClient, LLMProvider
+
+UnifiedLLMClient = _llm_module.UnifiedLLMClient
+LLMProvider = _llm_module.LLMProvider
 
 
 def test_provider_detection():

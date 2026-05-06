@@ -376,10 +376,19 @@ class PeerClient:
             # ["scout", "analyst", "reporter"]
         """
         roles = set()
+        # Check local agents
         for role_name, agents in self._agent_registry.items():
             for agent in agents:
                 if agent.agent_id != self._agent_id:
                     roles.add(role_name)
+        
+        # BUG FIX: Also check remote agents from SWIM mesh
+        if self._coordinator and hasattr(self._coordinator, '_remote_agent_registry'):
+            remote_registry = self._coordinator._remote_agent_registry
+            for agent_id, info in remote_registry.items():
+                if agent_id != self._agent_id:  # Exclude self
+                    roles.add(info.get('role'))
+        
         return sorted(list(roles))
 
     def list_peers(self) -> List[Dict[str, Any]]:
@@ -522,8 +531,8 @@ class PeerClient:
             context=context
         )
 
-        # Create future to wait for response
-        response_future: asyncio.Future = asyncio.get_event_loop().create_future()
+        # Create future to wait for response (use running loop — this is an async method)
+        response_future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending_requests[correlation_id] = response_future
 
         try:
@@ -696,8 +705,8 @@ class PeerClient:
             'timeout': timeout
         }
 
-        # Create future for async response handling
-        response_future: asyncio.Future = asyncio.get_event_loop().create_future()
+        # Create future for async response handling (use running loop — this is an async method)
+        response_future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending_requests[correlation_id] = response_future
 
         # Setup background task to move response to inbox
@@ -1194,7 +1203,17 @@ class PeerClient:
         if message.type == MessageType.RESPONSE and message.correlation_id:
             future = self._pending_requests.get(message.correlation_id)
             if future and not future.done():
-                future.set_result(message.data)
+                fut_loop = future.get_loop()
+                try:
+                    running_loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    running_loop = None
+                if running_loop is not None and running_loop is fut_loop:
+                    future.set_result(message.data)
+                else:
+                    # Called from a different event loop (e.g. SWIM thread) —
+                    # schedule the set_result on the future's own loop
+                    fut_loop.call_soon_threadsafe(future.set_result, message.data)
                 self._logger.debug(
                     f"Delivered response for {message.correlation_id}"
                 )

@@ -3,6 +3,10 @@ include README.md
 include LICENSE
 include .env.example
 include TESTING_GUIDE.md
+include CONTRIBUTING.md
+include CODE_OF_CONDUCT.md
+include TRADEMARK.md
+recursive-include CLA *.md
 
 # Include all markdown docs in package
 recursive-include jarviscore/docs *.md

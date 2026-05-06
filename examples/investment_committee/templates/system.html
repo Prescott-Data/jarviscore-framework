@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}System — Investment Committee{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+
+  <h1 class="text-2xl font-bold text-slate-800">System Status</h1>
+
+  <!-- Service health -->
+  <div class="bg-white rounded-xl shadow p-5">
+    <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">Services</h2>
+    <div class="space-y-3">
+
+      {% macro service_row(name, ok, detail) %}
+      <div class="flex items-center justify-between py-2 border-b border-slate-50">
+        <div class="flex items-center gap-3">
+          <span class="inline-block w-2.5 h-2.5 rounded-full {% if ok %}bg-emerald-500{% else %}bg-red-500{% endif %}"></span>
+          <span class="text-sm font-medium text-slate-700">{{ name }}</span>
+        </div>
+        <span class="text-xs text-slate-400 font-mono">{{ detail }}</span>
+      </div>
+      {% endmacro %}
+
+      {{ service_row("Redis",        redis_ok,    redis_url) }}
+      {{ service_row("LTM Cache",    ltm | length > 0, (ltm | length ~ " chars stored") if ltm else "empty") }}
+      {{ service_row("Blob Storage", blob_exists, blob_path) }}
+      {{ service_row("Memo Archive", true,        (key_counts.get("step_output", 0) ~ " step outputs") ) }}
+
+    </div>
+  </div>
+
+  <!-- Redis key counts -->
+  <div class="bg-white rounded-xl shadow p-5">
+    <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">Redis Keys</h2>
+    {% if key_counts %}
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+      {% for pattern, count in key_counts.items() %}
+      <div class="bg-slate-50 rounded-lg p-3">
+        <p class="text-xs text-slate-400 font-mono">{{ pattern }}:*</p>
+        <p class="text-2xl font-bold text-slate-700 mt-1">{{ count }}</p>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm text-slate-400">Redis unavailable.</p>
+    {% endif %}
+  </div>
+
+  <!-- Registered agents -->
+  <div class="bg-white rounded-xl shadow p-5">
+    <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">Registered Agents</h2>
+    <div class="grid grid-cols-2 gap-2">
+      {% for agent in agents %}
+      <div class="flex items-center gap-2 text-sm py-1.5">
+        <span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+        <span class="font-mono text-slate-700">{{ agent }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- LTM content -->
+  <div class="bg-white rounded-xl shadow p-5">
+    <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">
+      LTM Content <span class="text-xs font-normal text-slate-400">(key: ltm:committee)</span>
+    </h2>
+    {% if ltm %}
+    <pre class="text-xs text-slate-600 bg-slate-50 rounded-lg p-4 whitespace-pre-wrap font-mono leading-relaxed max-h-48 overflow-y-auto">{{ ltm }}</pre>
+    {% else %}
+    <p class="text-sm text-slate-400">Empty — will populate after the first full committee run completes.</p>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
