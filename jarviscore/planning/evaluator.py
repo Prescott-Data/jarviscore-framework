@@ -160,17 +160,29 @@ class StepEvaluator:
         # ── LLM evaluation for "success" outputs ──────────────────────────────
         prompt = self._build_prompt(step, output, goal_execution)
 
+        # Evaluator is a fast 4-way classification task (pass/partial/fail/hitl).
+        # Route to the nano/fast tier — cheaper, lower latency, no quality loss.
+        # nano_model reads from TASK_MODEL_NANO config; falls back to the
+        # default deployment if not set. Any model works here — it is
+        # the developer's choice via env var, not hardcoded in the framework.
+        eval_model = getattr(self.llm, "nano_model", None)
+
+        call_kwargs: dict = {
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"},
+        }
+        if eval_model:
+            call_kwargs["model"] = eval_model
+
         try:
-            response = await self.llm.generate(
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-            )
+            response = await self.llm.generate(**call_kwargs)
         except TypeError:
             # LLM client does not support response_format kwarg
+            fallback_kwargs: dict = {"messages": [{"role": "user", "content": prompt}]}
+            if eval_model:
+                fallback_kwargs["model"] = eval_model
             try:
-                response = await self.llm.generate(
-                    messages=[{"role": "user", "content": prompt}],
-                )
+                response = await self.llm.generate(**fallback_kwargs)
             except Exception as exc:
                 raise EvaluatorError(
                     f"Evaluator LLM call failed: {exc}"

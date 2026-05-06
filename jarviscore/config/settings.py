@@ -200,6 +200,14 @@ class Settings(BaseSettings):
     browser_enabled: bool = False
     browser_headless: bool = True
     browser_default_viewport: str = "1280x720"
+    # Model for BrowserSubAgent. Must be a CUA (Computer Use Agent) model or
+    # at minimum a multimodal model capable of processing screenshots.
+    # Recommended:
+    #   Gemini:     gemini-2.5-computer-use  (native CUA, built on Gemini 2.5 Pro)
+    #   OpenAI:     gpt-5.4-mini             (native CUA, computer-use capable)
+    #   Fallback:   any multimodal model (gpt-4o, gemini-2.5-flash) — vision required
+    # Falls back to task_model_standard when not set (which may not be CUA-capable).
+    browser_model: Optional[str] = None  # BROWSER_MODEL
 
     # === Search Providers ===
     # Gemini Grounded Search (primary): set GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT

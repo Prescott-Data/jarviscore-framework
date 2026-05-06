@@ -206,6 +206,38 @@ class UnifiedLLMClient:
                 "  - claude_api_key for Claude"
             )
 
+    # ── Model tier helpers — used by Planner, Evaluator, and ContextManager ──
+
+    @property
+    def nano_model(self) -> Optional[str]:
+        """Fast/cheap model for classification and summarization tasks.
+
+        Used by: StepEvaluator, auto_summarize_if_needed.
+        Maps to TASK_MODEL_NANO env var (e.g. gpt-5.4-nano).
+        Falls back to AZURE_DEPLOYMENT if nano not configured.
+        """
+        return (
+            self.config.get("task_model_nano")
+            or self.config.get("azure_deployment")
+            or None
+        )
+
+    @property
+    def planner_model(self) -> Optional[str]:
+        """Model for goal planning — requires deep multi-step reasoning.
+
+        Used by: Planner._call_llm().
+        Prefers TASK_MODEL_HEAVY, falls back to TASK_MODEL_STANDARD.
+        Maps to gpt-5.2-chat in the Sky Team configuration.
+        """
+        return (
+            self.config.get("task_model_heavy")
+            or self.config.get("task_model_standard")
+            or self.config.get("task_model")
+            or self.config.get("azure_deployment")
+            or None
+        )
+
     async def generate(
         self,
         prompt: Optional[str] = None,
@@ -223,6 +255,9 @@ class UnifiedLLMClient:
             temperature: Sampling temperature (0-1)
             max_tokens: Maximum tokens to generate
             **kwargs: Additional provider-specific options
+                model: Override deployment name (used by kernel tier routing)
+                response_format: e.g. {"type": "json_object"} (forwarded to Azure)
+                max_completion_tokens: Alias for max_tokens (gpt-5.x naming)
 
         Returns:
             {
@@ -233,6 +268,11 @@ class UnifiedLLMClient:
                 "model": "gpt-4o"
             }
         """
+        # Accept max_completion_tokens as an alias (gpt-5.x SDK naming convention)
+        # Callers from the integration agent pattern may pass this explicitly.
+        if "max_completion_tokens" in kwargs:
+            max_tokens = kwargs.pop("max_completion_tokens")
+
         # Convert prompt to messages if needed
         if not messages:
             messages = [{"role": "user", "content": prompt}]
@@ -436,6 +476,13 @@ class UnifiedLLMClient:
         # Allow model kwarg to override deployment (for kernel model routing)
         deployment = kwargs.pop('model', None) or self.config.get('azure_deployment', 'gpt-4o')
 
+        # Extract response_format before building call_kwargs
+        # Previously this was silently dropped — now forwarded to the API
+        # enabling real JSON mode enforcement for Planner and Evaluator calls.
+        response_format = kwargs.pop('response_format', None)
+
+        logger.debug("_call_azure: deployment=%s, response_format=%s", deployment, response_format)
+
         # Try up to 2 passes: raw messages first, sanitized on content filter hit
         attempts = [
             ("raw", messages),
@@ -455,6 +502,9 @@ class UnifiedLLMClient:
             }
             if not deployment.startswith("gpt-5"):
                 call_kwargs["temperature"] = temperature
+            # Forward response_format when specified (JSON mode, structured output)
+            if response_format is not None:
+                call_kwargs["response_format"] = response_format
 
             try:
                 response = await self.azure_client.chat.completions.create(**call_kwargs)

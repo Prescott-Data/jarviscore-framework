@@ -110,10 +110,11 @@ class Kernel:
         """Resolve model name from tier using config.
 
         For the coding tier, returns coding_model.
+        For the browser tier, returns browser_model (should be a CUA or multimodal model).
         For the task tier, respects an optional complexity hint:
-          - "nano"     → task_model_nano     (fast/cheap)
-          - "standard" → task_model_standard (general, default)
-          - "heavy"    → task_model_heavy    (deep reasoning)
+          - "nano"     -> task_model_nano     (fast/cheap)
+          - "standard" -> task_model_standard (general, default)
+          - "heavy"    -> task_model_heavy    (deep reasoning)
         Falls back to task_model / coding_model if tier-specific setting unset.
         Legacy claude-specific settings are checked last for backward compat.
         """
@@ -123,8 +124,18 @@ class Kernel:
                 or self.config.get("claude_coding_model")
                 or None
             )
+        elif tier == "browser":
+            # Prefer an explicit CUA/multimodal model; fall back to standard task model.
+            # If browser_model is not set, the sub-agent still runs but vision-based
+            # screenshot reasoning may be degraded on non-multimodal models.
+            return (
+                self.config.get("browser_model")
+                or self.config.get("task_model_standard")
+                or self.config.get("task_model")
+                or None
+            )
         elif tier == "task":
-            # Multi-tier resolution: complexity hint → specific setting → base task_model
+            # Multi-tier resolution: complexity hint -> specific setting -> base task_model
             if complexity == "nano":
                 resolved = self.config.get("task_model_nano")
                 if resolved:
@@ -145,6 +156,7 @@ class Kernel:
                 or None
             )
         return None
+
 
     def _classify_task(self, task: str, context: Optional[Dict] = None) -> str:
         """
@@ -460,9 +472,16 @@ class Kernel:
                 workflow_id=workflow_id,
                 redis_store=self.redis_store,
             )
+            # Resolve complexity: explicit context override wins; lease profile
+            # provides the role-level default (e.g. communicator→nano, researcher→standard).
+            # Developers can always override per-goal via context["complexity"].
+            complexity = (
+                (context.get("complexity") if context else None)
+                or getattr(lease, "complexity", None)
+            )
             model = self._get_model_for_tier(
                 lease.model_tier,
-                complexity=context.get("complexity") if context else None,
+                complexity=complexity,
             )
 
             # Calculate max turns from lease

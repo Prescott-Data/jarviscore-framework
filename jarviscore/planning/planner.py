@@ -271,17 +271,30 @@ class Planner:
         return self._parse_plan(content, goal)
 
     async def _call_llm(self, prompt: str) -> str:
-        """Call the LLM. Try JSON mode first, fall back if not supported."""
+        """Call the LLM. Try JSON mode first, fall back if not supported.
+
+        Model tier: planner requires deep multi-step reasoning — uses
+        TASK_MODEL_HEAVY → TASK_MODEL_STANDARD from config (planner_model
+        property on the LLM client). Falls back to AZURE_DEPLOYMENT if
+        neither is configured.
+        """
         messages = [{"role": "user", "content": prompt}]
+
+        # Resolve planner model explicitly — never rely on AZURE_DEPLOYMENT default
+        call_kwargs: dict = {"messages": messages, "response_format": {"type": "json_object"}}
+        planner_model = getattr(self.llm, "planner_model", None)
+        if planner_model:
+            call_kwargs["model"] = planner_model
+
         try:
-            response = await self.llm.generate(
-                messages=messages,
-                response_format={"type": "json_object"},
-            )
+            response = await self.llm.generate(**call_kwargs)
         except TypeError:
             # LLM client does not support response_format kwarg
+            fallback_kwargs: dict = {"messages": messages}
+            if planner_model:
+                fallback_kwargs["model"] = planner_model
             try:
-                response = await self.llm.generate(messages=messages)
+                response = await self.llm.generate(**fallback_kwargs)
             except Exception as exc:
                 raise PlannerError(f"Planner LLM call failed: {exc}") from exc
         except Exception as exc:
