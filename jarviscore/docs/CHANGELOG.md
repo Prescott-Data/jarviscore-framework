@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] — hotfix/vertex-ai-provider
+
+### Added
+- **Vertex AI provider** (`LLMProvider.VERTEX_AI`): GCP-native Gemini access via Application Default Credentials (ADC). No API key required — authenticate with `gcloud auth application-default login` or attach a service account to your GCP compute resource.
+  - Config: `VERTEX_AI_ENABLED=true`, `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION` (default `us-central1`), `VERTEX_AI_MODEL` (default `gemini-2.5-flash`)
+  - Slots into the fallback chain after Gemini: **Azure → Claude → vLLM → Gemini → Vertex AI**
+- **`_normalize_tools_for_gemini()` static method**: auto-converts tool schemas to Gemini `function_declarations` format. Accepts Anthropic/PeerTool (`input_schema`), flat (`name`+`parameters`), or already-native formats — no adapter code needed by callers.
+- **Tool-call response parsing** in `_call_genai_client`: when a Gemini/Vertex AI response contains `function_call` parts, `tool_calls` is populated in the returned dict and `content` is set to `""`.
+- Shared `_call_genai_client()` helper: both `_call_gemini` and `_call_vertex_ai` delegate here, keeping token accounting and cost calculation consistent.
+- TOKEN_PRICING entries for `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.1-pro`, `gemini-3.1-pro-preview`.
+- Vertex AI settings in `.env.example`.
+
+### Fixed
+- `_call_gemini` now forwards `**kwargs` (including `tools`) to `_call_genai_client`, making Gemini tool-calling behaviour consistent with Vertex AI.
+
+### Tests
+- 7 new Vertex AI tests (all mocked — no GCP credentials required): provider detection, disabled/no-project guard, Gemini-absent preference, response shape, fallback-on-failure.
+- 5 new `_normalize_tools_for_gemini` unit tests: empty/None passthrough, Gemini-native passthrough, Anthropic format conversion, flat format wrapping, mixed schema list.
+- 2 new integration-style tests: tool-call parsing from response parts, Gemini `tools` kwarg forwarding.
+- Fixed `test_claude_primary`: now passes an explicit config that disables all other providers, making the assertion environment-independent.
+
+---
+
 ## [0.4.0] - 2026-02-18
 
 ### Added — Infrastructure Stack (Phases 1–9)

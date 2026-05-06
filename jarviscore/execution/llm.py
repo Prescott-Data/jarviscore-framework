@@ -58,7 +58,6 @@ TOKEN_PRICING = {
     "gemini-1.5-pro": {"input": 1.25, "output": 5.00, "cached": 0.31},
     "gemini-1.5-flash": {"input": 0.10, "output": 0.30, "cached": 0.03},
     # Vertex AI (same models, same pricing — accessed via ADC instead of API key)
-    # Vertex AI (same models, same pricing — accessed via ADC instead of API key)
     "gemini-2.5-flash": {"input": 0.15, "output": 0.60, "cached": 0.04},
     "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "cached": 0.31},
     "gemini-3.1-pro": {"input": 1.25, "output": 10.00, "cached": 0.31},
@@ -484,6 +483,7 @@ class UnifiedLLMClient:
             max_tokens=max_tokens,
             provider_label="gemini",
             default_pricing={"input": 0.10, "output": 0.30},
+            **kwargs,
         )
 
     async def _call_vertex_ai(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
