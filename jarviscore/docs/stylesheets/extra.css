@@ -2158,8 +2158,19 @@ body,
 
 /* ============================================================
    SIDEBAR SCROLL FIX
-   Gives both sidebars independent scrolling on long pages without
-   interfering with Material's layout or nav label positioning.
+   
+   Root cause: Material's sticky sidebar labels use
+   var(--md-default-bg-color) for background + box-shadow halo.
+   Our custom palette never defines that variable, so it resolves
+   transparent and items bleed through the sticky labels.
+   
+   Left sidebar (GUIDES):
+     Selector: .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav__link
+     This is a <label class="md-nav__link"> — NOT .md-nav__title
+   
+   Right sidebar (TABLE OF CONTENTS):
+     Selector: .md-nav--secondary .md-nav__title
+     This is a <label class="md-nav__title" for="__toc">
    ============================================================ */
 
 /* Both sidebars: independent scroll within the sticky column */
@@ -2169,44 +2180,25 @@ body,
   -webkit-overflow-scrolling: touch;
 }
 
-/* ── TOC (right) sidebar: sticky label occlusion.
-   Material sets position:sticky + background on .md-nav--secondary .md-nav__title
-   inside @media (min-width:60em), but uses var(--md-default-bg-color) which may
-   resolve transparent with custom palettes. Override with explicit colors and
-   Material's own box-shadow halo trick. ── */
-@media screen and (min-width: 60em) {
-  .md-nav--secondary .md-nav__title {
-    background: #ffffff !important;
-    box-shadow: 0 0 .4rem .4rem #ffffff !important;
-    position: sticky;
-    top: 0;
-    z-index: 11;
-  }
+/* ── Left sidebar: "GUIDES" / section label (the lifted variant).
+   Material makes the active item's .md-nav__link sticky inside --lifted. ── */
+.md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav__link {
+  background: #ffffff !important;
+  box-shadow: 0 0 .4rem .4rem #ffffff !important;
 }
 
-[data-md-color-scheme="slate"] .md-nav--secondary .md-nav__title {
+[data-md-color-scheme="slate"] .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav__link {
   background: #161618 !important;
   box-shadow: 0 0 .4rem .4rem #161618 !important;
 }
 
-/* ── Left sidebar: sticky label occlusion.
-   Material sets position:sticky + background on .md-nav--primary .md-nav__title
-   inside @media (min-width:76.25em). Same override pattern. ── */
-@media screen and (min-width: 76.25em) {
-  .md-nav--primary .md-nav__title {
-    background: #ffffff !important;
-    box-shadow: 0 0 .4rem .4rem #ffffff !important;
-    position: sticky;
-    top: 0;
-    z-index: 11;
-  }
-  
-  .md-nav--primary .md-nav__title[for="__drawer"] {
-    display: none;
-  }
+/* ── Right sidebar: "TABLE OF CONTENTS" label. ── */
+.md-nav--secondary .md-nav__title {
+  background: #ffffff !important;
+  box-shadow: 0 0 .4rem .4rem #ffffff !important;
 }
 
-[data-md-color-scheme="slate"] .md-nav--primary .md-nav__title {
+[data-md-color-scheme="slate"] .md-nav--secondary .md-nav__title {
   background: #161618 !important;
   box-shadow: 0 0 .4rem .4rem #161618 !important;
 }
