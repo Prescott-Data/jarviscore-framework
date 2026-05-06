@@ -1,6 +1,6 @@
 """
 Unified LLM Client - All providers in one file with zero-config setup
-Supports: vLLM, Azure OpenAI, Gemini, Claude with automatic fallback
+Supports: vLLM, Azure OpenAI, Gemini, Vertex AI, Claude with automatic fallback
 """
 import asyncio
 import aiohttp
@@ -39,6 +39,7 @@ class LLMProvider(Enum):
     VLLM = "vllm"
     AZURE = "azure"
     GEMINI = "gemini"
+    VERTEX_AI = "vertex_ai"
     CLAUDE = "claude"
 
 
@@ -56,6 +57,11 @@ TOKEN_PRICING = {
     "gemini-2.0-flash": {"input": 0.10, "output": 0.40, "cached": 0.03},
     "gemini-1.5-pro": {"input": 1.25, "output": 5.00, "cached": 0.31},
     "gemini-1.5-flash": {"input": 0.10, "output": 0.30, "cached": 0.03},
+    # Vertex AI (same models, same pricing — accessed via ADC instead of API key)
+    "gemini-2.5-flash": {"input": 0.15, "output": 0.60, "cached": 0.04},
+    "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "cached": 0.31},
+    "gemini-3.1-pro": {"input": 1.25, "output": 10.00, "cached": 0.31},
+    "gemini-3.1-pro-preview": {"input": 1.25, "output": 10.00, "cached": 0.31},
     # Anthropic Claude models
     "claude-opus-4": {"input": 15.00, "output": 75.00, "cached": 3.75},
     "claude-sonnet-4": {"input": 3.00, "output": 15.00, "cached": 0.75},
@@ -98,6 +104,7 @@ class UnifiedLLMClient:
         self.vllm_endpoint = None
         self.azure_client = None
         self.gemini_client = None
+        self.vertex_ai_client = None
         self.claude_client = None
 
         # Provider order (tries in this sequence)
@@ -155,7 +162,7 @@ class UnifiedLLMClient:
             self.provider_order.append(LLMProvider.VLLM)
             logger.info(f"✓ vLLM provider available: {self.vllm_endpoint}")
 
-        # 4. Try Gemini
+        # 4. Try Gemini (API key auth)
         if GEMINI_AVAILABLE:
             gemini_key = self.config.get('gemini_api_key')
             if gemini_key:
@@ -167,12 +174,30 @@ class UnifiedLLMClient:
                 except Exception as e:
                     logger.warning(f"Failed to setup Gemini: {e}")
 
+        # 5. Try Vertex AI (GCP-native, uses Application Default Credentials)
+        if GEMINI_AVAILABLE:
+            vertex_enabled = self.config.get('vertex_ai_enabled', False)
+            vertex_project = self.config.get('vertex_ai_project')
+            if vertex_enabled and vertex_project:
+                try:
+                    self.vertex_ai_client = genai.Client(
+                        vertexai=True,
+                        project=vertex_project,
+                        location=self.config.get('vertex_ai_location', 'us-central1'),
+                    )
+                    self.vertex_ai_model = self.config.get('vertex_ai_model', 'gemini-2.5-flash')
+                    self.provider_order.append(LLMProvider.VERTEX_AI)
+                    logger.info(f"✓ Vertex AI provider available: {self.vertex_ai_model} (project: {vertex_project})")
+                except Exception as e:
+                    logger.warning(f"Failed to setup Vertex AI: {e}")
+
         if not self.provider_order:
             logger.warning(
                 "⚠️  No LLM providers configured! Set at least one:\n"
                 "  - llm_endpoint for vLLM\n"
                 "  - azure_api_key + azure_endpoint for Azure\n"
                 "  - gemini_api_key for Gemini\n"
+                "  - vertex_ai_enabled + vertex_ai_project for Vertex AI\n"
                 "  - claude_api_key for Claude"
             )
 
@@ -197,7 +222,7 @@ class UnifiedLLMClient:
         Returns:
             {
                 "content": "generated text",
-                "provider": "vllm|azure|gemini|claude",
+                "provider": "vllm|azure|gemini|vertex_ai|claude",
                 "tokens": {"input": 100, "output": 200, "total": 300},
                 "cost_usd": 0.015,
                 "model": "gpt-4o"
@@ -219,6 +244,8 @@ class UnifiedLLMClient:
                     return await self._call_azure(messages, temperature, max_tokens, **kwargs)
                 elif provider == LLMProvider.GEMINI:
                     return await self._call_gemini(messages, temperature, max_tokens, **kwargs)
+                elif provider == LLMProvider.VERTEX_AI:
+                    return await self._call_vertex_ai(messages, temperature, max_tokens, **kwargs)
                 elif provider == LLMProvider.CLAUDE:
                     return await self._call_claude(messages, temperature, max_tokens, **kwargs)
 
@@ -316,28 +343,105 @@ class UnifiedLLMClient:
             "duration_seconds": duration
         }
 
-    async def _call_gemini(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
-        """Call Google Gemini using the new google.genai SDK."""
-        if not self.gemini_client:
-            raise RuntimeError("Gemini client not initialized")
+    @staticmethod
+    def _normalize_tools_for_gemini(tools) -> list:
+        """Auto-detect and convert tool schemas to Gemini function_declarations format.
 
-        # Convert messages to Gemini format
-        prompt = self._messages_to_prompt(messages)
+        Accepts three input shapes:
+        1. Already Gemini-native (list of dicts with 'function_declarations' key) → pass through.
+        2. Anthropic / JarvisCore PeerTool style (list of dicts with 'input_schema' key)
+           → rename 'input_schema' to 'parameters' and wrap in function_declarations.
+        3. Flat list of dicts with 'name'+'parameters' already → wrap in function_declarations.
 
+        This eliminates the need for consumers to write format adapters.
+        """
+        if not tools:
+            return tools
+
+        # Case 1: Already wrapped in function_declarations (Gemini-native)
+        if isinstance(tools, list) and tools and isinstance(tools[0], dict):
+            if "function_declarations" in tools[0]:
+                return tools
+
+        # Unwrap if nested
+        raw_schemas = tools if isinstance(tools, list) else [tools]
+
+        converted = []
+        for schema in raw_schemas:
+            if not isinstance(schema, dict):
+                continue
+            # Case 2: Anthropic / PeerTool format (has 'input_schema')
+            if "input_schema" in schema:
+                converted.append({
+                    "name": schema.get("name"),
+                    "description": schema.get("description", ""),
+                    "parameters": schema["input_schema"],
+                })
+            else:
+                # Case 3: Already has 'name' + 'parameters' (or unknown) → pass as-is
+                converted.append(schema)
+
+        return [{"function_declarations": converted}] if converted else tools
+
+    async def _call_genai_client(
+        self,
+        client,
+        model_name: str,
+        prompt: str,
+        temperature: float,
+        max_tokens: int,
+        provider_label: str,
+        default_pricing: Dict,
+        **kwargs,
+    ) -> Dict:
+        """
+        Shared helper for google.genai generate_content calls (Gemini and Vertex AI).
+
+        Handles the request, usage extraction, token estimation fallback, and cost
+        calculation so both paths stay consistent.
+
+        Args:
+            client: A ``genai.Client`` instance (standard or Vertex AI).
+            model_name: Model identifier string (e.g. ``"gemini-2.5-flash"``).
+            prompt: Plain-text prompt to send.
+            temperature: Sampling temperature (0–1).
+            max_tokens: Maximum tokens to generate.
+            provider_label: Value for the ``"provider"`` key in the returned dict.
+            default_pricing: Fallback pricing dict used when *model_name* is not
+                found in ``TOKEN_PRICING``.  Must contain ``"input"`` and
+                ``"output"`` keys (cost per 1M tokens).
+            **kwargs: Additional arguments forwarded to generate_content
+                (e.g. ``tools`` for function-calling support).
+        """
         start_time = time.time()
 
-        # Use the new async API via client.aio.models
-        response = await self.gemini_client.aio.models.generate_content(
-            model=self.gemini_model,
-            contents=prompt,
-            config={
+        # Build generate_content kwargs, forwarding tools if provided
+        gen_kwargs = {
+            "model": model_name,
+            "contents": prompt,
+            "config": {
                 "temperature": temperature,
-                "max_output_tokens": max_tokens
-            }
-        )
+                "max_output_tokens": max_tokens,
+            },
+        }
+        tools = kwargs.get('tools', None)
+        if tools:
+            gen_kwargs["config"]["tools"] = self._normalize_tools_for_gemini(tools)
+
+        response = await client.aio.models.generate_content(**gen_kwargs)
         duration = time.time() - start_time
 
-        content = response.text
+        # Check if the model responded with tool calls instead of text
+        tool_calls = []
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    tool_calls.append({
+                        "name": part.function_call.name,
+                        "args": dict(part.function_call.args) if part.function_call.args else {}
+                    })
+
+        content = response.text if not tool_calls else ""
 
         # Get usage metadata if available, otherwise estimate
         usage_metadata = getattr(response, 'usage_metadata', None)
@@ -345,26 +449,59 @@ class UnifiedLLMClient:
             input_tokens = getattr(usage_metadata, 'prompt_token_count', 0)
             output_tokens = getattr(usage_metadata, 'candidates_token_count', 0)
         else:
-            # Estimate tokens (fallback)
             input_tokens = int(len(prompt.split()) * 1.3)
-            output_tokens = int(len(content.split()) * 1.3)
+            output_tokens = int(len(content.split()) * 1.3) if content else 0
 
-        model_name = self.gemini_model
-        pricing = TOKEN_PRICING.get(model_name, {"input": 0.10, "output": 0.30})
+        pricing = TOKEN_PRICING.get(model_name, default_pricing)
         cost = (input_tokens * pricing['input'] + output_tokens * pricing['output']) / 1_000_000
 
         return {
             "content": content,
-            "provider": "gemini",
+            "provider": provider_label,
+            "tool_calls": tool_calls,
             "tokens": {
                 "input": int(input_tokens),
                 "output": int(output_tokens),
-                "total": int(input_tokens + output_tokens)
+                "total": int(input_tokens + output_tokens),
             },
             "cost_usd": cost,
             "model": model_name,
-            "duration_seconds": duration
+            "duration_seconds": duration,
         }
+
+    async def _call_gemini(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
+        """Call Google Gemini using the new google.genai SDK."""
+        if not self.gemini_client:
+            raise RuntimeError("Gemini client not initialized")
+
+        prompt = self._messages_to_prompt(messages)
+        return await self._call_genai_client(
+            client=self.gemini_client,
+            model_name=self.gemini_model,
+            prompt=prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            provider_label="gemini",
+            default_pricing={"input": 0.10, "output": 0.30},
+            **kwargs,
+        )
+
+    async def _call_vertex_ai(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
+        """Call Gemini via Vertex AI using Application Default Credentials."""
+        if not self.vertex_ai_client:
+            raise RuntimeError("Vertex AI client not initialized")
+
+        prompt = self._messages_to_prompt(messages)
+        return await self._call_genai_client(
+            client=self.vertex_ai_client,
+            model_name=self.vertex_ai_model,
+            prompt=prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            provider_label="vertex_ai",
+            default_pricing={"input": 0.15, "output": 0.60},
+            **kwargs,
+        )
 
     async def _call_claude(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
         """Call Anthropic Claude."""

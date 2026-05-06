@@ -113,7 +113,7 @@ JARVISCORE_CLAUDE_API_KEY=...
 ## LLM Configuration
 
 Configure language model providers. The framework tries them in order:
-**Claude → vLLM → Azure → Gemini**
+**Azure → Claude → vLLM → Gemini → Vertex AI**
 
 ### Anthropic Claude (Recommended)
 
@@ -175,6 +175,19 @@ GEMINI_TIMEOUT=30.0
 
 **Get API Key:** https://ai.google.dev/
 
+### Vertex AI (GCP-native Gemini)
+
+Accesses Gemini via Application Default Credentials — no API key needed. Preferred on GCP infrastructure (Cloud Run, GKE, Compute Engine).
+
+```bash
+VERTEX_AI_ENABLED=true
+VERTEX_AI_PROJECT=your-gcp-project-id
+VERTEX_AI_LOCATION=us-central1          # optional, default: us-central1
+VERTEX_AI_MODEL=gemini-2.5-flash        # optional, default: gemini-2.5-flash
+```
+
+**Authentication:** Run `gcloud auth application-default login` locally, or attach a service account to your GCP compute resource.
+
 ### Common LLM Settings
 
 ```bash
@@ -187,12 +200,13 @@ LLM_TEMPERATURE=0.7
 
 ### Provider Selection
 
-The framework automatically selects providers:
+The framework automatically selects providers in this order:
 
-1. **Tries Claude first** (if CLAUDE_API_KEY set)
-2. **Falls back to vLLM** (if LLM_ENDPOINT set)
-3. **Falls back to Azure** (if AZURE_API_KEY set)
-4. **Falls back to Gemini** (if GEMINI_API_KEY set)
+1. **Azure OpenAI** (if `AZURE_API_KEY` + `AZURE_ENDPOINT` set)
+2. **Claude** (if `CLAUDE_API_KEY` set)
+3. **vLLM** (if `LLM_ENDPOINT` set)
+4. **Gemini** (if `GEMINI_API_KEY` set)
+5. **Vertex AI** (if `VERTEX_AI_ENABLED=true` + `VERTEX_AI_PROJECT` set)
 
 You only need to configure ONE provider.
 
@@ -780,6 +794,10 @@ LOG_DIRECTORY=/tmp/jarviscore-logs
 | `AZURE_API_VERSION` | 2024-02-15-preview | Azure API version |
 | `GEMINI_API_KEY` | None | Google Gemini key |
 | `GEMINI_MODEL` | gemini-2.0-flash | Gemini model |
+| `VERTEX_AI_ENABLED` | false | Enable Vertex AI provider |
+| `VERTEX_AI_PROJECT` | None | GCP project ID |
+| `VERTEX_AI_LOCATION` | us-central1 | GCP region |
+| `VERTEX_AI_MODEL` | gemini-2.5-flash | Vertex AI model |
 | `LLM_TIMEOUT` | 120.0 | LLM timeout (seconds) |
 | `LLM_TEMPERATURE` | 0.7 | Sampling temperature |
 | `SANDBOX_MODE` | local | Execution mode |
