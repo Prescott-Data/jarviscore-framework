@@ -165,7 +165,7 @@ def _print_results(results, mode: str, steps: list):
 async def run_committee(ticker: str, amount: float, mode: str = "full"):
     portfolio = load_portfolio()
 
-    mesh = Mesh(mode="autonomous", config={"redis_url": REDIS_URL})
+    mesh = Mesh(config={"redis_url": REDIS_URL})
     for AgentClass in [
         MarketAnalystAgent,
         FinancialAnalystAgent,

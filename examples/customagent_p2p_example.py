@@ -548,8 +548,8 @@ async def main():
 
     # Create mesh
     mesh = Mesh(
-        mode="p2p",
         config={
+            'p2p_enabled': True,
             'bind_host': '127.0.0.1',
             'bind_port': 7960,
             'node_name': 'p2p-demo-node',

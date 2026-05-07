@@ -3,15 +3,15 @@ Example 3 — Real-Time Customer Support Swarm
 =============================================
 Profile  : CustomAgent
 Mode     : P2P (SWIM discovery + ZMQ messaging, no workflow engine)
-Auth     : Production mode — tests the REAL Nexus OSS protocol end-to-end
+Auth     : Nexus OSS gateway — tests the REAL NexusClient protocol end-to-end
 
 What this example proves
 ------------------------
 This is the primary test of the deployed Dromos / Nexus OSS gateway. Running it
 exercises the full NexusClient protocol stack:
 
-  1. NexusClient.request_connection(provider, user_id, scopes)
-     → POST /v1/request-connection  →  (connection_id, auth_url)
+  1. NexusClient.request_connection(provider, user_id, scopes, return_url)
+     → POST /v1/request-connection  →  (connection_id, authUrl)
 
   2. CLIFlowHandler.present_auth_url(auth_url, provider)
      → Opens browser (or prints URL) so user can complete OAuth consent
@@ -36,7 +36,6 @@ Prerequisites
     # Set in .env (or export before running):
     NEXUS_GATEWAY_URL=https://your-dromos-gateway.example.com
     REDIS_URL=redis://localhost:6379/0
-    CLAUDE_API_KEY=sk-ant-...          # only needed if using LLM responses
 
     docker compose -f docker-compose.infra.yml up -d   # Redis
     pip install -e ".[redis,prometheus]"
@@ -53,7 +52,8 @@ Infrastructure features exercised
 ----------------------------------
 P2P mesh        : SWIM discovery — all 4 agents discover each other
 Mailbox         : GatewayAgent routes queries via mailbox.send()
-Nexus OSS auth  : AuthenticationManager(mode="production") injected into TechnicalAgent;
+Nexus OSS auth  : AuthenticationManager injected into TechnicalAgent when
+                  NEXUS_GATEWAY_URL is set (auth_mode="production" in config);
                   full NexusClient request_connection → poll → resolve flow tested
 Unified memory  : UnifiedMemory per agent; EpisodicLedger records every interaction
 Auto-injection  : redis + blob + mailbox injected before each agent's setup()
@@ -157,7 +157,7 @@ class TechnicalAgent(CustomAgent):
                 auth_note = f"[Nexus auth failed: {exc}]"
                 print(f"  [TechnicalAgent] {auth_note}")
         else:
-            auth_note = "[no auth manager — development mode]"
+            auth_note = "[no auth manager — NEXUS_GATEWAY_URL not set]"
 
         resolution = (
             f"Technical support response for: '{query}'\n"

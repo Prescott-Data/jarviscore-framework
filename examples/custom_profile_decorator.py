@@ -76,7 +76,7 @@ async def main():
     print("=" * 60)
 
     # Create mesh in autonomous mode
-    mesh = Mesh(mode="autonomous")
+    mesh = Mesh()
 
     # Add our decorated agents
     mesh.add(DataProcessor)

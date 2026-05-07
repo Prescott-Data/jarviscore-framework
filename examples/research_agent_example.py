@@ -41,7 +41,7 @@ async def main():
 
     # Zero-config: Reads from .env automatically
     # Framework auto-detects: Claude → Azure → Gemini → vLLM
-    mesh = Mesh(mode="autonomous")
+    mesh = Mesh()
     mesh.add(ResearchAgent)
 
     try:

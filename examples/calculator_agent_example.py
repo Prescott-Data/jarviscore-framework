@@ -40,7 +40,7 @@ async def main():
     # Or pass custom config dict to override
 
     # Create mesh and add agent (reads from .env automatically)
-    mesh = Mesh(mode="autonomous")
+    mesh = Mesh()
     mesh.add(CalculatorAgent)
 
     try:

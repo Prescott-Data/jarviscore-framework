@@ -329,7 +329,7 @@ async def main():
     print("=" * 60)
 
     # Create mesh with both agents
-    mesh = Mesh(mode="p2p", config={"bind_port": 7960})
+    mesh = Mesh(config={"p2p_enabled": True, "bind_port": 7960})
 
     analyst = mesh.add(AnalystAgent())
     coordinator = mesh.add(CoordinatorAgent())

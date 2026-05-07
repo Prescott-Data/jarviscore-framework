@@ -112,15 +112,15 @@ async def main():
         }
     ])
 
-    for step_id, output in results.items():
+    for output in results:
         if output.get("status") == "success":
-            print(f"\n✓ Result:\n{output.get('payload', 'No payload')}")
+            print(f"\n✓ Result:\n{output.get('payload', output.get('output', 'No output'))}")
             meta = output.get("metadata", {})
             tokens = meta.get("tokens", {})
             if tokens.get("total"):
                 print(f"\n  Tokens used: {tokens['total']:,}")
         else:
-            print(f"\n✗ Task failed: {output.get('summary', 'Unknown error')}")
+            print(f"\n✗ Task failed: {output.get('summary', output.get('error', 'Unknown error'))}")
 
     # ── Task 2: Math calculation (coder subagent, heavy complexity) ──
     print("\n" + "─" * 60)
@@ -136,11 +136,11 @@ async def main():
         }
     ])
 
-    for step_id, output in results2.items():
+    for output in results2:
         if output.get("status") == "success":
-            print(f"\n✓ Result: {output.get('payload', 'No payload')}")
+            print(f"\n✓ Result: {output.get('payload', output.get('output', 'No output'))}")
         else:
-            print(f"\n✗ Task failed: {output.get('summary', 'Unknown error')}")
+            print(f"\n✗ Task failed: {output.get('summary', output.get('error', 'Unknown error'))}")
 
     # ── Clean up ──
     await mesh.stop()

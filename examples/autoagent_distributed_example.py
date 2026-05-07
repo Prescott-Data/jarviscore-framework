@@ -76,8 +76,9 @@ async def main():
     # KEY DIFFERENCE: mode="distributed" with P2P configuration
     # ─────────────────────────────────────────────────────────────────────────
     mesh = Mesh(
-        mode="distributed",  # Enables P2P + Workflow Engine
         config={
+            # P2P enabled via config — replaces deprecated mode="distributed"
+            'p2p_enabled': True,
             # P2P Network Configuration
             'bind_host': '127.0.0.1',    # Interface to bind to
             'bind_port': 7950,            # SWIM protocol port (ZMQ uses +1000)
@@ -171,7 +172,8 @@ async def multi_node_example():
     Example: Running agents across multiple machines.
 
     Node 1 (seed node):
-        mesh = Mesh(mode="distributed", config={
+        mesh = Mesh(config={
+            'p2p_enabled': True,
             'bind_host': '0.0.0.0',
             'bind_port': 7950,
             'node_name': 'node-1',
@@ -181,7 +183,8 @@ async def multi_node_example():
         await mesh.serve_forever()  # Keep running
 
     Node 2 (joins cluster):
-        mesh = Mesh(mode="distributed", config={
+        mesh = Mesh(config={
+            'p2p_enabled': True,
             'bind_host': '0.0.0.0',
             'bind_port': 7950,
             'node_name': 'node-2',
@@ -192,7 +195,8 @@ async def multi_node_example():
         await mesh.serve_forever()
 
     Node 3 (joins cluster):
-        mesh = Mesh(mode="distributed", config={
+        mesh = Mesh(config={
+            'p2p_enabled': True,
             'bind_host': '0.0.0.0',
             'bind_port': 7950,
             'node_name': 'node-3',

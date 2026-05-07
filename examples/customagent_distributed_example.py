@@ -242,8 +242,8 @@ async def main():
     # KEY: mode="distributed" gives you BOTH P2P AND workflow orchestration
     # ─────────────────────────────────────────────────────────────────────────
     mesh = Mesh(
-        mode="distributed",
         config={
+            'p2p_enabled': True,
             # P2P Network Configuration
             'bind_host': '127.0.0.1',
             'bind_port': 7965,
@@ -380,7 +380,7 @@ async def async_requests_demo():
     print("v0.3.2 Feature: Async Requests (ask_async)")
     print("="*70)
 
-    mesh = Mesh(mode="p2p", config={"bind_port": 7966})
+    mesh = Mesh(config={"p2p_enabled": True, "bind_port": 7966})
 
     # Add multiple agents
     mesh.add(ContentResearcherAgent)
@@ -439,7 +439,7 @@ async def load_balancing_demo():
     print("v0.3.2 Feature: Load Balancing Strategies")
     print("="*70)
 
-    mesh = Mesh(mode="p2p", config={"bind_port": 7967})
+    mesh = Mesh(config={"p2p_enabled": True, "bind_port": 7967})
 
     # Add agents
     mesh.add(ContentResearcherAgent)
