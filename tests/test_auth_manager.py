@@ -1,8 +1,8 @@
 """
-Tests for AuthenticationManager — Dual-mode auth resolution.
+Tests for AuthenticationManager — Nexus-gated credential manager.
 
-Tests dev mode (env vars), production mode (mocked NexusClient),
-strategy caching, resolve_auth_context, OAuth flow handlers, and cleanup.
+Tests authenticate (mocked NexusClient), strategy caching,
+OAuth flow handlers, and cleanup.
 """
 
 import asyncio
@@ -19,58 +19,75 @@ from jarviscore.auth.oauth_flow import (
 from jarviscore.nexus.models import DynamicStrategy
 
 
-# ── Development Mode ──────────────────────────────────────────────
+def _make_manager_with_mock_nexus(**extra_config):
+    """Create an AuthenticationManager with a mocked NexusClient."""
+    manager = AuthenticationManager({
+        "nexus_gateway_url": "https://gateway.test.com",
+        **extra_config,
+    })
+    manager.nexus_client.request_connection = AsyncMock(
+        return_value=("conn_abc", "https://provider.com/auth")
+    )
+    manager.nexus_client.check_connection_status = AsyncMock(return_value="ACTIVE")
+    manager.lifecycle_monitor.monitor_connection = AsyncMock()
+    manager.flow_handler.present_auth_url = AsyncMock()
+    manager.flow_handler.wait_for_completion = AsyncMock(return_value="ACTIVE")
+    return manager
 
-class TestDevMode:
+
+# ── Authentication (no Nexus configured) ──────────────────────────
+
+class TestNoNexusConfigured:
+
+    def test_manager_created_without_nexus_client(self):
+        """AuthenticationManager can be created without gateway_url (no Nexus client)."""
+        manager = AuthenticationManager({})
+        assert manager.nexus_client is None
 
     @pytest.mark.asyncio
-    async def test_dev_mode_returns_connection_id(self):
-        manager = AuthenticationManager({"auth_mode": "development"})
+    async def test_authenticate_raises_when_no_nexus(self):
+        """authenticate() raises RuntimeError when NEXUS_GATEWAY_URL is not set."""
+        manager = AuthenticationManager({})
+        with pytest.raises(RuntimeError, match="NEXUS_GATEWAY_URL is not configured"):
+            await manager.authenticate("shopify")
+
+    @pytest.mark.asyncio
+    async def test_authenticate_returns_connection_id(self):
+        """authenticate() returns connection_id from NexusClient."""
+        manager = _make_manager_with_mock_nexus()
         conn_id = await manager.authenticate("shopify", user_id="u1")
-        assert conn_id == "dev_shopify_u1"
+        assert conn_id == "conn_abc"
+        await manager.close()
 
     @pytest.mark.asyncio
-    async def test_dev_mode_reads_env_token(self, monkeypatch):
-        monkeypatch.setenv("SHOPIFY_TOKEN", "shpat_test123")
-        manager = AuthenticationManager({"auth_mode": "development"})
-
-        conn_id = await manager.authenticate("shopify")
-        strategy = await manager.resolve_strategy(conn_id)
-
-        assert strategy.type == "api_key"
-        assert strategy.credentials["api_key"] == "shpat_test123"
-
-    @pytest.mark.asyncio
-    async def test_dev_mode_empty_token_when_not_set(self):
-        manager = AuthenticationManager({"auth_mode": "development"})
-        conn_id = await manager.authenticate("unknown_provider")
-        strategy = await manager.resolve_strategy(conn_id)
-        assert strategy.credentials["api_key"] == ""
-
-    @pytest.mark.asyncio
-    async def test_dev_mode_caches_connection(self):
-        manager = AuthenticationManager({"auth_mode": "development"})
+    async def test_authenticate_caches_connection(self):
+        """authenticate() returns cached connection_id on repeat calls."""
+        manager = _make_manager_with_mock_nexus()
         conn1 = await manager.authenticate("github")
         conn2 = await manager.authenticate("github")
-        assert conn1 == conn2  # Same connection returned
+        assert conn1 == conn2
+        # Only one request_connection call — second was cached
+        manager.nexus_client.request_connection.assert_called_once()
+        await manager.close()
 
     @pytest.mark.asyncio
-    async def test_dev_mode_default_user_id(self):
-        manager = AuthenticationManager({
-            "auth_mode": "development",
-            "nexus_default_user_id": "custom-agent",
-        })
-        conn_id = await manager.authenticate("slack")
-        assert "custom-agent" in conn_id
+    async def test_default_user_id_used(self):
+        """nexus_default_user_id is passed to request_connection."""
+        manager = _make_manager_with_mock_nexus(nexus_default_user_id="custom-agent")
+        await manager.authenticate("slack")
+        call_kwargs = manager.nexus_client.request_connection.call_args
+        assert call_kwargs.kwargs.get("user_id") or call_kwargs.args[1] == "custom-agent"
+        await manager.close()
 
 
 # ── Production Mode ───────────────────────────────────────────────
 
 class TestProdMode:
 
-    def test_prod_mode_requires_gateway_url(self):
-        with pytest.raises(ValueError, match="nexus_gateway_url is required"):
-            AuthenticationManager({"auth_mode": "production"})
+    def test_no_nexus_client_when_gateway_url_absent(self):
+        """Without gateway_url, nexus_client is None — no hard error at construction."""
+        manager = AuthenticationManager({"auth_mode": "production"})
+        assert manager.nexus_client is None
 
     @pytest.mark.asyncio
     async def test_prod_mode_calls_nexus(self):
@@ -115,7 +132,7 @@ class TestProdMode:
         manager.flow_handler.present_auth_url = AsyncMock()
         manager.flow_handler.wait_for_completion = AsyncMock(return_value="FAILED")
 
-        with pytest.raises(RuntimeError, match="OAuth flow for shopify did not complete"):
+        with pytest.raises(RuntimeError, match="Nexus auth flow for 'shopify' did not complete"):
             await manager.authenticate("shopify")
 
         await manager.close()
@@ -146,12 +163,14 @@ class TestProdMode:
 class TestStrategyCaching:
 
     @pytest.mark.asyncio
-    async def test_cache_hit(self, monkeypatch):
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp_test")
-        manager = AuthenticationManager({
-            "auth_mode": "development",
-            "auth_strategy_cache_ttl": 300,
-        })
+    async def test_cache_hit(self):
+        manager = _make_manager_with_mock_nexus(auth_strategy_cache_ttl=300)
+        mock_strategy = DynamicStrategy(
+            type="oauth2",
+            credentials={"access_token": "tok_cached"},
+            expires_at="2030-01-01T00:00:00Z",
+        )
+        manager.nexus_client.resolve_strategy = AsyncMock(return_value=mock_strategy)
 
         conn_id = await manager.authenticate("github")
         s1 = await manager.resolve_strategy(conn_id)
@@ -159,63 +178,68 @@ class TestStrategyCaching:
 
         # Both should return same strategy (from cache)
         assert s1.credentials == s2.credentials
+        # resolve_strategy on nexus_client called only once (second hit is cached)
+        manager.nexus_client.resolve_strategy.assert_called_once()
+        await manager.close()
 
     @pytest.mark.asyncio
     async def test_cache_miss_on_ttl_expiry(self):
-        manager = AuthenticationManager({
-            "auth_mode": "development",
-            "auth_strategy_cache_ttl": 0,  # Immediate expiry
-        })
+        manager = _make_manager_with_mock_nexus(auth_strategy_cache_ttl=0)
+        mock_strategy = DynamicStrategy(
+            type="api_key",
+            credentials={"api_key": "k1"},
+        )
+        manager.nexus_client.resolve_strategy = AsyncMock(return_value=mock_strategy)
 
         conn_id = await manager.authenticate("test_provider")
 
-        # First call populates cache
         s1 = await manager.resolve_strategy(conn_id)
-
-        # TTL=0 means next call should re-fetch
         s2 = await manager.resolve_strategy(conn_id)
 
-        # Both should still work (dev mode recreates from env)
+        # TTL=0 → both calls hit nexus
+        assert manager.nexus_client.resolve_strategy.call_count == 2
         assert s1.type == s2.type
+        await manager.close()
 
 
 # ── resolve_auth_context ──────────────────────────────────────────
 
-class TestResolveAuthContext:
+class TestResolveStrategy:
 
     @pytest.mark.asyncio
-    async def test_returns_none_without_registry(self):
-        manager = AuthenticationManager({"auth_mode": "development"})
-        result = await manager.resolve_auth_context("shopify", registry=None)
-        assert result is None
+    async def test_resolve_strategy_calls_nexus(self):
+        manager = _make_manager_with_mock_nexus()
+        mock_strategy = DynamicStrategy(
+            type="oauth2",
+            credentials={"access_token": "live_token"},
+            expires_at="2030-01-01T00:00:00Z",
+        )
+        manager.nexus_client.resolve_strategy = AsyncMock(return_value=mock_strategy)
+
+        strategy = await manager.resolve_strategy("conn_xyz")
+        assert strategy.type == "oauth2"
+        assert strategy.credentials["access_token"] == "live_token"
+        await manager.close()
 
     @pytest.mark.asyncio
-    async def test_returns_none_for_no_auth_system(self):
-        manager = AuthenticationManager({"auth_mode": "development"})
-
-        mock_registry = MagicMock()
-        mock_registry.get_system_auth_requirements.return_value = {}
-
-        result = await manager.resolve_auth_context("utils", registry=mock_registry)
-        assert result is None
+    async def test_resolve_strategy_raises_when_no_nexus(self):
+        """resolve_strategy raises AttributeError when nexus_client is None."""
+        manager = AuthenticationManager({})
+        with pytest.raises(AttributeError):
+            await manager.resolve_strategy("conn_xyz")
 
     @pytest.mark.asyncio
-    async def test_resolves_auth_context_for_system(self, monkeypatch):
-        monkeypatch.setenv("SHOPIFY_TOKEN", "shpat_live_abc")
-        manager = AuthenticationManager({"auth_mode": "development"})
+    async def test_resolve_strategy_populates_cache(self):
+        manager = _make_manager_with_mock_nexus()
+        mock_strategy = DynamicStrategy(
+            type="api_key",
+            credentials={"api_key": "key123"},
+        )
+        manager.nexus_client.resolve_strategy = AsyncMock(return_value=mock_strategy)
 
-        mock_registry = MagicMock()
-        mock_registry.get_system_auth_requirements.return_value = {
-            "provider": "shopify",
-            "scopes": ["read_products"],
-            "auth_type": "oauth2",
-        }
-
-        result = await manager.resolve_auth_context("shopify", registry=mock_registry)
-        assert result is not None
-        assert result["provider"] == "shopify"
-        assert result["strategy_type"] == "api_key"  # dev mode uses api_key
-        assert result["access_token"] == "shpat_live_abc"
+        await manager.resolve_strategy("conn_abc")
+        assert "conn_abc" in manager._strategy_cache
+        await manager.close()
 
 
 # ── CLIFlowHandler ───────────────────────────────────────────────
@@ -255,6 +279,7 @@ class TestCLIFlowHandler:
             check_status_fn=check_fn,
             timeout=5,
             poll_interval=0.01,
+            failed_grace_period=0,  # No grace period — FAILED is immediately terminal
         )
         assert status == "FAILED"
 
@@ -360,9 +385,9 @@ class TestLocalCallbackServer:
 class TestCleanup:
 
     @pytest.mark.asyncio
-    async def test_close_dev_mode(self):
-        """Close in dev mode is a no-op (no external clients)."""
-        manager = AuthenticationManager({"auth_mode": "development"})
+    async def test_close_without_nexus(self):
+        """close() is a no-op when no NexusClient is configured."""
+        manager = AuthenticationManager({})
         await manager.close()  # Should not raise
 
     @pytest.mark.asyncio

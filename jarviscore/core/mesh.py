@@ -15,7 +15,7 @@ Capabilities (auto-detected, always accurate after start()):
   "redis"             — RedisContextStore connected
   "blob"              — BlobStorage connected
   "auth"              — AuthenticationManager active
-  "nexus"             — NexusLocalStore ready (always — zero dep)
+  "nexus"             — NexusLocalStore ready (when NEXUS_GATEWAY_URL set or NEXUS_ENABLED=true)
   "athena"            — AthenaClient connected (when ATHENA_URL set)
   "prometheus"        — Metrics server running
 
@@ -166,7 +166,7 @@ class Mesh:
         self._redis_store     = None
         self._settings        = None
         self._blob_storage    = None
-        self._nexus_store     = None   # NexusLocalStore — always available, zero dep
+        self._nexus_store     = None   # NexusLocalStore — when nexus is configured
         self._athena_client   = None   # AthenaClient — when ATHENA_URL set
         self._distributed_worker_task = None
         self._agent_run_tasks: List[asyncio.Task] = []
@@ -721,6 +721,9 @@ class Mesh:
                 redis_context_ttl_days=getattr(settings, "redis_context_ttl_days", 7),
             )
             store = RedisContextStore(settings=_s)
+            if not store.enabled:
+                self._logger.warning("Redis URL configured but connection failed — running without Redis")
+                return None
             self._logger.info("✓ RedisContextStore connected")
             return store
         except Exception as exc:
@@ -743,12 +746,32 @@ class Mesh:
         """
         Init NexusLocalStore — the built-in credential vault.
 
-        Always succeeds (zero external dependencies). Credentials are stored
-        at ~/.jarviscore/nexus.enc, AES-256-GCM encrypted.
+        Optional: only initialised when nexus is explicitly configured.
+        Detection order:
+          1. config dict key ``nexus_enabled`` (runtime override)
+          2. ``NEXUS_ENABLED`` env var / Settings.nexus_enabled
+          3. Auto-detect: enabled when ``NEXUS_GATEWAY_URL`` is set
 
-        Agents access via self._nexus_store.build_auth_info(provider) or
-        through nexus_call() which the Kernel injects into the sandbox.
+        Credentials are stored at ~/.jarviscore/nexus.enc, AES-256-GCM
+        encrypted.  Agents access via self._nexus_store.build_auth_info()
+        or through nexus_call() which the Kernel injects into the sandbox.
         """
+        # 1. Explicit runtime config takes priority
+        enabled = self.config.get("nexus_enabled")
+        # 2. Fall back to settings field
+        if enabled is None:
+            enabled = getattr(self._settings, "nexus_enabled", None)
+        # 3. Auto-detect from gateway URL presence
+        if enabled is None:
+            enabled = bool(getattr(self._settings, "nexus_gateway_url", None))
+
+        if not enabled:
+            self._logger.debug(
+                "Nexus store not configured — skipping "
+                "(set NEXUS_GATEWAY_URL or NEXUS_ENABLED=true to enable)"
+            )
+            return None
+
         try:
             from jarviscore.nexus.store import NexusLocalStore
             store = NexusLocalStore()

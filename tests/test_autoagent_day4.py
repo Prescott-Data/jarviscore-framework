@@ -119,19 +119,23 @@ result = 1 / 0
 
 @pytest.mark.asyncio
 async def test_code_generator_validation():
-    """Test code generator validates syntax."""
+    """Test code generator validates syntax via ValidationLayer."""
     from jarviscore.execution import CodeGenerator, UnifiedLLMClient
+    from jarviscore.execution.validation import ValidationLayer
 
     llm = UnifiedLLMClient({})
     codegen = CodeGenerator(llm, None)
 
-    # Test syntax validation
+    layer = codegen._get_validation_layer()
+    assert isinstance(layer, ValidationLayer)
+
     valid_code = "result = 42"
-    codegen._validate_code(valid_code)  # Should not raise
+    result = layer.validate_pre_execution(valid_code, skip_http_contract=True)
+    assert result.is_valid
 
     invalid_code = "result = if 42"
-    with pytest.raises(ValueError):
-        codegen._validate_code(invalid_code)
+    result = layer.validate_pre_execution(invalid_code, skip_http_contract=True)
+    assert not result.is_valid
 
 
 @pytest.mark.asyncio

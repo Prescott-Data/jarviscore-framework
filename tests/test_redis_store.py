@@ -196,8 +196,8 @@ class TestMailbox:
     """
 
     def test_send_and_read(self, store):
-        """Send a message, read it back."""
-        store.send_mailbox_message("agent-2", {"text": "Hello!", "from": "agent-1"})
+        """Send a message envelope, read it back."""
+        store.send_mailbox_message("agent-2", {"sender": "agent-1", "message": {"text": "Hello!"}})
         msgs = store.read_mailbox("agent-2")
 
         assert len(msgs) == 1
@@ -205,17 +205,17 @@ class TestMailbox:
 
     def test_fifo_ordering(self, store):
         """Messages are read in the order they were sent."""
-        store.send_mailbox_message("agent-2", {"seq": 1})
-        store.send_mailbox_message("agent-2", {"seq": 2})
-        store.send_mailbox_message("agent-2", {"seq": 3})
+        store.send_mailbox_message("agent-2", {"sender": "s", "message": {"seq": 1}})
+        store.send_mailbox_message("agent-2", {"sender": "s", "message": {"seq": 2}})
+        store.send_mailbox_message("agent-2", {"sender": "s", "message": {"seq": 3}})
 
         msgs = store.read_mailbox("agent-2", max_messages=10)
         assert [m["message"]["seq"] for m in msgs] == [1, 2, 3]
 
     def test_read_is_destructive(self, store):
         """read_mailbox removes messages (like popping from a queue)."""
-        store.send_mailbox_message("agent-2", {"text": "one"})
-        store.send_mailbox_message("agent-2", {"text": "two"})
+        store.send_mailbox_message("agent-2", {"sender": "s", "message": {"text": "one"}})
+        store.send_mailbox_message("agent-2", {"sender": "s", "message": {"text": "two"}})
 
         # Read first message only
         msgs = store.read_mailbox("agent-2", max_messages=1)
@@ -233,7 +233,7 @@ class TestMailbox:
 
     def test_peek_is_non_destructive(self, store):
         """peek_mailbox reads without removing messages."""
-        store.send_mailbox_message("agent-2", {"text": "peek me"})
+        store.send_mailbox_message("agent-2", {"sender": "s", "message": {"text": "peek me"}})
 
         # Peek twice — same message both times
         msgs1 = store.peek_mailbox("agent-2")
@@ -249,8 +249,8 @@ class TestMailbox:
 
     def test_per_agent_isolation(self, store):
         """Messages to agent-1 don't appear in agent-2's mailbox."""
-        store.send_mailbox_message("agent-1", {"for": "agent-1"})
-        store.send_mailbox_message("agent-2", {"for": "agent-2"})
+        store.send_mailbox_message("agent-1", {"sender": "s", "message": {"for": "agent-1"}})
+        store.send_mailbox_message("agent-2", {"sender": "s", "message": {"for": "agent-2"}})
 
         msgs = store.read_mailbox("agent-1")
         assert len(msgs) == 1
@@ -588,9 +588,10 @@ class TestUtilities:
 class TestSettingsIntegration:
     """Prove that new settings fields exist and have correct defaults."""
 
-    def test_redis_settings(self):
+    def test_redis_settings(self, monkeypatch):
+        monkeypatch.delenv("REDIS_URL", raising=False)
         from jarviscore.config.settings import Settings
-        s = Settings()
+        s = Settings(_env_file=None)
         assert s.redis_host == "localhost"
         assert s.redis_port == 6379
         assert s.redis_db == 0

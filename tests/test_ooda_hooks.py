@@ -97,9 +97,7 @@ class TestPreExecuteHook:
 
         agent = ConcreteAgent.__new__(ConcreteAgent)
         state = _make_state()
-        result = asyncio.get_event_loop().run_until_complete(
-            agent._pre_execute_hook("some_tool", {}, state)
-        )
+        result = asyncio.run(agent._pre_execute_hook("some_tool", {}, state))
         assert result is None
 
     def test_hook_signature(self):

@@ -196,9 +196,9 @@ class TestAgentStateAndCustomization:
             {"agent": "storage", "task": "Store item 3", "params": {"data": "item3"}},
         ])
 
-        # Verify storage agent maintained state
+        # Verify storage agent maintained state (steps run in parallel, order not guaranteed)
         assert len(storage.stored_data) == 3
-        assert storage.stored_data == ["item1", "item2", "item3"]
+        assert set(storage.stored_data) == {"item1", "item2", "item3"}
 
         await mesh.stop()
 

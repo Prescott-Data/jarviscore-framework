@@ -152,12 +152,14 @@ class TestInfrastructureInjection:
 class TestMailboxInjection:
     @pytest.mark.asyncio
     async def test_no_mailbox_without_redis(self):
-        """mailbox stays None when no redis is configured."""
+        """Mailbox is always created — uses local-only backend when Redis is absent."""
+        from jarviscore.mailbox import MailboxManager
         mesh = Mesh(mode="autonomous")
         agent = mesh.add(WorkerAgent)
         await mesh.start()
         try:
-            assert agent.mailbox is None
+            assert isinstance(agent.mailbox, MailboxManager)
+            assert agent.mailbox.redis is None
         finally:
             await mesh.stop()
 

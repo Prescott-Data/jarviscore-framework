@@ -34,7 +34,7 @@ class TestNexusClientControlPlane:
         mock_response.raise_for_status = MagicMock()
         mock_response.json.return_value = {
             "connection_id": "conn_123",
-            "auth_url": "https://provider.com/auth?state=abc",
+            "authUrl": "https://provider.com/auth?state=abc",
         }
 
         client.client.post = AsyncMock(return_value=mock_response)
@@ -43,6 +43,7 @@ class TestNexusClientControlPlane:
             provider="shopify",
             user_id="user1",
             scopes=["read_products", "write_products"],
+            return_url="http://localhost:8000/oauth/callback",
         )
 
         assert conn_id == "conn_123"

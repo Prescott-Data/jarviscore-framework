@@ -1,8 +1,8 @@
 """
-Tests for 6E: HumanTask + AdaptiveHITLPolicy.
+Tests for 6E: HITLRequest (formerly HumanTask) + AdaptiveHITLPolicy.
 
 What these tests prove:
-- HumanTask creates with valid defaults and unique IDs
+- HITLRequest creates with valid defaults and unique request_ids
 - Policy disabled → never escalates
 - Policy enabled + low confidence → escalates with reason
 - Policy enabled + high risk → escalates with reason
@@ -16,35 +16,42 @@ from jarviscore.kernel.hitl import HumanTask, AdaptiveHITLPolicy
 
 
 class TestHumanTask:
+    """HumanTask is now HITLRequest — tests updated for new required fields."""
 
     def test_default_creation(self):
-        task = HumanTask(description="Review this output")
-        assert task.type == "approval"
-        assert task.status == "created"
+        task = HumanTask(
+            workflow_id="wf-test",
+            step_id="step-1",
+            description="Review this output",
+        )
+        assert task.type.value == "approval"
+        assert task.status.value == "pending"
         assert task.description == "Review this output"
-        assert len(task.id) == 8
-        assert task.user_response is None
+        assert task.request_id.startswith("hitl-")
+        assert len(task.request_id) > 8
 
     def test_unique_ids(self):
-        t1 = HumanTask(description="a")
-        t2 = HumanTask(description="b")
-        assert t1.id != t2.id
+        t1 = HumanTask(workflow_id="wf-1", step_id="s-1", description="a")
+        t2 = HumanTask(workflow_id="wf-1", step_id="s-2", description="b")
+        assert t1.request_id != t2.request_id
 
     def test_all_types(self):
         for t in ("approval", "exception", "input_request", "notification"):
-            task = HumanTask(type=t, description="test")
-            assert task.type == t
+            task = HumanTask(workflow_id="wf-1", step_id="s-1", type=t, description="test")
+            assert task.type.value == t
 
     def test_serialization_roundtrip(self):
         task = HumanTask(
+            workflow_id="wf-round",
+            step_id="step-rt",
             type="input_request",
             description="Enter API key",
-            request_payload={"field": "api_key"},
+            payload={"field": "api_key"},
         )
         data = task.model_dump()
         restored = HumanTask.model_validate(data)
         assert restored.description == "Enter API key"
-        assert restored.request_payload == {"field": "api_key"}
+        assert restored.payload == {"field": "api_key"}
 
 
 class TestPolicyDisabled:

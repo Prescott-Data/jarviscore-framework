@@ -9,7 +9,7 @@ What these tests prove:
 - resolve() updates the file and Redis atomically
 - pending() filters by agent_id and status
 - The queue works in file-only mode (no Redis)
-- Invalid urgency raises ValueError
+- Invalid urgency or category raises ValueError
 
 These tests use a real temp directory for file I/O and MockRedisContextStore
 for Redis.
@@ -77,6 +77,7 @@ class TestRequestCreation:
             title="Review Q2 deck",
             content="Please review the attached deck.",
             urgency="normal",
+            category="data_required",
         )
 
         filepath = inbox_dir / f"{item_id}.json"
@@ -95,6 +96,7 @@ class TestRequestCreation:
             title="Review deployment",
             content="Deploy to production?",
             urgency="high",
+            category="critical_action",
         )
 
         # The typed API stores under hitl_request:{workflow_id}:{step_id}
@@ -105,8 +107,8 @@ class TestRequestCreation:
 
     def test_returns_unique_ids(self, queue):
         """Two calls return different IDs."""
-        id1 = queue.request(title="First", content="a", urgency="normal")
-        id2 = queue.request(title="Second", content="b", urgency="normal")
+        id1 = queue.request(title="First", content="a", urgency="normal", category="auth_required")
+        id2 = queue.request(title="Second", content="b", urgency="normal", category="auth_required")
         assert id1 != id2
 
     def test_file_only_mode(self, file_only_queue, inbox_dir):
@@ -115,6 +117,7 @@ class TestRequestCreation:
             title="File-only test",
             content="No Redis here.",
             urgency="low",
+            category="data_required",
         )
         filepath = inbox_dir / f"{item_id}.json"
         assert filepath.exists()
@@ -126,6 +129,17 @@ class TestRequestCreation:
                 title="Bad urgency",
                 content="test",
                 urgency="mega-urgent",
+                category="auth_required",
+            )
+
+    def test_invalid_category_raises(self, queue):
+        """Invalid category raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid HITL category"):
+            queue.request(
+                title="Bad category",
+                content="test",
+                urgency="normal",
+                category="not_a_real_category",
             )
 
 
@@ -144,6 +158,7 @@ class TestContentTruncation:
             title="Big payload",
             content=huge_content,
             urgency="normal",
+            category="data_required",
         )
 
         data = json.loads((inbox_dir / f"{item_id}.json").read_text())
@@ -157,6 +172,7 @@ class TestContentTruncation:
             title="Context test",
             content="Short content.",
             urgency="normal",
+            category="data_required",
             context={"goal": huge_goal, "short_key": "keep this"},
         )
 
@@ -170,6 +186,7 @@ class TestContentTruncation:
             title="Small",
             content="Short and sweet.",
             urgency="normal",
+            category="auth_required",
         )
 
         data = json.loads((inbox_dir / f"{item_id}.json").read_text())
@@ -191,6 +208,7 @@ class TestCheckAndResolve:
             title="Pending test",
             content="Still waiting.",
             urgency="normal",
+            category="auth_required",
         )
         resolution = queue.check(item_id)
         assert resolution is None  # pending → no resolution yet
@@ -201,6 +219,7 @@ class TestCheckAndResolve:
             title="Resolve test",
             content="Will be approved.",
             urgency="normal",
+            category="critical_action",
         )
         result = queue.resolve(item_id, "approved", reason="Looks good")
         assert result is True
@@ -226,16 +245,16 @@ class TestPending:
 
     def test_lists_pending_items(self, queue):
         """pending() returns only pending items for this agent."""
-        queue.request(title="Item 1", content="first", urgency="normal")
-        queue.request(title="Item 2", content="second", urgency="high")
+        queue.request(title="Item 1", content="first", urgency="normal", category="auth_required")
+        queue.request(title="Item 2", content="second", urgency="high", category="critical_action")
 
         items = queue.pending()
         assert len(items) == 2
 
     def test_excludes_resolved_items(self, queue):
         """Resolved items don't appear in pending()."""
-        id1 = queue.request(title="To approve", content="yes", urgency="normal")
-        queue.request(title="Still pending", content="wait", urgency="normal")
+        id1 = queue.request(title="To approve", content="yes", urgency="normal", category="auth_required")
+        queue.request(title="Still pending", content="wait", urgency="normal", category="auth_required")
 
         queue.resolve(id1, "approved")
 
@@ -262,6 +281,7 @@ class TestDualWrite:
             title="Dual write test",
             content="Check both backends.",
             urgency="normal",
+            category="data_required",
         )
 
         # File exists

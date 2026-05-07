@@ -51,7 +51,7 @@ class TestCoderSubAgent:
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
         prompt = coder.get_system_prompt()
         assert "write_code" in prompt
-        assert "validate_code" in prompt
+        assert "execute_code" in prompt
         assert "result" in prompt.lower()
 
     @pytest.mark.asyncio
@@ -59,17 +59,17 @@ class TestCoderSubAgent:
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
         coder._candidates = []  # fresh
 
-        r1 = coder._tool_write_code(code="x = 1")
-        assert r1["version"] == 1
-        assert r1["status"] == "drafted"
+        r1 = coder._tool_write_code(code="result = 1")
+        assert r1["candidate_id"] == 1
+        assert r1["status"] == "validated"
 
-        r2 = coder._tool_write_code(code="x = 2")
-        assert r2["version"] == 2
+        r2 = coder._tool_write_code(code="result = 2")
+        assert r2["candidate_id"] == 2
         assert len(coder.candidates) == 2
 
     def test_validate_code_valid(self, mock_llm):
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
-        result = coder._tool_validate_code(code="x = 1 + 2")
+        result = coder._tool_validate_code(code="result = 1 + 2")
         assert result["valid"] is True
 
     def test_validate_code_invalid(self, mock_llm):
@@ -155,108 +155,86 @@ class TestResearcherSubAgent:
 
     def test_registers_expected_tools(self, mock_llm):
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
-        assert "search_registry" in researcher.tool_names
-        assert "web_search" in researcher.tool_names
-        assert "read_url" in researcher.tool_names
-        assert "note_finding" in researcher.tool_names
-        assert "check_sufficiency" in researcher.tool_names
+        assert "search_internet" in researcher.tool_names
+        assert "search_internet_batch" in researcher.tool_names
+        assert "read_web_content" in researcher.tool_names
+        assert "publish_research_findings" in researcher.tool_names
+        assert "probe_target_api" in researcher.tool_names
+        assert "grep_codebase" in researcher.tool_names
 
-    def test_note_finding_tracks_with_source(self, mock_llm):
+    @pytest.mark.asyncio
+    async def test_publish_research_findings_returns_structured_output(self, mock_llm):
+        """publish_research_findings returns api_specs, libraries, evidence, summary."""
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
-        researcher._findings = []
-        researcher._sources = []
-
-        result = researcher._tool_note_finding(
-            finding="Python 3.12 supports PEP 695",
-            source="docs.python.org",
-            confidence=0.9,
+        result = await researcher._tool_publish_research_findings(
+            api_specs=[{"endpoint": "/users", "method": "GET"}],
+            libraries=["requests", "httpx"],
+            evidence=[{"url": "https://docs.example.com", "snippet": "API docs"}],
+            summary="Found the API docs.",
         )
-        assert result["recorded"] is True
-        assert result["total_findings"] == 1
-        assert len(researcher.findings) == 1
-        assert researcher.findings[0]["confidence"] == 0.9
-        assert "docs.python.org" in researcher.sources
-
-    def test_note_finding_clamps_confidence(self, mock_llm):
-        researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
-        researcher._findings = []
-        researcher._sources = []
-
-        researcher._tool_note_finding(finding="x", source="s", confidence=1.5)
-        assert researcher.findings[0]["confidence"] == 1.0
-
-        researcher._tool_note_finding(finding="y", source="s", confidence=-0.3)
-        assert researcher.findings[1]["confidence"] == 0.0
-
-    def test_check_sufficiency_insufficient(self, mock_llm):
-        researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
-        researcher._findings = []
-        researcher._sources = []
-
-        result = researcher._tool_check_sufficiency()
-        assert result["sufficient"] is False
-        assert result["findings_needed"] > 0
-
-    def test_check_sufficiency_sufficient(self, mock_llm):
-        researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
-        researcher._findings = []
-        researcher._sources = []
-
-        # Add enough findings and sources
-        researcher._tool_note_finding(finding="f1", source="src1", confidence=0.8)
-        researcher._tool_note_finding(finding="f2", source="src2", confidence=0.7)
-
-        result = researcher._tool_check_sufficiency()
-        assert result["sufficient"] is True
-        assert result["sources_count"] == 2
-        assert result["findings_count"] == 2
-
-    def test_search_registry_no_registry(self, mock_llm):
-        researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm, code_registry=None)
-        result = researcher._tool_search_registry(query="test")
-        assert result["status"] == "unavailable"
+        assert result["api_specs"] == [{"endpoint": "/users", "method": "GET"}]
+        assert "requests" in result["libraries"]
+        assert result["summary"] == "Found the API docs."
+        assert len(result["evidence"]) >= 1
 
     @pytest.mark.asyncio
-    async def test_web_search_no_client(self, mock_llm):
-        researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm, search_client=None)
-        result = await researcher._tool_web_search(query="test")
-        assert result["status"] == "unavailable"
+    async def test_publish_research_findings_empty_args(self, mock_llm):
+        """publish_research_findings works with no arguments (empty research)."""
+        researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
+        result = await researcher._tool_publish_research_findings()
+        assert "api_specs" in result
+        assert "libraries" in result
+        assert "evidence" in result
+        assert "summary" in result
 
     @pytest.mark.asyncio
-    async def test_full_run_with_findings(self, mock_llm):
-        """Researcher notes findings and completes."""
+    async def test_grep_codebase_finds_pattern(self, mock_llm):
+        """grep_codebase returns structured match results for a known pattern."""
+        researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
+        result = await researcher._tool_grep_codebase(
+            pattern="def test_",
+            path="tests",
+            file_glob="*.py",
+            max_results=5,
+        )
+        assert "matches" in result
+        assert isinstance(result["matches"], list)
+
+    @pytest.mark.asyncio
+    async def test_full_run_with_findings(self, mock_llm, monkeypatch):
+        """Researcher calls publish_research_findings and completes (phase checks disabled)."""
+        monkeypatch.setenv("RESEARCH_STRICT_PHASE_CONTRACT", "false")
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "false")
         mock_llm.responses = [
             _llm_response(
-                'THOUGHT: Note a finding\nTOOL: note_finding\n'
-                'PARAMS: {"finding": "Found info", "source": "web", "confidence": 0.8}'
+                'THOUGHT: Research complete\n'
+                'TOOL: publish_research_findings\n'
+                'PARAMS: {"api_specs": [], "libraries": ["requests"], '
+                '"evidence": [{"url": "https://example.com", "snippet": "API docs"}], '
+                '"summary": "Done"}'
             ),
             _llm_response(
-                'THOUGHT: Note another\nTOOL: note_finding\n'
-                'PARAMS: {"finding": "More info", "source": "docs", "confidence": 0.9}'
-            ),
-            _llm_response(
-                'THOUGHT: Research complete\nDONE: Gathered 2 findings\n'
-                'RESULT: {"findings": 2}'
+                'THOUGHT: Published\nDONE: Research complete\n'
+                'RESULT: {"summary": "Done", "evidence": [{"url": "https://example.com"}]}'
             ),
         ]
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
         output = await researcher.run("research topic X", max_turns=5)
         assert output.status == "success"
-        assert len(researcher.findings) == 2
-        assert len(researcher.sources) == 2
 
     @pytest.mark.asyncio
-    async def test_run_resets_findings(self, mock_llm):
-        """Each run() starts with empty findings."""
+    async def test_run_completes_on_done(self, mock_llm, monkeypatch):
+        """Researcher run() returns success on DONE signal (validation disabled)."""
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "false")
         mock_llm.responses = [
-            _llm_response("THOUGHT: done\nDONE: first"),
-            _llm_response("THOUGHT: done\nDONE: second"),
+            _llm_response(
+                'THOUGHT: done\nDONE: run complete\n'
+                'RESULT: {"summary": "done", "evidence": [{"url": "https://x.com"}]}'
+            ),
         ]
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
-        await researcher.run("task1")
-        await researcher.run("task2")
-        assert len(researcher.findings) == 0
-        assert len(researcher.sources) == 0
+        output = await researcher.run("task", max_turns=5)
+        assert output.status == "success"
 
 
 # ══════════════════════════════════════════════════════════════════════

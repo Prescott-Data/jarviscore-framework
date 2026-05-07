@@ -25,13 +25,20 @@ from jarviscore import Mesh
 from jarviscore.core.agent import Agent
 
 
+@pytest.fixture(autouse=True)
+def isolate_from_external_services(monkeypatch):
+    """Strip P2P and Redis env vars so workflow tests never touch real infra."""
+    monkeypatch.delenv("P2P_ENABLED", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+
 # ======================================================================
 # Helpers
 # ======================================================================
 
 def make_mesh():
-    """Return a Mesh in autonomous mode (no P2P, no real Redis)."""
-    return Mesh(mode="autonomous")
+    """Return a Mesh with P2P and Redis explicitly disabled for unit tests."""
+    return Mesh(config={"p2p_enabled": False})
 
 
 class EchoAgent(Agent):

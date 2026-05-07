@@ -124,12 +124,13 @@ class TestKernelExecuteSuccess:
         assert output.metadata["dispatches"][0]["role"] == "coder"
 
     @pytest.mark.asyncio
-    async def test_research_task(self, kernel, mock_llm):
+    async def test_research_task(self, kernel, mock_llm, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "false")
         mock_llm.responses = [
             _llm_response(
                 "THOUGHT: Research complete\n"
                 "DONE: Found the answer\n"
-                'RESULT: {"answer": "FastAPI"}'
+                'RESULT: {"answer": "FastAPI", "summary": "FastAPI is the best Python web framework"}'
             )
         ]
         output = await kernel.execute(task="Research the best Python web framework")

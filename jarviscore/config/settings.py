@@ -180,6 +180,7 @@ class Settings(BaseSettings):
     nexus_gateway_url: Optional[str] = None  # NEXUS_GATEWAY_URL — required for connected apps
     nexus_return_url: str = "http://localhost:8000/oauth/callback"  # Broker redirects here after consent
     nexus_default_user_id: str = "jarviscore-agent"
+    nexus_enabled: Optional[bool] = None  # NEXUS_ENABLED — explicit override; None = auto-detect from nexus_gateway_url
     auth_strategy_cache_ttl: int = 300   # Seconds before re-fetching strategy from Gateway
     auth_flow_timeout: int = 300         # Max seconds to wait for OAuth consent
     auth_poll_interval: float = 2.0      # Seconds between Gateway status polls
