@@ -30,6 +30,7 @@ from .mocks import (
     MockMesh, MockPeerClient, MockPeerInfo,
     MockBlobStorage, MockRedisContextStore,
     MockLLMClient, MockSandboxExecutor,
+    ExampleMockLLMClient,
 )
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     'MockRedisContextStore',
     'MockLLMClient',
     'MockSandboxExecutor',
+    'ExampleMockLLMClient',
 ]

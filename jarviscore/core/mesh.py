@@ -347,7 +347,23 @@ class Mesh:
                 self._capabilities.add("peer_swim")
                 self._logger.info("✓ P2P coordinator started")
 
-                await asyncio.sleep(5)  # let SWIM stabilise
+                # Wait for SWIM to stabilise: if seed_nodes are configured,
+                # poll until at least one peer is known (up to 5s); otherwise
+                # a short 0.3s pause is enough for single-node scenarios.
+                seed_nodes = self.config.get("seed_nodes", "")
+                if seed_nodes:
+                    deadline = asyncio.get_event_loop().time() + 5.0
+                    while asyncio.get_event_loop().time() < deadline:
+                        members = getattr(
+                            getattr(self._p2p_coordinator, "swim_manager", None),
+                            "alive_members", None,
+                        )
+                        if members:
+                            break
+                        await asyncio.sleep(0.2)
+                else:
+                    await asyncio.sleep(0.3)
+
                 await self._p2p_coordinator.announce_capabilities()
                 await self._p2p_coordinator.request_peer_capabilities()
                 self._logger.info("✓ P2P capabilities announced and exchanged")

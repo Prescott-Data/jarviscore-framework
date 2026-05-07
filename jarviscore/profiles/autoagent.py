@@ -355,6 +355,9 @@ class AutoAgent(Profile):
                     "status": output.status,
                     "output": output.payload,
                     "error": None if output.status == "success" else output.summary,
+                    # payload exposed as a dedicated key when it is a structured dict
+                    # so downstream steps can access it without parsing output
+                    **({"payload": output.payload} if isinstance(output.payload, dict) else {}),
                     "tokens": meta.get("tokens", {"input": 0, "output": 0, "total": 0}),
                     "cost_usd": meta.get("cost_usd", 0.0),
                     "repairs": 0,

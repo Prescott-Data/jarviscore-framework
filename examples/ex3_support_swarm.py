@@ -148,6 +148,11 @@ class TechnicalAgent(CustomAgent):
                 connection_id = await self._auth_manager.get_connection_id("github")
                 auth_note = f"[Nexus OK — connection_id={connection_id[:8]}...]"
                 print(f"  [TechnicalAgent] Nexus auth complete: {auth_note}")
+                # To make an authenticated API call with this connection_id:
+                #   from jarviscore.auth.nexus import NexusCallProxy
+                #   proxy = NexusCallProxy(connection_id)
+                #   result = await proxy.get("https://api.github.com/user")
+                #   # result contains {"status_code": 200, "body": {...}}
             except Exception as exc:
                 auth_note = f"[Nexus auth failed: {exc}]"
                 print(f"  [TechnicalAgent] {auth_note}")

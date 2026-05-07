@@ -790,6 +790,71 @@ class MockLLMClient:
         self._call_index = 0
 
 
+class ExampleMockLLMClient:
+    """
+    Mock LLM client for use in custom examples (chat_with_tools / chat interface).
+
+    Validates tool names against the ``tools`` parameter before returning a
+    tool-use response, preventing deadlocks where a mock returns a tool that
+    is not in scope for the calling agent.
+
+    Example::
+
+        llm = ExampleMockLLMClient()
+        resp = llm.chat_with_tools(
+            messages=[{"role": "user", "content": "analyze trends"}],
+            tools=[{"name": "ask_peer"}, {"name": "web_search"}],
+        )
+        # resp["type"] == "tool_use" and resp["tool_name"] == "ask_peer"
+    """
+
+    def __init__(self):
+        self.available = False  # set True when a real API connection succeeds
+
+    def chat_with_tools(self, messages, tools=None, system=None, max_tokens=1024):
+        available_tool_names = {t["name"] for t in (tools or [])}
+        user_msg = ""
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                user_msg = content.lower()
+
+        analyze = "analyze" in user_msg or "analysis" in user_msg or "trend" in user_msg
+        search = "search" in user_msg
+
+        if analyze and "ask_peer" in available_tool_names:
+            return {
+                "type": "tool_use",
+                "tool_name": "ask_peer",
+                "tool_args": {"role": "analyst", "question": user_msg},
+                "tool_use_id": "mock_001",
+            }
+        if search and "web_search" in available_tool_names:
+            return {
+                "type": "tool_use",
+                "tool_name": "web_search",
+                "tool_args": {"query": user_msg},
+                "tool_use_id": "mock_002",
+            }
+        if analyze and "statistical_analysis" in available_tool_names:
+            return {
+                "type": "tool_use",
+                "tool_name": "statistical_analysis",
+                "tool_args": {"data": user_msg},
+                "tool_use_id": "mock_003",
+            }
+        return {"type": "text", "content": f"Mock analysis: {user_msg[:80]}"}
+
+    def continue_with_tool_result(
+        self, messages, tool_use_id, tool_name, tool_args, tool_result,
+        tools=None, system=None,
+    ):
+        return {"type": "text", "content": f"Based on {tool_name}: {str(tool_result)[:100]}"}
+
+    def chat(self, message, system=None):
+        return f"[Mock response to: {message[:50]}...]"
+
+
 class MockSandboxExecutor:
     """
     Mock SandboxExecutor for kernel and subagent tests.
