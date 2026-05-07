@@ -322,7 +322,7 @@ the class; `mesh.start()` calls each agent's `setup()` coroutine; `mesh.workflow
 delegates to the `WorkflowEngine`.
 
 ```python
-mesh = Mesh(mode="autonomous", config={"redis_url": REDIS_URL})
+mesh = Mesh(config={"redis_url": REDIS_URL})
 mesh.add(MarketAnalystAgent)
 await mesh.start()
 results = await mesh.workflow(wf_id, steps)

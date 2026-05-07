@@ -144,14 +144,9 @@ class TechnicalAgent(CustomAgent):
                 # 3. User completes OAuth in browser
                 # 4. poll check_connection_status until ACTIVE
                 # 5. LifecycleMonitor starts tracking the connection
-                # 6. resolve_strategy → DynamicStrategy
-                # 7. apply_strategy_to_request → Authorization header injected
-                result = await self._auth_manager.make_authenticated_request(
-                    provider="github",
-                    method="GET",
-                    url="https://api.github.com/user",
-                )
-                auth_note = f"[Nexus OK — HTTP {result.get('status_code', '?')}]"
+                # 6. Agents use NexusCallProxy(connection_id) for authenticated requests
+                connection_id = await self._auth_manager.get_connection_id("github")
+                auth_note = f"[Nexus OK — connection_id={connection_id[:8]}...]"
                 print(f"  [TechnicalAgent] Nexus auth complete: {auth_note}")
             except Exception as exc:
                 auth_note = f"[Nexus auth failed: {exc}]"

@@ -73,7 +73,12 @@ class LLMClient:
         if system:
             kwargs["system"] = system
 
-        response = self.client.messages.create(**kwargs)
+        try:
+            response = self.client.messages.create(**kwargs)
+        except Exception as e:
+            print(f"[LLM] API call failed ({e}), falling back to mock")
+            self.available = False
+            return f"[Mock response to: {message[:50]}...]"
         return response.content[0].text
 
 
