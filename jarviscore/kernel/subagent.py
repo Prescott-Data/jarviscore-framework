@@ -41,6 +41,7 @@ OODA Loop Architecture:
     - Emergency turn fuse       — max_turns reached
 """
 
+import inspect
 import json
 import logging
 import re
@@ -54,6 +55,31 @@ from jarviscore.kernel.epistemic import EpistemicLedger
 from jarviscore.kernel.state import KernelState, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+class SubagentLogAdapter(logging.LoggerAdapter):
+    """LoggerAdapter that automatically prepends [role][turn=N] to every log line.
+
+    Subclasses should use ``self._log`` instead of ``logger`` directly so that
+    all log lines carry the agent's role and current OODA turn without
+    requiring manual f-string prefixes.
+
+    Usage in subclasses::
+
+        self._log.info("Starting pre-flight")
+        # emits: [researcher][turn=0] Starting pre-flight
+    """
+
+    def __init__(self, base_logger: logging.Logger, role: str) -> None:
+        super().__init__(base_logger, extra={"role": role, "turn": 0})
+
+    def set_turn(self, turn: int) -> None:
+        self.extra["turn"] = turn
+
+    def process(self, msg, kwargs):
+        role = self.extra.get("role", "?")
+        turn = self.extra.get("turn", 0)
+        return f"[{role}][turn={turn}] {msg}", kwargs
 
 # Regex patterns for parsing LLM tool call responses
 _TOOL_PATTERN = re.compile(r"^TOOL:\s*(.+)$", re.MULTILINE)
@@ -211,6 +237,7 @@ class BaseSubAgent(ABC):
         blob_storage=None,
         search_client=None,
         code_registry=None,
+        memory_enabled: bool = False,
     ):
         self.agent_id = agent_id
         self.role = role
@@ -219,13 +246,20 @@ class BaseSubAgent(ABC):
         self.blob_storage = blob_storage
         self.search_client = search_client
         self.code_registry = code_registry
+        self.memory_enabled = memory_enabled
         self._tools: Dict[str, ToolDefinition] = {}
+
+        # Structured logger — use self._log instead of bare logger in subclasses
+        self._log = SubagentLogAdapter(logger, role)
 
         # Cognition infrastructure — reset per run() call
         self._cognition: Optional[AgentCognitionManager] = None
 
-        # Let subclass register its tools
+        # Let subclass register its tools explicitly
         self.setup_tools()
+
+        # Auto-discover any _tool_* methods not already registered by setup_tools()
+        self._autodiscover_tools()
 
     def register_tool(
         self, name: str, func: Callable, description: str, phase: str = "action"
@@ -254,6 +288,62 @@ class BaseSubAgent(ABC):
     def setup_tools(self) -> None:
         """Register tools for this subagent. Called during __init__."""
         ...
+
+    def _autodiscover_tools(self) -> None:
+        """Auto-register any _tool_* methods not already registered by setup_tools().
+
+        Walks the MRO of the concrete subclass and picks up methods whose names
+        begin with ``_tool_`` that were not already registered via register_tool().
+        This lets subclass authors use arbitrary decorators (``@property``,
+        ``@cached_property``, custom wrappers) without losing tool discovery.
+
+        Explicit register_tool() calls always take priority — auto-discovered
+        tools only fill in the gaps.
+        """
+        for name, method in inspect.getmembers(self, predicate=inspect.ismethod):
+            if not name.startswith("_tool_"):
+                continue
+            tool_name = name[len("_tool_"):]
+            if tool_name in self._tools:
+                continue  # already registered explicitly
+            doc = inspect.getdoc(method) or ""
+            description = doc.splitlines()[0] if doc else "No description"
+            self._tools[tool_name] = ToolDefinition(tool_name, method, description)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Cross-task persistent memory (opt-in via memory_enabled=True)
+    # ──────────────────────────────────────────────────────────────────────
+
+    _MEMORY_KEY_PREFIX = "subagent_memory"
+
+    def _memory_key(self) -> str:
+        return f"{self._MEMORY_KEY_PREFIX}:{self.agent_id}"
+
+    async def _restore_memory(self, state: KernelState) -> None:
+        """Load persisted internal_variables from Redis into state (if memory_enabled)."""
+        if not self.memory_enabled or not self.redis_store:
+            return
+        try:
+            raw = await self.redis_store.get(self._memory_key())
+            if raw:
+                data = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+                state.internal_variables.update(data)
+                self._log.info("Restored %d memory keys from previous run", len(data))
+        except Exception as exc:
+            self._log.warning("Memory restore failed: %s", exc)
+
+    async def _persist_memory(self, state: KernelState) -> None:
+        """Save state.internal_variables to Redis for the next run (if memory_enabled)."""
+        if not self.memory_enabled or not self.redis_store:
+            return
+        try:
+            await self.redis_store.set(
+                self._memory_key(),
+                json.dumps(state.internal_variables),
+            )
+            self._log.info("Persisted %d memory keys for next run", len(state.internal_variables))
+        except Exception as exc:
+            self._log.warning("Memory persist failed: %s", exc)
 
     # ──────────────────────────────────────────────────────────────────────
     # Lifecycle hooks — override in subclasses for setup/teardown
@@ -366,6 +456,9 @@ class BaseSubAgent(ABC):
             tokens_budget=self._cognition.lease.max_total_tokens,
         )
 
+        # Restore cross-task memory (no-op unless memory_enabled=True)
+        await self._restore_memory(state)
+
         # Pre-run hook — subclasses can do deterministic pre-flight work
         await self._pre_run_hook(state)
 
@@ -386,10 +479,11 @@ class BaseSubAgent(ABC):
 
         for turn in range(max_turns):
             state.turn = turn
+            self._log.set_turn(turn)
 
             # ── Emergency guards ──
             if self._cognition.lease.is_expired():
-                logger.warning(f"[{self.role}] Lease expired on turn {turn}")
+                self._log.warning("Lease expired")
                 return AgentOutput(
                     status="yield",
                     summary=f"Lease budget exhausted after {turn} turns",
@@ -417,7 +511,7 @@ class BaseSubAgent(ABC):
             # ═══ 2. ORIENT — Meta-cognition check ═══
             intervention = self._cognition.get_intervention()
             if intervention:
-                logger.warning(f"[{self.role}] Cognition intervention: {intervention[:120]}")
+                self._log.warning("Cognition intervention: %s", intervention[:120])
                 state.add_thought(f"[META] {intervention}")
 
             # Inject failure memory into state for context building
@@ -446,7 +540,7 @@ class BaseSubAgent(ABC):
                     messages=messages, **kwargs
                 )
             except Exception as e:
-                logger.error(f"[{self.role}] LLM call failed on turn {turn}: {e}")
+                self._log.error("LLM call failed: %s", e)
                 state.retry_count += 1
                 if state.retry_count > state.max_retries:
                     _trace.log_step_complete(False, f"LLM call failed: {e}")
@@ -478,16 +572,14 @@ class BaseSubAgent(ABC):
                     state, self.llm_client, memory
                 )
             except Exception as e:
-                logger.warning(f"[{self.role}] Auto-summarization failed: {e}")
+                self._log.warning("Auto-summarization failed: %s", e)
 
             # ═══ Handle DONE ═══
             if parsed["type"] == "done":
                 # ── Done-gate: subclasses can reject premature completion ──
                 can_exit, reject_reason = self._can_complete(state, parsed)
                 if not can_exit:
-                    logger.info(
-                        f"[{self.role}] Done rejected: {reject_reason}"
-                    )
+                    self._log.info("Done rejected: %s", reject_reason)
                     state.add_thought(
                         f"[DONE_GATE] Cannot complete yet: {reject_reason}. "
                         f"Continue working."
@@ -527,6 +619,7 @@ class BaseSubAgent(ABC):
                     except Exception:
                         pass
 
+                await self._persist_memory(state)
                 return AgentOutput(
                     status="success",
                     payload=parsed.get("result"),
@@ -542,9 +635,7 @@ class BaseSubAgent(ABC):
 
                 # ── Repeat failure guard ──
                 if self._cognition.is_repeat_failure(tool_name, tool_params):
-                    logger.warning(
-                        f"[{self.role}] Blocked repeat failure: {tool_name}"
-                    )
+                    self._log.warning("Blocked repeat failure: %s", tool_name)
                     state.add_thought(
                         f"[GUARD] Blocked repeat of failing action: {tool_name}. "
                         "Must try a different tool or different parameters."
@@ -564,9 +655,7 @@ class BaseSubAgent(ABC):
                     tool_name, tool_params, turn, state
                 )
                 if _ep_verdict.action == "redirect":
-                    logger.info(
-                        f"[{self.role}] Epistemic redirect: {_ep_verdict.reason}"
-                    )
+                    self._log.info("Epistemic redirect: %s", _ep_verdict.reason)
                     state.add_thought(f"[EPISTEMIC] {_ep_verdict.injection}")
                     state.add_tool_result(
                         tool_name, tool_params,
@@ -594,10 +683,7 @@ class BaseSubAgent(ABC):
                     tool_name, tool_params, state
                 )
                 if hook_result is not None:
-                    logger.info(
-                        f"[{self.role}] Pre-execute hook blocked '{tool_name}': "
-                        f"{str(hook_result)[:200]}"
-                    )
+                    self._log.info("Pre-execute hook blocked '%s': %s", tool_name, str(hook_result)[:200])
                     state.add_tool_result(
                         tool_name, tool_params, hook_result,
                         error=hook_result.get("error") if isinstance(hook_result, dict) else None,
@@ -698,10 +784,7 @@ class BaseSubAgent(ABC):
                     else:
                         # Pivot was already attempted — escalate now
                         stall_reason = stall.get("reason", "Convergence stall")
-                        logger.warning(
-                            f"[{self.role}] Convergence stall (post-pivot): "
-                            f"{stall_reason}"
-                        )
+                        self._log.warning("Convergence stall (post-pivot): %s", stall_reason)
                         state.add_thought(f"[CONVERGENCE] {stall_reason}")
                         trajectory.append(turn_log)
                         _trace.log_step_complete(False, stall_reason)
@@ -751,7 +834,7 @@ class BaseSubAgent(ABC):
                     try:
                         await memory.save_checkpoint(state.model_dump_json())
                     except Exception as e:
-                        logger.debug(f"Checkpoint save failed: {e}")
+                        self._log.debug("Checkpoint save failed: %s", e)
 
                 # ── State-driven exit ──
                 # Tools like publish_research_findings set state.status = "completed"
@@ -763,6 +846,7 @@ class BaseSubAgent(ABC):
                         f"(state-driven exit on turn {turn})"
                     )
                     _trace.log_step_complete(True, summary)
+                    await self._persist_memory(state)
                     return AgentOutput(
                         status="success",
                         payload=tool_result,
@@ -868,9 +952,9 @@ class BaseSubAgent(ABC):
                 expected = [p for p in sig.parameters if p != "self"]
             except (ValueError, TypeError):
                 expected = ["(could not inspect)"]
-            logger.warning(
-                f"[{self.role}] Tool '{tool_name}' received malformed params "
-                f"(JSON parse failed). Expected: {expected}"
+            self._log.warning(
+                "Tool '%s' received malformed params (JSON parse failed). Expected: %s",
+                tool_name, expected,
             )
             return {
                 "status": "error",
@@ -896,7 +980,7 @@ class BaseSubAgent(ABC):
                 result["status"] = "success"
             return result
         except Exception as e:
-            logger.warning(f"[{self.role}] Tool '{tool_name}' failed: {e}")
+            self._log.warning("Tool '%s' failed: %s", tool_name, e)
             return {"status": "error", "error": str(e)}
 
     # ──────────────────────────────────────────────────────────────────────
