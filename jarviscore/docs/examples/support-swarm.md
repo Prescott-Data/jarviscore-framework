@@ -4,14 +4,14 @@ icon: material/lifebuoy
 
 # Customer Support Swarm
 
-[:fontawesome-brands-github: View full source](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/ex3_support_swarm.py){ .md-button }
+[:fontawesome-brands-github: View full source](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/support_swarm.py){ .md-button }
 
 | | |
 |---|---|
 | **Profile** | `CustomAgent` |
 | **Infra required** | Redis + P2P (`p2p_enabled: True`) |
 | **Agents** | `GatewayAgent`, `TechnicalAgent`, `BillingAgent`, `EscalationAgent` |
-| **Run** | `python examples/ex3_support_swarm.py` |
+| **Run** | `python examples/support_swarm.py` |
 
 ---
 
@@ -104,22 +104,27 @@ class TechnicalAgent(CustomAgent):
 
     async def handle_query(self, query: str, customer_id: str) -> str:
         if self._auth_manager:  # (2)!
-            result = await self._auth_manager.make_authenticated_request(
-                provider="github",
-                method="GET",
-                url="https://api.github.com/user",
-            )
+            # get_connection_id() triggers the full Nexus flow:
+            # request_connection → browser OAuth → poll ACTIVE → resolve_strategy
+            connection_id = await self._auth_manager.get_connection_id("github")  # (3)!
+
+            # Make authenticated API calls using NexusCallProxy
+            from jarviscore.auth.nexus import NexusCallProxy
+            proxy = NexusCallProxy(connection_id)
+            result = await proxy.get("https://api.github.com/user")
+            # result = {"status_code": 200, "body": {...}}
 ```
 
 1. Setting `requires_auth = True` tells `Mesh.start()` to inject an `AuthenticationManager` as `self._auth_manager`.
-2. On the first call, triggers the full Nexus flow: `request_connection → browser OAuth → poll ACTIVE → resolve_strategy → inject Authorization header`.
+2. `self._auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set — guard with `if self._auth_manager` to degrade gracefully.
+3. `get_connection_id()` drives the full Nexus protocol: `POST /v1/request-connection` → browser OAuth consent → `GET /v1/check-connection/{id}` poll until `ACTIVE` → `GET /v1/token/{id}` resolve strategy. The `connection_id` is then passed to `NexusCallProxy` which injects the correct `Authorization` header for every outbound request.
 
 **To test the real Nexus flow**, set in `.env`:
 ```bash
 NEXUS_GATEWAY_URL=https://your-dromos-gateway.example.com
 ```
 
-Without `NEXUS_GATEWAY_URL`, the agent runs in development mode and skips auth gracefully (logs `WARNING`, not `ERROR`).
+Without `NEXUS_GATEWAY_URL`, `_auth_manager` is injected but raises `ValueError` on the first call. The example catches this and logs it as a `WARNING`, not an `ERROR`, so the rest of the swarm continues unaffected.
 
 ---
 

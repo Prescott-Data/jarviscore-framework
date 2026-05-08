@@ -1,5 +1,5 @@
 """
-Example 1 — Financial Intelligence Pipeline
+Financial Intelligence Pipeline
 ============================================
 Profile  : AutoAgent
 Mode     : Autonomous (single process, workflow engine only — no P2P)
@@ -21,7 +21,7 @@ Prerequisites
     docker compose -f docker-compose.infra.yml up -d   # Redis
     cp .env.example .env                               # then set CLAUDE_API_KEY
     pip install -e ".[redis,prometheus]"
-    python examples/ex1_financial_pipeline.py
+    python examples/financial_pipeline.py
 
 Success criteria
 ----------------
@@ -213,7 +213,7 @@ class ReportAgent(AutoAgent):
 
 async def main():
     print("\n" + "=" * 70)
-    print("JarvisCore — Example 1: Financial Intelligence Pipeline")
+    print("JarvisCore — Financial Intelligence Pipeline")
     print("AutoAgent | Autonomous Mode | Phases 1, 5, 7, 8, 9")
     print("=" * 70)
 

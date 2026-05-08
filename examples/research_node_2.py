@@ -1,12 +1,12 @@
 """
-Example 2 — Distributed Research Network  |  Node 2: Market Researcher
+Distributed Research Network  |  Node 2: Market Researcher
 =======================================================================
 Profile  : AutoAgent
 Mode     : Distributed (SWIM P2P + WorkflowEngine)
 Role     : market_researcher — covers AI investment and venture trends
 
 Run after starting the synthesizer (port 7949):
-    python examples/ex2_research_node2.py
+    python examples/research_node_2.py
 
 Phases exercised (node 2)
 --------------------------
@@ -79,7 +79,7 @@ class MarketResearchAgent(AutoAgent):
 
 async def main():
     print("\n" + "=" * 70)
-    print("JarvisCore — Example 2: Node 2 (Market Researcher)")
+    print("JarvisCore — Distributed Research Network: Node 2 (Market Researcher)")
     print("AutoAgent | Distributed Mode | Port 7947 → Seed 7949")
     print("=" * 70)
 

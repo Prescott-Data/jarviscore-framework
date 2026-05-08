@@ -379,7 +379,7 @@ The [Support Swarm example](../examples/support-swarm.md) shows four `CustomAgen
 ```bash
 docker compose -f docker-compose.infra.yml up -d
 cp .env.example .env   # set GEMINI_API_KEY, REDIS_URL, NEXUS_GATEWAY_URL
-python examples/ex3_support_swarm.py
+python examples/support_swarm.py
 ```
 
 The [Content Pipeline example](../examples/content-pipeline.md) shows a `CustomAgent` (`PublisherAgent`) running alongside `AutoAgent` research and writing agents in a distributed workflow. The publisher coordinates final delivery and blob storage persistence.

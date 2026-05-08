@@ -1,5 +1,5 @@
 """
-Example 2 — Distributed Research Network  |  Synthesizer Node
+Distributed Research Network  |  Synthesizer Node
 ==============================================================
 Profile  : AutoAgent
 Mode     : Distributed (SWIM P2P + WorkflowEngine)
@@ -10,10 +10,10 @@ Role     : synthesizer — starts last, defines the full 4-step workflow,
 IMPORTANT: Start this script FIRST — it is the SWIM seed node (port 7949).
 Then start nodes 1, 2, 3 in separate terminals.
 
-    Terminal A: python examples/ex2_synthesizer.py       ← start FIRST
-    Terminal B: python examples/ex2_research_node1.py
-    Terminal C: python examples/ex2_research_node2.py
-    Terminal D: python examples/ex2_research_node3.py
+    Terminal A: python examples/research_synthesizer.py  ← start FIRST
+    Terminal B: python examples/research_node_1.py
+    Terminal C: python examples/research_node_2.py
+    Terminal D: python examples/research_node_3.py
 
 How it works
 ------------
@@ -118,7 +118,7 @@ class SynthesizerAgent(AutoAgent):
 
 async def main():
     print("\n" + "=" * 70)
-    print("JarvisCore — Example 2: Synthesizer (SWIM Seed)")
+    print("JarvisCore — Distributed Research Network: Synthesizer (SWIM Seed)")
     print("AutoAgent | Distributed Mode | Port 7949 (seed)")
     print("=" * 70)
     print("""

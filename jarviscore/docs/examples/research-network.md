@@ -35,12 +35,12 @@ No manual wiring. Each node declares its capabilities and the mesh's distributed
 
 ```bash
 # Terminal A — start synthesizer FIRST (it is the SWIM seed)
-python examples/ex2_synthesizer.py
+python examples/research_synthesizer.py
 
 # Then start nodes in any order
-python examples/ex2_research_node1.py   # Terminal B
-python examples/ex2_research_node2.py   # Terminal C  
-python examples/ex2_research_node3.py   # Terminal D
+python examples/research_node_1.py   # Terminal B
+python examples/research_node_2.py   # Terminal C  
+python examples/research_node_3.py   # Terminal D
 ```
 
 Wait for the synthesizer to print `Research synthesis complete`.

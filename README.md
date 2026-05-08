@@ -143,27 +143,27 @@ All examples require Redis (`docker compose -f docker-compose.infra.yml up -d`).
 
 | Example | Mode | Profile |
 |---------|------|---------|
-| Ex1 — Financial Pipeline | autonomous | AutoAgent |
-| Ex2 — Research Network (4 nodes) | distributed | AutoAgent |
-| Ex3 — Support Swarm | p2p | CustomAgent |
-| Ex4 — Content Pipeline | distributed | CustomAgent |
+| Financial Pipeline | autonomous | AutoAgent |
+| Research Network (4 nodes) | distributed | AutoAgent |
+| Support Swarm | p2p | CustomAgent |
+| Content Pipeline | distributed | CustomAgent |
 | Investment Committee | autonomous | AutoAgent + CustomAgent |
 
 ```bash
-# Ex1: Financial pipeline (single process)
-python examples/ex1_financial_pipeline.py
+# Financial pipeline (single process)
+python examples/financial_pipeline.py
 
-# Ex2: 4-node distributed research network
-python examples/ex2_synthesizer.py &       # Start seed first (port 7949)
-python examples/ex2_research_node1.py &    # port 7946
-python examples/ex2_research_node2.py &    # port 7947
-python examples/ex2_research_node3.py &    # port 7948
+# 4-node distributed research network
+python examples/research_synthesizer.py &  # Start seed first (port 7949)
+python examples/research_node_1.py &       # port 7946
+python examples/research_node_2.py &       # port 7947
+python examples/research_node_3.py &       # port 7948
 
-# Ex3: Customer support swarm (P2P + optional Nexus OSS auth)
-python examples/ex3_support_swarm.py
+# Customer support swarm (P2P + optional Nexus OSS auth)
+python examples/support_swarm.py
 
-# Ex4: Content pipeline with LTM (sequential, single process)
-python examples/ex4_content_pipeline.py
+# Content pipeline with LTM (sequential, single process)
+python examples/content_pipeline.py
 
 # Investment Committee: 7-agent workflow with web dashboard
 cd examples/investment_committee

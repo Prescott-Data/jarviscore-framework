@@ -4,14 +4,14 @@ icon: material/trending-up
 
 # Financial Intelligence Pipeline
 
-[:fontawesome-brands-github: View full source](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/ex1_financial_pipeline.py){ .md-button }
+[:fontawesome-brands-github: View full source](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/financial_pipeline.py){ .md-button }
 
 | | |
 |---|---|
 | **Profile** | `AutoAgent` |
 | **Infra required** | Redis (auto-detected from `REDIS_URL`) |
 | **Workflow** | `fetch → analyse → report` |
-| **Run** | `python examples/ex1_financial_pipeline.py` |
+| **Run** | `python examples/financial_pipeline.py` |
 
 ---
 
@@ -35,7 +35,9 @@ The final Markdown briefing is saved to `blob_storage/reports/financial-daily-00
 from jarviscore import Mesh
 from jarviscore.profiles import AutoAgent
 
-mesh = Mesh()           # No mode — Mesh auto-detects Redis from REDIS_URL (1)
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+mesh = Mesh(config={"redis_url": REDIS_URL})  # (1)!
 mesh.add(MarketDataAgent)
 mesh.add(AnalysisAgent)
 mesh.add(ReportAgent)
@@ -62,7 +64,7 @@ results = await mesh.workflow("financial-daily-001", [
 ])
 ```
 
-1. `Mesh()` with no arguments. Set `REDIS_URL` in `.env` and the Mesh connects automatically. No need to specify a mode.
+1. Pass `redis_url` in the config dict. The Mesh detects the Redis connection at `start()` time and activates the workflow engine with persistence automatically. No `mode=` argument needed.
 2. `depends_on` tells the `WorkflowEngine` to wait until `fetch` succeeds. The `fetch` output is injected into the analyst's execution context automatically.
 3. Chained dependency — `report` waits for `analyse`. Context includes both prior step outputs.
 
@@ -99,8 +101,8 @@ class MarketDataAgent(AutoAgent):
 The workflow uses a deterministic `workflow_id`. Re-running skips already-completed steps:
 
 ```bash
-python examples/ex1_financial_pipeline.py   # crashes after "fetch"
-python examples/ex1_financial_pipeline.py   # re-run: skips "fetch", continues from "analyse"
+python examples/financial_pipeline.py   # crashes after "fetch"
+python examples/financial_pipeline.py   # re-run: skips "fetch", continues from "analyse"
 ```
 
 Verify in Redis:

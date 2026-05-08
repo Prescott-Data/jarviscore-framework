@@ -18,8 +18,8 @@ or as per-process env vars — not in a shared .env file.
     })
 
     # Alternative: per-process env vars (set at launch, not in .env)
-    JARVISCORE_BIND_PORT=7949 python ex2_synthesizer.py
-    JARVISCORE_BIND_PORT=7946 python ex2_research_node1.py
+    JARVISCORE_BIND_PORT=7949 python research_synthesizer.py
+    JARVISCORE_BIND_PORT=7946 python research_node_1.py
 """
 import os
 from typing import Optional

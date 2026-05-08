@@ -197,10 +197,10 @@ Before each agent's `setup()`, the Mesh injects `_redis_store`, `_blob_storage`,
 
 **Production Examples**
 
-- `ex1_financial_pipeline.py` — AutoAgent autonomous, 3-step financial analysis pipeline.
-- `ex2_synthesizer.py` + `ex2_research_node1/2/3.py` — AutoAgent 4-node SWIM research cluster.
-- `ex3_support_swarm.py` — CustomAgent P2P, 4-agent support routing with Nexus auth.
-- `ex4_content_pipeline.py` — CustomAgent distributed, content pipeline with LTM.
+- `financial_pipeline.py` — AutoAgent autonomous, 3-step financial analysis pipeline.
+- `research_synthesizer.py` + `research_node_1/2/3.py` — AutoAgent 4-node SWIM research cluster.
+- `support_swarm.py` — CustomAgent P2P, 4-agent support routing with Nexus auth.
+- `content_pipeline.py` — CustomAgent distributed, content pipeline with LTM.
 
 **Fixed**
 

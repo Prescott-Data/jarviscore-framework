@@ -4,14 +4,14 @@ icon: material/text-box-edit
 
 # Content Production Pipeline
 
-[:fontawesome-brands-github: View full source](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/ex4_content_pipeline.py){ .md-button }
+[:fontawesome-brands-github: View full source](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/content_pipeline.py){ .md-button }
 
 | | |
 |---|---|
 | **Profile** | `CustomAgent` |
 | **Infra required** | Redis (auto-detected from `REDIS_URL`) |
 | **Workflow** | `research → write → seo → publish` |
-| **Run** | `python examples/ex4_content_pipeline.py` |
+| **Run** | `python examples/content_pipeline.py` |
 
 ---
 

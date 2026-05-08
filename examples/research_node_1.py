@@ -1,5 +1,5 @@
 """
-Example 2 — Distributed Research Network  |  Node 1: Technology Researcher
+Distributed Research Network  |  Node 1: Technology Researcher
 ===========================================================================
 Profile  : AutoAgent
 Mode     : Distributed (SWIM P2P + WorkflowEngine)
@@ -9,10 +9,10 @@ Run order
 ---------
 Start the synthesizer FIRST (it is the SWIM seed), then start nodes 1-3:
 
-    Terminal A: python examples/ex2_synthesizer.py          # starts on port 7949
-    Terminal B: python examples/ex2_research_node1.py       # connects to 7949
-    Terminal C: python examples/ex2_research_node2.py       # connects to 7949
-    Terminal D: python examples/ex2_research_node3.py       # connects to 7949
+    Terminal A: python examples/research_synthesizer.py     # starts on port 7949
+    Terminal B: python examples/research_node_1.py          # connects to 7949
+    Terminal C: python examples/research_node_2.py          # connects to 7949
+    Terminal D: python examples/research_node_3.py          # connects to 7949
 
 The synthesizer submits the 4-step workflow. The Mesh's built-in distributed
 worker scans Redis for pending steps matching each node's capabilities and
@@ -86,7 +86,7 @@ class TechResearchAgent(AutoAgent):
 
 async def main():
     print("\n" + "=" * 70)
-    print("JarvisCore — Example 2: Node 1 (Technology Researcher)")
+    print("JarvisCore — Distributed Research Network: Node 1 (Technology Researcher)")
     print("AutoAgent | Distributed Mode | Port 7946 → Seed 7949")
     print("=" * 70)
 

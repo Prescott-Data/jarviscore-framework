@@ -1,12 +1,12 @@
 """
-Example 2 — Distributed Research Network  |  Node 3: Regulatory Researcher
+Distributed Research Network  |  Node 3: Regulatory Researcher
 ===========================================================================
 Profile  : AutoAgent
 Mode     : Distributed (SWIM P2P + WorkflowEngine)
 Role     : reg_researcher — covers AI regulation and policy developments
 
 Run after starting the synthesizer (port 7949):
-    python examples/ex2_research_node3.py
+    python examples/research_node_3.py
 
 Phases exercised (node 3)
 --------------------------
@@ -88,7 +88,7 @@ class RegResearchAgent(AutoAgent):
 
 async def main():
     print("\n" + "=" * 70)
-    print("JarvisCore — Example 2: Node 3 (Regulatory Researcher)")
+    print("JarvisCore — Distributed Research Network: Node 3 (Regulatory Researcher)")
     print("AutoAgent | Distributed Mode | Port 7948 → Seed 7949")
     print("=" * 70)
 

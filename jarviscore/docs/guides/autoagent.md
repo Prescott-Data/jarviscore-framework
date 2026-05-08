@@ -408,12 +408,12 @@ Per-agent escalation targets are configured in the agent profile YAML under `esc
 
 ## Production Example: Financial Pipeline
 
-The `ex1_financial_pipeline.py` example runs three AutoAgents sequentially — a market data fetcher, an analyst, and a report writer — with Redis crash recovery, UnifiedMemory episodic logging, and blob storage output.
+The `financial_pipeline.py` example runs three AutoAgents sequentially — a market data fetcher, an analyst, and a report writer — with Redis crash recovery, UnifiedMemory episodic logging, and blob storage output.
 
 ```bash
 docker compose -f docker-compose.infra.yml up -d
 cp .env.example .env   # set GEMINI_API_KEY and REDIS_URL
-python examples/ex1_financial_pipeline.py
+python examples/financial_pipeline.py
 ```
 
 Verify the outputs:

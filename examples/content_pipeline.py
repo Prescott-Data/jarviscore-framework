@@ -1,5 +1,5 @@
 """
-Example 4 — Content Production Pipeline
+Content Production Pipeline
 ========================================
 Profile  : CustomAgent
 Mode     : Distributed (SWIM P2P + WorkflowEngine)
@@ -27,7 +27,7 @@ Prerequisites
     docker compose -f docker-compose.infra.yml up -d
     cp .env.example .env  # set CLAUDE_API_KEY
     pip install -e ".[redis,prometheus]"
-    python examples/ex4_content_pipeline.py
+    python examples/content_pipeline.py
 
 Success criteria
 ----------------
@@ -438,7 +438,7 @@ workflow_id: "{WORKFLOW_ID}"
 
 async def main():
     print("\n" + "=" * 70)
-    print("JarvisCore — Example 4: Content Production Pipeline")
+    print("JarvisCore — Content Production Pipeline")
     print("CustomAgent | Distributed Mode | Phases 1, 4, 5, 7, 8, 9")
     print("=" * 70)
 

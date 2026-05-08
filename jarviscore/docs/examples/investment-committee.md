@@ -117,6 +117,48 @@ results = await mesh.workflow(wf_id, steps)
 
 ---
 
+## Key pattern: processing AutoAgent output
+
+`AutoAgent` steps return their result via sandbox execution. The LLM sometimes wraps the JSON in a Markdown code fence (```` ```json ... ``` ````), so accessing `result["output"]` directly may give you a string instead of a dict. Use `_extract_output()` to handle both:
+
+```python
+import json, re
+
+def _extract_output(result: dict) -> dict:
+    """Return the step output as a dict, parsing JSON string if needed."""
+    raw = result.get("output", {})
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        clean = re.sub(r"^```[a-z]*\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE).strip()
+        try:
+            parsed = json.loads(clean)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
+
+# Index results by step id, then extract safely
+by_id = {r.get("step_id") or steps[i]["id"]: r for i, r in enumerate(results)}
+
+dec = by_id.get("final_decision", {})
+out = _extract_output(dec)          # (1)!
+print(f"Action:     {out.get('action')}")
+print(f"Allocation: ${out.get('allocation_usd', 0):,.0f}")
+print(f"Conviction: {out.get('conviction')}")
+```
+
+1. `_extract_output()` strips Markdown fences, attempts `json.loads()`, and falls back to an empty dict — so the rest of your code never has to branch on whether the output is a string or a dict.
+
+The same pattern applies inside `CommitteeChairAgent` when reading the memo from a prior step:
+
+```python
+memo = _as_dict(memo_entry.get("output") or {})  # handles string or dict output
+```
+
+---
+
 ## Expected output (full mode)
 
 ```

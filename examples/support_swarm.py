@@ -1,5 +1,5 @@
 """
-Example 3 — Real-Time Customer Support Swarm
+Real-Time Customer Support Swarm
 =============================================
 Profile  : CustomAgent
 Mode     : P2P (SWIM discovery + ZMQ messaging, no workflow engine)
@@ -39,7 +39,7 @@ Prerequisites
 
     docker compose -f docker-compose.infra.yml up -d   # Redis
     pip install -e ".[redis,prometheus]"
-    python examples/ex3_support_swarm.py
+    python examples/support_swarm.py
 
 Agents
 ------
@@ -364,7 +364,7 @@ class GatewayAgent(CustomAgent):
 
 async def main():
     print("\n" + "=" * 70)
-    print("JarvisCore — Example 3: Customer Support Swarm")
+    print("JarvisCore — Customer Support Swarm")
     print("CustomAgent | P2P Mode | Production Auth (Real Nexus Gateway)")
     print("=" * 70)
 
