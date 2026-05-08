@@ -96,11 +96,17 @@ class Settings(BaseSettings):
     azure_deployment: str = "gpt-4o"
     azure_api_version: str = "2024-02-15-preview"
 
-    # Gemini
+    # Gemini (API Key auth)
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.0-flash"
     gemini_temperature: float = 0.1
     gemini_timeout: float = 30.0
+
+    # Vertex AI (GCP-native Gemini via Application Default Credentials)
+    vertex_ai_enabled: bool = False
+    vertex_ai_project: Optional[str] = None
+    vertex_ai_location: str = "us-central1"
+    vertex_ai_model: str = "gemini-2.5-flash"
 
     # vLLM
     llm_endpoint: Optional[str] = None

@@ -689,6 +689,40 @@ class UnifiedLLMClient:
             "duration_seconds": duration,
         }
 
+    @staticmethod
+    def _normalize_tools_for_gemini(tools) -> list:
+        """Auto-detect and convert tool schemas to Gemini function_declarations format.
+
+        Accepts three input shapes:
+        1. Already Gemini-native (list of dicts with 'function_declarations' key) → pass through.
+        2. Anthropic / JarvisCore PeerTool style (list of dicts with 'input_schema' key)
+           → rename 'input_schema' to 'parameters' and wrap in function_declarations.
+        3. Flat list of dicts with 'name'+'parameters' already → wrap in function_declarations.
+        """
+        if not tools:
+            return tools
+
+        if isinstance(tools, list) and tools and isinstance(tools[0], dict):
+            if "function_declarations" in tools[0]:
+                return tools
+
+        raw_schemas = tools if isinstance(tools, list) else [tools]
+
+        converted = []
+        for schema in raw_schemas:
+            if not isinstance(schema, dict):
+                continue
+            if "input_schema" in schema:
+                converted.append({
+                    "name": schema.get("name"),
+                    "description": schema.get("description", ""),
+                    "parameters": schema["input_schema"],
+                })
+            else:
+                converted.append(schema)
+
+        return [{"function_declarations": converted}] if converted else tools
+
     async def _call_gemini(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
         """Call Google Gemini using the new google.genai SDK."""
         if not self.gemini_client:
