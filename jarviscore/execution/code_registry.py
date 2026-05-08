@@ -1044,10 +1044,13 @@ class FunctionRegistry:
             return
 
         meta_file = self.metadata_path / f"{function_name}.json"
-        # Convert Path objects and sets for JSON serialization
+        # Convert Path objects and sets for JSON serialization.
+        # oauth_metadata holds runtime auth tokens — never write to disk in plaintext.
         serializable = {}
         for k, v in metadata.items():
-            if isinstance(v, Path):
+            if k == "oauth_metadata":
+                continue
+            elif isinstance(v, Path):
                 serializable[k] = str(v)
             elif isinstance(v, set):
                 serializable[k] = sorted(v)
