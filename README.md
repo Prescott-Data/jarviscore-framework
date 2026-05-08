@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Build, orchestrate, and deploy multi-agent systems with peer-to-peer coordination, unified memory, 237 prebuilt service integrations, and full observability.</strong>
+  <strong>Build, orchestrate, and deploy multi-agent systems with peer-to-peer coordination, unified memory, 46 prebuilt service bundles (237 atoms), and full observability.</strong>
 </p>
 
 <p align="center">
