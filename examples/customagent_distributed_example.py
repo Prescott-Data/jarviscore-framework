@@ -244,7 +244,7 @@ async def main():
     print("="*70)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # KEY: mode="distributed" gives you BOTH P2P AND workflow orchestration
+    # KEY: p2p_enabled=True in config gives you BOTH P2P AND workflow orchestration
     # ─────────────────────────────────────────────────────────────────────────
     mesh = Mesh(
         config={

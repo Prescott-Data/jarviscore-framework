@@ -73,7 +73,7 @@ async def main():
     print("="*70)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # KEY DIFFERENCE: mode="distributed" with P2P configuration
+    # KEY DIFFERENCE: p2p_enabled=True in config for distributed P2P mode
     # ─────────────────────────────────────────────────────────────────────────
     mesh = Mesh(
         config={
