@@ -404,7 +404,7 @@ class PeerAwareAgent(CustomAgent):
 @pytest.fixture
 async def distributed_mesh_single():
     """Create distributed mesh with single CustomAgent."""
-    mesh = Mesh(mode="distributed", config={'bind_port': 7990})
+    mesh = Mesh(config={'p2p_enabled': True, 'bind_port': 7990})
     agent = mesh.add(LLMResearchAgent)
 
     await mesh.start()
@@ -417,7 +417,7 @@ async def distributed_mesh_single():
 @pytest.fixture
 async def distributed_mesh_pipeline():
     """Create distributed mesh with multiple CustomAgents for pipeline."""
-    mesh = Mesh(mode="distributed", config={'bind_port': 7991})
+    mesh = Mesh(config={'p2p_enabled': True, 'bind_port': 7991})
 
     researcher = mesh.add(LLMResearchAgent)
     writer = mesh.add(LLMWriterAgent)
@@ -433,7 +433,7 @@ async def distributed_mesh_pipeline():
 @pytest.fixture
 async def distributed_mesh_with_peers():
     """Create distributed mesh with peer-aware agents."""
-    mesh = Mesh(mode="distributed", config={'bind_port': 7992})
+    mesh = Mesh(config={'p2p_enabled': True, 'bind_port': 7992})
 
     coordinator = mesh.add(PeerAwareAgent)
     researcher = mesh.add(LLMResearchAgent)
@@ -735,7 +735,7 @@ async def run_customagent_demo():
     print("CUSTOMAGENT DISTRIBUTED MODE DEMONSTRATION")
     print("="*70)
 
-    mesh = Mesh(mode="distributed", config={'bind_port': 7995})
+    mesh = Mesh(config={'p2p_enabled': True, 'bind_port': 7995})
 
     mesh.add(LLMResearchAgent)
     mesh.add(LLMWriterAgent)

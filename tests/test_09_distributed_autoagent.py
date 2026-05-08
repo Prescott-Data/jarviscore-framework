@@ -89,7 +89,8 @@ a dictionary with 'report' key. Use only standard library for formatting."""
 @pytest.fixture
 async def distributed_mesh_math():
     """Create distributed mesh with MathAgent."""
-    mesh = Mesh(mode="distributed", config={
+    mesh = Mesh(config={
+        'p2p_enabled': True,
         'bind_port': 7980,
         'execution_timeout': 60,
         'max_repair_attempts': 2,
@@ -107,7 +108,8 @@ async def distributed_mesh_math():
 @pytest.fixture
 async def distributed_mesh_pipeline():
     """Create distributed mesh with multiple AutoAgents for pipeline testing."""
-    mesh = Mesh(mode="distributed", config={
+    mesh = Mesh(config={
+        'p2p_enabled': True,
         'bind_port': 7981,
         'execution_timeout': 60,
         'max_repair_attempts': 2,
