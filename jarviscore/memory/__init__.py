@@ -1,5 +1,5 @@
 """
-Memory module for JarvisCore v1.0.2.
+Memory module for JarvisCore v1.0.3.
 
 Three-tier baseline memory (Redis + Blob, zero extra deps):
   WorkingScratchpad  — per-step JSONL notes in BlobStorage

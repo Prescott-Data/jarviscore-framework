@@ -45,7 +45,7 @@ Autonomous agents (with run() loops):
     await mesh.run_forever()   # Starts run() loops, blocks until Ctrl+C
 """
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 __author__ = "JarvisCore Contributors"
 __license__ = "Apache-2.0"
 
