@@ -1,0 +1,36 @@
+name: Question
+description: Ask how to use a feature or understand a behaviour
+labels: ["question"]
+assignees: ["Ruth-mutua"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Not sure how something works? Ask here. For bugs use the Bug Report template.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: Be as specific as possible — include the component and what you've already tried.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: What have you tried?
+      description: Docs, examples, or code you've looked at.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: JarvisCore version
+      options:
+        - "1.0.3"
+        - "1.0.2"
+        - "main (unreleased)"
+    validations:
+      required: false

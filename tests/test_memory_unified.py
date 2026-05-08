@@ -153,6 +153,8 @@ class TestRehydrateBundle:
         await mem.log_turn("t1", "reasoning", "tool_call", "result")
         await mem.save_checkpoint('{"state": "ok"}')
         await mem.ltm.save_summary("Prior: processed 100 records")
+        # Scratchpad get_notes() returns only goal-scoped entries — write one directly
+        await mem.working.write("finding", {"content": "Key finding"}, scope="goal")
 
         bundle = await mem.rehydrate_bundle(ledger_tail=5)
 

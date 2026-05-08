@@ -61,7 +61,7 @@ async def main():
     # Framework tries: Claude → Azure → Gemini → vLLM
 
     # Create mesh with all agents
-    mesh = Mesh(mode="autonomous")
+    mesh = Mesh()
     mesh.add(DataGeneratorAgent)
     mesh.add(DataAnalyzerAgent)
     mesh.add(ReportGeneratorAgent)

@@ -7,10 +7,18 @@ workflow DAG, episodic ledger, checkpoints, trace events, and HITL requests.
 
 import json
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
 import redis
+
+from jarviscore.contracts.hitl import (
+    HITLRequest,
+    HITLResolution,
+    HITLStatus,
+    normalize_hitl_decision,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,13 +72,95 @@ class RedisContextStore:
     # Step Outputs
     # ------------------------------------------------------------------
 
+    # Env-tunable size caps (bytes of serialised JSON).
+    # Outputs above STEP_OUTPUT_MAX_BYTES are stored as a truncated preview
+    # with an _overflow flag so downstream steps know to retrieve the full
+    # result from blob storage rather than expect it inline.
+    _STEP_OUTPUT_MAX_BYTES: int = int(
+        os.getenv("STEP_OUTPUT_MAX_BYTES", str(200_000))
+    )  # 200 KB default
+    _STEP_OUTPUT_PREVIEW_BYTES: int = int(
+        os.getenv("STEP_OUTPUT_PREVIEW_BYTES", str(20_000))
+    )  # 20 KB preview
+
     def save_step_output(self, workflow_id: str, step_id: str,
                          output: Any = None, summary: str = None,
                          context_vars: Dict = None) -> bool:
-        """Save step result to Redis."""
+        """
+        Save step result to Redis.
+
+        Idempotent write guard: if a successful result already exists for this
+        step, a subsequent call carrying an error payload (e.g. from a stalled
+        re-execution) will not overwrite it. This prevents the last-write-wins
+        race condition that poisons downstream context with stale error data.
+
+        Payload size guard: outputs larger than STEP_OUTPUT_MAX_BYTES are
+        stored as a truncated preview with an _overflow marker. The full
+        payload should be written to blob storage by the caller; downstream
+        steps receive the preview in their context window and can retrieve the
+        full artifact via blob storage if they need the complete data.
+        """
         key = f"step_output:{workflow_id}:{step_id}"
+
+        # ── Idempotent write guard ────────────────────────────────────────────
+        # Protect a valid prior result from being overwritten by an error payload
+        # produced by a retry or crash-resumed execution.
+        existing_raw = self._redis.hget(key, "output")
+        if existing_raw:
+            try:
+                existing_output = json.loads(existing_raw)
+                existing_ok = (
+                    (isinstance(existing_output, dict) and existing_output.get("success") is True)
+                    or (isinstance(existing_output, list) and len(existing_output) > 0)
+                )
+                new_is_error = False
+                if isinstance(output, dict):
+                    new_is_error = (
+                        output.get("success") is False
+                        or "CONVERGENCE_STALL" in str(output.get("error", ""))
+                        or "CONVERGENCE_STALL" in str(output.get("status", ""))
+                    )
+                elif isinstance(output, str) and "CONVERGENCE_STALL" in output:
+                    new_is_error = True
+                if existing_ok and new_is_error:
+                    logger.warning(
+                        "[IDEMPOTENT GUARD] Blocked overwrite of valid output for "
+                        "%s:%s by erroneous re-execution payload.",
+                        workflow_id, step_id,
+                    )
+                    return True
+            except Exception:
+                pass  # Cannot parse existing — allow the write
+
+        # ── Payload size guard ───────────────────────────────────────────────
+        # Serialise first so we know the exact byte cost before pushing to Redis.
+        try:
+            output_serialised = json.dumps(output) if output is not None else None
+        except Exception:
+            output_serialised = str(output)
+
+        output_to_store = output_serialised
+        if output_serialised and len(output_serialised) > self._STEP_OUTPUT_MAX_BYTES:
+            preview = output_serialised[: self._STEP_OUTPUT_PREVIEW_BYTES]
+            output_to_store = json.dumps({
+                "_overflow": True,
+                "_size_bytes": len(output_serialised),
+                "_preview": preview,
+                "_note": (
+                    "Output exceeded STEP_OUTPUT_MAX_BYTES. "
+                    "Retrieve full result from blob storage using "
+                    f"workflow_id={workflow_id}, step_id={step_id}."
+                ),
+            })
+            logger.warning(
+                "Step output for %s:%s exceeds %d bytes (%d bytes). "
+                "Storing preview only — write full output to blob storage.",
+                workflow_id, step_id,
+                self._STEP_OUTPUT_MAX_BYTES, len(output_serialised),
+            )
+
         data = {
-            "output": json.dumps(output) if output is not None else None,
+            "output": output_to_store,
             "summary": summary or "",
             "context_vars": json.dumps(context_vars or {}),
             "timestamp": time.time(),
@@ -127,7 +217,7 @@ class RedisContextStore:
             self._redis.hset(key, mapping=flat)
             self._redis.expire(key, self._ttl_seconds)
         if source:
-            self._redis.hset(f"{key}:sources", source, json.dumps(list(updates.keys())))
+            self._redis.hset(f"{key}:sources", mapping={source: json.dumps(list(updates.keys()))})
         return True
 
     def merge_shared_facts(self, workflow_id: str, facts: Dict,
@@ -136,11 +226,11 @@ class RedisContextStore:
         key = f"shared_facts:{workflow_id}"
         for fact_key, fact_value in facts.items():
             serialized = json.dumps(fact_value) if not isinstance(fact_value, str) else fact_value
-            self._redis.hset(key, fact_key, serialized)
+            self._redis.hset(key, mapping={fact_key: serialized})
         self._redis.expire(key, self._ttl_seconds)
         if source:
             meta_key = f"{key}:sources"
-            self._redis.hset(meta_key, source, json.dumps(list(facts.keys())))
+            self._redis.hset(meta_key, mapping={source: json.dumps(list(facts.keys()))})
             self._redis.expire(meta_key, self._ttl_seconds)
         return True
 
@@ -184,19 +274,36 @@ class RedisContextStore:
     # ------------------------------------------------------------------
 
     def send_mailbox_message(self, target_id: str, message: Dict) -> bool:
-        """Send a durable message to an agent's mailbox."""
+        """
+        Send a durable message to an agent's mailbox.
+
+        Schema (flat — single JSON object per Redis List entry):
+            {
+                "sender":      "<agent_id>",
+                "message":     { ... },          # the actual payload
+                "timestamp":   <float>,          # arrival epoch, set here if absent
+                "workflow_id": "...",            # optional
+                "step_id":     "...",            # optional
+            }
+
+        The envelope is stored flat — no outer wrapper.  MailboxManager._flatten()
+        and the dashboard _unwrap_mailbox_entry() both expect this flat schema.
+        """
         key = f"mailbox:{target_id}"
-        entry = json.dumps({
-            "message": message,
-            "timestamp": time.time(),
-        })
-        self._redis.rpush(key, entry)
+        # Stamp arrival time at the storage layer if the caller didn't.
+        if "timestamp" not in message:
+            message = {**message, "timestamp": time.time()}
+        self._redis.rpush(key, json.dumps(message))
         self._redis.expire(key, self._ttl_seconds)
         return True
 
     def read_mailbox(self, agent_id: str,
                      max_messages: int = 10) -> List[Dict]:
-        """Drain messages from agent's mailbox (destructive read)."""
+        """
+        Drain messages from agent's mailbox (destructive, FIFO).
+
+        Returns a list of flat envelope dicts — no outer wrapper.
+        """
         key = f"mailbox:{agent_id}"
         messages = []
         for _ in range(max_messages):
@@ -210,7 +317,11 @@ class RedisContextStore:
         return messages
 
     def peek_mailbox(self, agent_id: str, limit: int = 10) -> List[Dict]:
-        """Non-destructive peek at agent's mailbox."""
+        """
+        Non-destructive peek at agent's mailbox.
+
+        Returns a list of flat envelope dicts — messages remain in queue.
+        """
         key = f"mailbox:{agent_id}"
         raw_list = self._redis.lrange(key, 0, limit - 1)
         messages = []
@@ -267,7 +378,7 @@ class RedisContextStore:
             data = {}
         data["status"] = status
         data["updated_at"] = time.time()
-        self._redis.hset(key, step_id, json.dumps(data))
+        self._redis.hset(key, mapping={step_id: json.dumps(data)})
         return True
 
     def are_dependencies_met(self, workflow_id: str, step_id: str) -> bool:
@@ -293,10 +404,11 @@ class RedisContextStore:
                    agent_id: str) -> bool:
         """Atomically claim a step for an agent (prevents double-execution)."""
         lock_key = f"step_lock:{workflow_id}:{step_id}"
-        # SETNX-based atomic claim
-        acquired = self._redis.set(lock_key, agent_id, nx=True,
-                                   ex=self._ttl_seconds)
+        # redis-py >=7.x rejects SET NX EX in one call — split into two:
+        # SET key value NX (atomic claim), then EXPIRE only if acquired.
+        acquired = self._redis.set(lock_key, agent_id, nx=True)
         if acquired:
+            self._redis.expire(lock_key, self._ttl_seconds)
             self.update_step_status(workflow_id, step_id, "in_progress")
         return bool(acquired)
 
@@ -473,13 +585,13 @@ class RedisContextStore:
     def resolve_hitl_request(self, workflow_id: str, step_id: str,
                              decision: str, responder: str = "",
                              comment: str = "") -> bool:
-        """Record human decision on a HITL request."""
+        """Record human decision on a HITL request (legacy untyped API)."""
         key = f"hitl_request:{workflow_id}:{step_id}"
         if not self._redis.exists(key):
             return False
         updates = {
-            "status": "resolved",
-            "decision": decision,
+            "status": HITLStatus.resolved.value,
+            "decision": normalize_hitl_decision(decision).value,
             "responder": responder,
             "comment": comment,
             "resolved_at": str(time.time()),
@@ -487,6 +599,35 @@ class RedisContextStore:
         self._redis.hset(key, mapping=updates)
         logger.info(f"HITL resolved: {workflow_id}/{step_id} -> {decision}")
         return True
+
+    # ── Typed HITL API (preferred) ────────────────────────────────────────────
+
+    def create_hitl_request_typed(self, request: HITLRequest) -> HITLRequest:
+        """
+        Persist a typed HITLRequest to Redis.
+
+        Preferred over create_hitl_request() — validates the contract before
+        writing and returns the persisted object with any defaults applied.
+        """
+        key = f"hitl_request:{request.workflow_id}:{request.step_id}"
+        self._redis.hset(key, mapping=request.to_redis_mapping())
+        self._redis.expire(key, self._ttl_seconds)
+        logger.info(f"HITL request created (typed): {request.request_id}")
+        return request
+
+    def get_hitl_resolution(self, workflow_id: str,
+                            step_id: str) -> Optional[HITLResolution]:
+        """
+        Return a typed HITLResolution if the request has been resolved.
+
+        Returns None if the request is still pending, not found, or expired.
+        This is the typed counterpart to get_hitl_request() — preferred for
+        kernel polling.
+        """
+        raw = self.get_hitl_request(workflow_id, step_id)
+        if not raw:
+            return None
+        return HITLResolution.from_raw(raw)
 
     # ------------------------------------------------------------------
     # Function Registry Index (Cognitive Projection)
@@ -521,6 +662,61 @@ class RedisContextStore:
         if data:
             return json.loads(data)
         return None
+
+    # ------------------------------------------------------------------
+    # Agent Telemetry (schema-enforced write path)
+    # ------------------------------------------------------------------
+
+    def publish_agent_telemetry(
+        self,
+        agent_id: str,
+        action: str,
+        note: str = "",
+        team: str = "",
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Write a structured telemetry event for an agent.
+
+        Enforces a canonical field schema so consumers can use a single
+        field path instead of double-fallback heuristics.
+
+        Canonical fields written to ``agent:telemetry:{agent_id}``:
+            agent, team, action, note, timestamp
+
+        Args:
+            agent_id: The agent's unique identifier (e.g. "researcher", "planner")
+            action:   Short verb describing the action (e.g. "task_completed", "step_started")
+            note:     Human-readable description for activity feeds and dashboards
+            team:     Logical team or group the agent belongs to (caller-supplied)
+            extra:    Optional additional string-valued fields to merge into the record
+
+        Returns:
+            True if written successfully
+        """
+        key = f"agent:telemetry:{agent_id}"
+        mapping: Dict[str, str] = {
+            "agent":     agent_id,
+            "team":      team,
+            "action":    action,
+            "note":      note[:500],
+            "timestamp": str(time.time()),
+        }
+        if extra:
+            for k, v in extra.items():
+                mapping[k] = str(v)[:500]
+        try:
+            # Verify the key is a hash (or absent) before writing
+            key_type = self._redis.type(key)
+            if key_type not in ("hash", "none"):
+                # Wrong type — delete stale key and rewrite
+                self._redis.delete(key)
+            self._redis.hset(key, mapping=mapping)
+            self._redis.expire(key, self._ttl_seconds)
+            return True
+        except Exception as exc:
+            logger.warning("publish_agent_telemetry failed for %s: %s", agent_id, exc)
+            return False
 
     # ------------------------------------------------------------------
     # Locking (for atomic registry operations)

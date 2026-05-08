@@ -2,7 +2,7 @@
 Research Agent Example - Internet Search & Data Extraction
 
 Demonstrates AutoAgent with internet search capabilities.
-Agent automatically gets access to web search tools (DuckDuckGo).
+Agent automatically gets access to web search tools (SearXNG metasearch).
 
 Usage:
     python examples/research_agent_example.py
@@ -41,7 +41,7 @@ async def main():
 
     # Zero-config: Reads from .env automatically
     # Framework auto-detects: Claude → Azure → Gemini → vLLM
-    mesh = Mesh(mode="autonomous")
+    mesh = Mesh()
     mesh.add(ResearchAgent)
 
     try:

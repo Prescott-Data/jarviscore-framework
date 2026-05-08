@@ -89,21 +89,30 @@ class LLMClient:
                 if isinstance(msg.get("content"), str):
                     user_msg = msg.get("content", "").lower()
 
-            if "analyze" in user_msg or "analysis" in user_msg or "trend" in user_msg:
+            available_tool_names = {t["name"] for t in (tools or [])}
+
+            if ("analyze" in user_msg or "analysis" in user_msg or "trend" in user_msg) and "ask_peer" in available_tool_names:
                 return {
                     "type": "tool_use",
                     "tool_name": "ask_peer",
                     "tool_args": {"role": "analyst", "question": user_msg},
                     "tool_use_id": "mock_id_001"
                 }
-            if "search" in user_msg:
+            if "search" in user_msg and "web_search" in available_tool_names:
                 return {
                     "type": "tool_use",
                     "tool_name": "web_search",
                     "tool_args": {"query": user_msg},
                     "tool_use_id": "mock_id_002"
                 }
-            return {"type": "text", "content": f"Hello! How can I help you today?"}
+            if ("analyze" in user_msg or "analysis" in user_msg or "trend" in user_msg) and "statistical_analysis" in available_tool_names:
+                return {
+                    "type": "tool_use",
+                    "tool_name": "statistical_analysis",
+                    "tool_args": {"data": user_msg},
+                    "tool_use_id": "mock_id_003"
+                }
+            return {"type": "text", "content": "Analysis complete. Key trends: positive growth, Q4 Week 3 spike (+256%) from Black Friday/Cyber Monday spillover. Avg order value rose to $75 in December. Recommendation: stock up pre-Black Friday and plan post-holiday clearance."}
 
         # Build request
         request_kwargs = {
@@ -119,7 +128,12 @@ class LLMClient:
             request_kwargs["tools"] = tools
 
         # Make the API call
-        response = self.client.messages.create(**request_kwargs)
+        try:
+            response = self.client.messages.create(**request_kwargs)
+        except Exception as e:
+            print(f"[LLM] API call failed ({e}), falling back to mock")
+            self.available = False
+            return self.chat_with_tools(messages, tools, system, max_tokens)
 
         # Parse response - check for tool_use first
         result = {"stop_reason": response.stop_reason}
@@ -548,8 +562,8 @@ async def main():
 
     # Create mesh
     mesh = Mesh(
-        mode="p2p",
         config={
+            'p2p_enabled': True,
             'bind_host': '127.0.0.1',
             'bind_port': 7960,
             'node_name': 'p2p-demo-node',

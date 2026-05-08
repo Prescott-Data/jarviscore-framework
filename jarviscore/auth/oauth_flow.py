@@ -1,14 +1,19 @@
 """
-OAuth flow handler for CLI environments without a backend.
+OAuth flow handler for CLI environments.
 
 Handles the interactive OAuth consent flow:
 1. Opens auth URL in system browser (or prints it for headless)
 2. Spins up a temporary local HTTP server to catch the callback
-3. Polls Dromos Gateway until connection becomes ACTIVE
+3. Polls Nexus Gateway until connection becomes ACTIVE
 4. Returns control to AuthenticationManager
 
 Pluggable: users can replace the default CLIFlowHandler with their own
-(e.g., SlackFlowHandler that sends the URL via DM and waits for webhook).
+(e.g., SlackFlowHandler that sends the URL via DM and waits for webhook,
+or DashboardFlowHandler that renders the URL in the application dashboard).
+
+IMPORTANT: The local callback server port must NOT be 8080 — that port
+belongs to the Nexus Broker. Use a different port (default: 8000) or
+configure via the dashboard's own callback route.
 """
 
 import asyncio
@@ -65,7 +70,7 @@ class CLIFlowHandler(OAuthFlowHandler):
 
     - Tries to open auth URL in system browser
     - Falls back to printing the URL for manual copy
-    - Polls connection status until ACTIVE or timeout
+    - Polls Nexus Gateway connection status until ACTIVE or timeout
     """
 
     def __init__(self, open_browser: bool = True):
@@ -74,8 +79,10 @@ class CLIFlowHandler(OAuthFlowHandler):
 
     async def present_auth_url(self, auth_url: str, provider: str) -> None:
         """Open browser and print URL as fallback."""
-        # Start local server to receive the OAuth redirect
-        self._callback_server = LocalCallbackServer(port=8080)
+        # Start local server to receive the Nexus Broker redirect.
+        # Port 9090 is used to avoid conflicting with the Broker (8080)
+        # or the dashboard (8000).
+        self._callback_server = LocalCallbackServer(port=9090)
         self._callback_server.start()
 
         print(f"\n{'='*60}")
@@ -107,12 +114,12 @@ class CLIFlowHandler(OAuthFlowHandler):
         failed_grace_period: float = 120.0,
     ) -> str:
         """
-        Poll connection status until ACTIVE or timeout.
+        Poll Nexus Gateway connection status until ACTIVE or timeout.
 
-        failed_grace_period: seconds to keep polling even when gateway
-        returns FAILED, to work around gateways that map "token not yet
-        available" (HTTP 403 from broker) as FAILED instead of PENDING.
-        After the grace period, a persistent FAILED is treated as terminal.
+        failed_grace_period: seconds to keep polling even when the Gateway
+        returns FAILED, to work around race conditions where the Broker
+        hasn't yet stored the token (maps HTTP 403 as FAILED instead of
+        PENDING). After the grace period, persistent FAILED is terminal.
         """
         try:
             elapsed = 0.0
@@ -170,7 +177,7 @@ class CLIFlowHandler(OAuthFlowHandler):
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for OAuth callback."""
+    """HTTP request handler for Nexus Broker OAuth redirect callback."""
 
     auth_code: Optional[str] = None
     error: Optional[str] = None
@@ -180,6 +187,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         params = parse_qs(parsed.query)
 
         if "code" in params:
+            # Standard OAuth2 authorization code response
             _CallbackHandler.auth_code = params["code"][0]
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
@@ -190,7 +198,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
                 b"</body></html>"
             )
         elif "connection_id" in params and params.get("status", [""])[0] == "success":
-            # Dromos broker callback: ?connection_id=...&provider=...&status=success
+            # Nexus Broker redirect: ?connection_id=...&provider=...&status=success
             _CallbackHandler.auth_code = params["connection_id"][0]
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
@@ -220,18 +228,28 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
 class LocalCallbackServer:
     """
-    Temporary HTTP server on localhost to catch OAuth redirects.
+    Temporary HTTP server on localhost to catch Nexus Broker OAuth redirects.
+
+    The Broker redirects to the return_url after the user completes consent.
+    This server catches that redirect and extracts the connection_id.
+
+    IMPORTANT: Do NOT use port 8080 — that's the Nexus Broker's own port.
 
     Usage:
-        server = LocalCallbackServer(port=8080)
-        callback_url = server.callback_url  # http://localhost:8080/callback
+        server = LocalCallbackServer(port=9090)
+        callback_url = server.callback_url  # http://localhost:9090/callback
         server.start()
-        # ... user completes OAuth, provider redirects to callback_url ...
+        # ... user completes OAuth, Broker redirects to callback_url ...
         code = server.wait_for_code(timeout=120)
         server.stop()
     """
 
-    def __init__(self, port: int = 8080):
+    def __init__(self, port: int = 9090):
+        if port == 8080:
+            raise ValueError(
+                "Cannot use port 8080 for the callback server — "
+                "that port belongs to the Nexus Broker."
+            )
         self.port = port
         self.callback_url = f"http://localhost:{port}/callback"
         self._server: Optional[HTTPServer] = None
@@ -247,7 +265,7 @@ class LocalCallbackServer:
         logger.info(f"OAuth callback server listening on {self.callback_url}")
 
     async def wait_for_code(self, timeout: float = 120) -> Optional[str]:
-        """Wait for the OAuth callback to deliver an auth code."""
+        """Wait for the OAuth callback to deliver a connection_id."""
         elapsed = 0.0
         while elapsed < timeout:
             if _CallbackHandler.auth_code:

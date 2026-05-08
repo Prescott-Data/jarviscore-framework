@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "1.0.2"
+version = "1.0.3"
 description = "Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -70,9 +70,26 @@ azure = [
 browser = [
     "playwright>=1.40.0",
 ]
+# RAG — local vector search + embedding for evidence-backed research
+rag = [
+    "faiss-cpu>=1.7.4",
+    "sentence-transformers>=2.2.0",
+]
+# Research — full researcher stack (search + RAG + browser)
+# Installs everything the ResearcherSubAgent needs for 1:1 IA parity.
+research = [
+    "jarviscore-framework[browser,rag]",
+    "beautifulsoup4>=4.12.0",
+]
+memory-athena = [
+    # Zero extra Python deps — Athena is called over HTTP.
+    # httpx is already in core. Install Athena itself separately:
+    #   cd /path/to/athena && docker compose -f docker-compose.local.yml up -d
+    # Then set: ATHENA_URL=http://localhost:8080
+]
 # Everything — production deployment with all capabilities
 full = [
-    "jarviscore-framework[p2p,web,redis,prometheus,azure]",
+    "jarviscore-framework[p2p,web,redis,prometheus,azure,browser,rag,research,memory-athena]",
 ]
 dev = [
     "jarviscore-framework[p2p,web,redis]",
@@ -94,8 +111,24 @@ Issues = "https://github.com/Prescott-Data/jarviscore-framework/issues"
 [tool.setuptools]
 packages = {find = {}}
 
+[project.scripts]
+# After `pip install jarviscore-framework`, these are available as CLI commands:
+#   nexus init
+#   nexus register github --client-id=... --client-secret=...
+#   nexus status / nexus up / nexus list / nexus test
+jarviscore = "jarviscore.cli.__main__:main"
+
 [tool.setuptools.package-data]
-jarviscore = ["docs/*.md", "data/.env.example", "data/examples/*.py"]
+jarviscore = [
+    "docs/*.md",
+    "data/.env.example",
+    "data/examples/*.py",
+    # Nexus local-stack data — bundled so pip install users don't need the repo
+    "nexus/_data/docker-compose.nexus.yml",
+    "nexus/_data/001_initial_schema.sql",
+    # Athena MemOS local-stack compose — bundled for same reason
+    "memory/_data/docker-compose.athena.yml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

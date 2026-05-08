@@ -1,22 +1,30 @@
 """
-6H.4: AuthenticationManager — Dual-mode auth resolution.
+AuthenticationManager — Nexus-gated credential resolution.
 
-Production mode: NexusClient → Dromos Gateway → DynamicStrategy
-Development mode: Tokens from environment variables (no external deps)
+JarvisCore's single rule: ALL authentication goes through Nexus.
+This applies universally to OAuth tokens, API keys, and basic auth passwords.
+Agents never see credentials — only opaque connection_id handles.
 
-The auth manager sits between the kernel and sandbox execution,
-transparently resolving credentials before code runs.
+Flow:
+  1. authenticate(provider) → Nexus handshake → connection_id
+  2. get_connection_id(provider) → returns cached connection_id
+  3. NexusCallProxy.call(connection_id, ...) → resolves strategy internally
+                                             → applies auth headers
+                                             → returns HTTP response
 
-OAuth flow (production, no backend/frontend):
-1. request_connection() → auth_url returned by Dromos Gateway
-2. CLIFlowHandler opens browser + prints URL for user
-3. User completes OAuth consent in browser
-4. Dromos Gateway receives callback, connection → ACTIVE
-5. Framework polls until ACTIVE, then resolves strategy
+Agents and generated code ONLY ever call nexus_call() (via CoderSandbox).
+resolve_strategy() is intentionally package-private — used only by NexusCallProxy.
+
+Production OAuth flow:
+  1. request_connection() → auth_url returned by Nexus Gateway
+  2. CLIFlowHandler / DashboardFlowHandler opens browser + presents URL
+  3. User completes OAuth consent
+  4. Nexus Broker receives callback, encrypts tokens, connection → ACTIVE
+  5. Framework polls Gateway until ACTIVE
+  6. LifecycleMonitor runs in background for health + proactive refresh
 """
 
 import logging
-import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -25,6 +33,7 @@ import httpx
 from jarviscore.nexus.client import NexusClient
 from jarviscore.nexus.lifecycle import LifecycleMonitor
 from jarviscore.nexus.models import DynamicStrategy
+from jarviscore.nexus.providers import get_scopes, get_provider
 from jarviscore.auth.oauth_flow import OAuthFlowHandler, CLIFlowHandler
 
 logger = logging.getLogger(__name__)
@@ -32,51 +41,78 @@ logger = logging.getLogger(__name__)
 
 class AuthenticationManager:
     """
-    Dual-mode auth resolution for the kernel execution pipeline.
+    Nexus-gated credential manager.
 
-    Development mode (default):
-    - Reads tokens from env vars: {PROVIDER}_TOKEN (e.g. SHOPIFY_TOKEN)
-    - No external dependencies or network calls
-    - Returns DynamicStrategy with type="api_key"
+    All auth goes through Nexus regardless of strategy type:
+      - oauth2      → full interactive OAuth consent flow via Nexus Gateway
+      - api_key     → key stored in Nexus; applied transparently by NexusCallProxy
+      - basic_auth  → credentials stored in Nexus; applied transparently by NexusCallProxy
 
-    Production mode:
-    - Uses NexusClient to connect to Dromos Gateway
-    - Interactive OAuth flow: opens browser, polls for completion
-    - Lifecycle monitoring for connection health
-    - Strategy caching with configurable TTL
+    Public API (for agents + kernel):
+      get_connection_id(provider) → str   — opaque handle; contains no credentials
+      authenticate(provider)      → str   — same, but triggers handshake if needed
+
+    Package-private (for NexusCallProxy only):
+      resolve_strategy(connection_id) → DynamicStrategy
 
     Custom flow handlers:
         manager = AuthenticationManager(config)
-        manager.flow_handler = MySlackFlowHandler()  # sends URL via Slack DM
+        manager.flow_handler = SlackFlowHandler()   # or DashboardFlowHandler()
     """
 
     def __init__(self, config: Dict[str, Any]):
-        self.mode = config.get("auth_mode", "development")
+        gateway_url = config.get("nexus_gateway_url")
+
         self.user_id = config.get("nexus_default_user_id", "jarviscore-agent")
         self.cache_ttl = config.get("auth_strategy_cache_ttl", 300)
         self.auth_timeout = config.get("auth_flow_timeout", 300)
         self.auth_poll_interval = config.get("auth_poll_interval", 2.0)
+        self.return_url = config.get(
+            "nexus_return_url",
+            "http://localhost:8000/oauth/callback",
+        )
+
+        # Nexus clients — only instantiated when gateway_url is provided.
+        # Agents that never call authenticate() don't need Nexus at all.
+        self.nexus_client: Optional[NexusClient] = None
+        self.lifecycle_monitor: Optional[LifecycleMonitor] = None
+        if gateway_url:
+            self.nexus_client = NexusClient(gateway_url)
+            self.lifecycle_monitor = LifecycleMonitor(self.nexus_client)
+        else:
+            logger.debug(
+                "AuthenticationManager: NEXUS_GATEWAY_URL not set. "
+                "Connected-app calls will raise at runtime. "
+                "Set NEXUS_GATEWAY_URL to enable Nexus auth, or run "
+                "'docker compose -f docker-compose.nexus.yml up' for local dev."
+            )
 
         # Pluggable OAuth flow handler (CLI by default)
         self.flow_handler: OAuthFlowHandler = CLIFlowHandler(
             open_browser=config.get("auth_open_browser", True)
         )
 
-        # Production mode: initialize NexusClient
-        self.nexus_client: Optional[NexusClient] = None
-        self.lifecycle_monitor: Optional[LifecycleMonitor] = None
-        if self.mode == "production":
-            gateway_url = config.get("nexus_gateway_url")
-            if not gateway_url:
-                raise ValueError(
-                    "nexus_gateway_url is required for production auth mode"
-                )
-            self.nexus_client = NexusClient(gateway_url)
-            self.lifecycle_monitor = LifecycleMonitor(self.nexus_client)
+        # Opaque connection handles — keyed by provider name
+        self._connections: Dict[str, str] = {}
 
-        # Connection and strategy caches
-        self.connections: Dict[str, str] = {}  # provider → connection_id
+        # _strategy_cache is package-private — only NexusCallProxy reads it
         self._strategy_cache: Dict[str, Tuple[DynamicStrategy, float]] = {}
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    async def get_connection_id(self, provider: str) -> str:
+        """
+        Return the opaque connection_id for a provider.
+
+        If a connection has already been established this session, returns
+        the cached connection_id immediately without another handshake.
+
+        Raises:
+            RuntimeError if a new handshake is needed but fails.
+        """
+        if provider in self._connections:
+            return self._connections[provider]
+        return await self.authenticate(provider)
 
     async def authenticate(
         self,
@@ -85,49 +121,43 @@ class AuthenticationManager:
         scopes: Optional[List[str]] = None,
     ) -> str:
         """
-        Acquire a connection for a provider.
+        Establish a Nexus connection for a provider.
 
-        Development mode: Returns a pseudo connection_id, token from env var.
-        Production mode: Nexus handshake → connection_id (cached per provider).
+        Scopes are resolved from the provider catalog (nexus/providers.py)
+        if not explicitly provided.
 
         Returns:
-            connection_id string
+            connection_id — an opaque string handle containing no credentials.
+            Store this; never store tokens.
+
+        Raises:
+            RuntimeError if NEXUS_GATEWAY_URL is not configured.
+            RuntimeError if the OAuth flow fails or times out.
         """
-        # Return cached connection if available
-        if provider in self.connections:
-            return self.connections[provider]
+        if not self.nexus_client:
+            raise RuntimeError(
+                f"Cannot authenticate provider {provider!r}: NEXUS_GATEWAY_URL is not configured. "
+                "Add NEXUS_GATEWAY_URL=<url> to your .env file. "
+                "For local development, run: docker compose -f docker-compose.nexus.yml up"
+            )
+
+        if provider in self._connections:
+            return self._connections[provider]
 
         uid = user_id or self.user_id
-        scopes = scopes or []
-
-        if self.mode == "development":
-            connection_id = f"dev_{provider}_{uid}"
-            self.connections[provider] = connection_id
-
-            # Cache a dev strategy from env var
-            env_key = f"{provider.upper()}_TOKEN"
-            token = os.environ.get(env_key, "")
-            strategy = DynamicStrategy(
-                type="api_key",
-                credentials={"api_key": token},
-            )
-            self._strategy_cache[connection_id] = (strategy, time.time())
-            return connection_id
-
-        # Production mode — interactive OAuth flow
-        if not self.nexus_client:
-            raise RuntimeError("NexusClient not initialized for production mode")
+        resolved_scopes = scopes or get_scopes(provider)
 
         connection_id, auth_url = await self.nexus_client.request_connection(
             provider=provider,
             user_id=uid,
-            scopes=scopes,
+            scopes=resolved_scopes,
+            return_url=self.return_url,
         )
 
-        # Present auth URL to user (opens browser / prints URL)
+        # Present auth URL to user (opens browser / posts to Slack / SSE)
         await self.flow_handler.present_auth_url(auth_url, provider)
 
-        # Wait for user to complete OAuth consent
+        # Poll until ACTIVE
         status = await self.flow_handler.wait_for_completion(
             connection_id=connection_id,
             check_status_fn=self.nexus_client.check_connection_status,
@@ -137,147 +167,45 @@ class AuthenticationManager:
 
         if status != "ACTIVE":
             raise RuntimeError(
-                f"OAuth flow for {provider} did not complete: {status}. "
-                f"Connection {connection_id} is not active."
+                f"Nexus auth flow for {provider!r} did not complete: status={status}. "
+                f"Connection {connection_id!r} is not active."
             )
 
-        self.connections[provider] = connection_id
+        self._connections[provider] = connection_id
 
-        # Start lifecycle monitoring for ongoing health
-        if self.lifecycle_monitor:
-            await self.lifecycle_monitor.monitor_connection(connection_id)
+        # Start background lifecycle monitoring
+        await self.lifecycle_monitor.monitor_connection(connection_id)
 
-        logger.info(f"Connection established for {provider}: {connection_id}")
+        logger.info(
+            "Connection established: provider=%s connection_id=%s",
+            provider, connection_id,
+        )
         return connection_id
+
+    # ── Package-private — NexusCallProxy only ──────────────────────────────
 
     async def resolve_strategy(self, connection_id: str) -> DynamicStrategy:
         """
-        Resolve a DynamicStrategy for a connection, with caching.
+        Resolve a connection_id to a DynamicStrategy. Package-private.
 
-        Checks cache first. If cache miss or expired, fetches from gateway.
+        Only NexusCallProxy should call this. Agents and kernel MUST NOT.
+        The strategy contains live credentials that agents must never see.
+
+        Uses a TTL cache (default 300s) to avoid hammering the Gateway.
         """
-        # Check cache
         if connection_id in self._strategy_cache:
             strategy, cached_at = self._strategy_cache[connection_id]
-            if time.time() - cached_at < self.cache_ttl:
-                if not strategy.is_expired():
-                    return strategy
+            if time.time() - cached_at < self.cache_ttl and not strategy.is_expired():
+                return strategy
 
-        # Cache miss or expired — fetch fresh
-        if self.mode == "development":
-            # Dev mode: recreate from env (shouldn't normally reach here)
-            provider = connection_id.split("_")[1] if "_" in connection_id else "unknown"
-            env_key = f"{provider.upper()}_TOKEN"
-            token = os.environ.get(env_key, "")
-            strategy = DynamicStrategy(
-                type="api_key",
-                credentials={"api_key": token},
-            )
-        else:
-            if not self.nexus_client:
-                raise RuntimeError("NexusClient not initialized")
-            strategy = await self.nexus_client.resolve_strategy(connection_id)
-
+        strategy = await self.nexus_client.resolve_strategy(connection_id)
         self._strategy_cache[connection_id] = (strategy, time.time())
         return strategy
 
-    async def resolve_auth_context(
-        self,
-        system: str,
-        registry=None,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Build auth_context dict for sandbox injection.
-
-        Steps:
-        1. Query registry for system auth requirements
-        2. Authenticate with the required provider
-        3. Resolve strategy (cached with TTL)
-        4. Return auth_context dict
-
-        Returns:
-            {"access_token": ..., "provider": ..., "strategy_type": ...}
-            or None if system needs no auth.
-        """
-        if not registry:
-            return None
-
-        # Get auth requirements from registry
-        try:
-            requirements = registry.get_system_auth_requirements(system)
-        except (AttributeError, Exception):
-            return None
-
-        if not requirements:
-            return None
-
-        provider = requirements.get("provider", system)
-        scopes = requirements.get("scopes", [])
-
-        # Authenticate
-        connection_id = await self.authenticate(provider, scopes=scopes)
-
-        # Resolve strategy
-        strategy = await self.resolve_strategy(connection_id)
-
-        # Build auth context for sandbox
-        auth_context: Dict[str, Any] = {
-            "provider": provider,
-            "strategy_type": strategy.type,
-        }
-
-        # Extract the primary credential
-        if strategy.type == "oauth2":
-            auth_context["access_token"] = strategy.credentials.get("access_token", "")
-        elif strategy.type == "api_key":
-            auth_context["access_token"] = strategy.credentials.get("api_key", "")
-        elif strategy.type == "basic_auth":
-            auth_context["username"] = strategy.credentials.get("username", "")
-            auth_context["password"] = strategy.credentials.get("password", "")
-
-        return auth_context
-
-    async def make_authenticated_request(
-        self,
-        provider: str,
-        method: str,
-        url: str,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        """
-        Make an HTTP request with auth headers applied via strategy.
-
-        Auto-retries once on 401 (refreshes strategy cache).
-        """
-        connection_id = await self.authenticate(provider)
-        strategy = await self.resolve_strategy(connection_id)
-
-        request_kwargs = NexusClient.apply_strategy_to_request(
-            strategy, method, url, **kwargs
-        )
-
-        async with httpx.AsyncClient() as client:
-            response = await client.request(**request_kwargs)
-
-            # Auto-retry on 401
-            if response.status_code == 401:
-                logger.info(f"Got 401 for {provider}, refreshing strategy...")
-                # Invalidate cache
-                self._strategy_cache.pop(connection_id, None)
-                strategy = await self.resolve_strategy(connection_id)
-                request_kwargs = NexusClient.apply_strategy_to_request(
-                    strategy, method, url, **kwargs
-                )
-                response = await client.request(**request_kwargs)
-
-            return {
-                "status_code": response.status_code,
-                "body": response.text,
-                "headers": dict(response.headers),
-            }
+    # ── Cleanup ─────────────────────────────────────────────────────────────
 
     async def close(self):
-        """Cleanup: stop lifecycle monitor, close nexus client."""
+        """Stop lifecycle monitor and close Nexus client."""
         if self.lifecycle_monitor:
             await self.lifecycle_monitor.stop_all()
         if self.nexus_client:

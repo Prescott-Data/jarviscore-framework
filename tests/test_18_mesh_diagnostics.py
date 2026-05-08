@@ -70,7 +70,7 @@ class TestDiagnosticsStructure:
             async def on_peer_request(self, msg):
                 return {}
 
-        mesh = Mesh(mode="autonomous")
+        mesh = Mesh(config={"p2p_enabled": False})
         mesh.add(TestAgent)
         await mesh.start()
 
@@ -198,13 +198,13 @@ class TestConnectivityStatus:
             async def on_peer_request(self, msg):
                 return {}
 
-        mesh = Mesh(mode="autonomous")
+        mesh = Mesh(config={"p2p_enabled": False})
         mesh.add(TestAgent)
         await mesh.start()
 
         try:
             diag = mesh.get_diagnostics()
-            # Autonomous mode without P2P coordinator should be local_only
+            # No P2P → autonomous mode → local_only
             assert diag["connectivity_status"] in ["local_only", "healthy"]
         finally:
             await mesh.stop()
@@ -313,7 +313,7 @@ class TestDiagnosticsWithModes:
 
     @pytest.mark.asyncio
     async def test_diagnostics_autonomous_mode(self):
-        """Test diagnostics in autonomous mode."""
+        """Test diagnostics in autonomous mode (no Redis, no P2P)."""
         from jarviscore import Mesh
         from jarviscore.profiles import CustomAgent
 
@@ -324,7 +324,7 @@ class TestDiagnosticsWithModes:
             async def on_peer_request(self, msg):
                 return {}
 
-        mesh = Mesh(mode="autonomous")
+        mesh = Mesh(config={"p2p_enabled": False})
         mesh.add(TestAgent)
         await mesh.start()
 
@@ -336,7 +336,7 @@ class TestDiagnosticsWithModes:
 
     @pytest.mark.asyncio
     async def test_diagnostics_distributed_mode(self):
-        """Test diagnostics in distributed mode."""
+        """Test diagnostics with explicit P2P config (replaces deprecated mode="distributed")."""
         from jarviscore import Mesh
         from jarviscore.profiles import CustomAgent
 
@@ -347,18 +347,18 @@ class TestDiagnosticsWithModes:
             async def on_peer_request(self, msg):
                 return {}
 
-        mesh = Mesh(mode="distributed", config={
+        mesh = Mesh(config={
+            "p2p_enabled": True,
             "bind_host": "127.0.0.1",
-            "bind_port": 7950
+            "bind_port": 7950,
         })
         mesh.add(TestAgent)
         await mesh.start()
 
         try:
             diag = mesh.get_diagnostics()
-            assert diag["local_node"]["mode"] == "distributed"
-            # P2P mode should include additional diagnostics
-            # Note: keepalive_status may not be present depending on config
+            # With p2p_enabled, mode is "p2p" (Redis + P2P) or "p2p" (P2P only)
+            assert diag["local_node"]["mode"] in ["p2p", "distributed"]
         finally:
             await mesh.stop()
 

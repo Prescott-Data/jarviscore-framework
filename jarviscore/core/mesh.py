@@ -1,30 +1,75 @@
 """
-Mesh - Central orchestrator for JarvisCore framework.
+Mesh — Central orchestrator for the JarvisCore agent framework.
 
-The Mesh coordinates agent execution and provides three operational modes:
-- Autonomous: Execute multi-step workflows with dependency resolution
-- Distributed: Run as P2P service responding to task requests
-- P2P: Agents run their own loops with direct peer-to-peer communication
+The Mesh manages agent lifecycle, enables peer-to-peer communication,
+runs workflow orchestration, and adapts to available infrastructure
+automatically.  You never specify a "mode" — the Mesh detects what is
+reachable (Redis, SWIM) at start() time and activates the right features.
 
-Day 1: Foundation with agent registration and setup
-Day 2: P2P integration for agent discovery and coordination
-Day 3: Full workflow orchestration with state management
+Capabilities (auto-detected, always accurate after start()):
+  "workflow"          — WorkflowEngine ready  (always enabled)
+  "run_loops"         — Agents with run() are running  (when present)
+  "peer_local"        — PeerClient routing via in-process registry  (always)
+  "peer_distributed"  — PeerClient routing via Redis pub/sub  (with Redis)
+  "peer_swim"         — PeerClient routing via SWIM/ZMQ  (with P2P stack)
+  "redis"             — RedisContextStore connected
+  "blob"              — BlobStorage connected
+  "auth"              — AuthenticationManager active
+  "nexus"             — NexusLocalStore ready (when NEXUS_GATEWAY_URL set or NEXUS_ENABLED=true)
+  "athena"            — AthenaClient connected (when ATHENA_URL set)
+  "prometheus"        — Metrics server running
+
+Usage:
+    mesh = Mesh()                    # No mode — auto-detects everything
+    mesh.add(ScraperAgent)
+    mesh.add(AnalystAgent)           # Can have run() — will be started
+    await mesh.start()               # Infrastructure probed, features enabled
+    results = await mesh.workflow(   # Workflow engine always available
+        "my-pipeline", [...]
+    )
+    await mesh.run_forever()         # Start run() loops for agents that have them
 """
-from typing import List, Dict, Any, Optional, Type
-from enum import Enum
+from typing import List, Dict, Any, Optional, Set
 import asyncio
 import logging
+import warnings
 
 from .agent import Agent
 
 logger = logging.getLogger(__name__)
 
 
-class MeshMode(Enum):
-    """Operational modes for Mesh."""
-    AUTONOMOUS = "autonomous"  # Execute workflows locally
-    DISTRIBUTED = "distributed"  # Run as P2P service (workflow-driven)
-    P2P = "p2p"  # Agents run own loops with direct peer communication
+class MeshMode:  # noqa: N801 (kept as deprecated shim — do not use in new code)
+    """
+    Deprecated shim — kept only for backward-compatibility imports.
+
+    ``MeshMode`` no longer controls Mesh behaviour.  The Mesh auto-detects
+    what infrastructure is available and activates features accordingly.
+    Do not pass ``mode=`` when constructing ``Mesh()``.
+
+    If you are importing ``MeshMode`` anywhere, switch to
+    ``mesh.has_capability(cap)`` for runtime capability checks.
+    """
+    AUTONOMOUS  = "autonomous"
+    DISTRIBUTED = "distributed"
+    P2P         = "p2p"
+    AUTO        = "auto"
+    LOCAL       = "autonomous"
+    MESH        = "auto"
+
+    def __init__(self, value: str = "auto"):
+        self.value = value
+
+    def __eq__(self, other):
+        if isinstance(other, MeshMode):
+            return self.value == other.value
+        return self.value == other
+
+    def __hash__(self):
+        return hash(self.value)
+
+    def __repr__(self):
+        return f"MeshMode({self.value!r})"
 
 
 class Mesh:
@@ -79,52 +124,64 @@ class Mesh:
 
     def __init__(
         self,
-        mode: str = "autonomous",
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        **_legacy_kwargs,  # absorbs deprecated mode= kwarg without crashing
     ):
         """
         Initialize Mesh orchestrator.
 
         Args:
-            mode: Operational mode ("autonomous", "distributed", or "p2p")
             config: Optional configuration dictionary:
-                - p2p_enabled: Enable P2P networking (default: True for distributed/p2p)
-                - state_backend: "file", "redis", "mongodb" (default: "file")
-                - event_store: Path or connection string for event storage
-                - checkpoint_interval: Save checkpoints every N steps (default: 1)
-                - max_parallel: Max parallel step execution (default: 5)
+                - redis_url:            Redis connection string (auto-detected from env)
+                - p2p_enabled:          bool — enable SWIM/ZMQ peer transport
+                - checkpoint_interval:  save checkpoints every N steps (default: 1)
+                - max_parallel:         max parallel step execution (default: 5)
 
-        Raises:
-            ValueError: If invalid mode specified
+        The Mesh detects available infrastructure at ``start()`` time and
+        activates features accordingly.  You do not need to specify a mode.
+        Pass ``REDIS_URL`` in the environment and the Mesh will use Redis
+        automatically in production.
         """
-        # Validate mode
-        try:
-            self.mode = MeshMode(mode)
-        except ValueError:
-            raise ValueError(
-                f"Invalid mode '{mode}'. Must be 'autonomous', 'distributed', or 'p2p'"
+        if _legacy_kwargs.get("mode"):
+            warnings.warn(
+                "Mesh(mode=...) is deprecated and has no effect. "
+                "The Mesh auto-detects infrastructure at start() time. "
+                "Remove the mode= argument.",
+                DeprecationWarning,
+                stacklevel=2,
             )
 
-        self.config = config or {}
-        self.agents: List[Agent] = []
-        self._agent_registry: Dict[str, List[Agent]] = {}  # role -> list of agents
-        self._agent_ids: set = set()  # Track unique agent IDs
-        self._capability_index: Dict[str, List[Agent]] = {}  # capability -> agents
+        self.config: Dict[str, Any] = config or {}
 
-        # Components (initialized in start())
-        self._p2p_coordinator = None  # Day 2: P2P integration
-        self._workflow_engine = None  # Day 3: Workflow orchestration
-        self._state_manager = None    # Day 3: State management
-        self._auth_manager = None     # Phase 7D: AuthenticationManager (optional)
-        self._redis_store = None      # Phase 7D: RedisContextStore (optional)
-        self._settings = None         # Phase 9: Settings instance
-        self._blob_storage = None     # Phase 9: BlobStorage
-        self._distributed_worker_task = None  # background step claimer (distributed mode)
+        # Agent registries
+        self.agents: List[Agent] = []
+        self._agent_registry: Dict[str, List[Agent]] = {}  # role → agents
+        self._agent_ids: Set[str] = set()
+        self._capability_index: Dict[str, List[Agent]] = {}  # capability → agents
+
+        # Infrastructure components — populated at start()
+        self._p2p_coordinator = None
+        self._workflow_engine = None
+        self._auth_manager    = None
+        self._redis_store     = None
+        self._settings        = None
+        self._blob_storage    = None
+        self._nexus_store     = None   # NexusLocalStore — when nexus is configured
+        self._athena_client   = None   # AthenaClient — when ATHENA_URL set
+        self._distributed_worker_task = None
+        self._agent_run_tasks: List[asyncio.Task] = []
+
+        # Capability set — populated at start() based on what's reachable
+        # Inspect with mesh.has_capability(cap) or mesh.capabilities
+        self._capabilities: Set[str] = set()
+
+        # Deprecated mode shim — reflects detected capabilities after start()
+        # Kept so code doing `mesh.mode.value` doesn't crash
+        self.mode = MeshMode("auto")
 
         self._started = False
-        self._logger = logging.getLogger(f"jarviscore.mesh")
-
-        self._logger.info(f"Mesh initialized in {self.mode.value} mode")
+        self._logger = logging.getLogger("jarviscore.mesh")
+        self._logger.info("Mesh created — capabilities will be detected at start()")
 
     def add(
         self,
@@ -236,87 +293,116 @@ class Mesh:
         if not self.agents:
             raise RuntimeError("No agents registered. Use mesh.add() to register agents.")
 
-        self._logger.info("Starting mesh...")
+        self._logger.info("Starting mesh — probing infrastructure...")
 
-        # Phase 9: Initialise Settings + infrastructure BEFORE agent setup
+        # ── 1. Infrastructure detection ───────────────────────────────────────
         from jarviscore.config.settings import Settings
         self._settings = Settings()
         self._redis_store = self._init_redis(self._settings)
         self._blob_storage = self._init_blob_storage(self._settings)
 
-        # Phase 9: Inject redis, blob, and mailbox into all agents (before setup()
-        # so agents can use their stores inside setup())
+        # Nexus: always available (local encrypted store, zero dep)
+        self._nexus_store = self._init_nexus()
+
+        # Athena: optional, when ATHENA_URL is set
+        self._athena_client = self._init_athena(self._settings)
+
+        if self._redis_store:
+            self._capabilities.add("redis")
+            self._capabilities.add("peer_distributed")
+        if self._blob_storage:
+            self._capabilities.add("blob")
+        if self._nexus_store:
+            self._capabilities.add("nexus")
+        if self._athena_client:
+            self._capabilities.add("athena")
+
+        # ── 2. Infrastructure injection into agents ───────────────────────────
+        # Must happen before agent.setup() so agents can use stores during setup
         self._inject_infrastructure()
 
-        # Setup all agents
+        # ── 3. Agent setup ────────────────────────────────────────────────────
         for agent in self.agents:
             try:
                 await agent.setup()
-                self._logger.info(f"Agent setup complete: {agent.agent_id}")
-            except Exception as e:
-                self._logger.error(f"Failed to setup agent {agent.agent_id}: {e}")
+                self._logger.info("Agent setup complete: %s", agent.agent_id)
+            except Exception as exc:
+                self._logger.error("Failed to setup agent %s: %s", agent.agent_id, exc)
                 raise
 
-        # Initialize P2P coordinator for distributed and p2p modes
-        if self.mode in (MeshMode.DISTRIBUTED, MeshMode.P2P) or self.config.get("p2p_enabled", False):
-            self._logger.info("Initializing P2P coordinator...")
-            from jarviscore.p2p import P2PCoordinator
-            from jarviscore.config import get_config_from_dict
+        # ── 4. P2P coordinator (when SWIM is configured) ──────────────────────
+        # Merge Settings.p2p_enabled → config so P2P_ENABLED=true in .env works
+        # without requiring the developer to pass config={"p2p_enabled": True} to Mesh().
+        if self._settings and getattr(self._settings, "p2p_enabled", False):
+            self.config.setdefault("p2p_enabled", True)
 
-            # Get full config with defaults
-            full_config = get_config_from_dict(self.config)
+        if self.config.get("p2p_enabled", False):
+            self._logger.info("Initializing P2P coordinator (SWIM)...")
+            try:
+                from jarviscore.p2p import P2PCoordinator
+                from jarviscore.config import get_config_from_dict
+                full_config = get_config_from_dict(self.config)
+                self._p2p_coordinator = P2PCoordinator(self.agents, full_config)
+                await self._p2p_coordinator.start()
+                self._capabilities.add("peer_swim")
+                self._logger.info("✓ P2P coordinator started")
 
-            # Initialize P2P Coordinator
-            self._p2p_coordinator = P2PCoordinator(self.agents, full_config)
-            await self._p2p_coordinator.start()
-            self._logger.info("✓ P2P coordinator started")
+                # Wait for SWIM to stabilise: if seed_nodes are configured,
+                # poll until at least one peer is known (up to 5s); otherwise
+                # a short 0.3s pause is enough for single-node scenarios.
+                seed_nodes = self.config.get("seed_nodes", "")
+                if seed_nodes:
+                    deadline = asyncio.get_event_loop().time() + 5.0
+                    while asyncio.get_event_loop().time() < deadline:
+                        members = getattr(
+                            getattr(self._p2p_coordinator, "swim_manager", None),
+                            "alive_members", None,
+                        )
+                        if members:
+                            break
+                        await asyncio.sleep(0.2)
+                else:
+                    await asyncio.sleep(0.3)
 
-            # Wait for mesh to stabilize before announcing
-            # Increased delay to ensure SWIM fully connects all nodes
-            await asyncio.sleep(5)
-            self._logger.info("Waited for mesh stabilization")
+                await self._p2p_coordinator.announce_capabilities()
+                await self._p2p_coordinator.request_peer_capabilities()
+                self._logger.info("✓ P2P capabilities announced and exchanged")
+            except Exception as exc:
+                self._logger.warning("P2P coordinator init failed (continuing without): %s", exc)
 
-            # Announce capabilities to network
-            await self._p2p_coordinator.announce_capabilities()
-            self._logger.info("✓ Capabilities announced to mesh")
+        # ── 5. PeerClients — always injected, transport depends on capabilities
+        self._inject_peer_clients()
+        self._capabilities.add("peer_local")
+        self._logger.info(
+            "✓ PeerClients injected (transports: %s)",
+            ", ".join(c for c in self._capabilities if c.startswith("peer")),
+        )
 
-            # Request capabilities from existing peers (for late-joiners)
-            await self._p2p_coordinator.request_peer_capabilities()
-            self._logger.info("✓ Requested capabilities from existing peers")
-
-        # Inject PeerClients for p2p mode
-        if self.mode == MeshMode.P2P:
-            self._inject_peer_clients()
-            self._logger.info("✓ PeerClients injected into agents")
-
-        # Phase 7D: Initialise AuthenticationManager (optional)
+        # ── 6. Authentication (optional, declared via config) ─────────────────
         if self.config.get("auth_mode"):
             try:
                 from jarviscore.auth.manager import AuthenticationManager
                 self._auth_manager = AuthenticationManager(self.config)
+                self._capabilities.add("auth")
                 self._logger.info(
-                    f"✓ AuthenticationManager started "
-                    f"(mode={self.config['auth_mode']})"
+                    "✓ AuthenticationManager started (mode=%s)", self.config["auth_mode"]
                 )
             except Exception as exc:
-                self._logger.warning(f"Auth manager init failed (continuing without): {exc}")
+                self._logger.warning("Auth manager init failed (continuing without): %s", exc)
 
-        # Phase 7D: Inject auth manager into agents that declare requires_auth
         if self._auth_manager:
-            injected = 0
-            for agent in self.agents:
-                if getattr(agent, "requires_auth", False):
-                    agent._auth_manager = self._auth_manager
-                    injected += 1
+            injected = sum(
+                1 for agent in self.agents
+                if getattr(agent, "requires_auth", False)
+                and not setattr(agent, "_auth_manager", self._auth_manager)  # type: ignore
+            )
             if injected:
-                self._logger.info(f"✓ AuthenticationManager injected into {injected} agent(s)")
+                self._logger.info("✓ AuthenticationManager injected into %d agent(s)", injected)
 
-        # Initialize workflow engine (for autonomous and distributed modes)
-        if self.mode in (MeshMode.AUTONOMOUS, MeshMode.DISTRIBUTED):
-            self._logger.info("Initializing workflow engine...")
+        # ── 7. Workflow engine — ALWAYS started (not mode-gated) ─────────────
+        self._logger.info("Initializing workflow engine...")
+        try:
             from jarviscore.orchestration import WorkflowEngine
-
-            # Initialize workflow engine
             self._workflow_engine = WorkflowEngine(
                 mesh=self,
                 p2p_coordinator=self._p2p_coordinator,
@@ -324,29 +410,44 @@ class Mesh:
                 redis_store=self._redis_store,
             )
             await self._workflow_engine.start()
+            self._capabilities.add("workflow")
             self._logger.info("✓ Workflow engine started")
+        except Exception as exc:
+            self._logger.warning("WorkflowEngine init failed (continuing without): %s", exc)
 
-        # Phase 9: Start Prometheus metrics server if enabled
-        if self._settings and self._settings.prometheus_enabled:
-            from jarviscore.telemetry.metrics import start_prometheus_server
-            start_prometheus_server(self._settings.prometheus_port)
-            self._logger.info(
-                f"✓ Prometheus metrics started on port {self._settings.prometheus_port}"
-            )
-
-        # Distributed worker: claims pending steps from Redis on behalf of local agents
-        # Agents declare capabilities; the Mesh handles routing — no manual wiring needed
-        if self.mode == MeshMode.DISTRIBUTED and self._redis_store:
+        # ── 8. Distributed worker — when Redis is available ───────────────────
+        if "redis" in self._capabilities:
             self._distributed_worker_task = asyncio.create_task(
                 self._run_distributed_worker(),
                 name="distributed-worker",
             )
-            self._logger.info("✓ Distributed worker started")
+            self._logger.info("✓ Distributed worker started (Redis-backed step claiming)")
+
+        # ── 9. Prometheus metrics ─────────────────────────────────────────────
+        if self._settings and self._settings.prometheus_enabled:
+            try:
+                from jarviscore.telemetry.metrics import start_prometheus_server
+                start_prometheus_server(self._settings.prometheus_port)
+                self._capabilities.add("prometheus")
+                self._logger.info(
+                    "✓ Prometheus metrics on port %d", self._settings.prometheus_port
+                )
+            except Exception as exc:
+                self._logger.warning("Prometheus init failed: %s", exc)
+
+        # ── 10. Update deprecated mode shim for any code that reads mesh.mode ─
+        if "peer_swim" in self._capabilities:
+            self.mode = MeshMode("p2p")
+        elif "redis" in self._capabilities:
+            self.mode = MeshMode("distributed")
+        else:
+            self.mode = MeshMode("autonomous")
 
         self._started = True
         self._logger.info(
-            f"Mesh started successfully with {len(self.agents)} agent(s) "
-            f"in {self.mode.value} mode"
+            "Mesh started: %d agent(s) | capabilities: %s",
+            len(self.agents),
+            ", ".join(sorted(self._capabilities)),
         )
 
     async def workflow(
@@ -355,7 +456,7 @@ class Mesh:
         steps: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        Execute a multi-step workflow (autonomous mode only).
+        Execute a multi-step workflow.
 
         Args:
             workflow_id: Unique workflow identifier (for crash recovery)
@@ -390,27 +491,18 @@ class Mesh:
                 }
             ])
 
-        DAY 1: Mock implementation (returns placeholder results)
-        DAY 3: Full implementation with state management and crash recovery
         """
         if not self._started:
             raise RuntimeError("Mesh not started. Call await mesh.start() first.")
 
-        if self.mode == MeshMode.P2P:
+        if not self._workflow_engine:
             raise RuntimeError(
-                f"workflow() not available in p2p mode. "
-                f"P2P mode uses agent.run() loops with direct peer communication. "
-                f"Use autonomous or distributed mode for workflow orchestration."
+                "Workflow engine not available. This usually means WorkflowEngine "
+                "failed to start — check startup logs for the root cause."
             )
 
-        self._logger.info(f"Executing workflow: {workflow_id} with {len(steps)} step(s)")
-
-        # Execute workflow using workflow engine
-        if self._workflow_engine:
-            return await self._workflow_engine.execute(workflow_id, steps)
-        else:
-            # Fallback if workflow engine not initialized
-            raise RuntimeError("Workflow engine not initialized")
+        self._logger.info("Executing workflow: %s (%d steps)", workflow_id, len(steps))
+        return await self._workflow_engine.execute(workflow_id, steps)
 
     async def serve_forever(self):
         """
@@ -645,6 +737,9 @@ class Mesh:
                 redis_context_ttl_days=getattr(settings, "redis_context_ttl_days", 7),
             )
             store = RedisContextStore(settings=_s)
+            if not store.enabled:
+                self._logger.warning("Redis URL configured but connection failed — running without Redis")
+                return None
             self._logger.info("✓ RedisContextStore connected")
             return store
         except Exception as exc:
@@ -663,43 +758,215 @@ class Mesh:
             self._logger.warning(f"BlobStorage init failed (continuing without): {exc}")
             return None
 
+    def _init_nexus(self):
+        """
+        Init NexusLocalStore — the built-in credential vault.
+
+        Optional: only initialised when nexus is explicitly configured.
+        Detection order:
+          1. config dict key ``nexus_enabled`` (runtime override)
+          2. ``NEXUS_ENABLED`` env var / Settings.nexus_enabled
+          3. Auto-detect: enabled when ``NEXUS_GATEWAY_URL`` is set
+
+        Credentials are stored at ~/.jarviscore/nexus.enc, AES-256-GCM
+        encrypted.  Agents access via self._nexus_store.build_auth_info()
+        or through nexus_call() which the Kernel injects into the sandbox.
+        """
+        # 1. Explicit runtime config takes priority
+        enabled = self.config.get("nexus_enabled")
+        # 2. Fall back to settings field
+        if enabled is None:
+            enabled = getattr(self._settings, "nexus_enabled", None)
+        # 3. Auto-detect from gateway URL presence
+        if enabled is None:
+            enabled = bool(getattr(self._settings, "nexus_gateway_url", None))
+
+        if not enabled:
+            self._logger.debug(
+                "Nexus store not configured — skipping "
+                "(set NEXUS_GATEWAY_URL or NEXUS_ENABLED=true to enable)"
+            )
+            return None
+
+        try:
+            from jarviscore.nexus.store import NexusLocalStore
+            store = NexusLocalStore()
+            registered = store.list()
+            self._logger.info(
+                "✓ Nexus credential store ready (%d provider%s registered)",
+                len(registered), "s" if len(registered) != 1 else "",
+            )
+            return store
+        except Exception as exc:
+            self._logger.warning("Nexus store init failed (continuing without): %s", exc)
+            return None
+
+    def _init_athena(self, settings):
+        """
+        Init AthenaClient — optional remote memory OS.
+
+        Returns None gracefully when ATHENA_URL is not set.
+        When connected, agents get cross-session semantic memory via
+        self._athena_client. UnifiedMemory uses this as its 4th tier.
+        """
+        try:
+            from jarviscore.memory.athena_client import AthenaClient
+            client = AthenaClient.from_env()
+            if client:
+                self._logger.info("✓ Athena memory client connected")
+            return client
+        except Exception as exc:
+            self._logger.debug("Athena client init skipped: %s", exc)
+            return None
+
+    def _resolve_auto_mode(self) -> "MeshMode":
+        """
+        Detect the best operational mode from the live environment.
+
+        Called at start() time when mode="auto" (the default).  By then
+        ``_redis_store`` has already been initialised, so we know exactly
+        what infrastructure is reachable.
+
+        Decision logic
+        --------------
+        1. Redis reachable AND p2p_enabled config flag set  →  ``p2p``
+        2. Redis reachable                                  →  ``distributed``
+        3. Nothing reachable                                →  ``autonomous``
+
+        This means:
+        - On your laptop with no Redis  →  autonomous  (just works)
+        - On a dev/staging server with Redis  →  distributed  (prod-like)
+        - On prod with Redis + p2p_enabled  →  p2p  (full mesh)
+
+        You never have to think about it.  Set REDIS_URL in env and the
+        mesh does the right thing.
+        """
+        has_redis = self._redis_store is not None
+        wants_p2p = self.config.get("p2p_enabled", False)
+
+        if has_redis and wants_p2p:
+            return MeshMode.P2P
+        if has_redis:
+            return MeshMode.DISTRIBUTED
+        return MeshMode.AUTONOMOUS
+
     def _inject_infrastructure(self):
         """
-        Inject redis_store, blob_storage, and mailbox into all agents.
+        Inject redis_store, blob_storage, mailbox, and HITLQueue into all agents.
 
-        Called during start() before agent setup() so agents can use
-        their stores during initialization.
+        Called during start() before agent setup() so agents have full access
+        to infrastructure stores and escalation channels during initialization.
+
+        Every agent ends up with:
+          agent._redis_store   — RedisContextStore (or None)
+          agent._blob_storage  — BlobStorage (or None)
+          agent.mailbox        — MailboxManager (always, file-backed if no Redis)
+          agent.hitl           — HITLQueue (always, writes to hitl_inbox/)
         """
         from jarviscore.mailbox import MailboxManager
+
+        # Resolve hitl_inbox path from config or use package-relative default
+        inbox_dir = self.config.get("hitl_inbox_dir", None)
+
+        # Import framework-native HITLQueue
+        try:
+            from jarviscore.hitl import HITLQueue as _HITLQueue
+        except ImportError:
+            _HITLQueue = None
+
         for agent in self.agents:
-            agent._redis_store = self._redis_store
-            agent._blob_storage = self._blob_storage
+            agent._redis_store   = self._redis_store
+            agent._blob_storage  = self._blob_storage
+            agent._nexus_store   = self._nexus_store    # always set (NexusLocalStore)
+            agent._athena_client = self._athena_client  # set when ATHENA_URL configured
+
+            # Mailbox: use Redis when available, local-only otherwise
             if self._redis_store:
                 agent.mailbox = MailboxManager(agent.agent_id, self._redis_store)
+            else:
+                agent.mailbox = MailboxManager(agent.agent_id, None)
+
+            # HITLQueue: always available; Redis-enhanced when connected
+            if _HITLQueue is not None:
+                agent.hitl = _HITLQueue(
+                    agent_id=agent.agent_id,
+                    inbox_dir=inbox_dir,
+                    redis_store=self._redis_store,
+                )
+            else:
+                agent.hitl = None  # degraded — log once
+                self._logger.warning(
+                    "HITLQueue not available — install jarviscore[hitl] or ensure "
+                    "services/hitl.py is on PYTHONPATH"
+                )
+
         self._logger.info(
-            f"✓ Infrastructure injected into {len(self.agents)} agent(s) "
-            f"(redis={'yes' if self._redis_store else 'no'}, "
-            f"blob={'yes' if self._blob_storage else 'no'})"
+            "✓ Infrastructure injected into %d agent(s) "
+            "(redis=%s, blob=%s, hitl=%s)",
+            len(self.agents),
+            "yes" if self._redis_store else "no",
+            "yes" if self._blob_storage else "no",
+            "yes" if _HITLQueue else "no",
         )
 
     def _inject_peer_clients(self):
         """
-        Inject PeerClient instances into all agents.
+        Inject PeerClient instances into all agents regardless of mesh mode.
 
-        Called during start() in p2p mode. Gives each agent a self.peers
-        client for direct peer-to-peer communication.
+        **P2P mode**: Full SWIM-backed ``PeerClient`` — uses the coordinator
+        and ZMQ transport for cross-process agent communication.
+
+        **AUTONOMOUS / DISTRIBUTED mode**: Local-only ``PeerClient``
+        (``coordinator=None``) — ``ask_peer`` routes through the in-process
+        ``_agent_registry`` so AutoAgents can delegate to co-registered
+        agents (e.g., Sentinel delegating to Coder) without SWIM.
+
+        This fixes Dogfooding Issue #13: ``ask_peer`` was P2P-only.
+        ``AutoAgent`` (which always runs in autonomous mode)
+        now gets a fully functional ``self.peers`` client.
         """
-        from jarviscore.p2p import PeerClient
+        try:
+            from jarviscore.p2p import PeerClient
+        except (ImportError, TypeError) as exc:
+            # TypeError: Python 3.9 SWIM uses kw_only=True (3.10+ only).
+            # ImportError: p2p deps not installed.
+            # Fall back: load peer_client.py directly via importlib to bypass
+            # the package __init__.py which chains to SWIM.
+            self._logger.warning(
+                "P2P PeerClient unavailable (%s: %s) — using local-only peer stubs",
+                type(exc).__name__, exc,
+            )
+            import importlib.util as _ilu
+            import pathlib as _pl
+            _pc_path = _pl.Path(__file__).parent.parent / "p2p" / "peer_client.py"
+            _spec = _ilu.spec_from_file_location("jarviscore.p2p.peer_client", str(_pc_path))
+            _mod = _ilu.module_from_spec(_spec)
+
+            # peer_client.py imports .messages — load that first the same way
+            _msg_path = _pl.Path(__file__).parent.parent / "p2p" / "messages.py"
+            _msg_spec = _ilu.spec_from_file_location("jarviscore.p2p.messages", str(_msg_path))
+            _msg_mod = _ilu.module_from_spec(_msg_spec)
+            import sys as _sys
+            _sys.modules["jarviscore.p2p.messages"] = _msg_mod
+            _msg_spec.loader.exec_module(_msg_mod)
+
+            _sys.modules["jarviscore.p2p.peer_client"] = _mod
+            _spec.loader.exec_module(_mod)
+            PeerClient = _mod.PeerClient
+
+        is_p2p = self.mode == MeshMode.P2P
 
         node_id = ""
-        if self._p2p_coordinator and self._p2p_coordinator.swim_manager:
+        if is_p2p and self._p2p_coordinator and self._p2p_coordinator.swim_manager:
             addr = self._p2p_coordinator.swim_manager.bind_addr
             if addr:
                 node_id = f"{addr[0]}:{addr[1]}"
 
+        coordinator = self._p2p_coordinator if is_p2p else None
+
         for agent in self.agents:
             peer_client = PeerClient(
-                coordinator=self._p2p_coordinator,
+                coordinator=coordinator,
                 agent_id=agent.agent_id,
                 agent_role=agent.role,
                 agent_registry=self._agent_registry,
@@ -707,66 +974,72 @@ class Mesh:
             )
             agent.peers = peer_client
 
-            # Register with coordinator for remote message routing
-            if self._p2p_coordinator:
+            # Register with coordinator for remote message routing (P2P only)
+            if is_p2p and self._p2p_coordinator:
                 self._p2p_coordinator.register_peer_client(agent.agent_id, peer_client)
 
-            self._logger.debug(f"Injected PeerClient into agent: {agent.agent_id}")
+            self._logger.debug(
+                "Injected PeerClient into agent: %s (local_only=%s)",
+                agent.agent_id, not is_p2p,
+            )
 
     async def run_forever(self):
         """
-        Run all agent loops concurrently (p2p mode only).
+        Start ``async def run()`` loops for every registered agent that has one,
+        and block until all loops exit or the process is interrupted.
 
-        In p2p mode, agents run their own execution loops via their run() method.
-        This method starts all agent loops and waits until shutdown is requested.
+        Works in every mesh configuration — no mode required.
+        Agents without a ``run()`` method are skipped (they are driven by
+        ``mesh.workflow()`` instead).
 
-        Raises:
-            RuntimeError: If mesh not started or not in p2p mode
+        Combines cleanly with ``mesh.workflow()``: some agents can have run()
+        loops for self-management while the workflow engine handles orchestrated
+        multi-step tasks.
 
-        Example:
-            mesh = Mesh(mode="p2p")
-            mesh.add(ScoutAgent)    # Has async def run(self)
-            mesh.add(AnalystAgent)  # Has async def run(self)
+        Example::
+
+            mesh = Mesh()
+            mesh.add(Compass)      # Has run() — self-drives standups, planning
+            mesh.add(Sentinel)     # Has run() — self-drives intel scans
+            mesh.add(Quill)        # Has run() — processes mailbox tasks
+            mesh.add(Coder)        # No run() — only called via workflow/delegate
 
             await mesh.start()
-            await mesh.run_forever()  # Blocks until Ctrl+C
+            await mesh.run_forever()   # blocks; Coder available via mesh.delegate()
         """
         if not self._started:
             raise RuntimeError("Mesh not started. Call await mesh.start() first.")
 
-        if self.mode != MeshMode.P2P:
-            raise RuntimeError(
-                f"run_forever() only available in p2p mode. "
-                f"Current mode: {self.mode.value}. "
-                f"Use workflow() for autonomous mode or serve_forever() for distributed mode."
-            )
+        self._logger.info("Starting agent run() loops...")
 
-        self._logger.info("Starting agent loops in p2p mode...")
-
-        # Collect all agent run() coroutines
-        agent_tasks = []
+        agent_tasks: List[asyncio.Task] = []
         for agent in self.agents:
-            if hasattr(agent, 'run') and asyncio.iscoroutinefunction(agent.run):
+            if hasattr(agent, "run") and asyncio.iscoroutinefunction(agent.run):
                 task = asyncio.create_task(
                     self._run_agent_loop(agent),
-                    name=f"agent-{agent.agent_id}"
+                    name=f"agent-loop-{agent.agent_id}",
                 )
+                self._agent_run_tasks.append(task)
                 agent_tasks.append(task)
-                self._logger.info(f"Started loop for agent: {agent.agent_id}")
+                self._logger.info("Started run() loop: %s", agent.agent_id)
             else:
-                self._logger.warning(
-                    f"Agent {agent.agent_id} has no async run() method, skipping"
+                self._logger.debug(
+                    "Agent %s has no run() — will be driven by workflow/delegate",
+                    agent.agent_id,
                 )
 
-        if not agent_tasks:
-            raise RuntimeError(
-                "No agents with run() method found. "
-                "p2p mode requires agents that implement async def run(self)."
+        if agent_tasks:
+            self._capabilities.add("run_loops")
+            self._logger.info(
+                "Running %d agent loop(s). Press Ctrl+C to stop.", len(agent_tasks)
             )
+        else:
+            self._logger.info(
+                "No agents have run() loops — mesh is workflow-only. "
+                "Use mesh.workflow() or mesh.delegate() to drive agents."
+            )
+            return
 
-        self._logger.info(f"Running {len(agent_tasks)} agent loop(s). Press Ctrl+C to stop.")
-
-        # Run until shutdown
         try:
             await asyncio.gather(*agent_tasks)
         except asyncio.CancelledError:
@@ -774,9 +1047,13 @@ class Mesh:
         except KeyboardInterrupt:
             self._logger.info("Keyboard interrupt received")
         finally:
-            # Request shutdown for all agents
             for agent in self.agents:
-                agent.request_shutdown()
+                if hasattr(agent, "request_shutdown"):
+                    agent.request_shutdown()
+            for task in agent_tasks:
+                if not task.done():
+                    task.cancel()
+            await self.stop()
 
             # Cancel any remaining tasks
             for task in agent_tasks:
@@ -787,18 +1064,36 @@ class Mesh:
 
     async def _run_agent_loop(self, agent: Agent):
         """
-        Run a single agent's loop with error handling.
+        Run a single agent's loop with crash-restart supervision.
 
-        Wraps the agent's run() method to catch and log errors.
+        If an agent's run() raises, this supervisor logs the error and
+        restarts it with exponential backoff — the other agents in the
+        mesh are unaffected.  Only asyncio.CancelledError (intentional
+        mesh shutdown) propagates upward.
+
+        This mirrors the _safe_run() pattern that exists in the agent
+        layer (signal.py) but was never wired into mesh.run_forever().
         """
-        try:
-            await agent.run()
-        except asyncio.CancelledError:
-            self._logger.debug(f"Agent {agent.agent_id} loop cancelled")
-            raise
-        except Exception as e:
-            self._logger.error(f"Agent {agent.agent_id} loop error: {e}")
-            raise
+        backoff = 5
+        max_backoff = 120
+        while self._started:
+            try:
+                await agent.run()
+                self._logger.info(
+                    f"Agent {agent.agent_id} run() returned normally — exiting supervisor"
+                )
+                break  # clean exit — agent chose to stop
+            except asyncio.CancelledError:
+                self._logger.debug(f"Agent {agent.agent_id} loop cancelled")
+                raise
+            except Exception as e:
+                self._logger.error(
+                    f"Agent {agent.agent_id} loop crashed "
+                    f"({type(e).__name__}: {e}) — restarting in {backoff}s"
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+
 
     def _find_agent_for_step(self, step: Dict[str, Any]) -> Optional[Agent]:
         """
@@ -853,6 +1148,200 @@ class Mesh:
             List of agents with the capability (empty if none found)
         """
         return self._capability_index.get(capability, [])
+
+    # ─────────────────────────────────────────────────────────────────
+    # CAPABILITY INSPECTION
+    # ─────────────────────────────────────────────────────────────────
+
+    @property
+    def capabilities(self) -> Set[str]:
+        """
+        Return the set of infrastructure capabilities available in this mesh.
+
+        Populated at ``start()`` time based on what is reachable.
+        Always accurate after the mesh has started.
+
+        Common values:
+            "workflow"          — WorkflowEngine ready
+            "run_loops"         — Agent run() loops are active
+            "peer_local"        — In-process PeerClient (always present)
+            "peer_distributed"  — Redis-backed peer routing
+            "peer_swim"         — SWIM/ZMQ cross-node routing
+            "redis"             — Redis connected
+            "blob"              — BlobStorage connected
+            "auth"              — AuthenticationManager active
+            "prometheus"        — Metrics server running
+        """
+        return frozenset(self._capabilities)
+
+    def has_capability(self, cap: str) -> bool:
+        """
+        Check whether a specific infrastructure capability is active.
+
+        Replaces the old ``mesh.mode == MeshMode.X`` pattern.
+
+        Args:
+            cap: Capability name (see ``mesh.capabilities`` for full list)
+
+        Returns:
+            True if the capability is active, False otherwise
+
+        Example::
+
+            if mesh.has_capability("redis"):
+                # Use Redis-backed storage
+            else:
+                # Fall back to in-process
+        """
+        return cap in self._capabilities
+
+    # ─────────────────────────────────────────────────────────────────
+    # DELEGATION  (Dogfooding Issue #12)
+    # ─────────────────────────────────────────────────────────────────
+
+    async def delegate(
+        self,
+        to: str,
+        task: str,
+        context: Optional[Dict[str, Any]] = None,
+        capability: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Delegate a task to another agent in the mesh by role or capability.
+
+        This is the canonical inter-agent communication primitive.  Any agent
+        whose generated code has access to ``mesh`` (injected by AutoAgent's
+        sandbox namespace) can hand off work to a specialist agent and await
+        a structured result — without knowing anything about the target's
+        internal implementation.
+
+        Resolution order:
+            1. Exact role match  →  ``mesh.get_agent(to)``
+            2. Capability match  →  ``mesh.get_agents_by_capability(capability or to)``
+            3. ``ValueError`` if nothing found
+
+        Args:
+            to:         Role name of the target agent (e.g. ``"coder"``).
+            task:       Natural language task description passed to the agent.
+            context:    Optional dict merged into the task payload under
+                        ``"context"`` — use this to pass prior step outputs,
+                        file paths, briefs, etc.
+            capability: Fallback capability string if the role is not found.
+                        Defaults to ``to`` when not specified.
+            timeout:    Optional per-call timeout in seconds (currently advisory;
+                        the target agent's own timeout governs actual execution).
+
+        Returns:
+            The raw dict returned by ``agent.execute_task()``.  Always contains
+            at least ``{"status": "success"|"failure", ...}``.
+
+        Raises:
+            ValueError:  No agent with the given role or capability was found.
+            RuntimeError: Target agent has no ``execute_task`` method.
+
+        Example — from inside generated code or a service::
+
+            result = await mesh.delegate(
+                to="coder",
+                task="Generate the Q2 investor deck as a branded PPTX",
+                context={
+                    "brief": team_brief,
+                    "output_filename": "quarterly_report_q2.pptx",
+                },
+            )
+            pptx_path = result["files_created"][0]
+
+        Example — delegate to whichever agent has a specific capability::
+
+            result = await mesh.delegate(
+                to="any",
+                capability="pdf_generation",
+                task="Convert the attached HTML report to a branded PDF",
+            )
+        """
+        # 1. Resolve target agent
+        agent = self.get_agent(to)
+
+        if agent is None and capability:
+            agents = self.get_agents_by_capability(capability)
+            agent = agents[0] if agents else None
+
+        if agent is None:
+            # Try capability fallback using the ``to`` string itself
+            agents = self.get_agents_by_capability(to)
+            agent = agents[0] if agents else None
+
+        if agent is None:
+            registered_roles = list(self._agent_registry.keys())
+            raise ValueError(
+                f"mesh.delegate(): no agent found for role='{to}' "
+                f"or capability='{capability or to}'. "
+                f"Registered roles: {registered_roles}"
+            )
+
+        if not hasattr(agent, "execute_task"):
+            raise RuntimeError(
+                f"mesh.delegate(): agent '{agent.agent_id}' (role={agent.role}) "
+                f"has no execute_task() method. It must inherit from AutoAgent."
+            )
+
+        self._logger.info(
+            "mesh.delegate: %s → %s  task=%s",
+            "caller", agent.agent_id, task[:80],
+        )
+
+        payload: Dict[str, Any] = {"task": task}
+        if context:
+            payload["context"] = context
+
+        return await agent.execute_task(payload)
+
+    async def run_task(
+        self,
+        agent: str = "",
+        agent_role: str = "",
+        task: str = "",
+        context: Optional[Dict[str, Any]] = None,
+        complexity: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Dispatch a single task to an agent by role.
+
+        This is the primary user-facing API for running a task on a specific
+        agent.  It wraps ``delegate()`` with a friendlier signature and adds
+        support for the ``complexity`` parameter (multi-tier model routing).
+
+        Args:
+            agent:      Agent role name (e.g. ``"researcher"``).
+            agent_role: Alias for ``agent`` — used internally by WorkflowBuilder.
+            task:       Natural language task description.
+            context:    Optional dict merged into the task payload.
+            complexity: Optional model tier hint: ``"nano"``, ``"standard"``,
+                        or ``"heavy"``.  Passed through to the Kernel via
+                        context so it selects the appropriate LLM model.
+
+        Returns:
+            The result dict from the agent's ``execute_task()`` — always
+            contains at least ``{"status": "success"|"failure", ...}``.
+
+        Example::
+
+            result = await mesh.run_task(
+                agent="analyst",
+                task="Summarise the following paragraph in one sentence.",
+                complexity="nano",
+            )
+        """
+        role = agent or agent_role
+        if not role:
+            raise ValueError("run_task() requires 'agent' or 'agent_role'.")
+
+        ctx = dict(context) if context else {}
+        if complexity:
+            ctx["complexity"] = complexity
+
+        return await self.delegate(to=role, task=task, context=ctx or None)
 
     # ─────────────────────────────────────────────────────────────────
     # DIAGNOSTICS

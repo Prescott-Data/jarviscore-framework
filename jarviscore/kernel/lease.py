@@ -12,34 +12,50 @@ Role-based profiles configure different budgets per subagent type.
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Optional
 
 
 # Role-specific lease profiles
+# model_tier: which tier family to use ("coding", "task", or "browser")
+# complexity: optional hint within the task tier ("nano", "standard", "heavy").
+#   The kernel reads this as a fallback when the caller hasn't set
+#   context["complexity"]. Developers can override per-call via context.
 ROLE_LEASE_PROFILES: Dict[str, Dict[str, Any]] = {
     "coder": {
         "thinking_budget": 132_000,
         "action_budget": 108_000,
         "max_total_tokens": 240_000,
         "wall_clock_ms": 240_000,
-        "emergency_turn_fuse": 24,
+        "emergency_turn_fuse": 32,
         "model_tier": "coding",
+        # No complexity hint — coding tier uses CODING_MODEL directly
     },
     "researcher": {
         "thinking_budget": 180_000,
         "action_budget": 60_000,
         "max_total_tokens": 240_000,
         "wall_clock_ms": 240_000,
-        "emergency_turn_fuse": 28,
+        "emergency_turn_fuse": 36,
         "model_tier": "task",
+        "complexity": "standard",  # Long-horizon web research — standard reasoning
     },
     "communicator": {
         "thinking_budget": 72_000,
         "action_budget": 48_000,
         "max_total_tokens": 120_000,
         "wall_clock_ms": 120_000,
-        "emergency_turn_fuse": 14,
+        "emergency_turn_fuse": 18,
         "model_tier": "task",
+        "complexity": "nano",  # Short creative writing — fast tier is sufficient
+    },
+    "browser": {
+        "thinking_budget": 60_000,
+        "action_budget": 60_000,
+        "max_total_tokens": 120_000,
+        "wall_clock_ms": 300_000,  # 5 min — page loads are slow
+        "emergency_turn_fuse": 28,
+        "model_tier": "browser",   # Dedicated tier — resolves BROWSER_MODEL first
+        # No complexity hint — browser tier always uses BROWSER_MODEL or standard fallback
     },
 }
 
@@ -64,8 +80,12 @@ class ExecutionLease:
     thinking_budget: int = 56_000
     action_budget: int = 24_000
     wall_clock_ms: int = 180_000
-    emergency_turn_fuse: int = 30
+    emergency_turn_fuse: int = 36
     model_tier: str = "task"
+    # Optional complexity hint for task-tier model resolution.
+    # Values: "nano" | "standard" | "heavy" | None
+    # Set in ROLE_LEASE_PROFILES; can be overridden per-call via context["complexity"].
+    complexity: Optional[str] = None
 
     # Mutable tracking
     thinking_used: int = 0

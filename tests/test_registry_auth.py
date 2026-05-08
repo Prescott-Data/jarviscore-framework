@@ -40,7 +40,8 @@ class TestGetOauthMetadata:
             "scopes": ["read_products"],
             "auth_type": "oauth2",
         })
-        meta = registry.get_oauth_metadata("list_products")
+        # Registry auto-prefixes 'list_products' → 'shopify_list_products'
+        meta = registry.get_oauth_metadata("shopify_list_products")
         assert meta is not None
         assert meta["provider"] == "shopify"
         assert "read_products" in meta["scopes"]

@@ -1,54 +1,65 @@
 """
-6E: Human-in-the-Loop — HumanTask model and AdaptiveHITLPolicy.
+jarviscore.kernel.hitl — Human-in-the-Loop kernel integration layer.
 
-The kernel pauses execution when human approval or input is needed.
-The AdaptiveHITLPolicy decides when to escalate based on configurable
-triggers: confidence thresholds, risk scores, and reason codes.
+Provides:
+  - HumanTask: lightweight kernel-facing alias for HITLRequest
+  - AdaptiveHITLPolicy: policy engine for autonomous escalation decisions
+
+The canonical typed contracts live in jarviscore.contracts.hitl.
+This module imports and re-exports them for backward compat, and adds
+the AdaptiveHITLPolicy decision engine which is kernel-internal.
 """
 
-import uuid
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import List, Optional, Tuple
 
-from pydantic import BaseModel, Field
+# ── Re-export the canonical contracts ────────────────────────────────────────
+from jarviscore.contracts.hitl import (
+    HITLRequest,
+    HITLResolution,
+    HITLPolicy,
+    HITLDecision,
+    HITLStatus,
+    HITLType,
+    APPROVED_DECISIONS,
+    REJECTED_DECISIONS,
+    normalize_hitl_decision,
+)
+
+# ── Kernel-facing alias ───────────────────────────────────────────────────────
+# HumanTask is the name the kernel uses internally. It is HITLRequest.
+# Agents and external code should use HITLRequest from contracts directly.
+HumanTask = HITLRequest
 
 
-class HumanTask(BaseModel):
-    """
-    A request for human input or approval.
-
-    Created by the kernel when the HITL policy triggers.
-    Persisted to Redis via RedisContextStore.create_hitl_request().
-    """
-
-    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:8])
-    type: Literal["approval", "exception", "input_request", "notification"] = "approval"
-    description: str = ""
-    status: str = "created"
-    channel: str = "email"
-    assigned_to: Optional[str] = None
-    request_payload: Dict[str, Any] = Field(default_factory=dict)
-    user_response: Optional[str] = None
-    created_at: float = Field(default_factory=time.time)
-
+# ── Adaptive Policy Engine ────────────────────────────────────────────────────
 
 @dataclass
 class AdaptiveHITLPolicy:
     """
     Decides when the kernel should pause for human input.
 
-    Triggers:
-    - enabled=False → never escalate (default)
-    - confidence < max_confidence → escalate (agent not sure enough)
-    - risk_score > min_risk_score → escalate (action too risky)
-    - reason_code in reason_codes → escalate (specific conditions)
+    Triggers (any match → escalate):
+      - reason_code in reason_codes
+      - confidence < max_confidence   (agent not confident enough)
+      - risk_score > min_risk_score   (action too risky to auto-proceed)
+
+    Default: disabled — agents never escalate unless you turn this on.
 
     Usage:
         policy = AdaptiveHITLPolicy(enabled=True, max_confidence=0.8)
         should, reason = policy.should_escalate(confidence=0.5)
         if should:
-            # Create HumanTask and yield
+            req = HITLRequest(
+                workflow_id=wf_id,
+                step_id=step_id,
+                description=reason,
+                type=HITLType.approval,
+            )
+            redis_store.create_hitl_request_typed(req)
     """
 
     enabled: bool = False
@@ -66,7 +77,7 @@ class AdaptiveHITLPolicy:
         Evaluate whether to escalate to a human.
 
         Returns:
-            (should_escalate, reason_string)
+            (should_escalate: bool, reason_string: str)
         """
         if not self.enabled:
             return False, ""
@@ -84,3 +95,21 @@ class AdaptiveHITLPolicy:
             return True, f"high_risk:{risk_score:.2f}>{self.min_risk_score:.2f}"
 
         return False, ""
+
+
+__all__ = [
+    # Kernel-facing alias (preferred name inside kernel code)
+    "HumanTask",
+    # Full contracts (for external code and the kernel equally)
+    "HITLRequest",
+    "HITLResolution",
+    "HITLPolicy",
+    "HITLDecision",
+    "HITLStatus",
+    "HITLType",
+    "APPROVED_DECISIONS",
+    "REJECTED_DECISIONS",
+    "normalize_hitl_decision",
+    # Policy engine
+    "AdaptiveHITLPolicy",
+]

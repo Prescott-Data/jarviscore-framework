@@ -116,10 +116,14 @@ class TestDistributedModeInitialization:
     """Tests for distributed mode setup and initialization."""
 
     def test_mesh_creates_in_distributed_mode(self):
-        """Mesh should initialize with distributed mode."""
-        mesh = Mesh(mode="distributed")
+        """Mesh created with deprecated mode= kwarg starts in 'auto' mode before start()."""
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            mesh = Mesh(mode="distributed")
 
-        assert mesh.mode == MeshMode.DISTRIBUTED
+        # Mode is resolved at start() time — always "auto" beforehand
+        assert mesh.mode.value == "auto"
         assert mesh._started is False
         assert mesh._p2p_coordinator is None  # Not started yet
         assert mesh._workflow_engine is None  # Not started yet
@@ -457,23 +461,23 @@ class TestDistributedVsOtherModes:
         assert mesh._p2p_coordinator is None
 
     @pytest.mark.asyncio
-    async def test_autonomous_starts_without_p2p(self):
-        """Autonomous mode should start without P2P."""
-        mesh = Mesh(mode="autonomous")
+    async def test_autonomous_starts_without_p2p(self, monkeypatch):
+        """Mesh with p2p_enabled=False starts with workflow engine but no P2P."""
+        monkeypatch.delenv("P2P_ENABLED", raising=False)
+        mesh = Mesh(config={"p2p_enabled": False})
         mesh.add(DataGeneratorAgent)
 
         await mesh.start()
 
         try:
-            # Autonomous has workflow engine but NOT P2P
             assert mesh._workflow_engine is not None
             assert mesh._p2p_coordinator is None
         finally:
             await mesh.stop()
 
     @pytest.mark.asyncio
-    async def test_p2p_mode_has_no_workflow_engine(self):
-        """P2P mode should NOT have workflow engine."""
+    async def test_p2p_mode_has_workflow_engine(self):
+        """P2P mode has BOTH P2P coordinator and workflow engine (always-on)."""
         mesh = Mesh(mode="p2p", config={'bind_port': 7962})
 
         class P2PAgent(Agent):
@@ -492,9 +496,9 @@ class TestDistributedVsOtherModes:
         await mesh.start()
 
         try:
-            # P2P has P2P coordinator but NOT workflow engine
+            # P2P coordinator is started AND workflow engine is always started
             assert mesh._p2p_coordinator is not None
-            assert mesh._workflow_engine is None
+            assert mesh._workflow_engine is not None
         finally:
             await mesh.stop()
 

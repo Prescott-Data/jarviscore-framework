@@ -175,7 +175,7 @@ async def _run_background(run_id: str) -> None:
 
     try:
         portfolio  = load_portfolio()
-        mesh = Mesh(mode="autonomous", config={"redis_url": REDIS_URL})
+        mesh = Mesh(config={"redis_url": REDIS_URL})
         for AgentClass in [MarketAnalystAgent, FinancialAnalystAgent,
                            TechnicalAnalystAgent, RiskOfficerAgent,
                            KnowledgeAgent, MemoWriterAgent, CommitteeChairAgent]:

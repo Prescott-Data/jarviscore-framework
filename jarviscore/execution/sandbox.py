@@ -9,15 +9,31 @@ Modes:
 import asyncio
 import aiohttp
 import base64
+import importlib
 import json
 import logging
+import os
 import signal
 import sys
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
+
+# Standard-library modules pre-loaded into every sandbox namespace.
+# Generated code can use these without an explicit import statement.
+_SANDBOX_STDLIB = [
+    "json", "math", "re", "datetime", "collections",
+    "itertools", "functools", "base64", "hashlib", "uuid",
+]
+
+# Optional third-party packages also pre-loaded when installed.
+_SANDBOX_OPTIONAL = ["requests", "aiohttp"]
+
+# Extend via env var: SANDBOX_EXTRA_IMPORTS=pandas,numpy
+_extra = os.environ.get("SANDBOX_EXTRA_IMPORTS", "")
+_SANDBOX_EXTRA: List[str] = [m.strip() for m in _extra.split(",") if m.strip()]
 
 
 class ExecutionTimeout(Exception):
@@ -480,6 +496,13 @@ if __name__ == "__main__":
             '__builtins__': safe_builtins,
             'result': None,  # Where code should store output
         }
+
+        # Pre-load stdlib modules so generated code works without explicit imports
+        for _mod_name in _SANDBOX_STDLIB + _SANDBOX_OPTIONAL + _SANDBOX_EXTRA:
+            try:
+                namespace[_mod_name] = importlib.import_module(_mod_name)
+            except ImportError:
+                pass  # optional packages silently absent
 
         # Inject search client if available
         if self.search:

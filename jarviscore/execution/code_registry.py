@@ -160,6 +160,124 @@ class FunctionRegistry:
         )
 
     # ─────────────────────────────────────────────────────────────
+    # Naming Conventions & Validation
+    # ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _clean_name_component(name: str) -> str:
+        """Clean and normalize a name component for use in function names.
+
+        Ported from IA CodeGenerator._clean_name_component().
+
+        Args:
+            name: Raw name component (e.g., "Airtable", "create-table!")
+
+        Returns:
+            Cleaned lowercase snake_case string, or empty string if invalid
+        """
+        if not name or name.lower() == "none" or name.strip() == "":
+            return ""
+
+        cleaned = re.sub(r"[^a-zA-Z0-9_]", "_", name.lower())
+        cleaned = re.sub(r"_+", "_", cleaned)
+        cleaned = cleaned.strip("_")
+
+        # Ensure it starts with a letter
+        if cleaned and not cleaned[0].isalpha():
+            cleaned = "f_" + cleaned
+
+        return cleaned
+
+    @classmethod
+    def validate_function_name(
+        cls, name: str, system: Optional[str] = None
+    ) -> str:
+        """Validate and normalize a function name to `{system}_{action}` format.
+
+        If `system` is provided and the name doesn't start with `{system}_`,
+        the system prefix is prepended (soft correction). The name is also
+        cleaned of invalid characters.
+
+        Args:
+            name: Raw function name from the LLM
+            system: Optional system/provider tag (e.g., "airtable", "slack")
+
+        Returns:
+            Validated and possibly corrected function name
+        """
+        cleaned = cls._clean_name_component(name)
+        if not cleaned:
+            cleaned = "unnamed_function"
+
+        if system:
+            system_clean = cls._clean_name_component(system)
+            if system_clean and not cleaned.startswith(f"{system_clean}_"):
+                old_name = cleaned
+                cleaned = f"{system_clean}_{cleaned}"
+                logger.warning(
+                    "Registry naming: auto-prefixed '%s' → '%s' "
+                    "(system=%s)",
+                    old_name,
+                    cleaned,
+                    system_clean,
+                )
+
+        return cleaned
+
+    @classmethod
+    def generate_function_name(
+        cls,
+        system: str,
+        action: str,
+        description: Optional[str] = None,
+    ) -> str:
+        """Generate a deterministic `{system}_{action}` function name.
+
+        Ported from IA CodeGenerator.generate_function_name().
+
+        Args:
+            system: Provider/system name (e.g., "airtable", "google")
+            action: Action verb (e.g., "create_table", "list_users")
+            description: Optional task description for fallback name extraction
+
+        Returns:
+            A clean `{system}_{action}` function name
+        """
+        system_clean = cls._clean_name_component(system)
+        action_clean = cls._clean_name_component(action)
+
+        if system_clean and action_clean:
+            return f"{system_clean}_{action_clean}"
+
+        # Fallback: extract from description
+        if description:
+            words = re.findall(r"\b[a-zA-Z][a-zA-Z0-9_]+\b", description.lower())
+            stop_words = {
+                "the", "a", "an", "and", "or", "but", "in", "on",
+                "at", "to", "for", "with", "by", "about", "as",
+            }
+            filtered = [w for w in words if w not in stop_words and len(w) > 2]
+
+            if system_clean and not action_clean and filtered:
+                for word in filtered:
+                    if word != system_clean:
+                        return f"{system_clean}_{word}"
+
+            if action_clean and not system_clean and filtered:
+                for word in filtered:
+                    if word != action_clean:
+                        return f"{word}_{action_clean}"
+
+            if not system_clean and not action_clean and len(filtered) >= 2:
+                return "_".join(filtered[:3])
+
+        # Absolute fallback with UUID
+        import uuid
+        prefix = system_clean or action_clean or "auto_function"
+        unique_id = str(uuid.uuid4())[:8]
+        return f"{prefix}_{unique_id}"
+
+    # ─────────────────────────────────────────────────────────────
     # Registration & Retrieval
     # ─────────────────────────────────────────────────────────────
 
@@ -191,6 +309,34 @@ class FunctionRegistry:
             True if registered successfully
         """
         metadata = metadata or {}
+
+        # ── Naming enforcement ──
+        # Soft-correct function_name to {system}_{action} convention.
+        # Existing atoms with legacy names are NOT rejected — only new
+        # registrations get auto-prefixed and warned.
+        raw_system = metadata.get("system") or metadata.get("domain")
+        corrected_name = self.validate_function_name(function_name, raw_system)
+        if corrected_name != function_name:
+            logger.info(
+                "Registry soft-corrected function name: '%s' → '%s'",
+                function_name,
+                corrected_name,
+            )
+            function_name = corrected_name
+
+        # ── Metadata completeness warnings ──
+        if not metadata.get("description"):
+            logger.warning(
+                "register_function('%s'): no description provided — "
+                "consider adding one for discoverability.",
+                function_name,
+            )
+        if not metadata.get("capabilities"):
+            logger.warning(
+                "register_function('%s'): no capabilities provided — "
+                "function won't appear in capability-based searches.",
+                function_name,
+            )
 
         # Extract source code
         if callable(function):
@@ -255,8 +401,14 @@ class FunctionRegistry:
         # Save metadata to disk
         self._save_function_metadata(function_name)
 
-        # Update indexes
-        self._index_function(function_name, func_metadata)
+        # Index using values sourced directly from the input `metadata`, not from
+        # `func_metadata` (which carries oauth_metadata and would taint all .get() results).
+        self._index_function(
+            function_name,
+            metadata.get("system") or metadata.get("domain"),
+            metadata.get("capabilities", []),
+            metadata.get("agent_id"),
+        )
 
         # Sync to Redis
         self.sync_registry_index()
@@ -264,10 +416,7 @@ class FunctionRegistry:
         # Sync to blob storage
         self._upload_to_blob(function_name, source_code, func_metadata)
 
-        logger.info(
-            f"Registered function: {function_name} v{new_version} "
-            f"(system={func_metadata['system']}, stage={func_metadata['registry_stage']})"
-        )
+        logger.info("Registered function: %s v%d", function_name, new_version)
         return True
 
     def unregister_function(
@@ -290,8 +439,13 @@ class FunctionRegistry:
         metadata = self.function_metadata.pop(function_name, {})
         self.functions.pop(function_name, None)
 
-        # Remove from indexes
-        self._deindex_function(function_name, metadata)
+        # Remove from indexes — extract primitives to avoid passing the full stored dict
+        self._deindex_function(
+            function_name,
+            metadata.get("system"),
+            metadata.get("capabilities", []),
+            metadata.get("agent_id"),
+        )
 
         # Remove metadata file
         meta_file = self.metadata_path / f"{function_name}.json"
@@ -353,14 +507,24 @@ class FunctionRegistry:
 
         # Remove from old indexes before updating
         old_metadata = self.function_metadata[function_name]
-        self._deindex_function(function_name, old_metadata)
+        self._deindex_function(
+            function_name,
+            old_metadata.get("system"),
+            old_metadata.get("capabilities", []),
+            old_metadata.get("agent_id"),
+        )
 
         # Merge updates
         old_metadata.update(updates)
         old_metadata["updated_at"] = datetime.now().isoformat()
 
-        # Re-index
-        self._index_function(function_name, old_metadata)
+        # Re-index with post-merge values
+        self._index_function(
+            function_name,
+            old_metadata.get("system"),
+            old_metadata.get("capabilities", []),
+            old_metadata.get("agent_id"),
+        )
 
         # Save
         self._save_function_metadata(function_name)
@@ -434,9 +598,9 @@ class FunctionRegistry:
         self.sync_registry_index()
 
         logger.debug(
-            f"Stats updated: {function_name} "
-            f"(success={success}, stage={stage}, "
-            f"count={metadata['success_count']}/{metadata['execution_count']})"
+            "Stats updated: %s (success=%s, count=%d/%d)",
+            function_name, success,
+            metadata["success_count"], metadata["execution_count"],
         )
         return True
 
@@ -844,7 +1008,7 @@ class FunctionRegistry:
         atom_file = system_dir / f"{function_name}_v{version}.py"
         atom_file.write_text(code)
 
-        logger.debug(f"Saved atom: {atom_file}")
+        logger.debug("Saved atom: %s v%d", function_name, version)
         return atom_file
 
     def _compute_file_hash(self, path: Union[str, Path]) -> str:
@@ -880,10 +1044,13 @@ class FunctionRegistry:
             return
 
         meta_file = self.metadata_path / f"{function_name}.json"
-        # Convert Path objects and sets for JSON serialization
+        # Convert Path objects and sets for JSON serialization.
+        # oauth_metadata holds runtime auth tokens — never write to disk in plaintext.
         serializable = {}
         for k, v in metadata.items():
-            if isinstance(v, Path):
+            if k == "oauth_metadata":
+                continue
+            elif isinstance(v, Path):
                 serializable[k] = str(v)
             elif isinstance(v, set):
                 serializable[k] = sorted(v)
@@ -930,40 +1097,46 @@ class FunctionRegistry:
         self.functions_by_capability.clear()
         self.functions_by_source.clear()
 
-        for name, metadata in self.function_metadata.items():
-            self._index_function(name, metadata)
+        for name, md in self.function_metadata.items():
+            self._index_function(
+                name,
+                md.get("system"),
+                md.get("capabilities", []),
+                md.get("agent_id"),
+            )
 
-    def _index_function(self, function_name: str, metadata: Dict) -> None:
+    def _index_function(
+        self,
+        function_name: str,
+        system: Optional[str],
+        capabilities: List[str],
+        agent_id: Optional[str],
+    ) -> None:
         """Add function to all applicable indexes."""
-        # System index
-        system = metadata.get("system")
         if system:
             self.functions_by_system.setdefault(system, set()).add(function_name)
-
-        # Capability index
-        for cap in metadata.get("capabilities", []):
+        for cap in capabilities or []:
             self.functions_by_capability.setdefault(cap, set()).add(function_name)
-
-        # Source index (by agent_id)
-        agent_id = metadata.get("agent_id")
         if agent_id:
             self.functions_by_source.setdefault(agent_id, set()).add(function_name)
 
-    def _deindex_function(self, function_name: str, metadata: Dict) -> None:
+    def _deindex_function(
+        self,
+        function_name: str,
+        system: Optional[str],
+        capabilities: List[str],
+        agent_id: Optional[str],
+    ) -> None:
         """Remove function from all indexes."""
-        system = metadata.get("system")
         if system and system in self.functions_by_system:
             self.functions_by_system[system].discard(function_name)
             if not self.functions_by_system[system]:
                 del self.functions_by_system[system]
-
-        for cap in metadata.get("capabilities", []):
+        for cap in capabilities or []:
             if cap in self.functions_by_capability:
                 self.functions_by_capability[cap].discard(function_name)
                 if not self.functions_by_capability[cap]:
                     del self.functions_by_capability[cap]
-
-        agent_id = metadata.get("agent_id")
         if agent_id and agent_id in self.functions_by_source:
             self.functions_by_source[agent_id].discard(function_name)
             if not self.functions_by_source[agent_id]:

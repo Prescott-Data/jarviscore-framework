@@ -475,7 +475,7 @@ def create_app():
     # ONE LINE: JarvisLifespan handles everything
     app = FastAPI(
         title="Autonomous Agents Demo",
-        lifespan=JarvisLifespan(agents, mode="p2p", bind_port=7980)
+        lifespan=JarvisLifespan(agents, bind_port=7980)
     )
 
     @app.get("/")

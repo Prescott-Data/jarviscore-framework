@@ -1,378 +1,378 @@
+---
+icon: material/history
+hide:
+  - toc
+---
+
 # Changelog
 
-All notable changes to JarvisCore Framework will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to JarvisCore Framework are documented here. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased] — hotfix/vertex-ai-provider
+<div class="changelog-release" markdown>
 
-### Added
-- **Vertex AI provider** (`LLMProvider.VERTEX_AI`): GCP-native Gemini access via Application Default Credentials (ADC). No API key required — authenticate with `gcloud auth application-default login` or attach a service account to your GCP compute resource.
-  - Config: `VERTEX_AI_ENABLED=true`, `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION` (default `us-central1`), `VERTEX_AI_MODEL` (default `gemini-2.5-flash`)
-  - Slots into the fallback chain after Gemini: **Azure → Claude → vLLM → Gemini → Vertex AI**
-- **`_normalize_tools_for_gemini()` static method**: auto-converts tool schemas to Gemini `function_declarations` format. Accepts Anthropic/PeerTool (`input_schema`), flat (`name`+`parameters`), or already-native formats — no adapter code needed by callers.
-- **Tool-call response parsing** in `_call_genai_client`: when a Gemini/Vertex AI response contains `function_call` parts, `tool_calls` is populated in the returned dict and `content` is set to `""`.
-- Shared `_call_genai_client()` helper: both `_call_gemini` and `_call_vertex_ai` delegate here, keeping token accounting and cost calculation consistent.
-- TOKEN_PRICING entries for `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.1-pro`, `gemini-3.1-pro-preview`.
-- Vertex AI settings in `.env.example`.
+## 1.0.3 <span class="changelog-date">2026-05-03</span>
 
-### Fixed
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.0.3" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+**Documentation**
+
+- Launched the full MkDocs documentation site — Getting Started, Concepts, Guides, Reference, Examples, and Enterprise sections.
+- New guides: AutoAgent, CustomAgent, Workflows, Chat, HITL, Nexus, Knowledge Base, System Prompts, Observability, FastAPI Integration, Internet Search, Migration (CrewAI + LangGraph), Testing.
+- New concept pages: Architecture, Memory, Nexus, P2P, System Bundles, Agent Personas.
+- New examples: Financial Pipeline, Research Network, Support Swarm, Content Pipeline, Investment Committee.
+- Synced all 15 brand SVG variants to `docs/assets/` and removed legacy unreferenced `logo.png` / `logo.svg`.
+- `guides/testing.md`: documented `ExampleMockLLMClient` — tool-validating mock LLM for unit testing agents with tool use.
+- Fixed deprecated `Mesh(mode=...)` calls in `README.md`, `guides/production.md`, `guides/browser-automation.md`, and `guides/adapters.md`.
+
+**Added**
+
+- `mesh.run_task(agent, task, context, complexity)` — primary user-facing API for dispatching a single task to an agent by role with multi-tier model routing.
+- `P2P_ENABLED=true` env var support — `Settings.p2p_enabled` is now merged into Mesh config at startup.
+- `HITLCategory` enum with hard enforcement on `HITLQueue.request()` — valid categories: `auth_required`, `data_required`, `critical_action`. Invalid categories raise `ValueError`.
+- Subagent hint alias map in the Planner — LLM-hallucinated hints (`analyst`, `developer`, `writer`, `scraper`) are remapped to valid roles before dispatch.
+- `STEP_OUTPUT_MAX_BYTES` (default 200 KB) and `STEP_OUTPUT_PREVIEW_BYTES` (default 20 KB) — large step outputs stored as truncated preview with `_overflow` flag.
+- Idempotent write guard on `RedisStore.save_step_output()` — a successful result will not be overwritten by a subsequent error payload from a stalled re-execution.
+- Azure Content Filter resilience in `LLMClient` — substitution table for business phrases that trigger false-positive content rejections.
+- `Kernel._get_model_for_tier()` — clean multi-tier model resolution: complexity hint → `TASK_MODEL_NANO` / `TASK_MODEL_STANDARD` / `TASK_MODEL_HEAVY` → legacy fallback.
+- `MailboxManager` schema normalisation — handles both the current flat envelope schema and the pre-v1.0.2 double-nested schema transparently.
+- **Vertex AI provider** (`LLMProvider.VERTEX_AI`): GCP-native Gemini access via Application Default Credentials (ADC). No API key required — authenticate with `gcloud auth application-default login` or attach a service account. Config: `VERTEX_AI_ENABLED=true`, `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION` (default `us-central1`), `VERTEX_AI_MODEL` (default `gemini-2.5-flash`). Slots into the fallback chain after Gemini: **Azure → Claude → vLLM → Gemini → Vertex AI**.
+- `_normalize_tools_for_gemini()` static method — auto-converts tool schemas to Gemini `function_declarations` format. Accepts Anthropic/PeerTool (`input_schema`), flat (`name`+`parameters`), or already-native formats.
+- Shared `_call_genai_client()` helper: both `_call_gemini` and `_call_vertex_ai` delegate here for consistent token accounting and cost calculation.
+- Tool-call response parsing in `_call_genai_client`: when a Gemini/Vertex AI response contains `function_call` parts, `tool_calls` is populated and `content` is set to `""`.
+- Token pricing entries for `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.1-pro`, `gemini-3.1-pro-preview`.
+- Process-wide LLM concurrency semaphore (`LLM_MAX_CONCURRENT` env var) — prevents thundering-herd 429s in multi-agent deployments.
+- `llm.nano_model` and `llm.planner_model` properties — tier-aware model selection for `StepEvaluator` and `Planner`.
+- `max_completion_tokens` alias in `generate()` — callers can use GPT-5.x SDK naming convention interchangeably with `max_tokens`.
+
+**Fixed**
+
+- `P2P_ENABLED` env var was not forwarded to `Mesh.config`, requiring `config={"p2p_enabled": True}` explicitly even when the env var was set.
+- HITL escalations could be raised for arbitrary reasons, polluting the human review queue. Now enforced at the framework level.
+- Planner emitted `Unknown subagent_hint` warnings for semantically valid but aliased LLM role names.
+- Examples audit (2026-05-07): fixed API compatibility across all 5 production examples for v1.0.3 breaking changes.
+- SWIM stabilisation replaced hardcoded 5 s sleep with condition-based poll (0.3 s for single-node; up to 5 s when seed nodes configured).
+- `AutoAgent` result dict now exposes `payload` as a dedicated top-level key when the output is a structured dict, enabling downstream step access without manual parsing.
+- Crash recovery `_resume()` pre-populates recovered step results into `pre_results` so resumed workflows replay correctly rather than skipping completed steps.
+- `ExampleMockLLMClient` validates tool names against the `tools` parameter before returning tool-use responses, preventing mock deadlocks when a tool is out of scope.
 - `_call_gemini` now forwards `**kwargs` (including `tools`) to `_call_genai_client`, making Gemini tool-calling behaviour consistent with Vertex AI.
+- `test_claude_primary` now passes an explicit config that disables all other providers, making the assertion environment-independent.
 
-### Tests
-- 7 new Vertex AI tests (all mocked — no GCP credentials required): provider detection, disabled/no-project guard, Gemini-absent preference, response shape, fallback-on-failure.
-- 5 new `_normalize_tools_for_gemini` unit tests: empty/None passthrough, Gemini-native passthrough, Anthropic format conversion, flat format wrapping, mixed schema list.
-- 2 new integration-style tests: tool-call parsing from response parts, Gemini `tools` kwarg forwarding.
-- Fixed `test_claude_primary`: now passes an explicit config that disables all other providers, making the assertion environment-independent.
+**Changed**
 
----
+- `mesh.workflow()` no longer restricted to autonomous mode — works across all mesh configurations.
+- CLI references updated from `python -m jarviscore.cli.*` to the `jarviscore` entry-point CLI.
 
-## [1.0.2] - 2026-03-04
-
-### Fixed
-- **P2P Keepalive Spam Prevention**: Added exponential backoff mechanism (45s default) to prevent continuous keepalive attempts when peers are unavailable or network has connectivity issues
-- **Remote Agent Discovery Bug**: Fixed `PeerClient.list_roles()` to include remote agents from SWIM mesh, not just local agents. Previously only checked local agent registry, missing agents discovered via P2P network
-- **Single-Node Graceful Degradation**: Added `allow_zero_peers` flag (default: True) to recognize single-node runs as valid state without triggering failure warnings
-
-### Changed
-- Increased `ask_peer` timeout from 600s (10 minutes) to 7200s (2 hours) to support long-running database queries and complex analysis tasks
-- Enhanced keepalive manager with consecutive failure tracking and backoff-until timestamp for better network resilience
-- Improved keepalive logging to distinguish between expected zero-peer state and actual failures
-
-### Added
-- `P2P_KEEPALIVE_FAILURE_BACKOFF_SECONDS` config parameter (default: 45) for keepalive retry backoff
-- `P2P_ALLOW_ZERO_PEERS` config parameter (default: True) for single-node development/testing
+</div>
 
 ---
 
-## [1.0.1] - 2026-02-27
+<div class="changelog-release" markdown>
 
-### Fixed
-- LICENSE link in README resolves to 404 on PyPI — replaced relative path with absolute GitHub URL
+## 1.0.2 <span class="changelog-date">2026-03-04</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.0.2" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+**Fixed**
+
+- P2P Keepalive Spam Prevention: Added exponential backoff mechanism (45s default) to prevent continuous keepalive attempts when peers are unavailable or network has connectivity issues.
+- Remote Agent Discovery Bug: Fixed `PeerClient.list_roles()` to include remote agents from SWIM mesh, not just local agents. Previously only checked local agent registry, missing agents discovered via P2P network.
+- Single-Node Graceful Degradation: Added `allow_zero_peers` flag (default: True) to recognize single-node runs as valid state without triggering failure warnings.
+
+**Changed**
+
+- Increased `ask_peer` timeout from 600s to 7200s (2 hours) to support long-running database queries and complex analysis tasks.
+- Enhanced keepalive manager with consecutive failure tracking and backoff-until timestamp for better network resilience.
+- Improved keepalive logging to distinguish between expected zero-peer state and actual failures.
+
+**Added**
+
+- `P2P_KEEPALIVE_FAILURE_BACKOFF_SECONDS` config parameter (default: 45) for keepalive retry backoff.
+- `P2P_ALLOW_ZERO_PEERS` config parameter (default: True) for single-node development and testing.
+
+</div>
 
 ---
 
-## [1.0.0] - 2026-02-25
+<div class="changelog-release" markdown>
 
-### Changed
-- Version: 0.4.0 → 1.0.0 — stable public release
+## 1.0.1 <span class="changelog-date">2026-02-27</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.0.1" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+**Fixed**
+
+- LICENSE link in README resolves to 404 on PyPI. Replaced relative path with absolute GitHub URL.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
+## 1.0.0 <span class="changelog-date">2026-02-25</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.0.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+**Changed**
+
+- Version: 0.4.0 → 1.0.0 — stable public release.
 - Documentation URL updated to custom domain: `https://jarviscore.developers.prescottdata.io/`
 
-### Added
-- Apache 2.0 license (replaces MIT); `CLA/INDIVIDUAL.md`, `CLA/CORPORATE.md`, `TRADEMARK.md`
-- `CONTRIBUTING.md` with CLA links, ruff tooling, PR checklist
-- `CODE_OF_CONDUCT.md` community standards
-- `ENTERPRISE.md` — OSS vs Enterprise comparison
-- `examples/investment_committee/` — 7-agent multi-step workflow with web dashboard (AutoAgent + CustomAgent,
-  parallel step execution, LTM institutional memory, FastAPI dashboard on port 8004)
+**Added**
+
+- Apache 2.0 license (replaces MIT); CLA/INDIVIDUAL.md, CLA/CORPORATE.md, TRADEMARK.md.
+- CONTRIBUTING.md with CLA links, ruff tooling, PR checklist.
+- CODE_OF_CONDUCT.md community standards.
+- ENTERPRISE.md for OSS vs Enterprise comparison.
+- `examples/investment_committee/` — 7-agent multi-step workflow with web dashboard (AutoAgent + CustomAgent, parallel step execution, LTM institutional memory, FastAPI dashboard on port 8004).
+
+</div>
 
 ---
 
-## [0.4.0] - 2026-02-18
+<div class="changelog-release" markdown>
 
-### Added — Infrastructure Stack (Phases 1–9)
+## 0.4.0 <span class="changelog-date">2026-02-18</span>
 
-#### Phase 1 — Foundation Layer
-- `LocalBlobStorage` / `AzureBlobStorage`: `save(path, data)` / `load(path)` for any artifact
-- `RedisContextStore`: full Redis-backed step output, workflow graph, mailbox, HITL, checkpoint methods
-- `STORAGE_BACKEND=local|azure`, `STORAGE_BASE_PATH`, `REDIS_URL` configuration
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v0.4.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
 
-#### Phase 2 — Context Distillation
-- `Evidence`, `TruthFact`, `TruthContext`, `AgentOutput` Pydantic models (`context/truth.py`)
-- `distill_output()`, `scrub_sensitive()`, `merge_facts()` utilities (`context/distillation.py`)
-- `ContextManager`: token-budget aware prompt builder (priority stack: mission → plan → scratchpad → LTM → tool history → variables)
-- `JarvisContext` enhanced with `truth`, `mailbox`, `tracer`, `human_tasks` fields
+This was the largest release in JarvisCore history, introducing the complete infrastructure stack across nine phases. It added persistent storage, context distillation, telemetry, the mailbox messaging system, the function registry, the Kernel OODA loop, distributed workflow execution, Nexus authentication, and the unified memory architecture.
 
-#### Phase 3 — Telemetry / Tracing
-- `TraceEventType` enum: workflow, step, kernel cognition, tool, mailbox, HITL, context events (`telemetry/events.py`)
-- `TraceManager`: three output channels — Redis List (persistent), Redis PubSub (real-time), JSONL (compliance fallback) (`telemetry/tracer.py`)
-- `record_step_execution(duration, status)` — Prometheus histogram + counter; enable via `PROMETHEUS_ENABLED=true`
+**Phase 1 — Foundation Layer**
 
-#### Phase 4 — MailboxManager
-- `self.mailbox.send(target_id, payload)` / `read(max_messages)` for async agent messaging
-- Redis Streams backed; available in all modes when `REDIS_URL` is set
+`LocalBlobStorage` / `AzureBlobStorage` with `save(path, data)` / `load(path)` for any artifact. `RedisContextStore` for full Redis-backed step output, workflow graph, mailbox, HITL, and checkpoint methods. Configured via `STORAGE_BACKEND`, `STORAGE_BASE_PATH`, and `REDIS_URL`.
 
-#### Phase 5 — Function Registry
-- `CodeRegistry`: auto-registers successfully executed code per task; promotes to `VERIFIED` on first success
-- Available as `agent.code_registry` in AutoAgent; persisted to `{log_dir}/function_registry/`
-- `update_execution_stats(func_name, success, execution_time)` for graduation tracking
+**Phase 2 — Context Distillation**
 
-#### Phase 6 — Kernel / SubAgent OODA Loop
-- `Kernel`: replaces AutoAgent's linear codegen→sandbox→repair pipeline with a supervised OODA loop
-- `ExecutionLease`: token/turn/wall-clock budgets per subagent role (`kernel/lease.py`)
-  - Role profiles: `coder` (coding model, 240k tokens), `researcher`, `communicator` (task model)
-- `AgentCognitionManager`: tracks budget spend per phase (DISCOVERY→ANALYSIS→IMPLEMENTATION→COMPLETION), detects spinning (same tool 3+ times), enforces cognitive gate (`kernel/cognition.py`)
-- `BaseSubAgent` + text tool-call protocol (`THOUGHT/TOOL/PARAMS → DONE/RESULT`) (`kernel/subagent.py`)
-- `AdaptiveHITLPolicy` + `HumanTask`: pauses execution for human approval/input when confidence/risk triggers fire (`kernel/hitl.py`)
-- Fast path: simple coding tasks skip full OODA, dispatch directly to coder subagent
+`Evidence`, `TruthFact`, `TruthContext`, `AgentOutput` Pydantic models. `distill_output()`, `scrub_sensitive()`, `merge_facts()` utilities. `ContextManager` for token-budget aware prompt building (priority stack: mission → plan → scratchpad → LTM → tool history → variables). `JarvisContext` enhanced with `truth`, `mailbox`, `tracer`, `human_tasks` fields.
 
-#### Phase 7 — Distributed WorkflowEngine
-- WorkflowEngine persists DAG to Redis hash `workflow_graph:{wf_id}` for crash recovery
-- When no local agent matches a step, engine resets status → `"pending"` and polls Redis
-- `Mesh._run_distributed_worker()`: background asyncio task scans `jarviscore:active_workflows`,
-  checks `are_dependencies_met()`, atomically claims steps via SETNX, executes, writes output to Redis
-- `redis_store.register_active_workflow()`, `get_active_workflows()`, `get_all_step_ids()` added
+**Phase 3 — Telemetry and Tracing**
 
-#### Phase 7D — AuthenticationManager (Nexus)
-- Set `requires_auth = True` on any agent; Mesh injects `self._auth_manager` before `setup()`
-- Full NexusClient flow: `request_connection → browser OAuth → poll ACTIVE → resolve_strategy → apply headers`
-- Config: `auth_mode="production"`, `nexus_gateway_url`, `nexus_default_user_id`
-- Graceful degradation: `_auth_manager = None` when `NEXUS_GATEWAY_URL` not set
+`TraceEventType` enum covering workflow, step, kernel cognition, tool, mailbox, HITL, and context events. `TraceManager` with three output channels: Redis List (persistent), Redis PubSub (real-time), and JSONL (compliance fallback). `record_step_execution(duration, status)` Prometheus histogram and counter, enabled via `PROMETHEUS_ENABLED=true`.
 
-#### Phase 8 — Memory Architecture
-- `UnifiedMemory(workflow_id, step_id, agent_id, redis_store, blob_storage)`
-- `.episodic` — `EpisodicLedger`: Redis Streams `append(event)` / `tail(count)`
-- `.ltm` — `LongTermMemory`: `save_summary(text)` / `load_summary()` (Redis `ltm:{wf_id}`)
-- `.scratch` — in-memory `WorkingScratchpad`
-- `RedisMemoryAccessor(redis_store, workflow_id).get(step_id)` — reads `step_output:{wf}:{step}`
+**Phase 4 — MailboxManager**
 
-#### Phase 9 — Mesh Integration + Auto-Injection
-- Before each agent's `setup()`, Mesh injects: `_redis_store`, `_blob_storage`, `mailbox`
-- Prometheus server started automatically when `PROMETHEUS_ENABLED=true`
-- Agents use injected infrastructure directly — zero boilerplate
+`self.mailbox.send(target_id, payload)` / `read(max_messages)` for async agent messaging. Backed by Redis Streams, available in all modes when `REDIS_URL` is set.
 
-### Added — Production Examples
-- `examples/ex1_financial_pipeline.py` — AutoAgent autonomous, 3-step financial analysis pipeline (Phases 1, 3, 4, 5, 8, 9)
-- `examples/ex2_synthesizer.py` + `ex2_research_node1/2/3.py` — AutoAgent 4-node SWIM research cluster (Phases 4, 7, 8, 9)
-- `examples/ex3_support_swarm.py` — CustomAgent P2P, 4-agent support routing + Nexus auth (Phases 1, 4, 7D, 8, 9)
-- `examples/ex4_content_pipeline.py` — CustomAgent distributed, content pipeline with LTM (Phases 1, 4, 5, 7, 8, 9)
+**Phase 5 — Function Registry**
 
-### Fixed
-- `AutoAgent.execute_task`: pass `context=task.get('context')` to `sandbox.execute()` so
-  LLM-generated code can access `previous_step_results` (previously caused silent synthesis failures)
+`CodeRegistry` auto-registers successfully executed code per task and promotes to `VERIFIED` on first success. Available as `agent.code_registry` in AutoAgent, persisted to `{log_dir}/function_registry/`. Includes `update_execution_stats(func_name, success, execution_time)` for graduation tracking.
 
-### Changed
-- Version: 0.3.2 → 0.4.0
-- **P2P env var namespace**: `bind_port`, `bind_host`, `seed_nodes`, `node_name` now read from
-  `JARVISCORE_BIND_PORT`, `JARVISCORE_BIND_HOST`, `JARVISCORE_SEED_NODES`, `JARVISCORE_NODE_NAME`
-  respectively. This isolates per-process P2P settings from the swim package's own env vars.
-  In a multi-node deployment each node has a unique port — set it explicitly in the Mesh
-  `config` dict or via `JARVISCORE_BIND_PORT` at process launch. Do not set port values in
-  a shared `.env` file.
-- `.env.example`: `BIND_HOST` / `BIND_PORT` replaced with commented `JARVISCORE_BIND_HOST` /
-  `JARVISCORE_BIND_PORT` with guidance on per-process configuration.
+**Phase 6 — Kernel / SubAgent OODA Loop**
+
+The `Kernel` replaces AutoAgent's linear codegen → sandbox → repair pipeline with a supervised OODA loop. `ExecutionLease` enforces token/turn/wall-clock budgets per subagent role. `AgentCognitionManager` tracks budget spend per phase, detects spinning (same tool 3+ times), and enforces cognitive gates. `AdaptiveHITLPolicy` with `HumanTask` pauses execution when confidence or risk triggers fire. Fast path: simple coding tasks skip full OODA and dispatch directly to coder subagent.
+
+**Phase 7 — Distributed WorkflowEngine**
+
+`WorkflowEngine` persists DAG to Redis hash `workflow_graph:{wf_id}` for crash recovery. When no local agent matches a step, the engine resets status to `"pending"` and polls Redis. `Mesh._run_distributed_worker()` scans `jarviscore:active_workflows`, checks `are_dependencies_met()`, atomically claims steps via SETNX, executes, and writes output to Redis.
+
+**Phase 7D — AuthenticationManager (Nexus)**
+
+Set `requires_auth = True` on any agent and the Mesh injects `self._auth_manager` before `setup()`. Full NexusClient flow: `request_connection → browser OAuth → poll ACTIVE → resolve_strategy → apply headers`. Graceful degradation when `NEXUS_GATEWAY_URL` is not set.
+
+**Phase 8 — Memory Architecture**
+
+`UnifiedMemory(workflow_id, step_id, agent_id, redis_store, blob_storage)` with `.episodic` (EpisodicLedger via Redis Streams), `.ltm` (LongTermMemory via Redis), and `.scratch` (in-memory WorkingScratchpad). `RedisMemoryAccessor` reads step outputs across the workflow.
+
+**Phase 9 — Mesh Integration and Auto-Injection**
+
+Before each agent's `setup()`, the Mesh injects `_redis_store`, `_blob_storage`, and `mailbox`. Prometheus server starts automatically when `PROMETHEUS_ENABLED=true`. Agents use injected infrastructure directly with zero boilerplate.
+
+**Production Examples**
+
+- `financial_pipeline.py` — AutoAgent autonomous, 3-step financial analysis pipeline.
+- `research_synthesizer.py` + `research_node_1/2/3.py` — AutoAgent 4-node SWIM research cluster.
+- `support_swarm.py` — CustomAgent P2P, 4-agent support routing with Nexus auth.
+- `content_pipeline.py` — CustomAgent distributed, content pipeline with LTM.
+
+**Fixed**
+
+- `AutoAgent.execute_task`: pass `context=task.get('context')` to `sandbox.execute()` so LLM-generated code can access `previous_step_results`.
+
+**Changed**
+
+- P2P env var namespace: `bind_port`, `bind_host`, `seed_nodes`, `node_name` now read from `JARVISCORE_BIND_PORT`, `JARVISCORE_BIND_HOST`, `JARVISCORE_SEED_NODES`, `JARVISCORE_NODE_NAME` respectively. This isolates per-process P2P settings from the swim package's own env vars.
+
+</div>
 
 ---
 
-## [0.3.2] - 2026-02-03
+<div class="changelog-release" markdown>
 
-### Added
+## 0.3.2 <span class="changelog-date">2026-02-03</span>
 
-#### Session Context Propagation
-- Added `context` parameter to `notify()`, `request()`, `respond()`, and `broadcast()` methods
-- Context carries metadata like mission_id, priority, trace_id across message flows
-- `respond()` automatically propagates context from request if not overridden
-- `IncomingMessage.context` accessible in all message handlers
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v0.3.2" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+**Added**
+
+Session Context Propagation: `context` parameter added to `notify()`, `request()`, `respond()`, and `broadcast()` methods. Context carries metadata like `mission_id`, `priority`, `trace_id` across message flows. `respond()` automatically propagates context from request if not overridden.
 
 ```python
-# Send request with context
 response = await peers.request("analyst", {"q": "..."}, context={"mission_id": "abc"})
 
-# Access context in handler
 async def on_peer_request(self, msg):
-    mission_id = msg.context.get("mission_id")  # Available!
+    mission_id = msg.context.get("mission_id")
     return {"result": "..."}
 ```
 
-#### Mesh Diagnostics
-- Added `mesh.get_diagnostics()` method for mesh health monitoring
-- Returns: `local_node`, `known_peers`, `local_agents`, `connectivity_status`
-- Connectivity status values: `healthy`, `isolated`, `degraded`, `not_started`, `local_only`
-- Includes SWIM and keepalive status when P2P is enabled
+Mesh Diagnostics: `mesh.get_diagnostics()` returns `local_node`, `known_peers`, `local_agents`, and `connectivity_status` (healthy, isolated, degraded, not_started, local_only). Includes SWIM and keepalive status when P2P is enabled.
+
+Async Request Pattern: `ask_async(target, message, timeout, context)` returns a `request_id` immediately. `check_inbox(request_id, timeout, remove)` retrieves the response later. Enables fire-and-forget workflows where you collect results when ready.
+
+Load Balancing Strategies: `strategy` parameter on `discover()` supports `"first"`, `"random"`, `"round_robin"`, and `"least_recent"`. `discover_one()` convenience method for single peer lookup.
+
+MockMesh Testing Utilities: `jarviscore.testing` module with `MockPeerClient` (full mock with discovery, messaging, assertion helpers) and `MockMesh` (simplified mesh without real P2P infrastructure). Auto-injects MockPeerClient into agents during `MockMesh.start()`.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
+## 0.3.1 <span class="changelog-date">2026-02-02</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v0.3.1" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+**Breaking Changes**
+
+ListenerAgent has been merged into CustomAgent. Migration requires only an import change:
 
 ```python
-diag = mesh.get_diagnostics()
-print(diag["connectivity_status"])  # "healthy", "isolated", etc.
+# Before
+from jarviscore.profiles import ListenerAgent
+
+# After
+from jarviscore.profiles import CustomAgent
 ```
 
-#### Async Request Pattern
-- Added `ask_async(target, message, timeout, context)` - returns request_id immediately
-- Added `check_inbox(request_id, timeout, remove)` - returns response or None
-- Added `get_pending_async_requests()` - list pending async requests
-- Added `clear_inbox(request_id)` - clear specific or all inbox entries
+All handler methods work exactly the same way. No other code changes required.
 
-```python
-# Fire off multiple requests
-req_ids = [await peers.ask_async(a, {"q": "..."}) for a in analysts]
+**Changed**
 
-# Do other work...
-await process_other_tasks()
+CustomAgent now includes P2P handlers: `on_peer_request(msg)`, `on_peer_notify(msg)`, `on_error(error, msg)`, and the built-in `run()` listener loop. The profile architecture was simplified from three profiles (AutoAgent + CustomAgent + ListenerAgent) to two (AutoAgent + CustomAgent), removing the "which profile do I use?" confusion.
 
-# Collect responses later
-for req_id in req_ids:
-    response = await peers.check_inbox(req_id, timeout=5)
-```
-
-#### Load Balancing Strategies
-- Added `strategy` parameter to `discover()`: `"first"`, `"random"`, `"round_robin"`, `"least_recent"`
-- Added `discover_one()` convenience method for single peer lookup
-- Added `record_peer_usage(peer_id)` for least_recent tracking
-
-```python
-# Round-robin across workers
-worker = peers.discover_one(role="worker", strategy="round_robin")
-
-# Least recently used analyst
-analyst = peers.discover_one(role="analyst", strategy="least_recent")
-```
-
-#### MockMesh Testing Utilities
-- Created `jarviscore.testing` module
-- `MockPeerClient`: Full mock with discovery, messaging, assertion helpers
-- `MockMesh`: Simplified mesh without real P2P infrastructure
-- Auto-injects MockPeerClient into agents during MockMesh.start()
-
-```python
-from jarviscore.testing import MockMesh, MockPeerClient
-
-mesh = MockMesh()
-mesh.add(MyAgent)
-await mesh.start()
-
-agent = mesh.get_agent("my_role")
-agent.peers.set_mock_response("analyst", {"result": "test"})
-agent.peers.assert_requested("analyst")
-```
-
-### Testing
-- Session context propagation through all messaging methods
-- Mesh diagnostics structure and connectivity status values
-- Async request/response flow with check_inbox
-- Load balancing strategies (first, random, round_robin, least_recent)
-- MockMesh and MockPeerClient functionality and assertion helpers
+</div>
 
 ---
 
-## [0.3.1] - 2026-02-02
+<div class="changelog-release" markdown>
 
-### Breaking Changes
+## 0.3.0 <span class="changelog-date">2026-01-29</span>
 
-#### ListenerAgent Removed
-- **ListenerAgent has been merged into CustomAgent**
-- Migration is simple - just change the import:
-  ```python
-  # Before
-  from jarviscore.profiles import ListenerAgent
-  class MyAgent(ListenerAgent): ...
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v0.3.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
 
-  # After
-  from jarviscore.profiles import CustomAgent
-  class MyAgent(CustomAgent): ...
-  ```
-- All handler methods work exactly the same way
-- No other code changes required
+**Added**
 
-### Changed
+ListenerAgent Profile: New `ListenerAgent` class for handler-based P2P communication with `on_peer_request(msg)` and `on_peer_notify(msg)` handlers. No more manual `run()` loops required for simple P2P agents.
 
-#### CustomAgent Now Includes P2P Handlers
-- `on_peer_request(msg)` - Handle incoming requests (return value sent as response)
-- `on_peer_notify(msg)` - Handle fire-and-forget notifications
-- `on_error(error, msg)` - Handle errors during message processing
-- `run()` - Built-in listener loop (no need to write your own)
-- Configuration: `listen_timeout`, `auto_respond`
+FastAPI Integration: `JarvisLifespan` context manager reduces FastAPI integration from approximately 100 lines to 3. Automatic agent lifecycle management with support for both `p2p` and `distributed` modes.
 
-#### Simplified Profile Architecture
-| Before (v0.3.0) | After (v0.3.1) |
-|-----------------|----------------|
-| AutoAgent + CustomAgent + ListenerAgent | AutoAgent + CustomAgent |
-| "Which profile do I use?" confusion | Clear: AutoAgent (LLM) or CustomAgent (your code) |
+Cognitive Discovery: `peers.get_cognitive_context()` generates LLM-ready peer descriptions with dynamic peer awareness. Auto-updates when peers join or leave the mesh.
 
-### Documentation
-- README.md updated with unified CustomAgent examples
-- GETTING_STARTED.md rewritten with framework integration patterns
-- CUSTOMAGENT_GUIDE.md updated (ListenerAgent sections removed)
-- Added async-first framework guidance (FastAPI, aiohttp, Flask patterns)
+Cloud Deployment: `agent.join_mesh(seed_nodes)` for self-registration without central orchestrator. `agent.leave_mesh()` for graceful departure. `agent.serve_forever()` for container deployments. `RemoteAgentProxy` for automatic cross-node agent visibility.
+
+</div>
 
 ---
 
-## [0.3.0] - 2026-01-29
+<div class="changelog-release" markdown>
 
-### Added
+## 0.2.1 <span class="changelog-date">2026-01-23</span>
 
-#### ListenerAgent Profile
-- New `ListenerAgent` class for handler-based P2P communication
-- `on_peer_request(msg)` handler for incoming requests
-- `on_peer_notify(msg)` handler for broadcast notifications
-- No more manual `run()` loops required for simple P2P agents
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v0.2.1" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
 
-#### FastAPI Integration
-- `JarvisLifespan` context manager for 3-line FastAPI integration
-- Automatic agent lifecycle management (setup, run, teardown)
-- Support for both `p2p` and `distributed` modes
-- Import: `from jarviscore.integrations.fastapi import JarvisLifespan`
+**Fixed**
 
-#### Cognitive Discovery
-- `peers.get_cognitive_context()` generates LLM-ready peer descriptions
-- Dynamic peer awareness - no more hardcoded agent names in prompts
-- Auto-updates when peers join or leave the mesh
+- P2P message routing stability improvements.
+- Workflow engine dependency resolution edge cases.
 
-#### Cloud Deployment
-- `agent.join_mesh(seed_nodes)` for self-registration without central orchestrator
-- `agent.leave_mesh()` for graceful departure
-- `agent.serve_forever()` for container deployments
-- `RemoteAgentProxy` for automatic cross-node agent visibility
-- Environment variable support:
-  - `JARVISCORE_SEED_NODES` - comma-separated seed node addresses
-  - `JARVISCORE_MESH_ENDPOINT` - advertised endpoint for this agent
-  - `JARVISCORE_BIND_PORT` - P2P port
-
-### Changed
-
-- Documentation restructured with before/after comparisons
-- CUSTOMAGENT_GUIDE.md expanded with v0.3.0 features
-- API_REFERENCE.md updated with new classes and methods
-
-### Developer Experience
-
-| Before (v0.2.x) | After (v0.3.0) |
-|-----------------|----------------|
-| Manual `run()` loops with `receive()`/`respond()` | `ListenerAgent` with `on_peer_request()` handlers |
-| ~100 lines for FastAPI integration | 3 lines with `JarvisLifespan` |
-| Hardcoded peer names in LLM prompts | Dynamic `get_cognitive_context()` |
-| Central orchestrator required | Self-registration with `join_mesh()` |
+</div>
 
 ---
 
-## [0.2.1] - 2026-01-23
+<div class="changelog-release" markdown>
 
-### Fixed
-- P2P message routing stability improvements
-- Workflow engine dependency resolution edge cases
+## 0.2.0 <span class="changelog-date">2026-01-15</span>
 
----
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v0.2.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
 
-## [0.2.0] - 2026-01-15
+**Added**
 
-### Added
-- CustomAgent profile for integrating existing agent code
-- P2P mode for direct agent-to-agent communication
-- Distributed mode combining workflow engine + P2P
-- `@jarvis_agent` decorator for wrapping existing classes
-- `wrap()` function for wrapping existing instances
-- `JarvisContext` for workflow context access
-- Peer tools: `ask_peer`, `broadcast`, `list_peers`
+CustomAgent profile for integrating existing agent code. P2P mode for direct agent-to-agent communication. Distributed mode combining workflow engine with P2P. `@jarvis_agent` decorator for wrapping existing classes. `wrap()` function for wrapping existing instances. `JarvisContext` for workflow context access. Peer tools: `ask_peer`, `broadcast`, `list_peers`.
 
-### Changed
-- Mesh now supports three modes: `autonomous`, `p2p`, `distributed`
-- Agent base class now includes P2P support
+**Changed**
+
+Mesh now supports three modes: `autonomous`, `p2p`, `distributed`. Agent base class now includes P2P support.
+
+</div>
 
 ---
 
-## [0.1.0] - 2026-01-01
+<div class="changelog-release" markdown>
 
-### Added
-- Initial release
-- AutoAgent profile with LLM-powered code generation
-- Workflow engine with dependency management
-- Sandbox execution (local and remote)
-- Auto-repair for failed code
-- Internet search integration (DuckDuckGo)
-- Multi-provider LLM support (Claude, OpenAI, Azure, Gemini)
-- Result storage and code registry
+## 0.1.0 <span class="changelog-date">2026-01-01</span>
 
----
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v0.1.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
 
-*JarvisCore Framework - Build autonomous AI agents with P2P mesh networking.*
+**Added**
+
+Initial release. AutoAgent profile with LLM-powered code generation. Workflow engine with dependency management. Sandbox execution (local and remote). Auto-repair for failed code. Internet search integration (DuckDuckGo). Multi-provider LLM support (Claude, OpenAI, Azure, Gemini). Result storage and code registry.
+
+</div>

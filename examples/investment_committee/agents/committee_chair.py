@@ -1,8 +1,23 @@
+import json
 import os
 import time
 
 from jarviscore.profiles import CustomAgent
 from jarviscore.memory import UnifiedMemory
+
+
+def _as_dict(value) -> dict:
+    """Return value as dict, parsing JSON string if needed."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
 
 MEMO_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "memos")
 
@@ -32,7 +47,7 @@ class CommitteeChairAgent(CustomAgent):
         # final_decision only depends_on memo_draft, so prev only has memo_draft.
         # The MemoWriter aggregates all scores — read from there.
         memo_entry = prev.get("memo_draft") or {}
-        memo = memo_entry.get("output") or {}
+        memo = _as_dict(memo_entry.get("output") or {})
         scores = memo.get("scores") or {}
 
         fin_score   = scores.get("fundamental") or 5

@@ -1,11 +1,11 @@
 """
 Authentication — Dual-mode auth resolution for kernel execution pipeline.
 
-Production: NexusClient → Dromos Gateway → DynamicStrategy
+Production: NexusClient → Nexus Gateway → DynamicStrategy
 Development: Read tokens from env vars / config (no external deps)
 
-OAuth flow: CLIFlowHandler opens browser + polls for completion.
-Custom handlers can be plugged in (Slack, web UI, etc).
+OAuth flow: CLIFlowHandler opens browser + polls Gateway for completion.
+Custom handlers can be plugged in (Slack, web UI, dashboard, etc).
 """
 
 from .manager import AuthenticationManager

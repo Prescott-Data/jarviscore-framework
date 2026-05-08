@@ -23,13 +23,14 @@ class TestP2PStartup:
     """Test P2P initialization and startup"""
 
     @pytest.mark.asyncio
-    async def test_p2p_disabled_by_default_in_autonomous_mode(self):
-        """Test that P2P is disabled by default in autonomous mode"""
-        mesh = Mesh(mode="autonomous")
+    async def test_p2p_disabled_when_config_says_false(self, monkeypatch):
+        """Test that P2P is disabled when explicitly set to False in config."""
+        monkeypatch.delenv("P2P_ENABLED", raising=False)
+        mesh = Mesh(config={"p2p_enabled": False})
         mesh.add(TestP2PAgent)
         await mesh.start()
 
-        # P2P should not be initialized in autonomous mode by default
+        # P2P should not be initialized when disabled via config
         assert mesh._p2p_coordinator is None
 
         await mesh.stop()

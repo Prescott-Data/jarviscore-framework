@@ -1,11 +1,12 @@
 """
-Tests for Phase 8A: WorkingScratchpad.
+Tests for WorkingScratchpad.
 
 What these tests prove:
-- write() appends a JSONL entry to blob storage
+- write() appends a JSONL entry to blob storage (with scope field)
+- write() defaults scope to "step" when not specified
 - Multiple writes accumulate correctly (read-append-write)
-- read_all() parses every JSONL line into a dict
-- get_notes() returns markdown-formatted output
+- read_all() returns ALL entries regardless of scope
+- get_notes() returns only scope="goal" entries (tactical noise excluded)
 - Malformed lines are skipped gracefully
 - Blob path includes role when provided, omits it when empty
 - Empty scratchpad returns [] / "" without error
@@ -57,6 +58,8 @@ class TestWrite:
         parsed = json.loads(raw.strip())
         assert parsed["type"] == "thought"
         assert parsed["content"] == "analyse the data"
+        # scope field always present — default is "step"
+        assert parsed["scope"] == "step"
 
     @pytest.mark.asyncio
     async def test_multiple_writes_accumulate(self, pad):
@@ -114,20 +117,30 @@ class TestGetNotes:
 
     @pytest.mark.asyncio
     async def test_notes_contain_step_id(self, pad):
-        await pad.write("thought", {"content": "check data"})
+        # get_notes() returns only scope="goal" entries
+        await pad.write("finding", {"content": "check data"}, scope="goal")
         notes = await pad.get_notes()
         assert "step1" in notes
 
     @pytest.mark.asyncio
     async def test_notes_contain_entry_types(self, pad):
-        await pad.write("thought", {"content": "plan"})
-        await pad.write("action", {"tool": "search"})
+        # get_notes() returns only scope="goal" entries
+        await pad.write("finding", {"content": "plan"}, scope="goal")
+        await pad.write("finding", {"content": "tool result"}, scope="goal")
         notes = await pad.get_notes()
-        assert "thought" in notes
-        assert "action" in notes
+        assert "finding" in notes
 
     @pytest.mark.asyncio
     async def test_notes_is_markdown(self, pad):
-        await pad.write("thought", {"content": "testing"})
+        await pad.write("finding", {"content": "testing"}, scope="goal")
         notes = await pad.get_notes()
         assert notes.startswith("## ")
+
+    @pytest.mark.asyncio
+    async def test_step_scoped_entries_excluded_from_notes(self, pad):
+        # Tactical noise should NOT appear in get_notes()
+        await pad.write("thought", {"content": "internal reasoning"}, scope="step")
+        await pad.write("finding", {"content": "api key found"}, scope="goal")
+        notes = await pad.get_notes()
+        assert "api key found" in notes
+        assert "internal reasoning" not in notes

@@ -134,19 +134,37 @@ def _index_results(results, steps) -> dict:
     return by_id
 
 
+def _extract_output(result: dict) -> dict:
+    """Extract output as dict, attempting JSON parse if it's a string."""
+    import json, re
+    raw = result.get("output", {})
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        # Strip markdown fences if present
+        clean = re.sub(r"^```[a-z]*\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE).strip()
+        try:
+            parsed = json.loads(clean)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
+
+
 def _print_results(results, mode: str, steps: list):
     by_id = _index_results(results, steps)
 
     if mode == "quick":
         fin = by_id.get("financial_analysis", {})
-        out = fin.get("output", {})
+        out = _extract_output(fin)
         print(f"\n  Ticker financials:")
         print(f"  P/E:   {out.get('pe_trailing')}")
         print(f"  P/S:   {out.get('price_to_sales')}")
         print(f"  Score: {out.get('overall_score')}/10  ({out.get('verdict', '')})")
     else:
         dec = by_id.get("final_decision", {})
-        out = dec.get("output", {})
+        out = _extract_output(dec)
         alloc = out.get("allocation_usd", 0)
         print(f"\n  ┌─ COMMITTEE DECISION {'─'*40}")
         print(f"  │  Ticker:     {out.get('ticker')}")
@@ -165,7 +183,7 @@ def _print_results(results, mode: str, steps: list):
 async def run_committee(ticker: str, amount: float, mode: str = "full"):
     portfolio = load_portfolio()
 
-    mesh = Mesh(mode="autonomous", config={"redis_url": REDIS_URL})
+    mesh = Mesh(config={"redis_url": REDIS_URL})
     for AgentClass in [
         MarketAnalystAgent,
         FinancialAnalystAgent,

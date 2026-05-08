@@ -6,6 +6,14 @@ import pytest
 from jarviscore import Mesh, MeshMode, Agent
 
 
+@pytest.fixture(autouse=True)
+def isolate_from_external_services(monkeypatch):
+    """Strip Redis, P2P and Nexus env vars so unit tests never touch real infra."""
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("P2P_ENABLED", raising=False)
+    monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+
+
 # Test agents
 class TestAgent1(Agent):
     """Test agent with role 'agent1'."""
@@ -29,32 +37,34 @@ class TestMeshInitialization:
     """Test mesh initialization."""
 
     def test_mesh_creation_default_mode(self):
-        """Test creating mesh with default mode."""
+        """Test creating mesh with default mode — resolves to 'auto' before start()."""
         mesh = Mesh()
 
-        assert mesh.mode == MeshMode.AUTONOMOUS
+        assert mesh.mode.value == "auto"
         assert mesh.config == {}
         assert mesh.agents == []
         assert mesh._started is False
 
     def test_mesh_creation_autonomous_mode(self):
-        """Test creating mesh in autonomous mode."""
-        mesh = Mesh(mode="autonomous")
+        """mode= kwarg is deprecated — emits warning, mode stays 'auto' until start()."""
+        with pytest.warns(DeprecationWarning):
+            mesh = Mesh(mode="autonomous")
 
-        assert mesh.mode == MeshMode.AUTONOMOUS
+        assert mesh.mode.value == "auto"
 
     def test_mesh_creation_distributed_mode(self):
-        """Test creating mesh in distributed mode."""
-        mesh = Mesh(mode="distributed")
+        """mode= kwarg is deprecated — emits warning, mode stays 'auto' until start()."""
+        with pytest.warns(DeprecationWarning):
+            mesh = Mesh(mode="distributed")
 
-        assert mesh.mode == MeshMode.DISTRIBUTED
+        assert mesh.mode.value == "auto"
 
     def test_mesh_creation_invalid_mode(self):
-        """Test that invalid mode raises ValueError."""
-        with pytest.raises(ValueError) as exc_info:
-            Mesh(mode="invalid_mode")
+        """Invalid mode kwarg is silently absorbed with a deprecation warning."""
+        with pytest.warns(DeprecationWarning):
+            mesh = Mesh(mode="invalid_mode")
 
-        assert "Invalid mode" in str(exc_info.value)
+        assert mesh._started is False
 
     def test_mesh_creation_with_config(self):
         """Test creating mesh with configuration."""
@@ -247,7 +257,7 @@ class TestMeshWorkflow:
     @pytest.mark.asyncio
     async def test_workflow_execution_single_step(self):
         """Test executing single-step workflow."""
-        mesh = Mesh(mode="autonomous")
+        mesh = Mesh()
         mesh.add(TestAgent1)
 
         await mesh.start()
@@ -263,7 +273,7 @@ class TestMeshWorkflow:
     @pytest.mark.asyncio
     async def test_workflow_execution_multiple_steps(self):
         """Test executing multi-step workflow."""
-        mesh = Mesh(mode="autonomous")
+        mesh = Mesh()
         mesh.add(TestAgent1)
         mesh.add(TestAgent2)
 
@@ -280,7 +290,7 @@ class TestMeshWorkflow:
     @pytest.mark.asyncio
     async def test_workflow_with_capability_routing(self):
         """Test workflow routing by capability."""
-        mesh = Mesh(mode="autonomous")
+        mesh = Mesh()
         mesh.add(TestAgent1)
 
         await mesh.start()
@@ -295,7 +305,7 @@ class TestMeshWorkflow:
     @pytest.mark.asyncio
     async def test_workflow_agent_not_found(self):
         """Test workflow with missing agent."""
-        mesh = Mesh(mode="autonomous")
+        mesh = Mesh()
         mesh.add(TestAgent1)
 
         await mesh.start()
@@ -311,7 +321,7 @@ class TestMeshWorkflow:
     @pytest.mark.asyncio
     async def test_workflow_not_started_fails(self):
         """Test that workflow() fails if mesh not started."""
-        mesh = Mesh(mode="autonomous")
+        mesh = Mesh()
         mesh.add(TestAgent1)
 
         with pytest.raises(RuntimeError) as exc_info:
@@ -322,15 +332,14 @@ class TestMeshWorkflow:
         assert "not started" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_workflow_distributed_mode_works(self):
-        """Test that workflow() works in distributed mode (has workflow engine)."""
-        # Use unique port to avoid conflicts with P2P tests
-        mesh = Mesh(mode="distributed", config={'bind_port': 7999})
+    async def test_workflow_always_available(self):
+        """Workflow engine is always started — no mode gating."""
+        mesh = Mesh()
         mesh.add(TestAgent1)
 
         await mesh.start()
 
-        # Distributed mode should allow workflow execution
+        assert mesh.has_capability("workflow")
         results = await mesh.workflow("test-workflow", [
             {"agent": "agent1", "task": "Should succeed"}
         ])
@@ -341,32 +350,15 @@ class TestMeshWorkflow:
         await mesh.stop()
 
     @pytest.mark.asyncio
-    async def test_workflow_p2p_mode_fails(self):
-        """Test that workflow() fails in p2p mode (no workflow engine)."""
-        mesh = Mesh(mode="p2p", config={'bind_port': 7998})
+    async def test_mode_resolved_after_start(self):
+        """mesh.mode resolves from 'auto' to actual mode after start()."""
+        mesh = Mesh()
+        mesh.add(TestAgent1)
 
-        class P2PTestAgent(Agent):
-            role = "p2p_test"
-            capabilities = ["test"]
-
-            async def execute_task(self, task):
-                return {"status": "success"}
-
-            async def run(self):
-                while not self.shutdown_requested:
-                    await asyncio.sleep(0.1)
-
-        mesh.add(P2PTestAgent)
-
+        assert mesh.mode.value == "auto"
         await mesh.start()
-
-        with pytest.raises(RuntimeError) as exc_info:
-            await mesh.workflow("test-workflow", [
-                {"agent": "p2p_test", "task": "Should fail"}
-            ])
-
-        assert "not available in p2p mode" in str(exc_info.value)
-
+        # Without Redis or SWIM, resolves to autonomous
+        assert mesh.mode.value == "autonomous"
         await mesh.stop()
 
 
@@ -374,14 +366,14 @@ class TestMeshRepresentation:
     """Test mesh string representation."""
 
     def test_mesh_repr(self):
-        """Test mesh __repr__."""
-        mesh = Mesh(mode="autonomous")
+        """Test mesh __repr__ before start() shows 'auto' mode."""
+        mesh = Mesh()
         mesh.add(TestAgent1)
         mesh.add(TestAgent2)
 
         repr_str = repr(mesh)
 
         assert "Mesh" in repr_str
-        assert "autonomous" in repr_str
+        assert "auto" in repr_str
         assert "agents=2" in repr_str
         assert "started=False" in repr_str

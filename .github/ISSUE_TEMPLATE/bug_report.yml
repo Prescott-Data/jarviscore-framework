@@ -1,0 +1,82 @@
+name: Bug Report
+description: Something is broken or behaving incorrectly
+labels: ["bug"]
+assignees: ["Ruth-mutua"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill in as much detail as possible so we can reproduce it quickly.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: "When I call mesh.run_task(...) with P2P_ENABLED=true, the agent crashes with..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal code or steps that trigger the bug.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Traceback / error output
+      render: shell
+    validations:
+      required: false
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: JarvisCore version
+      options:
+        - "1.0.3"
+        - "1.0.2"
+        - "1.0.1"
+        - "main (unreleased)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: LLM provider in use
+      multiple: true
+      options:
+        - Azure OpenAI
+        - Claude (Anthropic)
+        - Gemini
+        - Vertex AI
+        - vLLM
+        - Other
+    validations:
+      required: false
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: "OS, Python version, relevant env vars (redact keys)"
+      placeholder: |
+        OS: macOS 15 / Ubuntu 24.04
+        Python: 3.12
+        Redis: yes / no
+    validations:
+      required: false

@@ -168,6 +168,7 @@ class WorkflowEngine:
         workflow_id: str,
         steps: List[Dict[str, Any]],
         state: WorkflowState,
+        pre_results: Dict[str, Any] = None,
     ) -> List[Dict[str, Any]]:
         """
         Sovereign reactive loop adapted from IA/CA production pattern.
@@ -175,11 +176,15 @@ class WorkflowEngine:
         Unlike asyncio.gather() over dependency layers, this loop lets each
         step start the instant its dependencies complete, giving maximum
         parallelism on uneven workloads.
+
+        pre_results, if provided, seeds the results dict before the loop
+        starts — used by _resume() to surface previously-completed steps
+        rather than returning them as "skipped".
         """
         step_map = {s["id"]: s for s in steps}
         pending: Set[str] = set(step_map.keys())
         running_tasks: Dict[str, asyncio.Task] = {}
-        results: Dict[str, Any] = {}
+        results: Dict[str, Any] = dict(pre_results or {})
 
         # ── Zombie detection (crash recovery path) ───────────────────
         if state.running_steps:
@@ -337,14 +342,18 @@ class WorkflowEngine:
             f"{len(state.waiting_steps)} waiting"
         )
 
-        # Reload completed outputs into memory
+        # Reload completed outputs into memory and build pre_results so they
+        # appear in the final results list rather than returning as "skipped".
+        pre_results: Dict[str, Any] = {}
         for step_id in state.processed_steps:
-            if step_id not in self.memory and self.redis_store:
+            if self.redis_store:
                 saved = self.redis_store.get_step_output(state.workflow_id, step_id)
                 if saved:
-                    self.memory[step_id] = saved.get("output", saved)
+                    if step_id not in self.memory:
+                        self.memory[step_id] = saved.get("output", saved)
+                    pre_results[step_id] = {**saved, "recovered": True}
 
-        return await self._run_reactive_loop(state.workflow_id, steps, state)
+        return await self._run_reactive_loop(state.workflow_id, steps, state, pre_results=pre_results)
 
     # ------------------------------------------------------------------
     # Step Execution
@@ -381,9 +390,13 @@ class WorkflowEngine:
 
         logger.info(f"Step {step_id} claimed by {agent.agent_id}")
 
-        # Build task dict with dependency context
+        # Build task dict — merge caller-provided context with engine metadata.
+        # Callers may pass context in step["context"] (e.g. knowledge_context,
+        # config overrides). Preserve it; engine keys take precedence on conflict.
         task = step.copy()
+        caller_ctx = task.get("context", {}) if isinstance(task.get("context"), dict) else {}
         task["context"] = {
+            **caller_ctx,
             "previous_step_results": dep_outputs,
             "workflow_id": workflow_id,
             "step_id": step_id,

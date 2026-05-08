@@ -1,0 +1,54 @@
+name: Feature Request
+description: Propose a new capability or improvement
+labels: ["enhancement"]
+assignees: ["Ruth-mutua"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea that would make JarvisCore more powerful? Describe it below.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the limitation or gap you're hitting today.
+      placeholder: "Currently there's no way to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How should it work from the caller's perspective? Code snippets welcome.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or other approaches you've tried?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      multiple: true
+      options:
+        - Kernel / OODA loop
+        - Mesh / P2P
+        - LLM execution (llm.py)
+        - Code registry / sandbox
+        - Nexus / integrations
+        - Researcher subagent
+        - Coder subagent
+        - HITL
+        - Documentation
+        - Other
+    validations:
+      required: false

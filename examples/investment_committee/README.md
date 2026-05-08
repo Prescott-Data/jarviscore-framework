@@ -1,6 +1,6 @@
 # Investment Committee — Multi-Agent System
 
-A 7-agent investment committee built on **JarvisCore v1.0.2** that evaluates public-equity
+A 7-agent investment committee built on **JarvisCore v1.0.3** that evaluates public-equity
 opportunities and produces auditable allocation decisions for a $10M portfolio.
 Each run produces a formal markdown memo. Institutional memory (LTM) compounds across runs.
 
@@ -322,7 +322,7 @@ the class; `mesh.start()` calls each agent's `setup()` coroutine; `mesh.workflow
 delegates to the `WorkflowEngine`.
 
 ```python
-mesh = Mesh(mode="autonomous", config={"redis_url": REDIS_URL})
+mesh = Mesh(config={"redis_url": REDIS_URL})
 mesh.add(MarketAnalystAgent)
 await mesh.start()
 results = await mesh.workflow(wf_id, steps)

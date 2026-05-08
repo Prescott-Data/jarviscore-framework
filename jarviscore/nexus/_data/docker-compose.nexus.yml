@@ -1,0 +1,160 @@
+# docker-compose.nexus.yml
+#
+# JarvisCore — Local Nexus Development Stack
+# ===========================================
+# Spins up the Nexus Broker + Gateway locally for developing connected-app
+# features without needing a production Nexus deployment.
+#
+# Usage:
+#   docker compose -f docker-compose.nexus.yml up -d
+#
+# Then set in prescott-internal-agents/.env:
+#   NEXUS_GATEWAY_URL=http://localhost:8090
+#   NEXUS_RETURN_URL=http://localhost:8000/oauth/callback
+#   NEXUS_ENCRYPTION_KEY=<generate: openssl rand -base64 32>
+#   NEXUS_STATE_KEY=<generate: openssl rand -base64 32>
+#
+# Architecture:
+#   Broker (port 8080) — handles OAuth callbacks, stores encrypted tokens.
+#   Gateway (port 8090) — control plane; what JarvisCore talks to.
+#   DB (Postgres)       — broker persistence.
+#
+# ── DOGFOODING NOTES ────────────────────────────────────────────────────────
+# Issues found and resolved during local DX testing (April 2026):
+#
+# 1. BROKER_URL env var is IGNORED by the gateway binary — it always
+#    dials localhost:8080. Fix: run gateway in the broker's network namespace
+#    (network_mode: service:nexus-broker) so localhost:8080 IS the broker.
+#    This means the broker must also publish port 8090 for host access.
+#
+# 2. The broker binary does NOT auto-migrate its DB schema. You must
+#    apply nexus/migrations/001_initial_schema.sql manually on first run,
+#    or mount it into postgres initdb.d.
+#
+# 3. provider_profiles and workspaces must be pre-seeded. Use the
+#    nexus register CLI or apply nexus/seeds/seed_providers.sql.
+#    user_id must be a valid UUID — it is used as workspace_id.
+#
+# 4. ALLOWED_RETURN_DOMAINS=localhost is required for local OAuth callbacks.
+#    Without it, the broker blocks http://localhost:8000/oauth/callback.
+#
+# 5. DATABASE_URL requires ?sslmode=disable for local Postgres (no TLS in dev).
+#
+# 6. Healthchecks use wget (not curl) — busybox images ship wget only.
+#
+# 7. ENCRYPTION_KEY and STATE_KEY must be identical across both broker
+#    restarts. Generate once with `openssl rand -base64 32`, store in .env.
+# ────────────────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+  # ── Nexus Broker ────────────────────────────────────────────────────────────
+  # Handles OAuth 2.0 flows: redirects users to providers, receives callbacks,
+  # encrypts tokens, stores them. Agents never talk to this directly.
+  #
+  # IMPORTANT: This container also exposes port 8090 because the Gateway runs
+  # in this container's network namespace (see nexus-gateway below) and binds
+  # to port 8090 within that namespace.
+  nexus-broker:
+    image: ghcr.io/prescott-data/nexus-broker:latest
+    container_name: nexus-broker
+    ports:
+      - "8080:8080"   # Broker API (OAuth callbacks, provider lookups)
+      - "8090:8090"   # Gateway port (gateway shares this network namespace)
+    environment:
+      # Required: token encryption key. Must be stable across restarts.
+      # Generate: openssl rand -base64 32
+      ENCRYPTION_KEY: "${NEXUS_ENCRYPTION_KEY:?Set NEXUS_ENCRYPTION_KEY in .env or export it}"
+      # Required: HMAC state key. Must match Gateway STATE_KEY exactly.
+      # Generate: openssl rand -base64 32
+      STATE_KEY: "${NEXUS_STATE_KEY:?Set NEXUS_STATE_KEY in .env or export it}"
+      # Internal API key the Gateway uses to call the Broker.
+      BROKER_API_KEY: ${NEXUS_BROKER_API_KEY:-dev-broker-api-key-change-in-prod}
+      # Local Postgres — sslmode=disable required (no TLS in dev).
+      DATABASE_URL: postgresql://nexus:nexus@nexus-db:5432/nexus?sslmode=disable
+      # Redis (reuses existing jarviscore Redis if on same network).
+      REDIS_URL: ${NEXUS_REDIS_URL:-redis://jarviscore-framework-redis-1:6379/1}
+      # Where the Broker redirects users after OAuth consent.
+      DEFAULT_RETURN_URL: ${NEXUS_RETURN_URL:-http://localhost:8000/oauth/callback}
+      # Allow localhost OAuth callbacks (required for local dev).
+      ALLOWED_RETURN_DOMAINS: "localhost,127.0.0.1"
+      ENFORCE_RETURN_URL: "false"
+    depends_on:
+      nexus-db:
+        condition: service_healthy
+    networks:
+      - nexus_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 8s
+
+  # ── Nexus Gateway ───────────────────────────────────────────────────────────
+  # The control + data plane that JarvisCore talks to.
+  # This is what NEXUS_GATEWAY_URL points to (http://localhost:8090).
+  #
+  # IMPORTANT: Runs in the broker's network namespace so that its hardcoded
+  # broker=http://localhost:8080 dial actually reaches the broker container.
+  # The broker container publishes port 8090 to the host on its behalf.
+  nexus-gateway:
+    image: ghcr.io/prescott-data/nexus-gateway:latest
+    container_name: nexus-gateway
+    # Share the broker's network namespace — localhost:8080 = broker, :8090 = gateway
+    network_mode: "service:nexus-broker"
+    environment:
+      BROKER_URL: http://localhost:8080       # Correct inside shared namespace
+      BROKER_API_KEY: ${NEXUS_BROKER_API_KEY:-dev-broker-api-key-change-in-prod}
+      DATABASE_URL: postgresql://nexus:nexus@nexus-db:5432/nexus?sslmode=disable
+      # Must match Broker STATE_KEY for HMAC state verification.
+      STATE_KEY: "${NEXUS_STATE_KEY:?Set NEXUS_STATE_KEY in .env or export it}"
+      GATEWAY_PORT: 8090
+      CORS_ALLOWED_ORIGINS: "http://localhost:8000,http://localhost:3000,http://localhost:5173"
+    depends_on:
+      nexus-broker:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 8s
+
+  # ── Nexus Database ──────────────────────────────────────────────────────────
+  # Postgres for broker state. Schema auto-applied from initdb.d on first boot.
+  nexus-db:
+    image: postgres:16-alpine
+    container_name: nexus-db
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+      POSTGRES_DB: nexus
+    volumes:
+      - nexus_db_data:/var/lib/postgresql/data
+      # Mount migration SQL so Postgres applies it on first container creation.
+      # If data volume already exists, initdb.d is NOT re-run — safe for restarts.
+      - ./nexus/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+    networks:
+      - nexus_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  nexus_net:
+    # Use the same network name as the main jarviscore infra stack so nexus
+    # services can reach redis etc. If that stack isn't running, compose
+    # creates this network automatically — safe for fresh pip install users.
+    name: jarviscore-framework_default
+    driver: bridge
+
+volumes:
+  nexus_db_data:
+    name: jarviscore_nexus_db

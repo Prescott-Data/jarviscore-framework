@@ -110,7 +110,7 @@ async def main():
     )
 
     # Create mesh and add wrapped agents
-    mesh = Mesh(mode="autonomous")
+    mesh = Mesh()
     mesh.add(wrapped_llm)
     mesh.add(wrapped_data)
     mesh.add(wrapped_context)

@@ -1,0 +1,41 @@
+def _get_cloud_id(access_token: str, auth_info: dict) -> str:
+    if auth_info.get("cloud_id"):
+        return auth_info["cloud_id"]
+    resp = requests.get(
+        "https://api.atlassian.com/oauth/token/accessible-resources",
+        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+        timeout=30
+    )
+    resp.raise_for_status()
+    resources = resp.json()
+    domain = auth_info.get("domain", "").rstrip("/")
+    for r in resources:
+        if domain and domain in r.get("url", ""):
+            return r["id"]
+    return resources[0]["id"]
+
+def jira_get_project(auth_info: dict, project_key: str) -> dict:
+    import requests
+    domain = auth_info.get("domain", "").rstrip("/")
+    if not domain:
+        return {"success": False, "data": None, "error": "auth_info must include domain (e.g. your-domain.atlassian.net)"}
+
+    try:
+        access_token = _get_nexus_token(auth_info)
+        cloud_id = _get_cloud_id(access_token, auth_info)
+    except Exception as e:
+        return {"success": False, "data": None, "error": f"Auth error: {str(e)}"}
+
+    try:
+        resp = requests.get(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/{project_key}",
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            timeout=30
+        )
+        if resp.status_code != 200:
+            return {"success": False, "data": None, "error": f"Get project failed: {resp.status_code} {resp.text}"}
+
+        return {"success": True, "data": resp.json(), "error": None}
+
+    except Exception as e:
+        return {"success": False, "data": None, "error": str(e)}

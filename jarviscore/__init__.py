@@ -1,21 +1,22 @@
 """
-JarvisCore - P2P Distributed Agent Framework
+JarvisCore — Capability-Based Distributed Agent Framework
 
 A production-grade framework for building autonomous agent systems with:
-- P2P coordination via SWIM protocol
-- Workflow orchestration with dependencies
+- Workflow orchestration (always enabled)
+- Peer-to-peer communication via PeerClient (always injected)
+- Auto-scaling to available infrastructure (Redis, SWIM)
 - Two agent profiles: AutoAgent and CustomAgent
 
-Profiles:
-    AutoAgent   - LLM generates and executes code from prompts (autonomous mode)
-    CustomAgent - You provide handlers or execute_task() (p2p/distributed modes)
+Two agent profiles:
+    AutoAgent   — LLM generates and executes code from prompts
+    CustomAgent — You provide handlers or execute_task()
 
-Modes:
-    autonomous  - Workflow engine only (AutoAgent)
-    p2p         - P2P coordinator only (CustomAgent with run() loop)
-    distributed - Both workflow + P2P (CustomAgent with execute_task())
+The Mesh detects infrastructure at start() time:
+    No Redis  →  in-process workflow + local peer routing
+    Redis up  →  distributed workflow + Redis peer routing
+    + SWIM    →  cross-node discovery via SWIM gossip protocol
 
-Quick Start (AutoAgent - autonomous mode):
+Quick Start:
     from jarviscore import Mesh
     from jarviscore.profiles import AutoAgent
 
@@ -24,43 +25,27 @@ Quick Start (AutoAgent - autonomous mode):
         capabilities = ["math"]
         system_prompt = "You are a math expert. Store result in 'result'."
 
-    mesh = Mesh(mode="autonomous")
+    mesh = Mesh()             # No mode — auto-detects everything
     mesh.add(CalcAgent)
     await mesh.start()
     results = await mesh.workflow("calc", [{"agent": "calculator", "task": "Calculate 10!"}])
 
-Quick Start (CustomAgent + FastAPI):
-    from fastapi import FastAPI
-    from jarviscore.profiles import CustomAgent
-    from jarviscore.integrations.fastapi import JarvisLifespan
+Autonomous agents (with run() loops):
+    class MyAgent(AutoAgent):
+        role = "my_agent"
+        async def run(self):
+            while True:
+                await self._check_mailbox()
+                # ... self-driving logic
+                await asyncio.sleep(60)
 
-    class MyAgent(CustomAgent):
-        role = "processor"
-        capabilities = ["processing"]
-
-        async def on_peer_request(self, msg):
-            return {"result": msg.data.get("task", "").upper()}
-
-    app = FastAPI(lifespan=JarvisLifespan(MyAgent(), mode="p2p"))
-
-Quick Start (CustomAgent - distributed mode):
-    from jarviscore import Mesh
-    from jarviscore.profiles import CustomAgent
-
-    class MyAgent(CustomAgent):
-        role = "processor"
-        capabilities = ["processing"]
-
-        async def execute_task(self, task):
-            return {"status": "success", "output": task.get("task").upper()}
-
-    mesh = Mesh(mode="distributed", config={'bind_port': 7950})
+    mesh = Mesh()
     mesh.add(MyAgent)
     await mesh.start()
-    results = await mesh.workflow("demo", [{"agent": "processor", "task": "hello"}])
+    await mesh.run_forever()   # Starts run() loops, blocks until Ctrl+C
 """
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 __author__ = "JarvisCore Contributors"
 __license__ = "Apache-2.0"
 
@@ -77,6 +62,23 @@ from jarviscore.profiles.customagent import CustomAgent
 from jarviscore.adapter import jarvis_agent, wrap
 from jarviscore.context import JarvisContext, MemoryAccessor, DependencyAccessor
 
+# Long-horizon planning (lazy import — requires no extra dependencies)
+try:
+    from jarviscore.planning import (
+        GoalExecution,
+        PlannedStep,
+        StepEvaluation,
+        CompletedStep,
+        Planner,
+        PlannerError,
+        StepEvaluator,
+        EvaluatorError,
+    )
+except Exception:  # noqa: BLE001
+    GoalExecution = None   # type: ignore
+    Planner = None         # type: ignore
+    StepEvaluator = None   # type: ignore
+
 # P2P Direct Communication (optional — requires `pip install jarviscore-framework[p2p]`)
 # These are injected into agents at start() time when available.
 try:
@@ -87,8 +89,8 @@ except Exception:  # noqa: BLE001  (swim-p2p + pyzmq may not be installed)
     PeerInfo = None        # type: ignore
     IncomingMessage = None # type: ignore
 
-# Alias for p2p mode agents
-JarvisAgent = Agent  # Use this for agents with run() loops
+# Alias for agents with run() loops (previously called JarvisAgent)
+JarvisAgent = Agent
 
 __all__ = [
     # Version
@@ -117,4 +119,14 @@ __all__ = [
     "PeerTool",
     "PeerInfo",
     "IncomingMessage",
+
+    # Long-horizon planning
+    "GoalExecution",
+    "PlannedStep",
+    "StepEvaluation",
+    "CompletedStep",
+    "Planner",
+    "PlannerError",
+    "StepEvaluator",
+    "EvaluatorError",
 ]
