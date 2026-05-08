@@ -228,13 +228,20 @@ Every agent receives the full infrastructure stack automatically through depende
 ## CLI Reference
 
 ```bash
-jarviscore init          # Scaffold a new project
-jarviscore check         # Validate environment and LLM connectivity
-jarviscore run           # Start agents from a config file
-jarviscore atom list     # List all registered integration atoms
-jarviscore atom test     # Test a custom atom in isolation
-jarviscore nexus status  # Check Nexus Gateway health
-jarviscore nexus rotate  # Rotate the Nexus encryption secret
+jarviscore init              # Scaffold a new project (.env.example + optional examples)
+jarviscore check             # Validate environment and provider connectivity
+jarviscore check --validate-llm  # Also test LLM round-trip
+jarviscore smoketest         # Quick end-to-end smoke test
+jarviscore atom list         # List all registered integration atoms
+jarviscore atom test         # Validate atom structure or live Nexus connection
+jarviscore nexus init        # Generate keys and start Nexus Gateway via Docker
+jarviscore nexus status      # Check Nexus Gateway health
+jarviscore nexus register    # Register an OAuth provider (e.g. github, slack)
+jarviscore nexus list        # List registered providers
+jarviscore nexus test        # Open browser OAuth flow for a provider
+jarviscore memory init       # Initialize Athena MemOS backend
+jarviscore memory status     # Check Athena health
+jarviscore memory search     # Query the knowledge graph
 ```
 
 ## Framework Integrations
