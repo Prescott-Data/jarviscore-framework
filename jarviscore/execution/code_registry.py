@@ -411,8 +411,8 @@ class FunctionRegistry:
         self._upload_to_blob(function_name, source_code, func_metadata)
 
         logger.info(
-            f"Registered function: {function_name} v{new_version} "
-            f"(system={func_metadata['system']}, stage={func_metadata['registry_stage']})"
+            "Registered function: %s v%s (stage=%s)",
+            function_name, new_version, func_metadata.get("registry_stage", "candidate"),
         )
         return True
 

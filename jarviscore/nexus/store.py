@@ -254,8 +254,7 @@ class NexusLocalStore:
         entry["registered_at"] = datetime.now(timezone.utc).isoformat()
         data[provider.lower()] = entry
         self._write_all(data)
-        logger.info("[NexusStore] Registered provider=%s auth_type=%s",
-                    provider, credentials.get("auth_type", "?"))
+        logger.info("[NexusStore] Registered provider=%s", provider)
 
     def get(self, provider: str) -> Optional[Dict[str, Any]]:
         """

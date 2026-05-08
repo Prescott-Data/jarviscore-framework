@@ -225,8 +225,8 @@ class CodeGenerator:
         )
 
         logger.info(
-            "CodeGenerator: done (system=%s, repairs=%d, oauth=%s)",
-            system, repair_attempts, result.oauth_required,
+            "CodeGenerator: done (repairs=%d, oauth=%s)",
+            repair_attempts, result.oauth_required,
         )
         return result
 

@@ -268,9 +268,10 @@ class TestURLRegistry:
         assert "u1" in registry
 
     def test_known_urls_tracked(self, researcher):
-        researcher._add_known_url("https://docs.stripe.com")
+        target_url = "https://docs.stripe.com"
+        researcher._add_known_url(target_url)
         known = researcher._get_known_urls()
-        assert "https://docs.stripe.com" in known
+        assert any(u == target_url for u in known)
 
 
 # ═════════════════════════════════════════════════════════════════

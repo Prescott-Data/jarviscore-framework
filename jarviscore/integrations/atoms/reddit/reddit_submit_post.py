@@ -43,9 +43,17 @@ def reddit_submit_post(auth_info: dict, subreddit: str, title: str, text: str = 
         post_url = None
         for item in jquery:
             if isinstance(item, list) and len(item) > 3:
-                if isinstance(item[3], list) and item[3] and isinstance(item[3][0], str) and "reddit.com" in item[3][0]:
-                    post_url = item[3][0]
-                    break
+                if isinstance(item[3], list) and item[3] and isinstance(item[3][0], str):
+                    from urllib.parse import urlparse
+                    candidate = item[3][0]
+                    try:
+                        parsed = urlparse(candidate)
+                        host = parsed.hostname or ""
+                        if host == "reddit.com" or host.endswith(".reddit.com"):
+                            post_url = candidate
+                            break
+                    except Exception:
+                        pass
 
         return {"success": True, "data": {"post_url": post_url, "raw": data}, "error": None}
 

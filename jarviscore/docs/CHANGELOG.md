@@ -42,6 +42,14 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - Azure Content Filter resilience in `LLMClient` — substitution table for business phrases that trigger false-positive content rejections.
 - `Kernel._get_model_for_tier()` — clean multi-tier model resolution: complexity hint → `TASK_MODEL_NANO` / `TASK_MODEL_STANDARD` / `TASK_MODEL_HEAVY` → legacy fallback.
 - `MailboxManager` schema normalisation — handles both the current flat envelope schema and the pre-v1.0.2 double-nested schema transparently.
+- **Vertex AI provider** (`LLMProvider.VERTEX_AI`): GCP-native Gemini access via Application Default Credentials (ADC). No API key required — authenticate with `gcloud auth application-default login` or attach a service account. Config: `VERTEX_AI_ENABLED=true`, `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION` (default `us-central1`), `VERTEX_AI_MODEL` (default `gemini-2.5-flash`). Slots into the fallback chain after Gemini: **Azure → Claude → vLLM → Gemini → Vertex AI**.
+- `_normalize_tools_for_gemini()` static method — auto-converts tool schemas to Gemini `function_declarations` format. Accepts Anthropic/PeerTool (`input_schema`), flat (`name`+`parameters`), or already-native formats.
+- Shared `_call_genai_client()` helper: both `_call_gemini` and `_call_vertex_ai` delegate here for consistent token accounting and cost calculation.
+- Tool-call response parsing in `_call_genai_client`: when a Gemini/Vertex AI response contains `function_call` parts, `tool_calls` is populated and `content` is set to `""`.
+- Token pricing entries for `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.1-pro`, `gemini-3.1-pro-preview`.
+- Process-wide LLM concurrency semaphore (`LLM_MAX_CONCURRENT` env var) — prevents thundering-herd 429s in multi-agent deployments.
+- `llm.nano_model` and `llm.planner_model` properties — tier-aware model selection for `StepEvaluator` and `Planner`.
+- `max_completion_tokens` alias in `generate()` — callers can use GPT-5.x SDK naming convention interchangeably with `max_tokens`.
 
 **Fixed**
 
@@ -53,6 +61,8 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - `AutoAgent` result dict now exposes `payload` as a dedicated top-level key when the output is a structured dict, enabling downstream step access without manual parsing.
 - Crash recovery `_resume()` pre-populates recovered step results into `pre_results` so resumed workflows replay correctly rather than skipping completed steps.
 - `ExampleMockLLMClient` validates tool names against the `tools` parameter before returning tool-use responses, preventing mock deadlocks when a tool is out of scope.
+- `_call_gemini` now forwards `**kwargs` (including `tools`) to `_call_genai_client`, making Gemini tool-calling behaviour consistent with Vertex AI.
+- `test_claude_primary` now passes an explicit config that disables all other providers, making the assertion environment-independent.
 
 **Changed**
 

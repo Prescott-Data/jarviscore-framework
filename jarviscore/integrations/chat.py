@@ -139,10 +139,10 @@ def create_chat_router(
                 agent_id=req.agent_id or "chat",
             )
         except Exception as exc:
-            logger.error("[chat] Kernel execute failed: %s", exc)
+            logger.error("[chat] Kernel execute failed: %s", exc, exc_info=True)
             return JSONResponse(
                 status_code=500,
-                content={"error": str(exc), "workflow_id": workflow_id},
+                content={"error": "Internal server error", "workflow_id": workflow_id},
             )
 
         elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
@@ -225,7 +225,8 @@ def create_chat_router(
             tm.redis_client = TraceManager._init_redis()
             return {"events": tm.get_history()}
         except Exception as exc:
-            return JSONResponse(status_code=500, content={"error": str(exc)})
+            logger.error("[chat] chat_history failed: %s", exc, exc_info=True)
+            return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
     return router
 
@@ -311,8 +312,8 @@ async def _sse_generator(
     except asyncio.CancelledError:
         pass
     except Exception as exc:
-        logger.error("SSE generator error: %s", exc)
-        yield f"data: {json.dumps({'type': 'error', 'data': {'message': str(exc)}})}\n\n"
+        logger.error("SSE generator error: %s", exc, exc_info=True)
+        yield f"data: {json.dumps({'type': 'error', 'data': {'message': 'Stream error'}})}\n\n"
     finally:
         try:
             pubsub.unsubscribe(channel)
