@@ -42,8 +42,11 @@ jarviscore init --examples
 cp .env.example .env
 # Add your LLM API key to .env (AZURE_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
 
-# Start infrastructure (Redis, Nexus Gateway)
+# Start shared infrastructure (Redis, Mongo, Prometheus, Grafana)
 docker compose -f docker-compose.infra.yml up -d
+
+# Start Nexus Gateway locally (generates keys and updates .env)
+jarviscore nexus init
 
 # Validate installation
 jarviscore check --validate-llm
@@ -151,7 +154,7 @@ jarviscore atom test my_atoms/fetch_orders.py
 
 Agents can launch headless browser sessions for web research, form filling, and scraping. The BrowserSubAgent uses CUA-capable models (Gemini Computer Use, gpt-5.4-mini) or falls back to any multimodal model with vision.
 
-```python
+```bash
 # Set in .env
 BROWSER_ENABLED=true
 BROWSER_MODEL=gemini-2.5-computer-use
