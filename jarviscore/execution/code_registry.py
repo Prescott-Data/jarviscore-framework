@@ -410,10 +410,7 @@ class FunctionRegistry:
         # Sync to blob storage
         self._upload_to_blob(function_name, source_code, func_metadata)
 
-        logger.info(
-            "Registered function: %s v%s (stage=%s)",
-            function_name, new_version, func_metadata.get("registry_stage", "candidate"),
-        )
+        logger.info("Registered function: %s v%d", function_name, new_version)
         return True
 
     def unregister_function(

@@ -224,10 +224,7 @@ class CodeGenerator:
             validation_passed=True,
         )
 
-        logger.info(
-            "CodeGenerator: done (repairs=%d, oauth=%s)",
-            repair_attempts, result.oauth_required,
-        )
+        logger.info("CodeGenerator: done (repairs=%d)", repair_attempts)
         return result
 
     # ─────────────────────────────────────────────────────────────
