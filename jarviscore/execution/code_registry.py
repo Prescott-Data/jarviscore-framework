@@ -577,9 +577,9 @@ class FunctionRegistry:
         self.sync_registry_index()
 
         logger.debug(
-            f"Stats updated: {function_name} "
-            f"(success={success}, stage={stage}, "
-            f"count={metadata['success_count']}/{metadata['execution_count']})"
+            "Stats updated: %s (success=%s, count=%d/%d)",
+            function_name, success,
+            metadata["success_count"], metadata["execution_count"],
         )
         return True
 
@@ -987,7 +987,7 @@ class FunctionRegistry:
         atom_file = system_dir / f"{function_name}_v{version}.py"
         atom_file.write_text(code)
 
-        logger.debug(f"Saved atom: {atom_file}")
+        logger.debug("Saved atom: %s v%d", function_name, version)
         return atom_file
 
     def _compute_file_hash(self, path: Union[str, Path]) -> str:
