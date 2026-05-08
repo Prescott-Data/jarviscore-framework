@@ -173,7 +173,7 @@ class DashboardScraper(AutoAgent):
 from jarviscore import Mesh
 from agents.dashboard_scraper import DashboardScraper
 
-mesh = Mesh(mode="autonomous")
+mesh = Mesh()
 mesh.add(DashboardScraper)
 await mesh.start()
 

@@ -403,14 +403,12 @@ You can also configure these values in code to avoid environment variable collis
 ```python
 from jarviscore import Mesh
 
-mesh = Mesh(
-    mode="distributed",
-    config={
-        "bind_host": "0.0.0.0",
-        "bind_port": 7947,
-        "seed_nodes": "192.168.1.10:7946",
-    }
-)
+mesh = Mesh(config={
+    "p2p_enabled": True,
+    "bind_host": "0.0.0.0",
+    "bind_port": 7947,
+    "seed_nodes": "192.168.1.10:7946",
+})
 ```
 
 ### Shared settings for fleets

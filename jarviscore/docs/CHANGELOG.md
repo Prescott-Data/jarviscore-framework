@@ -27,6 +27,9 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - New guides: AutoAgent, CustomAgent, Workflows, Chat, HITL, Nexus, Knowledge Base, System Prompts, Observability, FastAPI Integration, Internet Search, Migration (CrewAI + LangGraph), Testing.
 - New concept pages: Architecture, Memory, Nexus, P2P, System Bundles, Agent Personas.
 - New examples: Financial Pipeline, Research Network, Support Swarm, Content Pipeline, Investment Committee.
+- Synced all 15 brand SVG variants to `docs/assets/` and removed legacy unreferenced `logo.png` / `logo.svg`.
+- `guides/testing.md`: documented `ExampleMockLLMClient` — tool-validating mock LLM for unit testing agents with tool use.
+- Fixed deprecated `Mesh(mode=...)` calls in `README.md`, `guides/production.md`, `guides/browser-automation.md`, and `guides/adapters.md`.
 
 **Added**
 
@@ -45,6 +48,11 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - `P2P_ENABLED` env var was not forwarded to `Mesh.config`, requiring `config={"p2p_enabled": True}` explicitly even when the env var was set.
 - HITL escalations could be raised for arbitrary reasons, polluting the human review queue. Now enforced at the framework level.
 - Planner emitted `Unknown subagent_hint` warnings for semantically valid but aliased LLM role names.
+- Examples audit (2026-05-07): fixed API compatibility across all 5 production examples for v1.0.3 breaking changes.
+- SWIM stabilisation replaced hardcoded 5 s sleep with condition-based poll (0.3 s for single-node; up to 5 s when seed nodes configured).
+- `AutoAgent` result dict now exposes `payload` as a dedicated top-level key when the output is a structured dict, enabling downstream step access without manual parsing.
+- Crash recovery `_resume()` pre-populates recovered step results into `pre_results` so resumed workflows replay correctly rather than skipping completed steps.
+- `ExampleMockLLMClient` validates tool names against the `tools` parameter before returning tool-use responses, preventing mock deadlocks when a tool is out of scope.
 
 **Changed**
 

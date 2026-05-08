@@ -34,7 +34,7 @@ class DataProcessor:
     def run(self, data):
         return {"processed": data * 2}
 
-mesh = Mesh(mode="autonomous")
+mesh = Mesh()
 mesh.add(DataProcessor)
 await mesh.start()
 ```
@@ -159,7 +159,7 @@ wrapped = wrap(
     execute_method="invoke"
 )
 
-mesh = Mesh(mode="autonomous")
+mesh = Mesh()
 mesh.add(wrapped)
 await mesh.start()
 ```

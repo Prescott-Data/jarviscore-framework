@@ -171,6 +171,50 @@ When the queue is exhausted, `MockLLMClient` returns `{"content": "DONE: no more
 
 ---
 
+## ExampleMockLLMClient
+
+A higher-level mock that interprets message content and **validates tool names against the `tools` parameter** before returning a tool-use response. Use it when testing agents that call `chat_with_tools()` — it prevents mock deadlocks caused by returning a tool that is not in scope for the current turn.
+
+```python
+from jarviscore.testing import ExampleMockLLMClient
+
+llm = ExampleMockLLMClient()
+
+# Returns a tool_use response only when the tool is in scope
+response = llm.chat_with_tools(
+    messages=[{"role": "user", "content": "analyze the sales trend"}],
+    tools=[{"name": "ask_peer"}, {"name": "statistical_analysis"}],
+)
+# → {"type": "tool_use", "tool_name": "ask_peer", ...}
+
+# Falls back to text when no matching tool is available
+response = llm.chat_with_tools(
+    messages=[{"role": "user", "content": "analyze the sales trend"}],
+    tools=[],  # no tools in scope
+)
+# → {"type": "text", "content": "Mock analysis: ..."}
+```
+
+**Tool routing logic** — `chat_with_tools()` inspects the user message and available tool names:
+
+| Message contains | Tool in scope | Returns |
+|-----------------|---------------|---------|
+| `analyze` / `trend` | `ask_peer` | `tool_use` → `ask_peer` |
+| `analyze` / `trend` | `statistical_analysis` | `tool_use` → `statistical_analysis` |
+| `search` | `web_search` | `tool_use` → `web_search` |
+| any | none matching | `text` fallback |
+
+**`continue_with_tool_result()`** always returns a text response summarising the tool result.
+
+**`chat()`** returns a short mock string — use it for agents that call the simple chat path rather than tool use.
+
+```python
+result = llm.chat("Summarise this report")
+# → "[Mock response to: Summarise this report...]"
+```
+
+---
+
 ## Testing HITL Flows
 
 Use `HITLQueue.resolve()` to simulate human decisions:
