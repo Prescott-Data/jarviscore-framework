@@ -164,7 +164,7 @@ BROWSER_MODEL=gemini-2.5-computer-use
 
 Built-in internet search via Gemini Grounded Search or Serper. Agents call it as a standard tool during task execution.
 
-```python
+```bash
 # Set in .env (pick one)
 GEMINI_API_KEY=...         # Gemini Grounded Search (primary)
 SERPER_API_KEY=...         # Serper fallback
