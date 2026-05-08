@@ -1079,8 +1079,11 @@ class FunctionRegistry:
     def _index_function(self, function_name: str, metadata: Dict) -> None:
         """Add function to all applicable indexes."""
         # System index
-        system = metadata.get("system")
-        if system:
+        # lgtm[py/clear-text-logging-sensitive-data] - system is an integration name
+        # (e.g. "shopify"), not a credential. func_metadata carries oauth_metadata as a
+        # separate field which causes CodeQL to over-taint the whole dict; suppress here.
+        system = metadata.get("system")  # lgtm[py/clear-text-logging-sensitive-data]
+        if system:  # lgtm[py/clear-text-logging-sensitive-data]
             self.functions_by_system.setdefault(system, set()).add(function_name)
 
         # Capability index
