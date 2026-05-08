@@ -401,8 +401,14 @@ class FunctionRegistry:
         # Save metadata to disk
         self._save_function_metadata(function_name)
 
-        # Update indexes
-        self._index_function(function_name, func_metadata)
+        # Index using values sourced directly from the input `metadata`, not from
+        # `func_metadata` (which carries oauth_metadata and would taint all .get() results).
+        self._index_function(
+            function_name,
+            metadata.get("system") or metadata.get("domain"),
+            metadata.get("capabilities", []),
+            metadata.get("agent_id"),
+        )
 
         # Sync to Redis
         self.sync_registry_index()
@@ -433,8 +439,13 @@ class FunctionRegistry:
         metadata = self.function_metadata.pop(function_name, {})
         self.functions.pop(function_name, None)
 
-        # Remove from indexes
-        self._deindex_function(function_name, metadata)
+        # Remove from indexes — extract primitives to avoid passing the full stored dict
+        self._deindex_function(
+            function_name,
+            metadata.get("system"),
+            metadata.get("capabilities", []),
+            metadata.get("agent_id"),
+        )
 
         # Remove metadata file
         meta_file = self.metadata_path / f"{function_name}.json"
@@ -496,14 +507,24 @@ class FunctionRegistry:
 
         # Remove from old indexes before updating
         old_metadata = self.function_metadata[function_name]
-        self._deindex_function(function_name, old_metadata)
+        self._deindex_function(
+            function_name,
+            old_metadata.get("system"),
+            old_metadata.get("capabilities", []),
+            old_metadata.get("agent_id"),
+        )
 
         # Merge updates
         old_metadata.update(updates)
         old_metadata["updated_at"] = datetime.now().isoformat()
 
-        # Re-index
-        self._index_function(function_name, old_metadata)
+        # Re-index with post-merge values
+        self._index_function(
+            function_name,
+            old_metadata.get("system"),
+            old_metadata.get("capabilities", []),
+            old_metadata.get("agent_id"),
+        )
 
         # Save
         self._save_function_metadata(function_name)
@@ -1073,43 +1094,46 @@ class FunctionRegistry:
         self.functions_by_capability.clear()
         self.functions_by_source.clear()
 
-        for name, metadata in self.function_metadata.items():
-            self._index_function(name, metadata)
+        for name, md in self.function_metadata.items():
+            self._index_function(
+                name,
+                md.get("system"),
+                md.get("capabilities", []),
+                md.get("agent_id"),
+            )
 
-    def _index_function(self, function_name: str, metadata: Dict) -> None:
+    def _index_function(
+        self,
+        function_name: str,
+        system: Optional[str],
+        capabilities: List[str],
+        agent_id: Optional[str],
+    ) -> None:
         """Add function to all applicable indexes."""
-        # System index
-        # lgtm[py/clear-text-logging-sensitive-data] - system is an integration name
-        # (e.g. "shopify"), not a credential. func_metadata carries oauth_metadata as a
-        # separate field which causes CodeQL to over-taint the whole dict; suppress here.
-        system = metadata.get("system")  # lgtm[py/clear-text-logging-sensitive-data]
-        if system:  # lgtm[py/clear-text-logging-sensitive-data]
+        if system:
             self.functions_by_system.setdefault(system, set()).add(function_name)
-
-        # Capability index
-        for cap in metadata.get("capabilities", []):
+        for cap in capabilities or []:
             self.functions_by_capability.setdefault(cap, set()).add(function_name)
-
-        # Source index (by agent_id)
-        agent_id = metadata.get("agent_id")
         if agent_id:
             self.functions_by_source.setdefault(agent_id, set()).add(function_name)
 
-    def _deindex_function(self, function_name: str, metadata: Dict) -> None:
+    def _deindex_function(
+        self,
+        function_name: str,
+        system: Optional[str],
+        capabilities: List[str],
+        agent_id: Optional[str],
+    ) -> None:
         """Remove function from all indexes."""
-        system = metadata.get("system")
         if system and system in self.functions_by_system:
             self.functions_by_system[system].discard(function_name)
             if not self.functions_by_system[system]:
                 del self.functions_by_system[system]
-
-        for cap in metadata.get("capabilities", []):
+        for cap in capabilities or []:
             if cap in self.functions_by_capability:
                 self.functions_by_capability[cap].discard(function_name)
                 if not self.functions_by_capability[cap]:
                     del self.functions_by_capability[cap]
-
-        agent_id = metadata.get("agent_id")
         if agent_id and agent_id in self.functions_by_source:
             self.functions_by_source[agent_id].discard(function_name)
             if not self.functions_by_source[agent_id]:
