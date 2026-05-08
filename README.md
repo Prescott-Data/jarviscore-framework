@@ -149,7 +149,7 @@ jarviscore atom test my_atoms/fetch_orders.py
 
 ### Browser Automation
 
-Agents can launch headless browser sessions for web research, form filling, and scraping. The BrowserSubAgent uses CUA-capable models (Gemini Computer Use, GPT-5.4-mini) or falls back to any multimodal model with vision.
+Agents can launch headless browser sessions for web research, form filling, and scraping. The BrowserSubAgent uses CUA-capable models (Gemini Computer Use, gpt-5.4-mini) or falls back to any multimodal model with vision.
 
 ```python
 # Set in .env
