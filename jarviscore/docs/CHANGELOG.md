@@ -18,6 +18,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 <div class="changelog-contributors">
 <a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
 <a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+<a href="https://github.com/sangalo20" title="Sangalo Mwenyinyo"><img src="https://github.com/sangalo20.png?size=32" alt="sangalo20"></a>
 </div>
 <a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.0.3" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
 </div>
