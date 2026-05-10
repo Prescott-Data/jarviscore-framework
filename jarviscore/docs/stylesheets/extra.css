@@ -251,16 +251,14 @@ body,
 @media screen and (max-width: 59.9375em) {
 
   /* ── Header ── */
+  /* Hide site title text on mobile — logo is enough */
   .md-header__title {
-    flex-shrink: 1 !important;
-    min-width: 0 !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
+    display: none !important;
   }
 
   .md-header__button.md-logo img,
   .md-header__button.md-logo svg {
-    height: 16px !important;
+    height: 18px !important;
   }
 
   .md-header__button.md-logo {
@@ -863,9 +861,11 @@ body,
   padding: 0.15rem 0 2rem;
 }
 
-/* Top-level section labels (nav titles like "Getting Started") */
-.md-nav--primary>.md-nav__list>.md-nav__item>.md-nav__link,
-.md-nav__title {
+/* Top-level section labels — DESKTOP SIDEBAR ONLY.
+   Do NOT use bare .md-nav__title or .md-nav--primary selectors here:
+   pointer-events:none breaks the mobile drawer back arrow + Level 1 clicks. */
+.md-sidebar--primary .md-nav--primary>.md-nav__list>.md-nav__item>.md-nav__link,
+.md-sidebar--primary .md-nav__title {
   font-family: 'Inter', sans-serif;
   font-size: 0.62rem;
   font-weight: 700;
@@ -878,8 +878,10 @@ body,
   pointer-events: none;
 }
 
-/* All nav links */
-.md-nav__link {
+/* Sidebar nav links — DESKTOP SIDEBAR ONLY.
+   Scoped to .md-sidebar--primary so styles don't bleed into the
+   mobile drawer which uses the same HTML but needs bigger touch targets. */
+.md-sidebar--primary .md-nav__link {
   font-family: 'Inter', sans-serif;
   font-size: 0.65rem;
   font-weight: 400;
@@ -893,33 +895,32 @@ body,
   transition: background 0.13s ease, color 0.13s ease, opacity 0.13s ease;
   position: relative;
   text-decoration: none !important;
-  /* Allow text to wrap — never clip or ellipsis */
   white-space: normal;
   overflow: visible;
   word-break: break-word;
 }
 
-.md-nav__link:hover {
+.md-sidebar--primary .md-nav__link:hover {
   background: rgba(23, 88, 245, 0.07);
   color: var(--jc-brand) !important;
   opacity: 1;
   text-decoration: none !important;
 }
 
-[data-md-color-scheme="slate"] .md-nav__link:hover {
+[data-md-color-scheme="slate"] .md-sidebar--primary .md-nav__link:hover {
   background: rgba(23, 88, 245, 0.12);
   color: var(--jc-brand-light) !important;
 }
 
-/* Active left-bar indicator */
-.md-nav__link--active {
+/* Active left-bar indicator — desktop sidebar only */
+.md-sidebar--primary .md-nav__link--active {
   font-weight: 600;
   color: var(--jc-brand) !important;
   opacity: 1;
   background: rgba(23, 88, 245, 0.08);
 }
 
-.md-nav__link--active::before {
+.md-sidebar--primary .md-nav__link--active::before {
   content: '';
   position: absolute;
   left: 0;
@@ -930,14 +931,14 @@ body,
   border-radius: 0 2px 2px 0;
 }
 
-[data-md-color-scheme="slate"] .md-nav__link--active {
+[data-md-color-scheme="slate"] .md-sidebar--primary .md-nav__link--active {
   color: var(--jc-brand-light) !important;
   background: rgba(23, 88, 245, 0.15);
 }
 
-/* Nested sub-items — indented, slightly smaller */
-.md-nav--secondary .md-nav__link,
-.md-nav__item--nested .md-nav .md-nav__link {
+/* Nested sub-items — desktop sidebar only */
+.md-sidebar--primary .md-nav--secondary .md-nav__link,
+.md-sidebar--primary .md-nav__item--nested .md-nav .md-nav__link {
   font-size: 0.63rem;
   opacity: 0.75;
   padding-left: 1rem;
@@ -946,8 +947,8 @@ body,
   word-break: break-word;
 }
 
-.md-nav--secondary .md-nav__link:hover,
-.md-nav__item--nested .md-nav .md-nav__link:hover {
+.md-sidebar--primary .md-nav--secondary .md-nav__link:hover,
+.md-sidebar--primary .md-nav__item--nested .md-nav .md-nav__link:hover {
   opacity: 1;
 }
 

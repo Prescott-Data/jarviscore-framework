@@ -81,20 +81,6 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
 
-  /* ── 5. Mobile drawer — always open at Level 1 ─────────── */
-  /* Material's bundle.js restores checked state on nav toggles
-     after DOMContentLoaded. We must run AFTER it finishes.
-     Strategy: double-RAF + setTimeout to guarantee we run last. */
-  function resetNavToggles() {
-    document.querySelectorAll('input[id^="__nav_"]').forEach(function (t) {
-      t.checked = false;
-    });
-  }
-  /* Run after Material's init completes */
-  requestAnimationFrame(function () {
-    requestAnimationFrame(resetNavToggles);
-  });
-  /* Belt-and-suspenders fallback */
-  setTimeout(resetNavToggles, 250);
+  /* ── 5. (removed) — Material's context-aware drawer is correct ── */
 
 });
