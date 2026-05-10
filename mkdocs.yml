@@ -91,6 +91,7 @@ nav:
       - Blog: https://developers.prescottdata.io/blog
   - Getting Started: getting-started.md
   - Concepts:
+      - Overview: concepts/index.md
       - Architecture: concepts/architecture.md
       - Agents: concepts/agents.md
       - Planning: concepts/planning.md
@@ -102,6 +103,7 @@ nav:
       - System Bundles & Atoms: concepts/system-bundles.md
       - Nexus: concepts/nexus.md
   - Guides:
+      - Overview: guides/index.md
       - AutoAgent: guides/autoagent.md
       - CustomAgent: guides/customagent.md
       - Adapters: guides/adapters.md
@@ -129,6 +131,7 @@ nav:
       - Content Pipeline: examples/content-pipeline.md
       - Investment Committee: examples/investment-committee.md
   - Reference:
+      - Overview: reference/index.md
       - Configuration: reference/configuration.md
       - Agent API: reference/agent-api.md
       - Chat API: reference/chat-api.md

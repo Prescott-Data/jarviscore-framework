@@ -327,6 +327,12 @@ body,
     border-bottom: 1px solid rgba(0, 0, 0, 0.06) !important;
   }
 
+  /* Hide "JARVISCORE" site name text in drawer — logo in topbar is enough.
+     The .md-ellipsis span inside the primary title holds the site name. */
+  .md-nav--primary > .md-nav__title .md-ellipsis {
+    display: none !important;
+  }
+
   [data-md-color-scheme="slate"] .md-nav--primary > .md-nav__title {
     background: #161618 !important;
     color: var(--jc-brand-light) !important;
