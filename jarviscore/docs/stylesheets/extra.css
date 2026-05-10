@@ -246,16 +246,80 @@ body,
   z-index: 2 !important;
 }
 
-/* On small screens, Material's own mobile search overlay takes over.
-   Hide the centered search bar to avoid layout overflow. */
+/* On small screens, reset ALL custom desktop overrides so Material's
+   native mobile layout (hamburger menu, drawer nav, overlay search) works. */
 @media screen and (max-width: 59.9375em) {
+
+  /* ── Header ── */
+  .md-header__title {
+    flex-shrink: 1 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .md-header__button.md-logo img,
+  .md-header__button.md-logo svg {
+    height: 16px !important;
+  }
+
+  .md-header__button.md-logo {
+    margin-right: 0.5rem !important;
+  }
+
+  /* Hide desktop-only header widgets */
+  .jc-version-chip,
+  .jc-gh-stars-btn {
+    display: none !important;
+  }
+
+  /* ── Search — let Material handle the mobile overlay ── */
   .md-header .md-header__inner .md-search,
   .md-header .md-search[data-md-component="search"] {
-    position: relative !important;
+    position: static !important;
     left: auto !important;
     transform: none !important;
     width: auto !important;
     max-width: none !important;
+  }
+
+  .md-header .md-search__form::after {
+    display: none !important; /* Hide ⌘K badge */
+  }
+
+  /* Reset custom search modal — let Material's native overlay work */
+  [data-md-toggle="search"]:checked ~ .md-header .md-search {
+    position: fixed !important;
+    padding-top: 0 !important;
+  }
+
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__inner {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* ── Tabs — hidden by Material on mobile, enforce it ── */
+  .md-tabs {
+    display: none !important;
+  }
+
+  /* ── Content — full width, no left cut ── */
+  .md-content {
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    padding: 0 1rem !important;
+  }
+
+  /* ── Sidebar — DON'T override Material's native drawer behavior.
+     Only reset min-width so the desktop 15rem enforcement doesn't
+     interfere with Material's transform-based hide/show. ── */
+  .md-sidebar--primary {
+    min-width: 0 !important;
+  }
+
+  /* Prevent horizontal overflow from any leaking desktop rules */
+  html, body {
+    overflow-x: hidden !important;
   }
 }
 
@@ -2112,17 +2176,19 @@ body,
 }
 
 /* ============================================================
-   SIDEBAR WIDTH ENFORCEMENT
+   SIDEBAR WIDTH ENFORCEMENT  (desktop only)
    Override Material's default ~12rem with 15rem so all nav
    labels have room to display without truncation or ellipsis.
    ============================================================ */
-.md-sidebar--primary {
-  min-width: var(--md-sidebar-width, 15rem);
-  width: var(--md-sidebar-width, 15rem);
-}
+@media screen and (min-width: 60em) {
+  .md-sidebar--primary {
+    min-width: var(--md-sidebar-width, 15rem);
+    width: var(--md-sidebar-width, 15rem);
+  }
 
-.md-sidebar--primary .md-nav {
-  width: 100%;
+  .md-sidebar--primary .md-nav {
+    width: 100%;
+  }
 }
 
 /* Belt-and-braces tooltip suppression for Material's ellipsis tooltip */
