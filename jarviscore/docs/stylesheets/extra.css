@@ -319,17 +319,14 @@ body,
 
   /* ── Mobile drawer aesthetics ── */
 
-  /* Drawer header — replace Material's branded blue bg with clean neutral */
+  /* Drawer header — clean neutral bg instead of Material's branded blue */
   .md-nav--primary > .md-nav__title {
     background: #ffffff !important;
     color: var(--jc-brand) !important;
     font-family: 'Inter', sans-serif !important;
-    font-size: 0.85rem !important;
     font-weight: 700 !important;
-    letter-spacing: -0.02em !important;
-    padding: 1rem 1rem 0.75rem !important;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.06) !important;
     box-shadow: none !important;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06) !important;
   }
 
   [data-md-color-scheme="slate"] .md-nav--primary > .md-nav__title {
@@ -343,7 +340,7 @@ body,
     display: none !important;
   }
 
-  /* Back arrow in Level 2 — clean styling */
+  /* Back arrow — brand colored */
   .md-nav--primary .md-nav__title .md-nav__icon {
     color: var(--jc-brand) !important;
   }
@@ -352,25 +349,9 @@ body,
     color: var(--jc-brand-light) !important;
   }
 
-  /* Nav items — generous touch targets + clean spacing */
-  .md-nav--primary .md-nav__item {
-    border-bottom: 1px solid rgba(0, 0, 0, 0.04);
-  }
-
-  [data-md-color-scheme="slate"] .md-nav--primary .md-nav__item {
-    border-bottom-color: rgba(255, 255, 255, 0.05);
-  }
-
-  .md-nav--primary .md-nav__link {
-    font-size: 0.875rem !important;
-    padding: 0.85rem 1rem !important;
-    font-weight: 500 !important;
-  }
-
-  /* Active item — brand accent */
+  /* Active item — brand accent (light touch, no layout changes) */
   .md-nav--primary .md-nav__item--active > .md-nav__link {
     color: var(--jc-brand) !important;
-    font-weight: 600 !important;
   }
 
   /* Prevent horizontal overflow from any leaking desktop rules */

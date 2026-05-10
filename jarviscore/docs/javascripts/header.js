@@ -82,23 +82,19 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   /* ── 5. Mobile drawer — always open at Level 1 ─────────── */
-  /* Material auto-expands the current section in the drawer.
-     We intercept the hamburger click and, after Material finishes
-     its own state update (microtask), uncheck all nav toggles so
-     the user always lands on the top-level section list. */
-  var hamburger = document.querySelector('label[for="__drawer"]');
-  if (hamburger) {
-    hamburger.addEventListener('click', function () {
-      /* Let Material toggle the drawer first, then reset nav state */
-      setTimeout(function () {
-        var drawerEl = document.getElementById('__drawer');
-        if (drawerEl && drawerEl.checked) {
-          document.querySelectorAll('input[id^="__nav_"]').forEach(function (t) {
-            t.checked = false;
-          });
-        }
-      }, 10);
+  /* Material's bundle.js restores checked state on nav toggles
+     after DOMContentLoaded. We must run AFTER it finishes.
+     Strategy: double-RAF + setTimeout to guarantee we run last. */
+  function resetNavToggles() {
+    document.querySelectorAll('input[id^="__nav_"]').forEach(function (t) {
+      t.checked = false;
     });
   }
+  /* Run after Material's init completes */
+  requestAnimationFrame(function () {
+    requestAnimationFrame(resetNavToggles);
+  });
+  /* Belt-and-suspenders fallback */
+  setTimeout(resetNavToggles, 250);
 
 });
