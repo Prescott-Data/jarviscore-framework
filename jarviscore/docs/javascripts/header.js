@@ -83,16 +83,21 @@ document.addEventListener('DOMContentLoaded', function () {
 
   /* ── 5. Mobile drawer — always open at Level 1 ─────────── */
   /* Material auto-expands the current section in the drawer.
-     Reset all nav toggles when the drawer opens so the user
-     always sees the top-level section list first. */
-  var drawer = document.getElementById('__drawer');
-  if (drawer) {
-    drawer.addEventListener('change', function () {
-      if (drawer.checked) {
-        document.querySelectorAll('input[id^="__nav_"]').forEach(function (toggle) {
-          toggle.checked = false;
-        });
-      }
+     We intercept the hamburger click and, after Material finishes
+     its own state update (microtask), uncheck all nav toggles so
+     the user always lands on the top-level section list. */
+  var hamburger = document.querySelector('label[for="__drawer"]');
+  if (hamburger) {
+    hamburger.addEventListener('click', function () {
+      /* Let Material toggle the drawer first, then reset nav state */
+      setTimeout(function () {
+        var drawerEl = document.getElementById('__drawer');
+        if (drawerEl && drawerEl.checked) {
+          document.querySelectorAll('input[id^="__nav_"]').forEach(function (t) {
+            t.checked = false;
+          });
+        }
+      }, 10);
     });
   }
 
