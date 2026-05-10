@@ -757,17 +757,14 @@ body,
 }
 
 /* ============================================================
-   TAB BAR ICONS — injected for sections that link to pages
-   without navigation.indexes (so Material doesn't auto-render
-   an icon from frontmatter). We match by the tab's href.
+   TAB BAR ICONS — Getting Started only (links directly to a page,
+   no index, so Material can't auto-render from frontmatter).
+   Concepts / Guides / Reference / Enterprise now have index pages
+   with frontmatter icons — Material renders those natively.
    ============================================================ */
 
-/* Shared pseudo-element setup for injected tab icons */
-.md-tabs__link[href*="getting-started"]::before,
-.md-tabs__link[href*="concepts/"]::before,
-.md-tabs__link[href*="guides/"]::before,
-.md-tabs__link[href*="reference/"]::before,
-.md-tabs__link[href*="infrastructure/"]::before {
+/* Getting Started — rocket launch (tab bar only) */
+.md-tabs__link[href*="getting-started"]::before {
   content: '';
   display: inline-block;
   width: 1rem;
@@ -783,36 +780,8 @@ body,
   vertical-align: middle;
   margin-right: 2px;
   opacity: 0.85;
-}
-
-/* Getting Started — rocket launch */
-.md-tabs__link[href*="getting-started"]::before {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2.81 14.12L5.64 11.29L8.17 13.82C9.78 12.5 11.5 11.39 13.5 10.62L13.57 10.69C15 8.5 17.5 7 20.23 7A9.98 9.98 0 0 1 22 12C22 17.52 17.52 22 12 22C8.91 22 6.19 20.55 4.43 18.3L6.56 16.17C7.72 17.65 9.5 18.6 11.5 18.91L11.5 15.79C9.28 15.36 7.19 14.36 5.64 13L2.81 14.12M13.5 13.43V18.91C15.5 18.6 17.28 17.65 18.44 16.17L16.36 14.09C15.5 14.82 14.53 15.22 13.5 15.43M5.5 5A2 2 0 0 0 3.5 7A2 2 0 0 0 5.5 9A2 2 0 0 0 7.5 7A2 2 0 0 0 5.5 5Z'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2.81 14.12L5.64 11.29L8.17 13.82C9.78 12.5 11.5 11.39 13.5 10.62L13.57 10.69C15 8.5 17.5 7 20.23 7A9.98 9.98 0 0 1 22 12C22 17.52 17.52 22 12 22C8.91 22 6.19 20.55 4.43 18.3L6.56 16.17C7.72 17.65 9.5 18.6 11.5 18.91L11.5 15.79C9.28 15.36 7.19 14.36 5.64 13L2.81 14.12M13.5 13.43V18.91C15.5 18.6 17.28 17.65 18.44 16.17L16.36 14.09C15.5 14.82 14.53 15.22 13.5 15.43M5.5 5A2 2 0 0 0 3.5 7A2 2 0 0 0 5.5 9A2 2 0 0 0 7.5 7A2 2 0 0 0 5.5 5Z'/%3E%3C/svg%3E");
-}
-
-/* Concepts — lightbulb-on */
-.md-tabs__link[href*="concepts/"]::before {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2A7 7 0 0 0 5 9C5 11.38 6.19 13.47 8 14.74V17A1 1 0 0 0 9 18H15A1 1 0 0 0 16 17V14.74C17.81 13.47 19 11.38 19 9A7 7 0 0 0 12 2M9 21A1 1 0 0 0 10 22H14A1 1 0 0 0 15 21V20H9V21Z'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2A7 7 0 0 0 5 9C5 11.38 6.19 13.47 8 14.74V17A1 1 0 0 0 9 18H15A1 1 0 0 0 16 17V14.74C17.81 13.47 19 11.38 19 9A7 7 0 0 0 12 2M9 21A1 1 0 0 0 10 22H14A1 1 0 0 0 15 21V20H9V21Z'/%3E%3C/svg%3E");
-}
-
-/* Guides — book open */
-.md-tabs__link[href*="guides/"]::before {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M17 22V20H20V17H22V20.5C22 20.89 21.84 21.24 21.54 21.54C21.24 21.84 20.89 22 20.5 22H17M7 22H3.5C3.11 22 2.76 21.84 2.46 21.54C2.16 21.24 2 20.89 2 20.5V17H4V20H7V22M17 2H20.5C20.89 2 21.24 2.16 21.54 2.46C21.84 2.76 22 3.11 22 3.5V7H20V4H17V2M7 2V4H4V7H2V3.5C2 3.11 2.16 2.76 2.46 2.46C2.76 2.16 3.11 2 3.5 2H7M13 17H11C10.45 17 10 16.55 10 16S10.45 15 11 15H13C13.55 15 14 15.45 14 16S13.55 17 13 17M17 13H7C6.45 13 6 12.55 6 12S6.45 11 7 11H17C17.55 11 18 11.45 18 12S17.55 13 17 13M17 9H7C6.45 9 6 8.55 6 8S6.45 7 7 7H17C17.55 7 18 7.45 18 8S17.55 9 17 9Z'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M17 22V20H20V17H22V20.5C22 20.89 21.84 21.24 21.54 21.54C21.24 21.84 20.89 22 20.5 22H17M7 22H3.5C3.11 22 2.76 21.84 2.46 21.54C2.16 21.24 2 20.89 2 20.5V17H4V20H7V22M17 2H20.5C20.89 2 21.24 2.16 21.54 2.46C21.84 2.76 22 3.11 22 3.5V7H20V4H17V2M7 2V4H4V7H2V3.5C2 3.11 2.16 2.76 2.46 2.46C2.76 2.16 3.11 2 3.5 2H7M13 17H11C10.45 17 10 16.55 10 16S10.45 15 11 15H13C13.55 15 14 15.45 14 16S13.55 17 13 17M17 13H7C6.45 13 6 12.55 6 12S6.45 11 7 11H17C17.55 11 18 11.45 18 12S17.55 13 17 13M17 9H7C6.45 9 6 8.55 6 8S6.45 7 7 7H17C17.55 7 18 7.45 18 8S17.55 9 17 9Z'/%3E%3C/svg%3E");
-}
-
-/* Reference — code tags */
-.md-tabs__link[href*="reference/"]::before {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14.6 16.6L19.2 12L14.6 7.4L16 6L22 12L16 18L14.6 16.6M9.4 16.6L4.8 12L9.4 7.4L8 6L2 12L8 18L9.4 16.6Z'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14.6 16.6L19.2 12L14.6 7.4L16 6L22 12L16 18L14.6 16.6M9.4 16.6L4.8 12L9.4 7.4L8 6L2 12L8 18L9.4 16.6Z'/%3E%3C/svg%3E");
-}
-
-/* Enterprise — office building */
-.md-tabs__link[href*="infrastructure/"]::before {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M18 15H16V17H18M18 11H16V13H18M20 19H12V17H14V15H12V13H14V11H12V9H20M10 7H8V5H10M10 11H8V9H10M10 15H8V13H10M10 19H8V17H10M6 7H4V5H6M6 11H4V9H6M6 15H4V13H6M6 19H4V17H6M12 7V3H2V21H22V7H12Z'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M18 15H16V17H18M18 11H16V13H18M20 19H12V17H14V15H12V13H14V11H12V9H20M10 7H8V5H10M10 11H8V9H10M10 15H8V13H10M10 19H8V17H10M6 7H4V5H6M6 11H4V9H6M6 15H4V13H6M6 19H4V17H6M12 7V3H2V21H22V7H12Z'/%3E%3C/svg%3E");
 }
 
 /* ============================================================
