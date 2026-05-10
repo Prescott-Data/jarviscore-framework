@@ -81,4 +81,19 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
 
+  /* ── 5. Mobile drawer — always open at Level 1 ─────────── */
+  /* Material auto-expands the current section in the drawer.
+     Reset all nav toggles when the drawer opens so the user
+     always sees the top-level section list first. */
+  var drawer = document.getElementById('__drawer');
+  if (drawer) {
+    drawer.addEventListener('change', function () {
+      if (drawer.checked) {
+        document.querySelectorAll('input[id^="__nav_"]').forEach(function (toggle) {
+          toggle.checked = false;
+        });
+      }
+    });
+  }
+
 });
