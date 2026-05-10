@@ -861,9 +861,8 @@ body,
   padding: 0.15rem 0 2rem;
 }
 
-/* Desktop sidebar: section group LINK labels (e.g. "GUIDES", "GETTING STARTED").
-   These are the top-level expandable section headers — non-interactive in the
-   sidebar since clicking the icon chevron handles expand. */
+/* Section group LINK labels (e.g. "GUIDES", "GETTING STARTED") — visual styles.
+   Applied to both desktop sidebar and mobile drawer for consistent typography. */
 .md-sidebar--primary .md-nav--primary>.md-nav__list>.md-nav__item>.md-nav__link {
   font-family: 'Inter', sans-serif;
   font-size: 0.62rem;
@@ -873,8 +872,16 @@ body,
   color: var(--jc-text-muted) !important;
   padding: 0.9rem 0.75rem 0.3rem;
   opacity: 0.7;
-  cursor: default;
-  pointer-events: none;
+}
+
+/* Desktop ONLY: section labels are non-interactive group headers.
+   On mobile these same elements ARE the clickable Level 1 items
+   that expand to Level 2, so pointer-events must stay enabled. */
+@media screen and (min-width: 60em) {
+  .md-sidebar--primary .md-nav--primary>.md-nav__list>.md-nav__item>.md-nav__link {
+    cursor: default;
+    pointer-events: none;
+  }
 }
 
 /* Desktop sidebar: top-level nav title (site name / section header label).
