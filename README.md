@@ -1,19 +1,23 @@
-# JarvisCore
+<p align="center">
+  <img src="jarviscore/docs/assets/combo-brand.svg" alt="JarvisCore" height="56" />
+</p>
 
-**Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth.**
+<p align="center">
+  <strong>Build, orchestrate, and deploy multi-agent systems with peer-to-peer coordination, unified memory, 46 prebuilt service bundles (237 atoms), and full observability.</strong>
+</p>
 
-## Features
+<p align="center">
+  <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/v/jarviscore-framework?style=flat-square&color=1758F5" alt="PyPI" /></a>
+  <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/pyversions/jarviscore-framework?style=flat-square" alt="Python" /></a>
+  <a href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Prescott-Data/jarviscore-framework?style=flat-square" alt="License" /></a>
+  <a href="https://jarviscore.developers.prescottdata.io/"><img src="https://img.shields.io/badge/docs-jarviscore-blue?style=flat-square" alt="Docs" /></a>
+</p>
 
-- **Agent Profiles** — AutoAgent auto-generates and executes function tools under Kernel supervision; CustomAgent is bring-your-own-logic for advanced use cases
-- **Human In the Loop (HITL)** — Pause and resume agent execution for human review and approval
-- **P2P Mesh** — Agent discovery, peer-to-peer communication, and cognitive discovery via SWIM protocol + ZMQ
-- **Workflow Orchestration** — Dependencies, context passing, multi-step pipelines with crash recovery
-- **Distributed Autonomous Workers** — Mesh claims workflow steps without hardcoding step IDs
-- **UnifiedMemory** — EpisodicLedger, LongTermMemory, RedisMemoryAccessor, WorkingScratchpad
-- **Context Distillation** — TruthContext, TruthFact, Evidence models for shared agent knowledge
-- **Nexus OSS Auth** — Full OAuth flow via `requires_auth=True`; no boilerplate in agents
-- **Telemetry / Tracing** — TraceManager (Redis + JSONL), Prometheus step metrics
-- **Integrations** — FastAPI, aiohttp, and other async frameworks via `jarviscore.integrations`
+---
+
+## What is JarvisCore?
+
+JarvisCore is a Python framework for building AI agent systems that can plan, reason, execute code, browse the web, search the internet, and connect to 46 external services out of the box. A single agent runs with three attributes. A fleet scales across machines with peer-to-peer discovery, shared memory, and crash recovery.
 
 ## Installation
 
@@ -30,25 +34,25 @@ pip install "jarviscore-framework[prometheus]"
 pip install "jarviscore-framework[redis,prometheus]"
 ```
 
-## Setup
-
-```bash
-# Initialize project
-python -m jarviscore.cli.scaffold --examples
-cp .env.example .env
-# Add your LLM API key to .env
-
-# Start Redis (required for mailbox, memory, distributed workflows)
-docker compose -f docker-compose.infra.yml up -d
-
-# Validate
-python -m jarviscore.cli.check --validate-llm
-python -m jarviscore.cli.smoketest
-```
-
 ## Quick Start
 
-### AutoAgent
+```bash
+# Scaffold a new project with example agents
+jarviscore init --examples
+cp .env.example .env
+# Add your LLM API key to .env (AZURE_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
+
+# Start shared infrastructure (Redis, Mongo, Prometheus, Grafana)
+docker compose -f docker-compose.infra.yml up -d
+
+# Start Nexus Gateway locally (generates keys and updates .env)
+jarviscore nexus init
+
+# Validate installation
+jarviscore check --validate-llm
+```
+
+### AutoAgent (3 attributes, zero boilerplate)
 
 ```python
 from jarviscore import Mesh
@@ -69,7 +73,7 @@ results = await mesh.workflow("calc", [
 print(results[0]["output"])  # 3628800
 ```
 
-### CustomAgent (Workflow Mode)
+### CustomAgent (full control)
 
 ```python
 from jarviscore import Mesh
@@ -83,7 +87,7 @@ class ProcessorAgent(CustomAgent):
         data = task.get("params", {}).get("data", [])
         return {"status": "success", "output": [x * 2 for x in data]}
 
-mesh = Mesh(config={"p2p_enabled": True, "bind_port": 7950, "redis_url": "redis://localhost:6379/0"})
+mesh = Mesh()
 mesh.add(ProcessorAgent)
 await mesh.start()
 
@@ -93,106 +97,163 @@ results = await mesh.workflow("demo", [
 print(results[0]["output"])  # [2, 4, 6]
 ```
 
+## Features
+
+### Agent Profiles
+
+| Profile | You Write | JarvisCore Handles |
+|---------|-----------|-------------------|
+| **AutoAgent** | `role`, `capabilities`, `system_prompt` | Kernel OODA loop, tool generation, sandboxed execution, self-repair, planning |
+| **CustomAgent** | `execute_task()` and/or `on_peer_request()` | Mesh routing, discovery, lifecycle, full infrastructure injection |
+
+### Kernel and Planning
+
+The Kernel runs an Observe-Orient-Decide-Act (OODA) loop for every AutoAgent task. In v1.0.3, the loop is backed by a dedicated Planner and StepEvaluator that use model tier routing to balance cost and reasoning depth.
+
+| Component | Purpose |
+|-----------|---------|
+| **Planner** | Decomposes goals into executable steps using heavy-tier models |
+| **StepEvaluator** | Classifies step outcomes using nano-tier models for fast, cheap evaluation |
+| **GoalContext** | Tracks plan state, step history, and convergence signals |
+| **EpistemicLedger** | Records what the agent knows, assumes, and has verified |
+
+### Service Integrations (46 bundles, 237 atoms)
+
+Every integration is a single-file Python function called an **atom**. Atoms are registered in the seed registry and discovered by agents at runtime. No SDK wiring required.
+
+<details>
+<summary><strong>View all 46 integration bundles</strong></summary>
+
+| Category | Bundles |
+|----------|---------|
+| **CRM and Sales** | Salesforce, HubSpot, Apollo, Oracle CX, Dynamics 365 |
+| **Project Management** | Jira, Linear, ClickUp, Todoist, Notion, Airtable |
+| **Communication** | Slack, Discord, Gmail, MS Graph (Teams/Outlook), Webex, Brevo |
+| **Developer Tools** | GitHub, Confluence, Serper (web search) |
+| **Cloud Storage** | Google Drive, Google Sheets, Dropbox, Azure Blob Storage |
+| **Finance and Accounting** | Stripe, QuickBooks, FreshBooks, Zoho Books, NetSuite |
+| **ERP** | SAP, Oracle ERP, Odoo |
+| **HR** | BambooHR, Zoho People, Zoho Shifts |
+| **Social and Content** | LinkedIn, LinkedIn Ads, Twitter/X, YouTube, Reddit |
+| **Meetings** | Zoom, Google Calendar |
+| **Email Marketing** | Mailchimp, SendGrid |
+| **Healthcare** | OpenMRS |
+| **Government** | KRA (Kenya Revenue Authority) |
+
+</details>
+
+```bash
+# List all registered atoms
+jarviscore atom list
+
+# Test a custom atom before registration
+jarviscore atom test my_atoms/fetch_orders.py
+```
+
+### Browser Automation
+
+Agents can launch headless browser sessions for web research, form filling, and scraping. The BrowserSubAgent uses CUA-capable models (Gemini Computer Use, gpt-5.4-mini) or falls back to any multimodal model with vision.
+
+```bash
+# Set in .env
+BROWSER_ENABLED=true
+BROWSER_MODEL=gemini-2.5-computer-use
+```
+
+### Internet Search
+
+Built-in internet search via Gemini Grounded Search or Serper. Agents call it as a standard tool during task execution.
+
+```bash
+# Set in .env (pick one)
+GEMINI_API_KEY=...         # Gemini Grounded Search (primary)
+SERPER_API_KEY=...         # Serper fallback
+```
+
+### RAG Pipeline
+
+Chunk documents, generate embeddings, and store them in a local FAISS index. Agents query the index during task execution to ground responses in source material.
+
+### Unified Memory
+
+| Layer | Purpose |
+|-------|---------|
+| **WorkingScratchpad** | Short-lived key-value store for the current task |
+| **EpisodicLedger** | Append-only event log for agent history |
+| **LongTermMemory** | Persistent Redis-backed storage across sessions |
+| **Athena** | Structured knowledge graph with heat-based scoring and cross-agent memory sharing |
+
+### Nexus Credentials
+
+Nexus is the built-in credential manager. It stores OAuth tokens and API keys, encrypts them with a per-deployment secret, and injects them into atoms at runtime. Agents never handle raw credentials.
+
+```python
+class MyAgent(CustomAgent):
+    requires_auth = True  # Nexus credentials injected automatically
+```
+
+### P2P Mesh and Distributed Workflows
+
+Agents discover each other over a SWIM protocol gossip mesh using ZMQ transport. Workflows execute across machines with Redis-backed crash recovery and step claiming.
+
+```python
+mesh = Mesh(config={
+    "p2p_enabled": True,
+    "bind_port": 7950,
+    "redis_url": "redis://localhost:6379/0",
+})
+```
+
+### Observability
+
+| Signal | Backend |
+|--------|---------|
+| **Traces** | TraceManager writes to Redis and JSONL files |
+| **Metrics** | Prometheus counters and histograms per step |
+| **Logs** | Structured JSON logging via `LOG_LEVEL` |
+
 ## Infrastructure Stack
 
-Every agent receives the full infrastructure stack automatically — no wiring required.
+Every agent receives the full infrastructure stack automatically through dependency injection. No manual wiring required.
 
 | Feature | Injected as | Enabled by |
 |---------|-------------|------------|
 | Blob storage | `self._blob_storage` | `STORAGE_BACKEND=local` (default) |
-| Context distillation | `TruthContext`, `ContextManager` | automatic |
-| Telemetry / tracing | `TraceManager` | automatic (`PROMETHEUS_ENABLED` for metrics) |
+| Context distillation | `TruthContext`, `ContextManager` | Automatic |
+| Telemetry and tracing | `TraceManager` | Automatic (`PROMETHEUS_ENABLED` for metrics) |
 | Mailbox messaging | `self.mailbox` | `REDIS_URL` |
-| Function registry | `self.code_registry` | automatic (AutoAgent) |
-| Kernel OODA loop | `Kernel` (AutoAgent internals) | automatic (AutoAgent) |
+| Function registry | `self.code_registry` | Automatic (AutoAgent) |
+| Kernel OODA loop | `Kernel` | Automatic (AutoAgent) |
 | Distributed workflow | `WorkflowEngine` | `REDIS_URL` |
-| Nexus OSS auth | `self._auth_manager` | `requires_auth=True` + `NEXUS_GATEWAY_URL` |
+| Nexus credentials | `self._auth_manager` | `requires_auth=True` + `NEXUS_GATEWAY_URL` |
 | Unified memory | `UnifiedMemory`, `EpisodicLedger`, `LTM` | `REDIS_URL` |
-| Auto-injection | all of the above | automatic |
 
-```python
-class MyAgent(CustomAgent):
-    requires_auth = True   # → self._auth_manager injected
-
-    async def setup(self):
-        await super().setup()
-        # All infrastructure already injected — no __init__ wiring needed
-        self.memory = UnifiedMemory(
-            workflow_id="my-workflow", step_id="step-1",
-            agent_id=self.role,
-            redis_store=self._redis_store,
-            blob_storage=self._blob_storage,
-        )
-
-    async def execute_task(self, task):
-        # Save artifact
-        await self._blob_storage.save("results/output.json", json.dumps(result))
-
-        # Notify another agent
-        self.mailbox.send(other_agent_id, {"event": "done", "workflow": "my-workflow"})
-
-        # Log to episodic ledger
-        await self.memory.episodic.append({"event": "step_complete", "ts": time.time()})
-
-        return {"status": "success", "output": result}
-```
-
-## Production Examples
-
-All examples require Redis (`docker compose -f docker-compose.infra.yml up -d`).
-
-| Example | Mode | Profile |
-|---------|------|---------|
-| Financial Pipeline | autonomous | AutoAgent |
-| Research Network (4 nodes) | distributed | AutoAgent |
-| Support Swarm | p2p | CustomAgent |
-| Content Pipeline | distributed | CustomAgent |
-| Investment Committee | autonomous | AutoAgent + CustomAgent |
+## CLI Reference
 
 ```bash
-# Financial pipeline (single process)
-python examples/financial_pipeline.py
-
-# 4-node distributed research network
-python examples/research_synthesizer.py &  # Start seed first (port 7949)
-python examples/research_node_1.py &       # port 7946
-python examples/research_node_2.py &       # port 7947
-python examples/research_node_3.py &       # port 7948
-
-# Customer support swarm (P2P + optional Nexus OSS auth)
-python examples/support_swarm.py
-
-# Content pipeline with LTM (sequential, single process)
-python examples/content_pipeline.py
-
-# Investment Committee: 7-agent workflow with web dashboard
-cd examples/investment_committee
-python committee.py --mode full --ticker NVDA --amount 1500000
-# or: python dashboard.py  (web UI on http://localhost:8004)
+jarviscore init              # Scaffold a new project (.env.example + optional examples)
+jarviscore check             # Validate environment and provider connectivity
+jarviscore check --validate-llm  # Also test LLM round-trip
+jarviscore smoketest         # Quick end-to-end smoke test
+jarviscore atom list         # List all registered integration atoms
+jarviscore atom test         # Validate atom structure or live Nexus connection
+jarviscore nexus init        # Generate keys and start Nexus Gateway via Docker
+jarviscore nexus status      # Check Nexus Gateway health
+jarviscore nexus register    # Register an OAuth provider (e.g. github, slack)
+jarviscore nexus list        # List registered providers
+jarviscore nexus test        # Open browser OAuth flow for a provider
+jarviscore memory init       # Initialize Athena MemOS backend
+jarviscore memory status     # Check Athena health
+jarviscore memory search     # Query the knowledge graph
 ```
 
-## Profiles
+## Framework Integrations
 
-| Profile | You Write | JarvisCore Handles |
-|---------|-----------|-------------------|
-| **AutoAgent** | System prompt (3 attributes) | Agent-generated function tools, Kernel OODA loop, sandboxed execution, repair, function registry |
-| **CustomAgent** | `on_peer_request()` and/or `execute_task()` | Mesh, discovery, routing, lifecycle, full infrastructure stack |
-
-## Execution Modes
-
-| Mode | Use Case |
-|------|----------|
-| `autonomous` | Single machine, agent-generated function tools (AutoAgent) |
-| `p2p` | Agent-to-agent communication, swarms (CustomAgent) |
-| `distributed` | Multi-node workflows + P2P + Redis crash recovery |
-
-## Integrations
-
-JarvisCore is **async-first**. Best experience with async frameworks.
+JarvisCore is async-first. It integrates directly with async web frameworks.
 
 | Framework | Integration |
 |-----------|-------------|
-| **FastAPI** | `JarvisLifespan` — 3-line setup via `jarviscore.integrations.fastapi` |
+| **FastAPI** | `JarvisLifespan` via `jarviscore.integrations.fastapi` (3 lines) |
 | **aiohttp, Quart, Tornado** | Manual lifecycle (see docs) |
 | **Flask, Django** | Background thread pattern (see docs) |
 
@@ -211,25 +272,54 @@ class ProcessorAgent(CustomAgent):
 app = FastAPI(lifespan=JarvisLifespan(ProcessorAgent()))
 ```
 
+## Production Deployment
+
+For production, set these environment variables instead of relying on development defaults:
+
+```bash
+NEXUS_SECRET=<long-random-string>       # Do not rely on machine-UUID fallback
+NEXUS_GATEWAY_URL=https://nexus.yours   # Point to your deployed Nexus Gateway
+REDIS_URL=redis://<persistent-host>     # External Redis with persistence enabled
+STORAGE_BACKEND=azure                   # Or mount a persistent volume for local mode
+SANDBOX_MODE=remote                     # Isolate code execution from the host
+LOG_LEVEL=INFO                          # Avoid token content in logs
+```
+
+See the [Production Deployment Guide](https://jarviscore.developers.prescottdata.io/guides/production/) for the full checklist, fleet scaling, and kernel tuning.
+
 ## Documentation
 
 **[https://jarviscore.developers.prescottdata.io/](https://jarviscore.developers.prescottdata.io/)**
 
-| Guide | Description |
-|-------|-------------|
-| [Getting Started](https://jarviscore.developers.prescottdata.io/getting-started/) | 5-minute quickstart |
-| [AutoAgent](https://jarviscore.developers.prescottdata.io/guides/autoagent/) | Agent profiles, Kernel, distributed research network |
-| [CustomAgent](https://jarviscore.developers.prescottdata.io/guides/customagent/) | CustomAgent patterns, infrastructure stack, production walkthroughs |
-| [Guides](https://jarviscore.developers.prescottdata.io/guides/workflows/) | Workflows, memory, auth, HITL, Nexus, testing, and more |
-| [API Reference](https://jarviscore.developers.prescottdata.io/reference/agent-api/) | Detailed API docs for all infrastructure classes |
-| [Configuration](https://jarviscore.developers.prescottdata.io/reference/configuration/) | Settings reference and environment variable guide |
-| [Troubleshooting](https://jarviscore.developers.prescottdata.io/troubleshooting/) | Common issues and diagnostics |
+| Section | Description |
+|---------|-------------|
+| [Getting Started](https://jarviscore.developers.prescottdata.io/getting-started/) | Install, scaffold, and run your first agent in 5 minutes |
+| [Concepts](https://jarviscore.developers.prescottdata.io/concepts/architecture/) | Architecture, model routing, planning, memory, Nexus |
+| [Guides](https://jarviscore.developers.prescottdata.io/guides/autoagent/) | AutoAgent, CustomAgent, workflows, HITL, browser, testing, production |
+| [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/) | All 46 service bundles with usage examples |
+| [Reference](https://jarviscore.developers.prescottdata.io/reference/agent-api/) | Agent API, CLI, configuration, and troubleshooting |
 | [Changelog](https://jarviscore.developers.prescottdata.io/changelog/) | Full release history |
 
-Docs are also bundled with the package:
+## Examples
+
+All examples require Redis (`docker compose -f docker-compose.infra.yml up -d`).
 
 ```bash
-python -c "import jarviscore; print(jarviscore.__path__[0] + '/docs')"
+# Financial pipeline (single process, AutoAgent)
+python examples/financial_pipeline.py
+
+# 4-node distributed research network
+python examples/research_synthesizer.py &
+python examples/research_node_1.py &
+python examples/research_node_2.py &
+python examples/research_node_3.py &
+
+# Customer support swarm (P2P + Nexus auth)
+python examples/support_swarm.py
+
+# Investment Committee: 7-agent workflow with web dashboard
+cd examples/investment_committee
+python committee.py --mode full --ticker NVDA --amount 1500000
 ```
 
 ## Version
@@ -238,4 +328,4 @@ python -c "import jarviscore; print(jarviscore.__path__[0] + '/docs')"
 
 ## License
 
-Apache 2.0 — see [LICENSE](https://github.com/Prescott-Data/jarviscore-framework/blob/main/LICENSE) for details.
+Apache 2.0. See [LICENSE](https://github.com/Prescott-Data/jarviscore-framework/blob/main/LICENSE) for details.
