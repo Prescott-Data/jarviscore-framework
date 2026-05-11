@@ -8,12 +8,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
   /* ── 1. Version chip ─────────────────────────────────── */
   var title = document.querySelector('.md-header__title');
-  var fallbackVersion = 'v1.0.2';
+  /* Read version from mkdocs.yml extra.version (injected by Material as
+     __md_extra). Falls back to __init__.__version__ pattern in the chip. */
+  var configVersion = (typeof __md_extra !== 'undefined' && __md_extra.version)
+    ? 'v' + __md_extra.version
+    : 'v1.0.3';
   var chip;
   if (title) {
     chip = document.createElement('span');
     chip.className = 'jc-version-chip';
-    chip.textContent = fallbackVersion;
+    chip.textContent = configVersion;
     title.insertAdjacentElement('afterend', chip);
   }
 
@@ -76,5 +80,7 @@ document.addEventListener('DOMContentLoaded', function () {
       link.setAttribute('rel', 'noopener noreferrer');
     }
   });
+
+  /* ── 5. (removed) — Material's context-aware drawer is correct ── */
 
 });

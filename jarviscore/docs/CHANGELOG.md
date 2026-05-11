@@ -12,11 +12,13 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## 1.0.3 <span class="changelog-date">2026-05-03</span>
+## 1.0.3 <span class="changelog-date">2026-05-08</span>
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">
 <a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+<a href="https://github.com/sangalo20" title="Sangalo Mwenyinyo"><img src="https://github.com/sangalo20.png?size=32" alt="sangalo20"></a>
 </div>
 <a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.0.3" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
 </div>
@@ -154,7 +156,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## 0.4.0 <span class="changelog-date">2026-02-18</span>
+## 0.4.0 <span class="changelog-date">2026-02-19</span>
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">
@@ -226,7 +228,7 @@ Before each agent's `setup()`, the Mesh injects `_redis_store`, `_blob_storage`,
 
 <div class="changelog-release" markdown>
 
-## 0.3.2 <span class="changelog-date">2026-02-03</span>
+## 0.3.2 <span class="changelog-date">2026-02-04</span>
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">
@@ -362,7 +364,32 @@ Mesh now supports three modes: `autonomous`, `p2p`, `distributed`. Agent base cl
 
 <div class="changelog-release" markdown>
 
-## 0.1.0 <span class="changelog-date">2026-01-01</span>
+## 0.1.1 <span class="changelog-date">2026-01-16</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/Ruth-mutua" title="Ruth Mutua"><img src="https://github.com/Ruth-mutua.png?size=32" alt="Ruth-mutua"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v0.1.1" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+**Changed**
+
+- Migrated from the deprecated `google.generativeai` SDK to the current `google.genai` SDK.
+- Updated default Gemini model to `gemini-2.0-flash`.
+
+**Added**
+
+- Scaffold CLI (`python -m jarviscore.cli.scaffold`) for new project initialization.
+- Bundled `.env.example` and example files in the PyPI distribution.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
+## 0.1.0 <span class="changelog-date">2026-01-13</span>
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">

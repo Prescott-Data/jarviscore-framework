@@ -242,7 +242,126 @@ body,
   left: 50% !important;
   transform: translateX(-50%) !important;
   width: 380px !important;
+  max-width: calc(100vw - 16rem) !important;
   z-index: 2 !important;
+}
+
+/* On small screens, reset ALL custom desktop overrides so Material's
+   native mobile layout (hamburger menu, drawer nav, overlay search) works. */
+@media screen and (max-width: 59.9375em) {
+
+  /* ── Header ── */
+  /* Hide site title text on mobile — logo is enough */
+  .md-header__title {
+    display: none !important;
+  }
+
+  .md-header__button.md-logo img,
+  .md-header__button.md-logo svg {
+    height: 18px !important;
+  }
+
+  .md-header__button.md-logo {
+    margin-right: 0.5rem !important;
+  }
+
+  /* Hide desktop-only header widgets */
+  .jc-version-chip,
+  .jc-gh-stars-btn {
+    display: none !important;
+  }
+
+  /* ── Search — let Material handle the mobile overlay ── */
+  .md-header .md-header__inner .md-search,
+  .md-header .md-search[data-md-component="search"] {
+    position: static !important;
+    left: auto !important;
+    transform: none !important;
+    width: auto !important;
+    max-width: none !important;
+  }
+
+  .md-header .md-search__form::after {
+    display: none !important; /* Hide ⌘K badge */
+  }
+
+  /* Reset custom search modal — let Material's native overlay work */
+  [data-md-toggle="search"]:checked ~ .md-header .md-search {
+    position: fixed !important;
+    padding-top: 0 !important;
+  }
+
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__inner {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* ── Tabs — hidden by Material on mobile, enforce it ── */
+  .md-tabs {
+    display: none !important;
+  }
+
+  /* ── Content — full width, no left cut ── */
+  .md-content {
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    padding: 0 1rem !important;
+  }
+
+  /* ── Sidebar — DON'T override Material's native drawer behavior.
+     Only reset min-width so the desktop 15rem enforcement doesn't
+     interfere with Material's transform-based hide/show. ── */
+  .md-sidebar--primary {
+    min-width: 0 !important;
+  }
+
+  /* ── Mobile drawer aesthetics ── */
+
+  /* Drawer header — clean neutral bg instead of Material's branded blue */
+  .md-nav--primary > .md-nav__title {
+    background: #ffffff !important;
+    color: var(--jc-brand) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 700 !important;
+    box-shadow: none !important;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06) !important;
+  }
+
+  /* Hide "JARVISCORE" site name text in drawer — logo in topbar is enough.
+     The .md-ellipsis span inside the primary title holds the site name. */
+  .md-nav--primary > .md-nav__title .md-ellipsis {
+    display: none !important;
+  }
+
+  [data-md-color-scheme="slate"] .md-nav--primary > .md-nav__title {
+    background: #161618 !important;
+    color: var(--jc-brand-light) !important;
+    border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+  }
+
+  /* Hide the repo badge inside drawer — we have our own GH widget */
+  .md-nav--primary .md-source {
+    display: none !important;
+  }
+
+  /* Back arrow — brand colored */
+  .md-nav--primary .md-nav__title .md-nav__icon {
+    color: var(--jc-brand) !important;
+  }
+
+  [data-md-color-scheme="slate"] .md-nav--primary .md-nav__title .md-nav__icon {
+    color: var(--jc-brand-light) !important;
+  }
+
+  /* Active item — brand accent (light touch, no layout changes) */
+  .md-nav--primary .md-nav__item--active > .md-nav__link {
+    color: var(--jc-brand) !important;
+  }
+
+  /* Prevent horizontal overflow from any leaking desktop rules */
+  html, body {
+    overflow-x: hidden !important;
+  }
 }
 
 .md-header .md-search__form {
@@ -638,17 +757,14 @@ body,
 }
 
 /* ============================================================
-   TAB BAR ICONS — injected for sections that link to pages
-   without navigation.indexes (so Material doesn't auto-render
-   an icon from frontmatter). We match by the tab's href.
+   TAB BAR ICONS — Getting Started only (links directly to a page,
+   no index, so Material can't auto-render from frontmatter).
+   Concepts / Guides / Reference / Enterprise now have index pages
+   with frontmatter icons — Material renders those natively.
    ============================================================ */
 
-/* Shared pseudo-element setup for injected tab icons */
-.md-tabs__link[href*="getting-started"]::before,
-.md-tabs__link[href*="concepts/"]::before,
-.md-tabs__link[href*="guides/"]::before,
-.md-tabs__link[href*="reference/"]::before,
-.md-tabs__link[href*="infrastructure/"]::before {
+/* Getting Started — rocket launch (tab bar only) */
+.md-tabs__link[href*="getting-started"]::before {
   content: '';
   display: inline-block;
   width: 1rem;
@@ -664,45 +780,17 @@ body,
   vertical-align: middle;
   margin-right: 2px;
   opacity: 0.85;
-}
-
-/* Getting Started — rocket launch */
-.md-tabs__link[href*="getting-started"]::before {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2.81 14.12L5.64 11.29L8.17 13.82C9.78 12.5 11.5 11.39 13.5 10.62L13.57 10.69C15 8.5 17.5 7 20.23 7A9.98 9.98 0 0 1 22 12C22 17.52 17.52 22 12 22C8.91 22 6.19 20.55 4.43 18.3L6.56 16.17C7.72 17.65 9.5 18.6 11.5 18.91L11.5 15.79C9.28 15.36 7.19 14.36 5.64 13L2.81 14.12M13.5 13.43V18.91C15.5 18.6 17.28 17.65 18.44 16.17L16.36 14.09C15.5 14.82 14.53 15.22 13.5 15.43M5.5 5A2 2 0 0 0 3.5 7A2 2 0 0 0 5.5 9A2 2 0 0 0 7.5 7A2 2 0 0 0 5.5 5Z'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2.81 14.12L5.64 11.29L8.17 13.82C9.78 12.5 11.5 11.39 13.5 10.62L13.57 10.69C15 8.5 17.5 7 20.23 7A9.98 9.98 0 0 1 22 12C22 17.52 17.52 22 12 22C8.91 22 6.19 20.55 4.43 18.3L6.56 16.17C7.72 17.65 9.5 18.6 11.5 18.91L11.5 15.79C9.28 15.36 7.19 14.36 5.64 13L2.81 14.12M13.5 13.43V18.91C15.5 18.6 17.28 17.65 18.44 16.17L16.36 14.09C15.5 14.82 14.53 15.22 13.5 15.43M5.5 5A2 2 0 0 0 3.5 7A2 2 0 0 0 5.5 9A2 2 0 0 0 7.5 7A2 2 0 0 0 5.5 5Z'/%3E%3C/svg%3E");
-}
-
-/* Concepts — lightbulb-on */
-.md-tabs__link[href*="concepts/"]::before {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2A7 7 0 0 0 5 9C5 11.38 6.19 13.47 8 14.74V17A1 1 0 0 0 9 18H15A1 1 0 0 0 16 17V14.74C17.81 13.47 19 11.38 19 9A7 7 0 0 0 12 2M9 21A1 1 0 0 0 10 22H14A1 1 0 0 0 15 21V20H9V21Z'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2A7 7 0 0 0 5 9C5 11.38 6.19 13.47 8 14.74V17A1 1 0 0 0 9 18H15A1 1 0 0 0 16 17V14.74C17.81 13.47 19 11.38 19 9A7 7 0 0 0 12 2M9 21A1 1 0 0 0 10 22H14A1 1 0 0 0 15 21V20H9V21Z'/%3E%3C/svg%3E");
-}
-
-/* Guides — book open */
-.md-tabs__link[href*="guides/"]::before {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M17 22V20H20V17H22V20.5C22 20.89 21.84 21.24 21.54 21.54C21.24 21.84 20.89 22 20.5 22H17M7 22H3.5C3.11 22 2.76 21.84 2.46 21.54C2.16 21.24 2 20.89 2 20.5V17H4V20H7V22M17 2H20.5C20.89 2 21.24 2.16 21.54 2.46C21.84 2.76 22 3.11 22 3.5V7H20V4H17V2M7 2V4H4V7H2V3.5C2 3.11 2.16 2.76 2.46 2.46C2.76 2.16 3.11 2 3.5 2H7M13 17H11C10.45 17 10 16.55 10 16S10.45 15 11 15H13C13.55 15 14 15.45 14 16S13.55 17 13 17M17 13H7C6.45 13 6 12.55 6 12S6.45 11 7 11H17C17.55 11 18 11.45 18 12S17.55 13 17 13M17 9H7C6.45 9 6 8.55 6 8S6.45 7 7 7H17C17.55 7 18 7.45 18 8S17.55 9 17 9Z'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M17 22V20H20V17H22V20.5C22 20.89 21.84 21.24 21.54 21.54C21.24 21.84 20.89 22 20.5 22H17M7 22H3.5C3.11 22 2.76 21.84 2.46 21.54C2.16 21.24 2 20.89 2 20.5V17H4V20H7V22M17 2H20.5C20.89 2 21.24 2.16 21.54 2.46C21.84 2.76 22 3.11 22 3.5V7H20V4H17V2M7 2V4H4V7H2V3.5C2 3.11 2.16 2.76 2.46 2.46C2.76 2.16 3.11 2 3.5 2H7M13 17H11C10.45 17 10 16.55 10 16S10.45 15 11 15H13C13.55 15 14 15.45 14 16S13.55 17 13 17M17 13H7C6.45 13 6 12.55 6 12S6.45 11 7 11H17C17.55 11 18 11.45 18 12S17.55 13 17 13M17 9H7C6.45 9 6 8.55 6 8S6.45 7 7 7H17C17.55 7 18 7.45 18 8S17.55 9 17 9Z'/%3E%3C/svg%3E");
-}
-
-/* Reference — code tags */
-.md-tabs__link[href*="reference/"]::before {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14.6 16.6L19.2 12L14.6 7.4L16 6L22 12L16 18L14.6 16.6M9.4 16.6L4.8 12L9.4 7.4L8 6L2 12L8 18L9.4 16.6Z'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14.6 16.6L19.2 12L14.6 7.4L16 6L22 12L16 18L14.6 16.6M9.4 16.6L4.8 12L9.4 7.4L8 6L2 12L8 18L9.4 16.6Z'/%3E%3C/svg%3E");
-}
-
-/* Enterprise — office building */
-.md-tabs__link[href*="infrastructure/"]::before {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M18 15H16V17H18M18 11H16V13H18M20 19H12V17H14V15H12V13H14V11H12V9H20M10 7H8V5H10M10 11H8V9H10M10 15H8V13H10M10 19H8V17H10M6 7H4V5H6M6 11H4V9H6M6 15H4V13H6M6 19H4V17H6M12 7V3H2V21H22V7H12Z'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M18 15H16V17H18M18 11H16V13H18M20 19H12V17H14V15H12V13H14V11H12V9H20M10 7H8V5H10M10 11H8V9H10M10 15H8V13H10M10 19H8V17H10M6 7H4V5H6M6 11H4V9H6M6 15H4V13H6M6 19H4V17H6M12 7V3H2V21H22V7H12Z'/%3E%3C/svg%3E");
 }
 
 /* ============================================================
    WELCOME PAGE — Website / Community / Blog sidebar icons
    Injected as ::before pseudo on links matching those hrefs.
    ============================================================ */
-.md-nav__link[href*="developers.prescottdata.io"]:not([href*="blog"])::before,
-.md-nav__link[href*="discord.gg"]::before,
-.md-nav__link[href*="blog"]::before {
+.md-sidebar--primary .md-nav__link[href="https://developers.prescottdata.io"]::before,
+.md-sidebar--primary .md-nav__link[href="https://discord.gg/jarviscore"]::before,
+.md-sidebar--primary .md-nav__link[href="https://developers.prescottdata.io/blog"]::before {
   content: '';
   display: inline-block;
   width: 0.85rem;
@@ -721,19 +809,19 @@ body,
 }
 
 /* Website — globe/web icon */
-.md-nav__link[href*="developers.prescottdata.io"]:not([href*="blog"])::before {
+.md-sidebar--primary .md-nav__link[href="https://developers.prescottdata.io"]::before {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M16.36 14C16.44 13.34 16.5 12.68 16.5 12S16.44 10.66 16.36 10H19.74C19.9 10.64 20 11.31 20 12S19.9 13.36 19.74 14M14.59 19.56C15.19 18.45 15.65 17.25 15.97 16H18.92C17.96 17.65 16.43 18.93 14.59 19.56M14.34 14H9.66C9.56 13.34 9.5 12.68 9.5 12S9.56 10.65 9.66 10H14.34C14.43 10.65 14.5 11.32 14.5 12S14.43 13.34 14.34 14M12 19.96C11.17 18.76 10.5 17.43 10.09 16H13.91C13.5 17.43 12.83 18.76 12 19.96M8 8H5.08C6.03 6.34 7.57 5.06 9.4 4.44C8.8 5.55 8.35 6.75 8 8M5.08 16H8C8.35 17.25 8.8 18.45 9.4 19.56C7.57 18.93 6.03 17.65 5.08 16M4.26 14C4.1 13.36 4 12.69 4 12S4.1 10.64 4.26 10H7.64C7.56 10.66 7.5 11.32 7.5 12S7.56 13.34 7.64 14M12 4.03C12.83 5.23 13.5 6.57 13.91 8H10.09C10.5 6.57 11.17 5.23 12 4.03M18.92 8H15.97C15.65 6.75 15.19 5.55 14.59 4.44C16.43 5.07 17.96 6.34 18.92 8M12 2C6.47 2 2 6.5 2 12A10 10 0 0 0 12 22A10 10 0 0 0 22 12A10 10 0 0 0 12 2Z'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M16.36 14C16.44 13.34 16.5 12.68 16.5 12S16.44 10.66 16.36 10H19.74C19.9 10.64 20 11.31 20 12S19.9 13.36 19.74 14M14.59 19.56C15.19 18.45 15.65 17.25 15.97 16H18.92C17.96 17.65 16.43 18.93 14.59 19.56M14.34 14H9.66C9.56 13.34 9.5 12.68 9.5 12S9.56 10.65 9.66 10H14.34C14.43 10.65 14.5 11.32 14.5 12S14.43 13.34 14.34 14M12 19.96C11.17 18.76 10.5 17.43 10.09 16H13.91C13.5 17.43 12.83 18.76 12 19.96M8 8H5.08C6.03 6.34 7.57 5.06 9.4 4.44C8.8 5.55 8.35 6.75 8 8M5.08 16H8C8.35 17.25 8.8 18.45 9.4 19.56C7.57 18.93 6.03 17.65 5.08 16M4.26 14C4.1 13.36 4 12.69 4 12S4.1 10.64 4.26 10H7.64C7.56 10.66 7.5 11.32 7.5 12S7.56 13.34 7.64 14M12 4.03C12.83 5.23 13.5 6.57 13.91 8H10.09C10.5 6.57 11.17 5.23 12 4.03M18.92 8H15.97C15.65 6.75 15.19 5.55 14.59 4.44C16.43 5.07 17.96 6.34 18.92 8M12 2C6.47 2 2 6.5 2 12A10 10 0 0 0 12 22A10 10 0 0 0 22 12A10 10 0 0 0 12 2Z'/%3E%3C/svg%3E");
 }
 
 /* Community — Discord bubble */
-.md-nav__link[href*="discord.gg"]::before {
+.md-sidebar--primary .md-nav__link[href="https://discord.gg/jarviscore"]::before {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M20.317 4.492c-1.53-.69-3.17-1.2-4.885-1.49a.075.075 0 0 0-.079.036c-.21.369-.444.85-.608 1.23a18.566 18.566 0 0 0-5.487 0 12.36 12.36 0 0 0-.617-1.23A.077.077 0 0 0 8.562 3c-1.714.29-3.354.8-4.885 1.491a.07.07 0 0 0-.032.027C.533 9.093-.32 13.555.099 17.961a.08.08 0 0 0 .031.055 20.03 20.03 0 0 0 5.993 2.98.078.078 0 0 0 .084-.026c.462-.62.874-1.275 1.226-1.963.021-.04.001-.088-.041-.104a13.201 13.201 0 0 1-1.872-.878.075.075 0 0 1-.008-.125c.126-.093.252-.19.372-.287a.075.075 0 0 1 .078-.01c3.927 1.764 8.18 1.764 12.061 0a.075.075 0 0 1 .079.009c.12.098.245.195.372.288a.075.075 0 0 1-.006.125c-.598.344-1.22.635-1.873.877a.075.075 0 0 0-.041.105c.36.687.772 1.341 1.225 1.962a.077.077 0 0 0 .084.028 19.963 19.963 0 0 0 6.002-2.981.076.076 0 0 0 .032-.054c.5-5.094-.838-9.52-3.549-13.442a.06.06 0 0 0-.031-.028zM8.02 15.278c-1.182 0-2.157-1.069-2.157-2.38 0-1.312.956-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.956 2.38-2.157 2.38zm7.975 0c-1.183 0-2.157-1.069-2.157-2.38 0-1.312.955-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.946 2.38-2.157 2.38z'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M20.317 4.492c-1.53-.69-3.17-1.2-4.885-1.49a.075.075 0 0 0-.079.036c-.21.369-.444.85-.608 1.23a18.566 18.566 0 0 0-5.487 0 12.36 12.36 0 0 0-.617-1.23A.077.077 0 0 0 8.562 3c-1.714.29-3.354.8-4.885 1.491a.07.07 0 0 0-.032.027C.533 9.093-.32 13.555.099 17.961a.08.08 0 0 0 .031.055 20.03 20.03 0 0 0 5.993 2.98.078.078 0 0 0 .084-.026c.462-.62.874-1.275 1.226-1.963.021-.04.001-.088-.041-.104a13.201 13.201 0 0 1-1.872-.878.075.075 0 0 1-.008-.125c.126-.093.252-.19.372-.287a.075.075 0 0 1 .078-.01c3.927 1.764 8.18 1.764 12.061 0a.075.075 0 0 1 .079.009c.12.098.245.195.372.288a.075.075 0 0 1-.006.125c-.598.344-1.22.635-1.873.877a.075.075 0 0 0-.041.105c.36.687.772 1.341 1.225 1.962a.077.077 0 0 0 .084.028 19.963 19.963 0 0 0 6.002-2.981.076.076 0 0 0 .032-.054c.5-5.094-.838-9.52-3.549-13.442a.06.06 0 0 0-.031-.028zM8.02 15.278c-1.182 0-2.157-1.069-2.157-2.38 0-1.312.956-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.956 2.38-2.157 2.38zm7.975 0c-1.183 0-2.157-1.069-2.157-2.38 0-1.312.955-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.946 2.38-2.157 2.38z'/%3E%3C/svg%3E");
 }
 
 /* Blog — RSS feed */
-.md-nav__link[href*="blog"]::before {
+.md-sidebar--primary .md-nav__link[href="https://developers.prescottdata.io/blog"]::before {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6.18 15.64A2.18 2.18 0 0 1 8.36 17.82C8.36 19 7.38 20 6.18 20C4.98 20 4 19 4 17.82A2.18 2.18 0 0 1 6.18 15.64M4 4.44A15.56 15.56 0 0 1 19.56 20H16.73A12.73 12.73 0 0 0 4 7.27V4.44M4 10.1A9.9 9.9 0 0 1 13.9 20H11.07A7.07 7.07 0 0 0 4 12.93V10.1Z'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6.18 15.64A2.18 2.18 0 0 1 8.36 17.82C8.36 19 7.38 20 6.18 20C4.98 20 4 19 4 17.82A2.18 2.18 0 0 1 6.18 15.64M4 4.44A15.56 15.56 0 0 1 19.56 20H16.73A12.73 12.73 0 0 0 4 7.27V4.44M4 10.1A9.9 9.9 0 0 1 13.9 20H11.07A7.07 7.07 0 0 0 4 12.93V10.1Z'/%3E%3C/svg%3E");
 }
@@ -748,9 +836,9 @@ body,
   padding: 0.15rem 0 2rem;
 }
 
-/* Top-level section labels (nav titles like "Getting Started") */
-.md-nav--primary>.md-nav__list>.md-nav__item>.md-nav__link,
-.md-nav__title {
+/* Section group LINK labels (e.g. "GUIDES", "GETTING STARTED") — visual styles.
+   Applied to both desktop sidebar and mobile drawer for consistent typography. */
+.md-sidebar--primary .md-nav--primary>.md-nav__list>.md-nav__item>.md-nav__link {
   font-family: 'Inter', sans-serif;
   font-size: 0.62rem;
   font-weight: 700;
@@ -759,12 +847,36 @@ body,
   color: var(--jc-text-muted) !important;
   padding: 0.9rem 0.75rem 0.3rem;
   opacity: 0.7;
-  cursor: default;
-  pointer-events: none;
 }
 
-/* All nav links */
-.md-nav__link {
+/* Desktop ONLY: section labels are non-interactive group headers.
+   On mobile these same elements ARE the clickable Level 1 items
+   that expand to Level 2, so pointer-events must stay enabled. */
+@media screen and (min-width: 60em) {
+  .md-sidebar--primary .md-nav--primary>.md-nav__list>.md-nav__item>.md-nav__link {
+    cursor: default;
+    pointer-events: none;
+  }
+}
+
+/* Desktop sidebar: top-level nav title (site name / section header label).
+   Visual style only — pointer-events:none NOT applied here because the same
+   .md-nav__title element inside nested navs serves as the BACK ARROW in the
+   mobile drawer and must remain clickable. */
+.md-sidebar--primary .md-nav__title {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--jc-text-muted) !important;
+  opacity: 0.7;
+}
+
+/* Sidebar nav links — DESKTOP SIDEBAR ONLY.
+   Scoped to .md-sidebar--primary so styles don't bleed into the
+   mobile drawer which uses the same HTML but needs bigger touch targets. */
+.md-sidebar--primary .md-nav__link {
   font-family: 'Inter', sans-serif;
   font-size: 0.65rem;
   font-weight: 400;
@@ -778,33 +890,32 @@ body,
   transition: background 0.13s ease, color 0.13s ease, opacity 0.13s ease;
   position: relative;
   text-decoration: none !important;
-  /* Allow text to wrap — never clip or ellipsis */
   white-space: normal;
   overflow: visible;
   word-break: break-word;
 }
 
-.md-nav__link:hover {
+.md-sidebar--primary .md-nav__link:hover {
   background: rgba(23, 88, 245, 0.07);
   color: var(--jc-brand) !important;
   opacity: 1;
   text-decoration: none !important;
 }
 
-[data-md-color-scheme="slate"] .md-nav__link:hover {
+[data-md-color-scheme="slate"] .md-sidebar--primary .md-nav__link:hover {
   background: rgba(23, 88, 245, 0.12);
   color: var(--jc-brand-light) !important;
 }
 
-/* Active left-bar indicator */
-.md-nav__link--active {
+/* Active left-bar indicator — desktop sidebar only */
+.md-sidebar--primary .md-nav__link--active {
   font-weight: 600;
   color: var(--jc-brand) !important;
   opacity: 1;
   background: rgba(23, 88, 245, 0.08);
 }
 
-.md-nav__link--active::before {
+.md-sidebar--primary .md-nav__link--active::before {
   content: '';
   position: absolute;
   left: 0;
@@ -815,14 +926,14 @@ body,
   border-radius: 0 2px 2px 0;
 }
 
-[data-md-color-scheme="slate"] .md-nav__link--active {
+[data-md-color-scheme="slate"] .md-sidebar--primary .md-nav__link--active {
   color: var(--jc-brand-light) !important;
   background: rgba(23, 88, 245, 0.15);
 }
 
-/* Nested sub-items — indented, slightly smaller */
-.md-nav--secondary .md-nav__link,
-.md-nav__item--nested .md-nav .md-nav__link {
+/* Nested sub-items — desktop sidebar only */
+.md-sidebar--primary .md-nav--secondary .md-nav__link,
+.md-sidebar--primary .md-nav__item--nested .md-nav .md-nav__link {
   font-size: 0.63rem;
   opacity: 0.75;
   padding-left: 1rem;
@@ -831,8 +942,8 @@ body,
   word-break: break-word;
 }
 
-.md-nav--secondary .md-nav__link:hover,
-.md-nav__item--nested .md-nav .md-nav__link:hover {
+.md-sidebar--primary .md-nav--secondary .md-nav__link:hover,
+.md-sidebar--primary .md-nav__item--nested .md-nav .md-nav__link:hover {
   opacity: 1;
 }
 
@@ -2098,17 +2209,19 @@ body,
 }
 
 /* ============================================================
-   SIDEBAR WIDTH ENFORCEMENT
+   SIDEBAR WIDTH ENFORCEMENT  (desktop only)
    Override Material's default ~12rem with 15rem so all nav
    labels have room to display without truncation or ellipsis.
    ============================================================ */
-.md-sidebar--primary {
-  min-width: var(--md-sidebar-width, 15rem);
-  width: var(--md-sidebar-width, 15rem);
-}
+@media screen and (min-width: 60em) {
+  .md-sidebar--primary {
+    min-width: var(--md-sidebar-width, 15rem);
+    width: var(--md-sidebar-width, 15rem);
+  }
 
-.md-sidebar--primary .md-nav {
-  width: 100%;
+  .md-sidebar--primary .md-nav {
+    width: 100%;
+  }
 }
 
 /* Belt-and-braces tooltip suppression for Material's ellipsis tooltip */
