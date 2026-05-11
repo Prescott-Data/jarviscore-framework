@@ -12,6 +12,32 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.0.4 <span class="changelog-date">2026-05-11</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.0.4" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+**Documentation**
+
+- Mobile drawer fully resolved: Level 1 nav items clickable on all viewports, back arrow restored, site name text hidden in mobile view.
+- Section `index.md` entry points added for Concepts, Guides, and Reference — each section now has an overview landing page with icon cards.
+- CSS tab icons removed from sections that use frontmatter-defined icons, eliminating duplication.
+- README expanded and restructured with additional examples and API reference.
+
+**Fixed**
+
+- Deprecated `Mesh(mode='distributed')` calls replaced with explicit `config={"p2p_enabled": True}` in `test_09_distributed_autoagent.py` and `test_10_distributed_customagent.py`.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
 ## 1.0.3 <span class="changelog-date">2026-05-08</span>
 
 <div class="changelog-meta" markdown>
