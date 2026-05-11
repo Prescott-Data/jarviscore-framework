@@ -137,11 +137,11 @@ nav:
       - Chat API: reference/chat-api.md
       - CLI Reference: reference/cli.md
       - Troubleshooting: TROUBLESHOOTING.md
-      - Changelog: CHANGELOG.md
+      - Changelog: changelog.md
   - Enterprise: infrastructure/enterprise.md
 
 extra:
-  version: "1.0.3"
+  version: "1.0.4"
   social:
     - icon: material/web
       link: https://developers.prescottdata.io
