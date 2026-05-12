@@ -58,6 +58,7 @@ data/
 logs/
 test_logs/
 demo_logs/
+traces/
 
 # OS
 .DS_Store

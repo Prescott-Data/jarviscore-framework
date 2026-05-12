@@ -461,7 +461,10 @@ class Kernel:
                 enriched_context = dict(context) if context else {}
 
             # 1. OBSERVE + ORIENT: classify task and select subagent
-            role = self._classify_task(task, context)
+            class_ctx = dict(context) if context else {}
+            if agent_default_role:
+                class_ctx["_agent_default_kernel_role"] = agent_default_role
+            role = self._classify_task(task, class_ctx)
             logger.info(f"[Kernel] Dispatch {dispatch_num + 1}: task → {role}")
 
             # 2. DECIDE: create lease, cognition, memory, context manager

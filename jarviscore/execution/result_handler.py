@@ -113,6 +113,19 @@ class ResultHandler:
         # Determine detailed status
         result_status = self._determine_status(status, error, error_category)
 
+        # Determine semantic success
+        semantic_success = True
+        if result_status == ResultStatus.SUCCESS:
+            if isinstance(output, dict):
+                if output.get("success") is False:
+                    semantic_success = False
+                elif output.get("status") in ["failure", "error"]:
+                    semantic_success = False
+                elif output.get("semantic_success") is False:
+                    semantic_success = False
+        else:
+            semantic_success = False
+
         # Build result object
         result_data = {
             # Identity
@@ -128,6 +141,7 @@ class ResultHandler:
             # Status
             "status": result_status.value,
             "success": result_status == ResultStatus.SUCCESS,
+            "semantic_success": semantic_success,
 
             # Error details
             "error": error,
@@ -152,9 +166,10 @@ class ResultHandler:
         # Log summary
         if result_status == ResultStatus.SUCCESS:
             time_str = f"{execution_time:.2f}s" if execution_time else "N/A"
+            safe_cost = cost_usd or 0.0
             logger.info(
                 f"Result {result_id}: SUCCESS in {time_str} "
-                f"(repairs: {repairs}, cost: ${cost_usd:.4f})"
+                f"(repairs: {repairs}, cost: ${safe_cost:.4f})"
             )
         else:
             logger.error(

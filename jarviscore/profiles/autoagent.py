@@ -189,7 +189,7 @@ class AutoAgent(Profile):
             create_llm_client,
             create_search_client,
             create_code_generator,
-            create_sandbox_executor,
+            create_coder_sandbox,
             create_autonomous_repair,
             create_result_handler,
             create_function_registry
@@ -207,10 +207,10 @@ class AutoAgent(Profile):
         self._logger.info("Initializing code generator...")
         self.codegen = create_code_generator(self.llm, self.search)
 
-        # 4. Initialize sandbox executor (with search access)
+        # 4. Initialize coder sandbox (file-capable runtime for CoderSubAgent)
         timeout = config.get('execution_timeout', 300)
-        self._logger.info(f"Initializing sandbox executor ({timeout}s timeout)...")
-        self.sandbox = create_sandbox_executor(timeout, self.search, config)
+        self._logger.info(f"Initializing coder sandbox ({timeout}s timeout)...")
+        self.sandbox = create_coder_sandbox(timeout=timeout)
 
         # 5. Initialize autonomous repair
         max_repairs = config.get('max_repair_attempts', 3)
@@ -305,22 +305,51 @@ class AutoAgent(Profile):
         # If goal_oriented=True, every task is a goal — route to execute_goal().
         if self.goal_oriented:
             ctx = task.get('context', {}) if isinstance(task, dict) else {}
-            execution = await self.execute_goal(
-                goal=task_desc,
-                context=ctx,
-            )
-            # Wrap GoalExecution in the standard execute_task() response envelope
-            return {
-                "status": execution.status if execution.status != "complete" else "success",
-                "output": execution.result,
-                "error": execution.error,
-                "agent_id": self.agent_id,
-                "role": self.role,
-                "goal_execution": execution.to_summary_dict(),
-                "tokens": {},
-                "cost_usd": 0.0,
-                "repairs": 0,
-            }
+
+            # Fast-path complexity gate
+            # Avoid full Planner DAG for trivial/single-step requests
+            try:
+                from jarviscore.planning.classifier import TaskComplexityClassifier
+                classifier = TaskComplexityClassifier(self.llm)
+                complexity = await classifier.classify(task_desc)
+
+                if complexity.level == "trivial":
+                    self._logger.info(f"[AutoAgent] Task classified as trivial, bypassing Planner: {complexity.reason}")
+                    self._trivial_bypass = True
+                else:
+                    self._logger.info(f"[AutoAgent] Task classified as {complexity.level}, routing to Planner.")
+                    execution = await self.execute_goal(
+                        goal=task_desc,
+                        context=ctx,
+                    )
+                    return {
+                        "status": execution.status if execution.status != "complete" else "success",
+                        "output": execution.result,
+                        "error": execution.error,
+                        "agent_id": self.agent_id,
+                        "role": self.role,
+                        "goal_execution": execution.to_summary_dict(),
+                        "tokens": {},
+                        "cost_usd": 0.0,
+                        "repairs": 0,
+                    }
+            except Exception as e:
+                self._logger.warning(f"[AutoAgent] Complexity classifier failed, routing to Planner: {e}")
+                execution = await self.execute_goal(
+                    goal=task_desc,
+                    context=ctx,
+                )
+                return {
+                    "status": execution.status if execution.status != "complete" else "success",
+                    "output": execution.result,
+                    "error": execution.error,
+                    "agent_id": self.agent_id,
+                    "role": self.role,
+                    "goal_execution": execution.to_summary_dict(),
+                    "tokens": {},
+                    "cost_usd": 0.0,
+                    "repairs": 0,
+                }
 
         # ── Build effective system prompt = profile intelligence + role prompt ──
         effective_system_prompt = (
@@ -341,7 +370,12 @@ class AutoAgent(Profile):
                 self._logger.debug("Forwarded Mesh _auth_manager → Kernel")
 
             try:
-                kernel_ctx = task.get('context') if isinstance(task, dict) else None
+                kernel_ctx = task.get('context') if isinstance(task, dict) else {}
+                if kernel_ctx is None:
+                    kernel_ctx = {}
+                if getattr(self, "output_schema", None):
+                    kernel_ctx["output_schema"] = self.output_schema
+
                 output = await self._kernel.execute(
                     task=task_desc,
                     system_prompt=effective_system_prompt,
@@ -354,10 +388,8 @@ class AutoAgent(Profile):
                 result = {
                     "status": output.status,
                     "output": output.payload,
+                    "payload": output.payload,
                     "error": None if output.status == "success" else output.summary,
-                    # payload exposed as a dedicated key when it is a structured dict
-                    # so downstream steps can access it without parsing output
-                    **({"payload": output.payload} if isinstance(output.payload, dict) else {}),
                     "tokens": meta.get("tokens", {"input": 0, "output": 0, "total": 0}),
                     "cost_usd": meta.get("cost_usd", 0.0),
                     "repairs": 0,
@@ -366,6 +398,17 @@ class AutoAgent(Profile):
                     "function_id": meta.get("function_id"),
                     "dispatches": meta.get("dispatches", []),
                 }
+
+                if getattr(self, '_trivial_bypass', False):
+                    elapsed_ms = meta.get("elapsed_ms", 0)
+                    result["goal_execution"] = {
+                        "steps_completed": 1,
+                        "facts": 0,
+                        "elapsed_ms": elapsed_ms,
+                        "bypassed_planner": True,
+                        "complexity": "trivial",
+                    }
+                    self._trivial_bypass = False
 
                 if hasattr(self, 'result_handler') and self.result_handler:
                     stored = self.result_handler.process_result(

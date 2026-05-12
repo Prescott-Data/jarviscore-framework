@@ -47,7 +47,7 @@ import logging
 import re
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.kernel.cognition import AgentCognitionManager, ConvergenceGovernor, FailureLedger
@@ -74,7 +74,7 @@ class SubagentLogAdapter(logging.LoggerAdapter):
         super().__init__(base_logger, extra={"role": role, "turn": 0})
 
     def set_turn(self, turn: int) -> None:
-        self.extra["turn"] = turn
+        cast(Dict[str, Any], self.extra)["turn"] = turn
 
     def process(self, msg, kwargs):
         role = self.extra.get("role", "?")
@@ -84,7 +84,7 @@ class SubagentLogAdapter(logging.LoggerAdapter):
 # Regex patterns for parsing LLM tool call responses
 _TOOL_PATTERN = re.compile(r"^TOOL:\s*(.+)$", re.MULTILINE)
 _PARAMS_PATTERN = re.compile(r"^PARAMS:\s*(.+)$", re.MULTILINE | re.DOTALL)
-_DONE_PATTERN = re.compile(r"^DONE:\s*(.+)$", re.MULTILINE)
+_DONE_PATTERN = re.compile(r"^DONE:\s*(.*)$", re.MULTILINE)
 _RESULT_PATTERN = re.compile(r"^RESULT:\s*(.+)$", re.MULTILINE | re.DOTALL)
 _THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGHT):|\Z)", re.MULTILINE | re.DOTALL)
 
@@ -344,18 +344,6 @@ class BaseSubAgent(ABC):
             self._log.info("Persisted %d memory keys for next run", len(state.internal_variables))
         except Exception as exc:
             self._log.warning("Memory persist failed: %s", exc)
-
-    # ──────────────────────────────────────────────────────────────────────
-    # Lifecycle hooks — override in subclasses for setup/teardown
-    # ──────────────────────────────────────────────────────────────────────
-
-    async def _pre_run_hook(self, state) -> None:
-        """Called before the OODA loop starts. Override for resource setup (e.g. browser)."""
-        pass
-
-    async def _post_run_hook(self) -> None:
-        """Called after the OODA loop exits (even on exception). Override for cleanup."""
-        pass
 
     # ──────────────────────────────────────────────────────────────────────
     # Prompt Building
@@ -750,6 +738,26 @@ class BaseSubAgent(ABC):
                     turn_log["status"] = "success"
                     _trace.log_tool_result(tool_name, tool_result)
 
+                if isinstance(tool_result, dict) and tool_result.get("_auto_complete"):
+                    payload = tool_result.get("output", tool_result)
+                    state.status = "completed"
+                    state.output = payload
+                    trajectory.append(turn_log)
+                    summary = tool_result.get("message", f"Tool '{tool_name}' completed the task.")
+                    _trace.log_step_complete(True, summary)
+                    await self._persist_memory(state)
+                    return AgentOutput(
+                        status="success",
+                        payload=payload,
+                        summary=summary,
+                        trajectory=trajectory,
+                        metadata={
+                            "tokens": total_tokens,
+                            "cost_usd": total_cost,
+                            "exit_type": "tool_auto_complete",
+                        },
+                    )
+
                 # ── Check convergence stall (already evaluated inside track_usage) ──
                 stall = self._cognition.check_stall_verdict()
                 if stall:
@@ -1005,10 +1013,10 @@ class BaseSubAgent(ABC):
 
         # Check for DONE first
         done_match = _DONE_PATTERN.search(content)
-        if done_match:
-            summary = done_match.group(1).strip()
+        result_match = _RESULT_PATTERN.search(content)
+        if done_match or result_match:
+            summary = done_match.group(1).strip() if done_match else "Completed via RESULT block"
             result = None
-            result_match = _RESULT_PATTERN.search(content)
             if result_match:
                 try:
                     result = json.loads(result_match.group(1).strip())

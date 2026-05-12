@@ -108,7 +108,7 @@ print(results[0]["output"])  # [2, 4, 6]
 
 ### Kernel and Planning
 
-The Kernel runs an Observe-Orient-Decide-Act (OODA) loop for every AutoAgent task. In v1.0.3, the loop is backed by a dedicated Planner and StepEvaluator that use model tier routing to balance cost and reasoning depth.
+The Kernel runs an Observe-Orient-Decide-Act (OODA) loop for every AutoAgent task. In v1.1.0, the loop is backed by a dedicated Planner, StepEvaluator, and proof-of-work gates that balance cost, reasoning depth, and execution reliability.
 
 | Component | Purpose |
 |-----------|---------|
@@ -324,7 +324,7 @@ python committee.py --mode full --ticker NVDA --amount 1500000
 
 ## Version
 
-**1.0.3**
+**1.1.0**
 
 ## License
 

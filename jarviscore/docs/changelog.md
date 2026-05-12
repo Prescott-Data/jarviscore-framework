@@ -8,11 +8,64 @@ hide:
 
 All notable changes to JarvisCore Framework are documented here. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+!!! warning "Versioning Policy (effective v1.1.0)"
+    Releases prior to v1.1.0 did not follow SemVer consistently — new features
+    were shipped in patch releases and a breaking change landed in v0.3.1 (a
+    patch). Starting with **v1.1.0**, this project adheres to strict SemVer:
+
+    - **PATCH** (1.1.**x**) — backward-compatible bug fixes only.
+    - **MINOR** (1.**x**.0) — new features, new public API surface, backward-compatible behavioral changes.
+    - **MAJOR** (**x**.0.0) — breaking changes to the public API.
+
+    Versions **1.0.3** and **1.0.4** contain critical regressions and should be
+    avoided. They will be yanked from PyPI. Pin `jarviscore-framework>=1.1.0`.
+
 ---
 
 <div class="changelog-release" markdown>
 
-## 1.0.4 <span class="changelog-date">2026-05-11</span>
+## 1.1.0 <span class="changelog-date">2026-05-12</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
+</div>
+</div>
+
+This release fixes all critical regressions introduced in v1.0.3 that rendered AutoAgent unusable, adds new AI engineering primitives (cognitive routing, intent normalization, structured output validation), and marks the beginning of strict SemVer compliance. **Versions 1.0.3 and 1.0.4 are deprecated and will be yanked from PyPI.**
+
+**Fixed**
+
+- **[#32] Output schema enforcement** — `Agent.output_schema` (Pydantic `BaseModel`) is now passed through the Kernel into `CoderSubAgent`, which validates sandbox output against the schema via `model_validate()`. Schema violations fail fast with a clear error instead of silently returning unstructured data.
+- **[#33] CoderSubAgent sandbox hallucination** — `CoderSubAgent.get_system_prompt()` now appends a dynamic `SANDBOX ENVIRONMENT` manifest listing all pre-loaded modules and globals in the sandbox namespace. This grounds the LLM in what is actually available, preventing hallucinated imports and undefined-name errors.
+- **[#34] Complexity gate before Planner** — `AutoAgent.execute_task()` now runs a `TaskComplexityClassifier` before dispatching to the Planner DAG. Trivial tasks bypass the full Plan → Execute → Evaluate loop, reducing latency and unnecessary LLM calls for simple operations.
+- **[#35] FunctionRegistry semantic search miss** — `CoderSubAgent._tool_check_registry()` now normalizes verbose task descriptions into concise canonical intents via `IntentNormalizer` before calling `semantic_search()`. This eliminates embedding distance drift caused by prompt verbosity.
+- **[#36] AutoAgent vs CustomAgent boundary** — Added `p2p_responder` attribute to the `Agent` base class (`False` by default, `True` on `CustomAgent`). `JarvisLifespan` now only creates background `asyncio.Task` instances for agents with `p2p_responder=True`, and raises `RuntimeError` at startup if a `p2p_responder` agent does not override `run()`.
+- **[#37] Semantic vs execution status** — `ResultHandler.process_result()` now tracks `semantic_success` separately from execution status. `CoderSubAgent._tool_execute_code()` includes an evaluator hook that flags outputs where `success=False` or `status="failure"` even when the sandbox execution itself succeeded. Fixed `TypeError` when `cost_usd` is `None`.
+- **[#38] Sandbox namespace leak into ZMQ coroutine cleanup** — `SandboxExecutor._execute_sync()` and `_execute_async()` now restore `namespace['__builtins__']` to the actual `builtins` module in a `finally` block. This prevents `KeyError: '__builtins__'` crashes in ZMQ's Cython backend during coroutine garbage collection.
+- **Kernel routing ignoring `default_kernel_role`** — `Kernel.execute()` now forwards `agent_default_role` into the classification context, ensuring that an agent's explicitly defined `default_kernel_role` overrides the keyword-based classification logic.
+- **`_run_context` AttributeError in CoderSubAgent** — Changed direct attribute access to `getattr(self, '_run_context', {})` to prevent `AttributeError` when `_run_context` is not yet initialized.
+
+**Added**
+
+- `TaskComplexityClassifier` (`jarviscore.planning.classifier`) — LLM-based cognitive router that classifies tasks as "trivial", "moderate", or "complex" to determine whether the full Planner DAG is needed.
+- `IntentNormalizer` (`jarviscore.execution.intent_normalizer`) — Distills verbose task descriptions into concise canonical intents for accurate embedding-based semantic search.
+- `Agent.p2p_responder` attribute — Boolean flag distinguishing reactive task workers (AutoAgent) from proactive mesh citizens (CustomAgent) at the framework level.
+- `Agent.output_schema` attribute — Optional Pydantic `BaseModel` class for end-to-end structured output validation through the Kernel pipeline.
+- `semantic_success` field in `ResultHandler` result data — Enables downstream consumers to distinguish between "code ran without errors" and "task actually achieved its goal".
+- `SandboxExecutor.get_manifest()` / `CoderSandbox.get_manifest()` — Introspect the sandbox namespace for prompt injection into the CoderSubAgent system prompt.
+
+**Deprecated**
+
+- Versions `1.0.3` and `1.0.4` — contain critical AutoAgent regressions. Will be yanked from PyPI. Users should pin `>=1.1.0`.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
+## 1.0.4 <span class="changelog-date">2026-05-11</span> {: .changelog-deprecated }
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">
@@ -38,7 +91,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## 1.0.3 <span class="changelog-date">2026-05-08</span>
+## 1.0.3 <span class="changelog-date">2026-05-08</span> {: .changelog-deprecated }
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">
@@ -367,7 +420,7 @@ Cloud Deployment: `agent.join_mesh(seed_nodes)` for self-registration without ce
 
 <div class="changelog-release" markdown>
 
-## 0.2.0 <span class="changelog-date">2026-01-15</span>
+## 0.2.0 <span class="changelog-date">2026-01-22</span>
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">

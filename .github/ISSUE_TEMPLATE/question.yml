@@ -29,7 +29,9 @@ body:
     attributes:
       label: JarvisCore version
       options:
-        - "1.0.3"
+        - "1.1.0"
+        - "1.0.4 (yanked)"
+        - "1.0.3 (yanked)"
         - "1.0.2"
         - "main (unreleased)"
     validations:

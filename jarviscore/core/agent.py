@@ -43,6 +43,10 @@ class Agent(ABC):
     role: str = None
     capabilities: List[str] = []
 
+    # Optional capability flags
+    p2p_responder: bool = False  # Set to True for agents that run a continuous listener loop (e.g. CustomAgent)
+    output_schema: Optional[Any] = None  # Pydantic BaseModel class for output validation
+
     def __init__(self, agent_id: Optional[str] = None):
         """
         Initialize agent with validation.

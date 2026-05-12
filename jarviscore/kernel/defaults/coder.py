@@ -199,6 +199,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
 
         # URL content cache — session-scoped dedup for read_api_docs
         self._read_urls: set = set()
+        self._current_task: str = ""
 
         super().__init__(
             agent_id=agent_id,
@@ -206,10 +207,148 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
             llm_client=llm_client,
             redis_store=redis_store,
             blob_storage=blob_storage,
+            search_client=search_client,
+            code_registry=code_registry,
         )
 
     def get_system_prompt(self) -> str:
-        return self.DEFAULT_SYSTEM_PROMPT
+        prompt = self.DEFAULT_SYSTEM_PROMPT
+        if self.sandbox and hasattr(self.sandbox, "get_manifest"):
+            manifest = self.sandbox.get_manifest()
+            prompt += f"\\n\\n## SANDBOX ENVIRONMENT\\nThe following modules and globals are pre-loaded in your execution environment. Do NOT use `import` for these:\\n{manifest}"
+        return prompt
+
+    def _build_user_prompt(self, state: KernelState, context_block: str) -> str:
+        """Add a coder-specific proof-of-work contract to the generic OODA prompt."""
+        prompt = super()._build_user_prompt(state, context_block)
+        has_execution = any(
+            tool_res.tool_name == "execute_code" and tool_res.succeeded
+            for tool_res in state.tool_history
+        )
+        if has_execution:
+            return prompt
+
+        validated_candidates = [
+            tool_res.tool_output.get("candidate_id")
+            for tool_res in state.tool_history
+            if (
+                tool_res.tool_name == "write_code"
+                and tool_res.succeeded
+                and isinstance(tool_res.tool_output, dict)
+                and tool_res.tool_output.get("status") == "validated"
+            )
+        ]
+        if validated_candidates:
+            next_action = (
+                f"You already have validated candidate_id={validated_candidates[-1]}. "
+                "Your next response MUST call execute_code with that candidate_id."
+            )
+        else:
+            next_action = (
+                "Your next response MUST call write_code with executable Python code. "
+                "After write_code validates it, call execute_code with the returned candidate_id."
+            )
+
+        return (
+            f"{prompt}\n\n"
+            "## CODER PROOF-OF-WORK GATE\n"
+            "DONE/RESULT is disabled until execute_code has returned status=success.\n"
+            f"{next_action}\n\n"
+            "Valid next response format:\n"
+            "THOUGHT: I need executable proof before completion.\n"
+            "TOOL: write_code\n"
+            "PARAMS: {\"code\": \"result = {'success': True, 'data': ...}\"}\n\n"
+            "If you already have a candidate_id:\n"
+            "THOUGHT: I have validated code and must execute it.\n"
+            "TOOL: execute_code\n"
+            "PARAMS: {\"candidate_id\": <id>}\n\n"
+            "Do not emit DONE. Do not emit RESULT. Do not answer in prose."
+        )
+
+    # ─────────────────────────────────────────────────────────────
+    # Completion Gate (Proof of Work)
+    # ─────────────────────────────────────────────────────────────
+
+    def _can_complete(
+        self,
+        state: KernelState,
+        parsed: Dict[str, Any],
+    ) -> tuple:
+        """
+        Enforce the "Verify Before Done" proof-of-work contract.
+        """
+        # Exemption: If the agent successfully delegated to research, it is handing
+        # control back to the Kernel. It must be allowed to complete.
+        if state.tool_history:
+            last_tool = state.tool_history[-1]
+            if last_tool.tool_name == "delegate_research" and last_tool.succeeded:
+                return (True, "")
+
+        # Scan history for execution proof
+        has_executed = False
+        last_success_output = None
+        for tool_res in state.tool_history:
+            if tool_res.tool_name == "execute_code" and tool_res.succeeded:
+                has_executed = True
+                last_success_output = tool_res.tool_output
+            elif (
+                tool_res.tool_name == "write_code"
+                and tool_res.succeeded
+                and isinstance(tool_res.tool_output, dict)
+                and isinstance(tool_res.tool_output.get("execution_result"), dict)
+                and tool_res.tool_output["execution_result"].get("status") == "success"
+            ):
+                has_executed = True
+                last_success_output = tool_res.tool_output["execution_result"]
+
+        output_schema = state.context.get("output_schema")
+        if not has_executed and output_schema and parsed.get("result") is not None:
+            try:
+                output_data = parsed["result"]
+                data_to_validate = (
+                    output_data["data"]
+                    if isinstance(output_data, dict) and isinstance(output_data.get("data"), dict)
+                    else output_data
+                )
+                output_schema.model_validate(data_to_validate)
+                return (True, "")
+            except Exception:
+                pass
+
+        contract_text = f"{state.task}\n{state.context.get('system_prompt', '')}".lower()
+        requires_execution = any(
+            marker in contract_text
+            for marker in (
+                "blob_path",
+                "codersandbox",
+                "sandbox",
+                "write actual python code",
+                "write code",
+                "execute code",
+                "open()",
+                "write to a file",
+                "file-writing",
+            )
+        )
+
+        # If the caller requested runtime proof, reject premature DONE.
+        # For simple pure-answer tasks, a structured RESULT can complete without
+        # forcing unnecessary sandbox execution.
+        if not has_executed:
+            if not requires_execution and parsed.get("result") is not None:
+                return (True, "")
+            return (
+                False,
+                "PROOF OF WORK REQUIRED: You cannot call DONE without executing code first.\n"
+                "You must use the `write_code` or `execute_code` tool to write and run actual Python code.\n"
+                "Do NOT just output the answer in the RESULT block. You MUST execute a Python script that sets the `result` variable."
+            )
+
+        # Force the payload to be the actual sandbox execution result.
+        if last_success_output is not None:
+            parsed["result"] = last_success_output.get("output", last_success_output)
+
+        return (True, "")
 
     # ─────────────────────────────────────────────────────────────
     # Tool Registration
@@ -300,11 +439,60 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
             phase="thinking",
         )
 
+    async def _execute_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
+        """Execute tools, auto-running validated code when runtime proof is required."""
+        result = await super()._execute_tool(tool_name, params)
+        if (
+            tool_name != "write_code"
+            or not isinstance(result, dict)
+            or result.get("status") != "validated"
+            or not self.sandbox
+        ):
+            return result
+
+        contract_text = (
+            f"{getattr(self, '_current_task', '')}\n"
+            f"{(getattr(self, '_run_context', {}) or {}).get('system_prompt', '')}"
+        ).lower()
+        requires_execution = any(
+            marker in contract_text
+            for marker in (
+                "blob_path",
+                "codersandbox",
+                "sandbox",
+                "write actual python code",
+                "write code",
+                "execute code",
+                "open()",
+                "write to a file",
+                "file-writing",
+                "output_schema",
+            )
+        ) or bool((getattr(self, '_run_context', {}) or {}).get("output_schema"))
+
+        if not requires_execution:
+            return result
+
+        execution_result = await self._tool_execute_code(candidate_id=result["candidate_id"])
+        merged = dict(result)
+        merged["execution_result"] = execution_result
+        if execution_result.get("status") == "success":
+            merged["status"] = "success"
+            merged["output"] = execution_result.get("output")
+            merged["_auto_complete"] = True
+            merged["message"] = (
+                f"Code validated and executed successfully (candidate_id={result['candidate_id']})."
+            )
+        else:
+            merged["status"] = "error"
+            merged["error"] = execution_result.get("error", "Code execution failed.")
+        return merged
+
     # ─────────────────────────────────────────────────────────────
     # Tool: check_registry
     # ─────────────────────────────────────────────────────────────
 
-    def _tool_check_registry(
+    async def _tool_check_registry(
         self,
         task: str = "",
         system: Optional[str] = None,
@@ -315,7 +503,11 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
             return {"found": False, "reason": "No registry configured."}
 
         try:
-            matches = self.code_registry.semantic_search(task, limit=5)
+            from jarviscore.execution.intent_normalizer import IntentNormalizer
+            normalizer = IntentNormalizer(self.llm_client)
+            normalized_task = await normalizer.normalize(task)
+
+            matches = self.code_registry.semantic_search(normalized_task, limit=5)
             production = [
                 m for m in matches
                 if m.get("registry_stage") in ("verified", "golden")
@@ -363,6 +555,40 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         self._has_written_code = True  # Unlock delegate_research gate
 
         candidate_id = len(self._candidates) + 1
+
+        contract_text = (
+            f"{getattr(self, '_current_task', '')}\n"
+            f"{(getattr(self, '_run_context', {}) or {}).get('system_prompt', '')}"
+        ).lower()
+        if "blob_path" in contract_text and "blob_path(" not in code:
+            candidate = {
+                "candidate_id": candidate_id,
+                "code": code,
+                "system": system,
+                "status": "validation_failed",
+                "validation_error": "Contract requires blob_path(), but generated code does not call it.",
+                "ts": time.time(),
+            }
+            self._candidates.append(candidate)
+            return {
+                "candidate_id": candidate_id,
+                "status": "validation_failed",
+                "error": "Contract requires blob_path(), but generated code does not call it.",
+                "issues": [
+                    {
+                        "code": "missing_blob_path",
+                        "message": (
+                            "The task or system prompt explicitly requires blob_path(). "
+                            "Rewrite the code to call dest = blob_path(<filename>) and write to dest."
+                        ),
+                        "severity": "error",
+                    }
+                ],
+                "instruction": (
+                    "Call write_code again with corrected code that uses blob_path(...). "
+                    "Do NOT call execute_code for this candidate."
+                ),
+            }
 
         # Run ValidationLayer
         try:
@@ -517,6 +743,30 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
                 result["auth_error_type"] = auth_category
                 result["hitl_required"] = True
                 result["hitl_reason"] = auth_category
+
+        # Evaluator hook: check semantic success
+        if result.get("status") == "success":
+            output = result.get("output", {})
+            if isinstance(output, dict):
+                if output.get("success") is False or output.get("status") in ["failure", "error"]:
+                    result["status"] = "failure"
+                    result["error"] = output.get("error", output.get("reason", "Semantic failure: Task executed but returned a failure status."))
+                    result["semantic_success"] = False
+
+        # Pydantic schema validation
+        output_schema = (getattr(self, '_run_context', {}) or {}).get("output_schema")
+        if result.get("status") == "success" and output_schema:
+            try:
+                output_data = result.get("output", {})
+                if isinstance(output_data, dict) and "data" in output_data:
+                    data_to_validate = output_data["data"]
+                else:
+                    data_to_validate = output_data
+                output_schema.model_validate(data_to_validate)
+            except Exception as e:
+                result["status"] = "failure"
+                result["error"] = f"Output schema validation failed: {str(e)}"
+                result["semantic_success"] = False
 
         if candidate:
             candidate["status"] = result.get("status", "unknown")
@@ -862,8 +1112,10 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         self._candidates = []
         self._has_written_code = False
         self._read_urls = set()
+        self._current_task = str(task)
         self._run_context = context or {}
         try:
             return await super().run(task, context, max_turns, model, **kwargs)
         finally:
+            self._current_task = ""
             self._run_context = {}

@@ -108,10 +108,6 @@ function initLLMWidget() {
     if (window.location.hostname === 'localhost' && window._jcMdPathBase) {
       candidates.push('/docs' + window._jcMdPathBase + '/index.md');
     }
-    if (rawUrl.includes('raw.githubusercontent.com') && rawUrl.includes('/main/')) {
-      candidates.push(rawUrl.replace('/main/', '/feat/jarviscore-release-v1.0.3/'));
-    }
-
     function tryNext(urls) {
       if (!urls.length) {
         var article = document.querySelector('article') || document.querySelector('.md-content');
