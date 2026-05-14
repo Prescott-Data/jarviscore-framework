@@ -9,6 +9,8 @@ setup pipeline) since AutoAgent.setup() requires full infrastructure.
 The kernel is the component that replaces the linear pipeline.
 """
 
+import json
+
 import pytest
 from jarviscore.kernel import Kernel
 from jarviscore.testing import MockLLMClient, MockSandboxExecutor
@@ -22,6 +24,25 @@ def _llm_response(content, tokens=None, cost=0.001):
         "cost_usd": cost,
         "model": "mock-model",
     }
+
+
+def _router_response(role="coder"):
+    return _llm_response(
+        f'{{"role": "{role}", "confidence": 0.9, '
+        '"reason": "test route", "evidence_required": false}',
+        tokens={"input": 5, "output": 5, "total": 10},
+        cost=0.0,
+    )
+
+
+def _coder_write_response(code='result = {"ok": True}', tokens=None, cost=0.001):
+    return _llm_response(
+        "THOUGHT: Write executable code\n"
+        "TOOL: write_code\n"
+        f"PARAMS: {json.dumps({'code': code})}",
+        tokens=tokens,
+        cost=cost,
+    )
 
 
 @pytest.fixture
@@ -40,11 +61,10 @@ class TestKernelOutputFormat:
     @pytest.mark.asyncio
     async def test_success_output_has_required_fields(self, mock_llm, mock_sandbox):
         """Kernel success output contains all fields needed for legacy format."""
+        mock_sandbox.responses = [{"status": "success", "output": {"output": "hello world"}}]
         mock_llm.responses = [
-            _llm_response(
-                "THOUGHT: Generated code\nDONE: Task complete\n"
-                'RESULT: {"output": "hello world"}'
-            )
+            _router_response(),
+            _coder_write_response('result = {"output": "hello world"}')
         ]
         kernel = Kernel(llm_client=mock_llm, sandbox=mock_sandbox)
         output = await kernel.execute(task="Print hello world")
@@ -76,9 +96,11 @@ class TestKernelOutputFormat:
     @pytest.mark.asyncio
     async def test_legacy_dict_conversion(self, mock_llm, mock_sandbox):
         """AgentOutput can be converted to the legacy dict format."""
+        mock_sandbox.responses = [{"status": "success", "output": {"answer": 42}}]
         mock_llm.responses = [
-            _llm_response(
-                "THOUGHT: Done\nDONE: Calculated\nRESULT: {\"answer\": 42}",
+            _router_response(),
+            _coder_write_response(
+                'result = {"answer": 42}',
                 tokens={"input": 100, "output": 200, "total": 300},
                 cost=0.05,
             )
@@ -132,6 +154,7 @@ class TestKernelOutputFormat:
             {"status": "success", "output": 120, "error": None, "execution_time": 0.1}
         ]
         mock_llm.responses = [
+            _router_response(),
             _llm_response(
                 'THOUGHT: Write code\nTOOL: write_code\nPARAMS: {"code": "result = 120"}'
             ),
@@ -149,6 +172,5 @@ class TestKernelOutputFormat:
         output = await kernel.execute(task="Calculate factorial of 5")
 
         assert output.status == "success"
-        assert output.payload == {"factorial": 120}
-        # Should have 4 trajectory entries (3 tool calls + 1 done)
-        assert len(output.trajectory) == 4
+        assert output.payload == 120
+        assert output.metadata["dispatches"][0]["status"] == "success"

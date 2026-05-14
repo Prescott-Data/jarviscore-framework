@@ -84,8 +84,8 @@ The values are passed verbatim to the provider client as the deployment or model
 
 Tier resolution runs automatically on every agent dispatch. The chain is:
 
-1. `Kernel._classify_task()` determines the sub-agent role for the current task: `coder`, `researcher`, `communicator`, or `browser`.
-2. `ExecutionLease.for_role(role)` returns a lease for that role. Every lease carries a `model_tier` and an optional `complexity` hint.
+1. `Kernel._route_task()` obtains a structured routing decision for the current task: `coder`, `researcher`, `communicator`, or `browser`. Explicit planner/profile roles are honored first; otherwise the Kernel asks the LLM router for a typed JSON decision and rejects invalid or low-confidence output.
+2. The Kernel creates an `ExecutionLease` from the built-in role profile or an application-registered `kernel_role_profiles` entry. Every lease carries a `model_tier` and an optional `complexity` hint.
 3. `Kernel._get_model_for_tier(tier, complexity)` resolves the deployment name from your environment configuration.
 4. The resolved name is passed as `model=` into the sub-agent's LLM call.
 

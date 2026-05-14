@@ -301,42 +301,7 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
                 has_executed = True
                 last_success_output = tool_res.tool_output["execution_result"]
 
-        output_schema = state.context.get("output_schema")
-        if not has_executed and output_schema and parsed.get("result") is not None:
-            try:
-                output_data = parsed["result"]
-                data_to_validate = (
-                    output_data["data"]
-                    if isinstance(output_data, dict) and isinstance(output_data.get("data"), dict)
-                    else output_data
-                )
-                output_schema.model_validate(data_to_validate)
-                return (True, "")
-            except Exception:
-                pass
-
-        contract_text = f"{state.task}\n{state.context.get('system_prompt', '')}".lower()
-        requires_execution = any(
-            marker in contract_text
-            for marker in (
-                "blob_path",
-                "codersandbox",
-                "sandbox",
-                "write actual python code",
-                "write code",
-                "execute code",
-                "open()",
-                "write to a file",
-                "file-writing",
-            )
-        )
-
-        # If the caller requested runtime proof, reject premature DONE.
-        # For simple pure-answer tasks, a structured RESULT can complete without
-        # forcing unnecessary sandbox execution.
         if not has_executed:
-            if not requires_execution and parsed.get("result") is not None:
-                return (True, "")
             return (
                 False,
                 "PROOF OF WORK REQUIRED: You cannot call DONE without executing code first.\n"
@@ -448,29 +413,6 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
             or result.get("status") != "validated"
             or not self.sandbox
         ):
-            return result
-
-        contract_text = (
-            f"{getattr(self, '_current_task', '')}\n"
-            f"{(getattr(self, '_run_context', {}) or {}).get('system_prompt', '')}"
-        ).lower()
-        requires_execution = any(
-            marker in contract_text
-            for marker in (
-                "blob_path",
-                "codersandbox",
-                "sandbox",
-                "write actual python code",
-                "write code",
-                "execute code",
-                "open()",
-                "write to a file",
-                "file-writing",
-                "output_schema",
-            )
-        ) or bool((getattr(self, '_run_context', {}) or {}).get("output_schema"))
-
-        if not requires_execution:
             return result
 
         execution_result = await self._tool_execute_code(candidate_id=result["candidate_id"])
@@ -788,8 +730,12 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
                     success=True,
                     execution_time=exec_time,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to update execution stats for %s: %s",
+                    candidate["function_name"],
+                    exc,
+                )
 
         return result
 

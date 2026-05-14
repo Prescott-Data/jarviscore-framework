@@ -8,7 +8,7 @@ This test uses ACTUAL LLM API calls (not mocks) to verify that:
 4. The response flows back correctly
 
 IMPORTANT: This test makes real API calls and costs money.
-Run with: pytest tests/test_06_real_llm_integration.py -v -s
+Run with: RUN_REAL_LLM_TESTS=1 pytest tests/test_06_real_llm_integration.py -v -s
 
 Prerequisites:
     - .env file with CLAUDE_API_KEY (or other provider keys)
@@ -30,20 +30,18 @@ from jarviscore.p2p.peer_client import PeerClient
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Skip all tests if no API key is configured
+# Real LLM tests are opt-in because they make external calls and cost money.
 try:
     from jarviscore.config import settings
     HAS_API_KEY = bool(
-        settings.claude_api_key or
-        settings.azure_api_key or
-        settings.gemini_api_key
+        settings.claude_api_key or os.environ.get("CLAUDE_API_KEY")
     )
 except Exception:
     HAS_API_KEY = False
 
 pytestmark = pytest.mark.skipif(
-    not HAS_API_KEY,
-    reason="No LLM API key configured in .env"
+    os.environ.get("RUN_REAL_LLM_TESTS") != "1" or not HAS_API_KEY,
+    reason="Real LLM integration tests are opt-in and require Claude credentials",
 )
 
 

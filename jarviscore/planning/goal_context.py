@@ -24,12 +24,15 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
 from jarviscore.context.truth import TruthContext
+
+logger = logging.getLogger(__name__)
 
 
 # ── Step planning ─────────────────────────────────────────────────────────────
@@ -284,8 +287,12 @@ class GoalExecution:
                     else:
                         typed_facts[k] = TruthFact(value=v, source=step.step_id)
                 merge_facts(self.truth, typed_facts, source=step.step_id)
-            except Exception:
-                pass  # Non-fatal — truth will still get evaluator findings
+            except Exception as exc:
+                logger.warning(
+                    "Failed to merge distilled facts for step %s into goal truth: %s",
+                    step.step_id,
+                    exc,
+                )
 
         # Merge evaluator-extracted additional findings
         if evaluation.additional_findings:
@@ -297,8 +304,12 @@ class GoalExecution:
                     confidence=evaluation.confidence,
                 )
                 merge_facts(self.truth, new_facts, source=f"evaluator:{step.step_id}")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to merge evaluator findings for step %s into goal truth: %s",
+                    step.step_id,
+                    exc,
+                )
 
     # ── Serialisation ─────────────────────────────────────────────────────────
 

@@ -5,6 +5,8 @@ Tests task classification, subagent dispatch, model routing,
 multi-dispatch retry, HITL escalation, and cost aggregation.
 """
 
+import json
+
 import pytest
 from jarviscore.kernel import Kernel
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
@@ -19,6 +21,23 @@ def _llm_response(content, tokens=None, cost=0.001):
         "cost_usd": cost,
         "model": "mock-model",
     }
+
+
+def _router_response(role, confidence=0.9, reason="test route"):
+    return _llm_response(
+        f'{{"role": "{role}", "confidence": {confidence}, '
+        f'"reason": "{reason}", "evidence_required": false}}',
+        tokens={"input": 5, "output": 5, "total": 10},
+        cost=0.0,
+    )
+
+
+def _coder_write_response(code='result = {"ok": True}'):
+    return _llm_response(
+        "THOUGHT: Write executable code\n"
+        "TOOL: write_code\n"
+        f"PARAMS: {json.dumps({'code': code})}"
+    )
 
 
 @pytest.fixture
@@ -48,23 +67,75 @@ def kernel(mock_llm, mock_sandbox):
 
 class TestTaskClassification:
 
-    def test_default_is_coder(self, kernel):
-        assert kernel._classify_task("Calculate factorial of 10") == "coder"
+    @pytest.mark.asyncio
+    async def test_explicit_role_routes_without_llm(self, kernel, mock_llm):
+        decision = await kernel._route_task(
+            "Run the exact planner-assigned step",
+            agent_default_role="researcher",
+        )
+        assert decision.role == "researcher"
+        assert decision.confidence == 1.0
+        assert mock_llm.calls == []
 
-    def test_research_keywords(self, kernel):
-        assert kernel._classify_task("Research the best Python frameworks") == "researcher"
-        assert kernel._classify_task("Find information about REST APIs") == "researcher"
-        assert kernel._classify_task("What is dependency injection?") == "researcher"
+    @pytest.mark.asyncio
+    async def test_structured_router_selects_role(self, kernel, mock_llm):
+        mock_llm.responses = [_router_response("communicator", reason="request needs coordination")]
+        decision = await kernel._route_task(
+            "Secure read-only access or PDFs for all bank accounts and confirm completeness.",
+            agent_default_role="coder",
+            use_default_role_as_fallback=True,
+        )
+        assert decision.role == "communicator"
+        assert decision.reason == "request needs coordination"
 
-    def test_communication_keywords(self, kernel):
-        assert kernel._classify_task("Send a status report to the team") == "communicator"
-        assert kernel._classify_task("Draft an email about the release") == "communicator"
-        assert kernel._classify_task("Summarize the findings") == "communicator"
+    @pytest.mark.asyncio
+    async def test_router_rejects_invalid_role(self, kernel, mock_llm):
+        mock_llm.responses = [_llm_response('{"role": "hacker", "confidence": 0.99, "reason": "bad"}')]
+        decision = await kernel.execute(task="Route impossible task", max_dispatches=1)
+        assert decision.status == "failure"
+        assert decision.metadata["routing_error"]
 
-    def test_communication_takes_priority_over_research(self, kernel):
-        """Communication keywords checked first."""
-        result = kernel._classify_task("Summarize and research findings")
-        assert result == "communicator"
+    @pytest.mark.asyncio
+    async def test_custom_explicit_role_uses_registered_lease_profile(self, mock_llm, mock_sandbox):
+        from jarviscore.kernel.defaults.communicator import CommunicatorSubAgent
+
+        class DatabaseKernel(Kernel):
+            def _create_subagent(self, role: str, agent_id: str):
+                if role == "database":
+                    return CommunicatorSubAgent(agent_id=agent_id, llm_client=self.llm_client)
+                return super()._create_subagent(role, agent_id)
+
+        kernel = DatabaseKernel(
+            llm_client=mock_llm,
+            sandbox=mock_sandbox,
+            config={
+                "kernel_role_profiles": {
+                    "database": {
+                        "thinking_budget": 40_000,
+                        "action_budget": 20_000,
+                        "max_total_tokens": 60_000,
+                        "wall_clock_ms": 120_000,
+                        "emergency_turn_fuse": 8,
+                        "model_tier": "task",
+                        "complexity": "standard",
+                    },
+                },
+                "kernel_role_catalog": {
+                    "database": "Read-only SQL/database analysis role.",
+                },
+            },
+        )
+        mock_llm.responses = [
+            _llm_response('THOUGHT: Done\nDONE: Query summarized\nRESULT: {"rows": 3}')
+        ]
+        output = await kernel.execute(
+            task="Summarize customer table row count",
+            agent_default_role="database",
+            max_dispatches=1,
+        )
+        assert output.status == "success"
+        assert output.metadata["dispatches"][0]["role"] == "database"
+        assert "COMMUNICATION SPECIALIST" in mock_llm.calls[0]["messages"][0]["content"]
 
 
 # ── Model Routing ─────────────────────────────────────────────────────
@@ -110,13 +181,11 @@ class TestSubagentCreation:
 class TestKernelExecuteSuccess:
 
     @pytest.mark.asyncio
-    async def test_simple_coding_task(self, kernel, mock_llm):
+    async def test_simple_coding_task(self, kernel, mock_llm, mock_sandbox):
+        mock_sandbox.responses = [{"status": "success", "output": {"factorial": 3628800}}]
         mock_llm.responses = [
-            _llm_response(
-                "THOUGHT: Simple math\n"
-                "DONE: Computed factorial\n"
-                'RESULT: {"factorial": 3628800}'
-            )
+            _router_response("coder"),
+            _coder_write_response('import math\nresult = {"factorial": math.factorial(10)}')
         ]
         output = await kernel.execute(task="Calculate factorial of 10")
         assert output.status == "success"
@@ -127,6 +196,7 @@ class TestKernelExecuteSuccess:
     async def test_research_task(self, kernel, mock_llm, monkeypatch):
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "false")
         mock_llm.responses = [
+            _router_response("researcher"),
             _llm_response(
                 "THOUGHT: Research complete\n"
                 "DONE: Found the answer\n"
@@ -140,6 +210,7 @@ class TestKernelExecuteSuccess:
     @pytest.mark.asyncio
     async def test_communication_task(self, kernel, mock_llm):
         mock_llm.responses = [
+            _router_response("communicator"),
             _llm_response(
                 "THOUGHT: Drafted\n"
                 "DONE: Message drafted\n"
@@ -153,7 +224,8 @@ class TestKernelExecuteSuccess:
     @pytest.mark.asyncio
     async def test_context_passed_to_subagent(self, kernel, mock_llm):
         mock_llm.responses = [
-            _llm_response("THOUGHT: Done\nDONE: Used context")
+            _router_response("communicator"),
+            _llm_response("THOUGHT: Done\nDONE: Used context\nRESULT: {\"used_context\": true}")
         ]
         output = await kernel.execute(
             task="Process data",
@@ -165,7 +237,7 @@ class TestKernelExecuteSuccess:
         # (messages[1]) since the subagent injects context into the task prompt.
         # The system message (messages[0]) is the subagent's own hardcoded persona.
         all_content = " ".join(
-            str(m.get("content", "")) for m in mock_llm.calls[0]["messages"]
+            str(m.get("content", "")) for m in mock_llm.calls[1]["messages"]
         )
         assert "data" in all_content
         assert "Process data" in all_content
@@ -177,29 +249,24 @@ class TestKernelExecuteFailure:
 
     @pytest.mark.asyncio
     async def test_all_dispatches_fail(self, kernel, mock_llm):
-        """When all dispatches fail, kernel returns failure."""
-        # Empty responses → LLM returns default which is unparseable raw
-        # Actually let's make it return raw content which maps to success with raw payload
-        # Need to trigger actual failure - max_turns exceeded
+        """Protocol-invalid responses must not become successful work."""
+        # Empty responses use the mock default, which violates TOOL/DONE and
+        # cannot satisfy coder proof-of-work.
         mock_llm.responses = []  # Will use default response
         output = await kernel.execute(
             task="Do something complex",
             max_dispatches=2,
+            agent_default_role="coder",
         )
-        # Default mock response is raw text → treated as success by subagent
-        # So we need to verify it works. Let me adjust the test.
-        assert output.status in ("success", "failure")
+        assert output.status == "yield"
+        assert output.metadata["typed_outcome"] == "YIELD_BUDGET_EXHAUSTED"
 
     @pytest.mark.asyncio
     async def test_failure_then_success(self, kernel, mock_llm):
-        """Kernel retries on failure and succeeds on second dispatch."""
-        # First dispatch: subagent returns unparseable → success with raw
-        # To test retry, we need first to fail. Max turns = 1 but
-        # default mock returns text which is "success" as raw.
-        # Instead, simulate by having LLM fail then succeed.
+        """Kernel succeeds when coder produces executable proof of work."""
         mock_llm.responses = [
-            # First dispatch will get this — treated as raw → success
-            _llm_response("THOUGHT: Done\nDONE: Completed\nRESULT: {\"ok\": true}"),
+            _router_response("coder"),
+            _coder_write_response('result = {"ok": True}'),
         ]
         output = await kernel.execute(task="Calculate pi", max_dispatches=2)
         assert output.status == "success"
@@ -209,6 +276,7 @@ class TestKernelExecuteFailure:
     async def test_cost_aggregation(self, kernel, mock_llm):
         """Token and cost metadata is aggregated across dispatches."""
         mock_llm.responses = [
+            _router_response("coder"),
             _llm_response(
                 "THOUGHT: Done\nDONE: Result\nRESULT: {\"v\": 1}",
                 tokens={"input": 100, "output": 200, "total": 300},
@@ -222,7 +290,8 @@ class TestKernelExecuteFailure:
     @pytest.mark.asyncio
     async def test_elapsed_time_tracked(self, kernel, mock_llm):
         mock_llm.responses = [
-            _llm_response("THOUGHT: Done\nDONE: Quick result")
+            _router_response("coder"),
+            _llm_response("THOUGHT: Done\nDONE: Quick result\nRESULT: {\"ok\": true}")
         ]
         output = await kernel.execute(task="Fast task")
         assert "elapsed_ms" in output.metadata
@@ -256,19 +325,13 @@ class TestKernelHITL:
             hitl_policy=policy,
             config={"kernel_max_turns": 1},
         )
-        # LLM returns nothing useful, subagent hits max turns → failure
-        # But with max_turns=1 from lease (emergency_turn_fuse is 24),
-        # kernel uses min(24, config=1) = 1
-        # Default mock response is raw text → "success"
-        # We need a way to force failure. Let's use empty content.
+        # Empty content violates the subagent protocol and must not become success.
         mock_llm.responses = [
+            _router_response("coder"),
             {"content": "", "provider": "mock", "tokens": {"input": 0, "output": 0, "total": 0}, "cost_usd": 0, "model": "m"},
         ]
-        # Empty content → raw → success. Still not failure.
-        # The kernel will see success and return it.
         output = await kernel.execute(task="Risky operation", max_dispatches=1)
-        # With empty content, subagent returns success with raw empty string
-        assert output.status == "success"
+        assert output.status in {"failure", "yield"}
 
 
 # ── Dispatch Records ──────────────────────────────────────────────────
@@ -278,7 +341,8 @@ class TestDispatchRecords:
     @pytest.mark.asyncio
     async def test_dispatch_records_in_metadata(self, kernel, mock_llm):
         mock_llm.responses = [
-            _llm_response("THOUGHT: Done\nDONE: Completed")
+            _router_response("coder"),
+            _coder_write_response('result = {"ok": True}')
         ]
         output = await kernel.execute(task="Build a widget")
         dispatches = output.metadata["dispatches"]
@@ -290,6 +354,7 @@ class TestDispatchRecords:
     @pytest.mark.asyncio
     async def test_model_in_dispatch_record(self, kernel, mock_llm):
         mock_llm.responses = [
+            _router_response("researcher"),
             _llm_response("THOUGHT: Done\nDONE: Researched")
         ]
         output = await kernel.execute(task="Research Python typing")

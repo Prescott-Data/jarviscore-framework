@@ -1,6 +1,9 @@
 """
 Tests for AutoAgent profile.
 """
+import json
+from typing import Any, cast
+
 import pytest
 from jarviscore.profiles.autoagent import AutoAgent
 
@@ -16,6 +19,29 @@ class NoPromptAutoAgent(AutoAgent):
     """AutoAgent without system_prompt (should fail)."""
     role = "no_prompt"
     capabilities = ["testing"]
+
+
+class ProfiledAutoAgent(AutoAgent):
+    """AutoAgent whose runtime routing comes from AgentProfile."""
+    role = "profiled"
+    capabilities = ["testing"]
+    system_prompt = "You are a profiled test agent."
+
+
+class ExplicitKernelRoleAutoAgent(AutoAgent):
+    """AutoAgent whose class-level routing must not be overwritten."""
+    role = "profiled"
+    capabilities = ["testing"]
+    default_kernel_role = "coder"
+    system_prompt = "You are an explicitly routed test agent."
+
+
+class GoalDirectAutoAgent(AutoAgent):
+    """Goal-oriented agent that can still accept bounded single-turn work."""
+    role = "goal_direct"
+    capabilities = ["testing"]
+    goal_oriented = True
+    system_prompt = "You are a goal direct test agent."
 
 
 class TestAutoAgentInitialization:
@@ -45,6 +71,126 @@ class TestAutoAgentInitialization:
         assert agent.sandbox is None
         assert agent.repair is None
 
+    def test_agent_profile_hydrates_default_kernel_role(self, tmp_path, monkeypatch):
+        """Profile default_kernel_role should affect runtime routing."""
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        (profiles_dir / "profiled.yaml").write_text(
+            "\n".join([
+                'role: "Profiled Test Agent"',
+                "default_kernel_role: researcher",
+                "expertise:",
+                "  - profile-driven routing",
+                "owns:",
+                "  - routing behavior",
+                "sops:",
+                "  - Use profile defaults when class defaults are absent.",
+                "domain_facts: {}",
+                "escalates_to: []",
+            ]),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("JARVISCORE_PROFILES_DIR", str(profiles_dir))
+
+        agent = ProfiledAutoAgent()
+        agent._load_agent_profile()
+
+        assert agent.default_kernel_role == "researcher"
+        assert "ROLE INTELLIGENCE" in agent._profile_block
+
+    def test_agent_profile_does_not_override_explicit_kernel_role(self, tmp_path, monkeypatch):
+        """Class-level default_kernel_role remains authoritative."""
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        (profiles_dir / "profiled.yaml").write_text(
+            "\n".join([
+                'role: "Profiled Test Agent"',
+                "default_kernel_role: researcher",
+                "expertise:",
+                "  - profile-driven routing",
+                "owns:",
+                "  - routing behavior",
+                "sops:",
+                "  - Use profile defaults when class defaults are absent.",
+                "domain_facts: {}",
+                "escalates_to: []",
+            ]),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("JARVISCORE_PROFILES_DIR", str(profiles_dir))
+
+        agent = ExplicitKernelRoleAutoAgent()
+        agent._load_agent_profile()
+
+        assert agent.default_kernel_role == "coder"
+
+    def test_agent_profile_directory_is_resolved_at_load_time(self, tmp_path, monkeypatch):
+        """Late application bootstrap should still control profile lookup."""
+        from jarviscore.profiles.agent_profile import AgentProfile
+
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        (profiles_dir / "profiled.yaml").write_text(
+            "\n".join([
+                'role: "Late Bound Profile"',
+                "default_kernel_role: communicator",
+                "expertise:",
+                "  - late env resolution",
+                "owns:",
+                "  - profile loading",
+                "sops:",
+                "  - Resolve profile directories at load time.",
+                "domain_facts: {}",
+                "escalates_to: []",
+            ]),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("JARVISCORE_PROFILES_DIR", str(profiles_dir))
+
+        profile = AgentProfile.load("profiled")
+        assert profile is not None
+        assert profile.role == "Late Bound Profile"
+
+    def test_agent_profile_without_kernel_role_does_not_invent_default(self, tmp_path, monkeypatch):
+        """Missing profile routing config should not silently force communicator."""
+        from jarviscore.profiles.agent_profile import AgentProfile
+
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        (profiles_dir / "profiled.yaml").write_text(
+            "\n".join([
+                'role: "No Route Profile"',
+                "expertise:",
+                "  - profile loading",
+                "owns: []",
+                "sops: []",
+                "domain_facts: {}",
+                "escalates_to: []",
+            ]),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("JARVISCORE_PROFILES_DIR", str(profiles_dir))
+
+        profile = AgentProfile.load("profiled")
+        assert profile is not None
+        assert profile.default_kernel_role is None
+
+    def test_hitl_category_is_derived_from_kernel_yield_metadata(self):
+        """AutoAgent must satisfy the strict HITL category contract."""
+        from types import SimpleNamespace
+
+        agent = ValidAutoAgent()
+
+        assert agent._hitl_category_from_output(
+            SimpleNamespace(metadata={"typed_outcome": "YIELD_AUTH_REQUIRED"})
+        ) == "auth_required"
+        assert agent._hitl_category_from_output(
+            SimpleNamespace(metadata={"escalation_reason": "critical approval needed"})
+        ) == "critical_action"
+        assert agent._hitl_category_from_output(SimpleNamespace(metadata={})) == "data_required"
+
 
 class TestAutoAgentSetup:
     """Test AutoAgent setup."""
@@ -57,6 +203,23 @@ class TestAutoAgentSetup:
 
         # Day 1: Just verify it runs without error
         # Day 4: Will test actual LLM initialization
+
+    @pytest.mark.asyncio
+    async def test_autoagent_teardown_closes_search_client(self):
+        """AutoAgent-owned aiohttp search clients must be closed on teardown."""
+        class SearchClient:
+            closed = False
+
+            async def close(self):
+                self.closed = True
+
+        agent = ValidAutoAgent()
+        search = SearchClient()
+        setattr(agent, "search", search)
+
+        await agent.teardown()
+
+        assert search.closed is True
 
 
 class TestAutoAgentExecution:
@@ -112,6 +275,138 @@ class TestAutoAgentExecution:
         assert result["output"] == 42
         assert result["code"] == "result = 42"
 
+    @pytest.mark.asyncio
+    async def test_kernel_exception_does_not_fall_back_to_legacy_pipeline(self):
+        """Kernel failures must be visible instead of silently using legacy codegen."""
+        from unittest.mock import Mock, AsyncMock
+
+        class BrokenKernel:
+            auth_manager = None
+
+            async def execute(self, **kwargs):
+                raise RuntimeError("router exploded")
+
+        agent = ValidAutoAgent()
+        cast(Any, agent)._kernel = BrokenKernel()
+        agent.codegen = Mock()
+        agent.codegen.generate = AsyncMock(return_value="result = 42")
+        agent.sandbox = Mock()
+        agent.sandbox.execute = AsyncMock(return_value={"status": "success", "output": 42})
+        agent.repair = Mock()
+
+        result = await agent.execute_task({"task": "Calculate 21 * 2"})
+
+        assert result["status"] == "failure"
+        assert "Kernel exception" in result["error"]
+        agent.codegen.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_goal_oriented_agent_uses_kernel_for_non_complex_work(self):
+        """Goal-oriented agents use the Kernel directly when classifier says non-complex."""
+        from types import SimpleNamespace
+
+        class FakeLLM:
+            async def generate(self, **kwargs):
+                return {
+                    "content": json.dumps({
+                        "level": "moderate",
+                        "reason": "Single-turn deliverable, not a long-running goal.",
+                    })
+                }
+
+        class FakeKernel:
+            def __init__(self):
+                self.auth_manager = None
+                self.calls = []
+
+            async def execute(self, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(
+                    status="success",
+                    payload={"ok": True},
+                    summary="done",
+                    metadata={"tokens": {"input": 0, "output": 0, "total": 0}, "elapsed_ms": 1},
+                )
+
+        agent = GoalDirectAutoAgent()
+        setattr(agent, "llm", FakeLLM())
+        kernel = FakeKernel()
+        setattr(agent, "_kernel", kernel)
+
+        result = await agent.execute_task({
+            "task": "Return a single-turn operating contribution.",
+            "context": {},
+        })
+
+        assert result["status"] == "success"
+        assert result["payload"] == {"ok": True}
+        assert result["goal_execution"]["planner_mode"] == "direct_kernel"
+        assert result["goal_execution"]["complexity"] == "moderate"
+        assert len(kernel.calls) == 1
+        assert kernel.calls[0]["agent_default_role"] is None
+        assert kernel.calls[0]["use_default_role_as_fallback"] is True
+
+    @pytest.mark.asyncio
+    async def test_goal_oriented_agent_honors_single_response_execution_contract(self):
+        """A single-response contract is a direct Kernel turn, not a planner DAG."""
+        from types import SimpleNamespace
+
+        class FakeLLM:
+            async def generate(self, **kwargs):
+                raise AssertionError("execution_contract should avoid classifier LLM call")
+
+        class FakeKernel:
+            def __init__(self):
+                self.auth_manager = None
+                self.calls = []
+
+            async def execute(self, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(
+                    status="success",
+                    payload="single artifact",
+                    summary="done",
+                    metadata={"tokens": {"input": 0, "output": 0, "total": 0}, "elapsed_ms": 1},
+                )
+
+        agent = GoalDirectAutoAgent()
+        setattr(agent, "llm", FakeLLM())
+        kernel = FakeKernel()
+        setattr(agent, "_kernel", kernel)
+
+        result = await agent.execute_task({
+            "task": "Return a founder-grade peer brief from supplied context.",
+            "context": {"execution_contract": {"execution_shape": "single_response"}},
+        })
+
+        assert result["status"] == "success"
+        assert result["goal_execution"]["planner_mode"] == "direct_kernel"
+        assert result["goal_execution"]["reason"].startswith("Task execution contract declares")
+        assert len(kernel.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_kernel_routes_access_requests_before_default_coder_role(self):
+        from jarviscore.kernel.kernel import Kernel
+        from jarviscore.testing import MockLLMClient
+
+        llm = MockLLMClient(responses=[{
+            "content": json.dumps({
+                "role": "communicator",
+                "confidence": 0.95,
+                "reason": "The task is a request for access coordination.",
+                "evidence_required": False,
+            })
+        }])
+        kernel = Kernel(llm_client=llm)
+        decision = await kernel._route_task(
+            "Secure read-only access or PDFs for all bank accounts and confirm completeness.",
+            context={},
+            agent_default_role="coder",
+            use_default_role_as_fallback=True,
+        )
+
+        assert decision.role == "communicator"
+
 
 class TestAutoAgentInheritance:
     """Test AutoAgent inheritance from Profile and Agent."""
@@ -138,3 +433,51 @@ class TestAutoAgentInheritance:
 
         task3 = {"role": "different", "task": "Won't handle"}
         assert agent.can_handle(task3) is False
+
+
+class TestPlannerCompatibility:
+    """Planner compatibility with JSON-object model behavior."""
+
+    def test_planner_accepts_single_strict_step_object(self):
+        from jarviscore.planning.planner import Planner
+
+        planner = Planner(llm_client=None)
+        steps = planner._parse_plan(
+            """
+            {
+              "step_id": "step_01_read_calendar",
+              "task": "Read the content calendar and list today's due items.",
+              "success_criterion": "Today's due content items are listed.",
+              "expected_findings": ["today_due_items"],
+              "subagent_hint": "researcher"
+            }
+            """,
+            goal="Run content pipeline",
+        )
+
+        assert len(steps) == 1
+        assert steps[0].step_id == "step_01_read_calendar"
+        assert steps[0].subagent_hint == "researcher"
+
+    def test_planner_accepts_single_named_step_object(self):
+        from jarviscore.planning.planner import Planner
+
+        planner = Planner(llm_client=None)
+        steps = planner._parse_plan(
+            """
+            {
+              "step_02d_value_fit_mapping_matrix": {
+                "step_id": "step_02d_value_fit_mapping_matrix",
+                "task": "Map each validated expectation to product constraints.",
+                "success_criterion": "Every expectation has at least one fit classification.",
+                "expected_findings": ["fit_matrix"],
+                "subagent_hint": "researcher"
+              }
+            }
+            """,
+            goal="Recover from a partially nested replan response",
+        )
+
+        assert len(steps) == 1
+        assert steps[0].step_id == "step_02d_value_fit_mapping_matrix"
+        assert steps[0].task == "Map each validated expectation to product constraints."

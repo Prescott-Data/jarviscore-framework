@@ -146,7 +146,7 @@ For agents that format and deliver output rather than gather it, the system prom
 ```python
 class SlackReporter(AutoAgent):
     role = "reporter"
-    default_kernel_role = "communicator"  # skip routing — always communicates
+    default_kernel_role = "communicator"  # preferred fallback for communication tasks
     system_prompt = """
     You are a Slack notification agent for the engineering team.
 
@@ -162,7 +162,7 @@ class SlackReporter(AutoAgent):
     """
 ```
 
-Setting `default_kernel_role = "communicator"` bypasses the Kernel's LLM classification step. This saves a round-trip on every task and eliminates classification errors for specialist agents.
+Setting `default_kernel_role = "communicator"` tells the Kernel and Planner the agent's preferred specialist role. It does not replace task-aware routing for general work; use it only when the agent's domain is genuinely narrow enough that `communicator` is the right fallback.
 
 ---
 

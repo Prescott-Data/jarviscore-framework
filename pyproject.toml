@@ -108,8 +108,9 @@ Documentation = "https://jarviscore.developers.prescottdata.io/"
 Repository = "https://github.com/Prescott-Data/jarviscore-framework"
 Issues = "https://github.com/Prescott-Data/jarviscore-framework/issues"
 
-[tool.setuptools]
-packages = {find = {}}
+[tool.setuptools.packages.find]
+include = ["jarviscore*"]
+exclude = ["tests*", "examples*", "hooks*", "nexus*"]
 
 [project.scripts]
 # After `pip install jarviscore-framework`, these are available as CLI commands:

@@ -5,6 +5,8 @@ Tests use MockLLMClient to control LLM responses and verify the tool dispatch
 loop, artifact tracking, and error handling without real LLM calls.
 """
 
+import json
+
 import pytest
 from jarviscore.kernel.defaults import CoderSubAgent, ResearcherSubAgent, CommunicatorSubAgent
 from jarviscore.kernel.defaults.coder import classify_auth_error
@@ -32,6 +34,14 @@ def _llm_response(content, tokens=None):
         "cost_usd": 0.001,
         "model": "mock-model",
     }
+
+
+def _coder_write_response(code: str):
+    return _llm_response(
+        "THOUGHT: Write executable code\n"
+        "TOOL: write_code\n"
+        f"PARAMS: {json.dumps({'code': code})}"
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -109,28 +119,30 @@ class TestCoderSubAgent:
 
     @pytest.mark.asyncio
     async def test_full_run_done_immediately(self, mock_llm):
-        """Coder gets a DONE response on first turn."""
+        """Coder rejects DONE without executable proof of work."""
         mock_llm.responses = [
             _llm_response("THOUGHT: Simple task\nDONE: Completed\nRESULT: {\"value\": 42}")
         ]
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
-        output = await coder.run("compute 42")
-        assert output.status == "success"
-        assert output.payload == {"value": 42}
-        assert output.summary == "Completed"
+        output = await coder.run("compute 42", max_turns=1)
+        assert output.status == "yield"
+        assert output.metadata["typed_outcome"] == "YIELD_EMERGENCY_TURN_FUSE"
 
     @pytest.mark.asyncio
     async def test_full_run_tool_then_done(self, mock_llm, mock_sandbox):
-        """Coder uses write_code tool, then completes."""
+        """Coder uses write_code tool and completes from sandbox execution evidence."""
+        mock_sandbox.responses = [
+            {"status": "success", "output": 2, "error": None, "execution_time": 0.1}
+        ]
         mock_llm.responses = [
-            _llm_response("THOUGHT: Write code\nTOOL: write_code\nPARAMS: {\"code\": \"result = 1+1\"}"),
-            _llm_response("THOUGHT: Done\nDONE: Code written\nRESULT: {\"code\": \"result = 1+1\"}"),
+            _coder_write_response("result = 1+1"),
         ]
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, sandbox=mock_sandbox)
         output = await coder.run("write addition code", max_turns=3)
         assert output.status == "success"
+        assert output.payload == 2
         assert len(coder.candidates) == 1
-        assert len(output.trajectory) == 2  # tool_call + done
+        assert len(output.trajectory) == 1
 
     @pytest.mark.asyncio
     async def test_run_resets_candidates(self, mock_llm):
@@ -332,6 +344,63 @@ class TestCommunicatorSubAgent:
         output = await comm.run("draft status update", max_turns=3)
         assert output.status == "success"
         assert len(comm.drafts) == 1
+
+    @pytest.mark.asyncio
+    async def test_full_run_accepts_json_done_protocol(self, mock_llm):
+        """Structured JSON completion is a valid protocol, not raw prose."""
+        mock_llm.responses = [
+            _llm_response(json.dumps({
+                "thought": "The task is answerable directly.",
+                "done": "Message drafted",
+                "result": {"message": "Status update: all systems go."},
+            }))
+        ]
+        comm = CommunicatorSubAgent(agent_id="m1", llm_client=mock_llm)
+        output = await comm.run("draft status update", max_turns=1)
+        assert output.status == "success"
+        assert output.payload == {"message": "Status update: all systems go."}
+
+    @pytest.mark.asyncio
+    async def test_full_run_repairs_protocol_violation(self, mock_llm):
+        """A raw response becomes visible feedback before final failure."""
+        mock_llm.responses = [
+            _llm_response("Here is the status update without the protocol."),
+            _llm_response(
+                'THOUGHT: Repair protocol\nDONE: Message drafted\n'
+                'RESULT: {"message": "Status update: all systems go."}'
+            ),
+        ]
+        comm = CommunicatorSubAgent(agent_id="m1", llm_client=mock_llm)
+        output = await comm.run("draft status update", max_turns=2)
+        assert output.status == "success"
+        assert output.trajectory[0]["status"] == "protocol_violation"
+        assert output.payload == {"message": "Status update: all systems go."}
+
+    @pytest.mark.asyncio
+    async def test_full_run_fails_after_unrepaired_protocol_violation(self, mock_llm):
+        """Invalid protocol is never coerced into completion."""
+        mock_llm.responses = [
+            _llm_response("Plain prose with no protocol."),
+        ]
+        comm = CommunicatorSubAgent(agent_id="m1", llm_client=mock_llm)
+        output = await comm.run("draft status update", max_turns=1)
+        assert output.status == "failure"
+        assert output.metadata["typed_outcome"] == "PROTOCOL_VIOLATION"
+
+    @pytest.mark.asyncio
+    async def test_full_run_fails_after_repeated_protocol_violation(self, mock_llm):
+        """The repair loop is bounded; repeated raw output fails visibly."""
+        mock_llm.responses = [
+            _llm_response("First plain prose response."),
+            _llm_response("Second plain prose response."),
+            _llm_response("Third plain prose response."),
+        ]
+        comm = CommunicatorSubAgent(agent_id="m1", llm_client=mock_llm)
+        output = await comm.run("draft status update", max_turns=3)
+        assert output.status == "failure"
+        assert output.metadata["typed_outcome"] == "PROTOCOL_VIOLATION"
+        assert output.metadata["protocol_violations"] == 2
+        assert len(output.trajectory) == 2
 
     @pytest.mark.asyncio
     async def test_run_resets_drafts(self, mock_llm):

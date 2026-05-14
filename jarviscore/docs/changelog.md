@@ -38,12 +38,19 @@ This release fixes all critical regressions introduced in v1.0.3 that rendered A
 
 - **[#32] Output schema enforcement** — `Agent.output_schema` (Pydantic `BaseModel`) is now passed through the Kernel into `CoderSubAgent`, which validates sandbox output against the schema via `model_validate()`. Schema violations fail fast with a clear error instead of silently returning unstructured data.
 - **[#33] CoderSubAgent sandbox hallucination** — `CoderSubAgent.get_system_prompt()` now appends a dynamic `SANDBOX ENVIRONMENT` manifest listing all pre-loaded modules and globals in the sandbox namespace. This grounds the LLM in what is actually available, preventing hallucinated imports and undefined-name errors.
-- **[#34] Complexity gate before Planner** — `AutoAgent.execute_task()` now runs a `TaskComplexityClassifier` before dispatching to the Planner DAG. Trivial tasks bypass the full Plan → Execute → Evaluate loop, reducing latency and unnecessary LLM calls for simple operations.
+- **[#34] Complexity gate before Planner** — `AutoAgent.execute_task()` now runs a `TaskComplexityClassifier` before dispatching to the Planner DAG. Non-complex tasks bypass the full Plan → Execute → Evaluate loop, while classifier contract failures now fail visibly instead of silently falling through to the Planner.
 - **[#35] FunctionRegistry semantic search miss** — `CoderSubAgent._tool_check_registry()` now normalizes verbose task descriptions into concise canonical intents via `IntentNormalizer` before calling `semantic_search()`. This eliminates embedding distance drift caused by prompt verbosity.
 - **[#36] AutoAgent vs CustomAgent boundary** — Added `p2p_responder` attribute to the `Agent` base class (`False` by default, `True` on `CustomAgent`). `JarvisLifespan` now only creates background `asyncio.Task` instances for agents with `p2p_responder=True`, and raises `RuntimeError` at startup if a `p2p_responder` agent does not override `run()`.
 - **[#37] Semantic vs execution status** — `ResultHandler.process_result()` now tracks `semantic_success` separately from execution status. `CoderSubAgent._tool_execute_code()` includes an evaluator hook that flags outputs where `success=False` or `status="failure"` even when the sandbox execution itself succeeded. Fixed `TypeError` when `cost_usd` is `None`.
 - **[#38] Sandbox namespace leak into ZMQ coroutine cleanup** — `SandboxExecutor._execute_sync()` and `_execute_async()` now restore `namespace['__builtins__']` to the actual `builtins` module in a `finally` block. This prevents `KeyError: '__builtins__'` crashes in ZMQ's Cython backend during coroutine garbage collection.
-- **Kernel routing ignoring `default_kernel_role`** — `Kernel.execute()` now forwards `agent_default_role` into the classification context, ensuring that an agent's explicitly defined `default_kernel_role` overrides the keyword-based classification logic.
+- **Structured Kernel routing** — keyword role matching has been replaced by a typed `TaskRouter`. Explicit planner/profile roles are honored first; otherwise the router returns a validated role, confidence, reason, and evidence flag. Invalid or low-confidence routing fails visibly. Custom roles must register `kernel_role_profiles`.
+- **Strict subagent completion protocol** — unparseable LLM responses now fail as protocol violations instead of being returned as successful raw content.
+- **Coder proof-of-work contract** — `CoderSubAgent` must produce sandbox execution evidence before completion; structured prose results alone are no longer accepted for coder work.
+- **Workflow terminal status handling** — only `success` completes a workflow step. `yield`, `hitl`, `blocked`, `error`, and unknown statuses are recorded as failures rather than satisfying dependencies.
+- **WorkflowBuilder failure visibility** — agent-returned `failure`, `yield`, `blocked`, `hitl`, or unknown statuses are now preserved instead of being wrapped as step `success`.
+- **Distributed workflow output integrity** — a remote step marked `completed` without persisted output now returns failure rather than fabricating a successful empty result.
+- **AutoAgent Kernel failure visibility** — Kernel exceptions now return an explicit failure instead of silently falling back to the legacy direct-codegen pipeline.
+- **Profile routing explicitness** — missing `default_kernel_role` in a profile no longer implies `communicator`; applications must opt into profile-level routing hints.
 - **`_run_context` AttributeError in CoderSubAgent** — Changed direct attribute access to `getattr(self, '_run_context', {})` to prevent `AttributeError` when `_run_context` is not yet initialized.
 
 **Added**
@@ -117,10 +124,10 @@ This release fixes all critical regressions introduced in v1.0.3 that rendered A
 - `mesh.run_task(agent, task, context, complexity)` — primary user-facing API for dispatching a single task to an agent by role with multi-tier model routing.
 - `P2P_ENABLED=true` env var support — `Settings.p2p_enabled` is now merged into Mesh config at startup.
 - `HITLCategory` enum with hard enforcement on `HITLQueue.request()` — valid categories: `auth_required`, `data_required`, `critical_action`. Invalid categories raise `ValueError`.
-- Subagent hint alias map in the Planner — LLM-hallucinated hints (`analyst`, `developer`, `writer`, `scraper`) are remapped to valid roles before dispatch.
+- Planner subagent hints are strict — valid hints are accepted exactly and invalid hints fail visibly instead of being remapped.
 - `STEP_OUTPUT_MAX_BYTES` (default 200 KB) and `STEP_OUTPUT_PREVIEW_BYTES` (default 20 KB) — large step outputs stored as truncated preview with `_overflow` flag.
 - Idempotent write guard on `RedisStore.save_step_output()` — a successful result will not be overwritten by a subsequent error payload from a stalled re-execution.
-- Azure Content Filter resilience in `LLMClient` — substitution table for business phrases that trigger false-positive content rejections.
+- Azure Content Filter visibility in `LLMClient` — raw provider content-filter rejections now fail visibly by default. `AZURE_CONTENT_FILTER_REPAIR_ENABLED=true` explicitly opts into Azure-specific prompt repair after the raw prompt is rejected.
 - `Kernel._get_model_for_tier()` — clean multi-tier model resolution: complexity hint → `TASK_MODEL_NANO` / `TASK_MODEL_STANDARD` / `TASK_MODEL_HEAVY` → legacy fallback.
 - `MailboxManager` schema normalisation — handles both the current flat envelope schema and the pre-v1.0.2 double-nested schema transparently.
 - **Vertex AI provider** (`LLMProvider.VERTEX_AI`): GCP-native Gemini access via Application Default Credentials (ADC). No API key required — authenticate with `gcloud auth application-default login` or attach a service account. Config: `VERTEX_AI_ENABLED=true`, `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION` (default `us-central1`), `VERTEX_AI_MODEL` (default `gemini-2.5-flash`). Slots into the fallback chain after Gemini: **Azure → Claude → vLLM → Gemini → Vertex AI**.
@@ -268,7 +275,7 @@ This was the largest release in JarvisCore history, introducing the complete inf
 
 **Phase 6 — Kernel / SubAgent OODA Loop**
 
-The `Kernel` replaces AutoAgent's linear codegen → sandbox → repair pipeline with a supervised OODA loop. `ExecutionLease` enforces token/turn/wall-clock budgets per subagent role. `AgentCognitionManager` tracks budget spend per phase, detects spinning (same tool 3+ times), and enforces cognitive gates. `AdaptiveHITLPolicy` with `HumanTask` pauses execution when confidence or risk triggers fire. Fast path: simple coding tasks skip full OODA and dispatch directly to coder subagent.
+The `Kernel` replaces AutoAgent's linear codegen → sandbox → repair pipeline with a supervised OODA loop. `ExecutionLease` enforces token/turn/wall-clock budgets per subagent role. `AgentCognitionManager` tracks budget spend per phase, detects spinning (same tool 3+ times), and enforces cognitive gates. `AdaptiveHITLPolicy` with `HumanTask` pauses execution when confidence or risk triggers fire. Coder dispatches require executable proof of work before completion.
 
 **Phase 7 — Distributed WorkflowEngine**
 

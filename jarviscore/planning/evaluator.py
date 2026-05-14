@@ -20,13 +20,9 @@ Only "success" outputs go through the LLM evaluation call.
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any, Optional
 
 from .goal_context import GoalExecution, PlannedStep, StepEvaluation
-
-logger = logging.getLogger(__name__)
-
 
 _EVAL_SCHEMA = """\
 Return ONLY a JSON object with exactly these fields:
@@ -193,7 +189,15 @@ class StepEvaluator:
         content = (
             response.get("content", "") if isinstance(response, dict) else str(response)
         )
-        return self._parse_evaluation(content, step)
+        try:
+            return self._parse_evaluation(content, step)
+        except EvaluatorError as first_error:
+            repaired = await self._repair_evaluation_response(
+                invalid_content=content,
+                parse_error=first_error,
+                eval_model=eval_model,
+            )
+            return self._parse_evaluation(repaired, step)
 
     # ── Prompt ────────────────────────────────────────────────────────────────
 
@@ -218,6 +222,47 @@ class StepEvaluator:
             f"Accumulated goal facts (do not re-extract these): {known}\n\n"
             f"{_EVAL_SCHEMA}"
         )
+
+    async def _repair_evaluation_response(
+        self,
+        invalid_content: str,
+        parse_error: EvaluatorError,
+        eval_model: Optional[str],
+    ) -> str:
+        """Ask the evaluator model to repair its response to the strict schema once."""
+        repair_prompt = (
+            "Your previous evaluation response violated the required contract.\n\n"
+            f"Parse error:\n{parse_error}\n\n"
+            f"Invalid response:\n{invalid_content[:1200]}\n\n"
+            "Rewrite it as valid JSON that obeys this exact schema. Do not change "
+            "the assessment, only repair the envelope and enum values.\n\n"
+            f"{_EVAL_SCHEMA}"
+        )
+        call_kwargs: dict = {
+            "messages": [{"role": "user", "content": repair_prompt}],
+            "response_format": {"type": "json_object"},
+        }
+        if eval_model:
+            call_kwargs["model"] = eval_model
+
+        try:
+            response = await self.llm.generate(**call_kwargs)
+        except TypeError:
+            fallback_kwargs: dict = {"messages": [{"role": "user", "content": repair_prompt}]}
+            if eval_model:
+                fallback_kwargs["model"] = eval_model
+            try:
+                response = await self.llm.generate(**fallback_kwargs)
+            except Exception as exc:
+                raise EvaluatorError(
+                    f"Evaluator repair LLM call failed after invalid response: {exc}"
+                ) from exc
+        except Exception as exc:
+            raise EvaluatorError(
+                f"Evaluator repair LLM call failed after invalid response: {exc}"
+            ) from exc
+
+        return response.get("content", "") if isinstance(response, dict) else str(response)
 
     def _format_output(self, output: Any) -> str:
         """
@@ -248,11 +293,11 @@ class StepEvaluator:
         Parse LLM JSON response into StepEvaluation.
         Raises EvaluatorError if the response is invalid or verdict is unrecognised.
 
-        Tries three strategies in order:
+        Tries two strategies in order:
           1. Direct JSON parse
           2. Extract balanced { } block from prose (handles markdown wrappers)
-          3. Natural-language verdict detection (✅/❌ / pass/fail prose)
-        Only raises EvaluatorError if all three fail.
+        Raises EvaluatorError if both fail. Prose verdict guessing is
+        intentionally rejected so planner loops see malformed evaluator output.
         """
         content = content.strip()
 
@@ -292,44 +337,6 @@ class StepEvaluator:
                 except json.JSONDecodeError:
                     pass
 
-        # ── Strategy 3: natural-language verdict detection ────────────────────
-        # Handles Azure GPT returning "✅ PASS" / "❌ FAIL" markdown prose.
-        if parsed is None:
-            lower = content.lower()
-            if any(s in lower for s in ("✅", "pass", "met the success", "criterion met", "criterion is met")):
-                logger.info(
-                    "[Evaluator] Prose PASS detected for step %s — treating as pass",
-                    step.step_id,
-                )
-                return StepEvaluation(
-                    verdict="pass",
-                    confidence=0.7,
-                    evaluator_note=content[:300],
-                    additional_findings={},
-                )
-            if any(s in lower for s in ("❌", "did not meet", "not met", "criterion not met")):
-                logger.info(
-                    "[Evaluator] Prose FAIL detected for step %s — treating as fail",
-                    step.step_id,
-                )
-                return StepEvaluation(
-                    verdict="fail",
-                    confidence=0.7,
-                    evaluator_note=content[:300],
-                    additional_findings={},
-                )
-            if any(s in lower for s in ("partial", "partially met", "some criteria")):
-                logger.info(
-                    "[Evaluator] Prose PARTIAL detected for step %s — treating as partial",
-                    step.step_id,
-                )
-                return StepEvaluation(
-                    verdict="partial",
-                    confidence=0.6,
-                    evaluator_note=content[:300],
-                    additional_findings={},
-                )
-
         if parsed is None:
             raise EvaluatorError(
                 f"Evaluator response is not valid JSON.\n"
@@ -341,6 +348,98 @@ class StepEvaluator:
             raise EvaluatorError(
                 f"Evaluator response must be a JSON object, got {type(parsed).__name__}"
             )
+
+        if "verdict" not in parsed and isinstance(parsed.get("evaluation"), dict):
+            evaluation = parsed["evaluation"]
+            success_value = str(evaluation.get("success_criterion_met", "")).lower().strip()
+            verdict_map = {
+                "true": "pass",
+                "yes": "pass",
+                "met": "pass",
+                "pass": "pass",
+                "partial": "partial",
+                "partially_met": "partial",
+                "partially met": "partial",
+                "some": "partial",
+                "false": "fail",
+                "no": "fail",
+                "not_met": "fail",
+                "not met": "fail",
+                "fail": "fail",
+                "unknown": "hitl",
+                "ambiguous": "hitl",
+                "hitl": "hitl",
+            }
+            if success_value in verdict_map:
+                reason = evaluation.get("reason", "")
+                if isinstance(reason, list):
+                    reason = " ".join(str(item) for item in reason)
+                parsed = {
+                    "verdict": verdict_map[success_value],
+                    "confidence": evaluation.get("confidence", parsed.get("confidence", 0.7)),
+                    "evaluator_note": evaluation.get(
+                        "evaluator_note",
+                        reason or parsed.get("evaluator_note", ""),
+                    ),
+                    "additional_findings": parsed.get("additional_findings", {}),
+                }
+
+        if "verdict" not in parsed and "success_criterion_met" in parsed:
+            success_value = str(parsed.get("success_criterion_met", "")).lower().strip()
+            verdict_map = {
+                "true": "pass",
+                "yes": "pass",
+                "met": "pass",
+                "pass": "pass",
+                "partial": "partial",
+                "partially_met": "partial",
+                "partially met": "partial",
+                "some": "partial",
+                "false": "fail",
+                "no": "fail",
+                "not_met": "fail",
+                "not met": "fail",
+                "fail": "fail",
+                "unknown": "hitl",
+                "ambiguous": "hitl",
+                "hitl": "hitl",
+            }
+            if success_value in verdict_map:
+                parsed = {
+                    "verdict": verdict_map[success_value],
+                    "confidence": parsed.get("confidence", 0.7),
+                    "evaluator_note": parsed.get(
+                        "evaluator_note",
+                        parsed.get("evaluation", parsed.get("reason", "")),
+                    ),
+                    "additional_findings": parsed.get("additional_findings", {}),
+                }
+
+        if "verdict" not in parsed and "status" in parsed:
+            status_value = str(parsed.get("status", "")).lower().strip()
+            status_map = {
+                "success": "pass",
+                "passed": "pass",
+                "pass": "pass",
+                "partial": "partial",
+                "partially_met": "partial",
+                "partially met": "partial",
+                "failure": "fail",
+                "failed": "fail",
+                "fail": "fail",
+                "blocked": "hitl",
+                "yield": "hitl",
+                "hitl": "hitl",
+                "needs_human": "hitl",
+                "needs human": "hitl",
+            }
+            if status_value in status_map:
+                parsed = {
+                    "verdict": status_map[status_value],
+                    "confidence": parsed.get("confidence", 0.7),
+                    "evaluator_note": parsed.get("evaluator_note", parsed.get("reason", "")),
+                    "additional_findings": parsed.get("additional_findings", {}),
+                }
 
         verdict = str(parsed.get("verdict", "")).lower().strip()
         if verdict not in ("pass", "partial", "fail", "hitl"):

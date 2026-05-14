@@ -34,7 +34,7 @@ The framework raises `ValueError` at startup if `system_prompt` is absent. Every
 | `system_prompt` | Yes | Base LLM system prompt; framework raises ValueError if absent |
 | `name` | No | Human-readable display name |
 | `description` | No | One-sentence purpose used by peers for routing decisions |
-| `default_kernel_role` | No | Skips Kernel role classification; one of `"researcher"`, `"coder"`, `"communicator"`, `"browser"` |
+| `default_kernel_role` | No | Preferred fallback role for specialist agents; one of `"researcher"`, `"coder"`, `"communicator"`, `"browser"`. Leave unset for generalists. |
 | `goal_oriented` | No | Defaults to `False`; set `True` for multi-step goal decomposition |
 | `requires_auth` | No | Defaults to `False`; set `True` to receive Nexus-backed `_auth_manager` |
 
@@ -242,7 +242,7 @@ Every sub-agent dispatch runs against an `ExecutionLease` — a token, turn, and
 |---|---|---|---|---|---|
 | `coder` | 132,000 | 108,000 | 240,000 | 4 min | 32 turns |
 | `researcher` | 180,000 | 60,000 | 240,000 | 4 min | 36 turns |
-| `communicator` | 72,000 | 48,000 | 120,000 | 2 min | 18 turns |
+| `communicator` | 72,000 | 48,000 | 120,000 | 4 min | 18 turns |
 | `browser` | 60,000 | 60,000 | 120,000 | 5 min | 28 turns |
 
 The turn fuse is an emergency hard-stop. If a sub-agent reaches 32 turns without completing, the Kernel terminates it regardless of token budget. This prevents runaway loops on adversarial or ambiguous tasks.

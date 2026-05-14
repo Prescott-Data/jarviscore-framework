@@ -396,14 +396,13 @@ class FailureLedger:
         # Redis cross-session check
         if self.redis_store and hasattr(self.redis_store, "has_failure_guard"):
             try:
-                from jarviscore.storage.redis_store import _REDIS_FAILURE_GUARD_KEY  # noqa: F401
-            except ImportError:
-                pass
-            try:
                 if self.redis_store.has_failure_guard("global", "unknown", fp):
                     return True
-            except Exception:
-                pass  # Redis unavailable — fall through to in-process check
+            except Exception as exc:
+                logger.warning(
+                    "[FailureLedger] Redis failure guard unavailable; using in-process guard only: %s",
+                    exc,
+                )
 
         # In-process ledger check
         now = time.time()

@@ -11,8 +11,11 @@ loop automatically. The execute_task() contract is unchanged.
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
 from jarviscore.core.profile import Profile
+
+if TYPE_CHECKING:
+    from jarviscore.planning.goal_context import GoalExecution
 
 
 
@@ -51,7 +54,7 @@ class AutoAgent(Profile):
     # ── Required class attributes ────────────────────────────────────────────
     # Every AutoAgent subclass must define these three.
     # role and capabilities are declared on the Agent base class.
-    system_prompt: str = None
+    system_prompt: Optional[str] = None
 
     # ── Optional capabilities — full reference ───────────────────────────────
     #
@@ -94,7 +97,7 @@ class AutoAgent(Profile):
     #
     # In goal_oriented mode the Planner assigns a subagent_hint to every step
     # ("coder", "researcher", "communicator", "browser"). This attribute is the
-    # agent-level fallback used when the Planner returns subagent_hint: null.
+    # agent-level explicit role used when the Planner returns subagent_hint: null.
     #
     # Use this on SPECIALIST agents where every task always uses the same role,
     # so the Planner null-hint path also routes correctly.
@@ -104,7 +107,7 @@ class AutoAgent(Profile):
     # Example:
     #     class SlackNotifier(AutoAgent):
     #         default_kernel_role = "communicator"  # always sends, never codes
-    default_kernel_role: str = None
+    default_kernel_role: Optional[str] = None
 
     # ── requires_auth ────────────────────────────────────────────────────────
     # Set True on agents that call third-party services (GitHub, Jira, Slack…).
@@ -132,11 +135,11 @@ class AutoAgent(Profile):
             )
 
         # Execution components (initialized in setup())
-        self.llm = None
-        self.codegen = None
-        self.sandbox = None
-        self.repair = None
-        self._kernel = None  # Production Kernel (registry-first → coder → research-on-failure)
+        self.llm: Any = None
+        self.codegen: Any = None
+        self.sandbox: Any = None
+        self.repair: Any = None
+        self._kernel: Any = None  # Production Kernel (registry-first → coder → research-on-failure)
 
         # ── Agent intelligence: profile block prepended to system prompt ──
         # Loaded lazily in setup() from jarviscore/profiles/agents/{role}.yaml
@@ -160,25 +163,9 @@ class AutoAgent(Profile):
         self._logger.info(f"AutoAgent setup: {self.agent_id}")
         self._logger.info(f"  Role: {self.role}")
         self._logger.info(f"  Capabilities: {self.capabilities}")
-        self._logger.info(f"  System Prompt: {self.system_prompt[:50]}...")
+        self._logger.info(f"  System Prompt: {str(self.system_prompt or '')[:50]}...")
 
-        # ── Load agent intelligence profile ─────────────────────────────────────
-        # Loads jarviscore/profiles/agents/{role}.yaml if it exists.
-        # Graceful no-op if PyYAML not installed or profile file absent.
-        try:
-            from jarviscore.profiles.agent_profile import AgentProfile
-            profile = AgentProfile.load(self.role)
-            if profile:
-                self._profile_block = profile.to_prompt_block()
-                self._logger.info(
-                    "[AutoAgent] Loaded intelligence profile for role=%s "
-                    "(%d SOPs, %d owns)",
-                    self.role, len(profile.sops), len(profile.owns)
-                )
-            else:
-                self._logger.debug("[AutoAgent] No intelligence profile for role=%s", self.role)
-        except Exception as _pe:
-            self._logger.debug("[AutoAgent] Profile load failed (non-fatal): %s", _pe)
+        self._load_agent_profile()
 
 
         # Get config from mesh (or use empty dict)
@@ -270,6 +257,52 @@ class AutoAgent(Profile):
 
         self._logger.info(f"✓ AutoAgent ready: {self.agent_id}")
 
+    async def teardown(self) -> None:
+        """Release AutoAgent-owned runtime resources."""
+        kernel = getattr(self, "_kernel", None)
+        if kernel is not None and hasattr(kernel, "teardown"):
+            try:
+                await kernel.teardown()
+            except Exception as exc:
+                self._logger.warning("[AutoAgent] Kernel teardown failed: %s", exc)
+        search = getattr(self, "search", None)
+        if search is not None and hasattr(search, "close"):
+            try:
+                await search.close()
+            except Exception as exc:
+                self._logger.warning("[AutoAgent] Search client close failed: %s", exc)
+        await super().teardown()
+
+    def _load_agent_profile(self) -> None:
+        """
+        Load structured role intelligence from AgentProfile, if available.
+
+        The rendered profile is prompt context. Runtime routing fields are also
+        applied when the class did not explicitly declare them, so persona YAML
+        can carry real framework semantics instead of being documentation only.
+        """
+        try:
+            from jarviscore.profiles.agent_profile import AgentProfile
+            profile = AgentProfile.load(self.role)
+            if profile:
+                self._profile_block = profile.to_prompt_block()
+                if self.default_kernel_role is None and profile.default_kernel_role:
+                    self.default_kernel_role = profile.default_kernel_role
+                    self._logger.info(
+                        "[AutoAgent] Applied profile default_kernel_role=%s for role=%s",
+                        self.default_kernel_role,
+                        self.role,
+                    )
+                self._logger.info(
+                    "[AutoAgent] Loaded intelligence profile for role=%s "
+                    "(%d SOPs, %d owns)",
+                    self.role, len(profile.sops), len(profile.owns)
+                )
+            else:
+                self._logger.debug("[AutoAgent] No intelligence profile for role=%s", self.role)
+        except Exception as _pe:
+            self._logger.debug("[AutoAgent] Profile load failed (non-fatal): %s", _pe)
+
     async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute task through the production Kernel pipeline.
@@ -280,8 +313,6 @@ class AutoAgent(Profile):
         3. Sandbox execution — real test
         4. Research-on-failure ONLY (Option C) — researcher fires with real error
         5. Auto-register success in FunctionRegistry (CANDIDATE → VERIFIED → GOLDEN)
-
-        Falls back to legacy direct codegen pipeline if Kernel unavailable.
 
         Args:
             task: Task specification with 'task' key (natural language)
@@ -302,39 +333,62 @@ class AutoAgent(Profile):
         self._logger.info(f"[AutoAgent] Executing via Kernel: {task_desc[:100]}...")
 
         # ── Goal-oriented routing ─────────────────────────────────────────────
-        # If goal_oriented=True, every task is a goal — route to execute_goal().
+        # goal_oriented=True means planner-capable, not planner-forced. The
+        # structured complexity classifier decides whether this task needs the
+        # full Plan→Execute→Evaluate loop or a direct Kernel turn.
         if self.goal_oriented:
             ctx = task.get('context', {}) if isinstance(task, dict) else {}
-
-            # Fast-path complexity gate
-            # Avoid full Planner DAG for trivial/single-step requests
+            self._direct_kernel_turn = False
+            self._direct_kernel_complexity = None
+            self._direct_kernel_reason = None
             try:
-                from jarviscore.planning.classifier import TaskComplexityClassifier
-                classifier = TaskComplexityClassifier(self.llm)
-                complexity = await classifier.classify(task_desc)
+                from jarviscore.planning.classifier import ComplexityVerdict, TaskComplexityClassifier
 
-                if complexity.level == "trivial":
-                    self._logger.info(f"[AutoAgent] Task classified as trivial, bypassing Planner: {complexity.reason}")
-                    self._trivial_bypass = True
-                else:
-                    self._logger.info(f"[AutoAgent] Task classified as {complexity.level}, routing to Planner.")
-                    execution = await self.execute_goal(
-                        goal=task_desc,
-                        context=ctx,
+                execution_contract: Dict[str, Any] = {}
+                if isinstance(ctx, dict) and isinstance(ctx.get("execution_contract"), dict):
+                    execution_contract = cast(Dict[str, Any], ctx.get("execution_contract"))
+                if execution_contract.get("execution_shape") in {"single_response", "single_artifact"}:
+                    complexity = ComplexityVerdict(
+                        level="moderate",
+                        reason=(
+                            "Task execution contract declares a bounded single-turn "
+                            f"{execution_contract.get('execution_shape')} deliverable."
+                        ),
                     )
-                    return {
-                        "status": execution.status if execution.status != "complete" else "success",
-                        "output": execution.result,
-                        "error": execution.error,
-                        "agent_id": self.agent_id,
-                        "role": self.role,
-                        "goal_execution": execution.to_summary_dict(),
-                        "tokens": {},
-                        "cost_usd": 0.0,
-                        "repairs": 0,
-                    }
+                else:
+                    classifier = TaskComplexityClassifier(self.llm)
+                    complexity = await classifier.classify(task_desc, context=ctx)
             except Exception as e:
-                self._logger.warning(f"[AutoAgent] Complexity classifier failed, routing to Planner: {e}")
+                self._logger.error("[AutoAgent] Complexity classifier failed: %s", e)
+                return {
+                    "status": "failure",
+                    "output": None,
+                    "error": f"Complexity classification failed: {e}",
+                    "agent_id": self.agent_id,
+                    "role": self.role,
+                    "goal_execution": {
+                        "status": "failed",
+                        "error": f"Complexity classification failed: {e}",
+                        "steps_completed": 0,
+                        "facts": 0,
+                    },
+                    "tokens": {},
+                    "cost_usd": 0.0,
+                    "repairs": 0,
+                }
+
+            if complexity is not None and complexity.level != "complex":
+                self._logger.info(
+                    "[AutoAgent] Task classified as %s; routing directly to Kernel: %s",
+                    complexity.level,
+                    complexity.reason,
+                )
+                self._direct_kernel_turn = True
+                self._direct_kernel_complexity = complexity.level
+                self._direct_kernel_reason = complexity.reason
+            elif not getattr(self, '_direct_kernel_turn', False):
+                if complexity is not None:
+                    self._logger.info("[AutoAgent] Task classified as complex, routing to Planner.")
                 execution = await self.execute_goal(
                     goal=task_desc,
                     context=ctx,
@@ -382,6 +436,7 @@ class AutoAgent(Profile):
                     context=kernel_ctx,
                     agent_id=self.agent_id,
                     agent_default_role=self.default_kernel_role,
+                    use_default_role_as_fallback=True,
                 )
 
                 meta = output.metadata or {}
@@ -399,16 +454,19 @@ class AutoAgent(Profile):
                     "dispatches": meta.get("dispatches", []),
                 }
 
-                if getattr(self, '_trivial_bypass', False):
+                if getattr(self, '_direct_kernel_turn', False):
                     elapsed_ms = meta.get("elapsed_ms", 0)
                     result["goal_execution"] = {
                         "steps_completed": 1,
                         "facts": 0,
                         "elapsed_ms": elapsed_ms,
-                        "bypassed_planner": True,
-                        "complexity": "trivial",
+                        "planner_mode": "direct_kernel",
+                        "complexity": getattr(self, "_direct_kernel_complexity", None) or "moderate",
+                        "reason": getattr(self, "_direct_kernel_reason", None),
                     }
-                    self._trivial_bypass = False
+                    self._direct_kernel_turn = False
+                    self._direct_kernel_complexity = None
+                    self._direct_kernel_reason = None
 
                 if hasattr(self, 'result_handler') and self.result_handler:
                     stored = self.result_handler.process_result(
@@ -442,12 +500,23 @@ class AutoAgent(Profile):
 
             except Exception as exc:
                 self._logger.error(
-                    "Kernel raised exception — falling back to legacy pipeline: %s", exc,
+                    "Kernel raised exception: %s", exc,
                     exc_info=True,
                 )
-                # Fall through to legacy pipeline
+                return {
+                    "status": "failure",
+                    "output": None,
+                    "payload": None,
+                    "error": f"Kernel exception: {exc}",
+                    "tokens": {"input": 0, "output": 0, "total": 0},
+                    "cost_usd": 0.0,
+                    "repairs": 0,
+                    "agent_id": self.agent_id,
+                    "role": self.role,
+                    "dispatches": [],
+                }
 
-        # ── Legacy pipeline (fallback if Kernel unavailable or crashed) ────────
+        # ── Legacy pipeline (only when Kernel has not been initialised) ────────
         self._logger.warning("[AutoAgent] Using legacy direct-codegen pipeline for %s", self.agent_id)
 
         total_tokens = {"input": 0, "output": 0, "total": 0}
@@ -455,7 +524,7 @@ class AutoAgent(Profile):
         repairs_attempted = 0
 
         try:
-            code_result = await self.codegen.generate(
+            code_result = await cast(Any, self.codegen).generate(
                 task=task,
                 system_prompt=effective_system_prompt,
                 context=task.get('context') if isinstance(task, dict) else None,
@@ -464,19 +533,19 @@ class AutoAgent(Profile):
             exec_code = code_result if isinstance(code_result, str) else getattr(code_result, 'code', str(code_result))
             self._logger.debug(f"Generated {len(exec_code)} chars of code")
 
-            result = await self.sandbox.execute(
+            result = await cast(Any, self.sandbox).execute(
                 exec_code,
                 context=task.get('context') if isinstance(task, dict) else None,
             )
 
             if result['status'] == 'failure':
                 self._logger.info("Attempting autonomous repair...")
-                repair_result = await self.repair.repair_with_retries(
+                repair_result = await cast(Any, self.repair).repair_with_retries(
                     code=exec_code,
                     error=Exception(result.get('error', 'Unknown error')),
                     task=task,
                     system_prompt=effective_system_prompt,
-                    executor=self.sandbox,
+                    executor=cast(Any, self.sandbox),
                 )
                 result = repair_result
                 repairs_attempted = len(repair_result.get('attempts', []))
@@ -555,6 +624,18 @@ class AutoAgent(Profile):
 
     # ── Long-horizon goal execution ───────────────────────────────────────────
 
+    def _hitl_category_from_output(self, output: Any) -> str:
+        """Map Kernel yield metadata to the strict HITL category contract."""
+        metadata = getattr(output, "metadata", None) or {}
+        typed_outcome = str(metadata.get("typed_outcome", "")).lower()
+        reason = str(metadata.get("escalation_reason", "")).lower()
+
+        if "auth" in typed_outcome or "auth" in reason:
+            return "auth_required"
+        if any(marker in reason for marker in ("approve", "irreversible", "sensitive", "critical")):
+            return "critical_action"
+        return "data_required"
+
     async def execute_goal(
         self,
         goal: str,
@@ -631,7 +712,7 @@ class AutoAgent(Profile):
         )
 
         # Shared planner and evaluator — stateless, reused across steps
-        planner = Planner(self.llm, system_prompt_excerpt=self.system_prompt[:400])
+        planner = Planner(self.llm, system_prompt_excerpt=str(self.system_prompt or "")[:400])
         evaluator = StepEvaluator(self.llm)
 
         # The live execution state — carries the TruthContext across all steps
@@ -768,6 +849,7 @@ class AutoAgent(Profile):
                                 f"**Confidence:** {evaluation.confidence:.0%}"
                             ),
                             urgency="normal",
+                            category=self._hitl_category_from_output(output),
                             context={
                                 "goal": goal,
                                 "step_id": step.step_id,

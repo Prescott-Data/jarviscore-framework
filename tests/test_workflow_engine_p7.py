@@ -23,6 +23,7 @@ import pytest
 
 from jarviscore import Mesh
 from jarviscore.core.agent import Agent
+from jarviscore.orchestration.engine import WorkflowEngine
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +61,21 @@ class SlowAgent(Agent):
         return {"status": "success", "output": "slow_done"}
 
 
+class CancelAwareAgent(Agent):
+    """Runs until cancelled so workflow cancellation can be verified."""
+    role = "cancel_aware"
+    capabilities = ["cancel_aware"]
+    cancelled = False
+
+    async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            type(self).cancelled = True
+            raise
+        return {"status": "success", "output": "unexpected"}
+
+
 class FailAgent(Agent):
     """Always returns a failure result."""
     role = "fail"
@@ -76,6 +92,32 @@ class WaitAgent(Agent):
 
     async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "waiting", "reason": "human approval required"}
+
+
+class YieldAgent(Agent):
+    """Returns a non-terminal yield result that must not satisfy dependencies."""
+    role = "yield_agent"
+    capabilities = ["yield_agent"]
+
+    async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        return {"status": "yield", "summary": "budget exhausted"}
+
+
+class UnknownStatusAgent(Agent):
+    """Returns a malformed status that must fail visibly."""
+    role = "unknown_status"
+    capabilities = ["unknown_status"]
+
+    async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        return {"status": "mystery", "output": "bad"}
+
+
+class FakeRemoteRedis:
+    def get_step_status(self, workflow_id: str, step_id: str) -> str:
+        return "completed"
+
+    def get_step_output(self, workflow_id: str, step_id: str):
+        return None
 
 
 class ContextAgent(Agent):
@@ -157,6 +199,27 @@ class TestParallelExecution:
         assert all(r["status"] == "success" for r in results)
         # Sequential would take ≥ 0.2 s; concurrent takes < 0.18 s
         assert elapsed < 0.18, f"Steps ran sequentially (took {elapsed:.3f}s)"
+
+    async def test_workflow_cancellation_cancels_running_steps(self):
+        """Cancelling workflow execution must propagate to in-flight step tasks."""
+        CancelAwareAgent.cancelled = False
+        mesh = make_mesh()
+        mesh.add(CancelAwareAgent)
+        await mesh.start()
+        workflow_task = asyncio.create_task(
+            mesh.workflow("wf-cancel", [
+                {"id": "s1", "agent": "cancel_aware", "task": "wait"}
+            ])
+        )
+        try:
+            await asyncio.sleep(0.05)
+            workflow_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(workflow_task, timeout=1)
+        finally:
+            await mesh.stop()
+
+        assert CancelAwareAgent.cancelled is True
 
 
 # ======================================================================
@@ -253,6 +316,47 @@ class TestFailureHandling:
 
         assert results[0]["status"] == "failure"
         assert "No agent found" in results[0].get("error", "")
+
+    async def test_yield_result_is_failed_not_completed(self):
+        mesh = make_mesh()
+        mesh.add(YieldAgent)
+        await mesh.start()
+        try:
+            results = await mesh.workflow("wf-yield", [
+                {"agent": "yield_agent", "task": "go"}
+            ])
+            memory = mesh._workflow_engine.memory
+        finally:
+            await mesh.stop()
+
+        assert results[0]["status"] == "yield"
+        assert memory == {}
+
+    async def test_unknown_status_is_not_completed(self):
+        mesh = make_mesh()
+        mesh.add(UnknownStatusAgent)
+        await mesh.start()
+        try:
+            results = await mesh.workflow("wf-unknown-status", [
+                {"agent": "unknown_status", "task": "go"}
+            ])
+            memory = mesh._workflow_engine.memory
+        finally:
+            await mesh.stop()
+
+        assert results[0]["status"] == "mystery"
+        assert memory == {}
+
+    async def test_remote_completed_without_output_is_failure(self):
+        engine = WorkflowEngine(
+            mesh=type("MeshStub", (), {"agents": []})(),
+            redis_store=FakeRemoteRedis(),
+        )
+
+        result = await engine._wait_remote_step("wf-remote", "remote-step", timeout=0.01)
+
+        assert result["status"] == "failure"
+        assert "no output" in result["error"]
 
 
 # ======================================================================

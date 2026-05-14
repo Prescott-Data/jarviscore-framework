@@ -34,9 +34,9 @@ async def test_complexity_gate_trivial(MockClassifier):
     result = await agent.execute_task({"task": "Say hello"})
 
     # Assert classifier was called
-    mock_classifier_instance.classify.assert_called_once_with("Say hello")
+    mock_classifier_instance.classify.assert_called_once_with("Say hello", context={})
 
-    # Assert kernel was called directly (Planner bypassed)
+    # Assert kernel was called directly.
     agent._kernel.execute.assert_called_once()
 
     # Result should be from the kernel
@@ -67,10 +67,27 @@ async def test_complexity_gate_complex(mock_execute_goal, MockClassifier):
     result = await agent.execute_task({"task": "Do research"})
 
     # Assert classifier was called
-    mock_classifier_instance.classify.assert_called_once_with("Do research")
+    mock_classifier_instance.classify.assert_called_once_with("Do research", context={})
 
-    # Assert execute_goal was called (Planner NOT bypassed)
+    # Assert execute_goal was called.
     mock_execute_goal.assert_called_once()
 
     # Result should be from the goal execution
     assert result["status"] == "success"
+
+@pytest.mark.asyncio
+@patch("jarviscore.planning.classifier.TaskComplexityClassifier")
+@patch.object(DummyGoalAgent, "execute_goal", new_callable=AsyncMock)
+async def test_complexity_gate_failure_is_visible(mock_execute_goal, MockClassifier):
+    mock_classifier_instance = AsyncMock()
+    MockClassifier.return_value = mock_classifier_instance
+    mock_classifier_instance.classify.side_effect = RuntimeError("invalid classifier JSON")
+
+    agent = DummyGoalAgent()
+    agent.llm = AsyncMock()
+
+    result = await agent.execute_task({"task": "Do research"})
+
+    assert result["status"] == "failure"
+    assert "Complexity classification failed" in result["error"]
+    mock_execute_goal.assert_not_called()

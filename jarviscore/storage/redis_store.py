@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import redis
 
@@ -31,7 +31,7 @@ class RedisContextStore:
     TTL is applied to prevent unbounded growth.
     """
 
-    def __init__(self, settings=None, client: redis.Redis = None):
+    def __init__(self, settings=None, client: Optional[redis.Redis] = None):
         """
         Initialize Redis context store.
 
@@ -39,24 +39,25 @@ class RedisContextStore:
             settings: Settings instance with redis_* fields
             client: Pre-built Redis client (for testing with fakeredis)
         """
+        self._redis: Any
         if client is not None:
-            self._redis = client
+            self._redis = cast(Any, client)
         elif settings is not None:
             url = getattr(settings, "redis_url", None)
             if url:
-                self._redis = redis.Redis.from_url(url, decode_responses=True)
+                self._redis = cast(Any, redis.Redis.from_url(url, decode_responses=True))
             else:
-                self._redis = redis.Redis(
+                self._redis = cast(Any, redis.Redis(
                     host=getattr(settings, "redis_host", "localhost"),
                     port=getattr(settings, "redis_port", 6379),
                     password=getattr(settings, "redis_password", None),
                     db=getattr(settings, "redis_db", 0),
                     decode_responses=True,
-                )
+                ))
         else:
-            self._redis = redis.Redis(
+            self._redis = cast(Any, redis.Redis(
                 host="localhost", port=6379, db=0, decode_responses=True
-            )
+            ))
 
         self._ttl_seconds = getattr(settings, "redis_context_ttl_days", 7) * 86400
         self.enabled = True
@@ -84,8 +85,8 @@ class RedisContextStore:
     )  # 20 KB preview
 
     def save_step_output(self, workflow_id: str, step_id: str,
-                         output: Any = None, summary: str = None,
-                         context_vars: Dict = None) -> bool:
+                         output: Any = None, summary: Optional[str] = None,
+                         context_vars: Optional[Dict] = None) -> bool:
         """
         Save step result to Redis.
 
@@ -129,8 +130,13 @@ class RedisContextStore:
                         workflow_id, step_id,
                     )
                     return True
-            except Exception:
-                pass  # Cannot parse existing — allow the write
+            except Exception as exc:
+                logger.warning(
+                    "Could not inspect existing step output for %s:%s before overwrite guard: %s",
+                    workflow_id,
+                    step_id,
+                    exc,
+                )
 
         # ── Payload size guard ───────────────────────────────────────────────
         # Serialise first so we know the exact byte cost before pushing to Redis.

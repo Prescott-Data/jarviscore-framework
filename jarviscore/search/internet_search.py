@@ -112,6 +112,9 @@ class InternetSearch:
             or os.environ.get("GEMINI_API_KEY")
             or os.environ.get("GOOGLE_GENAI_API_KEY", "")
         )
+        self._allow_wikipedia_fallback = os.environ.get(
+            "RESEARCH_ALLOW_WIKIPEDIA_FALLBACK", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
 
     async def initialize(self):
         """Initialize the HTTP session"""
@@ -185,33 +188,82 @@ class InternetSearch:
         await self.initialize()
         skip = set(exclude_providers or ())
 
-        encoded_query = quote_plus(query)
-        provider_tasks = []
-        if "google_grounded" not in skip and (self._gcp_project or self._gemini_api_key):
-            provider_tasks.append(self._search_google_grounded(query, max_results=max_results))
-        if self.serper_api_key and "serper" not in skip:
-            provider_tasks.append(self._search_serper(query, max_results=max_results))
-        if "searxng" not in skip:
-            provider_tasks.append(self._search_searxng(query, max_results=max_results))
-        if "wikipedia" not in skip:
-            provider_tasks.append(self._search_wikipedia(query, max_results=max_results))
-        if "arxiv" not in skip:
-            provider_tasks.append(self._search_arxiv(query, max_results=max_results))
-        if "crossref" not in skip:
-            provider_tasks.append(self._search_crossref(query, max_results=max_results))
-        provider_results = await asyncio.gather(
-            *(asyncio.wait_for(task, timeout=6) for task in provider_tasks),
-            return_exceptions=True,
-        )
-        results: List[Dict[str, Any]] = []
-        for batch in provider_results:
-            if isinstance(batch, Exception):
-                logger.warning(f"Search provider failed: {batch}")
+        provider_tiers = self._provider_tiers(skip)
+        for tier_name, providers in provider_tiers:
+            if not providers:
                 continue
-            elif isinstance(batch, list):
-                results.extend(batch)
-        ranked = self._rank_results(query, results)
-        return ranked[:max_results]
+            logger.info(
+                "InternetSearch tier=%s providers=%s query=%s",
+                tier_name,
+                ",".join(providers),
+                query,
+            )
+            provider_results = await asyncio.gather(
+                *(
+                    asyncio.wait_for(
+                        self._run_search_provider(provider, query, max_results),
+                        timeout=6,
+                    )
+                    for provider in providers
+                ),
+                return_exceptions=True,
+            )
+            results: List[Dict[str, Any]] = []
+            for batch in provider_results:
+                if isinstance(batch, Exception):
+                    logger.warning("Search provider failed in tier %s: %s", tier_name, batch)
+                    continue
+                if isinstance(batch, list):
+                    results.extend(batch)
+            ranked = self._rank_results(query, results)
+            if ranked:
+                return ranked[:max_results]
+        return []
+
+    def _provider_tiers(self, skip: set) -> List[Tuple[str, List[str]]]:
+        """Return ordered provider tiers from authoritative to fallback."""
+        tiers: List[Tuple[str, List[str]]] = []
+        if "google_grounded" not in skip and (self._gcp_project or self._gemini_api_key):
+            tiers.append(("grounded", ["google_grounded"]))
+
+        configured_general: List[str] = []
+        if self.serper_api_key and "serper" not in skip:
+            configured_general.append("serper")
+        if "searxng" not in skip:
+            configured_general.append("searxng")
+        tiers.append(("general_web", configured_general))
+
+        scholarly = [
+            provider for provider in ("arxiv", "crossref")
+            if provider not in skip
+        ]
+        tiers.append(("scholarly", scholarly))
+
+        primary_available = any(providers for name, providers in tiers if name in {"grounded", "general_web"})
+        if "wikipedia" not in skip and (self._allow_wikipedia_fallback or not primary_available):
+            tiers.append(("last_resort", ["wikipedia"]))
+        return tiers
+
+    async def _run_search_provider(
+        self,
+        provider: str,
+        query: str,
+        max_results: int,
+    ) -> List[Dict[str, Any]]:
+        if provider == "google_grounded":
+            return await self._search_google_grounded(query, max_results=max_results)
+        if provider == "serper":
+            return await self._search_serper(query, max_results=max_results)
+        if provider == "searxng":
+            return await self._search_searxng(query, max_results=max_results)
+        if provider == "arxiv":
+            return await self._search_arxiv(query, max_results=max_results)
+        if provider == "crossref":
+            return await self._search_crossref(query, max_results=max_results)
+        if provider == "wikipedia":
+            return await self._search_wikipedia(query, max_results=max_results)
+        logger.warning("Unknown search provider skipped: %s", provider)
+        return []
 
     def _rank_results(self, query: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         tokens = set(re.findall(r"[a-z0-9]+", query.lower()))
@@ -830,8 +882,8 @@ class InternetSearch:
         finally:
             try:
                 await browser.session.disconnect()
-            except:
-                pass
+            except Exception as exc:
+                logger.warning("Browser extraction disconnect failed: %s", exc)
 
     async def extract_content(self, url: str) -> Dict[str, Any]:
         """

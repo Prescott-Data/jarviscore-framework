@@ -554,10 +554,10 @@ async def test_11_goal_oriented(mesh):
 
     goal_exec = step.get("goal_execution")
     if goal_exec:
-        bypassed = goal_exec.get("bypassed_planner", False)
-        if bypassed:
-            report("Response includes goal_execution summary (trivial bypass)", True,
-                   f"steps={goal_exec.get('steps_completed')}, bypassed_planner=True")
+        planner_mode = goal_exec.get("planner_mode")
+        if planner_mode == "direct_kernel":
+            report("Response includes goal_execution summary (direct kernel)", True,
+                   f"steps={goal_exec.get('steps_completed')}, planner_mode=direct_kernel")
         else:
             report("Response includes goal_execution summary", True,
                    f"steps={goal_exec.get('steps_completed')}, elapsed={goal_exec.get('elapsed_ms')}")
