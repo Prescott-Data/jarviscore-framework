@@ -102,8 +102,12 @@ class LifecycleMonitor:
                         if self.on_attention:
                             try:
                                 self.on_attention(connection_id)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                logger.exception(
+                                    "Nexus attention callback failed for connection %s: %s",
+                                    connection_id,
+                                    exc,
+                                )
 
                     if status in _TERMINAL_STATES:
                         logger.info(

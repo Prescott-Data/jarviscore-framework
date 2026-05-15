@@ -488,6 +488,23 @@ class CoderSandbox:
     # Namespace
     # ─────────────────────────────────────────────────────────────
 
+    def get_manifest(self) -> str:
+        """Return a string listing all pre-loaded modules and globals available in the sandbox."""
+        ns = self._build_namespace(None)
+        available = []
+        import types
+        for key, value in ns.items():
+            if key == '__builtins__': continue
+            if isinstance(value, types.ModuleType):
+                available.append(f"- {key} (module)")
+            elif isinstance(value, type):
+                available.append(f"- {key} (class)")
+            elif callable(value):
+                available.append(f"- {key}() (function/callable)")
+            else:
+                available.append(f"- {key} ({type(value).__name__})")
+        return "\\n".join(sorted(available))
+
     def _build_namespace(self, context: Optional[Dict]) -> Dict:
         """
         Build the execution namespace with all Coder capabilities injected.

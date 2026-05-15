@@ -83,6 +83,7 @@ These become important once you run more than two agents concurrently against a 
 | `LLM_MAX_CONCURRENT` | `0` | Maximum concurrent LLM calls across the whole process. `0` means unlimited. Set to approximately `RPM ÷ avg_latency_seconds` to avoid 429 storms in multi-agent deployments. |
 | `LLM_MAX_RETRIES_429` | `4` | Retry attempts when a provider returns 429 before giving up. |
 | `LLM_429_BASE_DELAY` | `2.0` | Exponential backoff base delay in seconds. Actual delay: `min(base × 2^attempt, 60s)`. |
+| `AZURE_CONTENT_FILTER_REPAIR_ENABLED` | `false` | Opt into an Azure-specific content-filter retry that applies a provider-safe preamble and neutral wording after the raw prompt is rejected. Off by default so prompt rewriting never hides developer intent. |
 
 ---
 

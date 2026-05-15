@@ -459,6 +459,19 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
     def get_role_description(self) -> str:
         return "Find API specifications, documentation, and libraries for the assigned task."
 
+    async def teardown(self) -> None:
+        """Close researcher-owned network/browser resources."""
+        try:
+            await self.internet_search.close()
+        except Exception as exc:
+            logger.warning("[RESEARCHER] InternetSearch close failed: %s", exc)
+        if self._dispatcher is not None:
+            try:
+                await self._tool_browser_close()
+            except Exception as exc:
+                logger.warning("[RESEARCHER] Browser dispatcher close failed: %s", exc)
+        await super().teardown()
+
     def _set_research_phase(self, phase: ResearchPhase, reason: str) -> None:
         if self.current_state:
             self.current_state.internal_variables["research_flow"] = ResearchFlow.snapshot(phase, reason)
@@ -2505,7 +2518,7 @@ DOCUMENTATION TEXT:
         logger.info("[RESEARCHER] Browser dispatcher initialized (profile=%s)", self._browser_profile_name)
 
         if (
-            getattr(settings, "BROWSER_CAPTURE_ENABLED", False)
+            _env_bool("BROWSER_CAPTURE_ENABLED", False)
             and self.current_state
             and not self.current_state.internal_variables.get("browser_capture_started")
         ):

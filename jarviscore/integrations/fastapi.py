@@ -127,15 +127,27 @@ class JarvisLifespan:
         logger.info(f"JarvisLifespan: Mesh started with {len(self._nodes)} agent(s)")
 
         # 4. Launch agent run() loops as background tasks
-        # This is crucial - without backgrounding, the HTTP server would hang
+        # Only agents explicitly marked as P2P responders get a background listener loop
         for node in self._nodes:
-            if hasattr(node, 'run') and asyncio.iscoroutinefunction(node.run):
-                task = asyncio.create_task(
-                    self._run_agent_with_error_handling(node),
-                    name=f"jarvis-agent-{node.agent_id}"
-                )
-                self._background_tasks.append(task)
-                logger.info(f"JarvisLifespan: Started background loop for {node.role}")
+            if getattr(node, 'p2p_responder', False):
+                # Fast fail: If it claims to be a responder but doesn't override the default no-op run loop
+                # we fail early instead of spawning a zombie task
+                from jarviscore.core.agent import Agent
+                if hasattr(node, 'run') and node.run.__code__ is Agent.run.__code__:
+                    raise RuntimeError(
+                        f"Agent '{node.role}' claims to be a p2p_responder but inherits the base no-op run() loop. "
+                        f"You must implement an active run() loop to listen for P2P messages."
+                    )
+
+                if hasattr(node, 'run') and asyncio.iscoroutinefunction(node.run):
+                    task = asyncio.create_task(
+                        self._run_agent_with_error_handling(node),
+                        name=f"jarvis-agent-{node.agent_id}"
+                    )
+                    self._background_tasks.append(task)
+                    logger.info(f"JarvisLifespan: Started background loop for {node.role}")
+            else:
+                logger.debug(f"JarvisLifespan: Skipping background loop for {node.role} (not a p2p_responder)")
 
         # 5. Inject state into FastAPI app for handler access
         app.state.jarvis_mesh = self.mesh

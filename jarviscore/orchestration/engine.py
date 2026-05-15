@@ -200,102 +200,124 @@ class WorkflowEngine:
         pending -= state.failed_steps
         pending -= set(state.waiting_steps.keys())
 
-        while pending or running_tasks:
+        try:
+            while pending or running_tasks:
 
-            # ── HARVEST ──────────────────────────────────────────────
-            done_ids = [sid for sid, t in running_tasks.items() if t.done()]
-            for step_id in done_ids:
-                task = running_tasks.pop(step_id)
-                state.running_steps.pop(step_id, None)
+                # ── HARVEST ──────────────────────────────────────────────
+                done_ids = [sid for sid, t in running_tasks.items() if t.done()]
+                for step_id in done_ids:
+                    task = running_tasks.pop(step_id)
+                    state.running_steps.pop(step_id, None)
 
-                try:
-                    result = task.result()
-                except Exception as exc:
-                    logger.error(f"Step {step_id} raised: {exc}", exc_info=True)
-                    result = {
-                        "status": "failure",
-                        "error": str(exc),
-                        "step_id": step_id,
-                    }
-
-                self._record_result(workflow_id, step_id, result, state, pending)
-                results[step_id] = result
-
-            # ── DECIDE ───────────────────────────────────────────────
-            launchable = []
-            for step_id in list(pending):
-                if step_id in running_tasks:
-                    continue
-                step = step_map[step_id]
-                dep_ids = self._resolve_dependency_ids(
-                    step.get("depends_on", []), steps
-                )
-                if self._deps_met(dep_ids, state, workflow_id):
-                    launchable.append(step)
-
-            # ── ACT ──────────────────────────────────────────────────
-            for step in launchable:
-                step_id = step["id"]
-                dep_ids = self._resolve_dependency_ids(
-                    step.get("depends_on", []), steps
-                )
-                dep_outputs = {d: self.memory.get(d) for d in dep_ids}
-
-                self.status_manager.update(step_id, StepStatus.IN_PROGRESS.value)
-                if self.redis_store:
-                    self.redis_store.update_step_status(
-                        workflow_id, step_id, "in_progress"
-                    )
-
-                state.running_steps[step_id] = time.time()
-                task = asyncio.create_task(
-                    self._execute_step(workflow_id, step, dep_outputs),
-                    name=f"step-{step_id}",
-                )
-                running_tasks[step_id] = task
-                logger.info(f"Launched step {step_id}")
-
-            # ── PERSIST ──────────────────────────────────────────────
-            self._save_state(state)
-
-            # ── DEADLOCK DETECTION ───────────────────────────────────
-            if not running_tasks and pending:
-                unblocked = any(
-                    self._deps_met(
-                        self._resolve_dependency_ids(
-                            step_map[sid].get("depends_on", []), steps
-                        ),
-                        state,
-                        workflow_id,
-                    )
-                    for sid in pending
-                )
-                if not unblocked:
-                    logger.error(
-                        f"Deadlock in {workflow_id}: steps {pending} cannot be satisfied"
-                    )
-                    for sid in list(pending):
-                        state.failed_steps.add(sid)
-                        results[sid] = {
+                    try:
+                        result = task.result()
+                    except Exception as exc:
+                        logger.error(f"Step {step_id} raised: {exc}", exc_info=True)
+                        result = {
                             "status": "failure",
-                            "error": "dependency deadlock — dependencies will never complete",
-                            "step_id": sid,
+                            "error": str(exc),
+                            "step_id": step_id,
                         }
-                        pending.discard(sid)
-                    break
 
-            # ── PACE ─────────────────────────────────────────────────
-            if running_tasks:
-                try:
-                    await asyncio.wait(
-                        running_tasks.values(),
-                        return_when=asyncio.FIRST_COMPLETED,
-                        timeout=1.0,
+                    self._record_result(workflow_id, step_id, result, state, pending)
+                    results[step_id] = result
+
+                # ── DECIDE ───────────────────────────────────────────────
+                launchable = []
+                for step_id in list(pending):
+                    if step_id in running_tasks:
+                        continue
+                    step = step_map[step_id]
+                    dep_ids = self._resolve_dependency_ids(
+                        step.get("depends_on", []), steps
                     )
-                except Exception:
+                    if self._deps_met(dep_ids, state, workflow_id):
+                        launchable.append(step)
+
+                # ── ACT ──────────────────────────────────────────────────
+                for step in launchable:
+                    step_id = step["id"]
+                    dep_ids = self._resolve_dependency_ids(
+                        step.get("depends_on", []), steps
+                    )
+                    dep_outputs = {d: self.memory.get(d) for d in dep_ids}
+
+                    self.status_manager.update(step_id, StepStatus.IN_PROGRESS.value)
+                    if self.redis_store:
+                        self.redis_store.update_step_status(
+                            workflow_id, step_id, "in_progress"
+                        )
+
+                    state.running_steps[step_id] = time.time()
+                    task = asyncio.create_task(
+                        self._execute_step(workflow_id, step, dep_outputs),
+                        name=f"step-{step_id}",
+                    )
+                    running_tasks[step_id] = task
+                    logger.info(f"Launched step {step_id}")
+
+                # ── PERSIST ──────────────────────────────────────────────
+                self._save_state(state)
+
+                # ── DEADLOCK DETECTION ───────────────────────────────────
+                if not running_tasks and pending:
+                    unblocked = any(
+                        self._deps_met(
+                            self._resolve_dependency_ids(
+                                step_map[sid].get("depends_on", []), steps
+                            ),
+                            state,
+                            workflow_id,
+                        )
+                        for sid in pending
+                    )
+                    if not unblocked:
+                        logger.error(
+                            f"Deadlock in {workflow_id}: steps {pending} cannot be satisfied"
+                        )
+                        for sid in list(pending):
+                            state.failed_steps.add(sid)
+                            results[sid] = {
+                                "status": "failure",
+                                "error": "dependency deadlock — dependencies will never complete",
+                                "step_id": sid,
+                            }
+                            pending.discard(sid)
+                        break
+
+                # ── PACE ─────────────────────────────────────────────────
+                if running_tasks:
+                    try:
+                        await asyncio.wait(
+                            running_tasks.values(),
+                            return_when=asyncio.FIRST_COMPLETED,
+                            timeout=1.0,
+                        )
+                    except Exception:
+                        await asyncio.sleep(0.5)
+                elif pending:
                     await asyncio.sleep(0.5)
-            elif pending:
-                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            logger.warning(
+                "Workflow %s cancelled; cancelling %d in-flight step(s)",
+                workflow_id,
+                len(running_tasks),
+            )
+            for task in running_tasks.values():
+                task.cancel()
+            if running_tasks:
+                await asyncio.gather(*running_tasks.values(), return_exceptions=True)
+            for step_id in running_tasks:
+                state.running_steps.pop(step_id, None)
+                state.failed_steps.add(step_id)
+                results[step_id] = {
+                    "status": "failure",
+                    "error": "workflow cancelled",
+                    "step_id": step_id,
+                }
+            state.status = "failed"
+            self._save_state(state)
+            raise
 
         # ── Finalise workflow status ──────────────────────────────────
         if state.waiting_steps:
@@ -433,11 +455,16 @@ class WorkflowEngine:
         # P2P broadcast (best-effort, never fails the step)
         if self.p2p and hasattr(self.p2p, "broadcaster"):
             try:
+                broadcast_status = (
+                    result.get("status", "unknown")
+                    if isinstance(result, dict)
+                    else "unknown"
+                )
                 await self.p2p.broadcaster.broadcast_step_result(
                     step_id=step_id,
                     workflow_id=workflow_id,
                     output_data=result,
-                    status="success",
+                    status=broadcast_status,
                 )
             except Exception as err:
                 logger.warning(f"Broadcast failed for {step_id}: {err}")
@@ -468,7 +495,11 @@ class WorkflowEngine:
                 if saved:
                     # get_step_output returns {"output": result_dict, ...}
                     return saved.get("output", saved)
-                return {"status": "success", "step_id": step_id}
+                return {
+                    "status": "failure",
+                    "error": "Remote node marked step completed but no output was found",
+                    "step_id": step_id,
+                }
             if status == "failed":
                 return {
                     "status": "failure",
@@ -550,24 +581,7 @@ class WorkflowEngine:
         """Classify a step result and update state + Redis accordingly."""
         status = result.get("status") if isinstance(result, dict) else None
 
-        if status == "waiting":
-            reason = result.get("reason", "HITL")
-            state.waiting_steps[step_id] = reason
-            self.status_manager.update(step_id, StepStatus.WAITING.value)
-            if self.redis_store:
-                self.redis_store.update_step_status(workflow_id, step_id, "waiting")
-            logger.info(f"Step {step_id} waiting: {reason}")
-
-        elif status == "failure":
-            state.failed_steps.add(step_id)
-            self.status_manager.update(
-                step_id, StepStatus.FAILED.value, error=result.get("error")
-            )
-            if self.redis_store:
-                self.redis_store.update_step_status(workflow_id, step_id, "failed")
-            logger.warning(f"Step {step_id} failed: {result.get('error')}")
-
-        else:
+        if status == "success":
             state.processed_steps.add(step_id)
             self.memory[step_id] = result
             self.status_manager.update(
@@ -579,6 +593,34 @@ class WorkflowEngine:
                     workflow_id, step_id, output=result
                 )
             logger.info(f"Step {step_id} completed")
+
+        elif status == "waiting":
+            reason = result.get("reason", "HITL")
+            state.waiting_steps[step_id] = reason
+            self.status_manager.update(step_id, StepStatus.WAITING.value)
+            if self.redis_store:
+                self.redis_store.update_step_status(workflow_id, step_id, "waiting")
+            logger.info(f"Step {step_id} waiting: {reason}")
+
+        elif status in {"failure", "failed", "error", "yield", "hitl", "blocked"}:
+            state.failed_steps.add(step_id)
+            error = result.get("error") or result.get("summary") or f"Step ended with status={status}"
+            self.status_manager.update(
+                step_id, StepStatus.FAILED.value, error=error
+            )
+            if self.redis_store:
+                self.redis_store.update_step_status(workflow_id, step_id, "failed")
+            logger.warning(f"Step {step_id} failed: {error}")
+
+        else:
+            state.failed_steps.add(step_id)
+            error = f"Invalid step status {status!r}; expected success, waiting, or failure."
+            self.status_manager.update(
+                step_id, StepStatus.FAILED.value, error=error
+            )
+            if self.redis_store:
+                self.redis_store.update_step_status(workflow_id, step_id, "failed")
+            logger.error(f"Step {step_id} failed: {error}")
 
         pending.discard(step_id)
 

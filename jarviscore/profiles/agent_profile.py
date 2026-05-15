@@ -38,12 +38,17 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Profile directory resolution:
-#   1. JARVISCORE_PROFILES_DIR env var (set by the application repo)
-#   2. Bundled fallback: jarviscore/profiles/agents/ (example.yaml only)
-_PROFILES_DIR = Path(
-    os.environ.get("JARVISCORE_PROFILES_DIR", "")
-) if os.environ.get("JARVISCORE_PROFILES_DIR") else Path(__file__).parent / "agents"
+def _profiles_dir() -> Path:
+    """
+    Resolve the active profile directory at load time.
+
+    Applications often set JARVISCORE_PROFILES_DIR during their own bootstrap,
+    which can happen after this module is imported by another JarvisCore path.
+    """
+    configured = os.environ.get("JARVISCORE_PROFILES_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).parent / "agents"
 
 
 class AgentProfile:
@@ -57,7 +62,7 @@ class AgentProfile:
         domain_facts:         Static facts about the org/context
         owns:                 Artifacts this agent produces (accountability)
         escalates_to:         Who to HITL when blocked
-        default_kernel_role:  "coder"|"researcher"|"communicator" — bypasses classifier
+        default_kernel_role:  Optional explicit Kernel routing hint
     """
 
     def __init__(
@@ -68,7 +73,7 @@ class AgentProfile:
         domain_facts: Dict[str, str],
         owns: List[str],
         escalates_to: List[str],
-        default_kernel_role: str = "communicator",
+        default_kernel_role: Optional[str] = None,
     ) -> None:
         self.role = role
         self.expertise = expertise
@@ -91,7 +96,7 @@ class AgentProfile:
         Returns:
             AgentProfile, or None if no profile found (graceful degradation).
         """
-        yaml_path = _PROFILES_DIR / f"{role_name.lower()}.yaml"
+        yaml_path = _profiles_dir() / f"{role_name.lower()}.yaml"
         if not yaml_path.exists():
             logger.debug("[AgentProfile] No profile found for '%s' at %s", role_name, yaml_path)
             return None
@@ -114,7 +119,7 @@ class AgentProfile:
                 domain_facts=data.get("domain_facts", {}),
                 owns=data.get("owns", []),
                 escalates_to=data.get("escalates_to", []),
-                default_kernel_role=data.get("default_kernel_role", "communicator"),
+                default_kernel_role=data.get("default_kernel_role"),
             )
         except Exception as exc:
             logger.warning("[AgentProfile] Failed to load profile '%s': %s", role_name, exc)

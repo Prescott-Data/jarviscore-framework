@@ -38,40 +38,31 @@ logger = logging.getLogger(__name__)
 
 _VALID_HINTS = frozenset({"coder", "researcher", "communicator", "browser"})
 
-# Common LLM-hallucinated hints → closest valid role.
-# Prevents noisy "Unknown subagent_hint" warnings and gives better routing.
-_HINT_ALIASES: Dict[str, str] = {
-    "analyst":       "researcher",
-    "data_analyst":  "researcher",
-    "data":          "researcher",
-    "investigator":  "researcher",
-    "architect":     "researcher",   # goal_oriented planning sessions emit this
-    "strategist":    "researcher",
-    "planner":       "researcher",
-    "writer":        "communicator",
-    "author":        "communicator",
-    "editor":        "communicator",
-    "reporter":      "communicator",
-    "developer":     "coder",
-    "programmer":    "coder",
-    "engineer":      "coder",
-    "scraper":       "browser",
-    "crawler":       "browser",
-    "web":           "browser",
-}
-
 _SUBAGENT_GUIDE = """\
 Available subagent types (set subagent_hint to route directly):
 - "researcher"   : web search, document retrieval, data gathering, investigation, analysis
 - "coder"        : code generation, data processing, API calls, file I/O, computation
 - "communicator" : drafting text, reports, emails, structured documents
 - "browser"      : web automation, form filling, UI interaction, screenshots
-If subagent_hint is null, the kernel classifies automatically from the task text.
+If subagent_hint is null, the kernel obtains a structured routing decision.
 """
 
 _OUTPUT_SCHEMA = """\
-Return ONLY a JSON array. No prose, no markdown fences, no explanation.
-Each element must have exactly these fields:
+Return ONLY JSON. No prose, no markdown fences, no explanation.
+Preferred shape:
+{
+  "steps": [
+    {
+      "step_id"           : "<unique slug, e.g. step_01_gather_data>",
+      "task"              : "<complete, self-contained task the agent can act on immediately>",
+      "success_criterion" : "<concrete, observable condition that means this step is done>",
+      "expected_findings" : ["<snake_case key this step should produce>", ...],
+      "subagent_hint"     : "<MUST be exactly one of: researcher, coder, communicator, browser, null>"
+    }
+  ]
+}
+
+Each step must have exactly these fields:
 {
   "step_id"           : "<unique slug, e.g. step_01_gather_data>",
   "task"              : "<complete, self-contained task the agent can act on immediately>",
@@ -311,6 +302,8 @@ class Planner:
         Accepts:
           - A raw JSON array: [{"step_id": ..., "task": ..., ...}, ...]
           - A JSON object wrapping an array: {"steps": [...]} or {"plan": [...]}
+          - A single strict step object: {"step_id": ..., "task": ..., ...}
+          - A single named step object: {"step_01_name": {"step_id": ..., "task": ..., ...}}
 
         Raises PlannerError if:
           - The response is not valid JSON
@@ -346,6 +339,12 @@ class Planner:
                 if key in parsed and isinstance(parsed[key], list):
                     raw = parsed[key]
                     break
+            if raw is None and "task" in parsed and "success_criterion" in parsed:
+                raw = [parsed]
+            if raw is None and len(parsed) == 1:
+                only_value = next(iter(parsed.values()))
+                if isinstance(only_value, dict) and "task" in only_value and "success_criterion" in only_value:
+                    raw = [only_value]
             if raw is None:
                 raise PlannerError(
                     f"Planner returned a JSON object with no recognisable steps array.\n"
@@ -382,36 +381,10 @@ class Planner:
             if hint in (None, "null", ""):
                 hint = None
             elif hint not in _VALID_HINTS:
-                hint_lower = hint.lower() if isinstance(hint, str) else ""
-                # 1. Fast-path: known alias map
-                alias = _HINT_ALIASES.get(hint_lower)
-                if alias:
-                    logger.info(
-                        "[Planner] Remapped subagent_hint %r → %r in step %d",
-                        hint, alias, i,
-                    )
-                    hint = alias
-                else:
-                    # 2. Semantic fallback: find closest valid type by string similarity
-                    # so unknown hints are never silently dropped to null
-                    import difflib
-                    matches = difflib.get_close_matches(
-                        hint_lower, _VALID_HINTS, n=1, cutoff=0.4
-                    )
-                    if matches:
-                        logger.info(
-                            "[Planner] Unknown subagent_hint %r — fuzzy matched to %r in step %d",
-                            hint, matches[0], i,
-                        )
-                        hint = matches[0]
-                    else:
-                        # 3. Last resort: let kernel auto-classify from task text
-                        logger.debug(
-                            "[Planner] Unknown subagent_hint %r in step %d — "
-                            "no alias or fuzzy match found, kernel will auto-classify",
-                            hint, i,
-                        )
-                        hint = None
+                raise PlannerError(
+                    f"Step {i} has invalid subagent_hint {hint!r}. "
+                    f"Expected one of {sorted(_VALID_HINTS)} or null."
+                )
 
             step_id = item.get("step_id") or f"step_{i+1:02d}_{uuid.uuid4().hex[:4]}"
             steps.append(PlannedStep(

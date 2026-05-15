@@ -205,8 +205,12 @@ class Workflow:
                 if redis_store:
                     try:
                         redis_store.update_step_status(self.workflow_id, step.step_id, "in_progress")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(
+                            "[Workflow] Failed to persist in_progress for step %s: %s",
+                            step.step_id,
+                            exc,
+                        )
 
                 try:
                     result = await asyncio.wait_for(
@@ -217,14 +221,29 @@ class Workflow:
                         ),
                         timeout=timeout_per_step,
                     )
-                    step.status = "success"
-                    step.result = result
+                    result_status = result.get("status") if isinstance(result, dict) else "success"
+                    if result_status == "success":
+                        step.status = "success"
+                        step.result = result
+                        output = result
+                        error = None
+                    else:
+                        step.status = str(result_status or "failure")
+                        step.result = None
+                        output = None
+                        error = (
+                            result.get("error")
+                            or result.get("summary")
+                            or f"Step ended with status={result_status!r}"
+                            if isinstance(result, dict)
+                            else f"Step returned invalid status={result_status!r}"
+                        )
                     entry = {
                         "step_id": step.step_id,
                         "agent": step.agent,
-                        "status": "success",
-                        "output": result,
-                        "error": None,
+                        "status": step.status,
+                        "output": output,
+                        "error": error,
                         "elapsed_ms": round((time.time() - t0) * 1000),
                     }
                 except asyncio.TimeoutError:
@@ -251,8 +270,12 @@ class Workflow:
                 if redis_store:
                     try:
                         redis_store.update_step_status(self.workflow_id, step.step_id, step.status)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(
+                            "[Workflow] Failed to persist final status for step %s: %s",
+                            step.step_id,
+                            exc,
+                        )
 
                 logger.info(
                     "[Workflow] Step %s: %s (%dms)",

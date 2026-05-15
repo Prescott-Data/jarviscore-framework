@@ -430,10 +430,10 @@ class UnifiedLLMClient:
         "for internal business operations and professional use only.]\n\n"
     )
 
-    # Phrases that Azure's hate-filter heuristic commonly flags in
-    # business/competitive-analysis contexts.  Keyed as (original, replacement).
-    _HATE_FILTER_SUBSTITUTIONS = [
-        # Competitive / adversarial language
+    # Optional provider repair map for known Azure false-positive content filter
+    # triggers. This is disabled by default; applications must opt in via
+    # AZURE_CONTENT_FILTER_REPAIR_ENABLED=true because it changes prompt text.
+    _AZURE_FILTER_REPAIR_SUBSTITUTIONS = [
         ("kill the competition",      "outperform competitors"),
         ("destroy competitors",       "outperform competitors"),
         ("crush the competition",     "outperform competitors"),
@@ -448,7 +448,6 @@ class UnifiedLLMClient:
         ("target audience",           "intended audience"),
         ("target users",              "intended users"),
         ("target customers",          "intended customers"),
-        # Security / pen-test language that triggers hate filter
         ("exploit vulnerability",     "address vulnerability"),
         ("exploit weaknesses",        "identify weaknesses"),
         ("penetration testing",       "security testing"),
@@ -456,20 +455,16 @@ class UnifiedLLMClient:
 
     @classmethod
     def _sanitize_for_azure(cls, messages: List[Dict]) -> List[Dict]:
-        """Wrap system messages with Azure-safe preamble and neutralise language
-        that triggers Azure's content filter (jailbreak + hate false-positives)."""
+        """Apply opt-in Azure content-filter repair after a raw prompt is rejected."""
         sanitized = []
         for msg in messages:
             if msg["role"] == "system":
                 content = msg["content"]
-                # Jailbreak heuristic phrases
                 content = content.replace("You don't wait for instructions — you self-direct", 
                                           "You proactively execute tasks")
                 content = content.replace("you self-direct within your domain",
                                           "you take initiative on tasks in your area")
-                # Hate-filter false-positive phrases (case-insensitive replacement)
-                for trigger, safe in cls._HATE_FILTER_SUBSTITUTIONS:
-                    # Case-insensitive replace without re.sub overhead
+                for trigger, safe in cls._AZURE_FILTER_REPAIR_SUBSTITUTIONS:
                     lower = content.lower()
                     idx = lower.find(trigger.lower())
                     while idx != -1:
@@ -482,8 +477,7 @@ class UnifiedLLMClient:
                 })
             elif msg["role"] == "user":
                 content = msg["content"]
-                # Apply the same hate-filter substitutions to user messages
-                for trigger, safe in cls._HATE_FILTER_SUBSTITUTIONS:
+                for trigger, safe in cls._AZURE_FILTER_REPAIR_SUBSTITUTIONS:
                     lower = content.lower()
                     idx = lower.find(trigger.lower())
                     while idx != -1:
@@ -510,12 +504,10 @@ class UnifiedLLMClient:
 
         logger.debug("_call_azure: deployment=%s, response_format=%s", deployment, response_format)
 
-        # Try up to 2 passes: raw messages first, sanitized on content filter hit
-        attempts = [
-            ("raw", messages),
-            ("sanitized", self._sanitize_for_azure(messages)),
-        ]
-
+        repair_enabled = bool(self.config.get("azure_content_filter_repair_enabled", False))
+        attempts = [("raw", messages)]
+        if repair_enabled:
+            attempts.append(("provider_repaired", self._sanitize_for_azure(messages)))
         last_error = None
         for label, attempt_messages in attempts:
             start_time = time.time()
@@ -543,7 +535,7 @@ class UnifiedLLMClient:
                     or "ResponsibleAIPolicyViolation" in error_str
                     or "jailbreak" in error_str.lower()
                 )
-                if is_content_filter and label == "raw":
+                if is_content_filter and label == "raw" and repair_enabled:
                     # Identify the actual filter category for accurate logging
                     filter_cat = "unknown"
                     for cat in ("hate", "jailbreak", "violence", "self_harm", "sexual"):
@@ -552,19 +544,27 @@ class UnifiedLLMClient:
                             break
                     logger.warning(
                         "Azure content filter triggered (category=%s, likely false-positive). "
-                        "Retrying with sanitized prompt...",
+                        "Retrying with opt-in provider prompt repair.",
                         filter_cat,
                     )
                     last_error = e
-                    continue  # try sanitized version
+                    continue
+                if is_content_filter and label == "raw":
+                    raise RuntimeError(
+                        "Azure content filter blocked the raw prompt. "
+                        "JarvisCore does not rewrite prompts by default because that can "
+                        "hide or alter developer intent. Revise the prompt or explicitly "
+                        "set AZURE_CONTENT_FILTER_REPAIR_ENABLED=true to opt into Azure "
+                        "provider prompt repair."
+                    ) from e
                 raise  # non-filter error or already sanitized — propagate
 
             duration = time.time() - start_time
             content = response.choices[0].message.content
             usage = response.usage
 
-            if label == "sanitized":
-                logger.info("Azure content filter bypass succeeded with sanitized prompt.")
+            if label == "provider_repaired":
+                logger.info("Azure content filter retry succeeded with opt-in provider prompt repair.")
 
             # Calculate cost
             pricing = TOKEN_PRICING.get(deployment, {"input": 3.0, "output": 15.0})
@@ -581,7 +581,8 @@ class UnifiedLLMClient:
                 },
                 "cost_usd": cost,
                 "model": deployment,
-                "duration_seconds": duration
+                "duration_seconds": duration,
+                "content_filter_repaired": label == "provider_repaired",
             }
 
         # Both attempts failed on content filter — raise the last error

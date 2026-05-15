@@ -9,9 +9,10 @@ Tests the CustomAgent profile in distributed execution mode:
 
 This file uses REAL LLM API calls (not mocks).
 
-Run with: pytest tests/test_10_distributed_customagent.py -v -s
+Run with: RUN_REAL_LLM_TESTS=1 pytest tests/test_10_distributed_customagent.py -v -s
 """
 import asyncio
+import os
 import sys
 import pytest
 import logging
@@ -38,8 +39,8 @@ except Exception:
     HAS_API_KEY = False
 
 pytestmark = pytest.mark.skipif(
-    not HAS_API_KEY,
-    reason="No LLM API key configured in .env"
+    os.environ.get("RUN_REAL_LLM_TESTS") != "1" or not HAS_API_KEY,
+    reason="Real LLM integration tests are opt-in and require provider credentials",
 )
 
 

@@ -17,9 +17,12 @@ The kernel owns:
 - Blocker detection and escalation
 """
 
+import json
 import logging
+import os
 import time
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, cast
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.context.context_manager import ContextManager, BudgetConfig
@@ -30,27 +33,162 @@ from jarviscore.kernel.hitl import AdaptiveHITLPolicy
 
 logger = logging.getLogger(__name__)
 
-# Keywords that suggest a task needs research before coding
-_RESEARCH_KEYWORDS = frozenset({
-    "find", "search", "look up", "investigate", "research",
-    "what is", "how does", "explain", "analyze", "compare",
-})
-
-# Keywords that suggest a task is a communication/reporting task
-_COMMUNICATION_KEYWORDS = frozenset({
-    "send", "notify", "report", "summarize", "draft",
-    "email", "message", "communicate", "format",
-})
-
-# Keywords that suggest a task requires a real browser (JS, auth, interactive UI)
-_BROWSER_KEYWORDS = frozenset({
-    "browser", "click", "navigate", "screenshot", "fill form",
-    "login to", "log in to", "scrape", "automate", "playwright",
-    "selenium", "headless", "web automation", "interact with",
-})
-
 # Minimum registry confidence to skip code generation
 _REGISTRY_REUSE_SCORE_THRESHOLD = 2  # semantic_search score units
+_BUILTIN_KERNEL_ROLES = frozenset(ROLE_LEASE_PROFILES.keys())
+
+
+class RoutingError(RuntimeError):
+    """Raised when Kernel cannot obtain a valid, typed routing decision."""
+
+
+@dataclass(frozen=True)
+class RoutingDecision:
+    role: str
+    confidence: float
+    reason: str
+    evidence_required: bool = False
+
+
+class TaskRouter:
+    """Structured LLM router for Kernel subagent role selection."""
+
+    _SYSTEM_PROMPT = """\
+You are JarvisCore's Kernel router. Choose the single best subagent role for one task.
+
+Return ONLY a JSON object:
+{
+  "role": "<one value from valid_roles>",
+  "confidence": 0.0-1.0,
+  "reason": "one concise sentence",
+  "evidence_required": true | false
+}
+
+Built-in role contract:
+- coder: write/execute code, process files/data, call APIs, compute or transform data.
+- researcher: gather unknown facts from web/docs/files, investigate, compare evidence.
+- communicator: draft/review/summarize/structure decisions, reports, messages, requests, JSON contracts.
+- browser: operate an interactive browser/UI: navigation, clicks, screenshots, forms, login flows.
+
+Use the task, context summary, agent default role, and available registry/handoff context.
+For custom roles, use role_catalog from the payload as the authoritative contract.
+Do not use keyword matching. If the task asks for missing access/data/founder input, route to
+communicator unless it explicitly requires browser UI work. Prefer coder only when executable
+processing is actually required.
+"""
+
+    def __init__(
+        self,
+        llm_client,
+        model: Optional[str] = None,
+        min_confidence: float = 0.55,
+        valid_roles: Optional[List[str]] = None,
+        role_catalog: Optional[Dict[str, str]] = None,
+    ):
+        self.llm = llm_client
+        self.model = model
+        self.min_confidence = min_confidence
+        self.valid_roles = frozenset(valid_roles or sorted(_BUILTIN_KERNEL_ROLES))
+        self.role_catalog = role_catalog or {}
+
+    async def route(
+        self,
+        *,
+        task: str,
+        context: Optional[Dict[str, Any]] = None,
+        agent_default_role: Optional[str] = None,
+    ) -> RoutingDecision:
+        if self.llm is None:
+            raise RoutingError("Kernel routing requires an LLM client when no explicit role is provided")
+
+        context_summary = self._summarize_context(context or {})
+        payload = {
+            "task": task,
+            "context_summary": context_summary,
+            "agent_default_role": agent_default_role,
+            "valid_roles": sorted(self.valid_roles),
+            "role_catalog": self.role_catalog,
+        }
+        messages = [
+            {"role": "system", "content": self._SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
+        ]
+        kwargs: Dict[str, Any] = {
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": 500,
+            "response_format": {"type": "json_object"},
+        }
+        if self.model:
+            kwargs["model"] = self.model
+        try:
+            response = await self.llm.generate(**kwargs)
+        except TypeError:
+            kwargs.pop("response_format", None)
+            response = await self.llm.generate(**kwargs)
+        except Exception as exc:
+            raise RoutingError(f"Kernel router LLM call failed: {exc}") from exc
+
+        content = response.get("content", "") if isinstance(response, dict) else str(response)
+        data = self._parse_json_object(content)
+        role = str(data.get("role", "")).lower().strip()
+        if role not in self.valid_roles:
+            raise RoutingError(f"Kernel router returned invalid role {role!r}: {content[:300]}")
+
+        try:
+            confidence = float(data.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, confidence))
+        if confidence < self.min_confidence:
+            raise RoutingError(
+                f"Kernel router confidence too low ({confidence:.2f}) for role {role!r}: "
+                f"{data.get('reason', '')}"
+            )
+
+        return RoutingDecision(
+            role=role,
+            confidence=confidence,
+            reason=str(data.get("reason", ""))[:500],
+            evidence_required=bool(data.get("evidence_required", False)),
+        )
+
+    @staticmethod
+    def _summarize_context(context: Dict[str, Any]) -> Dict[str, Any]:
+        keys = [
+            "workflow_id",
+            "step_id",
+            "complexity",
+            "system",
+            "previous_step_results",
+            "registry_candidate",
+            "meeting_step_id",
+            "task_id",
+        ]
+        summary: Dict[str, Any] = {}
+        for key in keys:
+            if key in context:
+                value = context[key]
+                rendered = json.dumps(value, ensure_ascii=False, default=str)
+                summary[key] = rendered[:1200]
+        return summary
+
+    @staticmethod
+    def _parse_json_object(content: str) -> Dict[str, Any]:
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start < 0 or end <= start:
+                raise RoutingError(f"Kernel router response is not JSON: {content[:300]}")
+            try:
+                parsed = json.loads(content[start:end])
+            except json.JSONDecodeError as exc:
+                raise RoutingError(f"Kernel router response is not valid JSON: {content[:300]}") from exc
+        if not isinstance(parsed, dict):
+            raise RoutingError(f"Kernel router response must be a JSON object, got {type(parsed).__name__}")
+        return parsed
 
 
 class Kernel:
@@ -101,10 +239,20 @@ class Kernel:
         # AutoAgent forwards it lazily at execute_task() time (because Mesh
         # injects _auth_manager AFTER setup() completes — see mesh.py:292-312).
         # Kernel uses it to resolve credentials before sandbox execution.
-        self.auth_manager = None
+        self.auth_manager: Any = None
 
         # Subagent cache — reuse within same workflow step
         self._subagent_cache: Dict[str, Any] = {}
+        self._role_lease_profiles: Dict[str, Dict[str, Any]] = dict(ROLE_LEASE_PROFILES)
+        self._role_lease_profiles.update(self.config.get("kernel_role_profiles", {}) or {})
+        self._role_catalog: Dict[str, str] = dict(self.config.get("kernel_role_catalog", {}) or {})
+        self._task_router = TaskRouter(
+            llm_client=llm_client,
+            model=self._get_model_for_tier("task", complexity="nano"),
+            min_confidence=float(self.config.get("kernel_router_min_confidence", 0.55)),
+            valid_roles=sorted(self._role_lease_profiles),
+            role_catalog=self._role_catalog,
+        )
 
     def _get_model_for_tier(self, tier: str, complexity: Optional[str] = None) -> Optional[str]:
         """Resolve model name from tier using config.
@@ -158,56 +306,49 @@ class Kernel:
         return None
 
 
-    def _classify_task(self, task: str, context: Optional[Dict] = None) -> str:
+    async def _route_task(
+        self,
+        task: str,
+        context: Optional[Dict] = None,
+        *,
+        agent_default_role: Optional[str] = None,
+        use_default_role_as_fallback: bool = False,
+    ) -> RoutingDecision:
         """
-        Classify a task into a subagent role.
-
-        Respects `default_kernel_role` declared on the AutoAgent subclass first.
-        This lets agents like Sentinel (always researcher) and Quill (always
-        communicator) skip keyword guessing and route correctly every time.
-
-        Returns: "coder", "researcher", "communicator", or "browser"
+        Route a task into a subagent role using explicit contracts first, then
+        a structured LLM router. Keyword routing is intentionally not used.
         """
-        # Check for agent-declared default role (from enriched context set by kernel)
-        if context and context.get("_agent_default_kernel_role"):
-            return context["_agent_default_kernel_role"]
+        explicit_role = None
+        if context:
+            explicit_role = context.get("_agent_default_kernel_role")
+        if agent_default_role and not use_default_role_as_fallback:
+            explicit_role = agent_default_role
 
-        lower = task.lower()
-        words = lower.split()
+        if explicit_role:
+            normalized_role = str(explicit_role).lower().strip()
+            if normalized_role not in self._role_lease_profiles:
+                raise RoutingError(f"Explicit kernel role {explicit_role!r} is not valid")
+            return RoutingDecision(
+                role=normalized_role,
+                confidence=1.0,
+                reason="Explicit planner/profile role.",
+            )
 
-        # Browser tasks take highest priority — real browser needed
-        for kw in _BROWSER_KEYWORDS:
-            kw_words = kw.split()
-            if len(kw_words) == 1:
-                if kw in words:
-                    return "browser"
-            else:
-                if kw in lower:
-                    return "browser"
+        return await self._task_router.route(
+            task=task,
+            context=context,
+            agent_default_role=agent_default_role,
+        )
 
-        # Check for communication keywords (word-level match to avoid
-        # substring false positives like "format" in "information")
-        for kw in _COMMUNICATION_KEYWORDS:
-            kw_words = kw.split()
-            if len(kw_words) == 1:
-                if kw in words:
-                    return "communicator"
-            else:
-                if kw in lower:
-                    return "communicator"
-
-        # Check for research keywords
-        for kw in _RESEARCH_KEYWORDS:
-            kw_words = kw.split()
-            if len(kw_words) == 1:
-                if kw in words:
-                    return "researcher"
-            else:
-                if kw in lower:
-                    return "researcher"
-
-        # Default to coder (most common case)
-        return "coder"
+    def _lease_for_role(self, role: str) -> ExecutionLease:
+        """Create a lease from built-in or application-registered role profile."""
+        profile = self._role_lease_profiles.get(role)
+        if profile is None:
+            raise RoutingError(
+                f"No lease profile registered for kernel role {role!r}. "
+                "Add config['kernel_role_profiles'][role] or use a built-in role."
+            )
+        return ExecutionLease(**profile)
 
     def _get_or_create_subagent(self, role: str, agent_id: str, step_id: str):
         """Get a cached subagent or create a new one.
@@ -224,11 +365,33 @@ class Kernel:
         self._subagent_cache[cache_key] = subagent
         return subagent
 
-    def _cleanup_step(self, step_id: str) -> None:
+    async def _cleanup_step(self, step_id: str) -> None:
         """Remove cached subagents for a completed step."""
         keys_to_remove = [k for k in self._subagent_cache if k.startswith(f"{step_id}:")]
         for key in keys_to_remove:
-            del self._subagent_cache[key]
+            subagent = self._subagent_cache.pop(key)
+            teardown = getattr(subagent, "teardown", None)
+            if teardown is not None:
+                try:
+                    result = teardown()
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception as exc:
+                    logger.warning("[Kernel] Subagent teardown failed for %s: %s", key, exc)
+
+    async def teardown(self) -> None:
+        """Release all cached subagent resources owned by this Kernel."""
+        keys_to_remove = list(self._subagent_cache)
+        for key in keys_to_remove:
+            subagent = self._subagent_cache.pop(key)
+            teardown = getattr(subagent, "teardown", None)
+            if teardown is not None:
+                try:
+                    result = teardown()
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception as exc:
+                    logger.warning("[Kernel] Subagent teardown failed for %s: %s", key, exc)
 
     def _create_subagent(self, role: str, agent_id: str):
         """Create a subagent instance for the given role."""
@@ -291,14 +454,22 @@ class Kernel:
             if self.redis_store or self.blob_storage:
                 # Try to get AthenaClient from settings
                 athena_client = None
+                athena_configured = False
                 try:
-                    from jarviscore.config.settings import get_settings
+                    from jarviscore.config.settings import Settings
                     from jarviscore.memory.athena_client import AthenaClient
-                    _settings = get_settings()
-                    if getattr(_settings, "athena_url", None):
+                    _settings = cast(Any, Settings)()
+                    athena_configured = bool(
+                        getattr(_settings, "athena_url", None)
+                        or os.environ.get("ATHENA_URL")
+                    )
+                    if athena_configured:
                         athena_client = AthenaClient.from_env()
-                except Exception:
-                    pass   # Athena not configured — no Tier 4
+                except Exception as exc:
+                    if athena_configured or os.environ.get("ATHENA_URL"):
+                        logger.warning("[Kernel] Athena memory tier configured but unavailable: %s", exc)
+                    else:
+                        logger.debug("[Kernel] Athena memory tier not configured: %s", exc)
 
                 return UnifiedMemory(
                     workflow_id=workflow_id,
@@ -315,7 +486,7 @@ class Kernel:
 
     def _create_context_manager(self, role: str) -> ContextManager:
         """Create a ContextManager with role-appropriate budget config."""
-        profile = ROLE_LEASE_PROFILES.get(role, {})
+        profile = self._role_lease_profiles.get(role, {})
         total_tokens = profile.get("max_total_tokens", 80_000)
 
         config = BudgetConfig(
@@ -403,6 +574,7 @@ class Kernel:
         agent_id: str = "kernel",
         max_dispatches: int = 3,
         agent_default_role: Optional[str] = None,
+        use_default_role_as_fallback: bool = False,
     ) -> AgentOutput:
         """
         Execute a task through the OODA loop.
@@ -413,7 +585,9 @@ class Kernel:
             context: Optional context (dependencies, previous results)
             agent_id: Agent identifier for tracking
             max_dispatches: Maximum subagent dispatches before giving up
-            agent_default_role: If set, skip keyword classification and use this role.
+            agent_default_role: Preferred role from the agent/profile.
+            use_default_role_as_fallback: If true, classify the task first and use
+                agent_default_role only when the classifier has no stronger signal.
 
         Returns:
             AgentOutput with the final result
@@ -460,12 +634,47 @@ class Kernel:
             else:
                 enriched_context = dict(context) if context else {}
 
-            # 1. OBSERVE + ORIENT: classify task and select subagent
-            role = self._classify_task(task, context)
-            logger.info(f"[Kernel] Dispatch {dispatch_num + 1}: task → {role}")
+            # 1. OBSERVE + ORIENT: obtain a typed routing decision.
+            class_ctx = dict(context) if context else {}
+            try:
+                routing = await self._route_task(
+                    task,
+                    class_ctx,
+                    agent_default_role=agent_default_role,
+                    use_default_role_as_fallback=use_default_role_as_fallback,
+                )
+            except RoutingError as route_exc:
+                logger.error("[Kernel] Routing failed: %s", route_exc)
+                return AgentOutput(
+                    status="failure",
+                    payload={"error": str(route_exc), "stage": "kernel_routing"},
+                    summary=f"Kernel routing failed: {route_exc}",
+                    trajectory=[],
+                    metadata={
+                        "tokens": total_tokens,
+                        "cost_usd": total_cost,
+                        "dispatches": dispatches,
+                        "elapsed_ms": (time.time() - start_time) * 1000,
+                        "routing_error": str(route_exc),
+                    },
+                )
+            role = routing.role
+            enriched_context["_kernel_routing"] = {
+                "role": routing.role,
+                "confidence": routing.confidence,
+                "reason": routing.reason,
+                "evidence_required": routing.evidence_required,
+            }
+            logger.info(
+                "[Kernel] Dispatch %d: task → %s (confidence=%.2f, reason=%s)",
+                dispatch_num + 1,
+                role,
+                routing.confidence,
+                routing.reason,
+            )
 
             # 2. DECIDE: create lease, cognition, memory, context manager
-            lease = ExecutionLease.for_role(role)
+            lease = self._lease_for_role(role)
             cognition = AgentCognitionManager(
                 lease=lease,
                 agent_id=agent_id,
@@ -547,7 +756,7 @@ class Kernel:
 
 
             # ── Dispatch subagent with full infrastructure ──
-            output = await subagent.run(
+            output = await cast(Any, subagent).run(
                 task=task,
                 context=enriched_context if enriched_context else None,
                 max_turns=max_turns,
@@ -591,12 +800,13 @@ class Kernel:
                 "summary": output.summary,
                 "model": model,
                 "typed_outcome": meta.get("typed_outcome"),
+                "routing": enriched_context.get("_kernel_routing"),
             }
             dispatches.append(dispatch_record)
 
             # 4. EVALUATE: check result
             if output.status == "success":
-                self._cleanup_step(step_id)
+                await self._cleanup_step(step_id)
                 return AgentOutput(
                     status="success",
                     payload=output.payload,
@@ -624,6 +834,7 @@ class Kernel:
                         "dispatches": dispatches,
                         "yield_pending": True,
                         "typed_outcome": meta.get("typed_outcome"),
+                        "elapsed_ms": (time.time() - start_time) * 1000,
                     },
                 )
 
@@ -647,7 +858,7 @@ class Kernel:
                     "Find the correct endpoint, request format, authentication method, "
                     "and any required parameters. Return structured API specs."
                 )
-                research_output = await research_agent.run(
+                research_output = await cast(Any, research_agent).run(
                     task=research_task,
                     context=enriched_context,
                     max_turns=8,
@@ -681,7 +892,7 @@ class Kernel:
             if isinstance(coder_payload, dict) and coder_payload.get("hitl_required"):
                 auth_error_type = coder_payload.get("auth_error_type", "auth_required")
                 system_name = enriched_context.get("system", "unknown")
-                self._cleanup_step(step_id)
+                await self._cleanup_step(step_id)
                 return AgentOutput(
                     status="yield",
                     summary=(
@@ -722,7 +933,7 @@ class Kernel:
                     risk_score=risk_from_spend,
                 )
                 if should_escalate:
-                    self._cleanup_step(step_id)
+                    await self._cleanup_step(step_id)
                     return AgentOutput(
                         status="yield",
                         summary=f"Escalated to human: {reason}",
@@ -739,7 +950,7 @@ class Kernel:
 
         # All dispatches exhausted
         elapsed = (time.time() - start_time) * 1000
-        self._cleanup_step(step_id)
+        await self._cleanup_step(step_id)
         return AgentOutput(
             status="failure",
             summary=f"All {max_dispatches} dispatches failed",

@@ -4,7 +4,7 @@ icon: material/web
 
 # Browser Automation
 
-JarvisCore's `BrowserSubAgent` drives a real Chromium browser via Playwright. It is activated when the Kernel routes a task to the `browser` role, triggered automatically by keyword classification or by setting `default_kernel_role = "browser"` on your `AutoAgent`.
+JarvisCore's `BrowserSubAgent` drives a real Chromium browser via Playwright. It is activated when the Kernel routes a task to the `browser` role through a structured routing decision or by setting `default_kernel_role = "browser"` on your `AutoAgent`.
 
 The browser subagent is **not** a replacement for web search. Use it only when the target page requires JavaScript execution, cookie-based authentication, interactive UI automation, or form submission. For static content and API-based research, the `ResearcherSubAgent`'s `web_search` and `read_url` tools are faster and cheaper.
 
@@ -25,7 +25,7 @@ JarvisCore imports Playwright lazily, the framework loads and runs correctly wit
 
 ## Enabling browser automation
 
-Set `BROWSER_ENABLED=true` in your `.env`. Without this, the browser role is never selected by the Kernel's task classifier, even if Playwright is installed.
+Set `BROWSER_ENABLED=true` in your `.env`. Without this, the browser role should not be selected for normal tasks, even if Playwright is installed.
 
 Also set `BROWSER_MODEL` to a CUA or multimodal model. Without it, the framework falls back to `TASK_MODEL_STANDARD`, which may be a text-only model that cannot interpret screenshots.
 
@@ -48,14 +48,9 @@ The kernel reads `browser_headless` from settings and passes it to `BrowserSubAg
 
 ## How routing works
 
-The Kernel classifies tasks into sub-agent roles using keyword sets. The browser role has highest priority and is checked before researcher and communicator. Any task whose text contains one of these keywords is routed to the browser:
+The Kernel routes tasks with a structured router. The router sees the task, context summary, valid roles, and role contracts, then returns a typed decision with confidence and reason. Invalid or low-confidence routing fails visibly instead of guessing.
 
-```
-browser, click, navigate, screenshot, fill form, login to, log in to,
-scrape, automate, playwright, selenium, headless, web automation, interact with
-```
-
-You can also force browser routing without relying on keywords by declaring it on your agent class:
+You can also make browser routing explicit by declaring it on your agent class:
 
 ```python
 class MyAgent(AutoAgent):

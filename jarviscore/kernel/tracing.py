@@ -287,8 +287,8 @@ class TraceManager:
             with open(self.trace_file, "a") as f:
                 f.flush()
                 os.fsync(f.fileno())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Trace fsync failed for %s: %s", self.trace_file, exc)
 
     # ──────────────────────────────────────────────────────────────────────
     # History replay (for SSE catch-up on re-connect)
@@ -306,8 +306,13 @@ class TraceManager:
                 key = f"traces:{self.workflow_id}:{self.step_id}"
                 raw_events = self.redis_client.lrange(key, -max_events, -1)
                 return [json.loads(e) for e in raw_events]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Trace Redis history replay failed for %s/%s: %s",
+                    self.workflow_id,
+                    self.step_id,
+                    exc,
+                )
         # File fallback
         events = []
         try:
@@ -317,8 +322,8 @@ class TraceManager:
                     if line:
                         try:
                             events.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
+                        except json.JSONDecodeError as exc:
+                            logger.warning("Skipping malformed trace event in %s: %s", self.trace_file, exc)
         except FileNotFoundError:
             pass
         return events[-max_events:]

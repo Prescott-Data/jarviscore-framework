@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     azure_openai_endpoint: Optional[str] = None  # Alias
     azure_deployment: str = "gpt-4o"
     azure_api_version: str = "2024-02-15-preview"
+    # Off by default: content-filter hits should be visible failures unless
+    # an application explicitly opts into provider-specific prompt repair.
+    azure_content_filter_repair_enabled: bool = False
 
     # Gemini (API Key auth)
     gemini_api_key: Optional[str] = None

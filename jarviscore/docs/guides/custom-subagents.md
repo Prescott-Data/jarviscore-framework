@@ -158,7 +158,7 @@ async def _pre_execute_hook(self, tool_name, params, state):
 
 ## Wiring into the Kernel
 
-The Kernel's `_classify_task()` method routes tasks by keyword matching against four built-in roles. Custom roles are not in the default routing table. Override `_create_subagent()` on a Kernel subclass:
+The Kernel routes built-in tasks through a structured router rather than keyword matching. Custom roles still need an explicit Kernel extension so the runtime knows how to construct the sub-agent. Override `_create_subagent()` on a Kernel subclass:
 
 ```python title="my_agent/kernel_extension.py"
 from jarviscore.kernel.kernel import Kernel
@@ -181,7 +181,7 @@ class ExtendedKernel(Kernel):
         return super()._create_subagent(role, agent_id)
 ```
 
-Override `_create_kernel()` on your `AutoAgent` and set `default_kernel_role` so the Kernel always routes to your sub-agent without relying on keyword matching:
+Override `_create_kernel()` on your `AutoAgent` and set `default_kernel_role` so the Kernel receives an explicit planner/profile role for this agent:
 
 ```python title="my_agent/agents/db_agent.py"
 from jarviscore import AutoAgent
@@ -199,12 +199,33 @@ class DatabaseAgent(AutoAgent):
         settings = get_settings()
         return ExtendedKernel(
             llm_client=UnifiedLLMClient(settings),
-            config=settings.model_dump(),
+            config={
+                **settings.model_dump(),
+                "kernel_role_profiles": {
+                    "database": {
+                        "thinking_budget": 80_000,
+                        "action_budget": 40_000,
+                        "max_total_tokens": 120_000,
+                        "wall_clock_ms": 180_000,
+                        "emergency_turn_fuse": 18,
+                        "model_tier": "task",
+                        "complexity": "standard",
+                    },
+                },
+                "kernel_role_catalog": {
+                    "database": "Read-only SQL/database analysis and query execution role.",
+                },
+            },
             db_dsn=settings.db_dsn,
             redis_store=self._redis_store,
             blob_storage=self._blob_storage,
         )
 ```
+
+`kernel_role_profiles` is required for custom roles because leases, model tier
+selection, context budgets, and tracing must remain explicit. `kernel_role_catalog`
+is optional but recommended when the structured router may infer the custom role
+instead of receiving it through `default_kernel_role`.
 
 ---
 

@@ -9,9 +9,8 @@
 #
 # Fields:
 #   role              - Human-readable role title (displayed in logs/dashboard)
-#   default_kernel_role - "coder" | "researcher" | "communicator" | "browser"
-#                         Tells the Kernel which subagent to use by default,
-#                         bypassing keyword classification.
+#   default_kernel_role - Optional explicit Kernel role:
+#                         "coder" | "researcher" | "communicator" | "browser"
 #   expertise         - Domain areas this agent is authoritative on
 #   domain_facts      - Static facts the agent should always know
 #   owns              - Artifacts this agent is accountable for producing

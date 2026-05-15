@@ -8,11 +8,71 @@ hide:
 
 All notable changes to JarvisCore Framework are documented here. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+!!! warning "Versioning Policy (effective v1.1.0)"
+    Releases prior to v1.1.0 did not follow SemVer consistently — new features
+    were shipped in patch releases and a breaking change landed in v0.3.1 (a
+    patch). Starting with **v1.1.0**, this project adheres to strict SemVer:
+
+    - **PATCH** (1.1.**x**) — backward-compatible bug fixes only.
+    - **MINOR** (1.**x**.0) — new features, new public API surface, backward-compatible behavioral changes.
+    - **MAJOR** (**x**.0.0) — breaking changes to the public API.
+
+    Versions **1.0.3** and **1.0.4** contain critical regressions and should be
+    avoided. They will be yanked from PyPI. Pin `jarviscore-framework>=1.1.0`.
+
 ---
 
 <div class="changelog-release" markdown>
 
-## 1.0.4 <span class="changelog-date">2026-05-11</span>
+## 1.1.0 <span class="changelog-date">2026-05-12</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
+</div>
+</div>
+
+This release fixes all critical regressions introduced in v1.0.3 that rendered AutoAgent unusable, adds new AI engineering primitives (cognitive routing, intent normalization, structured output validation), and marks the beginning of strict SemVer compliance. **Versions 1.0.3 and 1.0.4 are deprecated and will be yanked from PyPI.**
+
+**Fixed**
+
+- **[#32] Output schema enforcement** — `Agent.output_schema` (Pydantic `BaseModel`) is now passed through the Kernel into `CoderSubAgent`, which validates sandbox output against the schema via `model_validate()`. Schema violations fail fast with a clear error instead of silently returning unstructured data.
+- **[#33] CoderSubAgent sandbox hallucination** — `CoderSubAgent.get_system_prompt()` now appends a dynamic `SANDBOX ENVIRONMENT` manifest listing all pre-loaded modules and globals in the sandbox namespace. This grounds the LLM in what is actually available, preventing hallucinated imports and undefined-name errors.
+- **[#34] Complexity gate before Planner** — `AutoAgent.execute_task()` now runs a `TaskComplexityClassifier` before dispatching to the Planner DAG. Non-complex tasks bypass the full Plan → Execute → Evaluate loop, while classifier contract failures now fail visibly instead of silently falling through to the Planner.
+- **[#35] FunctionRegistry semantic search miss** — `CoderSubAgent._tool_check_registry()` now normalizes verbose task descriptions into concise canonical intents via `IntentNormalizer` before calling `semantic_search()`. This eliminates embedding distance drift caused by prompt verbosity.
+- **[#36] AutoAgent vs CustomAgent boundary** — Added `p2p_responder` attribute to the `Agent` base class (`False` by default, `True` on `CustomAgent`). `JarvisLifespan` now only creates background `asyncio.Task` instances for agents with `p2p_responder=True`, and raises `RuntimeError` at startup if a `p2p_responder` agent does not override `run()`.
+- **[#37] Semantic vs execution status** — `ResultHandler.process_result()` now tracks `semantic_success` separately from execution status. `CoderSubAgent._tool_execute_code()` includes an evaluator hook that flags outputs where `success=False` or `status="failure"` even when the sandbox execution itself succeeded. Fixed `TypeError` when `cost_usd` is `None`.
+- **[#38] Sandbox namespace leak into ZMQ coroutine cleanup** — `SandboxExecutor._execute_sync()` and `_execute_async()` now restore `namespace['__builtins__']` to the actual `builtins` module in a `finally` block. This prevents `KeyError: '__builtins__'` crashes in ZMQ's Cython backend during coroutine garbage collection.
+- **Structured Kernel routing** — keyword role matching has been replaced by a typed `TaskRouter`. Explicit planner/profile roles are honored first; otherwise the router returns a validated role, confidence, reason, and evidence flag. Invalid or low-confidence routing fails visibly. Custom roles must register `kernel_role_profiles`.
+- **Strict subagent completion protocol** — unparseable LLM responses now fail as protocol violations instead of being returned as successful raw content.
+- **Coder proof-of-work contract** — `CoderSubAgent` must produce sandbox execution evidence before completion; structured prose results alone are no longer accepted for coder work.
+- **Workflow terminal status handling** — only `success` completes a workflow step. `yield`, `hitl`, `blocked`, `error`, and unknown statuses are recorded as failures rather than satisfying dependencies.
+- **WorkflowBuilder failure visibility** — agent-returned `failure`, `yield`, `blocked`, `hitl`, or unknown statuses are now preserved instead of being wrapped as step `success`.
+- **Distributed workflow output integrity** — a remote step marked `completed` without persisted output now returns failure rather than fabricating a successful empty result.
+- **AutoAgent Kernel failure visibility** — Kernel exceptions now return an explicit failure instead of silently falling back to the legacy direct-codegen pipeline.
+- **Profile routing explicitness** — missing `default_kernel_role` in a profile no longer implies `communicator`; applications must opt into profile-level routing hints.
+- **`_run_context` AttributeError in CoderSubAgent** — Changed direct attribute access to `getattr(self, '_run_context', {})` to prevent `AttributeError` when `_run_context` is not yet initialized.
+
+**Added**
+
+- `TaskComplexityClassifier` (`jarviscore.planning.classifier`) — LLM-based cognitive router that classifies tasks as "trivial", "moderate", or "complex" to determine whether the full Planner DAG is needed.
+- `IntentNormalizer` (`jarviscore.execution.intent_normalizer`) — Distills verbose task descriptions into concise canonical intents for accurate embedding-based semantic search.
+- `Agent.p2p_responder` attribute — Boolean flag distinguishing reactive task workers (AutoAgent) from proactive mesh citizens (CustomAgent) at the framework level.
+- `Agent.output_schema` attribute — Optional Pydantic `BaseModel` class for end-to-end structured output validation through the Kernel pipeline.
+- `semantic_success` field in `ResultHandler` result data — Enables downstream consumers to distinguish between "code ran without errors" and "task actually achieved its goal".
+- `SandboxExecutor.get_manifest()` / `CoderSandbox.get_manifest()` — Introspect the sandbox namespace for prompt injection into the CoderSubAgent system prompt.
+
+**Deprecated**
+
+- Versions `1.0.3` and `1.0.4` — contain critical AutoAgent regressions. Will be yanked from PyPI. Users should pin `>=1.1.0`.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
+## 1.0.4 <span class="changelog-date">2026-05-11</span> {: .changelog-deprecated }
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">
@@ -38,7 +98,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## 1.0.3 <span class="changelog-date">2026-05-08</span>
+## 1.0.3 <span class="changelog-date">2026-05-08</span> {: .changelog-deprecated }
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">
@@ -64,10 +124,10 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - `mesh.run_task(agent, task, context, complexity)` — primary user-facing API for dispatching a single task to an agent by role with multi-tier model routing.
 - `P2P_ENABLED=true` env var support — `Settings.p2p_enabled` is now merged into Mesh config at startup.
 - `HITLCategory` enum with hard enforcement on `HITLQueue.request()` — valid categories: `auth_required`, `data_required`, `critical_action`. Invalid categories raise `ValueError`.
-- Subagent hint alias map in the Planner — LLM-hallucinated hints (`analyst`, `developer`, `writer`, `scraper`) are remapped to valid roles before dispatch.
+- Planner subagent hints are strict — valid hints are accepted exactly and invalid hints fail visibly instead of being remapped.
 - `STEP_OUTPUT_MAX_BYTES` (default 200 KB) and `STEP_OUTPUT_PREVIEW_BYTES` (default 20 KB) — large step outputs stored as truncated preview with `_overflow` flag.
 - Idempotent write guard on `RedisStore.save_step_output()` — a successful result will not be overwritten by a subsequent error payload from a stalled re-execution.
-- Azure Content Filter resilience in `LLMClient` — substitution table for business phrases that trigger false-positive content rejections.
+- Azure Content Filter visibility in `LLMClient` — raw provider content-filter rejections now fail visibly by default. `AZURE_CONTENT_FILTER_REPAIR_ENABLED=true` explicitly opts into Azure-specific prompt repair after the raw prompt is rejected.
 - `Kernel._get_model_for_tier()` — clean multi-tier model resolution: complexity hint → `TASK_MODEL_NANO` / `TASK_MODEL_STANDARD` / `TASK_MODEL_HEAVY` → legacy fallback.
 - `MailboxManager` schema normalisation — handles both the current flat envelope schema and the pre-v1.0.2 double-nested schema transparently.
 - **Vertex AI provider** (`LLMProvider.VERTEX_AI`): GCP-native Gemini access via Application Default Credentials (ADC). No API key required — authenticate with `gcloud auth application-default login` or attach a service account. Config: `VERTEX_AI_ENABLED=true`, `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION` (default `us-central1`), `VERTEX_AI_MODEL` (default `gemini-2.5-flash`). Slots into the fallback chain after Gemini: **Azure → Claude → vLLM → Gemini → Vertex AI**.
@@ -215,7 +275,7 @@ This was the largest release in JarvisCore history, introducing the complete inf
 
 **Phase 6 — Kernel / SubAgent OODA Loop**
 
-The `Kernel` replaces AutoAgent's linear codegen → sandbox → repair pipeline with a supervised OODA loop. `ExecutionLease` enforces token/turn/wall-clock budgets per subagent role. `AgentCognitionManager` tracks budget spend per phase, detects spinning (same tool 3+ times), and enforces cognitive gates. `AdaptiveHITLPolicy` with `HumanTask` pauses execution when confidence or risk triggers fire. Fast path: simple coding tasks skip full OODA and dispatch directly to coder subagent.
+The `Kernel` replaces AutoAgent's linear codegen → sandbox → repair pipeline with a supervised OODA loop. `ExecutionLease` enforces token/turn/wall-clock budgets per subagent role. `AgentCognitionManager` tracks budget spend per phase, detects spinning (same tool 3+ times), and enforces cognitive gates. `AdaptiveHITLPolicy` with `HumanTask` pauses execution when confidence or risk triggers fire. Coder dispatches require executable proof of work before completion.
 
 **Phase 7 — Distributed WorkflowEngine**
 
@@ -367,7 +427,7 @@ Cloud Deployment: `agent.join_mesh(seed_nodes)` for self-registration without ce
 
 <div class="changelog-release" markdown>
 
-## 0.2.0 <span class="changelog-date">2026-01-15</span>
+## 0.2.0 <span class="changelog-date">2026-01-22</span>
 
 <div class="changelog-meta" markdown>
 <div class="changelog-contributors">

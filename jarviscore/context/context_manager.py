@@ -256,7 +256,15 @@ class ContextManager:
             if other:
                 cleaned = self._scrub_dict(other)
                 for k, v in list(cleaned.items())[:10]:
-                    val_str = str(v)[:800]
+                    if hasattr(v, "model_json_schema"):
+                        # Render Pydantic BaseModels as JSON schemas for the LLM
+                        try:
+                            import json
+                            val_str = json.dumps(v.model_json_schema(), indent=2)
+                        except Exception:
+                            val_str = str(v)[:800]
+                    else:
+                        val_str = str(v)[:800]
                     input_block += f"- `{k}`: {val_str}\n"
             _add_block(input_block, max_tokens=8000)
 

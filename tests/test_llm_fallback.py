@@ -6,6 +6,7 @@ Azure is the primary provider in this deployment.
 """
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 import jarviscore.execution.llm as _llm_module
 from jarviscore.execution.llm import UnifiedLLMClient, LLMProvider
@@ -147,6 +148,73 @@ async def test_no_providers_raises():
 
     with pytest.raises((RuntimeError, Exception)):
         await llm.generate(prompt="test", max_tokens=5)
+
+
+def _fake_azure_response(content: str = "OK"):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=3, total_tokens=13),
+    )
+
+
+@pytest.mark.asyncio
+async def test_azure_content_filter_fails_visibly_by_default():
+    """JarvisCore must not silently rewrite prompts after provider filter hits."""
+    llm = UnifiedLLMClient(config={
+        "azure_api_key": None,
+        "azure_endpoint": None,
+        "claude_api_key": None,
+        "anthropic_api_key": None,
+        "gemini_api_key": None,
+        "vertex_ai_enabled": False,
+        "llm_endpoint": None,
+        "azure_content_filter_repair_enabled": False,
+    })
+    create = AsyncMock(side_effect=RuntimeError("ResponsibleAIPolicyViolation content_filter jailbreak"))
+    llm.azure_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+
+    with pytest.raises(RuntimeError, match="does not rewrite prompts by default"):
+        await llm._call_azure(
+            messages=[{"role": "user", "content": "kill the competition"}],
+            temperature=0.0,
+            max_tokens=10,
+        )
+    assert create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_azure_content_filter_repair_is_explicit_opt_in():
+    llm = UnifiedLLMClient(config={
+        "azure_api_key": None,
+        "azure_endpoint": None,
+        "claude_api_key": None,
+        "anthropic_api_key": None,
+        "gemini_api_key": None,
+        "vertex_ai_enabled": False,
+        "llm_endpoint": None,
+        "azure_content_filter_repair_enabled": True,
+    })
+    create = AsyncMock(side_effect=[
+        RuntimeError("ResponsibleAIPolicyViolation content_filter hate"),
+        _fake_azure_response("repaired"),
+    ])
+    llm.azure_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+
+    result = await llm._call_azure(
+        messages=[{"role": "user", "content": "kill the competition"}],
+        temperature=0.0,
+        max_tokens=10,
+    )
+
+    assert create.await_count == 2
+    repaired_messages = create.await_args_list[1].kwargs["messages"]
+    assert repaired_messages[0]["content"] == "outperform competitors"
+    assert result["content"] == "repaired"
+    assert result["content_filter_repaired"] is True
 
 
 # ---------------------------------------------------------------------------

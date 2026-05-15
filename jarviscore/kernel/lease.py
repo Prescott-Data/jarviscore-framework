@@ -43,7 +43,7 @@ ROLE_LEASE_PROFILES: Dict[str, Dict[str, Any]] = {
         "thinking_budget": 72_000,
         "action_budget": 48_000,
         "max_total_tokens": 120_000,
-        "wall_clock_ms": 120_000,
+        "wall_clock_ms": 240_000,
         "emergency_turn_fuse": 18,
         "model_tier": "task",
         "complexity": "nano",  # Short creative writing — fast tier is sufficient

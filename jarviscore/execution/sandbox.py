@@ -429,6 +429,23 @@ if __name__ == "__main__":
         logger.debug(f"No specific result field found, returning whole response")
         return sandbox_response
 
+    def get_manifest(self) -> str:
+        """Return a string listing all pre-loaded modules and globals available in the sandbox."""
+        ns = self._create_namespace()
+        available = []
+        import types
+        for key, value in ns.items():
+            if key == '__builtins__': continue
+            if isinstance(value, types.ModuleType):
+                available.append(f"- {key} (module)")
+            elif isinstance(value, type):
+                available.append(f"- {key} (class)")
+            elif callable(value):
+                available.append(f"- {key}() (function/callable)")
+            else:
+                available.append(f"- {key} ({type(value).__name__})")
+        return "\\n".join(sorted(available))
+
     def _create_namespace(self, context: Optional[Dict] = None) -> Dict:
         """
         Create isolated namespace with safe built-ins and tools.
@@ -541,6 +558,11 @@ if __name__ == "__main__":
 
         except asyncio.TimeoutError:
             raise ExecutionTimeout(f"Execution exceeded {timeout} seconds")
+        finally:
+            # Restore __builtins__ to the actual module before cleanup
+            # This prevents KeyError in Cython backends (like ZMQ) during coroutine GC
+            import builtins
+            namespace['__builtins__'] = builtins
 
     async def _execute_async(
         self,
@@ -581,7 +603,11 @@ if __name__ == "__main__":
 
         except asyncio.TimeoutError:
             raise ExecutionTimeout(f"Async execution exceeded {timeout} seconds")
-
+        finally:
+            # Restore __builtins__ to the actual module before cleanup
+            # This prevents KeyError in Cython backends (like ZMQ) during coroutine GC
+            import builtins
+            namespace['__builtins__'] = builtins
 
 def create_sandbox_executor(
     timeout: int = 300,

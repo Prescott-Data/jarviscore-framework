@@ -118,6 +118,7 @@ class CustomAgent(Profile):
     # Configuration - can be overridden in subclasses
     listen_timeout: float = 1.0  # Seconds to wait for messages
     auto_respond: bool = True    # Automatically send response for requests
+    p2p_responder: bool = True   # CustomAgents listen on the P2P mesh by default
 
     def __init__(self, agent_id: Optional[str] = None):
         super().__init__(agent_id)
@@ -192,7 +193,7 @@ class CustomAgent(Profile):
                     f"[{self.role}] Ignoring orphaned RESPONSE from {msg.sender} (no pending request)"
                 )
                 return
-            
+
             # Check if this is a request (expects response)
             is_request = (
                 msg.type == MessageType.REQUEST or

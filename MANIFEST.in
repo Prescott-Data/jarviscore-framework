@@ -14,9 +14,6 @@ recursive-include jarviscore/docs *.md
 # Include examples
 recursive-include examples *.py
 
-# Include tests (optional, for users who want to run tests)
-recursive-include tests *.py
-
 # Exclude compiled Python files
 global-exclude *.pyc
 global-exclude __pycache__
@@ -32,3 +29,4 @@ prune .venv
 prune .git
 prune logs
 prune jarviscore.egg-info
+prune tests

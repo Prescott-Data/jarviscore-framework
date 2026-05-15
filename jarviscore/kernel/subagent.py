@@ -44,10 +44,11 @@ OODA Loop Architecture:
 import inspect
 import json
 import logging
+import os
 import re
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.kernel.cognition import AgentCognitionManager, ConvergenceGovernor, FailureLedger
@@ -74,7 +75,7 @@ class SubagentLogAdapter(logging.LoggerAdapter):
         super().__init__(base_logger, extra={"role": role, "turn": 0})
 
     def set_turn(self, turn: int) -> None:
-        self.extra["turn"] = turn
+        cast(Dict[str, Any], self.extra)["turn"] = turn
 
     def process(self, msg, kwargs):
         role = self.extra.get("role", "?")
@@ -84,13 +85,9 @@ class SubagentLogAdapter(logging.LoggerAdapter):
 # Regex patterns for parsing LLM tool call responses
 _TOOL_PATTERN = re.compile(r"^TOOL:\s*(.+)$", re.MULTILINE)
 _PARAMS_PATTERN = re.compile(r"^PARAMS:\s*(.+)$", re.MULTILINE | re.DOTALL)
-_DONE_PATTERN = re.compile(r"^DONE:\s*(.+)$", re.MULTILINE)
+_DONE_PATTERN = re.compile(r"^DONE:\s*(.*)$", re.MULTILINE)
 _RESULT_PATTERN = re.compile(r"^RESULT:\s*(.+)$", re.MULTILINE | re.DOTALL)
 _THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGHT):|\Z)", re.MULTILINE | re.DOTALL)
-
-# JSON protocol fallback (for models that prefer JSON output)
-_JSON_BLOCK_PATTERN = re.compile(r"\{[^{}]*\"tool\"\s*:", re.DOTALL)
-
 
 def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     """Extract the first complete JSON object from *text* using brace-counting.
@@ -346,18 +343,6 @@ class BaseSubAgent(ABC):
             self._log.warning("Memory persist failed: %s", exc)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Lifecycle hooks — override in subclasses for setup/teardown
-    # ──────────────────────────────────────────────────────────────────────
-
-    async def _pre_run_hook(self, state) -> None:
-        """Called before the OODA loop starts. Override for resource setup (e.g. browser)."""
-        pass
-
-    async def _post_run_hook(self) -> None:
-        """Called after the OODA loop exits (even on exception). Override for cleanup."""
-        pass
-
-    # ──────────────────────────────────────────────────────────────────────
     # Prompt Building
     # ──────────────────────────────────────────────────────────────────────
 
@@ -371,6 +356,8 @@ class BaseSubAgent(ABC):
             "Protocol:",
             "  To use a tool: THOUGHT: <reasoning>\\nTOOL: <name>\\nPARAMS: <json>",
             "  To finish:     THOUGHT: <reasoning>\\nDONE: <summary>\\nRESULT: <json>",
+            "  JSON alternative: {\"thought\": \"...\", \"tool\": \"...\", \"params\": {...}}",
+            "  JSON finish:      {\"thought\": \"...\", \"done\": \"<summary>\", \"result\": {...}}",
         ]
         return "\n".join(parts)
 
@@ -616,8 +603,13 @@ class BaseSubAgent(ABC):
                             action="done", result=parsed["summary"],
                             tokens=llm_tokens_this_turn,
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        self._log.warning(
+                            "Memory turn log failed on DONE for %s turn=%s: %s",
+                            self.agent_id,
+                            turn,
+                            exc,
+                        )
 
                 await self._persist_memory(state)
                 return AgentOutput(
@@ -750,6 +742,26 @@ class BaseSubAgent(ABC):
                     turn_log["status"] = "success"
                     _trace.log_tool_result(tool_name, tool_result)
 
+                if isinstance(tool_result, dict) and tool_result.get("_auto_complete"):
+                    payload = tool_result.get("output", tool_result)
+                    state.status = "completed"
+                    state.output = payload
+                    trajectory.append(turn_log)
+                    summary = tool_result.get("message", f"Tool '{tool_name}' completed the task.")
+                    _trace.log_step_complete(True, summary)
+                    await self._persist_memory(state)
+                    return AgentOutput(
+                        status="success",
+                        payload=payload,
+                        summary=summary,
+                        trajectory=trajectory,
+                        metadata={
+                            "tokens": total_tokens,
+                            "cost_usd": total_cost,
+                            "exit_type": "tool_auto_complete",
+                        },
+                    )
+
                 # ── Check convergence stall (already evaluated inside track_usage) ──
                 stall = self._cognition.check_stall_verdict()
                 if stall:
@@ -826,15 +838,21 @@ class BaseSubAgent(ABC):
                             result=str(tool_result)[:1000],
                             tokens=llm_tokens_this_turn,
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        self._log.warning(
+                            "Memory turn log failed for %s turn=%s tool=%s: %s",
+                            self.agent_id,
+                            turn,
+                            tool_name,
+                            exc,
+                        )
 
                 # Save checkpoint
                 if memory:
                     try:
                         await memory.save_checkpoint(state.model_dump_json())
                     except Exception as e:
-                        self._log.debug("Checkpoint save failed: %s", e)
+                        self._log.warning("Checkpoint save failed for %s turn=%s: %s", self.agent_id, turn, e)
 
                 # ── State-driven exit ──
                 # Tools like publish_research_findings set state.status = "completed"
@@ -860,18 +878,70 @@ class BaseSubAgent(ABC):
 
                 continue
 
-            # ── Unparseable response — treat as done with raw content ──
-            trajectory.append({
+            # ── Unparseable response — protocol failure, not completion ──
+            # Keep this inside the OODA loop so the agent sees the failure and
+            # can repair its protocol on the next turn. If it cannot repair
+            # before the turn fuse, return an explicit failure.
+            raw_turn = {
                 "turn": turn,
                 "type": "raw",
                 "content": content[:500],
-            })
+                "status": "protocol_violation",
+            }
+            trajectory.append(raw_turn)
+            protocol_violations = int(
+                state.internal_variables.get("_protocol_violation_count", 0)
+            ) + 1
+            state.internal_variables["_protocol_violation_count"] = protocol_violations
+            max_protocol_repairs = int(os.getenv("SUBAGENT_MAX_PROTOCOL_REPAIRS", "1"))
+            self._cognition.track_usage(
+                "protocol_violation",
+                tokens=llm_tokens_this_turn,
+                tool_output={"status": "error", "error": "Protocol violation"},
+            )
+            self._cognition.record_failure(
+                "protocol_violation",
+                {"raw": content[:500]},
+                error="Subagent response did not match TOOL or DONE protocol.",
+            )
+            if protocol_violations <= max_protocol_repairs and turn < max_turns - 1:
+                conversation_history.append({
+                    "assistant": content,
+                    "observation": (
+                        f"[Turn {turn}] PROTOCOL VIOLATION: Your response did not match "
+                        "the required TOOL/PARAMS or DONE/RESULT protocol.\n"
+                        "Repair on the next turn. Emit exactly one of:\n"
+                        "THOUGHT: <reasoning>\\nTOOL: <tool_name>\\nPARAMS: <json>\n"
+                        "or\n"
+                        "THOUGHT: <reasoning>\\nDONE: <summary>\\nRESULT: <json>."
+                    ),
+                })
+                state.add_thought(
+                    "[PROTOCOL_VIOLATION] Previous response did not match the required "
+                    "TOOL/PARAMS or DONE/RESULT protocol. Repair on the next turn."
+                )
+                continue
             return AgentOutput(
-                status="success",
-                payload=content,
-                summary=content[:200],
+                status="failure",
+                payload={
+                    "error": (
+                        "Subagent response did not match TOOL or DONE protocol "
+                        f"after {protocol_violations} violation(s)."
+                    ),
+                    "raw": content[:1000],
+                },
+                summary=(
+                    "Subagent response repeatedly violated the required TOOL/DONE protocol."
+                    if protocol_violations > 1
+                    else "Subagent response violated the required TOOL/DONE protocol."
+                ),
                 trajectory=trajectory,
-                metadata={"tokens": total_tokens, "cost_usd": total_cost},
+                metadata={
+                    "tokens": total_tokens,
+                    "cost_usd": total_cost,
+                    "typed_outcome": "PROTOCOL_VIOLATION",
+                    "protocol_violations": protocol_violations,
+                },
             )
 
         # Max turns reached (emergency fuse)
@@ -897,6 +967,10 @@ class BaseSubAgent(ABC):
         Override in subclasses for pre-run setup (e.g. API discovery,
         registry warm-up, context seeding). Default is a no-op.
         """
+        pass
+
+    async def teardown(self) -> None:
+        """Release resources owned by this subagent instance."""
         pass
 
     async def _pre_execute_hook(
@@ -1005,10 +1079,10 @@ class BaseSubAgent(ABC):
 
         # Check for DONE first
         done_match = _DONE_PATTERN.search(content)
-        if done_match:
-            summary = done_match.group(1).strip()
+        result_match = _RESULT_PATTERN.search(content)
+        if done_match or result_match:
+            summary = done_match.group(1).strip() if done_match else "Completed via RESULT block"
             result = None
-            result_match = _RESULT_PATTERN.search(content)
             if result_match:
                 try:
                     result = json.loads(result_match.group(1).strip())
@@ -1038,34 +1112,29 @@ class BaseSubAgent(ABC):
             return {"type": "tool", "thought": thought, "tool": tool_name, "params": params}
 
         # ── JSON protocol fallback ──
-        # Some models prefer to return JSON instead of the text protocol
-        json_match = _JSON_BLOCK_PATTERN.search(content)
-        if json_match:
-            try:
-                # Find the full JSON object
-                start = json_match.start()
-                # Simple brace-counting parser
-                depth = 0
-                end = start
-                for i in range(start, len(content)):
-                    if content[i] == '{':
-                        depth += 1
-                    elif content[i] == '}':
-                        depth -= 1
-                        if depth == 0:
-                            end = i + 1
-                            break
-                json_str = content[start:end]
-                obj = json.loads(json_str)
-                if "tool" in obj:
-                    return {
-                        "type": "tool",
-                        "thought": obj.get("thought", thought),
-                        "tool": obj["tool"],
-                        "params": obj.get("parameters", obj.get("params", {})),
-                    }
-            except (json.JSONDecodeError, ValueError):
-                pass
+        # Some models emit the protocol as a single structured object. Accept
+        # only explicit protocol fields; arbitrary JSON remains unparseable.
+        obj = _extract_json_object(content)
+        if obj is not None:
+            json_thought = obj.get("thought", thought)
+            if isinstance(obj.get("tool"), str) and obj["tool"].strip():
+                return {
+                    "type": "tool",
+                    "thought": json_thought,
+                    "tool": obj["tool"].strip(),
+                    "params": obj.get("parameters", obj.get("params", {})),
+                }
+
+            done_summary = obj.get("done")
+            if done_summary is None and "summary" in obj and "result" in obj:
+                done_summary = obj.get("summary")
+            if done_summary is not None:
+                return {
+                    "type": "done",
+                    "thought": json_thought,
+                    "summary": str(done_summary),
+                    "result": obj.get("result"),
+                }
 
         # Unparseable
         return {"type": "raw", "content": content}
