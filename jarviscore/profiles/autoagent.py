@@ -8,6 +8,7 @@ For long-horizon autonomous work, set goal_oriented = True on your
 subclass — all tasks will be routed through the Plan → Execute → Evaluate
 loop automatically. The execute_task() contract is unchanged.
 """
+import asyncio
 import os
 import re
 import time
@@ -774,6 +775,29 @@ class AutoAgent(Profile):
         }
         remaining = [s for s in execution.plan if s.step_id not in done_ids]
 
+        # ── Dependency-aware parallelism (issue #74) ────────────────────────
+        # Plans that declare depends_on opt into concurrent execution of
+        # co-ready steps (speculative prefetch, bounded). Plans without any
+        # depends_on run exactly as before — strictly sequential.
+        plan_uses_deps = any(s.depends_on for s in execution.plan)
+        max_parallel = max(1, int(os.environ.get("MAX_PARALLEL_STEPS", "3")))
+        _inflight: Dict[str, "asyncio.Task"] = {}
+
+        def _cancel_inflight() -> None:
+            for _t in _inflight.values():
+                _t.cancel()
+            _inflight.clear()
+
+        async def _kernel_step(one_step, one_ctx):
+            return await self._kernel.execute(
+                task=one_step.task,
+                system_prompt=effective_system_prompt,
+                context=one_ctx,
+                agent_id=self.agent_id,
+                agent_default_role=one_step.subagent_hint or self.default_kernel_role,
+            )
+
+
         while remaining and steps_run < max_steps:
             step = remaining.pop(0)
             steps_run += 1
@@ -787,6 +811,29 @@ class AutoAgent(Profile):
             step_ctx = execution.context_for_next_step(base_context=context)
             step_ctx.update(step.to_context_extras())
 
+            # ── Speculative launch of co-ready steps (issue #74) ─────────────
+            # Steps whose declared dependencies are already satisfied cannot
+            # need this step's output — start them now, harvest when the loop
+            # reaches them. Size-1 plans and dep-free plans skip this block.
+            if plan_uses_deps:
+                co_ready = [
+                    s for s in remaining
+                    if s.step_id not in _inflight
+                    and all(d in done_ids for d in s.depends_on)
+                ]
+                slots = max_parallel - 1 - len(_inflight)
+                for extra in co_ready[:max(0, slots)]:
+                    extra_ctx = execution.context_for_next_step(base_context=context)
+                    extra_ctx.update(extra.to_context_extras())
+                    _inflight[extra.step_id] = asyncio.create_task(
+                        _kernel_step(extra, extra_ctx),
+                        name=f"goal-step-{extra.step_id}",
+                    )
+                    self._logger.info(
+                        "[AutoAgent] Speculatively launched co-ready step %s",
+                        extra.step_id,
+                    )
+
             # ── Execute step via Kernel (full OODA) ───────────────────────────
             step_start = time.time()
             try:
@@ -794,17 +841,16 @@ class AutoAgent(Profile):
                 if auth_mgr and self._kernel.auth_manager is not auth_mgr:
                     self._kernel.auth_manager = auth_mgr
 
-                output = await self._kernel.execute(
-                    task=step.task,
-                    system_prompt=effective_system_prompt,
-                    context=step_ctx,
-                    agent_id=self.agent_id,
-                    agent_default_role=step.subagent_hint or self.default_kernel_role,
-                )
+                inflight = _inflight.pop(step.step_id, None)
+                if inflight is not None:
+                    output = await inflight   # harvest the speculative run
+                else:
+                    output = await _kernel_step(step, step_ctx)
             except Exception as exc:
                 self._logger.error(
                     "[AutoAgent] Kernel raised on step %s: %s", step.step_id, exc
                 )
+                _cancel_inflight()
                 execution.status = "failed"
                 execution.error = f"Kernel exception on step {step.step_id}: {exc}"
                 execution.completed_at = time.time()
@@ -838,10 +884,15 @@ class AutoAgent(Profile):
                 execution.status = "failed"
                 execution.error = f"Evaluation error on step {step.step_id}: {exc}"
                 execution.completed_at = time.time()
+                _cancel_inflight()
+                await self._persist_goal(execution)
                 return execution
 
             # Record: merges distilled_facts + evaluator findings into truth
             execution.record_completed(step, output, evaluation, elapsed)
+            if evaluation.verdict == "pass":
+                # Newly-satisfied dependencies unlock further co-ready steps
+                done_ids.add(step.step_id)
             # Durability: every completed step survives a crash (issue #73)
             await self._persist_goal(execution)
 
@@ -853,6 +904,7 @@ class AutoAgent(Profile):
 
             # ── Handle verdict ────────────────────────────────────────────────
             if evaluation.needs_hitl:
+                _cancel_inflight()
                 # Audit log: only genuine HITL escalations reach here now
                 # (routine budget yields are downgraded to partial by evaluator)
                 self._logger.info(
@@ -903,6 +955,7 @@ class AutoAgent(Profile):
                         "[AutoAgent] Max replan attempts (%d) reached. Failing goal.",
                         max_replan_attempts,
                     )
+                    _cancel_inflight()
                     execution.status = "failed"
                     execution.error = (
                         f"Max replan attempts ({max_replan_attempts}) reached. "
@@ -918,10 +971,19 @@ class AutoAgent(Profile):
                 )
                 try:
                     completed_step = execution.completed[-1]
+                    # Invalidate speculative work — a revised plan must not
+                    # harvest results computed under the failed premise (#74).
+                    _cancel_inflight()
                     revised = await planner.replan(
                         goal_execution=execution,
                         failed_step=completed_step,
                         reason=evaluation.evaluator_note,
+                        pending_steps=list(remaining),
+                        budget_note=(
+                            f"{steps_run} of max {max_steps} steps used; "
+                            f"{max_steps - steps_run} remaining — the revised "
+                            f"plan must fit"
+                        ),
                     )
                     execution.plan_revision += 1
                     remaining = revised   # replace remaining steps with revised plan
@@ -939,6 +1001,7 @@ class AutoAgent(Profile):
                 continue  # proceed with revised plan
 
         # ── Phase 3: Safety check ─────────────────────────────────────────────
+        _cancel_inflight()
         if steps_run >= max_steps and remaining:
             self._logger.warning(
                 "[AutoAgent] max_steps=%d reached with %d steps still remaining.",

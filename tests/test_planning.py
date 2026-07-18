@@ -680,3 +680,243 @@ class TestGoalSnapshotRoundTrip:
         }
         restored = GoalExecution.from_snapshot(data)
         assert "broken" not in restored.truth.facts
+
+
+# ── Issue #74: planner robustness ─────────────────────────────────────────────
+
+class _PlanLLM:
+    """Captures the prompt; returns a canned plan JSON."""
+
+    def __init__(self, plan_json):
+        self._plan_json = plan_json
+        self.prompts = []
+
+    async def generate(self, **kwargs):
+        self.prompts.append(kwargs["messages"][0]["content"])
+        return {"content": self._plan_json}
+
+
+def _step_json(step_id, depends_on=None):
+    import json
+    return {
+        "step_id": step_id,
+        "task": f"do {step_id}",
+        "success_criterion": "done",
+        "expected_findings": [],
+        "depends_on": depends_on or [],
+        "subagent_hint": None,
+    }
+
+
+class TestPlanValidation:
+
+    @pytest.mark.asyncio
+    async def test_duplicate_step_ids_are_a_hard_error(self):
+        import json
+        from jarviscore.planning.planner import Planner, PlannerError
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1"), _step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        with pytest.raises(PlannerError, match="duplicate step_id"):
+            await Planner(llm).plan(goal="G", goal_execution=ge)
+
+    @pytest.mark.asyncio
+    async def test_unknown_and_self_depends_on_refs_are_stripped(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        llm = _PlanLLM(json.dumps({"steps": [
+            _step_json("s1"),
+            _step_json("s2", depends_on=["s1", "ghost_step", "s2"]),
+        ]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        steps = await Planner(llm).plan(goal="G", goal_execution=ge)
+        assert steps[1].depends_on == ["s1"]
+
+    @pytest.mark.asyncio
+    async def test_depends_on_round_trips_through_parse(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        llm = _PlanLLM(json.dumps({"steps": [
+            _step_json("s1"), _step_json("s2", depends_on=["s1"]),
+        ]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        steps = await Planner(llm).plan(goal="G", goal_execution=ge)
+        assert steps[1].depends_on == ["s1"]
+
+
+class TestHonestPlannerPrompts:
+
+    @pytest.mark.asyncio
+    async def test_facts_render_one_per_line_with_count(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        from jarviscore.context.truth import TruthFact
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        for i in range(25):
+            ge.truth.facts[f"fact_{i:02d}"] = TruthFact(
+                value=f"v{i}", source="s", confidence=0.9
+            )
+        await Planner(llm).plan(goal="G", goal_execution=ge)
+        prompt = llm.prompts[0]
+        assert "25 fact(s) known:" in prompt
+        assert "- fact_00: v0" in prompt
+        assert "…and 5 more facts not shown" in prompt
+
+    @pytest.mark.asyncio
+    async def test_long_fact_values_carry_markers(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        from jarviscore.context.truth import TruthFact
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        ge.truth.facts["huge"] = TruthFact(value="H" * 700, source="s", confidence=0.9)
+        await Planner(llm).plan(goal="G", goal_execution=ge)
+        assert "…[truncated: showing 200 of 700 chars]" in llm.prompts[0]
+
+
+class TestReplanTailAndBudget:
+
+    def _failed_execution(self):
+        ge = GoalExecution(goal="G", agent_id="a")
+        ge.record_completed(
+            _make_step("s1"), _make_output(), _make_evaluation(verdict="fail"),
+            elapsed_ms=10.0,
+        )
+        return ge
+
+    @pytest.mark.asyncio
+    async def test_pending_tail_and_budget_reach_the_prompt(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s9")]}))
+        ge = self._failed_execution()
+        pending = [_make_step("s2", task="untouched work")]
+
+        await Planner(llm).replan(
+            goal_execution=ge, failed_step=ge.completed[0], reason="broke",
+            pending_steps=pending,
+            budget_note="3 of max 30 steps used",
+        )
+        prompt = llm.prompts[0]
+        assert "NOT yet attempted — KEEP these" in prompt
+        assert "s2: untouched work" in prompt
+        assert "Execution budget: 3 of max 30 steps used" in prompt
+
+    @pytest.mark.asyncio
+    async def test_replan_drops_completed_ids_defensively(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        # The model disobeys and re-includes the completed step s1
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1"), _step_json("s2")]}))
+        ge = self._failed_execution()
+
+        revised = await Planner(llm).replan(
+            goal_execution=ge, failed_step=ge.completed[0], reason="broke",
+        )
+        assert [s.step_id for s in revised] == ["s2"]
+
+
+class TestDependencyParallelExecution:
+    """Plans that declare depends_on opt into concurrent co-ready steps."""
+
+    @pytest.mark.asyncio
+    async def test_co_ready_steps_overlap_and_dependents_wait(self, monkeypatch):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-test"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()  # never called: planner/evaluator are patched
+
+        # Kernel fake: records in-flight overlap per step
+        in_flight = set()
+        overlap_seen = {"max": 0}
+        order = []
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                step_id = kwargs["context"]["step_id"]
+                in_flight.add(step_id)
+                overlap_seen["max"] = max(overlap_seen["max"], len(in_flight))
+                await asyncio.sleep(0.05)
+                in_flight.discard(step_id)
+                order.append(step_id)
+                return _make_output(summary=f"did {step_id}")
+
+        agent._kernel = _Kernel()
+
+        # Plan: a and b are independent; c depends on both
+        plan = [
+            PlannedStep("a", "task a", "done", depends_on=[]),
+            PlannedStep("b", "task b", "done", depends_on=[]),
+            PlannedStep("c", "task c", "done", depends_on=["a", "b"]),
+        ]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("test parallel goal")
+
+        assert execution.status == "complete"
+        assert len(execution.completed) == 3
+        # a and b overlapped; c ran only after both finished
+        assert overlap_seen["max"] >= 2
+        assert order.index("c") == 2
+
+    @pytest.mark.asyncio
+    async def test_dep_free_plans_stay_strictly_sequential(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-test-seq"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+
+        in_flight = set()
+        overlap_seen = {"max": 0}
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                step_id = kwargs["context"]["step_id"]
+                in_flight.add(step_id)
+                overlap_seen["max"] = max(overlap_seen["max"], len(in_flight))
+                await asyncio.sleep(0.02)
+                in_flight.discard(step_id)
+                return _make_output(summary=f"did {step_id}")
+
+        agent._kernel = _Kernel()
+
+        # Historical plan shape: no depends_on anywhere
+        plan = [PlannedStep(f"s{i}", f"task {i}", "done") for i in range(3)]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("test sequential goal")
+
+        assert execution.status == "complete"
+        assert overlap_seen["max"] == 1  # byte-identical historical behavior
