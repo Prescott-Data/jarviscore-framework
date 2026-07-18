@@ -467,7 +467,9 @@ class Mesh:
                 - params: Additional parameters (optional)
 
         Returns:
-            List of step results in execution order
+            List of step results in ORIGINAL STEP ORDER (index i corresponds
+            to steps[i], regardless of execution/completion order). Every
+            result dict carries a ``step_id`` key identifying its step.
 
         Raises:
             RuntimeError: If mesh not started or not in autonomous mode

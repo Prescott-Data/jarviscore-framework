@@ -1077,9 +1077,38 @@ class BaseSubAgent(ABC):
         thought_match = _THOUGHT_PATTERN.search(content)
         thought = thought_match.group(1).strip() if thought_match else ""
 
-        # Check for DONE first
         done_match = _DONE_PATTERN.search(content)
         result_match = _RESULT_PATTERN.search(content)
+        tool_match = _TOOL_PATTERN.search(content)
+
+        # RESULT alone (no DONE, no TOOL) only completes when it carries a
+        # structured JSON object. "RESULT: pending" prose mid-thought must not
+        # end the dispatch with a fabricated completion (issue #61).
+        if result_match and not done_match and not tool_match:
+            if _extract_json_object(result_match.group(1).strip()) is None:
+                result_match = None
+
+        # Directive precedence: models quote protocol keywords in their
+        # reasoning constantly — the system prompt itself teaches the magic
+        # strings. When one response carries BOTH an actionable TOOL and a
+        # DONE/RESULT completion, the LAST directive wins (models emit their
+        # decision at the end). A false completion destroys the dispatch;
+        # a false tool call costs one turn (issue #61).
+        if tool_match and (done_match or result_match):
+            completion_pos = max(
+                done_match.start() if done_match else -1,
+                result_match.start() if result_match else -1,
+            )
+            logger.info(
+                "Protocol ambiguity: TOOL@%d and DONE/RESULT@%d in one response — "
+                "taking the later directive",
+                tool_match.start(), completion_pos,
+            )
+            if tool_match.start() > completion_pos:
+                done_match = None
+                result_match = None
+
+        # Check for DONE
         if done_match or result_match:
             summary = done_match.group(1).strip() if done_match else "Completed via RESULT block"
             result = None
@@ -1090,8 +1119,7 @@ class BaseSubAgent(ABC):
                     result = result_match.group(1).strip()
             return {"type": "done", "thought": thought, "summary": summary, "result": result}
 
-        # Check for TOOL
-        tool_match = _TOOL_PATTERN.search(content)
+        # Check for TOOL (matched above, before precedence resolution)
         if tool_match:
             tool_name = tool_match.group(1).strip()
             params = {}
