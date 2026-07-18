@@ -332,8 +332,10 @@ class AutoAgent(Profile):
 
         # Loud failure for the classic mistake (issue #63/JC-002): using the
         # agent before mesh.start() previously died deep in codegen with
-        # "'NoneType' object has no attribute 'generate'".
-        if self._kernel is None and self.llm is None:
+        # "'NoneType' object has no attribute 'generate'". Fires only when
+        # NOTHING is wired — tests that mock individual components (kernel,
+        # llm, or the legacy codegen pipeline) pass through.
+        if self._kernel is None and self.llm is None and self.codegen is None:
             raise RuntimeError(
                 f"Agent '{self.agent_id}' used before mesh.start() — setup() "
                 f"wires the LLM and Kernel. Call `await mesh.start()` first."

@@ -79,15 +79,34 @@ async def test_complexity_gate_complex(mock_execute_goal, MockClassifier):
 @patch("jarviscore.planning.classifier.TaskComplexityClassifier")
 @patch.object(DummyGoalAgent, "execute_goal", new_callable=AsyncMock)
 async def test_complexity_gate_failure_is_visible(mock_execute_goal, MockClassifier):
+    """A classifier failure is VISIBLE but no longer fatal (issue #63).
+
+    Previously the task failed without being attempted. Now the failure is
+    logged, recorded in goal_execution.reason, and the task proceeds via a
+    direct Kernel turn — visibility without a spurious task kill.
+    """
     mock_classifier_instance = AsyncMock()
     MockClassifier.return_value = mock_classifier_instance
     mock_classifier_instance.classify.side_effect = RuntimeError("invalid classifier JSON")
 
     agent = DummyGoalAgent()
     agent.llm = AsyncMock()
+    agent._kernel = AsyncMock()
+
+    class MockOutput:
+        status = "success"
+        payload = {"result": "success"}
+        summary = "Done"
+        metadata = {}
+
+    agent._kernel.execute.return_value = MockOutput()
 
     result = await agent.execute_task({"task": "Do research"})
 
-    assert result["status"] == "failure"
-    assert "Complexity classification failed" in result["error"]
+    # The failure is visible in the envelope…
+    assert "classifier unavailable" in result["goal_execution"]["reason"]
+    # …and the task was still attempted via a direct Kernel turn
+    assert result["status"] == "success"
+    agent._kernel.execute.assert_called_once()
+    # The planner path was never taken on a failed preflight
     mock_execute_goal.assert_not_called()
