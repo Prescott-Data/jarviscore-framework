@@ -920,3 +920,128 @@ class TestDependencyParallelExecution:
 
         assert execution.status == "complete"
         assert overlap_seen["max"] == 1  # byte-identical historical behavior
+
+    @pytest.mark.asyncio
+    async def test_misordered_plan_runs_dependency_first(self):
+        """Review fix: a step listed BEFORE its dependency must wait for it."""
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-test-order"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+        order = []
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                order.append(kwargs["context"]["step_id"])
+                return _make_output(summary="ok")
+
+        agent._kernel = _Kernel()
+
+        # b listed first but depends on a — the model misordered the list
+        plan = [
+            PlannedStep("b", "task b", "done", depends_on=["a"]),
+            PlannedStep("a", "task a", "done", depends_on=[]),
+        ]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("test order goal")
+
+        assert execution.status == "complete"
+        assert order == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_unsatisfiable_deps_fail_honestly(self):
+        """Review fix: a dependency that can never pass is a loud failure."""
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-test-deadlock"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                return _make_output(summary="ok")
+
+        agent._kernel = _Kernel()
+
+        # Planner validation strips unknown refs, so simulate the only path a
+        # bad ref can survive: a plan injected directly (e.g. resume of a
+        # snapshot written by an older version).
+        plan = [PlannedStep("b", "task b", "done", depends_on=["never_exists"])]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("test deadlock goal")
+
+        assert execution.status == "failed"
+        assert "Dependency deadlock" in execution.error
+
+    @pytest.mark.asyncio
+    async def test_partial_verdict_does_not_deadlock_dependents(self):
+        """Review fix: partial output is usable output — dependents may run."""
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-test-partial"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+        order = []
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                order.append(kwargs["context"]["step_id"])
+                return _make_output(summary="ok")
+
+        agent._kernel = _Kernel()
+
+        plan = [
+            PlannedStep("a", "task a", "done", depends_on=[]),
+            PlannedStep("b", "task b", "done", depends_on=["a"]),
+        ]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="partial")),
+        ):
+            execution = await agent.execute_goal("test partial goal")
+
+        assert execution.status == "complete"
+        assert order == ["a", "b"]

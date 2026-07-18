@@ -799,7 +799,29 @@ class AutoAgent(Profile):
 
 
         while remaining and steps_run < max_steps:
-            step = remaining.pop(0)
+            # ── Dependency-aware step selection (issue #74, review fix) ──────
+            # A replanned or model-ordered plan may list a step before its
+            # dependency — never run a step whose depends_on are unsatisfied.
+            if plan_uses_deps:
+                step = next(
+                    (s for s in remaining
+                     if all(d in done_ids for d in s.depends_on)),
+                    None,
+                )
+                if step is None:
+                    _cancel_inflight()
+                    blocked = [s.step_id for s in remaining]
+                    execution.status = "failed"
+                    execution.error = (
+                        f"Dependency deadlock: no runnable step among {blocked} — "
+                        f"unsatisfied depends_on references"
+                    )
+                    execution.completed_at = time.time()
+                    await self._persist_goal(execution)
+                    return execution
+                remaining.remove(step)
+            else:
+                step = remaining.pop(0)
             steps_run += 1
 
             self._logger.info(
@@ -890,8 +912,10 @@ class AutoAgent(Profile):
 
             # Record: merges distilled_facts + evaluator findings into truth
             execution.record_completed(step, output, evaluation, elapsed)
-            if evaluation.verdict == "pass":
-                # Newly-satisfied dependencies unlock further co-ready steps
+            if evaluation.verdict != "fail":
+                # pass AND partial satisfy dependencies — the step produced
+                # usable output (fail routes through replan below). A partial
+                # verdict must not deadlock its dependents (review fix).
                 done_ids.add(step.step_id)
             # Durability: every completed step survives a crash (issue #73)
             await self._persist_goal(execution)
