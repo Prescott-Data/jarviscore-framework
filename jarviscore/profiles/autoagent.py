@@ -330,7 +330,30 @@ class AutoAgent(Profile):
         """
         task_desc = task.get('task', '') if isinstance(task, dict) else str(task)
 
+        # Loud failure for the classic mistake (issue #63/JC-002): using the
+        # agent before mesh.start() previously died deep in codegen with
+        # "'NoneType' object has no attribute 'generate'".
+        if self._kernel is None and self.llm is None:
+            raise RuntimeError(
+                f"Agent '{self.agent_id}' used before mesh.start() — setup() "
+                f"wires the LLM and Kernel. Call `await mesh.start()` first."
+            )
+
         self._logger.info(f"[AutoAgent] Executing via Kernel: {task_desc[:100]}...")
+
+        # ── Declared single-turn contracts bypass the kernel pipeline ───────
+        # (issue #63/JC-003): execution_shape single_response promises "just
+        # answer" — one structured completion against the system prompt, not a
+        # codegen turn that emits TOOL/DONE protocol violations on analysis
+        # prompts.
+        _ctx = task.get('context', {}) if isinstance(task, dict) else {}
+        _contract = _ctx.get('execution_contract') if isinstance(_ctx, dict) else None
+        if (
+            isinstance(_contract, dict)
+            and _contract.get('execution_shape') == 'single_response'
+            and self.llm is not None
+        ):
+            return await self._single_response_turn(task_desc, _contract)
 
         # ── Goal-oriented routing ─────────────────────────────────────────────
         # goal_oriented=True means planner-capable, not planner-forced. The
@@ -359,23 +382,17 @@ class AutoAgent(Profile):
                     classifier = TaskComplexityClassifier(self.llm)
                     complexity = await classifier.classify(task_desc, context=ctx)
             except Exception as e:
-                self._logger.error("[AutoAgent] Complexity classifier failed: %s", e)
-                return {
-                    "status": "failure",
-                    "output": None,
-                    "error": f"Complexity classification failed: {e}",
-                    "agent_id": self.agent_id,
-                    "role": self.role,
-                    "goal_execution": {
-                        "status": "failed",
-                        "error": f"Complexity classification failed: {e}",
-                        "steps_completed": 0,
-                        "facts": 0,
-                    },
-                    "tokens": {},
-                    "cost_usd": 0.0,
-                    "repairs": 0,
-                }
+                # A flaky preflight must not kill work the Kernel could do
+                # (issue #63): fall back to a direct Kernel turn instead of
+                # returning failure without attempting the task.
+                self._logger.warning(
+                    "[AutoAgent] Complexity classifier failed (%s) — "
+                    "falling back to a direct Kernel turn", e,
+                )
+                complexity = None
+                self._direct_kernel_turn = True
+                self._direct_kernel_complexity = "moderate"
+                self._direct_kernel_reason = f"classifier unavailable: {e}"
 
             if complexity is not None and complexity.level != "complex":
                 self._logger.info(
@@ -393,6 +410,7 @@ class AutoAgent(Profile):
                     goal=task_desc,
                     context=ctx,
                 )
+                goal_tokens, goal_cost = self._aggregate_goal_telemetry(execution)
                 return {
                     "status": execution.status if execution.status != "complete" else "success",
                     "output": execution.result,
@@ -400,8 +418,8 @@ class AutoAgent(Profile):
                     "agent_id": self.agent_id,
                     "role": self.role,
                     "goal_execution": execution.to_summary_dict(),
-                    "tokens": {},
-                    "cost_usd": 0.0,
+                    "tokens": goal_tokens,
+                    "cost_usd": goal_cost,
                     "repairs": 0,
                 }
 
@@ -623,6 +641,77 @@ class AutoAgent(Profile):
             }
 
     # ── Long-horizon goal execution ───────────────────────────────────────────
+
+    async def _single_response_turn(
+        self, task_desc: str, contract: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Honor a declared single_response contract with ONE completion.
+
+        The contract promises "just answer" — one structured completion
+        against the (profile-augmented) system prompt. No planner, no
+        router, no codegen (issue #63/JC-003).
+        """
+        effective_system_prompt = (
+            f"{self._profile_block}\n\n---\n\n{self.system_prompt}"
+            if self._profile_block
+            else self.system_prompt
+        )
+        try:
+            response = await self.llm.generate(
+                messages=[
+                    {"role": "system", "content": effective_system_prompt or ""},
+                    {"role": "user", "content": task_desc},
+                ],
+                temperature=0.0,
+            )
+        except Exception as exc:  # noqa: BLE001 - provider errors become clean failures
+            return {
+                "status": "failure",
+                "output": None,
+                "error": f"single_response completion failed: {type(exc).__name__}: {exc}",
+                "agent_id": self.agent_id,
+                "role": self.role,
+                "tokens": {},
+                "cost_usd": 0.0,
+                "repairs": 0,
+            }
+        content = (response.get("content") or "").strip()
+        return {
+            "status": "success",
+            "output": content,
+            "payload": content,
+            "error": None,
+            "agent_id": self.agent_id,
+            "role": self.role,
+            "execution_shape": "single_response",
+            "tokens": response.get("tokens", {}),
+            "cost_usd": response.get("cost_usd", 0.0),
+            "repairs": 0,
+        }
+
+    @staticmethod
+    def _aggregate_goal_telemetry(execution: Any) -> tuple:
+        """Sum step tokens/cost from a GoalExecution's completed steps.
+
+        The goal path previously reported tokens={} and cost 0.0 — the most
+        expensive execution mode looked free on every dashboard (issue #63).
+        """
+        tokens = {"input": 0, "output": 0, "total": 0}
+        cost = 0.0
+        for cs in getattr(execution, "completed", []) or []:
+            meta = getattr(getattr(cs, "output", None), "metadata", None) or {}
+            step_tokens = meta.get("tokens") or {}
+            if isinstance(step_tokens, dict):
+                for key in tokens:
+                    try:
+                        tokens[key] += int(step_tokens.get(key, 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+            try:
+                cost += float(meta.get("cost_usd", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+        return tokens, round(cost, 6)
 
     def _hitl_category_from_output(self, output: Any) -> str:
         """Map Kernel yield metadata to the strict HITL category contract."""

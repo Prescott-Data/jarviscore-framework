@@ -8,5 +8,6 @@ Profiles define HOW agents execute tasks:
 
 from .autoagent import AutoAgent
 from .customagent import CustomAgent
+from .reasoningagent import ReasoningAgent
 
-__all__ = ["AutoAgent", "CustomAgent"]
+__all__ = ["AutoAgent", "CustomAgent", "ReasoningAgent"]

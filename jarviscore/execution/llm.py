@@ -835,3 +835,8 @@ def create_llm_client(config: Optional[Dict] = None) -> UnifiedLLMClient:
     Zero-config: Just call this and it auto-detects providers.
     """
     return UnifiedLLMClient(config)
+
+
+# The natural guess for the class name (issue #63/JC-005). The factory
+# `create_llm_client` remains the documented entry point.
+LLMClient = UnifiedLLMClient
