@@ -97,6 +97,13 @@ class BudgetConfig:
     summary_evidence_limit: int = 800
     # How many compressed-away turns stay retrievable in the archive.
     archive_window: int = 50
+    # Long-term memory bound (issue #69). On overflow the OLDEST half is
+    # merged into one labeled epoch summary; the newest entries keep full
+    # fidelity. Incremental accumulation, never monolithic rewrite — the
+    # context-collapse failure mode identified by ACE (arXiv:2510.04618).
+    ltm_window: int = 20
+    # How many LTM entries the context block renders (was a silent [-5:]).
+    ltm_render_limit: int = 5
 
     @property
     def usable_tokens(self) -> int:
@@ -363,11 +370,15 @@ class ContextManager:
         ltm = state.internal_variables.get("long_term_memory", [])
         if ltm:
             ltm_block = "## LONG-TERM MEMORY (Compressed History)\n"
-            for item in ltm[-5:]:
+            render_limit = self.config.ltm_render_limit
+            for item in ltm[-render_limit:]:
                 if isinstance(item, dict):
                     ltm_block += f"- {self._clip(item.get('summary', str(item)), self.config.memory_item_limit)}\n"
                 else:
                     ltm_block += f"- {self._clip(item, self.config.memory_item_limit)}\n"
+            hidden = len(ltm) - render_limit
+            if hidden > 0:
+                ltm_block += f"…and {hidden} older memories not shown\n"
             _add_block(ltm_block, max_tokens=2000)
 
         # ═══ BLOCK 8: TOOL HISTORY (Sliding Window) ═══
@@ -650,6 +661,7 @@ class ContextManager:
         state.internal_variables["long_term_memory"].append({
             "summary": f"[lossy summary of {len(old_entries)} turns — originals archived] {summary_text}",
             "turns_compressed": len(old_entries),
+            "generation": 1,
             "archived": True,
             "timestamp": time.time(),
         })
@@ -657,6 +669,94 @@ class ContextManager:
         # Trim history
         state.tool_history = remaining
         logger.info(f"Compressed {len(old_entries)} turns into long-term memory")
+
+        # Bound LTM itself — generational compaction (issue #69)
+        await self._compact_ltm(state, llm)
+
+        # Compression telemetry: entropy management must be visible, not
+        # suspected. Rides in internal variables → rendered in INTERNAL STATE.
+        stats = state.internal_variables.setdefault(
+            "compression_stats",
+            {"cycles": 0, "turns_compressed": 0, "epochs": 0, "max_generation": 1},
+        )
+        stats["cycles"] += 1
+        stats["turns_compressed"] += len(old_entries)
+        return True
+
+    async def _compact_ltm(self, state: "KernelState", llm) -> bool:
+        """Bound long_term_memory via generational epoch merges (issue #69).
+
+        The failure mode this avoids is context collapse (ACE,
+        arXiv:2510.04618): iteratively re-summarizing EVERYTHING erodes
+        detail until memory is mush. Instead, on overflow only the OLDEST
+        half is merged into one epoch summary — newest entries are never
+        touched, so fidelity decays monotonically with age and recent
+        memory stays verbatim. Generations are labeled so downstream
+        reasoning can weight fidelity, and merged-away entries are archived
+        first — compression, never destruction.
+        """
+        ltm = state.internal_variables.get("long_term_memory") or []
+        if len(ltm) <= self.config.ltm_window:
+            return False
+
+        merge_count = max(2, self.config.ltm_window // 2)
+        oldest = ltm[:merge_count]
+        newest = ltm[merge_count:]
+
+        def _text(item: Any) -> str:
+            return item.get("summary", str(item)) if isinstance(item, dict) else str(item)
+
+        def _gen(item: Any) -> int:
+            return int(item.get("generation", 1)) if isinstance(item, dict) else 1
+
+        generation = max(_gen(i) for i in oldest) + 1
+        try:
+            merge_prompt = (
+                "Merge these agent memory entries into one dense record. "
+                "Recall first: preserve every decision, discovery, error, and "
+                "open question — drop only redundancy and filler:\n"
+                + "\n".join(f"- {_text(i)}" for i in oldest)
+            )
+            if not hasattr(llm, "generate"):
+                return False  # no LLM: keep entries; retry when one is attached
+            result = await llm.generate(
+                messages=[{"role": "user", "content": merge_prompt}]
+            )
+            epoch_text = self._clip(result.get("content", ""), 2000)
+        except Exception as e:
+            # A failed merge must not cost memory — keep entries, retry later.
+            logger.warning(f"LTM epoch merge failed ({e}) — keeping entries for retry")
+            return False
+
+        # Archive the merged-away originals before replacing them.
+        ltm_archive = state.internal_variables.setdefault("_archived_ltm", [])
+        ltm_archive.extend(
+            i if isinstance(i, dict) else {"summary": str(i)} for i in oldest
+        )
+        if len(ltm_archive) > self.config.archive_window:
+            del ltm_archive[:-self.config.archive_window]
+
+        epoch = {
+            "summary": (
+                f"[gen-{generation} epoch summary of {len(oldest)} older memories "
+                f"— originals archived] {epoch_text}"
+            ),
+            "generation": generation,
+            "merged_entries": len(oldest),
+            "archived": True,
+            "timestamp": time.time(),
+        }
+        state.internal_variables["long_term_memory"] = [epoch] + newest
+
+        stats = state.internal_variables.setdefault(
+            "compression_stats",
+            {"cycles": 0, "turns_compressed": 0, "epochs": 0, "max_generation": 1},
+        )
+        stats["epochs"] += 1
+        stats["max_generation"] = max(stats.get("max_generation", 1), generation)
+        logger.info(
+            f"LTM compacted: {len(oldest)} entries merged into gen-{generation} epoch"
+        )
         return True
 
     # ------------------------------------------------------------------

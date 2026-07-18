@@ -412,3 +412,134 @@ class TestZeroLossSummarization:
         await cm._summarize_state(state, llm)
         # save_checkpoint calls model_dump_json — must not raise
         _json.loads(state.model_dump_json())
+
+
+# ======================================================================
+# Issue #69: generational compaction — LTM is bounded, collapse is not
+# ======================================================================
+
+def _ltm_entry(i, generation=1):
+    return {
+        "summary": f"[lossy summary of 3 turns — originals archived] discovered fact {i}",
+        "generation": generation,
+        "turns_compressed": 3,
+        "archived": True,
+        "timestamp": 1000.0 + i,
+    }
+
+
+class TestGenerationalCompaction:
+
+    @pytest.mark.asyncio
+    async def test_ltm_under_window_is_untouched(self):
+        cm = ContextManager(BudgetConfig(ltm_window=20))
+        state = _kernel_state()
+        state.internal_variables["long_term_memory"] = [_ltm_entry(i) for i in range(20)]
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "merged"})
+
+        assert await cm._compact_ltm(state, llm) is False
+        assert len(state.internal_variables["long_term_memory"]) == 20
+        llm.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_overflow_merges_only_the_oldest_half(self):
+        cm = ContextManager(BudgetConfig(ltm_window=20))
+        state = _kernel_state()
+        state.internal_variables["long_term_memory"] = [_ltm_entry(i) for i in range(21)]
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "dense epoch record"})
+
+        assert await cm._compact_ltm(state, llm) is True
+
+        ltm = state.internal_variables["long_term_memory"]
+        # 21 entries → oldest 10 merged into 1 epoch + 11 untouched
+        assert len(ltm) == 12
+        epoch = ltm[0]
+        assert epoch["generation"] == 2
+        assert epoch["merged_entries"] == 10
+        assert epoch["summary"].startswith("[gen-2 epoch summary of 10 older memories")
+        # Newest entries are verbatim — never rewritten (anti context-collapse)
+        assert ltm[1] == _ltm_entry(10)
+        assert ltm[-1] == _ltm_entry(20)
+
+    @pytest.mark.asyncio
+    async def test_merging_epochs_increments_the_generation(self):
+        cm = ContextManager(BudgetConfig(ltm_window=4))
+        state = _kernel_state()
+        state.internal_variables["long_term_memory"] = (
+            [_ltm_entry(0, generation=2)] + [_ltm_entry(i) for i in range(1, 5)]
+        )
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "gen3 record"})
+
+        await cm._compact_ltm(state, llm)
+        assert state.internal_variables["long_term_memory"][0]["generation"] == 3
+
+    @pytest.mark.asyncio
+    async def test_merged_entries_are_archived_first(self):
+        cm = ContextManager(BudgetConfig(ltm_window=4))
+        state = _kernel_state()
+        state.internal_variables["long_term_memory"] = [_ltm_entry(i) for i in range(5)]
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "epoch"})
+
+        await cm._compact_ltm(state, llm)
+        archived = state.internal_variables["_archived_ltm"]
+        assert [a["summary"] for a in archived] == [
+            _ltm_entry(0)["summary"], _ltm_entry(1)["summary"]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_failed_merge_keeps_memory_intact(self):
+        cm = ContextManager(BudgetConfig(ltm_window=4))
+        state = _kernel_state()
+        entries = [_ltm_entry(i) for i in range(6)]
+        state.internal_variables["long_term_memory"] = list(entries)
+        llm = MagicMock()
+        llm.generate = AsyncMock(side_effect=RuntimeError("provider down"))
+
+        assert await cm._compact_ltm(state, llm) is False
+        assert state.internal_variables["long_term_memory"] == entries
+        assert "_archived_ltm" not in state.internal_variables
+
+    @pytest.mark.asyncio
+    async def test_merge_prompt_is_recall_first(self):
+        cm = ContextManager(BudgetConfig(ltm_window=4))
+        state = _kernel_state()
+        state.internal_variables["long_term_memory"] = [_ltm_entry(i) for i in range(5)]
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "epoch"})
+
+        await cm._compact_ltm(state, llm)
+        prompt = llm.generate.call_args.kwargs["messages"][0]["content"]
+        assert "preserve every decision, discovery, error" in prompt
+        assert "discovered fact 0" in prompt
+
+    @pytest.mark.asyncio
+    async def test_full_cycle_updates_compression_stats(self):
+        cm = _compressing_cm()
+        state = _state_ready_to_compress()
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "- ok"})
+
+        await cm._summarize_state(state, llm)
+        stats = state.internal_variables["compression_stats"]
+        assert stats["cycles"] == 1
+        assert stats["turns_compressed"] == 3
+        assert stats["max_generation"] >= 1
+
+
+class TestLtmRenderOverflow:
+
+    def test_hidden_ltm_entries_are_announced(self, big_cm):
+        state = _kernel_state()
+        state.internal_variables["long_term_memory"] = [_ltm_entry(i) for i in range(9)]
+        rendered = big_cm.build_context(state)
+        assert "…and 4 older memories not shown" in rendered
+
+    def test_no_notice_at_or_under_render_limit(self, big_cm):
+        state = _kernel_state()
+        state.internal_variables["long_term_memory"] = [_ltm_entry(i) for i in range(5)]
+        rendered = big_cm.build_context(state)
+        assert "older memories not shown" not in rendered
