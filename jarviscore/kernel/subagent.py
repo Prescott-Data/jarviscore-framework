@@ -89,6 +89,32 @@ _DONE_PATTERN = re.compile(r"^DONE:\s*(.*)$", re.MULTILINE)
 _RESULT_PATTERN = re.compile(r"^RESULT:\s*(.+)$", re.MULTILINE | re.DOTALL)
 _THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGHT):|\Z)", re.MULTILINE | re.DOTALL)
 
+# ── Observation channel integrity (issue #57) ─────────────────────────────
+# How much of a tool result the agent sees inline per turn. Anything beyond
+# the cap is clipped WITH an explicit marker and remains retrievable via the
+# built-in read_turn_result tool for the lifetime of the dispatch.
+_OBSERVATION_LIMIT = int(os.getenv("SUBAGENT_OBSERVATION_LIMIT", "800"))
+# Full-result retention per turn (chars) and how many turns are kept.
+_TURN_RESULT_RETENTION = int(os.getenv("SUBAGENT_TURN_RESULT_RETENTION", "16000"))
+_TURN_RESULT_WINDOW = int(os.getenv("SUBAGENT_TURN_RESULT_WINDOW", "10"))
+
+
+def _clip_observation(text: str, turn: int, limit: int = 0) -> str:
+    """Clip a tool result for the observation channel — honestly.
+
+    A model that KNOWS data is missing asks for the rest; a model that
+    doesn't confabulates. Every clip therefore carries an explicit marker
+    with the exact retrieval call for the remainder.
+    """
+    limit = limit or _OBSERVATION_LIMIT
+    if len(text) <= limit:
+        return text
+    return (
+        f"{text[:limit]}\n"
+        f"…[showing {limit} of {len(text)} chars — call TOOL: read_turn_result "
+        f'PARAMS: {{"turn": {turn}, "offset": {limit}}} for the rest]'
+    )
+
 def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     """Extract the first complete JSON object from *text* using brace-counting.
 
@@ -252,6 +278,10 @@ class BaseSubAgent(ABC):
         # Cognition infrastructure — reset per run() call
         self._cognition: Optional[AgentCognitionManager] = None
 
+        # Live KernelState for the current dispatch — set at the top of run()
+        # so built-in tools (read_turn_result) can reach the retention ring.
+        self._current_state: Optional[KernelState] = None
+
         # Let subclass register its tools explicitly
         self.setup_tools()
 
@@ -263,6 +293,42 @@ class BaseSubAgent(ABC):
     ) -> None:
         """Register a tool available to this subagent."""
         self._tools[name] = ToolDefinition(name, func, description, phase)
+
+    def _tool_read_turn_result(self, turn: int, offset: int = 0, length: int = 0) -> Dict[str, Any]:
+        """Read the FULL output of a previous tool call when the inline view was clipped (params: turn, optional offset/length).
+
+        The observation channel shows at most a fixed window of each tool
+        result; the untruncated output of the last few turns is retained and
+        readable here in chunks. This is the honest counterpart to the
+        …[showing X of Y chars] marker.
+        """
+        state = self._current_state
+        ring = (state.internal_variables.get("_turn_results") or {}) if state is not None else {}
+        full = ring.get(str(turn))
+        if full is None:
+            available = sorted(ring, key=int) if ring else []
+            return {
+                "status": "error",
+                "error": (
+                    f"No retained result for turn {turn}. "
+                    f"Retained turns: {available or 'none'} "
+                    f"(the last {_TURN_RESULT_WINDOW} tool turns are kept)."
+                ),
+            }
+        offset = max(0, int(offset))
+        length = int(length) or _OBSERVATION_LIMIT * 4
+        chunk = full[offset:offset + length]
+        remaining = max(0, len(full) - (offset + len(chunk)))
+        return {
+            "status": "success",
+            "turn": turn,
+            "offset": offset,
+            "total_chars": len(full),
+            "remaining_chars": remaining,
+            "output": chunk,
+            **({"note": f'call again with {{"turn": {turn}, "offset": {offset + len(chunk)}}} for the rest'}
+               if remaining else {}),
+        }
 
     @property
     def tool_names(self) -> List[str]:
@@ -445,6 +511,9 @@ class BaseSubAgent(ABC):
 
         # Restore cross-task memory (no-op unless memory_enabled=True)
         await self._restore_memory(state)
+
+        # Expose state to built-in tools (read_turn_result) for this dispatch.
+        self._current_state = state
 
         # Pre-run hook — subclasses can do deterministic pre-flight work
         await self._pre_run_hook(state)
@@ -713,6 +782,15 @@ class BaseSubAgent(ABC):
                 tool_result = await self._execute_tool(tool_name, tool_params)
                 turn_log["result"] = str(tool_result)[:500]
 
+                # ── Retain the full result for honest retrieval (issue #57) ──
+                # The observation channel clips below; the bytes it clips stay
+                # reachable via read_turn_result for the last N turns.
+                if tool_name != "read_turn_result":
+                    ring = state.internal_variables.setdefault("_turn_results", {})
+                    ring[str(turn)] = str(tool_result)[:_TURN_RESULT_RETENTION]
+                    for stale in sorted(ring, key=int)[:-_TURN_RESULT_WINDOW]:
+                        del ring[stale]
+
                 # Record in state
                 error_str = tool_result.get("error") if isinstance(tool_result, dict) else None
                 state.add_tool_result(tool_name, tool_params, tool_result, error=error_str)
@@ -728,6 +806,7 @@ class BaseSubAgent(ABC):
                 # ── Track usage + convergence ──
                 self._cognition.track_usage(
                     tool_name, tokens=llm_tokens_this_turn, tool_output=tool_result,
+                    params=tool_params,
                 )
 
                 # ── Record failure if tool errored ──
@@ -774,10 +853,10 @@ class BaseSubAgent(ABC):
                             "different strategy this turn. Consider: different tool, "
                             "different parameters, or call DONE with partial results."
                         )
-                        # Reset governor streaks to allow one more turn
-                        self._cognition.convergence._same_tool_streak = 0
-                        self._cognition.convergence._equiv_streak = 0
-                        self._cognition.convergence._last_verdict = None
+                        # Grant a fresh convergence window for the pivot turn.
+                        self._cognition.convergence.reset_streaks(
+                            reason=f"strategic pivot granted to {self.role}"
+                        )
                         logger.info(
                             f"[{self.role}] Strategic pivot granted — "
                             f"resetting convergence for one more turn"
@@ -786,7 +865,7 @@ class BaseSubAgent(ABC):
                         # Record conversation for continuity through the pivot
                         observation = (
                             f"Tool '{tool_name}' returned: "
-                            f"{str(tool_result)[:800]}"
+                            f"{_clip_observation(str(tool_result), turn)}"
                         )
                         conversation_history.append({
                             "assistant": content,
@@ -817,7 +896,7 @@ class BaseSubAgent(ABC):
                 # Record conversation history for multi-turn LLM continuity
                 # Structured turn digest instead of raw output — helps the LLM
                 # retain what was learned and reason about strategy changes.
-                result_str = str(tool_result)[:800]
+                result_str = _clip_observation(str(tool_result), turn)
                 observation = (
                     f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}):\n"
                     f"{result_str}\n\n"

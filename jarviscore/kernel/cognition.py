@@ -50,6 +50,8 @@ THINKING_TOOLS = frozenset({
     "inspect_error",
     "scan_peers",
     "read_mailbox",
+    # Re-reading a retained tool result is recall, not action (issue #57).
+    "read_turn_result",
 })
 
 ACTION_TOOLS = frozenset({
@@ -111,6 +113,7 @@ class ConvergenceGovernor:
         # Mutable governor state
         self._same_tool_streak: int = 0
         self._last_tool: Optional[str] = None
+        self._last_tool_key: Optional[str] = None
         self._equiv_streak: int = 0
         self._last_outcome_sig: Optional[str] = None
         self._stagnant_turns: int = 0
@@ -145,32 +148,55 @@ class ConvergenceGovernor:
         return score
 
     @staticmethod
+    def _is_error_output(tool_output: Any) -> bool:
+        """True when the output is an explicit error/empty result."""
+        if tool_output is None:
+            return True
+        if isinstance(tool_output, str):
+            return not tool_output.strip()
+        if isinstance(tool_output, dict):
+            status = str(tool_output.get("status", "")).lower()
+            return status in {"error", "failed", "blocked"} or bool(tool_output.get("error"))
+        return False
+
+    @staticmethod
     def _outcome_signature(tool_name: str, tool_output: Any) -> str:
         """
         Canonical signature of a (tool, result) pair for detecting
-        semantically equivalent repeated outcomes.
+        genuinely identical repeated outcomes.
+
+        Hashes the FULL canonicalized output — "equivalent" must mean
+        identical. Earlier drafts compared content length / a 120-char
+        prefix, which flagged different results of the same size as
+        "equivalent" and stalled healthy agents (e.g. paginated reads
+        returning uniform page sizes). See issue #58.
         """
-        if not isinstance(tool_output, dict):
-            return f"{tool_name}:{str(tool_output)[:120]}"
-        stable: Dict[str, Any] = {"tool": tool_name}
-        for key in ("status", "success", "error"):
-            if key in tool_output:
-                stable[key] = tool_output[key]
-        results = tool_output.get("results")
-        if isinstance(results, list):
-            stable["results_count"] = len(results)
-        content = tool_output.get("content") or tool_output.get("output")
-        if isinstance(content, str):
-            stable["content_len"] = len(content)
-        return json.dumps(stable, sort_keys=True, default=str)[:300]
+        try:
+            canonical = json.dumps(
+                tool_output, sort_keys=True, default=str, separators=(",", ":")
+            )
+        except (TypeError, ValueError):
+            canonical = repr(tool_output)
+        digest = hashlib.sha256(canonical.encode("utf-8", "replace")).hexdigest()
+        return f"{tool_name}:{digest}"
 
     def evaluate(
         self,
         tool_name: str,
         tool_output: Any,
+        params: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Evaluate one tool call and return a stall verdict dict if stall is detected.
+
+        Args:
+            tool_name: Name of the tool invoked.
+            tool_output: The tool's result.
+            params: Optional tool parameters. When provided, the same-tool
+                streak becomes param-aware — calling one tool repeatedly with
+                DIFFERENT params (reading ten files, ten distinct searches) is
+                legitimate iteration, not spinning. When omitted, behavior is
+                the historical name-only streak.
 
         Returns:
             None if no stall.
@@ -178,16 +204,22 @@ class ConvergenceGovernor:
         """
         self._turn += 1
 
-        # 1. Same-tool streak
-        if self._last_tool == tool_name:
+        # 1. Same-tool streak (param-aware when params are supplied)
+        if params is None:
+            streak_key = tool_name
+        else:
+            streak_key = f"{tool_name}:{FailureLedger.fingerprint(tool_name, params)[:16]}"
+        if self._last_tool_key == streak_key:
             self._same_tool_streak += 1
         else:
             self._same_tool_streak = 1
         self._last_tool = tool_name
+        self._last_tool_key = streak_key
 
-        # 2. Equivalent-outcome streak
+        # 2. Equivalent-outcome streak (identical means identical — full-content hash)
         sig = self._outcome_signature(tool_name, tool_output)
-        if self._last_outcome_sig == sig:
+        novel = self._last_outcome_sig != sig
+        if not novel:
             self._equiv_streak += 1
         else:
             self._equiv_streak = 1
@@ -195,6 +227,11 @@ class ConvergenceGovernor:
 
         # 3. Stagnant turns
         score = self._progress_score(tool_output)
+        if score < self.min_progress_score and novel and not self._is_error_output(tool_output):
+            # Unknown result schema, but the output CHANGED and is not an
+            # error — novelty is progress for shapes _progress_score does not
+            # recognize (domain dicts without status/content/results keys).
+            score = self.min_progress_score
         if score >= self.min_progress_score:
             self._stagnant_turns = 0
         else:
@@ -232,6 +269,20 @@ class ConvergenceGovernor:
         without re-running evaluate() and double-counting streaks.
         """
         return self._last_verdict
+
+    def reset_streaks(self, reason: str = "") -> None:
+        """Clear all stall streaks and the cached verdict.
+
+        The supported way for pivot/recovery paths to grant the agent a
+        fresh convergence window — callers must not poke the private
+        counters directly.
+        """
+        self._same_tool_streak = 0
+        self._equiv_streak = 0
+        self._stagnant_turns = 0
+        self._last_verdict = None
+        if reason:
+            logger.info("[ConvergenceGovernor] Streaks reset: %s", reason)
 
     def get_intervention(self) -> Optional[str]:
         """Return a coaching message if the agent's trajectory suggests it
@@ -507,6 +558,7 @@ class AgentCognitionManager:
         tool_name: str,
         tokens: int = 0,
         tool_output: Any = None,
+        params: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Record a tool invocation and charge tokens to the appropriate budget.
@@ -515,6 +567,9 @@ class AgentCognitionManager:
             tool_name: Name of the tool invoked
             tokens: Tokens consumed by this invocation
             tool_output: Result from the tool (used by ConvergenceGovernor)
+            params: Tool parameters — forwarded to the ConvergenceGovernor so
+                the same-tool streak can distinguish iteration (same tool,
+                different params) from spinning (same tool, same params).
         """
         phase = self.classify_tool(tool_name)
         if tokens > 0:
@@ -536,7 +591,7 @@ class AgentCognitionManager:
 
         # Feed the Convergence Governor
         if tool_name != "done":
-            self.convergence.evaluate(tool_name, tool_output)
+            self.convergence.evaluate(tool_name, tool_output, params=params)
 
         # Update phase
         self._update_phase(tool_name)
