@@ -66,12 +66,31 @@ class BudgetConfig:
         history_limit:             Max tokens to spend on tool history.
         summarization_threshold:   Fraction of total_tokens at which
                                    auto-summarisation is triggered.
+        prior_step_value_limit:    Chars of each prior step output shown inline.
+        context_value_limit:       Chars of each input-context value shown inline.
+        belief_value_limit:        Chars of each belief-state value shown inline.
+        memory_item_limit:         Chars of each finding / LTM item shown inline.
+        internal_var_limit:        Chars of each internal variable shown inline.
+        history_value_limit:       Chars of each tool-history input/output shown inline.
+        state_keys_limit:          Max keys rendered per state dict (overflow is
+                                   announced by name, never silently dropped).
+
+    All char limits default to the historical values; every cut they cause
+    is marked in the rendered context (see issue #55) — an agent that KNOWS
+    data is missing asks for the rest; one that doesn't confabulates.
     """
     total_tokens: int = 80_000
     output_reserve: int = 4_000
     system_reserve: int = 8_000
     history_limit: int = 20_000
     summarization_threshold: float = 0.8
+    prior_step_value_limit: int = 2000
+    context_value_limit: int = 800
+    belief_value_limit: int = 200
+    memory_item_limit: int = 200
+    internal_var_limit: int = 200
+    history_value_limit: int = 600
+    state_keys_limit: int = 10
 
     @property
     def usable_tokens(self) -> int:
@@ -151,6 +170,48 @@ class ContextManager:
         return cleaned
 
     # ------------------------------------------------------------------
+    # Honest rendering helpers (issues #55, #56)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clip(value: Any, limit: int) -> str:
+        """Render a value for the context window — cut honestly, never silently.
+
+        Values within the limit render byte-identical to ``str(value)``.
+        Longer values are cut WITH an explicit marker, because the agent
+        reads these blocks as its world state: a model that knows data is
+        missing asks for the rest; a model that doesn't confabulates.
+        """
+        text = str(value)
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}…[truncated: showing {limit} of {len(text)} chars]"
+
+    @staticmethod
+    def _visible_items(
+        data: Dict[str, Any], limit: int
+    ) -> Tuple[List[Tuple[str, Any]], str]:
+        """Cap a state dict at *limit* keys — recency wins, overflow is named.
+
+        Returns (visible_items, overflow_notice). The MOST RECENTLY inserted
+        keys survive (dicts preserve insertion order; the newest state is the
+        most likely to matter). Hidden keys are announced BY NAME so the agent
+        keeps an index of its own state even when the values don't fit —
+        silent key loss decided by insertion order was issue #56.
+        """
+        items = list(data.items())
+        if len(items) <= limit:
+            return items, ""
+        visible = items[-limit:]
+        hidden = [k for k, _ in items[:-limit]]
+        notice = (
+            f"…and {len(hidden)} earlier key(s) not shown: "
+            + ", ".join(f"`{k}`" for k in hidden)
+            + " (values hidden — re-derive or ask if needed)\n"
+        )
+        return visible, notice
+
+    # ------------------------------------------------------------------
     # Context building — KernelState input (preferred)
     # ------------------------------------------------------------------
 
@@ -181,9 +242,13 @@ class ContextManager:
             if cost <= 0 or limit <= 0:
                 return False
             if cost > limit:
-                # Truncate to fit
+                # Truncate to fit — honestly (issue #55)
                 char_limit = int(limit * 4)  # ~4 chars per token
-                block = block[:char_limit] + "\n…[truncated]"
+                original_len = len(block)
+                block = (
+                    block[:char_limit]
+                    + f"\n…[block truncated to fit budget: showing {char_limit} of {original_len} chars]"
+                )
                 cost = self.count_tokens(block)
             blocks.append(block)
             used += cost
@@ -207,7 +272,7 @@ class ContextManager:
             for entry in state.failure_ledger[-5:]:
                 tool = entry.get("tool", "unknown")
                 err_type = entry.get("error_type", "UNKNOWN")
-                err_msg = str(entry.get("error", ""))[:180]
+                err_msg = self._clip(entry.get("error", ""), 180)
                 lines.append(f"- `{tool}` → `{err_type}`: {err_msg}")
             lines.append("Rule: if tool+params already failed recently, choose a different strategy.")
             _add_block("\n".join(lines))
@@ -226,15 +291,15 @@ class ContextManager:
                         continue
                     method = spec.get("method", "?")
                     path = spec.get("path") or spec.get("url") or "?"
-                    summary_text = spec.get("summary", "")[:80]
+                    summary_text = self._clip(spec.get("summary", ""), 80)
                     kb_block += f"  - `{method} {path}` — {summary_text}\n"
             if isinstance(findings, list) and findings:
                 kb_block += f"**Research Findings:** {len(findings)} item(s)\n"
                 for finding in findings[-5:]:
                     if isinstance(finding, dict):
-                        kb_block += f"  - {str(finding.get('summary', finding.get('content_preview', finding)))[:200]}\n"
+                        kb_block += f"  - {self._clip(finding.get('summary', finding.get('content_preview', finding)), self.config.memory_item_limit)}\n"
                     else:
-                        kb_block += f"  - {str(finding)[:200]}\n"
+                        kb_block += f"  - {self._clip(finding, self.config.memory_item_limit)}\n"
             _add_block(kb_block, max_tokens=4000)
 
         # ═══ BLOCK 4: INPUT CONTEXT (High Priority) ═══
@@ -245,7 +310,7 @@ class ContextManager:
             if prior:
                 for step_id, step_result in prior.items():
                     output = step_result.get("output", step_result) if isinstance(step_result, dict) else step_result
-                    output_str = str(output)[:2000]
+                    output_str = self._clip(output, self.config.prior_step_value_limit)
                     input_block += f"**[Prior Step: {step_id}]**\n{output_str}\n\n"
 
             # Other context fields (skip internal keys)
@@ -255,24 +320,28 @@ class ContextManager:
             other = {k: v for k, v in state.context.items() if k not in skip_keys}
             if other:
                 cleaned = self._scrub_dict(other)
-                for k, v in list(cleaned.items())[:10]:
+                visible, overflow = self._visible_items(cleaned, self.config.state_keys_limit)
+                for k, v in visible:
                     if hasattr(v, "model_json_schema"):
                         # Render Pydantic BaseModels as JSON schemas for the LLM
                         try:
                             import json
                             val_str = json.dumps(v.model_json_schema(), indent=2)
                         except Exception:
-                            val_str = str(v)[:800]
+                            val_str = self._clip(v, self.config.context_value_limit)
                     else:
-                        val_str = str(v)[:800]
+                        val_str = self._clip(v, self.config.context_value_limit)
                     input_block += f"- `{k}`: {val_str}\n"
+                input_block += overflow
             _add_block(input_block, max_tokens=8000)
 
         # ═══ BLOCK 5: BELIEF STATE (Medium Priority) ═══
         if state.belief_state:
             belief_block = "## BELIEF STATE\n"
-            for k, v in list(state.belief_state.items())[:10]:
-                belief_block += f"- `{k}`: {str(v)[:200]}\n"
+            visible, overflow = self._visible_items(state.belief_state, self.config.state_keys_limit)
+            for k, v in visible:
+                belief_block += f"- `{k}`: {self._clip(v, self.config.belief_value_limit)}\n"
+            belief_block += overflow
             _add_block(belief_block, max_tokens=1000)
 
         # ═══ BLOCK 6: SCRATCHPAD / THOUGHTS (Medium Priority) ═══
@@ -290,9 +359,9 @@ class ContextManager:
             ltm_block = "## LONG-TERM MEMORY (Compressed History)\n"
             for item in ltm[-5:]:
                 if isinstance(item, dict):
-                    ltm_block += f"- {item.get('summary', str(item))[:200]}\n"
+                    ltm_block += f"- {self._clip(item.get('summary', str(item)), self.config.memory_item_limit)}\n"
                 else:
-                    ltm_block += f"- {str(item)[:200]}\n"
+                    ltm_block += f"- {self._clip(item, self.config.memory_item_limit)}\n"
             _add_block(ltm_block, max_tokens=2000)
 
         # ═══ BLOCK 8: TOOL HISTORY (Sliding Window) ═══
@@ -309,13 +378,20 @@ class ContextManager:
         remaining = budget - used
         if remaining > 500 and state.internal_variables:
             vars_block = "## INTERNAL STATE\n"
-            # Skip keys that are surfaced by dedicated blocks above
+            # Skip keys that are surfaced by dedicated blocks above.
+            # Filter FIRST, then cap — skipped keys must not consume the
+            # visibility budget of real ones (issue #56).
             skip_var_keys = {"long_term_memory", "research_findings", "api_specs", "failure_ledger"}
-            for key, value in list(state.internal_variables.items())[:10]:
-                if key in skip_var_keys or key.startswith("_"):
-                    continue
-                value_str = str(self._scrub_value(key, value))[:200]
+            renderable = {
+                key: value
+                for key, value in state.internal_variables.items()
+                if key not in skip_var_keys and not key.startswith("_")
+            }
+            visible, overflow = self._visible_items(renderable, self.config.state_keys_limit)
+            for key, value in visible:
+                value_str = self._clip(self._scrub_value(key, value), self.config.internal_var_limit)
                 vars_block += f"- `{key}`: {value_str}\n"
+            vars_block += overflow
             vars_cost = self.count_tokens(vars_block)
             if vars_cost < remaining:
                 blocks.append(vars_block)
@@ -350,16 +426,14 @@ class ContextManager:
         for turn in reversed(history[-20:]):
             if hasattr(turn, "tool_name"):
                 # KernelState.ToolResult model
-                output_str = str(turn.tool_output)[:600]
-                if len(str(turn.tool_output)) > 600:
-                    output_str += "…"
+                output_str = self._clip(turn.tool_output, self.config.history_value_limit)
                 entry = (
                     f"**{turn.tool_name}** [{turn.status}]\n"
-                    f"  Input: {json.dumps(turn.tool_input, default=str)[:600]}\n"
+                    f"  Input: {self._clip(json.dumps(turn.tool_input, default=str), self.config.history_value_limit)}\n"
                     f"  Output: {output_str}"
                 )
                 if turn.error:
-                    entry += f"\n  Error: {turn.error[:200]}"
+                    entry += f"\n  Error: {self._clip(turn.error, 200)}"
             elif isinstance(turn, dict):
                 # Legacy dict format
                 entry = f"- {json.dumps(turn, default=str)[:500]}"

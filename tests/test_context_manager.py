@@ -196,3 +196,112 @@ class TestAutoSummarize:
         mock_memory.ltm = None
         result = await cm.auto_summarize_if_needed({}, MagicMock(), mock_memory)
         assert result is False
+
+
+# ======================================================================
+# Issues #55/#56: honest truncation markers + named key overflow
+# ======================================================================
+
+def _kernel_state(**overrides):
+    from jarviscore.kernel.state import KernelState
+    defaults = dict(workflow_id="wf", step_id="s1", agent_id="a1", task="test task")
+    defaults.update(overrides)
+    return KernelState(**defaults)
+
+
+@pytest.fixture
+def big_cm():
+    # Roomy budget so blocks are never trimmed by _add_block itself
+    return ContextManager(BudgetConfig())
+
+
+class TestHonestTruncation:
+    """Every value cut for the agent's eyes carries an explicit marker (#55)."""
+
+    def test_clip_within_limit_is_byte_identical(self):
+        assert ContextManager._clip("short value", 100) == "short value"
+
+    def test_clip_at_exact_limit_is_byte_identical(self):
+        text = "x" * 100
+        assert ContextManager._clip(text, 100) == text
+
+    def test_clip_over_limit_carries_marker(self):
+        text = "y" * 250
+        out = ContextManager._clip(text, 100)
+        assert out.startswith("y" * 100)
+        assert "…[truncated: showing 100 of 250 chars]" in out
+
+    def test_prior_step_output_truncation_is_marked(self, big_cm):
+        state = _kernel_state(context={
+            "previous_step_results": {
+                "step_a": {"output": "Z" * 5000},
+            },
+        })
+        rendered = big_cm.build_context(state)
+        assert "…[truncated: showing 2000 of 5000 chars]" in rendered
+
+    def test_belief_value_truncation_is_marked(self, big_cm):
+        state = _kernel_state(belief_state={"hypothesis": "B" * 900})
+        rendered = big_cm.build_context(state)
+        assert "…[truncated: showing 200 of 900 chars]" in rendered
+
+    def test_short_values_render_without_markers(self, big_cm):
+        state = _kernel_state(
+            context={"note": "small"},
+            belief_state={"k": "v"},
+        )
+        rendered = big_cm.build_context(state)
+        assert "…[truncated" not in rendered
+
+    def test_limits_are_configurable(self):
+        cm = ContextManager(BudgetConfig(belief_value_limit=50))
+        state = _kernel_state(belief_state={"h": "C" * 120})
+        rendered = cm.build_context(state)
+        assert "…[truncated: showing 50 of 120 chars]" in rendered
+
+
+class TestKeyOverflowNotices:
+    """Past the key cap, hidden keys are announced by name — recency wins (#56)."""
+
+    def test_overflow_names_the_hidden_keys(self, big_cm):
+        beliefs = {f"belief_{i:02d}": f"value {i}" for i in range(14)}
+        rendered = big_cm.build_context(_kernel_state(belief_state=beliefs))
+        assert "…and 4 earlier key(s) not shown" in rendered
+        for hidden in ["belief_00", "belief_01", "belief_02", "belief_03"]:
+            assert f"`{hidden}`" in rendered
+
+    def test_most_recent_keys_survive(self, big_cm):
+        beliefs = {f"belief_{i:02d}": f"value {i}" for i in range(14)}
+        rendered = big_cm.build_context(_kernel_state(belief_state=beliefs))
+        # Newest key renders with its value; oldest only in the overflow notice
+        assert "- `belief_13`: value 13" in rendered
+        assert "- `belief_00`:" not in rendered
+
+    def test_at_or_under_cap_renders_identically_with_no_notice(self, big_cm):
+        beliefs = {f"b{i}": "v" for i in range(10)}
+        rendered = big_cm.build_context(_kernel_state(belief_state=beliefs))
+        assert "not shown" not in rendered
+
+    def test_internal_variable_skip_keys_do_not_consume_the_cap(self, big_cm):
+        # 4 dedicated/underscore keys + 10 real ones: all 10 real keys must render
+        vars_ = {"long_term_memory": [], "research_findings": [], "_private": 1, "api_specs": []}
+        vars_.update({f"var_{i}": f"value {i}" for i in range(10)})
+        rendered = big_cm.build_context(_kernel_state(internal_variables=vars_))
+        for i in range(10):
+            assert f"- `var_{i}`: value {i}" in rendered
+        assert "not shown" not in rendered
+
+    def test_input_context_overflow_named(self, big_cm):
+        ctx = {f"key_{i:02d}": f"val {i}" for i in range(13)}
+        rendered = big_cm.build_context(_kernel_state(context=ctx))
+        assert "…and 3 earlier key(s) not shown" in rendered
+
+
+class TestToolHistoryMarkers:
+    """The tool-history window uses the same honest markers."""
+
+    def test_history_output_truncation_is_marked(self, big_cm):
+        state = _kernel_state()
+        state.add_tool_result("read_file", {"path": "/x"}, "D" * 1500)
+        rendered = big_cm.build_context(state)
+        assert "…[truncated: showing 600 of" in rendered
