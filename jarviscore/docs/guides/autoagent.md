@@ -389,6 +389,37 @@ Control the loop ceiling with environment variables:
 |---|---|---|
 | `MAX_GOAL_STEPS` | `30` | Hard ceiling on plan steps |
 | `MAX_REPLAN_ATTEMPTS` | `8` | Maximum replanning cycles before the goal fails |
+| `MAX_PARALLEL_STEPS` | `3` | Concurrency ceiling for independent plan steps |
+
+### Parallel steps in plans
+
+The planner declares `depends_on` per step — real data dependencies only. Steps with no ordering constraint between them run **concurrently** (bounded by `MAX_PARALLEL_STEPS`), and a step never runs before its dependencies have produced usable output. Plans without any `depends_on` execute strictly sequentially, exactly as before.
+
+```text
+plan: [
+  ("step_01_gather_risks",      []),                          # ┐ run in
+  ("step_02_gather_mitigations", []),                          # ┘ parallel
+  ("step_03_write_brief", ["step_01_gather_risks",
+                           "step_02_gather_mitigations"]),     # waits for both
+]
+```
+
+### Goal persistence and resume
+
+Goal executions persist automatically when blob storage is attached — after planning, after every completed step, and at terminal states — under `goals/{agent_id}/{goal_id}.json`. A crash loses at most the in-flight step:
+
+```python
+execution = await agent.execute_goal("Produce the Q2 analysis")
+goal_id = execution.goal_id                      # capture for resume
+
+# After a crash or restart:
+execution = await agent.execute_goal(
+    "Produce the Q2 analysis",
+    resume_goal_id=goal_id,                      # rehydrates plan, facts, history
+)
+```
+
+Resume continues from the first step without a passing verdict. A missing or corrupt snapshot logs a warning and starts fresh — resume never crashes a goal.
 
 ---
 
