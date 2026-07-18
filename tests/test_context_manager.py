@@ -543,3 +543,73 @@ class TestLtmRenderOverflow:
         state.internal_variables["long_term_memory"] = [_ltm_entry(i) for i in range(5)]
         rendered = big_cm.build_context(state)
         assert "older memories not shown" not in rendered
+
+
+# ======================================================================
+# Issue #72: GOAL STATE block — plan memory crosses steps structured
+# ======================================================================
+
+def _goal_context(n_facts=3, n_steps=2):
+    return {
+        "_goal": "Run the weekly market analysis",
+        "_goal_id": "goal-abc",
+        "_plan_revision": 1,
+        "_goal_facts": {f"fact_{i}": f"value {i}" for i in range(n_facts)},
+        "_goal_facts_high_confidence": {"fact_0": "value 0"},
+        "_completed_steps": [
+            {
+                "step_id": f"step_{i:02d}",
+                "task": f"do thing {i}",
+                "verdict": "pass",
+                "summary": f"did thing {i}",
+            }
+            for i in range(n_steps)
+        ],
+    }
+
+
+class TestGoalStateBlock:
+
+    def test_goal_state_renders_structured(self, big_cm):
+        rendered = big_cm.build_context(_kernel_state(context=_goal_context()))
+        assert "## GOAL STATE" in rendered
+        assert "**Goal:** Run the weekly market analysis (plan revision 1)" in rendered
+        assert "**Established facts (3):**" in rendered
+        assert "- `fact_1`: value 1" in rendered
+        assert "- [pass] `step_01`: did thing 1" in rendered
+
+    def test_high_confidence_facts_render_first_and_marked(self, big_cm):
+        rendered = big_cm.build_context(_kernel_state(context=_goal_context()))
+        assert "- `fact_0` ✓: value 0" in rendered
+        facts_section = rendered.split("**Established facts")[1]
+        assert facts_section.index("fact_0") < facts_section.index("fact_1")
+
+    def test_goal_keys_do_not_leak_into_input_context(self, big_cm):
+        ctx = _goal_context()
+        ctx["normal_key"] = "normal value"
+        rendered = big_cm.build_context(_kernel_state(context=ctx))
+        # Promoted, not duplicated: no generic clipped line for goal keys
+        assert "- `_goal_facts`:" not in rendered
+        assert "- `_completed_steps`:" not in rendered
+        # Ordinary context still renders generically
+        assert "- `normal_key`: normal value" in rendered
+
+    def test_non_goal_dispatch_sees_no_block(self, big_cm):
+        rendered = big_cm.build_context(_kernel_state(context={"plain": "ctx"}))
+        assert "## GOAL STATE" not in rendered
+
+    def test_fact_overflow_is_announced_by_name(self, big_cm):
+        ctx = _goal_context(n_facts=25)
+        rendered = big_cm.build_context(_kernel_state(context=ctx))
+        assert "earlier key(s) not shown" in rendered
+
+    def test_step_overflow_is_announced(self, big_cm):
+        ctx = _goal_context(n_steps=12)
+        rendered = big_cm.build_context(_kernel_state(context=ctx))
+        assert "…and 4 earlier steps not shown" in rendered
+
+    def test_long_fact_values_carry_markers(self, big_cm):
+        ctx = _goal_context()
+        ctx["_goal_facts"]["huge"] = "H" * 900
+        rendered = big_cm.build_context(_kernel_state(context=ctx))
+        assert "…[truncated: showing 200 of 900 chars]" in rendered

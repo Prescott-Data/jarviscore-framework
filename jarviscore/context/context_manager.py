@@ -104,6 +104,9 @@ class BudgetConfig:
     ltm_window: int = 20
     # How many LTM entries the context block renders (was a silent [-5:]).
     ltm_render_limit: int = 5
+    # Token budget for the GOAL STATE block (issue #72) — the accumulated
+    # facts and step history of a goal execution, rendered structured.
+    goal_state_budget: int = 4000
 
     @property
     def usable_tokens(self) -> int:
@@ -185,6 +188,55 @@ class ContextManager:
     # ------------------------------------------------------------------
     # Honest rendering helpers (issues #55, #56)
     # ------------------------------------------------------------------
+
+    def _build_goal_state_block(self, context: Dict[str, Any]) -> str:
+        """Render a goal execution's accumulated state — structured (issue #72).
+
+        Consumes the keys `context_for_next_step()` injects (`_goal`,
+        `_goal_facts`, `_goal_facts_high_confidence`, `_completed_steps`,
+        `_plan_revision`). Returns "" when the agent is not running under a
+        goal — non-goal dispatches see zero change.
+        """
+        goal = context.get("_goal")
+        facts = context.get("_goal_facts")
+        completed = context.get("_completed_steps")
+        if not goal and not facts and not completed:
+            return ""
+
+        lines = ["## GOAL STATE"]
+        if goal:
+            revision = context.get("_plan_revision", 0)
+            rev_note = f" (plan revision {revision})" if revision else ""
+            lines.append(f"**Goal:** {self._clip(goal, 300)}{rev_note}")
+
+        if isinstance(facts, dict) and facts:
+            high_conf = context.get("_goal_facts_high_confidence") or {}
+            lines.append(f"**Established facts ({len(facts)}):**")
+            # High-confidence facts first — they are the plan's load-bearing truth
+            ordered = sorted(facts.items(), key=lambda kv: kv[0] not in high_conf)
+            visible, overflow = self._visible_items(dict(ordered), self.config.state_keys_limit * 2)
+            for key, value in visible:
+                marker = " ✓" if key in high_conf else ""
+                lines.append(f"- `{key}`{marker}: {self._clip(value, self.config.belief_value_limit)}")
+            if overflow:
+                lines.append(overflow.rstrip())
+
+        if isinstance(completed, list) and completed:
+            lines.append(f"**Completed steps ({len(completed)}):**")
+            for cs in completed[-8:]:
+                if isinstance(cs, dict):
+                    sid = cs.get("step_id", "?")
+                    verdict = cs.get("verdict", cs.get("status", "?"))
+                    summary = self._clip(cs.get("summary") or cs.get("task", ""), 160)
+                    lines.append(f"- [{verdict}] `{sid}`: {summary}")
+                else:
+                    lines.append(f"- {self._clip(cs, 160)}")
+            hidden = len(completed) - 8
+            if hidden > 0:
+                lines.append(f"…and {hidden} earlier steps not shown")
+
+        return "\n".join(lines)
+
 
     @staticmethod
     def _clip(value: Any, limit: int) -> str:
@@ -279,6 +331,15 @@ class ContextManager:
             mission += f"**CRITICAL ERROR TO FIX:** {state.last_error}\n"
         _add_block(mission)
 
+        # ═══ BLOCK 1b: GOAL STATE (High Priority — issue #72) ═══
+        # A goal execution's accumulated truth used to reach each step as ONE
+        # generic `_goal_facts: {...}` line clipped at the value limit — the
+        # plan's entire memory in 800 chars. Goal state is mission-level
+        # context: structured, one fact per line, honest overflow.
+        goal_block = self._build_goal_state_block(state.context or {})
+        if goal_block:
+            _add_block(goal_block, max_tokens=self.config.goal_state_budget)
+
         # ═══ BLOCK 2: FAILURE MEMORY (High Priority) ═══
         if state.failure_ledger:
             lines = ["## FAILURE MEMORY (Do Not Repeat)"]
@@ -326,10 +387,14 @@ class ContextManager:
                     output_str = self._clip(output, self.config.prior_step_value_limit)
                     input_block += f"**[Prior Step: {step_id}]**\n{output_str}\n\n"
 
-            # Other context fields (skip internal keys)
+            # Other context fields (skip internal keys; goal keys are
+            # PROMOTED to the GOAL STATE block, not dropped)
             skip_keys = {"previous_step_results", "workflow_id", "step_id",
                           "system_prompt", "_jarvis_context", "_auth_credentials",
-                          "_agent_default_kernel_role"}
+                          "_agent_default_kernel_role",
+                          "_goal", "_goal_id", "_goal_facts",
+                          "_goal_facts_high_confidence", "_completed_steps",
+                          "_plan_revision"}
             other = {k: v for k, v in state.context.items() if k not in skip_keys}
             if other:
                 cleaned = self._scrub_dict(other)
