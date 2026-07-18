@@ -602,3 +602,81 @@ class TestAgentOutputDistilledFacts:
     def test_failure_output_has_no_facts(self):
         out = AgentOutput(status="failure", summary="error occurred")
         assert out.distilled_facts() == {}
+
+
+# ── Issue #73: goal persistence & resume ──────────────────────────────────────
+
+class TestGoalSnapshotRoundTrip:
+
+    def _executed_goal(self):
+        ge = GoalExecution(goal="Analyse the market", agent_id="analyst-1")
+        ge.plan = [_make_step("step_01"), _make_step("step_02", task="Do Y")]
+        ge.plan_revision = 1
+        ge.status = "executing"
+        from jarviscore.context.truth import TruthFact
+        ge.truth.facts["api_auth"] = TruthFact(
+            value="oauth2", source="step_01", confidence=0.95
+        )
+        ge.record_completed(
+            ge.plan[0],
+            _make_output(summary="found the auth method"),
+            _make_evaluation(verdict="pass"),
+            elapsed_ms=120.0,
+        )
+        return ge
+
+    def test_full_dict_is_json_safe_and_carries_the_plan(self):
+        import json
+        ge = self._executed_goal()
+        data = json.loads(json.dumps(ge.to_full_dict(), default=str))
+        assert [s["step_id"] for s in data["plan"]] == ["step_01", "step_02"]
+        assert "truth_facts_full" in data
+        assert data["completed_steps"][0]["summary"] == "found the auth method"
+
+    def test_snapshot_round_trip_restores_plan_facts_and_history(self):
+        import json
+        ge = self._executed_goal()
+        data = json.loads(json.dumps(ge.to_full_dict(), default=str))
+
+        restored = GoalExecution.from_snapshot(data)
+
+        assert restored.goal == "Analyse the market"
+        assert restored.goal_id == ge.goal_id
+        assert restored.agent_id == "analyst-1"
+        assert [s.step_id for s in restored.plan] == ["step_01", "step_02"]
+        assert restored.plan_revision == 1
+        # Facts survive with value + confidence
+        assert restored.truth.facts["api_auth"].value == "oauth2"
+        assert restored.truth.facts["api_auth"].confidence == pytest.approx(0.95)
+        # History survives as duck-typed completed steps
+        assert len(restored.completed) == 1
+        cs = restored.completed[0]
+        assert cs.step.step_id == "step_01"
+        assert cs.evaluation.verdict == "pass"
+        assert cs.to_summary()["summary"] == "found the auth method"
+
+    def test_resumed_context_chains_into_next_step(self):
+        """The restored execution feeds context_for_next_step correctly."""
+        import json
+        ge = self._executed_goal()
+        restored = GoalExecution.from_snapshot(
+            json.loads(json.dumps(ge.to_full_dict(), default=str))
+        )
+        ctx = restored.context_for_next_step()
+        assert ctx["_goal_facts"]["api_auth"] == "oauth2"
+        assert ctx["_completed_steps"][0]["step_id"] == "step_01"
+
+    def test_planned_step_round_trip(self):
+        step = _make_step()
+        restored = PlannedStep.from_dict(step.to_dict())
+        assert restored == step
+
+    def test_bad_fact_is_skipped_not_fatal(self):
+        data = {
+            "goal": "G", "agent_id": "a", "goal_id": "goal-x",
+            "plan": [], "plan_revision": 0, "status": "executing",
+            "truth_facts_full": {"broken": {"not_a_fact_field": 1}},
+            "completed_steps": [],
+        }
+        restored = GoalExecution.from_snapshot(data)
+        assert "broken" not in restored.truth.facts
