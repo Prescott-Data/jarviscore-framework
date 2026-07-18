@@ -23,6 +23,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from collections import deque
 from enum import Enum
@@ -75,6 +76,19 @@ _CONV_STALL_ACTION = os.getenv("CONVERGENCE_STALL_ACTION", "yield").strip().lowe
 
 # Failure guard TTL (in-process guard; Redis uses its own TTL)
 _FAILURE_GUARD_HORIZON_SECONDS = int(os.getenv("FAILURE_GUARD_HORIZON_SECONDS", "1800"))
+# Whether unclassifiable failures block retries. "guard" (default, historical)
+# treats UNKNOWN as permanent; "skip" treats it as weak evidence and allows
+# retries — an error we could not classify is thin grounds for a 30-min block.
+_FAILURE_GUARD_UNKNOWN = os.getenv("FAILURE_GUARD_UNKNOWN", "guard").strip().lower()
+
+# HTTP-ish status codes → failure class, for structured classification.
+_STATUS_CODE_CLASSES = {
+    401: "AUTH_UNAUTHORIZED",
+    403: "AUTH_FORBIDDEN",
+    404: "NOT_FOUND",
+    408: "TIMEOUT",
+    429: "RATE_LIMIT",
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,14 +335,46 @@ class FailureLedger:
         return hashlib.sha256(f"{tool_name}:{payload}".encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _classify_error(error_text: str) -> str:
-        """Classify failure mode from error string."""
+    def _classify_error(error_text: str, output: Any = None) -> str:
+        """Classify a failure — structured signals first, prose last.
+
+        Classification decides retryability (TIMEOUT/NETWORK are never
+        guarded), so it must prefer machine-readable evidence over substring
+        sniffing (issue #60):
+
+        1. output["error_type"] — an explicit class from the tool wins outright
+        2. output["status_code"] / output["code"] — numeric HTTP-ish codes
+        3. Prose heuristics — word-boundary matched numeric codes, so
+           "1404 rows" never reads as a 404
+        """
+        # 1. Explicit class from the tool
+        if isinstance(output, dict):
+            explicit = output.get("error_type")
+            if isinstance(explicit, str) and explicit.strip():
+                return explicit.strip().upper()
+            # 2. Numeric status code
+            for key in ("status_code", "code"):
+                code = output.get(key)
+                try:
+                    code = int(code)
+                except (TypeError, ValueError):
+                    continue
+                if code in _STATUS_CODE_CLASSES:
+                    return _STATUS_CODE_CLASSES[code]
+                if code >= 500:
+                    return "NETWORK"
+
+        # 3. Prose heuristics (fallback only)
         text = str(error_text).lower()
-        if "401" in text or "unauthorized" in text:
+
+        def _code(n: str) -> bool:
+            return bool(re.search(rf"\b{n}\b", text))
+
+        if _code("401") or "unauthorized" in text:
             return "AUTH_UNAUTHORIZED"
-        if "403" in text or "forbidden" in text:
+        if _code("403") or "forbidden" in text:
             return "AUTH_FORBIDDEN"
-        if "429" in text or "rate limit" in text:
+        if _code("429") or "rate limit" in text:
             return "RATE_LIMIT"
         if "timeout" in text or "timed out" in text:
             return "TIMEOUT"
@@ -336,7 +382,7 @@ class FailureLedger:
             return "NETWORK"
         if "schema" in text or "validation" in text:
             return "SCHEMA_VALIDATION"
-        if "not found" in text or "404" in text:
+        if "not found" in text or _code("404"):
             return "NOT_FOUND"
         return "UNKNOWN"
 
@@ -355,7 +401,7 @@ class FailureLedger:
         If redis_store is attached, the failure is also indexed there.
         """
         fp = self.fingerprint(tool_name, params)
-        error_type = self._classify_error(error or str(output or ""))
+        error_type = self._classify_error(error or str(output or ""), output=output)
         entry: Dict[str, Any] = {
             "ts": time.time(),
             "tool": tool_name,
@@ -391,12 +437,20 @@ class FailureLedger:
         Return True if this fingerprint has failed recently and should not be retried.
 
         Checks Redis cross-session guard first (if attached), then in-process ledger.
-        Transient failures (TIMEOUT, NETWORK) are NOT guarded — they may succeed on retry.
+        Transient failures (TIMEOUT, NETWORK) are NOT guarded — they may succeed
+        on retry. UNKNOWN failures follow FAILURE_GUARD_UNKNOWN ("guard", the
+        historical default, or "skip" — an error we could not classify is weak
+        evidence for a 30-minute block).
         """
-        # Redis cross-session check
+        # Redis cross-session check — keyed exactly as record() writes it
+        # (issue #60: this used to query workflow_id="unknown" while record()
+        # indexed under the real workflow id, so the cross-session guard
+        # could never match what was written).
         if self.redis_store and hasattr(self.redis_store, "has_failure_guard"):
             try:
-                if self.redis_store.has_failure_guard("global", "unknown", fp):
+                if self.redis_store.has_failure_guard(
+                    "global", str(self.workflow_id), fp
+                ):
                     return True
             except Exception as exc:
                 logger.warning(
@@ -406,6 +460,9 @@ class FailureLedger:
 
         # In-process ledger check
         now = time.time()
+        skip_types = {"TIMEOUT", "NETWORK"}
+        if _FAILURE_GUARD_UNKNOWN == "skip":
+            skip_types = skip_types | {"UNKNOWN"}
         for entry in reversed(self._ledger[-20:]):
             if entry.get("fingerprint") != fp:
                 continue
@@ -415,7 +472,7 @@ class FailureLedger:
             if (now - float(ts)) > self.horizon_seconds:
                 continue
             # Don't guard transient failures — they might succeed next time
-            if entry.get("error_type") in {"TIMEOUT", "NETWORK"}:
+            if entry.get("error_type") in skip_types:
                 continue
             return True
         return False
