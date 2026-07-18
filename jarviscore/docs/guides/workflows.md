@@ -213,6 +213,37 @@ The `market_research` and `competitor_scan` steps are dispatched simultaneously.
 
 ---
 
+## Dynamic Fan-Out: `mesh.fanout()`
+
+Workflow DAGs are declared upfront — the right tool when the step list is known at authoring time. When N is **data** (scan results, file lists, symbol boards), use `mesh.fanout()` to run one task template over runtime items with bounded concurrency:
+
+```python
+result = await mesh.fanout(
+    "board-scan",
+    agent="analyst",                       # role or capability
+    items=symbols,                         # the dynamic N
+    task=lambda s: f"Deep-read {s} and return a thesis JSON.",
+    context=lambda s: {"symbol": s},       # per-item context (or a static dict)
+    concurrency=5,                         # always bounded
+    budget=20,                             # optional cap; the rest → result.skipped
+    on_error="collect",                    # or "fail_fast"
+    timeout=120,                           # optional per-item seconds
+)
+
+theses = [r["payload"] for r in result.succeeded]
+errors = result.failed                     # honest per-item errors
+brief  = await result.summarize(llm, "Synthesize the board read.")
+```
+
+Guarantees:
+
+- **Identity by construction** — every item runs under a namespaced step id and every result is stamped with `item` + `step_id`; concurrent items cannot cross-contaminate.
+- **Results in item order**, always — aggregation never guesses by position.
+- **Partial failure is first-class** — one bad item never voids the rest in `collect` mode; `fail_fast` cancels pending items while keeping finished results.
+- **Nothing silent** — budget-skipped items are reported; `summarize()` shows the LLM clipped evidence *with markers* plus every failure.
+
+---
+
 ## Accessing redis_store from an Agent
 
 `self._redis_store` is the `RedisContextStore` instance injected by the Mesh at setup time. It is `None` if Redis is not configured. Pass it to `register()` and `execute()`:

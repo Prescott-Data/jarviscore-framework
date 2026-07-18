@@ -1200,7 +1200,7 @@ class Mesh:
         Get first agent by role.
 
         If multiple agents share the same role, returns the first registered agent.
-        Use get_agents_by_role() to get all agents with a specific role.
+        Use get_agents_by_capability() to query agents by capability tag.
 
         Args:
             role: Agent role identifier
