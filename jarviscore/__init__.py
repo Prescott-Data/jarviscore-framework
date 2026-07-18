@@ -57,7 +57,6 @@ from jarviscore.core.mesh import Mesh, MeshMode
 # Execution profiles
 from jarviscore.profiles.autoagent import AutoAgent
 from jarviscore.profiles.customagent import CustomAgent
-from jarviscore.profiles.reasoningagent import ReasoningAgent
 
 # Custom Profile: Decorator, Wrapper, and Context
 from jarviscore.adapter import jarvis_agent, wrap
@@ -106,7 +105,6 @@ __all__ = [
 
     # Profiles
     "AutoAgent",
-    "ReasoningAgent",
     "CustomAgent",
 
     # Custom Profile (decorator and wrapper)
