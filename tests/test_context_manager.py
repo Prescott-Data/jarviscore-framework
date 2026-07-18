@@ -305,3 +305,110 @@ class TestToolHistoryMarkers:
         state.add_tool_result("read_file", {"path": "/x"}, "D" * 1500)
         rendered = big_cm.build_context(state)
         assert "…[truncated: showing 600 of" in rendered
+
+
+# ======================================================================
+# Issue #59: summarization is compression, never destruction
+# ======================================================================
+
+def _state_ready_to_compress(n_turns=10, output_len=400):
+    state = _kernel_state()
+    for i in range(n_turns):
+        state.add_tool_result(
+            "web_search", {"query": f"q{i}"},
+            {"status": "success", "content": f"finding-{i}-" + "x" * output_len},
+        )
+    return state
+
+
+def _compressing_cm():
+    # Tiny history_limit so the 80% threshold trips immediately
+    return ContextManager(BudgetConfig(history_limit=10))
+
+
+class TestZeroLossSummarization:
+
+    @pytest.mark.asyncio
+    async def test_originals_archived_before_trim(self):
+        cm = _compressing_cm()
+        state = _state_ready_to_compress()
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "- discovered things"})
+
+        assert await cm._summarize_state(state, llm) is True
+
+        archive = state.internal_variables["_archived_turns"]
+        assert len(archive) == 3  # oldest 30% of 10
+        assert archive[0]["tool_name"] == "web_search"
+        # Full output preserved — not the 100-char stub of old
+        assert "finding-0-" in archive[0]["tool_output"]
+        assert len(archive[0]["tool_output"]) > 300
+        # And history was trimmed as before
+        assert len(state.tool_history) == 7
+
+    @pytest.mark.asyncio
+    async def test_summary_is_labeled_lossy(self):
+        cm = _compressing_cm()
+        state = _state_ready_to_compress()
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "- found stuff"})
+
+        await cm._summarize_state(state, llm)
+
+        ltm = state.internal_variables["long_term_memory"]
+        assert ltm[0]["summary"].startswith("[lossy summary of 3 turns — originals archived]")
+        assert ltm[0]["archived"] is True
+
+    @pytest.mark.asyncio
+    async def test_summarizer_sees_a_real_evidence_window(self):
+        cm = _compressing_cm()
+        state = _state_ready_to_compress(output_len=700)
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "- ok"})
+
+        await cm._summarize_state(state, llm)
+
+        prompt = llm.generate.call_args.kwargs["messages"][0]["content"]
+        # Old code fed 100 chars/turn; the evidence window is now config-sized
+        assert "finding-0-" + "x" * 300 in prompt
+
+    @pytest.mark.asyncio
+    async def test_failed_summarizer_keeps_history_intact(self):
+        cm = _compressing_cm()
+        state = _state_ready_to_compress()
+        llm = MagicMock()
+        llm.generate = AsyncMock(side_effect=RuntimeError("provider down"))
+
+        assert await cm._summarize_state(state, llm) is False
+        assert len(state.tool_history) == 10          # nothing trimmed
+        assert "_archived_turns" not in state.internal_variables
+        assert "long_term_memory" not in state.internal_variables
+
+    @pytest.mark.asyncio
+    async def test_archive_is_bounded(self):
+        cm = ContextManager(BudgetConfig(history_limit=10, archive_window=4))
+        state = _state_ready_to_compress()
+        state.internal_variables["_archived_turns"] = [
+            {"tool_name": f"old_{i}"} for i in range(4)
+        ]
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "- ok"})
+
+        await cm._summarize_state(state, llm)
+
+        archive = state.internal_variables["_archived_turns"]
+        assert len(archive) == 4
+        # Newest entries survive; the pre-existing oldest were evicted
+        assert archive[-1]["tool_name"] == "web_search"
+
+    @pytest.mark.asyncio
+    async def test_archive_is_json_safe_for_checkpoints(self):
+        import json as _json
+        cm = _compressing_cm()
+        state = _state_ready_to_compress()
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "- ok"})
+
+        await cm._summarize_state(state, llm)
+        # save_checkpoint calls model_dump_json — must not raise
+        _json.loads(state.model_dump_json())

@@ -91,6 +91,12 @@ class BudgetConfig:
     internal_var_limit: int = 200
     history_value_limit: int = 600
     state_keys_limit: int = 10
+    # Chars of each turn's output shown to the summarizer LLM. 100 chars was
+    # not a summarizable evidence base — the "summary" was confabulation by
+    # construction (issue #59).
+    summary_evidence_limit: int = 800
+    # How many compressed-away turns stay retrievable in the archive.
+    archive_window: int = 50
 
     @property
     def usable_tokens(self) -> int:
@@ -565,7 +571,14 @@ class ContextManager:
         return True
 
     async def _summarize_state(self, state: "KernelState", llm) -> bool:
-        """Compress oldest tool history entries into long-term memory."""
+        """Compress oldest tool history entries into long-term memory.
+
+        Compression, not destruction (issue #59): the summary is built from a
+        real evidence window per turn, the ORIGINALS are archived before the
+        history is trimmed, the stored summary is labeled lossy, and a failed
+        summarizer keeps the entries for the next cycle instead of replacing
+        evidence with a tool-name list.
+        """
         if len(state.tool_history) < 8:
             return False  # Not enough to compress
 
@@ -586,35 +599,58 @@ class ContextManager:
         old_entries = state.tool_history[:slice_idx]
         remaining = state.tool_history[slice_idx:]
 
-        # Build summary (LLM or fallback)
+        # Build summary from a real evidence base — an LLM asked to summarize
+        # "WHAT was discovered" needs to actually see the discoveries.
         try:
             summary_prompt = (
                 "Summarize these agent actions into 2-3 bullet points. "
                 "Focus on WHAT was discovered and WHAT was attempted:\n"
             )
             for tr in old_entries:
-                summary_prompt += f"- {tr.tool_name}: {str(tr.tool_output)[:100]}\n"
+                evidence = self._clip(tr.tool_output, self.config.summary_evidence_limit)
+                summary_prompt += f"- {tr.tool_name}: {evidence}\n"
 
             if hasattr(llm, "generate"):
                 result = await llm.generate(
                     messages=[{"role": "user", "content": summary_prompt}]
                 )
-                summary_text = result.get("content", "")[:500]
+                summary_text = self._clip(result.get("content", ""), 1000)
             else:
-                # Fallback: mechanical summary
+                # No LLM attached: mechanical summary, but the originals are
+                # archived below — nothing is destroyed.
                 tool_names = set(tr.tool_name for tr in old_entries)
                 summary_text = f"Executed {len(old_entries)} actions: {', '.join(tool_names)}"
         except Exception as e:
-            logger.warning(f"Summarization LLM call failed: {e}")
-            tool_names = set(tr.tool_name for tr in old_entries)
-            summary_text = f"Executed {len(old_entries)} actions: {', '.join(tool_names)}"
+            # A failed summarizer must not cost evidence: keep the entries
+            # and let the next cycle retry. The old fallback replaced the
+            # oldest 30% of the agent's history with a tool-name list.
+            logger.warning(
+                f"Summarization LLM call failed ({e}) — keeping tool history "
+                f"intact for retry on the next cycle"
+            )
+            return False
 
-        # Store in long-term memory
+        # Archive the originals BEFORE trimming — a summary is a view,
+        # never the only copy. JSON-safe (checkpoints call model_dump_json).
+        archive = state.internal_variables.setdefault("_archived_turns", [])
+        for tr in old_entries:
+            archive.append({
+                "tool_name": tr.tool_name,
+                "tool_input": json.loads(json.dumps(tr.tool_input, default=str)),
+                "tool_output": str(tr.tool_output),
+                "status": getattr(tr, "status", None),
+                "error": getattr(tr, "error", None),
+            })
+        if len(archive) > self.config.archive_window:
+            del archive[:-self.config.archive_window]
+
+        # Store in long-term memory — labeled for what it is
         if "long_term_memory" not in state.internal_variables:
             state.internal_variables["long_term_memory"] = []
         state.internal_variables["long_term_memory"].append({
-            "summary": summary_text,
+            "summary": f"[lossy summary of {len(old_entries)} turns — originals archived] {summary_text}",
             "turns_compressed": len(old_entries),
+            "archived": True,
             "timestamp": time.time(),
         })
 
