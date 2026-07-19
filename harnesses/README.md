@@ -12,22 +12,31 @@ to the profiles, the kernel, the planner, or the orchestration layer.
 | `dx_customagent.py` | CustomAgent: workflows, step identity, `mesh.fanout()` | No |
 | `dx_autoagent.py` | AutoAgent: loud pre-start errors, `single_response`, a kernel task | Yes |
 | `dx_goalmode.py` | Goal mode: planning with `depends_on`, parallel steps, persistence, resume | Yes |
+| `prod_customagent_swarm.py` | A production CustomAgent swarm: DAG pipeline, fan-out with a poison item, 30 workflows of sustained load, failure semantics | No |
+| `prod_autoagent_swarm.py` | A production AutoAgent swarm with plan mode on: triage (simple asks must not plan), bounded context inside goals, flat repeated sessions, mixed-profile workflow | Yes |
+
+The two `prod_` harnesses are the stability gate. They simulate two developers
+running production swarms and assert the failure signatures that matter:
+over-planning, compounding context growth, cross-workflow contamination,
+timing drift, and memory growth under sustained load.
 
 ## Running them
 
-The CustomAgent harness runs offline:
+The CustomAgent harnesses run offline:
 
 ```bash
 python3 harnesses/dx_customagent.py
+python3 harnesses/prod_customagent_swarm.py
 ```
 
-The other two need live LLM credentials in the environment (the same variables
+The others need live LLM credentials in the environment (the same variables
 the framework reads, for example `AZURE_API_KEY` and `AZURE_ENDPOINT`):
 
 ```bash
 set -a && source /path/to/your/.env && set +a
 python3 harnesses/dx_autoagent.py
 python3 harnesses/dx_goalmode.py
+python3 harnesses/prod_autoagent_swarm.py
 ```
 
 Each harness prints one line per check and exits non-zero if any check fails.
