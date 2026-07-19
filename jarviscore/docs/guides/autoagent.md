@@ -184,7 +184,7 @@ The four sub-agents the Kernel routes to are the `CoderSubAgent` for tasks that 
 
 ### Analysis, not code: the `single_response` contract
 
-The most common lightweight agent shape — render the system prompt, make **one** structured completion, return the answer — needs no planner, no router, and no codegen. Declare it per task with an execution contract:
+Many agent tasks need exactly one LLM completion: render the system prompt, ask the question, return the answer. No planner, no routing, no code generation. Declare this shape per task with an execution contract:
 
 ```python
 results = await mesh.workflow("analysis-001", [{
@@ -194,9 +194,9 @@ results = await mesh.workflow("analysis-001", [{
 }])
 ```
 
-With `single_response` declared, `execute_task()` runs exactly one completion against the agent's (profile-augmented) system prompt and returns the standard envelope with token/cost telemetry. The Kernel pipeline is bypassed entirely — an analysis prompt will never produce TOOL/DONE protocol violations from the Coder sub-agent.
+With `single_response` declared, `execute_task()` runs one completion against the agent's system prompt (including its persona profile, if one is loaded) and returns the standard result envelope with token and cost telemetry. The Kernel pipeline is skipped entirely, so an analysis prompt never reaches the Coder sub-agent and never produces TOOL/DONE protocol errors.
 
-Use this when the steps are "just answer": analysis, classification, extraction, drafting. The moment the task needs tools, search, or multi-turn reasoning, drop the contract and let the Kernel route.
+Use this for tasks where the whole job is the answer: analysis, classification, extraction, drafting. When the task needs tools, search, or several turns of reasoning, drop the contract and let the Kernel route it.
 
 ---
 
