@@ -213,6 +213,23 @@ class TestCheckAndResolve:
         resolution = queue.check(item_id)
         assert resolution is None  # pending → no resolution yet
 
+    def test_check_after_resolve_returns_decision(self, queue):
+        """resolve() then check() round-trips to an approved resolution.
+
+        Regression: resolve() used to write the verdict into `status`, which
+        made from_raw() (and therefore check()) return None forever.
+        """
+        item_id = queue.request(
+            title="Round-trip test",
+            content="Approve me.",
+            urgency="normal",
+            category="critical_action",
+        )
+        assert queue.resolve(item_id, "approved", reason="ok") is True
+        resolution = queue.check(item_id)
+        assert resolution is not None
+        assert resolution.is_approved
+
     def test_resolve_updates_file(self, queue, inbox_dir):
         """resolve() writes decision to the JSON file."""
         item_id = queue.request(
@@ -225,7 +242,9 @@ class TestCheckAndResolve:
         assert result is True
 
         data = json.loads((inbox_dir / f"{item_id}.json").read_text())
-        assert data["status"] == "approved"
+        # status is the lifecycle state (resolved); the verdict lives in
+        # decision. This is what lets check()/from_raw() read the item back.
+        assert data["status"] == "resolved"
         assert data["decision"] == "approved"
         assert data["decision_reason"] == "Looks good"
         assert data["decided_at"] is not None

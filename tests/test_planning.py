@@ -318,6 +318,56 @@ class TestStepEvaluator:
     def _evaluator(self):
         return StepEvaluator(llm_client=None)
 
+    def test_evidence_fits_real_artifacts(self):
+        """A multi-KB artifact is visible to the evaluator, not blinded at 1KB (#85)."""
+        ev = self._evaluator()
+        artifact = "SECTION\n" + ("x" * 4000) + "\nEND-OF-ARTIFACT"
+        out = _make_output(summary="assembled the handbook", payload=artifact)
+        rendered = ev._format_output(out)
+        assert "END-OF-ARTIFACT" in rendered          # the whole artifact is evidence
+        assert "[truncated" not in rendered           # nothing silently hidden
+
+    def test_clipped_evidence_is_announced(self):
+        """When evidence must be clipped, the marker is explicit (#55/#85)."""
+        ev = self._evaluator()
+        huge = "y" * 10_000
+        out = _make_output(summary="s" * 5_000, payload=huge)
+        rendered = ev._format_output(out)
+        assert "[truncated: showing 2000 of 5000 chars]" in rendered
+        assert "[truncated: showing 6000 of 10000 chars]" in rendered
+
+    def test_evidence_limits_are_tunable(self, monkeypatch):
+        monkeypatch.setenv("EVALUATOR_PAYLOAD_EVIDENCE_LIMIT", "50")
+        ev = self._evaluator()
+        out = _make_output(payload="z" * 100)
+        rendered = ev._format_output(out)
+        assert "[truncated: showing 50 of 100 chars]" in rendered
+
+    def test_schema_teaches_truncation_semantics(self):
+        """The verdict contract says clipped evidence is partial, never fail."""
+        from jarviscore.planning.evaluator import _EVAL_SCHEMA
+        assert "Truncated evidence" in _EVAL_SCHEMA
+        assert "Never return \"fail\" solely because evidence was clipped" in _EVAL_SCHEMA
+
+    def test_accumulated_facts_never_clipped_silently(self):
+        """The facts block in the prompt clips with a marker, not silently (#55/#85).
+
+        Regression: the prompt told the model 'do not re-extract these' while
+        silently hiding everything past 500 chars.
+        """
+        from jarviscore.context.truth import TruthFact
+        ev = self._evaluator()
+        ge = GoalExecution(goal="G", agent_id="a")
+        for i in range(60):
+            ge.truth.facts[f"fact_{i:02d}"] = TruthFact(
+                value="v" * 60, source="t", confidence=0.9,
+            )
+        prompt = ev._build_prompt(_make_step(), _make_output(), ge)
+        facts_block = prompt.split("Accumulated goal facts", 1)[1]
+        assert "[truncated: showing" in facts_block   # clipped, but honestly
+        # and the window is real: far more than the old 500 silent chars
+        assert "fact_20" in facts_block
+
     @pytest.mark.asyncio
     async def test_short_circuits_failure_status(self):
         """No LLM call on output.status == 'failure'."""
@@ -602,3 +652,637 @@ class TestAgentOutputDistilledFacts:
     def test_failure_output_has_no_facts(self):
         out = AgentOutput(status="failure", summary="error occurred")
         assert out.distilled_facts() == {}
+
+
+# ── Issue #73: goal persistence & resume ──────────────────────────────────────
+
+class TestGoalSnapshotRoundTrip:
+
+    def _executed_goal(self):
+        ge = GoalExecution(goal="Analyse the market", agent_id="analyst-1")
+        ge.plan = [_make_step("step_01"), _make_step("step_02", task="Do Y")]
+        ge.plan_revision = 1
+        ge.status = "executing"
+        from jarviscore.context.truth import TruthFact
+        ge.truth.facts["api_auth"] = TruthFact(
+            value="oauth2", source="step_01", confidence=0.95
+        )
+        ge.record_completed(
+            ge.plan[0],
+            _make_output(summary="found the auth method"),
+            _make_evaluation(verdict="pass"),
+            elapsed_ms=120.0,
+        )
+        return ge
+
+    def test_full_dict_is_json_safe_and_carries_the_plan(self):
+        import json
+        ge = self._executed_goal()
+        data = json.loads(json.dumps(ge.to_full_dict(), default=str))
+        assert [s["step_id"] for s in data["plan"]] == ["step_01", "step_02"]
+        assert "truth_facts_full" in data
+        assert data["completed_steps"][0]["summary"] == "found the auth method"
+
+    def test_snapshot_round_trip_restores_plan_facts_and_history(self):
+        import json
+        ge = self._executed_goal()
+        data = json.loads(json.dumps(ge.to_full_dict(), default=str))
+
+        restored = GoalExecution.from_snapshot(data)
+
+        assert restored.goal == "Analyse the market"
+        assert restored.goal_id == ge.goal_id
+        assert restored.agent_id == "analyst-1"
+        assert [s.step_id for s in restored.plan] == ["step_01", "step_02"]
+        assert restored.plan_revision == 1
+        # Facts survive with value + confidence
+        assert restored.truth.facts["api_auth"].value == "oauth2"
+        assert restored.truth.facts["api_auth"].confidence == pytest.approx(0.95)
+        # History survives as duck-typed completed steps
+        assert len(restored.completed) == 1
+        cs = restored.completed[0]
+        assert cs.step.step_id == "step_01"
+        assert cs.evaluation.verdict == "pass"
+        assert cs.to_summary()["summary"] == "found the auth method"
+
+    def test_resumed_context_chains_into_next_step(self):
+        """The restored execution feeds context_for_next_step correctly."""
+        import json
+        ge = self._executed_goal()
+        restored = GoalExecution.from_snapshot(
+            json.loads(json.dumps(ge.to_full_dict(), default=str))
+        )
+        ctx = restored.context_for_next_step()
+        assert ctx["_goal_facts"]["api_auth"] == "oauth2"
+        assert ctx["_completed_steps"][0]["step_id"] == "step_01"
+
+    def test_planned_step_round_trip(self):
+        step = _make_step()
+        restored = PlannedStep.from_dict(step.to_dict())
+        assert restored == step
+
+    def test_bad_fact_is_skipped_not_fatal(self):
+        data = {
+            "goal": "G", "agent_id": "a", "goal_id": "goal-x",
+            "plan": [], "plan_revision": 0, "status": "executing",
+            "truth_facts_full": {"broken": {"not_a_fact_field": 1}},
+            "completed_steps": [],
+        }
+        restored = GoalExecution.from_snapshot(data)
+        assert "broken" not in restored.truth.facts
+
+
+# ── Issue #74: planner robustness ─────────────────────────────────────────────
+
+class _PlanLLM:
+    """Captures the prompt; returns a canned plan JSON."""
+
+    def __init__(self, plan_json):
+        self._plan_json = plan_json
+        self.prompts = []
+
+    async def generate(self, **kwargs):
+        self.prompts.append(kwargs["messages"][0]["content"])
+        return {"content": self._plan_json}
+
+
+def _step_json(step_id, depends_on=None):
+    import json
+    return {
+        "step_id": step_id,
+        "task": f"do {step_id}",
+        "success_criterion": "done",
+        "expected_findings": [],
+        "depends_on": depends_on or [],
+        "subagent_hint": None,
+    }
+
+
+class TestPlanValidation:
+
+    @pytest.mark.asyncio
+    async def test_duplicate_step_ids_are_a_hard_error(self):
+        import json
+        from jarviscore.planning.planner import Planner, PlannerError
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1"), _step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        with pytest.raises(PlannerError, match="duplicate step_id"):
+            await Planner(llm).plan(goal="G", goal_execution=ge)
+
+    @pytest.mark.asyncio
+    async def test_unknown_and_self_depends_on_refs_are_stripped(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        llm = _PlanLLM(json.dumps({"steps": [
+            _step_json("s1"),
+            _step_json("s2", depends_on=["s1", "ghost_step", "s2"]),
+        ]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        steps = await Planner(llm).plan(goal="G", goal_execution=ge)
+        assert steps[1].depends_on == ["s1"]
+
+    @pytest.mark.asyncio
+    async def test_depends_on_round_trips_through_parse(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        llm = _PlanLLM(json.dumps({"steps": [
+            _step_json("s1"), _step_json("s2", depends_on=["s1"]),
+        ]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        steps = await Planner(llm).plan(goal="G", goal_execution=ge)
+        assert steps[1].depends_on == ["s1"]
+
+
+class TestHonestPlannerPrompts:
+
+    @pytest.mark.asyncio
+    async def test_facts_render_one_per_line_with_count(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        from jarviscore.context.truth import TruthFact
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        for i in range(25):
+            ge.truth.facts[f"fact_{i:02d}"] = TruthFact(
+                value=f"v{i}", source="s", confidence=0.9
+            )
+        await Planner(llm).plan(goal="G", goal_execution=ge)
+        prompt = llm.prompts[0]
+        assert "25 fact(s) known:" in prompt
+        assert "- fact_00: v0" in prompt
+        assert "…and 5 more facts not shown" in prompt
+
+    @pytest.mark.asyncio
+    async def test_long_fact_values_carry_markers(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        from jarviscore.context.truth import TruthFact
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        ge.truth.facts["huge"] = TruthFact(value="H" * 700, source="s", confidence=0.9)
+        await Planner(llm).plan(goal="G", goal_execution=ge)
+        assert "…[truncated: showing 200 of 700 chars]" in llm.prompts[0]
+
+
+class TestReplanTailAndBudget:
+
+    def _failed_execution(self):
+        ge = GoalExecution(goal="G", agent_id="a")
+        ge.record_completed(
+            _make_step("s1"), _make_output(), _make_evaluation(verdict="fail"),
+            elapsed_ms=10.0,
+        )
+        return ge
+
+    @pytest.mark.asyncio
+    async def test_pending_tail_and_budget_reach_the_prompt(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s9")]}))
+        ge = self._failed_execution()
+        pending = [_make_step("s2", task="untouched work")]
+
+        await Planner(llm).replan(
+            goal_execution=ge, failed_step=ge.completed[0], reason="broke",
+            pending_steps=pending,
+            budget_note="3 of max 30 steps used",
+        )
+        prompt = llm.prompts[0]
+        assert "NOT yet attempted — KEEP these" in prompt
+        assert "s2: untouched work" in prompt
+        assert "Execution budget: 3 of max 30 steps used" in prompt
+
+    @pytest.mark.asyncio
+    async def test_replan_drops_completed_ids_defensively(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        # The model disobeys and re-includes the completed step s1
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1"), _step_json("s2")]}))
+        ge = self._failed_execution()
+
+        revised = await Planner(llm).replan(
+            goal_execution=ge, failed_step=ge.completed[0], reason="broke",
+        )
+        assert [s.step_id for s in revised] == ["s2"]
+
+
+class TestDependencyParallelExecution:
+    """Plans that declare depends_on opt into concurrent co-ready steps."""
+
+    @pytest.mark.asyncio
+    async def test_co_ready_steps_overlap_and_dependents_wait(self, monkeypatch):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-test"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()  # never called: planner/evaluator are patched
+
+        # Kernel fake: records in-flight overlap per step
+        in_flight = set()
+        overlap_seen = {"max": 0}
+        order = []
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                step_id = kwargs["context"]["step_id"]
+                in_flight.add(step_id)
+                overlap_seen["max"] = max(overlap_seen["max"], len(in_flight))
+                await asyncio.sleep(0.05)
+                in_flight.discard(step_id)
+                order.append(step_id)
+                return _make_output(summary=f"did {step_id}")
+
+        agent._kernel = _Kernel()
+
+        # Plan: a and b are independent; c depends on both
+        plan = [
+            PlannedStep("a", "task a", "done", depends_on=[]),
+            PlannedStep("b", "task b", "done", depends_on=[]),
+            PlannedStep("c", "task c", "done", depends_on=["a", "b"]),
+        ]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("test parallel goal")
+
+        assert execution.status == "complete"
+        assert len(execution.completed) == 3
+        # a and b overlapped; c ran only after both finished
+        assert overlap_seen["max"] >= 2
+        assert order.index("c") == 2
+
+    @pytest.mark.asyncio
+    async def test_dep_free_plans_stay_strictly_sequential(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-test-seq"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+
+        in_flight = set()
+        overlap_seen = {"max": 0}
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                step_id = kwargs["context"]["step_id"]
+                in_flight.add(step_id)
+                overlap_seen["max"] = max(overlap_seen["max"], len(in_flight))
+                await asyncio.sleep(0.02)
+                in_flight.discard(step_id)
+                return _make_output(summary=f"did {step_id}")
+
+        agent._kernel = _Kernel()
+
+        # Historical plan shape: no depends_on anywhere
+        plan = [PlannedStep(f"s{i}", f"task {i}", "done") for i in range(3)]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("test sequential goal")
+
+        assert execution.status == "complete"
+        assert overlap_seen["max"] == 1  # byte-identical historical behavior
+
+    @pytest.mark.asyncio
+    async def test_misordered_plan_runs_dependency_first(self):
+        """Review fix: a step listed BEFORE its dependency must wait for it."""
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-test-order"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+        order = []
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                order.append(kwargs["context"]["step_id"])
+                return _make_output(summary="ok")
+
+        agent._kernel = _Kernel()
+
+        # b listed first but depends on a — the model misordered the list
+        plan = [
+            PlannedStep("b", "task b", "done", depends_on=["a"]),
+            PlannedStep("a", "task a", "done", depends_on=[]),
+        ]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("test order goal")
+
+        assert execution.status == "complete"
+        assert order == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_unsatisfiable_deps_fail_honestly(self):
+        """Review fix: a dependency that can never pass is a loud failure."""
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-test-deadlock"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                return _make_output(summary="ok")
+
+        agent._kernel = _Kernel()
+
+        # Planner validation strips unknown refs, so simulate the only path a
+        # bad ref can survive: a plan injected directly (e.g. resume of a
+        # snapshot written by an older version).
+        plan = [PlannedStep("b", "task b", "done", depends_on=["never_exists"])]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("test deadlock goal")
+
+        assert execution.status == "failed"
+        assert "Dependency deadlock" in execution.error
+
+    @pytest.mark.asyncio
+    async def test_partial_verdict_does_not_deadlock_dependents(self):
+        """Review fix: partial output is usable output — dependents may run."""
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-test-partial"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+        order = []
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                order.append(kwargs["context"]["step_id"])
+                return _make_output(summary="ok")
+
+        agent._kernel = _Kernel()
+
+        plan = [
+            PlannedStep("a", "task a", "done", depends_on=[]),
+            PlannedStep("b", "task b", "done", depends_on=["a"]),
+        ]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="partial")),
+        ):
+            execution = await agent.execute_goal("test partial goal")
+
+        assert execution.status == "complete"
+        assert order == ["a", "b"]
+
+
+class TestHITLConsentGate:
+    """HITL is opt-in: a hitl verdict never dead-ends an unattended goal (#81)."""
+
+    @pytest.mark.asyncio
+    async def test_hitl_without_consent_replans_then_fails_loudly(self, monkeypatch):
+        """No HITL_ENABLED, no queue: a hitl verdict downgrades to replan and,
+        once attempts are exhausted, fails loudly. It never pauses."""
+        monkeypatch.setenv("MAX_REPLAN_ATTEMPTS", "1")
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-hitl-noconsent"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+        # The default unattended deployment: no consent, no queue.
+        assert getattr(agent, "_hitl_enabled", False) is False
+        assert getattr(agent, "hitl", None) is None
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                return _make_output(summary="did it")
+
+        agent._kernel = _Kernel()
+
+        plan = [PlannedStep("a", "task a", "done")]
+        replan_calls = {"n": 0}
+
+        async def _fake_replan(*args, **kwargs):
+            replan_calls["n"] += 1
+            return [PlannedStep("a2", "task a2", "done")]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.planner.Planner.replan",
+            new=_fake_replan,
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="hitl")),
+        ):
+            execution = await agent.execute_goal("unattended goal")
+
+        assert execution.status != "hitl"      # the whole point: no dead-end
+        assert execution.status == "failed"    # fails loudly instead
+        assert replan_calls["n"] >= 1          # the replan path engaged
+
+    @pytest.mark.asyncio
+    async def test_hitl_with_consent_pauses_and_notifies(self):
+        """With HITL_ENABLED and a queue attached, a hitl verdict pauses the
+        goal and submits a request to the operator queue."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-hitl-consent"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+        agent._hitl_enabled = True
+        fake_queue = MagicMock()
+        fake_queue.request = MagicMock(return_value="hitl-xyz")
+        agent.hitl = fake_queue
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                return _make_output(summary="did it")
+
+        agent._kernel = _Kernel()
+
+        plan = [PlannedStep("a", "task a", "done")]
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="hitl")),
+        ):
+            execution = await agent.execute_goal("attended goal")
+
+        assert execution.status == "hitl"
+        fake_queue.request.assert_called_once()
+
+
+class TestPartialResultPreservation:
+    """A goal that did real work never returns an empty result (#84)."""
+
+    @pytest.mark.asyncio
+    async def test_exhausted_replans_preserve_completed_work(self, monkeypatch):
+        monkeypatch.setenv("MAX_REPLAN_ATTEMPTS", "1")
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-partial"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                sid = kwargs["context"]["step_id"]
+                return _make_output(summary=f"finished {sid}")
+
+        agent._kernel = _Kernel()
+
+        # Step a passes; everything after fails, so the goal exhausts replans.
+        async def _eval(_evaluator, step, output, execution):
+            if step.step_id == "a":
+                return _make_evaluation(verdict="pass")
+            return _make_evaluation(verdict="fail")
+
+        plan = [PlannedStep("a", "task a", "done"), PlannedStep("b", "task b", "done")]
+
+        async def _fake_replan(*args, **kwargs):
+            return [PlannedStep("b2", "task b2", "done")]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.planner.Planner.replan",
+            new=_fake_replan,
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=_eval,
+        ):
+            execution = await agent.execute_goal("demanding goal")
+
+        assert execution.status == "failed"          # still fails loudly
+        assert execution.result is not None          # but hands back the work
+        assert "[PARTIAL RESULT]" in execution.result
+        assert "finished a" in execution.result      # the completed step survives
+
+    @pytest.mark.asyncio
+    async def test_blocked_at_max_steps_preserves_work(self):
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-blocked"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                sid = kwargs["context"]["step_id"]
+                return _make_output(summary=f"finished {sid}")
+
+        agent._kernel = _Kernel()
+
+        plan = [PlannedStep(f"s{i}", f"task {i}", "done") for i in range(4)]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("capped goal", max_steps=2)
+
+        assert execution.status == "blocked"
+        assert execution.result is not None
+        assert "[PARTIAL RESULT]" in execution.result
+        assert "finished s0" in execution.result

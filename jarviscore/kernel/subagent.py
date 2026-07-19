@@ -464,6 +464,12 @@ class BaseSubAgent(ABC):
         # before they execute (deterministic, unlike prompt-based nudges)
         _epistemic = EpistemicLedger()
 
+        # Per-dispatch metadata channel (issue #88): tools stamp identity
+        # facts here (e.g. the coder's registry function_id) and the success
+        # envelope carries them out. Reset every run so nothing leaks across
+        # dispatches.
+        self._dispatch_metadata: Dict[str, Any] = {}
+
         for turn in range(max_turns):
             state.turn = turn
             self._log.set_turn(turn)
@@ -617,7 +623,11 @@ class BaseSubAgent(ABC):
                     payload=parsed.get("result"),
                     summary=parsed["summary"],
                     trajectory=trajectory,
-                    metadata={"tokens": total_tokens, "cost_usd": total_cost},
+                    metadata={
+                        "tokens": total_tokens,
+                        "cost_usd": total_cost,
+                        **getattr(self, "_dispatch_metadata", {}),
+                    },
                 )
 
             # ═══ 4. ACT — Tool execution ═══

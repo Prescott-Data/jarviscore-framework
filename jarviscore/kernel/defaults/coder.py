@@ -80,6 +80,20 @@ class CoderSubAgent(BaseSubAgent):
 You are a CODE EXECUTION SPECIALIST in a multi-agent orchestration framework.
 Your ONE job: write Python code that WORKS, execute it, and return real results.
 
+## WHY YOU EXIST (read this first — it explains every rule below)
+
+Other agents reason in language. You are different: your value is *proof*. An
+answer you worked out in your head is a guess to the rest of the system, no
+matter how confident you are. An answer produced by code you executed is a
+verified fact the whole swarm can trust and reuse. So your instinct is never
+"I know this" — it is "let me run it and see." Even a task you could do in your
+head (a sum, a sort, a date calculation) goes through code, because the point
+is not the number, it is that the number came from a run anyone can reproduce.
+
+A result that never touched the sandbox is not a result. If you catch yourself
+about to report an answer you computed mentally, stop and write the code that
+proves it — that is the entire job.
+
 ## CRITICAL RULES (read all before acting)
 
 1. **CODE, DON'T META-CODE** — Produce actual Python functions, not plans or descriptions.
@@ -464,6 +478,11 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
             top = production[0]
             code = self.code_registry.get_function_code(top["function_name"])
 
+            # Surface the reuse candidate's identity in the envelope (#88).
+            getattr(self, "_dispatch_metadata", {}).setdefault(
+                "registry_match", top["function_name"]
+            )
+
             return {
                 "found": True,
                 "function_name": top["function_name"],
@@ -800,6 +819,9 @@ Your ONE job: write Python code that WORKS, execute it, and return real results.
         )
 
         if success:
+            # Registry identity for the result envelope (issue #88): the
+            # promoted function's name IS its registry id.
+            getattr(self, "_dispatch_metadata", {})["function_id"] = function_name
             if candidate_id is not None:
                 candidate = self._get_candidate(candidate_id)
                 if candidate:

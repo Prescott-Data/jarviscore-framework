@@ -8,6 +8,7 @@ For long-horizon autonomous work, set goal_oriented = True on your
 subclass — all tasks will be routed through the Plan → Execute → Evaluate
 loop automatically. The execute_task() contract is unchanged.
 """
+import asyncio
 import os
 import re
 import time
@@ -233,6 +234,11 @@ class AutoAgent(Profile):
         # 9. Wire AdaptiveHITLPolicy from mesh config if enabled.
         #    The Kernel's execute() checks self.hitl_policy.should_escalate()
         #    on every dispatch — no agent code required.
+        #    HITL_ENABLED is the single opt-in for every escalation path: the
+        #    kernel policy here AND the goal-loop pause in execute_goal both
+        #    read it, so a deployment that never turned HITL on never pauses
+        #    for a human (issue #81).
+        self._hitl_enabled = bool(config.get("hitl_enabled", False))
         if config.get("hitl_enabled", False):
             try:
                 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
@@ -642,6 +648,7 @@ class AutoAgent(Profile):
         context: Optional[Dict[str, Any]] = None,
         max_steps: int = 30,
         max_replan_attempts: Optional[int] = None,
+        resume_goal_id: Optional[str] = None,
     ) -> "GoalExecution":
         """
         Internal method — driven by execute_task() when goal_oriented = True.
@@ -715,36 +722,111 @@ class AutoAgent(Profile):
         planner = Planner(self.llm, system_prompt_excerpt=str(self.system_prompt or "")[:400])
         evaluator = StepEvaluator(self.llm)
 
+        # ── Resume path (issue #73) ──────────────────────────────────────────────
+        # A persisted goal rehydrates: plan, truth facts, completed history.
+        # Execution continues from the first step without a passing verdict.
+        resumed = None
+        if resume_goal_id:
+            resumed = await self._load_goal_snapshot(resume_goal_id)
+            if resumed is None:
+                self._logger.warning(
+                    "[AutoAgent] resume_goal_id=%s: no persisted snapshot found — "
+                    "starting fresh", resume_goal_id,
+                )
+
         # The live execution state — carries the TruthContext across all steps
-        execution = GoalExecution(goal=goal, agent_id=self.agent_id)
+        if resumed is not None:
+            execution = resumed
+            execution.status = "executing"
+            execution.error = None
+            self._logger.info(
+                "[AutoAgent] Resuming goal %s: %d steps done, %d facts restored",
+                execution.goal_id, len(execution.completed), len(execution.truth.facts),
+            )
+        else:
+            execution = GoalExecution(goal=goal, agent_id=self.agent_id)
         replan_count = 0
         steps_run = 0
 
         # ── Phase 1: Plan ─────────────────────────────────────────────────────
-        execution.status = "planning"
-        try:
-            execution.plan = await planner.plan(
-                goal=goal,
-                goal_execution=execution,
-                context=context,
-            )
-        except PlannerError as exc:
-            self._logger.error("[AutoAgent] Planning failed: %s", exc)
-            execution.status = "failed"
-            execution.error = f"Planning failed: {exc}"
-            execution.completed_at = time.time()
-            return execution
+        if resumed is None:
+            execution.status = "planning"
+            try:
+                execution.plan = await planner.plan(
+                    goal=goal,
+                    goal_execution=execution,
+                    context=context,
+                )
+            except PlannerError as exc:
+                self._logger.error("[AutoAgent] Planning failed: %s", exc)
+                execution.status = "failed"
+                execution.error = f"Planning failed: {exc}"
+                execution.completed_at = time.time()
+                await self._persist_goal(execution)
+                return execution
 
-        self._logger.info(
-            "[AutoAgent] Plan ready: %d steps", len(execution.plan)
-        )
-        execution.status = "executing"
+            self._logger.info(
+                "[AutoAgent] Plan ready: %d steps", len(execution.plan)
+            )
+            execution.status = "executing"
+            # Durability: the plan exists before the first step runs
+            await self._persist_goal(execution)
 
         # ── Phase 2: Execute → Evaluate → loop ───────────────────────────────
-        remaining = list(execution.plan)
+        done_ids = {
+            cs.step.step_id
+            for cs in execution.completed
+            if getattr(cs.evaluation, "verdict", "") == "pass"
+        }
+        remaining = [s for s in execution.plan if s.step_id not in done_ids]
+
+        # ── Dependency-aware parallelism (issue #74) ────────────────────────
+        # Plans that declare depends_on opt into concurrent execution of
+        # co-ready steps (speculative prefetch, bounded). Plans without any
+        # depends_on run exactly as before — strictly sequential.
+        plan_uses_deps = any(s.depends_on for s in execution.plan)
+        max_parallel = max(1, int(os.environ.get("MAX_PARALLEL_STEPS", "3")))
+        _inflight: Dict[str, "asyncio.Task"] = {}
+
+        def _cancel_inflight() -> None:
+            for _t in _inflight.values():
+                _t.cancel()
+            _inflight.clear()
+
+        async def _kernel_step(one_step, one_ctx):
+            return await self._kernel.execute(
+                task=one_step.task,
+                system_prompt=effective_system_prompt,
+                context=one_ctx,
+                agent_id=self.agent_id,
+                agent_default_role=one_step.subagent_hint or self.default_kernel_role,
+            )
+
 
         while remaining and steps_run < max_steps:
-            step = remaining.pop(0)
+            # ── Dependency-aware step selection (issue #74, review fix) ──────
+            # A replanned or model-ordered plan may list a step before its
+            # dependency — never run a step whose depends_on are unsatisfied.
+            if plan_uses_deps:
+                step = next(
+                    (s for s in remaining
+                     if all(d in done_ids for d in s.depends_on)),
+                    None,
+                )
+                if step is None:
+                    _cancel_inflight()
+                    blocked = [s.step_id for s in remaining]
+                    execution.status = "failed"
+                    execution.error = (
+                        f"Dependency deadlock: no runnable step among {blocked} — "
+                        f"unsatisfied depends_on references"
+                    )
+                    execution.completed_at = time.time()
+                    await self._persist_goal(execution)
+                    return execution
+                remaining.remove(step)
+            else:
+                step = remaining.pop(0)
             steps_run += 1
 
             self._logger.info(
@@ -756,6 +838,29 @@ class AutoAgent(Profile):
             step_ctx = execution.context_for_next_step(base_context=context)
             step_ctx.update(step.to_context_extras())
 
+            # ── Speculative launch of co-ready steps (issue #74) ─────────────
+            # Steps whose declared dependencies are already satisfied cannot
+            # need this step's output — start them now, harvest when the loop
+            # reaches them. Size-1 plans and dep-free plans skip this block.
+            if plan_uses_deps:
+                co_ready = [
+                    s for s in remaining
+                    if s.step_id not in _inflight
+                    and all(d in done_ids for d in s.depends_on)
+                ]
+                slots = max_parallel - 1 - len(_inflight)
+                for extra in co_ready[:max(0, slots)]:
+                    extra_ctx = execution.context_for_next_step(base_context=context)
+                    extra_ctx.update(extra.to_context_extras())
+                    _inflight[extra.step_id] = asyncio.create_task(
+                        _kernel_step(extra, extra_ctx),
+                        name=f"goal-step-{extra.step_id}",
+                    )
+                    self._logger.info(
+                        "[AutoAgent] Speculatively launched co-ready step %s",
+                        extra.step_id,
+                    )
+
             # ── Execute step via Kernel (full OODA) ───────────────────────────
             step_start = time.time()
             try:
@@ -763,21 +868,20 @@ class AutoAgent(Profile):
                 if auth_mgr and self._kernel.auth_manager is not auth_mgr:
                     self._kernel.auth_manager = auth_mgr
 
-                output = await self._kernel.execute(
-                    task=step.task,
-                    system_prompt=effective_system_prompt,
-                    context=step_ctx,
-                    agent_id=self.agent_id,
-                    agent_default_role=step.subagent_hint or self.default_kernel_role,
-                )
+                inflight = _inflight.pop(step.step_id, None)
+                if inflight is not None:
+                    output = await inflight   # harvest the speculative run
+                else:
+                    output = await _kernel_step(step, step_ctx)
             except Exception as exc:
                 self._logger.error(
                     "[AutoAgent] Kernel raised on step %s: %s", step.step_id, exc
                 )
+                _cancel_inflight()
                 execution.status = "failed"
                 execution.error = f"Kernel exception on step {step.step_id}: {exc}"
                 execution.completed_at = time.time()
-                return execution
+                return await self._finalize_incomplete(execution)
 
             elapsed = (time.time() - step_start) * 1000
 
@@ -807,10 +911,42 @@ class AutoAgent(Profile):
                 execution.status = "failed"
                 execution.error = f"Evaluation error on step {step.step_id}: {exc}"
                 execution.completed_at = time.time()
+                _cancel_inflight()
+                await self._persist_goal(execution)
+                execution.result = execution.result or self._partial_result_from_progress(execution)
                 return execution
+                return execution
+
+            # ── HITL consent gate (issue #81) ─────────────────────────────────
+            # HITL is opt-in. A goal only pauses for a human when the deployment
+            # consented via HITL_ENABLED and a queue exists to carry the
+            # request. Without consent no operator is watching, so a hitl
+            # verdict is downgraded to fail right here: the replan path below
+            # demands a verifiable artifact and the goal keeps moving instead of
+            # waiting forever. HITL_ENABLED is the single opt-in for every
+            # escalation path.
+            if evaluation.needs_hitl and not (
+                getattr(self, "_hitl_enabled", False)
+                and getattr(self, "hitl", None) is not None
+            ):
+                self._logger.warning(
+                    "[AutoAgent] Evaluator asked for HITL but HITL is not enabled "
+                    "for this deployment — downgrading to fail so the goal "
+                    "replans instead of waiting for an operator who is not there. "
+                    "Cause: %s",
+                    evaluation.evaluator_note[:200],
+                )
+                evaluation.verdict = "fail"
 
             # Record: merges distilled_facts + evaluator findings into truth
             execution.record_completed(step, output, evaluation, elapsed)
+            if evaluation.verdict != "fail":
+                # pass AND partial satisfy dependencies — the step produced
+                # usable output (fail routes through replan below). A partial
+                # verdict must not deadlock its dependents (review fix).
+                done_ids.add(step.step_id)
+            # Durability: every completed step survives a crash (issue #73)
+            await self._persist_goal(execution)
 
             self._logger.info(
                 "[AutoAgent] Step %s: verdict=%s (confidence=%.2f) — %s",
@@ -820,6 +956,7 @@ class AutoAgent(Profile):
 
             # ── Handle verdict ────────────────────────────────────────────────
             if evaluation.needs_hitl:
+                _cancel_inflight()
                 # Audit log: only genuine HITL escalations reach here now
                 # (routine budget yields are downgraded to partial by evaluator)
                 self._logger.info(
@@ -829,6 +966,10 @@ class AutoAgent(Profile):
                 execution.status = "hitl"
                 execution.error = evaluation.evaluator_note
                 execution.completed_at = time.time()
+                # Persist the terminal hitl state so resume_goal_id sees the
+                # truth (the completed-step persist above ran before this
+                # status change) — issue #81.
+                await self._persist_goal(execution)
                 self._logger.warning(
                     "[AutoAgent] Goal execution paused for HITL: %s",
                     evaluation.evaluator_note,
@@ -870,13 +1011,14 @@ class AutoAgent(Profile):
                         "[AutoAgent] Max replan attempts (%d) reached. Failing goal.",
                         max_replan_attempts,
                     )
+                    _cancel_inflight()
                     execution.status = "failed"
                     execution.error = (
                         f"Max replan attempts ({max_replan_attempts}) reached. "
                         f"Last failure: {evaluation.evaluator_note}"
                     )
                     execution.completed_at = time.time()
-                    return execution
+                    return await self._finalize_incomplete(execution)
 
                 replan_count += 1
                 self._logger.info(
@@ -885,10 +1027,19 @@ class AutoAgent(Profile):
                 )
                 try:
                     completed_step = execution.completed[-1]
+                    # Invalidate speculative work — a revised plan must not
+                    # harvest results computed under the failed premise (#74).
+                    _cancel_inflight()
                     revised = await planner.replan(
                         goal_execution=execution,
                         failed_step=completed_step,
                         reason=evaluation.evaluator_note,
+                        pending_steps=list(remaining),
+                        budget_note=(
+                            f"{steps_run} of max {max_steps} steps used; "
+                            f"{max_steps - steps_run} remaining — the revised "
+                            f"plan must fit"
+                        ),
                     )
                     execution.plan_revision += 1
                     remaining = revised   # replace remaining steps with revised plan
@@ -901,11 +1052,12 @@ class AutoAgent(Profile):
                     execution.status = "failed"
                     execution.error = f"Replanning failed: {pe}"
                     execution.completed_at = time.time()
-                    return execution
+                    return await self._finalize_incomplete(execution)
 
                 continue  # proceed with revised plan
 
         # ── Phase 3: Safety check ─────────────────────────────────────────────
+        _cancel_inflight()
         if steps_run >= max_steps and remaining:
             self._logger.warning(
                 "[AutoAgent] max_steps=%d reached with %d steps still remaining.",
@@ -917,7 +1069,7 @@ class AutoAgent(Profile):
                 f"{len(remaining)} steps were not executed."
             )
             execution.completed_at = time.time()
-            return execution
+            return await self._finalize_incomplete(execution)
 
         # ── Phase 4: Synthesise final result ──────────────────────────────────
         execution.status = "complete"
@@ -946,4 +1098,96 @@ class AutoAgent(Profile):
             execution.elapsed_ms,
             goal[:80],
         )
+        # Terminal snapshot — status, result, and full audit trail (issue #73)
+        await self._persist_goal(execution)
         return execution
+
+    # ── Partial-result preservation (issue #84) ───────────────────────────
+    @staticmethod
+    def _partial_result_from_progress(execution: Any) -> Optional[str]:
+        """Assemble whatever the goal actually produced before it stopped.
+
+        A goal that finished real steps must never hand back an empty result.
+        The completed work (passing and partial steps) and the high-confidence
+        facts are surfaced with an honest partial marker, so a caller gets the
+        value that was earned plus a clear signal that more remained. The
+        status and error fields already explain why it stopped.
+        """
+        parts: List[str] = []
+        for cs in getattr(execution, "completed", []) or []:
+            verdict = getattr(getattr(cs, "evaluation", None), "verdict", "")
+            if verdict not in ("pass", "partial"):
+                continue
+            summary = (getattr(getattr(cs, "output", None), "summary", "") or "").strip()
+            if summary:
+                parts.append(f"### {cs.step.step_id}\n{summary}")
+        body = "\n\n".join(parts)
+
+        high_conf = execution.truth.high_confidence_facts(threshold=0.7)
+        facts_str = (
+            "\n".join(f"- {k}: {v.value}" for k, v in high_conf.items())
+            if high_conf else ""
+        )
+
+        sections = [s for s in (body, f"#### Established facts\n{facts_str}" if facts_str else "") if s]
+        if not sections:
+            return None
+        assembled = "\n\n".join(sections)
+        return (
+            "[PARTIAL RESULT] The goal stopped before fully completing. The "
+            "finished work and established facts are below; see `error` for "
+            "what remained.\n\n" + assembled
+        )
+
+    async def _finalize_incomplete(self, execution: Any) -> Any:
+        """Preserve partial work on a goal that stops before completing (#84).
+
+        Fills execution.result from accumulated progress when it is still empty,
+        then persists the terminal snapshot for audit and resume (#73). The
+        status ('failed'/'blocked') and error are set by the caller and left
+        untouched — this only rescues the work that would otherwise be lost.
+        """
+        if getattr(execution, "result", None) is None:
+            execution.result = self._partial_result_from_progress(execution)
+        await self._persist_goal(execution)
+        return execution
+
+    # ── Goal persistence (issue #73) ──────────────────────────────────────
+
+    def _goal_blob_path(self, goal_id: str) -> str:
+        return f"goals/{self.agent_id}/{goal_id}.json"
+
+    async def _persist_goal(self, execution: Any) -> None:
+        """Best-effort durability for a goal execution — never fatal.
+
+        Saved after planning, after every completed step, and at terminal
+        states, so a crash mid-goal loses at most the in-flight step. Skipped
+        silently when no blob storage is attached.
+        """
+        blob = getattr(self._kernel, "blob_storage", None) if self._kernel else None
+        if blob is None:
+            return
+        try:
+            import json as _json
+            await blob.save(
+                self._goal_blob_path(execution.goal_id),
+                _json.dumps(execution.to_full_dict(), default=str),
+            )
+        except Exception as exc:  # noqa: BLE001 - durability is best-effort
+            self._logger.debug("[AutoAgent] Goal persist failed (non-fatal): %s", exc)
+
+    async def _load_goal_snapshot(self, goal_id: str) -> Optional[Any]:
+        """Rehydrate a persisted GoalExecution, or None when unavailable."""
+        blob = getattr(self._kernel, "blob_storage", None) if self._kernel else None
+        if blob is None:
+            return None
+        try:
+            import json as _json
+            raw = await blob.read(self._goal_blob_path(goal_id))
+            if not raw:
+                return None
+            from jarviscore.planning.goal_context import GoalExecution
+            return GoalExecution.from_snapshot(_json.loads(raw))
+        except Exception as exc:  # noqa: BLE001 - a bad snapshot must not crash the goal
+            self._logger.warning("[AutoAgent] Goal snapshot load failed: %s", exc)
+            return None
