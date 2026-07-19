@@ -497,3 +497,39 @@ class TestAgentMailboxAttribute:
         agent.mailbox = "mock_mailbox"
         assert agent.mailbox == "mock_mailbox"
         assert agent.peers is None
+
+
+class TestLocalMailbox:
+    """Redis-less mailboxes work in-process instead of crashing (#86)."""
+
+    def setup_method(self):
+        from jarviscore.mailbox.mailbox import _LOCAL_QUEUES
+        _LOCAL_QUEUES.clear()
+
+    def test_send_and_read_without_redis(self):
+        sender = MailboxManager("agent-a", None)
+        receiver = MailboxManager("agent-b", None)
+        assert sender.send("agent-b", {"query": "digest", "n": 7}) is True
+        msgs = receiver.read(max_messages=5)
+        assert len(msgs) == 1
+        assert msgs[0]["sender"] == "agent-a"
+        assert msgs[0]["message"] == {"query": "digest", "n": 7}
+        assert msgs[0]["timestamp"] > 0
+        # read is destructive
+        assert receiver.read() == []
+
+    def test_peek_without_redis_is_non_destructive(self):
+        sender = MailboxManager("agent-a", None)
+        receiver = MailboxManager("agent-b", None)
+        sender.send("agent-b", {"k": 1})
+        assert len(receiver.peek()) == 1
+        assert len(receiver.peek()) == 1     # still there
+        assert len(receiver.read()) == 1     # now drained
+
+    def test_fifo_order_without_redis(self):
+        sender = MailboxManager("agent-a", None)
+        receiver = MailboxManager("agent-b", None)
+        for i in range(3):
+            sender.send("agent-b", {"seq": i})
+        seqs = [m["message"]["seq"] for m in receiver.read(max_messages=10)]
+        assert seqs == [0, 1, 2]

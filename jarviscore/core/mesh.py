@@ -860,7 +860,7 @@ class Mesh:
         Every agent ends up with:
           agent._redis_store   — RedisContextStore (or None)
           agent._blob_storage  — BlobStorage (or None)
-          agent.mailbox        — MailboxManager (always, file-backed if no Redis)
+          agent.mailbox        — MailboxManager (always; in-memory when no Redis)
           agent.hitl           — HITLQueue (always, writes to hitl_inbox/)
         """
         from jarviscore.mailbox import MailboxManager
