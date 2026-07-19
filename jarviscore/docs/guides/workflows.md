@@ -230,10 +230,18 @@ result = await mesh.fanout(
     timeout=120,                           # optional per-item seconds
 )
 
-theses = [r["payload"] for r in result.succeeded]
+theses = [r["output"] for r in result.succeeded]
 errors = result.failed                     # per-item errors
 brief  = await result.summarize(llm, "Synthesize the board read.")
 ```
+
+Each result dict has this shape:
+
+```python
+{"status": "success", "output": {...}, "item": "AAPL", "step_id": "board-scan:0000-aapl"}
+```
+
+The agent's returned value is under `output`. `item` is the input that produced this result, and `step_id` is its unique namespaced identity.
 
 What you can rely on:
 

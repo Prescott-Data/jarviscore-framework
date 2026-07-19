@@ -17,7 +17,7 @@ lists, symbol boards — where N is data, not authorship:
         concurrency=5,
         budget=20,
     )
-    theses = [r["payload"] for r in result.succeeded]
+    theses = [r["output"] for r in result.succeeded]
 
 Design rules (learned in production, see #52/#53/#54):
 - Identity by construction: every item runs under a namespaced workflow/step

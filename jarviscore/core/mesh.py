@@ -557,7 +557,7 @@ class Mesh:
                 concurrency=5,
                 budget=20,
             )
-            theses = [r["payload"] for r in result.succeeded]
+            theses = [r["output"] for r in result.succeeded]
         """
         if not self._started:
             raise RuntimeError("Mesh not started. Call await mesh.start() first.")
