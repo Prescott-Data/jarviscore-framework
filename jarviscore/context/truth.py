@@ -7,7 +7,7 @@ Typed contracts for shared knowledge between agents:
 - TruthContext: The canonical shared fact store for a workflow
 - AgentOutput: Standardized envelope returned by all subagents
 
-Ported from IA/CA's schema.py with improvements:
+Ported from earlier agent implementations's schema.py with improvements:
 - Pydantic v2 models (not raw dicts)
 - Evidence has explicit `kind` enum (not free-form strings)
 - TruthFact tracks version for conflict detection

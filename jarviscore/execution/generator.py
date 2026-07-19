@@ -1,7 +1,7 @@
 """
 Code Generator - LLM-based Python code generation with REACTPP discipline.
 
-Upgraded from integration-agent staging branch patterns:
+Upgraded from internal agent pipeline patterns:
 - REACTPP 2-block output format (JSON metadata + Python — nothing else)
 - Registry pre-check: inject existing capabilities before generation
 - HTTP contract enforcement via ValidationLayer
@@ -38,7 +38,7 @@ class GeneratedCode:
 # Prompt Templates
 # ─────────────────────────────────────────────────────────────────
 
-# REACTPP system prompt — mirrors integration-agent CodeGenerator philosophy.
+# REACTPP system prompt — mirrors an earlier internal agent codebase CodeGenerator philosophy.
 # Key mandates:
 #   1. Identify provider + action from task.
 #   2. Use discovered schemas / training knowledge — no hardcoded mappings.
@@ -349,7 +349,7 @@ class CodeGenerator:
     def _build_existing_caps_snippet(self, registry, system: str) -> str:
         """
         Query registry for existing capabilities and format as prompt snippet.
-        Mirrors integration-agent CodeGenerator.check_existing_capabilities().
+        Mirrors an earlier internal agent codebase CodeGenerator.check_existing_capabilities().
         """
         try:
             functions = registry.get_functions_by_system(system)

@@ -217,7 +217,7 @@ class AutoAgent(Profile):
         # 8. Initialize Kernel — production routing:
         #    Registry-first (Option A) → Coder with ValidationLayer (Option B)
         #    → Research-on-failure only (Option C)
-        #    Matches integration-agent staging pipeline.
+        #    Matches an earlier internal agent pipeline.
         from jarviscore.kernel.kernel import Kernel
         self._logger.info("Initializing Kernel (registry-first routing + ValidationLayer)...")
         self._kernel = Kernel(
@@ -307,7 +307,7 @@ class AutoAgent(Profile):
         """
         Execute task through the production Kernel pipeline.
 
-        Pipeline (matches integration-agent staging branch):
+        Pipeline (matches an earlier internal agent pipeline):
         1. Registry-first: check FunctionRegistry for verified function (Option A)
         2. Coder writes from training knowledge + ValidationLayer gate (Option B)
         3. Sandbox execution — real test

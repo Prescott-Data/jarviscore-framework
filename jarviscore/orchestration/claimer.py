@@ -1,7 +1,7 @@
 """
 Step Claimer - Matches workflow steps to capable agents
 
-Simplified from integration-agent (260 lines → 80 lines)
+Simplified from an earlier internal agent codebase (260 lines → 80 lines)
 Focused on capability matching without Kafka integration.
 """
 import logging
@@ -14,7 +14,7 @@ class StepClaimer:
     """
     Matches workflow steps to agents based on capabilities.
 
-    Simplified from integration-agent's version.
+    Simplified from an earlier internal agent codebase's version.
     Removes: Lazy evaluation, external dependency tracking, Kafka claims
     Keeps: Core capability matching logic
     """

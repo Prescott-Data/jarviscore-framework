@@ -8,10 +8,10 @@ routing. Wraps RedisContextStore mailbox primitives (Phase 1) with:
 - Broadcast to all mesh agents
 - LLM context formatting with sensitive data scrubbing
 
-Ported from IA/CA patterns:
-- IA: kernel._ingest_mailbox() injects messages into scratchpad
-- CA: _sanitize_mailbox_text() strips credentials before LLM sees them
-- Both: Redis-backed durable FIFO queues per agent
+Established patterns carried over from earlier agent implementations:
+- messages inject into the working scratchpad
+- credentials are stripped before the LLM sees any message text
+- Redis-backed durable FIFO queues per agent
 
 We use Mesh.get_agents_by_capability() and Mesh._agent_registry
 directly for routing — no separate router class needed since Mesh,
@@ -260,7 +260,7 @@ class MailboxManager:
         scratchpad/prompt injection. Optionally scrubs sensitive
         data (tokens, passwords, API keys) before formatting.
 
-        Follows IA/CA pattern: kernel._ingest_mailbox() injects
+        Follows the established pattern: the kernel injects mailbox
         messages into agent scratchpad as structured text.
 
         Args:

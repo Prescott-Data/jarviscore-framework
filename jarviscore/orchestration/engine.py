@@ -2,7 +2,7 @@
 WorkflowEngine - Orchestrates multi-step workflow execution.
 
 Phase 7B upgrade: Sequential per-step loop replaced by a sovereign reactive
-loop (IA/CA pattern). Steps launch the moment their dependencies are met,
+loop (earlier agent implementations pattern). Steps launch the moment their dependencies are met,
 not in batches — so step C can start as soon as B finishes even if B's
 peers are still running.
 
@@ -171,7 +171,7 @@ class WorkflowEngine:
         pre_results: Dict[str, Any] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Sovereign reactive loop adapted from IA/CA production pattern.
+        Sovereign reactive loop adapted from earlier agent implementations production pattern.
 
         Unlike asyncio.gather() over dependency layers, this loop lets each
         step start the instant its dependencies complete, giving maximum

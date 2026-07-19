@@ -921,7 +921,7 @@ class Mesh:
         ``_agent_registry`` so AutoAgents can delegate to co-registered
         agents (e.g., Sentinel delegating to Coder) without SWIM.
 
-        This fixes Dogfooding Issue #13: ``ask_peer`` was P2P-only.
+        This fixes an earlier limitation: ``ask_peer`` was P2P-only.
         ``AutoAgent`` (which always runs in autonomous mode)
         now gets a fully functional ``self.peers`` client.
         """
@@ -1196,7 +1196,7 @@ class Mesh:
         return cap in self._capabilities
 
     # ─────────────────────────────────────────────────────────────────
-    # DELEGATION  (Dogfooding Issue #12)
+    # DELEGATION
     # ─────────────────────────────────────────────────────────────────
 
     async def delegate(

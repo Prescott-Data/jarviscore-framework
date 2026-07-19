@@ -17,7 +17,7 @@ Run once on startup, or call seed_registry() programmatically:
 Sources:
   - 7 providers originally authored in JarvisCore (verified)
   - 12 providers authored as JarvisCore candidate atoms
-  - 28 providers ported from the Collabra production function registry (verified)
+  - 28 providers from a production function registry (verified)
 """
 from __future__ import annotations
 
@@ -157,7 +157,7 @@ PROVIDER_META: Dict[str, Dict[str, Any]] = {
         "capabilities": ["web_search", "news_search"],
     },
 
-    # ── COLLABRA REGISTRY (production-verified, ported 2026-05-05) ───────────
+    # ── SEED REGISTRY (production-verified) ───────────
     "zoom": {
         "category": "communication",
         "auth_type": "oauth2",

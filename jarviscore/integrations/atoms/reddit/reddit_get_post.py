@@ -14,7 +14,7 @@ def reddit_get_post(auth_info: dict, post_id: str) -> dict:
             params={"id": f"t3_{clean_id}"},
             headers={
                 "Authorization": f"Bearer {access_token}",
-                "User-Agent": "collabra-integration-agent/1.0"
+                "User-Agent": "jarviscore/1.0"
             },
             timeout=30
         )

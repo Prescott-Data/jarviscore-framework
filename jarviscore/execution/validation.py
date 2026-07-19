@@ -1,7 +1,7 @@
 """
 ValidationLayer — Pre-execution code quality gate.
 
-Ported from integration-agent staging branch (proprietary → OSS JarvisCore adaptation).
+Ported from an earlier internal agent pipeline (proprietary → OSS JarvisCore adaptation).
 
 Three sub-validators run in sequence:
 1. StaticValidator   — syntax check + result variable mandate

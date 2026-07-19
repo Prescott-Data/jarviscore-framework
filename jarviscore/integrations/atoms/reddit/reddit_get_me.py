@@ -10,7 +10,7 @@ def reddit_get_me(auth_info: dict) -> dict:
             "https://oauth.reddit.com/api/v1/me",
             headers={
                 "Authorization": f"Bearer {access_token}",
-                "User-Agent": "collabra-integration-agent/1.0"
+                "User-Agent": "jarviscore/1.0"
             },
             timeout=30
         )

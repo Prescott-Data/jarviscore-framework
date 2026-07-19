@@ -19,7 +19,7 @@
 #   Gateway (port 8090) — control plane; what JarvisCore talks to.
 #   DB (Postgres)       — broker persistence.
 #
-# ── DOGFOODING NOTES ────────────────────────────────────────────────────────
+# ── OPERATIONAL NOTES ────────────────────────────────────────────────────────
 # Issues found and resolved during local DX testing (April 2026):
 #
 # 1. BROKER_URL env var is IGNORED by the gateway binary — it always

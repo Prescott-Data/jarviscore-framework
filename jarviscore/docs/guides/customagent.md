@@ -180,7 +180,7 @@ await self._blob_storage.save("research/findings.json", json.dumps(research))
 await self._blob_storage.save("reports/summary.md", markdown_text)
 
 # Load an artifact
-content = await self._blob_storage.load("research/findings.json")
+content = await self._blob_storage.read("research/findings.json")
 data = json.loads(content) if content else {}
 ```
 
