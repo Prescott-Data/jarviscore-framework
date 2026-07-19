@@ -507,6 +507,8 @@ class AgentCognitionManager:
         tool_name: str,
         tokens: int = 0,
         tool_output: Any = None,
+        *,
+        count_as_done: bool = True,
     ) -> None:
         """
         Record a tool invocation and charge tokens to the appropriate budget.
@@ -515,6 +517,8 @@ class AgentCognitionManager:
             tool_name: Name of the tool invoked
             tokens: Tokens consumed by this invocation
             tool_output: Result from the tool (used by ConvergenceGovernor)
+            count_as_done: When False, a rejected DONE gate must not block the
+                next OODA turn via should_continue().
         """
         phase = self.classify_tool(tool_name)
         if tokens > 0:
@@ -531,7 +535,7 @@ class AgentCognitionManager:
         else:
             self._thinking_only_streak = 0
 
-        if tool_name == "done":
+        if tool_name == "done" and count_as_done:
             self._done_called = True
 
         # Feed the Convergence Governor
@@ -570,9 +574,7 @@ class AgentCognitionManager:
         return self._phase
 
     def should_continue(self) -> bool:
-        """Return True if the agent should keep running (budget remains, not done)."""
-        if self._done_called:
-            return False
+        """Return True if the agent should keep running (budget remains)."""
         return not self.lease.is_expired()
 
     def detect_spinning(self, tool_name: str) -> bool:

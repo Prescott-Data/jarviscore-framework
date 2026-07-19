@@ -469,6 +469,12 @@ class AutoAgent(Profile):
                     self._direct_kernel_reason = None
 
                 if hasattr(self, 'result_handler') and self.result_handler:
+                    _task_ctx = task.get('context', {}) if isinstance(task, dict) else {}
+                    _ctx_meta = {
+                        k: _task_ctx[k]
+                        for k in ('task_type', 'task_label', 'session_id', 'workflow_id', 'step_id')
+                        if isinstance(_task_ctx, dict) and _task_ctx.get(k)
+                    }
                     stored = self.result_handler.process_result(
                         agent_id=self.agent_id,
                         task=task_desc,
@@ -484,6 +490,7 @@ class AutoAgent(Profile):
                             "role": self.role,
                             "capabilities": self.capabilities,
                             "pipeline": "kernel",
+                            **_ctx_meta,
                         }
                     )
                     result["result_id"] = stored.get("result_id")
@@ -560,6 +567,12 @@ class AutoAgent(Profile):
                 result['cost_usd'] = total_cost
 
             if hasattr(self, 'result_handler') and self.result_handler:
+                _task_ctx = task.get('context', {}) if isinstance(task, dict) else {}
+                _ctx_meta = {
+                    k: _task_ctx[k]
+                    for k in ('task_type', 'task_label', 'session_id', 'workflow_id', 'step_id')
+                    if isinstance(_task_ctx, dict) and _task_ctx.get(k)
+                }
                 stored = self.result_handler.process_result(
                     agent_id=self.agent_id,
                     task=task_desc,
@@ -575,6 +588,7 @@ class AutoAgent(Profile):
                         'role': self.role,
                         'capabilities': self.capabilities,
                         'pipeline': 'legacy',
+                        **_ctx_meta,
                     },
                 )
                 result['result_id'] = stored.get('result_id')

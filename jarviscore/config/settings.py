@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     azure_openai_endpoint: Optional[str] = None  # Alias
     azure_deployment: str = "gpt-4o"
     azure_api_version: str = "2024-02-15-preview"
+    # Codex and other Responses-only Azure deployments use responses.create().
+    # Auto-fallback retries Responses API when chat completions returns "unsupported".
+    azure_responses_auto_fallback: bool = True
+    # Comma-separated deployment IDs to force Responses API (in addition to *codex* names).
+    azure_responses_deployments: str = ""
     # Off by default: content-filter hits should be visible failures unless
     # an application explicitly opts into provider-specific prompt repair.
     azure_content_filter_repair_enabled: bool = False

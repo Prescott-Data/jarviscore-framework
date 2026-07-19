@@ -38,6 +38,25 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_searxng_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _searxng_max_concurrent() -> int:
+    return max(1, int(os.environ.get("SEARXNG_MAX_CONCURRENT", "3")))
+
+
+def _get_searxng_semaphore() -> asyncio.Semaphore:
+    global _searxng_semaphore
+    if _searxng_semaphore is None:
+        _searxng_semaphore = asyncio.Semaphore(_searxng_max_concurrent())
+    return _searxng_semaphore
+
+
+def reset_searxng_semaphore_for_tests() -> None:
+    """Test helper — next search call rebuilds the semaphore."""
+    global _searxng_semaphore
+    _searxng_semaphore = None
+
 class CircuitBreaker:
     """
     Simple Circuit Breaker implementation.
@@ -77,12 +96,14 @@ class CircuitBreaker:
 class InternetSearch:
     """
     Class for performing internet searches and content extraction
-    
+
+    Search routing (sequential fallback, no cross-provider scoring):
+      - General: Gemini grounded → SearXNG
+      - Academic: arXiv → Crossref
+
     Features:
-    - Search the web using SearXNG (self-hosted metasearch)
     - Extract text content from web pages
     - Combined search and extraction in a single call
-    - All content returned as data, no file dependencies
     - Circuit Breaker pattern for resilience
     """
 
@@ -115,7 +136,17 @@ class InternetSearch:
         self._allow_wikipedia_fallback = os.environ.get(
             "RESEARCH_ALLOW_WIKIPEDIA_FALLBACK", ""
         ).strip().lower() in {"1", "true", "yes", "on"}
+        self._http_timeout = float(os.environ.get("SEARXNG_REQUEST_TIMEOUT", "45"))
+        self._provider_timeout = float(
+            os.environ.get("RESEARCH_SEARCH_PROVIDER_TIMEOUT", "60")
+        )
+        self._searxng_retries = max(1, int(os.environ.get("SEARXNG_MAX_RETRIES", "3")))
 
+    def _session_timeout(self) -> aiohttp.ClientTimeout:
+        return aiohttp.ClientTimeout(total=self._http_timeout)
+
+    def _request_timeout(self) -> aiohttp.ClientTimeout:
+        return aiohttp.ClientTimeout(total=self._http_timeout)
     async def initialize(self):
         """Initialize the HTTP session"""
         if self.session is None or self.session.closed:
@@ -130,9 +161,12 @@ class InternetSearch:
             
             self.session = aiohttp.ClientSession(
                 connector=connector,
-                timeout=aiohttp.ClientTimeout(total=10),  # 10 second timeout
+                timeout=self._session_timeout(),
                 headers={
-                    "User-Agent": self.user_agent,
+                    "User-Agent": os.environ.get(
+                        "RESEARCH_USER_AGENT",
+                        "SkyTeam/1.0 (Prescott Internal Agents; research@prescottdata.io)",
+                    ),
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.5"
                 }
@@ -173,76 +207,100 @@ class InternetSearch:
     ) -> List[Dict[str, Any]]:
         """
         Search for information on the internet.
-        Uses multiple providers and ranks results.
+
+        Routing (sequential fallback — no cross-provider scoring):
+          - General queries: Gemini grounded → SearXNG
+          - Academic queries: arXiv → Crossref
 
         Args:
             query: The search query
             max_results: Maximum number of results to return
-            exclude_providers: Optional set of provider names to skip entirely.
-                Skipping at this level avoids wasted network calls — prefer this
-                over filtering results after the fact.  e.g. {"arxiv", "crossref"}
-
-        Returns:
-            A list of search results with title, snippet, and URL
+            exclude_providers: Provider names to skip (e.g. {"arxiv", "crossref"})
         """
         await self.initialize()
         skip = set(exclude_providers or ())
+        chain = self._provider_chain(query, skip)
 
-        provider_tiers = self._provider_tiers(skip)
-        for tier_name, providers in provider_tiers:
-            if not providers:
-                continue
+        for provider in chain:
             logger.info(
-                "InternetSearch tier=%s providers=%s query=%s",
-                tier_name,
-                ",".join(providers),
+                "InternetSearch trying provider=%s query=%s academic=%s",
+                provider,
                 query,
+                self._is_academic_query(query),
             )
-            provider_results = await asyncio.gather(
-                *(
-                    asyncio.wait_for(
-                        self._run_search_provider(provider, query, max_results),
-                        timeout=6,
-                    )
-                    for provider in providers
-                ),
-                return_exceptions=True,
-            )
-            results: List[Dict[str, Any]] = []
-            for batch in provider_results:
-                if isinstance(batch, Exception):
-                    logger.warning("Search provider failed in tier %s: %s", tier_name, batch)
-                    continue
-                if isinstance(batch, list):
-                    results.extend(batch)
-            ranked = self._rank_results(query, results)
-            if ranked:
-                return ranked[:max_results]
+            results = await self._try_provider(provider, query, max_results)
+            if results:
+                return self._dedupe_by_url(results)[:max_results]
+
         return []
 
-    def _provider_tiers(self, skip: set) -> List[Tuple[str, List[str]]]:
-        """Return ordered provider tiers from authoritative to fallback."""
-        tiers: List[Tuple[str, List[str]]] = []
+    _ACADEMIC_QUERY = re.compile(
+        r"\b("
+        r"paper|papers|arxiv|journal|citation|doi|peer[- ]review|"
+        r"meta[- ]analysis|systematic review|research study|preprint|"
+        r"crossref|scholarly|literature review|phd thesis|dissertation"
+        r")\b",
+        re.IGNORECASE,
+    )
+
+    def _is_academic_query(self, query: str) -> bool:
+        return bool(self._ACADEMIC_QUERY.search(query or ""))
+
+    def _provider_chain(self, query: str, skip: set) -> List[str]:
+        """Ordered providers for this query — first hit wins."""
+        if self._is_academic_query(query):
+            return [p for p in ("arxiv", "crossref") if p not in skip]
+
+        chain: List[str] = []
         if "google_grounded" not in skip and (self._gcp_project or self._gemini_api_key):
-            tiers.append(("grounded", ["google_grounded"]))
-
-        configured_general: List[str] = []
-        if self.serper_api_key and "serper" not in skip:
-            configured_general.append("serper")
+            chain.append("google_grounded")
+        if "serper" not in skip and self.serper_api_key:
+            chain.append("serper")
+        wiki_fallback = os.environ.get(
+            "RESEARCH_WIKIPEDIA_FALLBACK", "true"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if wiki_fallback and "wikipedia" not in skip:
+            chain.append("wikipedia")
         if "searxng" not in skip:
-            configured_general.append("searxng")
-        tiers.append(("general_web", configured_general))
+            chain.append("searxng")
+        return chain
 
-        scholarly = [
-            provider for provider in ("arxiv", "crossref")
-            if provider not in skip
-        ]
-        tiers.append(("scholarly", scholarly))
+    async def _try_provider(
+        self,
+        provider: str,
+        query: str,
+        max_results: int,
+        timeout: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        limit = timeout if timeout is not None else self._provider_timeout
+        try:
+            batch = await asyncio.wait_for(
+                self._run_search_provider(provider, query, max_results),
+                timeout=limit,
+            )
+            return batch if isinstance(batch, list) else []
+        except asyncio.TimeoutError:
+            logger.warning("Search provider %s timed out after %.0fs", provider, limit)
+            return []
+        except Exception as exc:
+            logger.warning("Search provider %s failed: %s", provider, exc)
+            return []
 
-        primary_available = any(providers for name, providers in tiers if name in {"grounded", "general_web"})
-        if "wikipedia" not in skip and (self._allow_wikipedia_fallback or not primary_available):
-            tiers.append(("last_resort", ["wikipedia"]))
-        return tiers
+    def _dedupe_by_url(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Preserve provider order; drop duplicate URLs only."""
+        seen: set = set()
+        deduped: List[Dict[str, Any]] = []
+        for result in results:
+            url = (result.get("url") or "").strip()
+            if url and not url.startswith(("http://", "https://")):
+                url = "https://" + url
+                result["url"] = url
+            key = self._normalize_url(url) or url or (result.get("title") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(result)
+        return deduped
 
     async def _run_search_provider(
         self,
@@ -266,31 +324,8 @@ class InternetSearch:
         return []
 
     def _rank_results(self, query: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        tokens = set(re.findall(r"[a-z0-9]+", query.lower()))
-        weights = {
-            "google_grounded": 1.4,
-            "serper": 1.2,
-            "searxng": 1.1,
-            "arxiv": 0.9,
-            "crossref": 0.8,
-            "wikipedia": 0.6,
-        }
-        deduped: Dict[str, Dict[str, Any]] = {}
-        for result in results:
-            url = (result.get("url") or "").strip()
-            if url and not url.startswith(("http://", "https://")):
-                url = "https://" + url
-            result["url"] = url
-            key = self._normalize_url(url) or url
-            text = f"{result.get('title','')} {result.get('snippet','')}".lower()
-            overlap = sum(1 for t in tokens if t in text)
-            pdf_bonus = 0.1 if url.lower().endswith(".pdf") else 0.0
-            base = weights.get(result.get("source") or "", 0.5)
-            score = base + (overlap * 0.05) + pdf_bonus
-            result["score"] = score
-            if key not in deduped or score > deduped[key].get("score", 0):
-                deduped[key] = result
-        return sorted(deduped.values(), key=lambda r: r.get("score", 0), reverse=True)
+        """Deprecated: scoring removed. Use _dedupe_by_url for order-preserving dedupe."""
+        return self._dedupe_by_url(results)
 
     @staticmethod
     def _normalize_url(url: str) -> str:
@@ -321,6 +356,13 @@ class InternetSearch:
             logger.warning("Skipping SearXNG search (Circuit Breaker OPEN)")
             return []
 
+        async with _get_searxng_semaphore():
+            return await self._search_searxng_inner(query, max_results=max_results)
+
+    async def _search_searxng_inner(
+        self, query: str, max_results: int = 10
+    ) -> List[Dict[str, Any]]:
+        """SearXNG JSON API call (must run under the global concurrency semaphore)."""
         try:
             url = f"{self.searxng_url.rstrip('/')}/search"
             params = {
@@ -334,12 +376,12 @@ class InternetSearch:
             logger.info("Searching SearXNG: %s", query)
 
             last_status = 0
-            for attempt in range(2):
+            for attempt in range(self._searxng_retries):
                 try:
                     async with self._session.get(
                         url,
                         params=params,
-                        timeout=aiohttp.ClientTimeout(total=10),
+                        timeout=self._request_timeout(),
                     ) as response:
                         last_status = response.status
                         if response.status == 200:
@@ -847,6 +889,11 @@ class InternetSearch:
             # Wait a bit for JS to render
             await asyncio.sleep(3)
             
+            page = getattr(getattr(browser, "session", None), "page", None)
+            if page is None:
+                logger.warning("Browser page unavailable for SPA extraction")
+                return ""
+
             script = """
             (() => {
                 const selectors = [
@@ -868,7 +915,7 @@ class InternetSearch:
                 return clone.innerHTML;
             })();
             """
-            raw_html = await browser.session.page.evaluate(script)
+            raw_html = await page.evaluate(script)
             if not raw_html:
                 return ""
             # Convert innerHTML through the same markdown pipeline as the primary HTTP path

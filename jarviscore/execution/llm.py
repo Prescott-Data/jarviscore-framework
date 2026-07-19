@@ -78,6 +78,14 @@ TOKEN_PRICING = {
     "o3": {"input": 10.00, "output": 40.00, "cached": 2.50},
     "gpt-4": {"input": 30.00, "output": 60.00, "cached": 15.00},
     "gpt-3.5-turbo": {"input": 0.50, "output": 1.50, "cached": 0.25},
+    # Azure GPT-5.x (approximate — update when official pricing is published)
+    "gpt-5.2-chat": {"input": 2.50, "output": 10.00, "cached": 1.25},
+    "gpt-5.2": {"input": 2.50, "output": 10.00, "cached": 1.25},
+    "gpt-5.2-codex": {"input": 3.00, "output": 12.00, "cached": 1.50},
+    "gpt-5.3-codex": {"input": 3.50, "output": 14.00, "cached": 1.75},
+    "gpt-5.3-chat": {"input": 2.50, "output": 10.00, "cached": 1.25},
+    "gpt-5.4-chat": {"input": 3.00, "output": 12.00, "cached": 1.50},
+    "gpt-5.4-codex": {"input": 4.00, "output": 16.00, "cached": 2.00},
     # Google Gemini models
     "gemini-2.0-flash": {"input": 0.10, "output": 0.40, "cached": 0.03},
     "gemini-1.5-pro": {"input": 1.25, "output": 5.00, "cached": 0.31},
@@ -453,6 +461,79 @@ class UnifiedLLMClient:
         ("penetration testing",       "security testing"),
     ]
 
+    @staticmethod
+    def _azure_prefers_responses_api(deployment: str, config: Dict) -> bool:
+        """Return True when a deployment should use the Responses API instead of chat completions."""
+        name = (deployment or "").lower()
+        if "codex" in name:
+            return True
+        forced = config.get("azure_responses_deployments") or ""
+        if isinstance(forced, str):
+            deployments = {d.strip() for d in forced.split(",") if d.strip()}
+        else:
+            deployments = set(forced or [])
+        return deployment in deployments
+
+    @staticmethod
+    def _azure_chat_unsupported(error: Exception) -> bool:
+        """Detect Azure chat-completions errors that indicate Responses API is required."""
+        error_str = str(error).lower()
+        return (
+            "requested operation is unsupported" in error_str
+            or "operation is unsupported" in error_str
+        )
+
+    @classmethod
+    def _messages_to_responses_input(cls, messages: List[Dict]) -> Any:
+        """Convert OpenAI chat messages to Responses API input."""
+        converted = []
+        for msg in messages:
+            role = msg.get("role")
+            if role not in ("system", "user", "assistant", "developer"):
+                continue
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") in ("text", "input_text", "output_text"):
+                            text_parts.append(part.get("text", ""))
+                        elif "text" in part:
+                            text_parts.append(part["text"])
+                    elif isinstance(part, str):
+                        text_parts.append(part)
+                content = "\n".join(p for p in text_parts if p)
+            converted.append({"role": role, "content": content})
+        return converted or ""
+
+    @staticmethod
+    def _extract_responses_text(response: Any) -> str:
+        """Extract assistant text from an Azure/OpenAI Responses API payload."""
+        output_text = getattr(response, "output_text", None)
+        if output_text:
+            return output_text
+
+        parts: List[str] = []
+        for item in getattr(response, "output", None) or []:
+            item_type = getattr(item, "type", None)
+            if isinstance(item, dict):
+                item_type = item.get("type")
+            if item_type != "message":
+                continue
+
+            content = getattr(item, "content", None)
+            if content is None and isinstance(item, dict):
+                content = item.get("content", [])
+            for block in content or []:
+                block_type = getattr(block, "type", None)
+                text = getattr(block, "text", None)
+                if isinstance(block, dict):
+                    block_type = block.get("type")
+                    text = block.get("text")
+                if block_type == "output_text" and text:
+                    parts.append(text)
+        return "".join(parts)
+
     @classmethod
     def _sanitize_for_azure(cls, messages: List[Dict]) -> List[Dict]:
         """Apply opt-in Azure content-filter repair after a raw prompt is rejected."""
@@ -489,20 +570,134 @@ class UnifiedLLMClient:
                 sanitized.append(msg)
         return sanitized
 
+    async def _call_azure_responses(
+        self,
+        messages: List[Dict],
+        temperature: float,
+        max_tokens: int,
+        deployment: str,
+        response_format: Optional[Dict] = None,
+        content_filter_repaired: bool = False,
+    ) -> Dict:
+        """Call Azure OpenAI via the Responses API (required for codex deployments)."""
+        if not self.azure_client:
+            raise RuntimeError("Azure client not initialized")
+        if not hasattr(self.azure_client, "responses"):
+            raise RuntimeError(
+                "Azure Responses API is unavailable. Upgrade the openai SDK "
+                "(pip install -U openai) to a version that supports responses.create()."
+            )
+
+        start_time = time.time()
+        call_kwargs: Dict[str, Any] = {
+            "model": deployment,
+            "input": self._messages_to_responses_input(messages),
+            # Responses API enforces a higher minimum than chat completions.
+            "max_output_tokens": max(max_tokens, 16),
+        }
+        if not deployment.startswith("gpt-5"):
+            call_kwargs["temperature"] = temperature
+        if response_format is not None:
+            call_kwargs["text"] = {"format": response_format}
+
+        response = await self.azure_client.responses.create(**call_kwargs)
+        duration = time.time() - start_time
+        content = self._extract_responses_text(response)
+
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "input_tokens", 0) if usage else 0
+        output_tokens = getattr(usage, "output_tokens", 0) if usage else 0
+        total_tokens = getattr(usage, "total_tokens", input_tokens + output_tokens) if usage else input_tokens + output_tokens
+
+        pricing = TOKEN_PRICING.get(deployment, {"input": 3.0, "output": 15.0})
+        cost = (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+
+        return {
+            "content": content,
+            "provider": "azure",
+            "api": "responses",
+            "tokens": {
+                "input": input_tokens,
+                "output": output_tokens,
+                "total": total_tokens,
+            },
+            "cost_usd": cost,
+            "model": deployment,
+            "duration_seconds": duration,
+            "content_filter_repaired": content_filter_repaired,
+        }
+
+    async def _call_azure_chat_completions(
+        self,
+        messages: List[Dict],
+        temperature: float,
+        max_tokens: int,
+        deployment: str,
+        response_format: Optional[Dict] = None,
+        content_filter_repaired: bool = False,
+    ) -> Dict:
+        """Call Azure OpenAI via chat.completions."""
+        start_time = time.time()
+
+        # gpt-5.x models only support temperature=1 (default)
+        call_kwargs = {
+            "model": deployment,
+            "messages": messages,
+            "max_completion_tokens": max_tokens,
+        }
+        if not deployment.startswith("gpt-5"):
+            call_kwargs["temperature"] = temperature
+        if response_format is not None:
+            call_kwargs["response_format"] = response_format
+
+        response = await self.azure_client.chat.completions.create(**call_kwargs)
+        duration = time.time() - start_time
+        content = response.choices[0].message.content
+        usage = response.usage
+
+        pricing = TOKEN_PRICING.get(deployment, {"input": 3.0, "output": 15.0})
+        cost = (usage.prompt_tokens * pricing["input"] +
+                usage.completion_tokens * pricing["output"]) / 1_000_000
+
+        return {
+            "content": content,
+            "provider": "azure",
+            "api": "chat_completions",
+            "tokens": {
+                "input": usage.prompt_tokens,
+                "output": usage.completion_tokens,
+                "total": usage.total_tokens,
+            },
+            "cost_usd": cost,
+            "model": deployment,
+            "duration_seconds": duration,
+            "content_filter_repaired": content_filter_repaired,
+        }
+
     async def _call_azure(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:
-        """Call Azure OpenAI with automatic content filter retry."""
+        """Call Azure OpenAI with chat completions and Responses API fallback."""
         if not self.azure_client:
             raise RuntimeError("Azure client not initialized")
 
-        # Allow model kwarg to override deployment (for kernel model routing)
-        deployment = kwargs.pop('model', None) or self.config.get('azure_deployment', 'gpt-4o')
+        deployment = kwargs.pop("model", None) or self.config.get("azure_deployment", "gpt-4o")
+        response_format = kwargs.pop("response_format", None)
+        auto_responses_fallback = bool(self.config.get("azure_responses_auto_fallback", True))
 
-        # Extract response_format before building call_kwargs
-        # Previously this was silently dropped — now forwarded to the API
-        # enabling real JSON mode enforcement for Planner and Evaluator calls.
-        response_format = kwargs.pop('response_format', None)
+        logger.debug(
+            "_call_azure: deployment=%s, response_format=%s, prefer_responses=%s",
+            deployment,
+            response_format,
+            self._azure_prefers_responses_api(deployment, self.config),
+        )
 
-        logger.debug("_call_azure: deployment=%s, response_format=%s", deployment, response_format)
+        if self._azure_prefers_responses_api(deployment, self.config):
+            return await self._call_azure_responses(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                deployment=deployment,
+                response_format=response_format,
+            )
 
         repair_enabled = bool(self.config.get("azure_content_filter_repair_enabled", False))
         attempts = [("raw", messages)]
@@ -510,23 +705,15 @@ class UnifiedLLMClient:
             attempts.append(("provider_repaired", self._sanitize_for_azure(messages)))
         last_error = None
         for label, attempt_messages in attempts:
-            start_time = time.time()
-
-            # gpt-5.x models only support temperature=1 (default)
-            # Strip unsupported temperature to avoid API errors
-            call_kwargs = {
-                "model": deployment,
-                "messages": attempt_messages,
-                "max_completion_tokens": max_tokens,  # gpt-5.x requires max_completion_tokens
-            }
-            if not deployment.startswith("gpt-5"):
-                call_kwargs["temperature"] = temperature
-            # Forward response_format when specified (JSON mode, structured output)
-            if response_format is not None:
-                call_kwargs["response_format"] = response_format
-
             try:
-                response = await self.azure_client.chat.completions.create(**call_kwargs)
+                return await self._call_azure_chat_completions(
+                    messages=attempt_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    deployment=deployment,
+                    response_format=response_format,
+                    content_filter_repaired=label == "provider_repaired",
+                )
             except Exception as e:
                 error_str = str(e)
                 is_content_filter = (
@@ -536,7 +723,6 @@ class UnifiedLLMClient:
                     or "jailbreak" in error_str.lower()
                 )
                 if is_content_filter and label == "raw" and repair_enabled:
-                    # Identify the actual filter category for accurate logging
                     filter_cat = "unknown"
                     for cat in ("hate", "jailbreak", "violence", "self_harm", "sexual"):
                         if f"'{cat}': {{'filtered': True" in error_str or f"'{cat}': {{'detected': True" in error_str:
@@ -557,35 +743,21 @@ class UnifiedLLMClient:
                         "set AZURE_CONTENT_FILTER_REPAIR_ENABLED=true to opt into Azure "
                         "provider prompt repair."
                     ) from e
-                raise  # non-filter error or already sanitized — propagate
+                if auto_responses_fallback and self._azure_chat_unsupported(e):
+                    logger.info(
+                        "Azure chat completions unsupported for %s; retrying via Responses API.",
+                        deployment,
+                    )
+                    return await self._call_azure_responses(
+                        messages=attempt_messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        deployment=deployment,
+                        response_format=response_format,
+                        content_filter_repaired=label == "provider_repaired",
+                    )
+                raise
 
-            duration = time.time() - start_time
-            content = response.choices[0].message.content
-            usage = response.usage
-
-            if label == "provider_repaired":
-                logger.info("Azure content filter retry succeeded with opt-in provider prompt repair.")
-
-            # Calculate cost
-            pricing = TOKEN_PRICING.get(deployment, {"input": 3.0, "output": 15.0})
-            cost = (usage.prompt_tokens * pricing['input'] +
-                    usage.completion_tokens * pricing['output']) / 1_000_000
-
-            return {
-                "content": content,
-                "provider": "azure",
-                "tokens": {
-                    "input": usage.prompt_tokens,
-                    "output": usage.completion_tokens,
-                    "total": usage.total_tokens
-                },
-                "cost_usd": cost,
-                "model": deployment,
-                "duration_seconds": duration,
-                "content_filter_repaired": label == "provider_repaired",
-            }
-
-        # Both attempts failed on content filter — raise the last error
         raise RuntimeError(
             f"Azure content filter blocked both raw and sanitized prompts. "
             f"Last error: {last_error}"

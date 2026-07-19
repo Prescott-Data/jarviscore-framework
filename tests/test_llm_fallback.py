@@ -217,6 +217,102 @@ async def test_azure_content_filter_repair_is_explicit_opt_in():
     assert result["content_filter_repaired"] is True
 
 
+def test_azure_prefers_responses_api_for_codex():
+    assert UnifiedLLMClient._azure_prefers_responses_api("gpt-5.3-codex", {}) is True
+    assert UnifiedLLMClient._azure_prefers_responses_api("gpt-5.2-chat", {}) is False
+
+
+def test_azure_prefers_responses_api_for_forced_deployments():
+    config = {"azure_responses_deployments": "custom-model,another-model"}
+    assert UnifiedLLMClient._azure_prefers_responses_api("custom-model", config) is True
+    assert UnifiedLLMClient._azure_prefers_responses_api("gpt-4o", config) is False
+
+
+def test_extract_responses_text_from_output_blocks():
+    response = SimpleNamespace(
+        output_text=None,
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="Hello")],
+            )
+        ],
+    )
+    assert UnifiedLLMClient._extract_responses_text(response) == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_azure_codex_uses_responses_api():
+    llm = UnifiedLLMClient(config={
+        "azure_api_key": "fake",
+        "azure_endpoint": "https://example.openai.azure.com",
+        "azure_deployment": "gpt-4o",
+        "claude_api_key": None,
+        "anthropic_api_key": None,
+        "gemini_api_key": None,
+        "vertex_ai_enabled": False,
+        "llm_endpoint": None,
+    })
+    responses_create = AsyncMock(return_value=SimpleNamespace(
+        output_text="codex ok",
+        output=[],
+        usage=SimpleNamespace(input_tokens=12, output_tokens=4, total_tokens=16),
+    ))
+    chat_create = AsyncMock()
+    llm.azure_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=chat_create)),
+        responses=SimpleNamespace(create=responses_create),
+    )
+
+    result = await llm._call_azure(
+        messages=[{"role": "user", "content": "write code"}],
+        temperature=0.0,
+        max_tokens=32,
+        model="gpt-5.3-codex",
+    )
+
+    assert result["content"] == "codex ok"
+    assert result["api"] == "responses"
+    responses_create.assert_awaited_once()
+    chat_create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_azure_chat_unsupported_falls_back_to_responses_api():
+    llm = UnifiedLLMClient(config={
+        "azure_api_key": "fake",
+        "azure_endpoint": "https://example.openai.azure.com",
+        "azure_deployment": "gpt-5.2-chat",
+        "azure_responses_auto_fallback": True,
+        "claude_api_key": None,
+        "anthropic_api_key": None,
+        "gemini_api_key": None,
+        "vertex_ai_enabled": False,
+        "llm_endpoint": None,
+    })
+    chat_create = AsyncMock(side_effect=RuntimeError("The requested operation is unsupported."))
+    responses_create = AsyncMock(return_value=SimpleNamespace(
+        output_text="fallback ok",
+        output=[],
+        usage=SimpleNamespace(input_tokens=8, output_tokens=3, total_tokens=11),
+    ))
+    llm.azure_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=chat_create)),
+        responses=SimpleNamespace(create=responses_create),
+    )
+
+    result = await llm._call_azure(
+        messages=[{"role": "user", "content": "hello"}],
+        temperature=0.0,
+        max_tokens=32,
+    )
+
+    assert result["content"] == "fallback ok"
+    assert result["api"] == "responses"
+    chat_create.assert_awaited_once()
+    responses_create.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # Vertex AI provider tests (mocked — no real GCP credentials required)
 # ---------------------------------------------------------------------------

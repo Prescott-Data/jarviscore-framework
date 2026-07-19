@@ -152,7 +152,26 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     try:
         return json.loads(repaired)
     except (json.JSONDecodeError, ValueError):
-        return None
+        pass
+
+    # Repair path 2: trailing commas before } or ] (common LLM slip).
+    detrailed = re.sub(r",\s*([}\]])", r"\1", repaired)
+    if detrailed != repaired:
+        try:
+            return json.loads(detrailed)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Repair path 3: python-literal dict (single quotes, True/False/None).
+    try:
+        import ast
+
+        obj = ast.literal_eval(candidate)
+        if isinstance(obj, dict):
+            return obj
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        pass
+    return None
 
 
 def _repair_json_strings(text: str) -> str:
@@ -467,6 +486,10 @@ class BaseSubAgent(ABC):
         for turn in range(max_turns):
             state.turn = turn
             self._log.set_turn(turn)
+            # Each OODA turn is an independent decision cycle. A rejected DONE
+            # must not block the next turn; an accepted DONE returns before the
+            # next iteration.
+            self._cognition._done_called = False
 
             # ── Emergency guards ──
             if self._cognition.lease.is_expired():
@@ -487,7 +510,8 @@ class BaseSubAgent(ABC):
                     payload=state.get_final_output(),
                     trajectory=trajectory,
                     metadata={"tokens": total_tokens, "cost_usd": total_cost,
-                              "typed_outcome": "YIELD_BUDGET_EXHAUSTED"},
+                              "typed_outcome": "YIELD_BUDGET_EXHAUSTED",
+                              "cognition": self._cognition.get_budget_summary()},
                 )
 
             self._cognition.lease.consume_turn()
@@ -578,7 +602,11 @@ class BaseSubAgent(ABC):
                             f"You must address this before calling DONE again."
                         ),
                     })
-                    self._cognition.track_usage("done", tokens=llm_tokens_this_turn)
+                    self._cognition.track_usage(
+                        "done",
+                        tokens=llm_tokens_this_turn,
+                        count_as_done=False,
+                    )
                     continue
 
                 state.status = "completed"

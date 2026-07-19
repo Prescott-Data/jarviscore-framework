@@ -554,6 +554,15 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             }
         return None
 
+    @staticmethod
+    def _operator_bounded_turn(state) -> bool:
+        """True for bounded operator turns (peer wake, meetings) — not full research dispatches."""
+        ctx = getattr(state, "context", None) or {}
+        if ctx.get("operator_bounded"):
+            return True
+        contract = ctx.get("execution_contract") or {}
+        return contract.get("execution_shape") in {"single_artifact", "single_response"}
+
     def _can_complete(self, state, parsed: Dict[str, Any]) -> Tuple[bool, str]:
         """Reject premature DONE if no meaningful research has been done."""
         base_ok, base_reason = super()._can_complete(state, parsed)
@@ -563,10 +572,18 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         params = parsed.get("result") or {}
         if not isinstance(params, dict):
             params = {}
+        summary = str(params.get("summary") or parsed.get("summary") or "").strip()
         meaningful_research = any(
             t.status == "success" and t.tool_name in {"read_web_content", "browser_get_text", "browser_get_page_text", "rag_query", "read_file", "extract_api_details"}
             for t in state.tool_history
         )
+        if self._operator_bounded_turn(state):
+            if meaningful_research or summary:
+                return True, ""
+            return (
+                False,
+                "Operator turn requires a DONE summary or at least one successful tool result",
+            )
         if not meaningful_research and not (params.get("evidence") or params.get("summary")):
             return False, "Research completion requires at least one successful content/evidence tool result"
         valid, reason, _ = self._validate_done_payload(state, params)
@@ -576,6 +593,8 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
 
     def _validate_done_payload(self, state, params: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
         strict = _env_bool("RESEARCH_STRICT_DONE_VALIDATION", True)
+        if self._operator_bounded_turn(state):
+            strict = False
         summary = str(params.get("summary") or "").strip()
         evidence = params.get("evidence")
         api_specs = params.get("api_specs") or []
@@ -833,18 +852,27 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
 
     async def _track_content_cost(self, content: str, source: str):
         """Track token cost of consumed content."""
-        if not content or not hasattr(self, "cognition") or not self.cognition:
+        cognition = getattr(self, "_cognition", None) or getattr(self, "cognition", None)
+        if not content or not cognition:
             return
         
         # Estimate tokens (approx 4 chars per token)
         tokens = len(content) // 4
         if tokens > 0:
-            await self.cognition.track(
-                tool=source, 
-                result="content_ingestion", 
-                tokens=tokens, 
-                phase=AgentPhase.DISCOVERY
-            )
+            track = getattr(cognition, "track", None) or getattr(cognition, "track_usage", None)
+            if not track:
+                return
+            try:
+                result = track(
+                    tool=source,
+                    result="content_ingestion",
+                    tokens=tokens,
+                    phase=AgentPhase.DISCOVERY,
+                )
+                if hasattr(result, "__await__"):
+                    await result
+            except TypeError:
+                cognition.track_usage(source, tokens=tokens)
 
     def _get_known_urls(self) -> set:
         """Retrieve known URLs from persistent state."""
@@ -1706,7 +1734,12 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         }
 
     async def _tool_search_internet(
-        self, query: str, preferred_domains: Optional[List[str]] = None
+        self,
+        query: str,
+        preferred_domains: Optional[List[str]] = None,
+        max_results: int = 5,
+        max_results_per_query: Optional[int] = None,
+        **kwargs,
     ) -> str:
         """
         Search the internet.
@@ -1715,7 +1748,11 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             preferred_domains: Optional list of domains to bias results toward
                 (e.g. ['docs.example.com', 'api.example.com']). Appended as
                 site: hints so the search engine prioritises official sources.
+            max_results: Maximum number of results to return (default 5).
+            max_results_per_query: Alias for max_results (LLM sometimes uses batch param names).
         """
+        if max_results_per_query is not None:
+            max_results = max_results_per_query
         effective_query = query
         if preferred_domains:
             site_hint = " OR ".join(f"site:{d.strip()}" for d in preferred_domains[:3])
@@ -1735,9 +1772,10 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
 
         try:
             await self.internet_search.initialize()
-            results = await self.internet_search.search(effective_query, max_results=5)
+            limit = max(1, min(int(max_results or 5), 10))
+            results = await self.internet_search.search(effective_query, max_results=limit)
             results = self._filter_search_results(results)
-            results = self._compact_search_results(results, limit=5)
+            results = self._compact_search_results(results, limit=limit)
             # Register URLs to prevent hallucination
             for r in results:
                 if isinstance(r, dict) and r.get("url"):
@@ -1797,7 +1835,10 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             self.tracer.log_tool_result("search_internet_batch", None, error=error)
             return {"status": "error", "error": error}
 
-        effective_queries = effective_queries[:6]  # cap to reduce latency and context bloat
+        effective_queries = effective_queries[: min(
+            6,
+            max(1, int(os.environ.get("RESEARCH_SEARCH_BATCH_PARALLEL", "3"))),
+        )]  # cap parallel batch width under SearXNG concurrency guard
         logger.info("[RESEARCHER] Parallel search batch: %d queries", len(effective_queries))
 
         out: Dict[str, Any] = {"status": "success", "by_query": {}}
@@ -1876,6 +1917,10 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         traverse_enabled = _env_bool("RESEARCH_TRAVERSE_ENABLED", True)
         max_depth = _env_int("RESEARCH_TRAVERSE_MAX_DEPTH", 2)
         max_extra_links = _env_int("RESEARCH_TRAVERSE_MAX_LINKS", 5)
+        if auto_escalate and not _HAS_BROWSER:
+            # No [browser] extra installed — fall back to plain HTTP errors
+            # instead of crashing in _ensure_dispatcher (BrowserDispatcher is None).
+            auto_escalate = False
 
         if url_ids and self.current_state:
             reg = self._get_url_registry()
@@ -2505,6 +2550,10 @@ DOCUMENTATION TEXT:
         """Ensure browser dispatcher is ready; creates on first call."""
         if self._dispatcher is not None:
             return self._dispatcher
+        if not _HAS_BROWSER:
+            raise RuntimeError(
+                "Browser automation unavailable: install jarviscore[browser] extra"
+            )
 
         registry = BrowserProfileRegistry(
             default_profile=self._browser_profile_name,

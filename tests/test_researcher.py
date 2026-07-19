@@ -545,3 +545,43 @@ class TestSessionState:
         )
         assert len(r._url_content_cache) == 0
         assert r._current_research_phase() == ResearchPhase.INIT
+
+
+class TestOperatorBoundedDoneGate:
+
+    def test_peer_wake_done_with_summary_allowed(self, researcher):
+        from jarviscore.kernel.state import KernelState
+
+        state = KernelState(
+            workflow_id="wf",
+            step_id="wake",
+            agent_id="sentinel",
+            task="shift wake",
+            context={
+                "execution_contract": {"execution_shape": "single_artifact"},
+                "operator_bounded": True,
+            },
+        )
+        ok, reason = researcher._can_complete(
+            state,
+            {"type": "done", "summary": "Reviewed blockers", "result": {"summary": "Reviewed blockers"}},
+        )
+        assert ok is True
+        assert reason == ""
+
+    def test_full_research_still_requires_evidence(self, researcher):
+        from jarviscore.kernel.state import KernelState
+
+        state = KernelState(
+            workflow_id="wf",
+            step_id="dossier",
+            agent_id="sentinel",
+            task="enterprise dossier",
+            context={"complexity": "heavy"},
+        )
+        ok, reason = researcher._can_complete(
+            state,
+            {"type": "done", "summary": "done", "result": {"summary": "done"}},
+        )
+        assert ok is False
+        assert "evidence" in reason.lower() or "research" in reason.lower()

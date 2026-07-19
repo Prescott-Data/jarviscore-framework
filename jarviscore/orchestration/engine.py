@@ -417,11 +417,15 @@ class WorkflowEngine:
         # config overrides). Preserve it; engine keys take precedence on conflict.
         task = step.copy()
         caller_ctx = task.get("context", {}) if isinstance(task.get("context"), dict) else {}
+        step_contract = step.get("execution_contract")
+        if isinstance(step_contract, dict):
+            caller_ctx = {**caller_ctx, "execution_contract": step_contract}
         task["context"] = {
             **caller_ctx,
             "previous_step_results": dep_outputs,
             "workflow_id": workflow_id,
             "step_id": step_id,
+            "meeting_step_id": caller_ctx.get("meeting_step_id") or step_id,
         }
 
         # Auth resolution (Phase 7D)

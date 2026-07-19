@@ -115,9 +115,10 @@ class TestShouldContinue:
     def test_continues_when_budget_available(self, cognition):
         assert cognition.should_continue() is True
 
-    def test_stops_on_done(self, cognition):
+    def test_done_sets_completion_phase_without_stopping_budget(self, cognition):
         cognition.track_usage("done", tokens=0)
-        assert cognition.should_continue() is False
+        assert cognition.phase == AgentPhase.COMPLETION
+        assert cognition.should_continue() is True
 
     def test_stops_on_budget_exhaustion(self):
         lease = ExecutionLease(thinking_budget=100)
@@ -214,3 +215,14 @@ class TestBudgetSummary:
         assert s["tool_count"] == 2
         assert s["done_called"] is False
         assert "lease" in s
+
+    def test_rejected_done_does_not_block_should_continue(self, cognition):
+        cognition.track_usage("done", tokens=100, count_as_done=False)
+        assert cognition.should_continue() is True
+        assert cognition.get_budget_summary()["done_called"] is False
+
+    def test_accepted_done_does_not_block_next_turn(self, cognition):
+        cognition.track_usage("done", tokens=100, count_as_done=True)
+        assert cognition.get_budget_summary()["done_called"] is True
+        cognition._done_called = False
+        assert cognition.should_continue() is True
