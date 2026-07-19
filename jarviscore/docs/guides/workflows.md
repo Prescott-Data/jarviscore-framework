@@ -215,32 +215,32 @@ The `market_research` and `competitor_scan` steps are dispatched simultaneously.
 
 ## Dynamic Fan-Out: `mesh.fanout()`
 
-Workflow DAGs are declared upfront — the right tool when the step list is known at authoring time. When N is **data** (scan results, file lists, symbol boards), use `mesh.fanout()` to run one task template over runtime items with bounded concurrency:
+A workflow declares its steps upfront. That works when you know the step list while writing the code. Sometimes you only learn how many items there are at runtime: search results, a list of files, a board of symbols. For that case, use `mesh.fanout()`. It runs one task template over each item, a few at a time, and collects the results.
 
 ```python
 result = await mesh.fanout(
     "board-scan",
     agent="analyst",                       # role or capability
-    items=symbols,                         # the dynamic N
+    items=symbols,                         # your runtime list
     task=lambda s: f"Deep-read {s} and return a thesis JSON.",
     context=lambda s: {"symbol": s},       # per-item context (or a static dict)
-    concurrency=5,                         # always bounded
-    budget=20,                             # optional cap; the rest → result.skipped
+    concurrency=5,                         # how many run at once
+    budget=20,                             # optional cap on items attempted
     on_error="collect",                    # or "fail_fast"
     timeout=120,                           # optional per-item seconds
 )
 
 theses = [r["payload"] for r in result.succeeded]
-errors = result.failed                     # honest per-item errors
+errors = result.failed                     # per-item errors
 brief  = await result.summarize(llm, "Synthesize the board read.")
 ```
 
-Guarantees:
+What you can rely on:
 
-- **Identity by construction** — every item runs under a namespaced step id and every result is stamped with `item` + `step_id`; concurrent items cannot cross-contaminate.
-- **Results in item order**, always — aggregation never guesses by position.
-- **Partial failure is first-class** — one bad item never voids the rest in `collect` mode; `fail_fast` cancels pending items while keeping finished results.
-- **Nothing silent** — budget-skipped items are reported; `summarize()` shows the LLM clipped evidence *with markers* plus every failure.
+- Every result carries its `item` and a unique `step_id`. Items that run at the same time cannot mix up each other's results.
+- `result.results` is always in the same order as your `items` list.
+- One failed item does not stop the others. In `collect` mode (the default) failures land in `result.failed` with their error messages. In `fail_fast` mode the first failure cancels the items that have not started yet, and finished results are kept.
+- Nothing is dropped silently. Items skipped by `budget` are listed in `result.skipped`. When `summarize()` has to shorten an item's output for the LLM, it marks the cut and includes every failure in the evidence.
 
 ---
 
