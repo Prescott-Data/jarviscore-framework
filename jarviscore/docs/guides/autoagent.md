@@ -182,6 +182,22 @@ class SlackNotifier(AutoAgent):
 
 The four sub-agents the Kernel routes to are the `CoderSubAgent` for tasks that require writing and running Python, the `ResearcherSubAgent` for tasks that require web search and synthesis, the `CommunicatorSubAgent` for tasks that require formatting and delivering output, and the `BrowserSubAgent` for web navigation tasks when `BROWSER_ENABLED=true` is set.
 
+### Analysis, not code: the `single_response` contract
+
+Many agent tasks need exactly one LLM completion: render the system prompt, ask the question, return the answer. No planner, no routing, no code generation. Declare this shape per task with an execution contract:
+
+```python
+results = await mesh.workflow("analysis-001", [{
+    "agent": "market_analyst",
+    "task": "Analyse EURUSD H1 and return your thesis as JSON.",
+    "context": {"execution_contract": {"execution_shape": "single_response"}},
+}])
+```
+
+With `single_response` declared, `execute_task()` runs one completion against the agent's system prompt (including its persona profile, if one is loaded) and returns the standard result envelope with token and cost telemetry. The Kernel pipeline is skipped entirely, so an analysis prompt never reaches the Coder sub-agent and never produces TOOL/DONE protocol errors.
+
+Use this for tasks where the whole job is the answer: analysis, classification, extraction, drafting. When the task needs tools, search, or several turns of reasoning, drop the contract and let the Kernel route it.
+
 ---
 
 ## Coder Sandbox
