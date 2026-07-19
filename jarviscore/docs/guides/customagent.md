@@ -290,6 +290,42 @@ async def execute_task(self, task: dict) -> dict:
 
 ---
 
+## Planning: a library, not a mode
+
+Plan mode is an AutoAgent capability. `AutoAgent` with `goal_oriented = True`
+triages each task and, when the work is genuinely multi-step, plans before it
+executes. `CustomAgent` has no such mode, by design. Its contract is that you
+bring the brain, so the framework never plans on your behalf, and a
+`CustomAgent` has no built-in LLM to plan with.
+
+When a `CustomAgent` developer wants a plan, planning is a library you call, not
+a mode you enable. Use the `Planner` with your own LLM client and drive the
+steps yourself:
+
+```python
+from jarviscore.planning.planner import Planner
+from jarviscore.planning.goal_context import GoalExecution
+
+planner = Planner(llm_client=my_llm)                 # your own LLM client
+execution = GoalExecution(goal=goal, agent_id=self.agent_id)
+steps = await planner.plan(goal, execution)          # List[PlannedStep]
+
+for step in steps:
+    # step.step_id, step.task, step.success_criterion, step.depends_on
+    result = await self.run_step(step)               # your loop, your recovery
+```
+
+Each `PlannedStep` carries a `step_id`, the `task` string, a `success_criterion`,
+and any `depends_on` step ids. You decide how to execute them: your loop, your
+evaluation, your error handling. The framework gives you the decomposition and
+stays out of the way.
+
+If you want the framework to own the whole Plan, Execute, Evaluate loop instead,
+that is exactly what `AutoAgent` with `goal_oriented = True` provides. See
+[Goal-Oriented Execution](autoagent.md#goal-oriented-execution).
+
+---
+
 ## Agent Profile Integration
 
 Like `AutoAgent`, `CustomAgent` loads an agent profile YAML file during `setup()` if `JARVISCORE_PROFILES_DIR` is configured. The rendered profile block is available as `self._profile_block`. Use it when you are making LLM calls directly from your `on_peer_request()`:
