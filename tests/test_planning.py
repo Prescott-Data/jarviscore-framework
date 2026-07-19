@@ -349,6 +349,25 @@ class TestStepEvaluator:
         assert "Truncated evidence" in _EVAL_SCHEMA
         assert "Never return \"fail\" solely because evidence was clipped" in _EVAL_SCHEMA
 
+    def test_accumulated_facts_never_clipped_silently(self):
+        """The facts block in the prompt clips with a marker, not silently (#55/#85).
+
+        Regression: the prompt told the model 'do not re-extract these' while
+        silently hiding everything past 500 chars.
+        """
+        from jarviscore.context.truth import TruthFact
+        ev = self._evaluator()
+        ge = GoalExecution(goal="G", agent_id="a")
+        for i in range(60):
+            ge.truth.facts[f"fact_{i:02d}"] = TruthFact(
+                value="v" * 60, source="t", confidence=0.9,
+            )
+        prompt = ev._build_prompt(_make_step(), _make_output(), ge)
+        facts_block = prompt.split("Accumulated goal facts", 1)[1]
+        assert "[truncated: showing" in facts_block   # clipped, but honestly
+        # and the window is real: far more than the old 500 silent chars
+        assert "fact_20" in facts_block
+
     @pytest.mark.asyncio
     async def test_short_circuits_failure_status(self):
         """No LLM call on output.status == 'failure'."""

@@ -76,6 +76,17 @@ class EvaluatorError(Exception):
     """
 
 
+def _honest_clip(text: str, limit: int) -> str:
+    """Clip with an explicit marker — never silently (#55/#85).
+
+    Prompt views may be bounded, but a bound the model cannot see poisons
+    the judgment: markers are the floor.
+    """
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n[truncated: showing {limit} of {len(text)} chars]"
+
+
 class StepEvaluator:
     """
     Evaluates whether a completed step met its success criterion.
@@ -226,9 +237,11 @@ class StepEvaluator:
         goal_execution: GoalExecution,
     ) -> str:
         output_repr = self._format_output(output)
-        known = json.dumps(
-            goal_execution.truth.to_flat_dict(), default=str
-        )[:500]
+        facts_limit = int(os.environ.get("EVALUATOR_FACTS_EVIDENCE_LIMIT", "2000"))
+        known = _honest_clip(
+            json.dumps(goal_execution.truth.to_flat_dict(), default=str),
+            facts_limit,
+        )
 
         return (
             f"Evaluate whether this agent step met its success criterion.\n\n"
@@ -251,7 +264,7 @@ class StepEvaluator:
         repair_prompt = (
             "Your previous evaluation response violated the required contract.\n\n"
             f"Parse error:\n{parse_error}\n\n"
-            f"Invalid response:\n{invalid_content[:1200]}\n\n"
+            f"Invalid response:\n{_honest_clip(invalid_content, 1200)}\n\n"
             "Rewrite it as valid JSON that obeys this exact schema. Do not change "
             "the assessment, only repair the envelope and enum values.\n\n"
             f"{_EVAL_SCHEMA}"
@@ -295,14 +308,6 @@ class StepEvaluator:
         summary_limit = int(os.environ.get("EVALUATOR_SUMMARY_EVIDENCE_LIMIT", "2000"))
         payload_limit = int(os.environ.get("EVALUATOR_PAYLOAD_EVIDENCE_LIMIT", "6000"))
 
-        def _clip(text: str, limit: int) -> str:
-            if len(text) <= limit:
-                return text
-            return (
-                f"{text[:limit]}\n"
-                f"[truncated: showing {limit} of {len(text)} chars]"
-            )
-
         parts = []
         status = getattr(output, "status", "unknown")
         summary = getattr(output, "summary", None)
@@ -310,13 +315,13 @@ class StepEvaluator:
 
         parts.append(f"status: {status}")
         if summary:
-            parts.append(f"summary: {_clip(summary, summary_limit)}")
+            parts.append(f"summary: {_honest_clip(summary, summary_limit)}")
         if payload is not None:
             if isinstance(payload, dict):
                 payload_str = json.dumps(payload, default=str)
             else:
                 payload_str = str(payload)
-            parts.append(f"payload: {_clip(payload_str, payload_limit)}")
+            parts.append(f"payload: {_honest_clip(payload_str, payload_limit)}")
 
         return "\n".join(parts)
 
@@ -480,7 +485,7 @@ class StepEvaluator:
             raise EvaluatorError(
                 f"Evaluator returned invalid verdict: {verdict!r} for step {step.step_id!r}.\n"
                 f"Must be one of: pass, partial, fail, hitl.\n"
-                f"Full response: {content[:300]}"
+                f"Response: {_honest_clip(content, 300)}"
             )
 
         raw_confidence = parsed.get("confidence", 0.7)
@@ -497,6 +502,6 @@ class StepEvaluator:
         return StepEvaluation(
             verdict=verdict,
             confidence=confidence,
-            evaluator_note=str(parsed.get("evaluator_note", ""))[:600],
+            evaluator_note=_honest_clip(str(parsed.get("evaluator_note", "")), 600),
             additional_findings=additional,
         )
