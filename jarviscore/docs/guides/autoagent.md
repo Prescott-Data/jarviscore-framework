@@ -393,7 +393,7 @@ Control the loop ceiling with environment variables:
 
 ### Parallel steps in plans
 
-The planner declares `depends_on` per step — real data dependencies only. Steps with no ordering constraint between them run **concurrently** (bounded by `MAX_PARALLEL_STEPS`), and a step never runs before its dependencies have produced usable output. Plans without any `depends_on` execute strictly sequentially, exactly as before.
+The planner declares `depends_on` on each step, listing only the steps whose output it actually needs. Steps with no ordering constraint between them run at the same time, up to `MAX_PARALLEL_STEPS`. A step never starts before all of its dependencies have finished with a passing result. Plans that declare no `depends_on` at all run one step at a time, exactly as before.
 
 ```text
 plan: [
@@ -406,7 +406,7 @@ plan: [
 
 ### Goal persistence and resume
 
-Goal executions persist automatically when blob storage is attached — after planning, after every completed step, and at terminal states — under `goals/{agent_id}/{goal_id}.json`. A crash loses at most the in-flight step:
+Goal executions save themselves automatically when blob storage is attached. A snapshot is written after planning, after every completed step, and when the goal ends, under `goals/{agent_id}/{goal_id}.json`. If the process crashes, you lose at most the step that was running:
 
 ```python
 execution = await agent.execute_goal("Produce the Q2 analysis")
@@ -419,7 +419,7 @@ execution = await agent.execute_goal(
 )
 ```
 
-Resume continues from the first step without a passing verdict. A missing or corrupt snapshot logs a warning and starts fresh — resume never crashes a goal.
+Resume continues from the first step that has not passed yet. If the snapshot is missing or unreadable, the agent logs a warning and starts fresh. Resume never crashes a goal.
 
 ---
 
