@@ -234,6 +234,11 @@ class AutoAgent(Profile):
         # 9. Wire AdaptiveHITLPolicy from mesh config if enabled.
         #    The Kernel's execute() checks self.hitl_policy.should_escalate()
         #    on every dispatch — no agent code required.
+        #    HITL_ENABLED is the single opt-in for every escalation path: the
+        #    kernel policy here AND the goal-loop pause in execute_goal both
+        #    read it, so a deployment that never turned HITL on never pauses
+        #    for a human (issue #81).
+        self._hitl_enabled = bool(config.get("hitl_enabled", False))
         if config.get("hitl_enabled", False):
             try:
                 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
@@ -910,6 +915,27 @@ class AutoAgent(Profile):
                 await self._persist_goal(execution)
                 return execution
 
+            # ── HITL consent gate (issue #81) ─────────────────────────────────
+            # HITL is opt-in. A goal only pauses for a human when the deployment
+            # consented via HITL_ENABLED and a queue exists to carry the
+            # request. Without consent no operator is watching, so a hitl
+            # verdict is downgraded to fail right here: the replan path below
+            # demands a verifiable artifact and the goal keeps moving instead of
+            # waiting forever. HITL_ENABLED is the single opt-in for every
+            # escalation path.
+            if evaluation.needs_hitl and not (
+                getattr(self, "_hitl_enabled", False)
+                and getattr(self, "hitl", None) is not None
+            ):
+                self._logger.warning(
+                    "[AutoAgent] Evaluator asked for HITL but HITL is not enabled "
+                    "for this deployment — downgrading to fail so the goal "
+                    "replans instead of waiting for an operator who is not there. "
+                    "Cause: %s",
+                    evaluation.evaluator_note[:200],
+                )
+                evaluation.verdict = "fail"
+
             # Record: merges distilled_facts + evaluator findings into truth
             execution.record_completed(step, output, evaluation, elapsed)
             if evaluation.verdict != "fail":
@@ -938,6 +964,10 @@ class AutoAgent(Profile):
                 execution.status = "hitl"
                 execution.error = evaluation.evaluator_note
                 execution.completed_at = time.time()
+                # Persist the terminal hitl state so resume_goal_id sees the
+                # truth (the completed-step persist above ran before this
+                # status change) — issue #81.
+                await self._persist_goal(execution)
                 self._logger.warning(
                     "[AutoAgent] Goal execution paused for HITL: %s",
                     evaluation.evaluator_note,

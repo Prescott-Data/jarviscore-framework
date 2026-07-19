@@ -1045,3 +1045,99 @@ class TestDependencyParallelExecution:
 
         assert execution.status == "complete"
         assert order == ["a", "b"]
+
+
+class TestHITLConsentGate:
+    """HITL is opt-in: a hitl verdict never dead-ends an unattended goal (#81)."""
+
+    @pytest.mark.asyncio
+    async def test_hitl_without_consent_replans_then_fails_loudly(self, monkeypatch):
+        """No HITL_ENABLED, no queue: a hitl verdict downgrades to replan and,
+        once attempts are exhausted, fails loudly. It never pauses."""
+        monkeypatch.setenv("MAX_REPLAN_ATTEMPTS", "1")
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-hitl-noconsent"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+        # The default unattended deployment: no consent, no queue.
+        assert getattr(agent, "_hitl_enabled", False) is False
+        assert getattr(agent, "hitl", None) is None
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                return _make_output(summary="did it")
+
+        agent._kernel = _Kernel()
+
+        plan = [PlannedStep("a", "task a", "done")]
+        replan_calls = {"n": 0}
+
+        async def _fake_replan(*args, **kwargs):
+            replan_calls["n"] += 1
+            return [PlannedStep("a2", "task a2", "done")]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.planner.Planner.replan",
+            new=_fake_replan,
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="hitl")),
+        ):
+            execution = await agent.execute_goal("unattended goal")
+
+        assert execution.status != "hitl"      # the whole point: no dead-end
+        assert execution.status == "failed"    # fails loudly instead
+        assert replan_calls["n"] >= 1          # the replan path engaged
+
+    @pytest.mark.asyncio
+    async def test_hitl_with_consent_pauses_and_notifies(self):
+        """With HITL_ENABLED and a queue attached, a hitl verdict pauses the
+        goal and submits a request to the operator queue."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-hitl-consent"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+        agent._hitl_enabled = True
+        fake_queue = MagicMock()
+        fake_queue.request = MagicMock(return_value="hitl-xyz")
+        agent.hitl = fake_queue
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                return _make_output(summary="did it")
+
+        agent._kernel = _Kernel()
+
+        plan = [PlannedStep("a", "task a", "done")]
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="hitl")),
+        ):
+            execution = await agent.execute_goal("attended goal")
+
+        assert execution.status == "hitl"
+        fake_queue.request.assert_called_once()

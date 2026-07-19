@@ -39,7 +39,16 @@ Verdict guide:
   "pass"    — success_criterion is clearly met. Continue to next step.
   "partial" — criterion partially met. Continue, but note what is missing.
   "fail"    — criterion not met. The goal loop will trigger replanning.
-  "hitl"    — cannot determine without human judgement (ambiguous, risky, or conflicting).
+  "hitl"    — reserved for decisions only a human can make. Use it ONLY when:
+                • an irreversible or risky action needs human approval, or
+                • credentials, permissions, or access the agent cannot obtain
+                  are required to proceed, or
+                • facts genuinely conflict and no further agent work can
+                  resolve them.
+              Do NOT use "hitl" because the output is unverifiable, incomplete,
+              missing its artifact, or you simply lack evidence. Those are
+              "partial" or "fail" — the loop can retry or replan to demand the
+              artifact. A verification gap is never a human's problem.
 
 additional_findings:
   Key facts you extract from the output that should inform future steps.

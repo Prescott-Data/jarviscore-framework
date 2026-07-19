@@ -341,9 +341,17 @@ class HITLQueue:
         try:
             data = json.loads(filepath.read_text())
             normalized = normalize_hitl_decision(decision)
-            data["status"] = normalized.value
+            # `status` is the lifecycle state (pending -> resolved); the
+            # approve/reject verdict lives in `decision`. Writing the verdict
+            # into `status` broke HITLResolution.from_raw(), which only builds a
+            # resolution when status == "resolved" — so check() could never read
+            # a file-resolved item back (HITL queue contract fix).
+            data["status"] = HITLStatus.resolved.value
             data["decision"] = normalized.value
             data["decision_reason"] = reason
+            data["request_id"] = request_id
+            data["resolved_by"] = data.get("resolved_by") or "auto"
+            data["resolved_at"] = time.time()
             data["decided_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             filepath.write_text(json.dumps(data, indent=2))
 
