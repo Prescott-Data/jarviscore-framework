@@ -383,6 +383,11 @@ Workflow execution is crash-safe. If the process restarts with the same `workflo
 
 Setting `goal_oriented = True` switches the agent from a single OODA loop to a Plan, Execute, Evaluate loop. The agent decomposes the goal into steps, executes each through the Kernel, evaluates the outcome, and replans automatically if a step fails.
 
+Plan mode does not mean the agent plans everything. With `goal_oriented = True`
+the agent triages each task first: simple, single-answer work routes straight to
+the Kernel for a direct turn, and only genuinely multi-step work goes through the
+planner. Plan mode makes the agent planning-capable, not planning-forced.
+
 ```python
 class ResearchAgent(AutoAgent):
     role = "researcher"
@@ -436,6 +441,10 @@ execution = await agent.execute_goal(
 ```
 
 Resume continues from the first step that has not passed yet. If the snapshot is missing or unreadable, the agent logs a warning and starts fresh. Resume never crashes a goal.
+
+For the CustomAgent side of this boundary, where planning is a library you call
+rather than a mode you enable, see
+[Planning: a library, not a mode](customagent.md#planning-a-library-not-a-mode).
 
 ---
 
