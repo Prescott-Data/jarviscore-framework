@@ -881,7 +881,7 @@ class AutoAgent(Profile):
                 execution.status = "failed"
                 execution.error = f"Kernel exception on step {step.step_id}: {exc}"
                 execution.completed_at = time.time()
-                return execution
+                return await self._finalize_incomplete(execution)
 
             elapsed = (time.time() - step_start) * 1000
 
@@ -913,6 +913,8 @@ class AutoAgent(Profile):
                 execution.completed_at = time.time()
                 _cancel_inflight()
                 await self._persist_goal(execution)
+                execution.result = execution.result or self._partial_result_from_progress(execution)
+                return execution
                 return execution
 
             # ── HITL consent gate (issue #81) ─────────────────────────────────
@@ -1016,7 +1018,7 @@ class AutoAgent(Profile):
                         f"Last failure: {evaluation.evaluator_note}"
                     )
                     execution.completed_at = time.time()
-                    return execution
+                    return await self._finalize_incomplete(execution)
 
                 replan_count += 1
                 self._logger.info(
@@ -1050,7 +1052,7 @@ class AutoAgent(Profile):
                     execution.status = "failed"
                     execution.error = f"Replanning failed: {pe}"
                     execution.completed_at = time.time()
-                    return execution
+                    return await self._finalize_incomplete(execution)
 
                 continue  # proceed with revised plan
 
@@ -1067,7 +1069,7 @@ class AutoAgent(Profile):
                 f"{len(remaining)} steps were not executed."
             )
             execution.completed_at = time.time()
-            return execution
+            return await self._finalize_incomplete(execution)
 
         # ── Phase 4: Synthesise final result ──────────────────────────────────
         execution.status = "complete"
@@ -1097,6 +1099,56 @@ class AutoAgent(Profile):
             goal[:80],
         )
         # Terminal snapshot — status, result, and full audit trail (issue #73)
+        await self._persist_goal(execution)
+        return execution
+
+    # ── Partial-result preservation (issue #84) ───────────────────────────
+    @staticmethod
+    def _partial_result_from_progress(execution: Any) -> Optional[str]:
+        """Assemble whatever the goal actually produced before it stopped.
+
+        A goal that finished real steps must never hand back an empty result.
+        The completed work (passing and partial steps) and the high-confidence
+        facts are surfaced with an honest partial marker, so a caller gets the
+        value that was earned plus a clear signal that more remained. The
+        status and error fields already explain why it stopped.
+        """
+        parts: List[str] = []
+        for cs in getattr(execution, "completed", []) or []:
+            verdict = getattr(getattr(cs, "evaluation", None), "verdict", "")
+            if verdict not in ("pass", "partial"):
+                continue
+            summary = (getattr(getattr(cs, "output", None), "summary", "") or "").strip()
+            if summary:
+                parts.append(f"### {cs.step.step_id}\n{summary}")
+        body = "\n\n".join(parts)
+
+        high_conf = execution.truth.high_confidence_facts(threshold=0.7)
+        facts_str = (
+            "\n".join(f"- {k}: {v.value}" for k, v in high_conf.items())
+            if high_conf else ""
+        )
+
+        sections = [s for s in (body, f"#### Established facts\n{facts_str}" if facts_str else "") if s]
+        if not sections:
+            return None
+        assembled = "\n\n".join(sections)
+        return (
+            "[PARTIAL RESULT] The goal stopped before fully completing. The "
+            "finished work and established facts are below; see `error` for "
+            "what remained.\n\n" + assembled
+        )
+
+    async def _finalize_incomplete(self, execution: Any) -> Any:
+        """Preserve partial work on a goal that stops before completing (#84).
+
+        Fills execution.result from accumulated progress when it is still empty,
+        then persists the terminal snapshot for audit and resume (#73). The
+        status ('failed'/'blocked') and error are set by the caller and left
+        untouched — this only rescues the work that would otherwise be lost.
+        """
+        if getattr(execution, "result", None) is None:
+            execution.result = self._partial_result_from_progress(execution)
         await self._persist_goal(execution)
         return execution
 

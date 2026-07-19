@@ -1141,3 +1141,98 @@ class TestHITLConsentGate:
 
         assert execution.status == "hitl"
         fake_queue.request.assert_called_once()
+
+
+class TestPartialResultPreservation:
+    """A goal that did real work never returns an empty result (#84)."""
+
+    @pytest.mark.asyncio
+    async def test_exhausted_replans_preserve_completed_work(self, monkeypatch):
+        monkeypatch.setenv("MAX_REPLAN_ATTEMPTS", "1")
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-partial"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                sid = kwargs["context"]["step_id"]
+                return _make_output(summary=f"finished {sid}")
+
+        agent._kernel = _Kernel()
+
+        # Step a passes; everything after fails, so the goal exhausts replans.
+        async def _eval(_evaluator, step, output, execution):
+            if step.step_id == "a":
+                return _make_evaluation(verdict="pass")
+            return _make_evaluation(verdict="fail")
+
+        plan = [PlannedStep("a", "task a", "done"), PlannedStep("b", "task b", "done")]
+
+        async def _fake_replan(*args, **kwargs):
+            return [PlannedStep("b2", "task b2", "done")]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.planner.Planner.replan",
+            new=_fake_replan,
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=_eval,
+        ):
+            execution = await agent.execute_goal("demanding goal")
+
+        assert execution.status == "failed"          # still fails loudly
+        assert execution.result is not None          # but hands back the work
+        assert "[PARTIAL RESULT]" in execution.result
+        assert "finished a" in execution.result      # the completed step survives
+
+    @pytest.mark.asyncio
+    async def test_blocked_at_max_steps_preserves_work(self):
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-blocked"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                sid = kwargs["context"]["step_id"]
+                return _make_output(summary=f"finished {sid}")
+
+        agent._kernel = _Kernel()
+
+        plan = [PlannedStep(f"s{i}", f"task {i}", "done") for i in range(4)]
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("capped goal", max_steps=2)
+
+        assert execution.status == "blocked"
+        assert execution.result is not None
+        assert "[PARTIAL RESULT]" in execution.result
+        assert "finished s0" in execution.result
