@@ -1,7 +1,7 @@
 """
 Internet search module for performing web searches and extracting content.
 
-Ported from integration-agent-javiscore to jarviscore-framework.
+Ported from an earlier internal agent codebase to jarviscore-framework.
 All IA-specific imports replaced with env-var driven configuration
 and optional lazy imports for browser/beautifulsoup4.
 """

@@ -12,7 +12,7 @@ def reddit_submit_comment(auth_info: dict, parent_id: str, text: str) -> dict:
             data={"parent": parent_id, "text": text},
             headers={
                 "Authorization": f"Bearer {access_token}",
-                "User-Agent": "collabra-integration-agent/1.0"
+                "User-Agent": "jarviscore/1.0"
             },
             timeout=30
         )

@@ -30,7 +30,7 @@ def reddit_submit_post(auth_info: dict, subreddit: str, title: str, text: str = 
             data=payload,
             headers={
                 "Authorization": f"Bearer {access_token}",
-                "User-Agent": "collabra-integration-agent/1.0"
+                "User-Agent": "jarviscore/1.0"
             },
             timeout=30
         )

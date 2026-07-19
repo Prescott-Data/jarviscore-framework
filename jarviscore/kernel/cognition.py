@@ -5,18 +5,14 @@ Tracks tool usage against the lease budget, detects cognitive phases,
 catches spinning (same tool 3+ times in a row), and enforces a cognitive
 gate (can't call done() without having taken any action).
 
-Added (dogfooding Gap #4 + #9):
+Added from internal review findings:
   ConvergenceGovernor  — detects stall conditions across:
       - same-tool streak          (same tool N times consecutively)
       - equivalent-outcome streak (same semantic result from different calls)
       - stagnant turns            (no meaningful progress score for N turns)
   FailureLedger        — fingerprints (tool, params) pairs and guards against
       repeating the same failing action within a session. Optionally persists
-      the guard across sessions via Redis (same pattern as integration-agent).
-
-  Pattern sourced from integration-agent main:
-      src/agent/capabilities/base.py (_convergence_policy, _evaluate_convergence,
-      _record_failure, _has_recent_repeat_failure)
+      the guard across sessions via Redis.
 """
 
 import hashlib
@@ -106,7 +102,7 @@ class ConvergenceGovernor:
     2. equivalent_streak   — same semantic outcome N times (different calls OK)
     3. stagnant_turns      — no meaningful progress score for N consecutive turns
 
-    Pattern from integration-agent:
+    Pattern from an earlier internal agent codebase:
         src/agent/capabilities/base.py :: _convergence_policy + _evaluate_convergence
     """
 
@@ -347,7 +343,7 @@ class FailureLedger:
     If the same fingerprint fails within FAILURE_GUARD_HORIZON_SECONDS:
       - The in-process ledger blocks it immediately.
       - If a redis_store is attached, the guard is also indexed cross-session
-        (same pattern as integration-agent RedisContextStore.index_failure_event).
+        (same pattern as an earlier internal agent codebase RedisContextStore.index_failure_event).
 
     Usage:
         ledger = FailureLedger()
@@ -357,7 +353,7 @@ class FailureLedger:
         ...
         ledger.record("web_search", {"query": "AML trends"}, error="Timeout")
 
-    Pattern from integration-agent:
+    Pattern from an earlier internal agent codebase:
         src/agent/capabilities/base.py :: _record_failure + _has_recent_repeat_failure
     """
 

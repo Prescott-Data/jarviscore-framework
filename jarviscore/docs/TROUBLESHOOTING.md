@@ -225,7 +225,7 @@ grep REDIS_URL .env
    redis-cli xrange ledgers:your-workflow-id - +
    ```
 
-### `blob_storage.load()` returns `None`
+### `blob_storage.read()` returns `None`
 
 The file was saved with a different `STORAGE_BASE_PATH` or in a different process's working directory.
 

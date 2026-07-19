@@ -4,7 +4,7 @@ jarviscore.search — Internet search and content extraction.
 Multi-provider parallel search with circuit breaker resilience,
 HTML→Markdown extraction, and optional browser escalation for SPAs.
 
-Ported from integration-agent-javiscore's InternetSearch class.
+Ported from an earlier internal agent codebase's InternetSearch class.
 
 Providers:
     - Google Grounded Search (via Gemini, highest quality)

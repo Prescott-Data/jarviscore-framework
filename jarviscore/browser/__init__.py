@@ -1,7 +1,7 @@
 """
 jarviscore.browser — Ref-based browser automation using Playwright.
 
-Ported from integration-agent-javiscore's browser_control module.
+Ported from an earlier internal agent codebase's browser_control module.
 Port of OpenClaw's browser control architecture to Python.
 
 Key Components:

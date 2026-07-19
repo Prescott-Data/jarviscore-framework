@@ -1,7 +1,7 @@
 """
 RAG pipeline: ingestion, indexing, retrieval, and evidence scoring.
 
-Ported from integration-agent-javiscore.
+Ported from an earlier internal agent codebase.
 Settings adapted from src.config.settings to env vars.
 
 Install: pip install jarviscore[rag]

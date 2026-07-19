@@ -4,7 +4,7 @@ P2P Coordinator for JarvisCore Framework
 Unified P2P coordination layer wrapping swim_p2p library.
 Provides agent discovery, capability announcement, and message routing.
 
-Adapted from integration-agent P2P infrastructure
+Adapted from an earlier internal agent codebase P2P infrastructure
 """
 import asyncio
 import logging
@@ -54,7 +54,7 @@ class P2PCoordinator:
         self.agents = agents
         self.config = config
 
-        # Core components (from integration-agent)
+        # Core components (from an earlier internal agent codebase)
         self.swim_manager: Optional[SWIMThreadManager] = None
         self.keepalive_manager: Optional[P2PKeepaliveManager] = None
         self.broadcaster: Optional[StepOutputBroadcaster] = None
