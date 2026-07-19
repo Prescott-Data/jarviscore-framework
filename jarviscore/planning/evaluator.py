@@ -20,6 +20,7 @@ Only "success" outputs go through the LLM evaluation call.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Optional
 
 from .goal_context import GoalExecution, PlannedStep, StepEvaluation
@@ -55,6 +56,14 @@ additional_findings:
   Keys must be short snake_case (e.g. "api_base_url", "record_count").
   Return an empty object {} if there is nothing new to add.
   Do NOT duplicate facts already listed in accumulated_goal_facts.
+
+Truncated evidence:
+  Step output may end with a marker like "[truncated: showing N of M chars]".
+  That means the work exists but only part of it is visible to you. If the
+  visible portion satisfies the criterion and ONLY the truncation prevents
+  full verification, return "partial" and note what you could not see.
+  Never return "fail" solely because evidence was clipped — a hidden tail
+  is not a failed step, and "fail" burns a replan cycle on blindness.
 """
 
 
@@ -276,8 +285,24 @@ class StepEvaluator:
     def _format_output(self, output: Any) -> str:
         """
         Render AgentOutput fields for the evaluation prompt.
-        Keeps it focused: status, summary, and payload (capped).
+        Keeps it focused: status, summary, and payload.
+
+        Evidence windows are generous and tunable, and clipping is announced
+        with an honest marker (issue #85). A blind verdict drives the whole
+        Plan-Execute-Evaluate loop, so a few KB of evidence is cheap next to
+        the replan cycle a false "fail" costs.
         """
+        summary_limit = int(os.environ.get("EVALUATOR_SUMMARY_EVIDENCE_LIMIT", "2000"))
+        payload_limit = int(os.environ.get("EVALUATOR_PAYLOAD_EVIDENCE_LIMIT", "6000"))
+
+        def _clip(text: str, limit: int) -> str:
+            if len(text) <= limit:
+                return text
+            return (
+                f"{text[:limit]}\n"
+                f"[truncated: showing {limit} of {len(text)} chars]"
+            )
+
         parts = []
         status = getattr(output, "status", "unknown")
         summary = getattr(output, "summary", None)
@@ -285,13 +310,13 @@ class StepEvaluator:
 
         parts.append(f"status: {status}")
         if summary:
-            parts.append(f"summary: {summary[:600]}")
+            parts.append(f"summary: {_clip(summary, summary_limit)}")
         if payload is not None:
             if isinstance(payload, dict):
                 payload_str = json.dumps(payload, default=str)
             else:
                 payload_str = str(payload)
-            parts.append(f"payload: {payload_str[:1000]}")
+            parts.append(f"payload: {_clip(payload_str, payload_limit)}")
 
         return "\n".join(parts)
 

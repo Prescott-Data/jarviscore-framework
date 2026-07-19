@@ -318,6 +318,37 @@ class TestStepEvaluator:
     def _evaluator(self):
         return StepEvaluator(llm_client=None)
 
+    def test_evidence_fits_real_artifacts(self):
+        """A multi-KB artifact is visible to the evaluator, not blinded at 1KB (#85)."""
+        ev = self._evaluator()
+        artifact = "SECTION\n" + ("x" * 4000) + "\nEND-OF-ARTIFACT"
+        out = _make_output(summary="assembled the handbook", payload=artifact)
+        rendered = ev._format_output(out)
+        assert "END-OF-ARTIFACT" in rendered          # the whole artifact is evidence
+        assert "[truncated" not in rendered           # nothing silently hidden
+
+    def test_clipped_evidence_is_announced(self):
+        """When evidence must be clipped, the marker is explicit (#55/#85)."""
+        ev = self._evaluator()
+        huge = "y" * 10_000
+        out = _make_output(summary="s" * 5_000, payload=huge)
+        rendered = ev._format_output(out)
+        assert "[truncated: showing 2000 of 5000 chars]" in rendered
+        assert "[truncated: showing 6000 of 10000 chars]" in rendered
+
+    def test_evidence_limits_are_tunable(self, monkeypatch):
+        monkeypatch.setenv("EVALUATOR_PAYLOAD_EVIDENCE_LIMIT", "50")
+        ev = self._evaluator()
+        out = _make_output(payload="z" * 100)
+        rendered = ev._format_output(out)
+        assert "[truncated: showing 50 of 100 chars]" in rendered
+
+    def test_schema_teaches_truncation_semantics(self):
+        """The verdict contract says clipped evidence is partial, never fail."""
+        from jarviscore.planning.evaluator import _EVAL_SCHEMA
+        assert "Truncated evidence" in _EVAL_SCHEMA
+        assert "Never return \"fail\" solely because evidence was clipped" in _EVAL_SCHEMA
+
     @pytest.mark.asyncio
     async def test_short_circuits_failure_status(self):
         """No LLM call on output.status == 'failure'."""
