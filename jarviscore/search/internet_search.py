@@ -165,7 +165,7 @@ class InternetSearch:
                 headers={
                     "User-Agent": os.environ.get(
                         "RESEARCH_USER_AGENT",
-                        "SkyTeam/1.0 (Prescott Internal Agents; research@prescottdata.io)",
+                        "jarviscore/1.0 (research agent)",
                     ),
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.5"
