@@ -28,6 +28,12 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("jarviscore.mailbox")
 
 
+# Process-local mailbox queues, used when no Redis store is configured.
+# Keyed by target agent_id; every MailboxManager in the process shares this,
+# which is exactly the scope a Redis-less (single-process) mesh runs in.
+_LOCAL_QUEUES: Dict[str, List[dict]] = {}
+
+
 class MailboxManager:
     """
     High-level mailbox API for agent-to-agent messaging.
@@ -58,7 +64,9 @@ class MailboxManager:
 
         Args:
             agent_id: This agent's unique ID (used as sender in envelopes)
-            redis_store: RedisContextStore instance for persistence
+            redis_store: RedisContextStore for durable queues, or None for a
+                         process-local in-memory mailbox (single-process
+                         meshes; messages do not survive restarts — issue #86)
         """
         self.agent_id = agent_id
         self.redis = redis_store
@@ -102,6 +110,12 @@ class MailboxManager:
         self._logger.debug(
             f"Sending message to {target_agent_id}"
         )
+        if self.redis is None:
+            # Local mode: same envelope shape the Redis store writes
+            if "timestamp" not in envelope:
+                envelope["timestamp"] = time.time()
+            _LOCAL_QUEUES.setdefault(target_agent_id, []).append(envelope)
+            return True
         return self.redis.send_mailbox_message(target_agent_id, envelope)
 
     def send_by_capability(
@@ -232,6 +246,12 @@ class MailboxManager:
             List of message envelopes with keys:
             sender, message, timestamp, and optional workflow_id/step_id/context
         """
+        if self.redis is None:
+            queue = _LOCAL_QUEUES.get(self.agent_id, [])
+            raw, _LOCAL_QUEUES[self.agent_id] = (
+                queue[:max_messages], queue[max_messages:]
+            )
+            return self._flatten(raw)
         raw = self.redis.read_mailbox(self.agent_id, max_messages)
         return self._flatten(raw)
 
@@ -245,6 +265,8 @@ class MailboxManager:
         Returns:
             List of message envelopes (messages remain in mailbox)
         """
+        if self.redis is None:
+            return self._flatten(list(_LOCAL_QUEUES.get(self.agent_id, []))[:limit])
         raw = self.redis.peek_mailbox(self.agent_id, limit)
         return self._flatten(raw)
 
