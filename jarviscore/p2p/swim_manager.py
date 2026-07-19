@@ -2,7 +2,7 @@
 SWIM Thread Manager for JarvisCore Framework
 Runs SWIM protocol in dedicated thread to prevent GIL blocking from CPU-bound workflow operations.
 
-Adapted from integration-agent/src/swim_thread_manager.py
+Adapted from an earlier internal agent codebase/src/swim_thread_manager.py
 - Updated imports to use jarviscore.config
 - Kept core functionality identical
 """

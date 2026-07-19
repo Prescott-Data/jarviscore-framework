@@ -5,24 +5,21 @@ Tracks tool usage against the lease budget, detects cognitive phases,
 catches spinning (same tool 3+ times in a row), and enforces a cognitive
 gate (can't call done() without having taken any action).
 
-Added (dogfooding Gap #4 + #9):
+Added from internal review findings:
   ConvergenceGovernor  — detects stall conditions across:
       - same-tool streak          (same tool N times consecutively)
       - equivalent-outcome streak (same semantic result from different calls)
       - stagnant turns            (no meaningful progress score for N turns)
   FailureLedger        — fingerprints (tool, params) pairs and guards against
       repeating the same failing action within a session. Optionally persists
-      the guard across sessions via Redis (same pattern as integration-agent).
-
-  Pattern sourced from integration-agent main:
-      src/agent/capabilities/base.py (_convergence_policy, _evaluate_convergence,
-      _record_failure, _has_recent_repeat_failure)
+      the guard across sessions via Redis.
 """
 
 import hashlib
 import json
 import logging
 import os
+import re
 import time
 from collections import deque
 from enum import Enum
@@ -50,6 +47,8 @@ THINKING_TOOLS = frozenset({
     "inspect_error",
     "scan_peers",
     "read_mailbox",
+    # Re-reading a retained tool result is recall, not action (issue #57).
+    "read_turn_result",
 })
 
 ACTION_TOOLS = frozenset({
@@ -75,6 +74,19 @@ _CONV_STALL_ACTION = os.getenv("CONVERGENCE_STALL_ACTION", "yield").strip().lowe
 
 # Failure guard TTL (in-process guard; Redis uses its own TTL)
 _FAILURE_GUARD_HORIZON_SECONDS = int(os.getenv("FAILURE_GUARD_HORIZON_SECONDS", "1800"))
+# Whether unclassifiable failures block retries. "guard" (default, historical)
+# treats UNKNOWN as permanent; "skip" treats it as weak evidence and allows
+# retries — an error we could not classify is thin grounds for a 30-min block.
+_FAILURE_GUARD_UNKNOWN = os.getenv("FAILURE_GUARD_UNKNOWN", "guard").strip().lower()
+
+# HTTP-ish status codes → failure class, for structured classification.
+_STATUS_CODE_CLASSES = {
+    401: "AUTH_UNAUTHORIZED",
+    403: "AUTH_FORBIDDEN",
+    404: "NOT_FOUND",
+    408: "TIMEOUT",
+    429: "RATE_LIMIT",
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -90,7 +102,7 @@ class ConvergenceGovernor:
     2. equivalent_streak   — same semantic outcome N times (different calls OK)
     3. stagnant_turns      — no meaningful progress score for N consecutive turns
 
-    Pattern from integration-agent:
+    Pattern from an earlier internal agent codebase:
         src/agent/capabilities/base.py :: _convergence_policy + _evaluate_convergence
     """
 
@@ -111,6 +123,7 @@ class ConvergenceGovernor:
         # Mutable governor state
         self._same_tool_streak: int = 0
         self._last_tool: Optional[str] = None
+        self._last_tool_key: Optional[str] = None
         self._equiv_streak: int = 0
         self._last_outcome_sig: Optional[str] = None
         self._stagnant_turns: int = 0
@@ -145,32 +158,55 @@ class ConvergenceGovernor:
         return score
 
     @staticmethod
+    def _is_error_output(tool_output: Any) -> bool:
+        """True when the output is an explicit error/empty result."""
+        if tool_output is None:
+            return True
+        if isinstance(tool_output, str):
+            return not tool_output.strip()
+        if isinstance(tool_output, dict):
+            status = str(tool_output.get("status", "")).lower()
+            return status in {"error", "failed", "blocked"} or bool(tool_output.get("error"))
+        return False
+
+    @staticmethod
     def _outcome_signature(tool_name: str, tool_output: Any) -> str:
         """
         Canonical signature of a (tool, result) pair for detecting
-        semantically equivalent repeated outcomes.
+        genuinely identical repeated outcomes.
+
+        Hashes the FULL canonicalized output — "equivalent" must mean
+        identical. Earlier drafts compared content length / a 120-char
+        prefix, which flagged different results of the same size as
+        "equivalent" and stalled healthy agents (e.g. paginated reads
+        returning uniform page sizes). See issue #58.
         """
-        if not isinstance(tool_output, dict):
-            return f"{tool_name}:{str(tool_output)[:120]}"
-        stable: Dict[str, Any] = {"tool": tool_name}
-        for key in ("status", "success", "error"):
-            if key in tool_output:
-                stable[key] = tool_output[key]
-        results = tool_output.get("results")
-        if isinstance(results, list):
-            stable["results_count"] = len(results)
-        content = tool_output.get("content") or tool_output.get("output")
-        if isinstance(content, str):
-            stable["content_len"] = len(content)
-        return json.dumps(stable, sort_keys=True, default=str)[:300]
+        try:
+            canonical = json.dumps(
+                tool_output, sort_keys=True, default=str, separators=(",", ":")
+            )
+        except (TypeError, ValueError):
+            canonical = repr(tool_output)
+        digest = hashlib.sha256(canonical.encode("utf-8", "replace")).hexdigest()
+        return f"{tool_name}:{digest}"
 
     def evaluate(
         self,
         tool_name: str,
         tool_output: Any,
+        params: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Evaluate one tool call and return a stall verdict dict if stall is detected.
+
+        Args:
+            tool_name: Name of the tool invoked.
+            tool_output: The tool's result.
+            params: Optional tool parameters. When provided, the same-tool
+                streak becomes param-aware — calling one tool repeatedly with
+                DIFFERENT params (reading ten files, ten distinct searches) is
+                legitimate iteration, not spinning. When omitted, behavior is
+                the historical name-only streak.
 
         Returns:
             None if no stall.
@@ -178,16 +214,22 @@ class ConvergenceGovernor:
         """
         self._turn += 1
 
-        # 1. Same-tool streak
-        if self._last_tool == tool_name:
+        # 1. Same-tool streak (param-aware when params are supplied)
+        if params is None:
+            streak_key = tool_name
+        else:
+            streak_key = f"{tool_name}:{FailureLedger.fingerprint(tool_name, params)[:16]}"
+        if self._last_tool_key == streak_key:
             self._same_tool_streak += 1
         else:
             self._same_tool_streak = 1
         self._last_tool = tool_name
+        self._last_tool_key = streak_key
 
-        # 2. Equivalent-outcome streak
+        # 2. Equivalent-outcome streak (identical means identical — full-content hash)
         sig = self._outcome_signature(tool_name, tool_output)
-        if self._last_outcome_sig == sig:
+        novel = self._last_outcome_sig != sig
+        if not novel:
             self._equiv_streak += 1
         else:
             self._equiv_streak = 1
@@ -195,6 +237,11 @@ class ConvergenceGovernor:
 
         # 3. Stagnant turns
         score = self._progress_score(tool_output)
+        if score < self.min_progress_score and novel and not self._is_error_output(tool_output):
+            # Unknown result schema, but the output CHANGED and is not an
+            # error — novelty is progress for shapes _progress_score does not
+            # recognize (domain dicts without status/content/results keys).
+            score = self.min_progress_score
         if score >= self.min_progress_score:
             self._stagnant_turns = 0
         else:
@@ -232,6 +279,20 @@ class ConvergenceGovernor:
         without re-running evaluate() and double-counting streaks.
         """
         return self._last_verdict
+
+    def reset_streaks(self, reason: str = "") -> None:
+        """Clear all stall streaks and the cached verdict.
+
+        The supported way for pivot/recovery paths to grant the agent a
+        fresh convergence window — callers must not poke the private
+        counters directly.
+        """
+        self._same_tool_streak = 0
+        self._equiv_streak = 0
+        self._stagnant_turns = 0
+        self._last_verdict = None
+        if reason:
+            logger.info("[ConvergenceGovernor] Streaks reset: %s", reason)
 
     def get_intervention(self) -> Optional[str]:
         """Return a coaching message if the agent's trajectory suggests it
@@ -282,7 +343,7 @@ class FailureLedger:
     If the same fingerprint fails within FAILURE_GUARD_HORIZON_SECONDS:
       - The in-process ledger blocks it immediately.
       - If a redis_store is attached, the guard is also indexed cross-session
-        (same pattern as integration-agent RedisContextStore.index_failure_event).
+        (same pattern as an earlier internal agent codebase RedisContextStore.index_failure_event).
 
     Usage:
         ledger = FailureLedger()
@@ -292,7 +353,7 @@ class FailureLedger:
         ...
         ledger.record("web_search", {"query": "AML trends"}, error="Timeout")
 
-    Pattern from integration-agent:
+    Pattern from an earlier internal agent codebase:
         src/agent/capabilities/base.py :: _record_failure + _has_recent_repeat_failure
     """
 
@@ -321,14 +382,46 @@ class FailureLedger:
         return hashlib.sha256(f"{tool_name}:{payload}".encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _classify_error(error_text: str) -> str:
-        """Classify failure mode from error string."""
+    def _classify_error(error_text: str, output: Any = None) -> str:
+        """Classify a failure — structured signals first, prose last.
+
+        Classification decides retryability (TIMEOUT/NETWORK are never
+        guarded), so it must prefer machine-readable evidence over substring
+        sniffing (issue #60):
+
+        1. output["error_type"] — an explicit class from the tool wins outright
+        2. output["status_code"] / output["code"] — numeric HTTP-ish codes
+        3. Prose heuristics — word-boundary matched numeric codes, so
+           "1404 rows" never reads as a 404
+        """
+        # 1. Explicit class from the tool
+        if isinstance(output, dict):
+            explicit = output.get("error_type")
+            if isinstance(explicit, str) and explicit.strip():
+                return explicit.strip().upper()
+            # 2. Numeric status code
+            for key in ("status_code", "code"):
+                code = output.get(key)
+                try:
+                    code = int(code)
+                except (TypeError, ValueError):
+                    continue
+                if code in _STATUS_CODE_CLASSES:
+                    return _STATUS_CODE_CLASSES[code]
+                if code >= 500:
+                    return "NETWORK"
+
+        # 3. Prose heuristics (fallback only)
         text = str(error_text).lower()
-        if "401" in text or "unauthorized" in text:
+
+        def _code(n: str) -> bool:
+            return bool(re.search(rf"\b{n}\b", text))
+
+        if _code("401") or "unauthorized" in text:
             return "AUTH_UNAUTHORIZED"
-        if "403" in text or "forbidden" in text:
+        if _code("403") or "forbidden" in text:
             return "AUTH_FORBIDDEN"
-        if "429" in text or "rate limit" in text:
+        if _code("429") or "rate limit" in text:
             return "RATE_LIMIT"
         if "timeout" in text or "timed out" in text:
             return "TIMEOUT"
@@ -336,7 +429,7 @@ class FailureLedger:
             return "NETWORK"
         if "schema" in text or "validation" in text:
             return "SCHEMA_VALIDATION"
-        if "not found" in text or "404" in text:
+        if "not found" in text or _code("404"):
             return "NOT_FOUND"
         return "UNKNOWN"
 
@@ -355,7 +448,7 @@ class FailureLedger:
         If redis_store is attached, the failure is also indexed there.
         """
         fp = self.fingerprint(tool_name, params)
-        error_type = self._classify_error(error or str(output or ""))
+        error_type = self._classify_error(error or str(output or ""), output=output)
         entry: Dict[str, Any] = {
             "ts": time.time(),
             "tool": tool_name,
@@ -391,12 +484,20 @@ class FailureLedger:
         Return True if this fingerprint has failed recently and should not be retried.
 
         Checks Redis cross-session guard first (if attached), then in-process ledger.
-        Transient failures (TIMEOUT, NETWORK) are NOT guarded — they may succeed on retry.
+        Transient failures (TIMEOUT, NETWORK) are NOT guarded — they may succeed
+        on retry. UNKNOWN failures follow FAILURE_GUARD_UNKNOWN ("guard", the
+        historical default, or "skip" — an error we could not classify is weak
+        evidence for a 30-minute block).
         """
-        # Redis cross-session check
+        # Redis cross-session check — keyed exactly as record() writes it
+        # (issue #60: this used to query workflow_id="unknown" while record()
+        # indexed under the real workflow id, so the cross-session guard
+        # could never match what was written).
         if self.redis_store and hasattr(self.redis_store, "has_failure_guard"):
             try:
-                if self.redis_store.has_failure_guard("global", "unknown", fp):
+                if self.redis_store.has_failure_guard(
+                    "global", str(self.workflow_id), fp
+                ):
                     return True
             except Exception as exc:
                 logger.warning(
@@ -406,6 +507,9 @@ class FailureLedger:
 
         # In-process ledger check
         now = time.time()
+        skip_types = {"TIMEOUT", "NETWORK"}
+        if _FAILURE_GUARD_UNKNOWN == "skip":
+            skip_types = skip_types | {"UNKNOWN"}
         for entry in reversed(self._ledger[-20:]):
             if entry.get("fingerprint") != fp:
                 continue
@@ -415,7 +519,7 @@ class FailureLedger:
             if (now - float(ts)) > self.horizon_seconds:
                 continue
             # Don't guard transient failures — they might succeed next time
-            if entry.get("error_type") in {"TIMEOUT", "NETWORK"}:
+            if entry.get("error_type") in skip_types:
                 continue
             return True
         return False
@@ -507,6 +611,7 @@ class AgentCognitionManager:
         tool_name: str,
         tokens: int = 0,
         tool_output: Any = None,
+        params: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Record a tool invocation and charge tokens to the appropriate budget.
@@ -515,6 +620,9 @@ class AgentCognitionManager:
             tool_name: Name of the tool invoked
             tokens: Tokens consumed by this invocation
             tool_output: Result from the tool (used by ConvergenceGovernor)
+            params: Tool parameters — forwarded to the ConvergenceGovernor so
+                the same-tool streak can distinguish iteration (same tool,
+                different params) from spinning (same tool, same params).
         """
         phase = self.classify_tool(tool_name)
         if tokens > 0:
@@ -536,7 +644,7 @@ class AgentCognitionManager:
 
         # Feed the Convergence Governor
         if tool_name != "done":
-            self.convergence.evaluate(tool_name, tool_output)
+            self.convergence.evaluate(tool_name, tool_output, params=params)
 
         # Update phase
         self._update_phase(tool_name)

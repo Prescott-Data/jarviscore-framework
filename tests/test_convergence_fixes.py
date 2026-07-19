@@ -192,3 +192,127 @@ class TestStrategicPivot:
         verdict = gov.check_stall_verdict()
         assert verdict is not None
         assert "stagnant_turns" in verdict["reason"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Issue #58: content-true equivalence, param-aware streaks, novelty-as-progress
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestContentTrueEquivalence:
+    """'Equivalent' must mean identical — never same-length or same-prefix."""
+
+    def test_same_length_different_content_is_not_equivalent(self):
+        """Paginated reads returning uniform page sizes are progress, not a stall."""
+        gov = ConvergenceGovernor()
+        for page in range(6):
+            out = {"status": "success", "content": f"page-{page:04d}-" + "x" * 100}
+            gov.evaluate("fetch_page", out, params={"page": page})
+        assert gov._equiv_streak == 1
+        assert gov.check_stall_verdict() is None
+
+    def test_identical_outputs_are_equivalent_and_trip(self):
+        gov = ConvergenceGovernor()
+        out = {"status": "success", "content": "identical"}
+        verdict = None
+        for i in range(4):
+            verdict = gov.evaluate("fetch_page", out, params={"page": i})
+        assert verdict is not None
+        assert "equivalent_outcome_streak" in verdict["reason"]
+
+    def test_same_prefix_different_tail_is_not_equivalent(self):
+        """Long strings sharing a 120+ char prefix are distinct outcomes."""
+        gov = ConvergenceGovernor()
+        prefix = "A" * 200
+        for i in range(6):
+            gov.evaluate("read", prefix + f"tail-{i}", params={"i": i})
+        assert gov._equiv_streak == 1
+
+
+class TestParamAwareStreak:
+    """Same tool + different params is iteration; same tool + same params is spinning."""
+
+    def test_same_tool_different_params_does_not_trip(self):
+        gov = ConvergenceGovernor()
+        verdict = None
+        for i in range(8):
+            verdict = gov.evaluate(
+                "read_file",
+                {"status": "success", "content": f"file {i} contents"},
+                params={"path": f"/src/mod_{i}.py"},
+            )
+        assert verdict is None
+        assert gov._same_tool_streak == 1
+
+    def test_same_tool_same_params_still_trips(self):
+        gov = ConvergenceGovernor()
+        verdict = None
+        for _ in range(5):
+            verdict = gov.evaluate(
+                "read_file",
+                {"status": "success", "content": "same"},
+                params={"path": "/src/one.py"},
+            )
+        assert verdict is not None
+        assert "same_tool_streak" in verdict["reason"]
+
+    def test_no_params_preserves_historical_name_only_streak(self):
+        """Callers that don't pass params get exactly the old behavior."""
+        gov = ConvergenceGovernor()
+        verdict = None
+        for i in range(5):
+            verdict = gov.evaluate("web_search", {"status": "success", "content": f"r{i}"})
+        assert verdict is not None
+        assert "same_tool_streak" in verdict["reason"]
+
+
+class TestNoveltyAsProgress:
+    """Changing, non-error outputs count as progress even for unknown schemas."""
+
+    def test_unknown_schema_changing_dicts_do_not_stagnate(self):
+        """Domain dicts without status/content/results keys used to score 0.0."""
+        gov = ConvergenceGovernor()
+        verdict = None
+        for i in range(8):
+            verdict = gov.evaluate(
+                "get_price", {"price": 100.0 + i, "zone": [99, 101]},
+                params={"symbol": f"SYM{i}"},
+            )
+        assert verdict is None
+        assert gov._stagnant_turns == 0
+
+    def test_repeated_identical_unknown_dict_still_stalls(self):
+        """No novelty, no recognized schema — that IS stagnation (and equivalence)."""
+        gov = ConvergenceGovernor()
+        verdict = None
+        for i in range(6):
+            verdict = gov.evaluate(
+                "get_price", {"price": 100.0},
+                params={"call": i},  # different params: isolate the outcome signals
+            )
+        assert verdict is not None
+
+    def test_error_outputs_never_count_as_progress(self):
+        gov = ConvergenceGovernor()
+        for i in range(6):
+            gov.evaluate(
+                "flaky", {"status": "error", "error": f"boom {i}"},
+                params={"attempt": i},
+            )
+        assert gov._stagnant_turns == 6
+
+
+class TestResetStreaks:
+    """Public reset replaces external pokes at private counters."""
+
+    def test_reset_clears_streaks_and_verdict(self):
+        gov = ConvergenceGovernor()
+        out = {"status": "success", "content": "same"}
+        for _ in range(5):
+            gov.evaluate("tool_a", out)
+        assert gov.check_stall_verdict() is not None
+
+        gov.reset_streaks(reason="test pivot")
+        assert gov._same_tool_streak == 0
+        assert gov._equiv_streak == 0
+        assert gov._stagnant_turns == 0
+        assert gov.check_stall_verdict() is None

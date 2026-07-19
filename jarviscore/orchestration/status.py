@@ -1,7 +1,7 @@
 """
 Status Manager - Tracks workflow and step execution status
 
-Simplified from integration-agent
+Simplified from an earlier internal agent codebase
 """
 import logging
 import time
@@ -24,7 +24,7 @@ class StatusManager:
     """
     Tracks status of workflow steps.
 
-    Simplified from integration-agent's version.
+    Simplified from an earlier internal agent codebase's version.
     Removes: P2P status sync, persistent storage
     Keeps: In-memory status tracking
     """

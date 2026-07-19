@@ -3,7 +3,7 @@ jarviscore.kernel.defaults.research_flow
 ==========================================
 Explicit research state machine for the ResearcherSubAgent.
 
-Ported from integration-agent-javiscore — provides phase-based tool gating
+Ported from an earlier internal agent codebase — provides phase-based tool gating
 to prevent tool misuse loops and enforce disciplined research progression.
 
 Phases:

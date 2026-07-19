@@ -467,7 +467,9 @@ class Mesh:
                 - params: Additional parameters (optional)
 
         Returns:
-            List of step results in execution order
+            List of step results in ORIGINAL STEP ORDER (index i corresponds
+            to steps[i], regardless of execution/completion order). Every
+            result dict carries a ``step_id`` key identifying its step.
 
         Raises:
             RuntimeError: If mesh not started or not in autonomous mode
@@ -503,6 +505,80 @@ class Mesh:
 
         self._logger.info("Executing workflow: %s (%d steps)", workflow_id, len(steps))
         return await self._workflow_engine.execute(workflow_id, steps)
+
+    async def fanout(
+        self,
+        fanout_id: str,
+        *,
+        agent: str,
+        items: Any,
+        task: Any,
+        context: Any = None,
+        concurrency: int = 5,
+        budget: Optional[int] = None,
+        on_error: str = "collect",
+        timeout: Optional[float] = None,
+    ):
+        """
+        Dynamic fan-out: run one task template over N runtime items with
+        bounded concurrency, and aggregate the results explicitly.
+
+        Where workflow() executes a DAG declared upfront, fanout() handles
+        the map-shape agent systems hit constantly — scan results, file
+        lists, symbol boards — where N is data, not authorship (issue #52).
+
+        Args:
+            fanout_id:   Unique id; namespaces every item's step identity so
+                         concurrent items cannot cross-contaminate.
+            agent:       Role or capability that executes each item.
+            items:       Iterable of items — the dynamic N. Order defines
+                         result order.
+            task:        Task string, or callable ``item -> str``.
+            context:     Static dict, or callable ``item -> dict``.
+            concurrency: Max items in flight (default 5). Always bounded.
+            budget:      Optional cap on items attempted; the remainder is
+                         reported in ``result.skipped``, never dropped silently.
+            on_error:    "collect" (default) — failures land in ``result.failed``
+                         and the rest continue; "fail_fast" — first failure
+                         cancels pending items.
+            timeout:     Optional per-item timeout in seconds.
+
+        Returns:
+            FanoutResult with ``.results`` (item order, each stamped with
+            ``item`` and ``step_id``), ``.succeeded``/``.failed`` views,
+            ``.skipped``, and explicit reduce helpers ``.aggregate(fn)`` /
+            ``.summarize(llm, prompt)``.
+
+        Example:
+            result = await mesh.fanout(
+                "board-scan",
+                agent="analyst",
+                items=symbols,
+                task=lambda s: f"Deep-read {s} and return a thesis JSON.",
+                context=lambda s: {"symbol": s},
+                concurrency=5,
+                budget=20,
+            )
+            theses = [r["output"] for r in result.succeeded]
+        """
+        if not self._started:
+            raise RuntimeError("Mesh not started. Call await mesh.start() first.")
+
+        from jarviscore.orchestration.fanout import run_fanout
+
+        self._logger.info("Executing fanout: %s (agent=%s)", fanout_id, agent)
+        return await run_fanout(
+            fanout_id=fanout_id,
+            find_agent=self._find_agent_for_step,
+            agent=agent,
+            items=items,
+            task=task,
+            context=context,
+            concurrency=concurrency,
+            budget=budget,
+            on_error=on_error,
+            timeout=timeout,
+        )
 
     async def serve_forever(self):
         """
@@ -860,7 +936,7 @@ class Mesh:
         Every agent ends up with:
           agent._redis_store   — RedisContextStore (or None)
           agent._blob_storage  — BlobStorage (or None)
-          agent.mailbox        — MailboxManager (always, file-backed if no Redis)
+          agent.mailbox        — MailboxManager (always; in-memory when no Redis)
           agent.hitl           — HITLQueue (always, writes to hitl_inbox/)
         """
         from jarviscore.mailbox import MailboxManager
@@ -921,7 +997,7 @@ class Mesh:
         ``_agent_registry`` so AutoAgents can delegate to co-registered
         agents (e.g., Sentinel delegating to Coder) without SWIM.
 
-        This fixes Dogfooding Issue #13: ``ask_peer`` was P2P-only.
+        This fixes an earlier limitation: ``ask_peer`` was P2P-only.
         ``AutoAgent`` (which always runs in autonomous mode)
         now gets a fully functional ``self.peers`` client.
         """
@@ -1126,7 +1202,7 @@ class Mesh:
         Get first agent by role.
 
         If multiple agents share the same role, returns the first registered agent.
-        Use get_agents_by_role() to get all agents with a specific role.
+        Use get_agents_by_capability() to query agents by capability tag.
 
         Args:
             role: Agent role identifier
@@ -1196,7 +1272,7 @@ class Mesh:
         return cap in self._capabilities
 
     # ─────────────────────────────────────────────────────────────────
-    # DELEGATION  (Dogfooding Issue #12)
+    # DELEGATION
     # ─────────────────────────────────────────────────────────────────
 
     async def delegate(

@@ -24,6 +24,56 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.2.0 <span class="changelog-date">2026-07-19</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
+</div>
+</div>
+
+A large, fully backward-compatible release. It hardens the AutoAgent
+cognitive stack (context assembly, convergence, planning, evaluation),
+adds new orchestration and goal-mode primitives, and makes failures loud
+and honest across the board. Every change is additive: no public API was
+removed or altered, so upgrading from 1.1.0 is a drop-in.
+
+**Added**
+
+- **[#52] Dynamic fan-out (`mesh.fanout()`)**: run one task template over a runtime list of items with bounded concurrency, first-class partial failure (`collect` or `fail_fast`), per-item timeouts, and explicit aggregation via `.aggregate()` / `.summarize()`. Results are stamped with item and step identity so concurrent items cannot cross-contaminate.
+- **[#73] Goal persistence and resume**: goal executions persist after planning, after every completed step, and at terminal states, under `goals/{agent_id}/{goal_id}.json`. `execute_goal(resume_goal_id=...)` rehydrates the plan, facts, and history so a crash loses at most the in-flight step.
+- **[#74] Dependency-parallel planning**: the planner declares `depends_on` per step. Steps with no ordering constraint run concurrently (bounded by `MAX_PARALLEL_STEPS`), and a step never runs before its dependencies produce usable output. Plans without dependencies stay strictly sequential.
+- **[#72] GOAL STATE context block**: plan facts and completed-step outcomes now cross step boundaries as a structured, named block instead of one clipped generic line.
+- **[#69] Generational LTM compaction**: long-term memory is bounded through incremental generational merges rather than unbounded growth or a destructive rewrite, with archives kept for retrieval.
+- **[#63] `single_response` execution contract**: AutoAgent can serve a one-completion analysis shape without the full planner or codegen, declared per task. The two-profile model (CustomAgent, AutoAgent) is preserved.
+- **[#84] Partial-result preservation**: a goal that stops before completing now returns the work it finished, tagged `[PARTIAL RESULT]`, instead of an empty result. Loud failures stay loud but hand back what they earned.
+- **[#86] Local in-memory mailbox**: `MailboxManager` works without Redis for single-process meshes instead of raising `AttributeError`. Multi-node durability still uses Redis.
+- **[#88] Registry function identity**: successful coder results carry a `function_id` when a registry function was reused or promoted, so reuse is observable from the envelope.
+
+**Fixed**
+
+- **[#57, #58] Observation and convergence integrity**: the subagent observation channel no longer truncates silently, and the convergence governor stops raising false stalls from content-length equivalence or parameter-blind tool streaks.
+- **[#55, #56] Honest context assembly**: every context clip carries an explicit marker, and key-cap overflow is announced by name instead of dropping state silently.
+- **[#61, #62] Directive precedence and step identity**: `TOOL` and `DONE` precedence is resolved correctly, and every workflow result carries its `step_id`, including successes.
+- **[#59] Zero-loss summarization**: summarization compresses from real evidence and archives originals rather than discarding history.
+- **[#60] FailureLedger integrity**: structured-first error classification with aligned guard keys, so retry policy is driven by real error types, not substring guesses.
+- **[#81, #82] HITL correctness**: `HITL_ENABLED` is the single opt-in for every escalation path. Goals never dead-end waiting for a human on deployments that did not enable HITL. Evaluator `hitl` verdicts are reserved for genuine human decisions, and the file-backed queue `resolve()` to `check()` round-trip now works.
+- **[#85] Evaluator evidence**: the evaluator sees enough of a step's output to judge it (tunable, generous windows with honest truncation markers), ending replan churn caused by verdicts made blind.
+- **[#87] Execution-backed coder reasoning**: the coder's system prompt trains it to prove computed answers by executing code rather than answering from memory.
+
+**Changed**
+
+- **[#83] Plan-mode boundary documentation**: clarifies that plan mode is an AutoAgent capability which triages before planning, while CustomAgent treats planning as a library it calls.
+- **[#80] Fan-out guide fix**: the workflow guide fan-out example now reads results from `output`, matching the real result shape.
+- Documentation accuracy pass: corrected `blob_storage.load()` references to the real `read()` API in the CustomAgent guide and troubleshooting page.
+- Removed internal-project references and development artifacts from the public tree.
+
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.2.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.1.0 <span class="changelog-date">2026-05-12</span>
 
 <div class="changelog-meta" markdown>

@@ -182,6 +182,22 @@ class SlackNotifier(AutoAgent):
 
 The four sub-agents the Kernel routes to are the `CoderSubAgent` for tasks that require writing and running Python, the `ResearcherSubAgent` for tasks that require web search and synthesis, the `CommunicatorSubAgent` for tasks that require formatting and delivering output, and the `BrowserSubAgent` for web navigation tasks when `BROWSER_ENABLED=true` is set.
 
+### Analysis, not code: the `single_response` contract
+
+Many agent tasks need exactly one LLM completion: render the system prompt, ask the question, return the answer. No planner, no routing, no code generation. Declare this shape per task with an execution contract:
+
+```python
+results = await mesh.workflow("analysis-001", [{
+    "agent": "market_analyst",
+    "task": "Analyse EURUSD H1 and return your thesis as JSON.",
+    "context": {"execution_contract": {"execution_shape": "single_response"}},
+}])
+```
+
+With `single_response` declared, `execute_task()` runs one completion against the agent's system prompt (including its persona profile, if one is loaded) and returns the standard result envelope with token and cost telemetry. The Kernel pipeline is skipped entirely, so an analysis prompt never reaches the Coder sub-agent and never produces TOOL/DONE protocol errors.
+
+Use this for tasks where the whole job is the answer: analysis, classification, extraction, drafting. When the task needs tools, search, or several turns of reasoning, drop the contract and let the Kernel route it.
+
 ---
 
 ## Coder Sandbox
@@ -367,6 +383,11 @@ Workflow execution is crash-safe. If the process restarts with the same `workflo
 
 Setting `goal_oriented = True` switches the agent from a single OODA loop to a Plan, Execute, Evaluate loop. The agent decomposes the goal into steps, executes each through the Kernel, evaluates the outcome, and replans automatically if a step fails.
 
+Plan mode does not mean the agent plans everything. With `goal_oriented = True`
+the agent triages each task first: simple, single-answer work routes straight to
+the Kernel for a direct turn, and only genuinely multi-step work goes through the
+planner. Plan mode makes the agent planning-capable, not planning-forced.
+
 ```python
 class ResearchAgent(AutoAgent):
     role = "researcher"
@@ -389,6 +410,41 @@ Control the loop ceiling with environment variables:
 |---|---|---|
 | `MAX_GOAL_STEPS` | `30` | Hard ceiling on plan steps |
 | `MAX_REPLAN_ATTEMPTS` | `8` | Maximum replanning cycles before the goal fails |
+| `MAX_PARALLEL_STEPS` | `3` | Concurrency ceiling for independent plan steps |
+
+### Parallel steps in plans
+
+The planner declares `depends_on` on each step, listing only the steps whose output it actually needs. Steps with no ordering constraint between them run at the same time, up to `MAX_PARALLEL_STEPS`. A step never starts before all of its dependencies have finished with a passing result. Plans that declare no `depends_on` at all run one step at a time, exactly as before.
+
+```text
+plan: [
+  ("step_01_gather_risks",      []),                          # ┐ run in
+  ("step_02_gather_mitigations", []),                          # ┘ parallel
+  ("step_03_write_brief", ["step_01_gather_risks",
+                           "step_02_gather_mitigations"]),     # waits for both
+]
+```
+
+### Goal persistence and resume
+
+Goal executions save themselves automatically when blob storage is attached. A snapshot is written after planning, after every completed step, and when the goal ends, under `goals/{agent_id}/{goal_id}.json`. If the process crashes, you lose at most the step that was running:
+
+```python
+execution = await agent.execute_goal("Produce the Q2 analysis")
+goal_id = execution.goal_id                      # capture for resume
+
+# After a crash or restart:
+execution = await agent.execute_goal(
+    "Produce the Q2 analysis",
+    resume_goal_id=goal_id,                      # rehydrates plan, facts, history
+)
+```
+
+Resume continues from the first step that has not passed yet. If the snapshot is missing or unreadable, the agent logs a warning and starts fresh. Resume never crashes a goal.
+
+For the CustomAgent side of this boundary, where planning is a library you call
+rather than a mode you enable, see
+[Planning: a library, not a mode](customagent.md#planning-a-library-not-a-mode).
 
 ---
 

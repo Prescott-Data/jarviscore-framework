@@ -213,6 +213,45 @@ The `market_research` and `competitor_scan` steps are dispatched simultaneously.
 
 ---
 
+## Dynamic Fan-Out: `mesh.fanout()`
+
+A workflow declares its steps upfront. That works when you know the step list while writing the code. Sometimes you only learn how many items there are at runtime: search results, a list of files, a board of symbols. For that case, use `mesh.fanout()`. It runs one task template over each item, a few at a time, and collects the results.
+
+```python
+result = await mesh.fanout(
+    "board-scan",
+    agent="analyst",                       # role or capability
+    items=symbols,                         # your runtime list
+    task=lambda s: f"Deep-read {s} and return a thesis JSON.",
+    context=lambda s: {"symbol": s},       # per-item context (or a static dict)
+    concurrency=5,                         # how many run at once
+    budget=20,                             # optional cap on items attempted
+    on_error="collect",                    # or "fail_fast"
+    timeout=120,                           # optional per-item seconds
+)
+
+theses = [r["output"] for r in result.succeeded]
+errors = result.failed                     # per-item errors
+brief  = await result.summarize(llm, "Synthesize the board read.")
+```
+
+Each result dict has this shape:
+
+```python
+{"status": "success", "output": {...}, "item": "AAPL", "step_id": "board-scan:0000-aapl"}
+```
+
+The agent's returned value is under `output`. `item` is the input that produced this result, and `step_id` is its unique namespaced identity.
+
+What you can rely on:
+
+- Every result carries its `item` and a unique `step_id`. Items that run at the same time cannot mix up each other's results.
+- `result.results` is always in the same order as your `items` list.
+- One failed item does not stop the others. In `collect` mode (the default) failures land in `result.failed` with their error messages. In `fail_fast` mode the first failure cancels the items that have not started yet, and finished results are kept.
+- Nothing is dropped silently. Items skipped by `budget` are listed in `result.skipped`. When `summarize()` has to shorten an item's output for the LLM, it marks the cut and includes every failure in the evidence.
+
+---
+
 ## Accessing redis_store from an Agent
 
 `self._redis_store` is the `RedisContextStore` instance injected by the Mesh at setup time. It is `None` if Redis is not configured. Pass it to `register()` and `execute()`:

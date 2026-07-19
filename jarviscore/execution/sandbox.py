@@ -207,7 +207,7 @@ class SandboxExecutor:
         """
         Execute code via remote sandbox service (Azure Container Apps).
 
-        Matches integration-agent format:
+        Matches an earlier internal agent codebase format:
         {
             "STEP_DATA": {
                 "id": "job_id",

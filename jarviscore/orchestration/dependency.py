@@ -1,7 +1,7 @@
 """
 Dependency Manager - Resolves step dependencies
 
-Simplified from integration-agent
+Simplified from an earlier internal agent codebase
 Removes: Kafka integration, complex P2P queries
 Keeps: Memory cache, basic waiting logic
 
@@ -21,7 +21,7 @@ class DependencyManager:
     """
     Manages step dependencies and resolution.
 
-    Simplified from integration-agent's 3-tier system:
+    Simplified from an earlier internal agent codebase's 3-tier system:
     - Tier 1: Memory cache (kept)
     - Tier 2: Redis DAG (Phase 7C: added)
     - Tier 3: Kafka (removed for MVP)

@@ -76,6 +76,29 @@ class PlannedStep:
             extras["_agent_default_kernel_role"] = self.subagent_hint
         return extras
 
+    def to_dict(self) -> Dict[str, Any]:
+        """JSON-safe serialization for goal persistence (issue #73)."""
+        return {
+            "step_id": self.step_id,
+            "task": self.task,
+            "success_criterion": self.success_criterion,
+            "expected_findings": list(self.expected_findings),
+            "depends_on": list(self.depends_on),
+            "subagent_hint": self.subagent_hint,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PlannedStep":
+        """Rehydrate a step from a persisted snapshot (issue #73)."""
+        return cls(
+            step_id=str(data["step_id"]),
+            task=str(data["task"]),
+            success_criterion=str(data.get("success_criterion", "")),
+            expected_findings=list(data.get("expected_findings") or []),
+            depends_on=list(data.get("depends_on") or []),
+            subagent_hint=data.get("subagent_hint"),
+        )
+
 
 # ── Step evaluation ───────────────────────────────────────────────────────────
 
@@ -132,6 +155,57 @@ class CompletedStep:
             "verdict": self.evaluation.verdict,
             "summary": getattr(self.output, "summary", "")[:300],
         }
+
+
+@dataclass
+class _ResumedStep:
+    """A completed step rehydrated from a persisted snapshot (issue #73).
+
+    Duck-types the parts of CompletedStep that downstream code reads after
+    the fact — ``.step``, ``.evaluation``, ``.elapsed_ms``, ``to_summary()``.
+    The live AgentOutput is gone; its summary survives.
+    """
+    step: PlannedStep
+    verdict: str
+    evaluator_note: str
+    summary: str
+    elapsed_ms: float = 0.0
+
+    @property
+    def evaluation(self) -> Any:
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            verdict=self.verdict,
+            evaluator_note=self.evaluator_note,
+            confidence=0.0,
+        )
+
+    @property
+    def output(self) -> Any:
+        from types import SimpleNamespace
+        return SimpleNamespace(summary=self.summary, metadata={})
+
+    def to_summary(self) -> Dict[str, Any]:
+        return {
+            "step_id": self.step.step_id,
+            "task": self.step.task[:200],
+            "verdict": self.verdict,
+            "summary": self.summary[:300],
+        }
+
+    @classmethod
+    def from_snapshot_entry(cls, entry: Dict[str, Any]) -> "_ResumedStep":
+        return cls(
+            step=PlannedStep(
+                step_id=str(entry.get("step_id", "?")),
+                task=str(entry.get("task", "")),
+                success_criterion="",
+            ),
+            verdict=str(entry.get("verdict", "pass")),
+            evaluator_note=str(entry.get("evaluator_note", "")),
+            summary=str(entry.get("summary", "")),
+            elapsed_ms=float(entry.get("elapsed_ms", 0.0) or 0.0),
+        )
 
 
 # ── Goal execution state ──────────────────────────────────────────────────────
@@ -332,15 +406,52 @@ class GoalExecution:
         """Full serialisable representation for blob persistence / debugging."""
         return {
             **self.to_summary_dict(),
+            "agent_id": self.agent_id,
             "facts": self.truth.to_flat_dict(),
+            "plan": [s.to_dict() for s in self.plan],
+            "truth_facts_full": {
+                k: f.model_dump() for k, f in self.truth.facts.items()
+            },
             "completed_steps": [
                 {
                     "step_id": cs.step.step_id,
                     "task": cs.step.task,
                     "verdict": cs.evaluation.verdict,
                     "evaluator_note": cs.evaluation.evaluator_note,
+                    "summary": str(getattr(cs.output, "summary", "") or "")[:300],
                     "elapsed_ms": round(cs.elapsed_ms, 1),
                 }
                 for cs in self.completed
             ],
         }
+
+    @classmethod
+    def from_snapshot(cls, data: Dict[str, Any]) -> "GoalExecution":
+        """Rehydrate a persisted execution for resume (issue #73).
+
+        Restores the goal, the full plan, the truth facts (with confidence
+        and evidence), and the completed-step history as lightweight records
+        that satisfy everything downstream reads (``.step``, ``.evaluation``,
+        ``.to_summary()``). Live ``AgentOutput`` objects are not — and need
+        not be — reconstructed.
+        """
+        from jarviscore.context.truth import TruthFact
+
+        execution = cls(
+            goal=str(data.get("goal", "")),
+            agent_id=str(data.get("agent_id", "unknown")),
+            goal_id=str(data.get("goal_id") or f"goal-{uuid.uuid4().hex[:10]}"),
+        )
+        execution.plan = [PlannedStep.from_dict(s) for s in data.get("plan") or []]
+        execution.plan_revision = int(data.get("plan_revision", 0))
+        execution.status = str(data.get("status", "planning"))
+
+        for key, fact in (data.get("truth_facts_full") or {}).items():
+            try:
+                execution.truth.facts[key] = TruthFact(**fact)
+            except Exception:  # noqa: BLE001 - a bad fact must not void the rest
+                logger.warning("Skipping unrehydratable fact %r on resume", key)
+
+        for cs in data.get("completed_steps") or []:
+            execution.completed.append(_ResumedStep.from_snapshot_entry(cs))
+        return execution

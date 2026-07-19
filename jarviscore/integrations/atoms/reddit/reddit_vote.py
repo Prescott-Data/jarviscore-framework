@@ -13,7 +13,7 @@ def reddit_vote(auth_info: dict, fullname: str, direction: int) -> dict:
             data={"id": fullname, "dir": direction},
             headers={
                 "Authorization": f"Bearer {access_token}",
-                "User-Agent": "collabra-integration-agent/1.0"
+                "User-Agent": "jarviscore/1.0"
             },
             timeout=30
         )

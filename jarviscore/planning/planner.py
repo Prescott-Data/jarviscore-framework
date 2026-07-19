@@ -68,8 +68,15 @@ Each step must have exactly these fields:
   "task"              : "<complete, self-contained task the agent can act on immediately>",
   "success_criterion" : "<concrete, observable condition that means this step is done>",
   "expected_findings" : ["<snake_case key this step should produce>", ...],
+  "depends_on"        : ["<step_ids that must complete first>", ...],
   "subagent_hint"     : "<MUST be exactly one of: researcher, coder, communicator, browser, null>"
 }
+
+CRITICAL — depends_on rules:
+  List the step_ids whose OUTPUT this step actually needs. Steps with no
+  ordering constraint between them may run IN PARALLEL — declare only real
+  data dependencies, not habitual sequence. An empty list means the step can
+  start immediately.
 
 CRITICAL — subagent_hint rules:
   "researcher"   → web search, analysis, investigation, strategy, planning, architecture
@@ -132,6 +139,30 @@ class Planner:
         self.llm = llm_client
         self._identity = system_prompt_excerpt[:400] if system_prompt_excerpt else ""
 
+    @staticmethod
+    def _clip(value: Any, limit: int) -> str:
+        """Honest cut — a planner working from amputated facts plans wrong."""
+        text = str(value)
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}…[truncated: showing {limit} of {len(text)} chars]"
+
+    def _render_facts(self, facts: Dict[str, Any], limit: int = 20) -> str:
+        """Render known facts one per line with an honest count (#74).
+
+        Replaces the old clipped-JSON-blob rendering, which silently cut
+        facts mid-key at 800 chars — lost facts produce wrong plans.
+        """
+        if not facts:
+            return "None yet."
+        items = list(facts.items())
+        lines = [f"{len(items)} fact(s) known:"]
+        for key, value in items[:limit]:
+            lines.append(f"  - {key}: {self._clip(value, 200)}")
+        if len(items) > limit:
+            lines.append(f"  …and {len(items) - limit} more facts not shown")
+        return "\n".join(lines)
+
     async def plan(
         self,
         goal: str,
@@ -155,13 +186,13 @@ class Planner:
                           parsed into a valid plan.
         """
         known_facts = goal_execution.truth.to_flat_dict()
-        known_str = json.dumps(known_facts, default=str)[:800] if known_facts else "None yet."
+        known_str = self._render_facts(known_facts)
 
         ctx_note = ""
         if context:
             public = {k: v for k, v in context.items() if not str(k).startswith("_")}
             if public:
-                ctx_note = f"\nAvailable context:\n{json.dumps(public, default=str)[:300]}\n"
+                ctx_note = f"\nAvailable context:\n{self._clip(json.dumps(public, default=str), 600)}\n"
 
         prompt = self._build_initial_prompt(goal, known_str, ctx_note)
         return await self._call_and_parse(prompt, goal)
@@ -171,6 +202,8 @@ class Planner:
         goal_execution: GoalExecution,
         failed_step: Any,           # CompletedStep
         reason: str,
+        pending_steps: Optional[List[PlannedStep]] = None,
+        budget_note: str = "",
     ) -> List[PlannedStep]:
         """
         Recovery planning after a step failure.
@@ -183,20 +216,33 @@ class Planner:
             goal_execution: Full GoalExecution state at the point of failure.
             failed_step:    The CompletedStep that received a "fail" verdict.
             reason:         StepEvaluation.evaluator_note — why it failed.
+            pending_steps:  Steps not yet attempted — shown to the planner so
+                            good untouched work is kept, not churned (#74).
+            budget_note:    One line of execution economics (steps run vs.
+                            ceiling) so the plan fits the budget that's left.
 
         Returns:
-            Revised List[PlannedStep] for the remaining work.
+            Revised List[PlannedStep] for the remaining work. Steps whose ids
+            already completed are dropped defensively (prompt-only enforcement
+            was the previous, unreliable guard).
 
         Raises:
             PlannerError: if the LLM call fails or response is unparseable.
         """
         completed_summary = "\n".join(
-            f"  - [{cs.evaluation.verdict.upper()}] {cs.step.step_id}: {cs.step.task[:120]}"
+            f"  - [{cs.evaluation.verdict.upper()}] {cs.step.step_id}: {self._clip(cs.step.task, 120)}"
             for cs in goal_execution.completed
         )
 
         known_facts = goal_execution.truth.to_flat_dict()
-        known_str = json.dumps(known_facts, default=str)[:800] if known_facts else "None."
+        known_str = self._render_facts(known_facts)
+
+        pending_summary = ""
+        if pending_steps:
+            pending_summary = "\n".join(
+                f"  - {s.step_id}: {self._clip(s.task, 120)}"
+                for s in pending_steps
+            )
 
         prompt = self._build_replan_prompt(
             goal=goal_execution.goal,
@@ -204,8 +250,21 @@ class Planner:
             failed_step_task=failed_step.step.task,
             failure_reason=reason,
             known_facts_str=known_str,
+            pending_summary=pending_summary,
+            budget_note=budget_note,
         )
-        return await self._call_and_parse(prompt, goal_execution.goal)
+        revised = await self._call_and_parse(prompt, goal_execution.goal)
+
+        # Defensive: never re-run completed work, whatever the prompt said.
+        done_ids = {cs.step.step_id for cs in goal_execution.completed}
+        kept = [s for s in revised if s.step_id not in done_ids]
+        if len(kept) < len(revised):
+            dropped = [s.step_id for s in revised if s.step_id in done_ids]
+            logger.warning(
+                "[Planner] Replan re-included %d completed step(s) — dropped: %s",
+                len(dropped), dropped,
+            )
+        return kept
 
     # ── Prompt builders ───────────────────────────────────────────────────────
 
@@ -232,6 +291,8 @@ class Planner:
         failed_step_task: str,
         failure_reason: str,
         known_facts_str: str,
+        pending_summary: str = "",
+        budget_note: str = "",
     ) -> str:
         parts = [
             "An autonomous agent execution has partially failed. Produce a REVISED plan.\n\n",
@@ -244,6 +305,13 @@ class Planner:
         parts.append(f"\nFailed step: {failed_step_task}\n")
         parts.append(f"Failure reason: {failure_reason}\n")
         parts.append(f"Accumulated facts: {known_facts_str}\n")
+        if pending_summary:
+            parts.append(
+                f"\nSteps planned but NOT yet attempted — KEEP these (same step_id) "
+                f"unless the failure invalidates them:\n{pending_summary}\n"
+            )
+        if budget_note:
+            parts.append(f"\nExecution budget: {budget_note}\n")
         parts.append(
             "\nProduce a revised plan for the REMAINING work only. "
             "Change approach — do not repeat the same failed strategy.\n\n"
@@ -392,11 +460,44 @@ class Planner:
                 task=str(item["task"]),
                 success_criterion=str(item["success_criterion"]),
                 expected_findings=list(item.get("expected_findings") or []),
+                depends_on=[str(d) for d in (item.get("depends_on") or [])],
                 subagent_hint=hint,
             ))
+
+        self._validate_plan(steps)
 
         logger.info(
             "[Planner] Produced %d-step plan for goal: %s",
             len(steps), goal[:80],
         )
         return steps
+
+    @staticmethod
+    def _validate_plan(steps: List[PlannedStep]) -> None:
+        """Semantic validation the schema check cannot do (#74).
+
+        - Duplicate step_ids are a hard error: they corrupt keyed persistence,
+          resume, and dependency resolution.
+        - depends_on references to unknown step_ids are stripped with a
+          warning: a hallucinated dependency must not deadlock the plan.
+        - Self-dependencies are stripped for the same reason.
+        """
+        seen: set = set()
+        for step in steps:
+            if step.step_id in seen:
+                raise PlannerError(
+                    f"Plan contains duplicate step_id {step.step_id!r} — "
+                    f"step ids must be unique."
+                )
+            seen.add(step.step_id)
+
+        known = {s.step_id for s in steps}
+        for step in steps:
+            valid = [d for d in step.depends_on if d in known and d != step.step_id]
+            if len(valid) != len(step.depends_on):
+                stripped = [d for d in step.depends_on if d not in known or d == step.step_id]
+                logger.warning(
+                    "[Planner] Step %s: stripped invalid depends_on refs %s",
+                    step.step_id, stripped,
+                )
+                step.depends_on = valid

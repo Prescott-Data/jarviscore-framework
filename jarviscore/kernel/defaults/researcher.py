@@ -10,7 +10,7 @@ Uses ref-based browser control (ported from OpenClaw architecture) for dynamic w
 2. Get accessibility snapshot with `browser_snapshot`
 3. Interact using refs (e.g., "e1", "e2") with `browser_click`, `browser_type`
 
-Ported from integration-agent-javiscore to jarviscore-framework.
+Ported from an earlier internal agent codebase to jarviscore-framework.
 All IA-specific imports replaced with jarviscore equivalents.
 """
 

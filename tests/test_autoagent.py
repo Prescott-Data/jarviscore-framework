@@ -227,15 +227,17 @@ class TestAutoAgentExecution:
 
     @pytest.mark.asyncio
     async def test_execute_task_without_setup_fails(self):
-        """Test AutoAgent execute_task fails gracefully without setup."""
+        """Pre-start use raises a descriptive error (issue #63/JC-002).
+
+        Previously this died deep in codegen with a NoneType AttributeError
+        wrapped in a generic 'Fatal error' envelope; the loud, actionable
+        RuntimeError is the fix.
+        """
         agent = ValidAutoAgent()
 
         task = {"task": "Test task description"}
-        result = await agent.execute_task(task)
-
-        # Day 4: Should fail gracefully when components not initialized
-        assert result["status"] == "failure"
-        assert "Fatal error" in result.get("error", "")
+        with pytest.raises(RuntimeError, match="before mesh.start"):
+            await agent.execute_task(task)
 
     @pytest.mark.asyncio
     async def test_execute_task_with_mock_components(self):
@@ -348,12 +350,24 @@ class TestAutoAgentExecution:
 
     @pytest.mark.asyncio
     async def test_goal_oriented_agent_honors_single_response_execution_contract(self):
-        """A single-response contract is a direct Kernel turn, not a planner DAG."""
-        from types import SimpleNamespace
+        """A single-response contract is ONE completion against the system
+        prompt — no classifier, no planner, no kernel routing (issue #63).
 
+        The previous contract semantics routed into a direct Kernel turn,
+        which still landed analysis prompts in the Coder sub-agent
+        (TOOL/DONE protocol violations — JC-003).
+        """
         class FakeLLM:
+            def __init__(self):
+                self.calls = []
+
             async def generate(self, **kwargs):
-                raise AssertionError("execution_contract should avoid classifier LLM call")
+                self.calls.append(kwargs)
+                return {
+                    "content": "The founder-grade peer brief.",
+                    "tokens": {"input": 5, "output": 5, "total": 10},
+                    "cost_usd": 0.0,
+                }
 
         class FakeKernel:
             def __init__(self):
@@ -362,15 +376,11 @@ class TestAutoAgentExecution:
 
             async def execute(self, **kwargs):
                 self.calls.append(kwargs)
-                return SimpleNamespace(
-                    status="success",
-                    payload="single artifact",
-                    summary="done",
-                    metadata={"tokens": {"input": 0, "output": 0, "total": 0}, "elapsed_ms": 1},
-                )
+                raise AssertionError("single_response must not route into the Kernel")
 
         agent = GoalDirectAutoAgent()
-        setattr(agent, "llm", FakeLLM())
+        llm = FakeLLM()
+        setattr(agent, "llm", llm)
         kernel = FakeKernel()
         setattr(agent, "_kernel", kernel)
 
@@ -380,9 +390,14 @@ class TestAutoAgentExecution:
         })
 
         assert result["status"] == "success"
-        assert result["goal_execution"]["planner_mode"] == "direct_kernel"
-        assert result["goal_execution"]["reason"].startswith("Task execution contract declares")
-        assert len(kernel.calls) == 1
+        assert result["output"] == "The founder-grade peer brief."
+        assert result["execution_shape"] == "single_response"
+        assert len(llm.calls) == 1          # exactly one completion
+        assert len(kernel.calls) == 0       # kernel untouched
+        # The completion ran against the agent's system prompt
+        assert llm.calls[0]["messages"][0]["content"].endswith(
+            GoalDirectAutoAgent.system_prompt
+        )
 
     @pytest.mark.asyncio
     async def test_kernel_routes_access_requests_before_default_coder_role(self):

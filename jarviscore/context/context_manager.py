@@ -66,12 +66,47 @@ class BudgetConfig:
         history_limit:             Max tokens to spend on tool history.
         summarization_threshold:   Fraction of total_tokens at which
                                    auto-summarisation is triggered.
+        prior_step_value_limit:    Chars of each prior step output shown inline.
+        context_value_limit:       Chars of each input-context value shown inline.
+        belief_value_limit:        Chars of each belief-state value shown inline.
+        memory_item_limit:         Chars of each finding / LTM item shown inline.
+        internal_var_limit:        Chars of each internal variable shown inline.
+        history_value_limit:       Chars of each tool-history input/output shown inline.
+        state_keys_limit:          Max keys rendered per state dict (overflow is
+                                   announced by name, never silently dropped).
+
+    All char limits default to the historical values; every cut they cause
+    is marked in the rendered context (see issue #55) — an agent that KNOWS
+    data is missing asks for the rest; one that doesn't confabulates.
     """
     total_tokens: int = 80_000
     output_reserve: int = 4_000
     system_reserve: int = 8_000
     history_limit: int = 20_000
     summarization_threshold: float = 0.8
+    prior_step_value_limit: int = 2000
+    context_value_limit: int = 800
+    belief_value_limit: int = 200
+    memory_item_limit: int = 200
+    internal_var_limit: int = 200
+    history_value_limit: int = 600
+    state_keys_limit: int = 10
+    # Chars of each turn's output shown to the summarizer LLM. 100 chars was
+    # not a summarizable evidence base — the "summary" was confabulation by
+    # construction (issue #59).
+    summary_evidence_limit: int = 800
+    # How many compressed-away turns stay retrievable in the archive.
+    archive_window: int = 50
+    # Long-term memory bound (issue #69). On overflow the OLDEST half is
+    # merged into one labeled epoch summary; the newest entries keep full
+    # fidelity. Incremental accumulation, never monolithic rewrite — the
+    # context-collapse failure mode identified by ACE (arXiv:2510.04618).
+    ltm_window: int = 20
+    # How many LTM entries the context block renders (was a silent [-5:]).
+    ltm_render_limit: int = 5
+    # Token budget for the GOAL STATE block (issue #72) — the accumulated
+    # facts and step history of a goal execution, rendered structured.
+    goal_state_budget: int = 4000
 
     @property
     def usable_tokens(self) -> int:
@@ -151,6 +186,97 @@ class ContextManager:
         return cleaned
 
     # ------------------------------------------------------------------
+    # Honest rendering helpers (issues #55, #56)
+    # ------------------------------------------------------------------
+
+    def _build_goal_state_block(self, context: Dict[str, Any]) -> str:
+        """Render a goal execution's accumulated state — structured (issue #72).
+
+        Consumes the keys `context_for_next_step()` injects (`_goal`,
+        `_goal_facts`, `_goal_facts_high_confidence`, `_completed_steps`,
+        `_plan_revision`). Returns "" when the agent is not running under a
+        goal — non-goal dispatches see zero change.
+        """
+        goal = context.get("_goal")
+        facts = context.get("_goal_facts")
+        completed = context.get("_completed_steps")
+        if not goal and not facts and not completed:
+            return ""
+
+        lines = ["## GOAL STATE"]
+        if goal:
+            revision = context.get("_plan_revision", 0)
+            rev_note = f" (plan revision {revision})" if revision else ""
+            lines.append(f"**Goal:** {self._clip(goal, 300)}{rev_note}")
+
+        if isinstance(facts, dict) and facts:
+            high_conf = context.get("_goal_facts_high_confidence") or {}
+            lines.append(f"**Established facts ({len(facts)}):**")
+            # High-confidence facts first — they are the plan's load-bearing truth
+            ordered = sorted(facts.items(), key=lambda kv: kv[0] not in high_conf)
+            visible, overflow = self._visible_items(dict(ordered), self.config.state_keys_limit * 2)
+            for key, value in visible:
+                marker = " ✓" if key in high_conf else ""
+                lines.append(f"- `{key}`{marker}: {self._clip(value, self.config.belief_value_limit)}")
+            if overflow:
+                lines.append(overflow.rstrip())
+
+        if isinstance(completed, list) and completed:
+            lines.append(f"**Completed steps ({len(completed)}):**")
+            for cs in completed[-8:]:
+                if isinstance(cs, dict):
+                    sid = cs.get("step_id", "?")
+                    verdict = cs.get("verdict", cs.get("status", "?"))
+                    summary = self._clip(cs.get("summary") or cs.get("task", ""), 160)
+                    lines.append(f"- [{verdict}] `{sid}`: {summary}")
+                else:
+                    lines.append(f"- {self._clip(cs, 160)}")
+            hidden = len(completed) - 8
+            if hidden > 0:
+                lines.append(f"…and {hidden} earlier steps not shown")
+
+        return "\n".join(lines)
+
+
+    @staticmethod
+    def _clip(value: Any, limit: int) -> str:
+        """Render a value for the context window — cut honestly, never silently.
+
+        Values within the limit render byte-identical to ``str(value)``.
+        Longer values are cut WITH an explicit marker, because the agent
+        reads these blocks as its world state: a model that knows data is
+        missing asks for the rest; a model that doesn't confabulates.
+        """
+        text = str(value)
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}…[truncated: showing {limit} of {len(text)} chars]"
+
+    @staticmethod
+    def _visible_items(
+        data: Dict[str, Any], limit: int
+    ) -> Tuple[List[Tuple[str, Any]], str]:
+        """Cap a state dict at *limit* keys — recency wins, overflow is named.
+
+        Returns (visible_items, overflow_notice). The MOST RECENTLY inserted
+        keys survive (dicts preserve insertion order; the newest state is the
+        most likely to matter). Hidden keys are announced BY NAME so the agent
+        keeps an index of its own state even when the values don't fit —
+        silent key loss decided by insertion order was issue #56.
+        """
+        items = list(data.items())
+        if len(items) <= limit:
+            return items, ""
+        visible = items[-limit:]
+        hidden = [k for k, _ in items[:-limit]]
+        notice = (
+            f"…and {len(hidden)} earlier key(s) not shown: "
+            + ", ".join(f"`{k}`" for k in hidden)
+            + " (values hidden — re-derive or ask if needed)\n"
+        )
+        return visible, notice
+
+    # ------------------------------------------------------------------
     # Context building — KernelState input (preferred)
     # ------------------------------------------------------------------
 
@@ -181,9 +307,13 @@ class ContextManager:
             if cost <= 0 or limit <= 0:
                 return False
             if cost > limit:
-                # Truncate to fit
+                # Truncate to fit — honestly (issue #55)
                 char_limit = int(limit * 4)  # ~4 chars per token
-                block = block[:char_limit] + "\n…[truncated]"
+                original_len = len(block)
+                block = (
+                    block[:char_limit]
+                    + f"\n…[block truncated to fit budget: showing {char_limit} of {original_len} chars]"
+                )
                 cost = self.count_tokens(block)
             blocks.append(block)
             used += cost
@@ -201,13 +331,22 @@ class ContextManager:
             mission += f"**CRITICAL ERROR TO FIX:** {state.last_error}\n"
         _add_block(mission)
 
+        # ═══ BLOCK 1b: GOAL STATE (High Priority — issue #72) ═══
+        # A goal execution's accumulated truth used to reach each step as ONE
+        # generic `_goal_facts: {...}` line clipped at the value limit — the
+        # plan's entire memory in 800 chars. Goal state is mission-level
+        # context: structured, one fact per line, honest overflow.
+        goal_block = self._build_goal_state_block(state.context or {})
+        if goal_block:
+            _add_block(goal_block, max_tokens=self.config.goal_state_budget)
+
         # ═══ BLOCK 2: FAILURE MEMORY (High Priority) ═══
         if state.failure_ledger:
             lines = ["## FAILURE MEMORY (Do Not Repeat)"]
             for entry in state.failure_ledger[-5:]:
                 tool = entry.get("tool", "unknown")
                 err_type = entry.get("error_type", "UNKNOWN")
-                err_msg = str(entry.get("error", ""))[:180]
+                err_msg = self._clip(entry.get("error", ""), 180)
                 lines.append(f"- `{tool}` → `{err_type}`: {err_msg}")
             lines.append("Rule: if tool+params already failed recently, choose a different strategy.")
             _add_block("\n".join(lines))
@@ -226,15 +365,15 @@ class ContextManager:
                         continue
                     method = spec.get("method", "?")
                     path = spec.get("path") or spec.get("url") or "?"
-                    summary_text = spec.get("summary", "")[:80]
+                    summary_text = self._clip(spec.get("summary", ""), 80)
                     kb_block += f"  - `{method} {path}` — {summary_text}\n"
             if isinstance(findings, list) and findings:
                 kb_block += f"**Research Findings:** {len(findings)} item(s)\n"
                 for finding in findings[-5:]:
                     if isinstance(finding, dict):
-                        kb_block += f"  - {str(finding.get('summary', finding.get('content_preview', finding)))[:200]}\n"
+                        kb_block += f"  - {self._clip(finding.get('summary', finding.get('content_preview', finding)), self.config.memory_item_limit)}\n"
                     else:
-                        kb_block += f"  - {str(finding)[:200]}\n"
+                        kb_block += f"  - {self._clip(finding, self.config.memory_item_limit)}\n"
             _add_block(kb_block, max_tokens=4000)
 
         # ═══ BLOCK 4: INPUT CONTEXT (High Priority) ═══
@@ -245,34 +384,42 @@ class ContextManager:
             if prior:
                 for step_id, step_result in prior.items():
                     output = step_result.get("output", step_result) if isinstance(step_result, dict) else step_result
-                    output_str = str(output)[:2000]
+                    output_str = self._clip(output, self.config.prior_step_value_limit)
                     input_block += f"**[Prior Step: {step_id}]**\n{output_str}\n\n"
 
-            # Other context fields (skip internal keys)
+            # Other context fields (skip internal keys; goal keys are
+            # PROMOTED to the GOAL STATE block, not dropped)
             skip_keys = {"previous_step_results", "workflow_id", "step_id",
                           "system_prompt", "_jarvis_context", "_auth_credentials",
-                          "_agent_default_kernel_role"}
+                          "_agent_default_kernel_role",
+                          "_goal", "_goal_id", "_goal_facts",
+                          "_goal_facts_high_confidence", "_completed_steps",
+                          "_plan_revision"}
             other = {k: v for k, v in state.context.items() if k not in skip_keys}
             if other:
                 cleaned = self._scrub_dict(other)
-                for k, v in list(cleaned.items())[:10]:
+                visible, overflow = self._visible_items(cleaned, self.config.state_keys_limit)
+                for k, v in visible:
                     if hasattr(v, "model_json_schema"):
                         # Render Pydantic BaseModels as JSON schemas for the LLM
                         try:
                             import json
                             val_str = json.dumps(v.model_json_schema(), indent=2)
                         except Exception:
-                            val_str = str(v)[:800]
+                            val_str = self._clip(v, self.config.context_value_limit)
                     else:
-                        val_str = str(v)[:800]
+                        val_str = self._clip(v, self.config.context_value_limit)
                     input_block += f"- `{k}`: {val_str}\n"
+                input_block += overflow
             _add_block(input_block, max_tokens=8000)
 
         # ═══ BLOCK 5: BELIEF STATE (Medium Priority) ═══
         if state.belief_state:
             belief_block = "## BELIEF STATE\n"
-            for k, v in list(state.belief_state.items())[:10]:
-                belief_block += f"- `{k}`: {str(v)[:200]}\n"
+            visible, overflow = self._visible_items(state.belief_state, self.config.state_keys_limit)
+            for k, v in visible:
+                belief_block += f"- `{k}`: {self._clip(v, self.config.belief_value_limit)}\n"
+            belief_block += overflow
             _add_block(belief_block, max_tokens=1000)
 
         # ═══ BLOCK 6: SCRATCHPAD / THOUGHTS (Medium Priority) ═══
@@ -288,11 +435,15 @@ class ContextManager:
         ltm = state.internal_variables.get("long_term_memory", [])
         if ltm:
             ltm_block = "## LONG-TERM MEMORY (Compressed History)\n"
-            for item in ltm[-5:]:
+            render_limit = self.config.ltm_render_limit
+            for item in ltm[-render_limit:]:
                 if isinstance(item, dict):
-                    ltm_block += f"- {item.get('summary', str(item))[:200]}\n"
+                    ltm_block += f"- {self._clip(item.get('summary', str(item)), self.config.memory_item_limit)}\n"
                 else:
-                    ltm_block += f"- {str(item)[:200]}\n"
+                    ltm_block += f"- {self._clip(item, self.config.memory_item_limit)}\n"
+            hidden = len(ltm) - render_limit
+            if hidden > 0:
+                ltm_block += f"…and {hidden} older memories not shown\n"
             _add_block(ltm_block, max_tokens=2000)
 
         # ═══ BLOCK 8: TOOL HISTORY (Sliding Window) ═══
@@ -309,13 +460,20 @@ class ContextManager:
         remaining = budget - used
         if remaining > 500 and state.internal_variables:
             vars_block = "## INTERNAL STATE\n"
-            # Skip keys that are surfaced by dedicated blocks above
+            # Skip keys that are surfaced by dedicated blocks above.
+            # Filter FIRST, then cap — skipped keys must not consume the
+            # visibility budget of real ones (issue #56).
             skip_var_keys = {"long_term_memory", "research_findings", "api_specs", "failure_ledger"}
-            for key, value in list(state.internal_variables.items())[:10]:
-                if key in skip_var_keys or key.startswith("_"):
-                    continue
-                value_str = str(self._scrub_value(key, value))[:200]
+            renderable = {
+                key: value
+                for key, value in state.internal_variables.items()
+                if key not in skip_var_keys and not key.startswith("_")
+            }
+            visible, overflow = self._visible_items(renderable, self.config.state_keys_limit)
+            for key, value in visible:
+                value_str = self._clip(self._scrub_value(key, value), self.config.internal_var_limit)
                 vars_block += f"- `{key}`: {value_str}\n"
+            vars_block += overflow
             vars_cost = self.count_tokens(vars_block)
             if vars_cost < remaining:
                 blocks.append(vars_block)
@@ -350,16 +508,14 @@ class ContextManager:
         for turn in reversed(history[-20:]):
             if hasattr(turn, "tool_name"):
                 # KernelState.ToolResult model
-                output_str = str(turn.tool_output)[:600]
-                if len(str(turn.tool_output)) > 600:
-                    output_str += "…"
+                output_str = self._clip(turn.tool_output, self.config.history_value_limit)
                 entry = (
                     f"**{turn.tool_name}** [{turn.status}]\n"
-                    f"  Input: {json.dumps(turn.tool_input, default=str)[:600]}\n"
+                    f"  Input: {self._clip(json.dumps(turn.tool_input, default=str), self.config.history_value_limit)}\n"
                     f"  Output: {output_str}"
                 )
                 if turn.error:
-                    entry += f"\n  Error: {turn.error[:200]}"
+                    entry += f"\n  Error: {self._clip(turn.error, 200)}"
             elif isinstance(turn, dict):
                 # Legacy dict format
                 entry = f"- {json.dumps(turn, default=str)[:500]}"
@@ -491,7 +647,14 @@ class ContextManager:
         return True
 
     async def _summarize_state(self, state: "KernelState", llm) -> bool:
-        """Compress oldest tool history entries into long-term memory."""
+        """Compress oldest tool history entries into long-term memory.
+
+        Compression, not destruction (issue #59): the summary is built from a
+        real evidence window per turn, the ORIGINALS are archived before the
+        history is trimmed, the stored summary is labeled lossy, and a failed
+        summarizer keeps the entries for the next cycle instead of replacing
+        evidence with a tool-name list.
+        """
         if len(state.tool_history) < 8:
             return False  # Not enough to compress
 
@@ -512,41 +675,153 @@ class ContextManager:
         old_entries = state.tool_history[:slice_idx]
         remaining = state.tool_history[slice_idx:]
 
-        # Build summary (LLM or fallback)
+        # Build summary from a real evidence base — an LLM asked to summarize
+        # "WHAT was discovered" needs to actually see the discoveries.
         try:
             summary_prompt = (
                 "Summarize these agent actions into 2-3 bullet points. "
                 "Focus on WHAT was discovered and WHAT was attempted:\n"
             )
             for tr in old_entries:
-                summary_prompt += f"- {tr.tool_name}: {str(tr.tool_output)[:100]}\n"
+                evidence = self._clip(tr.tool_output, self.config.summary_evidence_limit)
+                summary_prompt += f"- {tr.tool_name}: {evidence}\n"
 
             if hasattr(llm, "generate"):
                 result = await llm.generate(
                     messages=[{"role": "user", "content": summary_prompt}]
                 )
-                summary_text = result.get("content", "")[:500]
+                summary_text = self._clip(result.get("content", ""), 1000)
             else:
-                # Fallback: mechanical summary
+                # No LLM attached: mechanical summary, but the originals are
+                # archived below — nothing is destroyed.
                 tool_names = set(tr.tool_name for tr in old_entries)
                 summary_text = f"Executed {len(old_entries)} actions: {', '.join(tool_names)}"
         except Exception as e:
-            logger.warning(f"Summarization LLM call failed: {e}")
-            tool_names = set(tr.tool_name for tr in old_entries)
-            summary_text = f"Executed {len(old_entries)} actions: {', '.join(tool_names)}"
+            # A failed summarizer must not cost evidence: keep the entries
+            # and let the next cycle retry. The old fallback replaced the
+            # oldest 30% of the agent's history with a tool-name list.
+            logger.warning(
+                f"Summarization LLM call failed ({e}) — keeping tool history "
+                f"intact for retry on the next cycle"
+            )
+            return False
 
-        # Store in long-term memory
+        # Archive the originals BEFORE trimming — a summary is a view,
+        # never the only copy. JSON-safe (checkpoints call model_dump_json).
+        archive = state.internal_variables.setdefault("_archived_turns", [])
+        for tr in old_entries:
+            archive.append({
+                "tool_name": tr.tool_name,
+                "tool_input": json.loads(json.dumps(tr.tool_input, default=str)),
+                "tool_output": str(tr.tool_output),
+                "status": getattr(tr, "status", None),
+                "error": getattr(tr, "error", None),
+            })
+        if len(archive) > self.config.archive_window:
+            del archive[:-self.config.archive_window]
+
+        # Store in long-term memory — labeled for what it is
         if "long_term_memory" not in state.internal_variables:
             state.internal_variables["long_term_memory"] = []
         state.internal_variables["long_term_memory"].append({
-            "summary": summary_text,
+            "summary": f"[lossy summary of {len(old_entries)} turns — originals archived] {summary_text}",
             "turns_compressed": len(old_entries),
+            "generation": 1,
+            "archived": True,
             "timestamp": time.time(),
         })
 
         # Trim history
         state.tool_history = remaining
         logger.info(f"Compressed {len(old_entries)} turns into long-term memory")
+
+        # Bound LTM itself — generational compaction (issue #69)
+        await self._compact_ltm(state, llm)
+
+        # Compression telemetry: entropy management must be visible, not
+        # suspected. Rides in internal variables → rendered in INTERNAL STATE.
+        stats = state.internal_variables.setdefault(
+            "compression_stats",
+            {"cycles": 0, "turns_compressed": 0, "epochs": 0, "max_generation": 1},
+        )
+        stats["cycles"] += 1
+        stats["turns_compressed"] += len(old_entries)
+        return True
+
+    async def _compact_ltm(self, state: "KernelState", llm) -> bool:
+        """Bound long_term_memory via generational epoch merges (issue #69).
+
+        The failure mode this avoids is context collapse (ACE,
+        arXiv:2510.04618): iteratively re-summarizing EVERYTHING erodes
+        detail until memory is mush. Instead, on overflow only the OLDEST
+        half is merged into one epoch summary — newest entries are never
+        touched, so fidelity decays monotonically with age and recent
+        memory stays verbatim. Generations are labeled so downstream
+        reasoning can weight fidelity, and merged-away entries are archived
+        first — compression, never destruction.
+        """
+        ltm = state.internal_variables.get("long_term_memory") or []
+        if len(ltm) <= self.config.ltm_window:
+            return False
+
+        merge_count = max(2, self.config.ltm_window // 2)
+        oldest = ltm[:merge_count]
+        newest = ltm[merge_count:]
+
+        def _text(item: Any) -> str:
+            return item.get("summary", str(item)) if isinstance(item, dict) else str(item)
+
+        def _gen(item: Any) -> int:
+            return int(item.get("generation", 1)) if isinstance(item, dict) else 1
+
+        generation = max(_gen(i) for i in oldest) + 1
+        try:
+            merge_prompt = (
+                "Merge these agent memory entries into one dense record. "
+                "Recall first: preserve every decision, discovery, error, and "
+                "open question — drop only redundancy and filler:\n"
+                + "\n".join(f"- {_text(i)}" for i in oldest)
+            )
+            if not hasattr(llm, "generate"):
+                return False  # no LLM: keep entries; retry when one is attached
+            result = await llm.generate(
+                messages=[{"role": "user", "content": merge_prompt}]
+            )
+            epoch_text = self._clip(result.get("content", ""), 2000)
+        except Exception as e:
+            # A failed merge must not cost memory — keep entries, retry later.
+            logger.warning(f"LTM epoch merge failed ({e}) — keeping entries for retry")
+            return False
+
+        # Archive the merged-away originals before replacing them.
+        ltm_archive = state.internal_variables.setdefault("_archived_ltm", [])
+        ltm_archive.extend(
+            i if isinstance(i, dict) else {"summary": str(i)} for i in oldest
+        )
+        if len(ltm_archive) > self.config.archive_window:
+            del ltm_archive[:-self.config.archive_window]
+
+        epoch = {
+            "summary": (
+                f"[gen-{generation} epoch summary of {len(oldest)} older memories "
+                f"— originals archived] {epoch_text}"
+            ),
+            "generation": generation,
+            "merged_entries": len(oldest),
+            "archived": True,
+            "timestamp": time.time(),
+        }
+        state.internal_variables["long_term_memory"] = [epoch] + newest
+
+        stats = state.internal_variables.setdefault(
+            "compression_stats",
+            {"cycles": 0, "turns_compressed": 0, "epochs": 0, "max_generation": 1},
+        )
+        stats["epochs"] += 1
+        stats["max_generation"] = max(stats.get("max_generation", 1), generation)
+        logger.info(
+            f"LTM compacted: {len(oldest)} entries merged into gen-{generation} epoch"
+        )
         return True
 
     # ------------------------------------------------------------------

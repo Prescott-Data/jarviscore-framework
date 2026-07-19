@@ -20,6 +20,7 @@ Only "success" outputs go through the LLM evaluation call.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Optional
 
 from .goal_context import GoalExecution, PlannedStep, StepEvaluation
@@ -39,13 +40,30 @@ Verdict guide:
   "pass"    — success_criterion is clearly met. Continue to next step.
   "partial" — criterion partially met. Continue, but note what is missing.
   "fail"    — criterion not met. The goal loop will trigger replanning.
-  "hitl"    — cannot determine without human judgement (ambiguous, risky, or conflicting).
+  "hitl"    — reserved for decisions only a human can make. Use it ONLY when:
+                • an irreversible or risky action needs human approval, or
+                • credentials, permissions, or access the agent cannot obtain
+                  are required to proceed, or
+                • facts genuinely conflict and no further agent work can
+                  resolve them.
+              Do NOT use "hitl" because the output is unverifiable, incomplete,
+              missing its artifact, or you simply lack evidence. Those are
+              "partial" or "fail" — the loop can retry or replan to demand the
+              artifact. A verification gap is never a human's problem.
 
 additional_findings:
   Key facts you extract from the output that should inform future steps.
   Keys must be short snake_case (e.g. "api_base_url", "record_count").
   Return an empty object {} if there is nothing new to add.
   Do NOT duplicate facts already listed in accumulated_goal_facts.
+
+Truncated evidence:
+  Step output may end with a marker like "[truncated: showing N of M chars]".
+  That means the work exists but only part of it is visible to you. If the
+  visible portion satisfies the criterion and ONLY the truncation prevents
+  full verification, return "partial" and note what you could not see.
+  Never return "fail" solely because evidence was clipped — a hidden tail
+  is not a failed step, and "fail" burns a replan cycle on blindness.
 """
 
 
@@ -56,6 +74,17 @@ class EvaluatorError(Exception):
     Attributes:
         message: Explanation including the raw LLM response snippet.
     """
+
+
+def _honest_clip(text: str, limit: int) -> str:
+    """Clip with an explicit marker — never silently (#55/#85).
+
+    Prompt views may be bounded, but a bound the model cannot see poisons
+    the judgment: markers are the floor.
+    """
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n[truncated: showing {limit} of {len(text)} chars]"
 
 
 class StepEvaluator:
@@ -208,9 +237,11 @@ class StepEvaluator:
         goal_execution: GoalExecution,
     ) -> str:
         output_repr = self._format_output(output)
-        known = json.dumps(
-            goal_execution.truth.to_flat_dict(), default=str
-        )[:500]
+        facts_limit = int(os.environ.get("EVALUATOR_FACTS_EVIDENCE_LIMIT", "2000"))
+        known = _honest_clip(
+            json.dumps(goal_execution.truth.to_flat_dict(), default=str),
+            facts_limit,
+        )
 
         return (
             f"Evaluate whether this agent step met its success criterion.\n\n"
@@ -233,7 +264,7 @@ class StepEvaluator:
         repair_prompt = (
             "Your previous evaluation response violated the required contract.\n\n"
             f"Parse error:\n{parse_error}\n\n"
-            f"Invalid response:\n{invalid_content[:1200]}\n\n"
+            f"Invalid response:\n{_honest_clip(invalid_content, 1200)}\n\n"
             "Rewrite it as valid JSON that obeys this exact schema. Do not change "
             "the assessment, only repair the envelope and enum values.\n\n"
             f"{_EVAL_SCHEMA}"
@@ -267,8 +298,16 @@ class StepEvaluator:
     def _format_output(self, output: Any) -> str:
         """
         Render AgentOutput fields for the evaluation prompt.
-        Keeps it focused: status, summary, and payload (capped).
+        Keeps it focused: status, summary, and payload.
+
+        Evidence windows are generous and tunable, and clipping is announced
+        with an honest marker (issue #85). A blind verdict drives the whole
+        Plan-Execute-Evaluate loop, so a few KB of evidence is cheap next to
+        the replan cycle a false "fail" costs.
         """
+        summary_limit = int(os.environ.get("EVALUATOR_SUMMARY_EVIDENCE_LIMIT", "2000"))
+        payload_limit = int(os.environ.get("EVALUATOR_PAYLOAD_EVIDENCE_LIMIT", "6000"))
+
         parts = []
         status = getattr(output, "status", "unknown")
         summary = getattr(output, "summary", None)
@@ -276,13 +315,13 @@ class StepEvaluator:
 
         parts.append(f"status: {status}")
         if summary:
-            parts.append(f"summary: {summary[:600]}")
+            parts.append(f"summary: {_honest_clip(summary, summary_limit)}")
         if payload is not None:
             if isinstance(payload, dict):
                 payload_str = json.dumps(payload, default=str)
             else:
                 payload_str = str(payload)
-            parts.append(f"payload: {payload_str[:1000]}")
+            parts.append(f"payload: {_honest_clip(payload_str, payload_limit)}")
 
         return "\n".join(parts)
 
@@ -446,7 +485,7 @@ class StepEvaluator:
             raise EvaluatorError(
                 f"Evaluator returned invalid verdict: {verdict!r} for step {step.step_id!r}.\n"
                 f"Must be one of: pass, partial, fail, hitl.\n"
-                f"Full response: {content[:300]}"
+                f"Response: {_honest_clip(content, 300)}"
             )
 
         raw_confidence = parsed.get("confidence", 0.7)
@@ -463,6 +502,6 @@ class StepEvaluator:
         return StepEvaluation(
             verdict=verdict,
             confidence=confidence,
-            evaluator_note=str(parsed.get("evaluator_note", ""))[:600],
+            evaluator_note=_honest_clip(str(parsed.get("evaluator_note", "")), 600),
             additional_findings=additional,
         )

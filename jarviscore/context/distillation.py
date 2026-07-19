@@ -9,7 +9,7 @@ Three functions:
 - scrub_sensitive: Remove passwords, tokens, keys from dicts
 - merge_facts: Incorporate new facts into TruthContext with versioning
 
-Ported from IA/CA patterns with improvements:
+Ported from earlier agent implementations patterns with improvements:
 - Explicit sensitive key list (not regex guessing)
 - Deep recursive scrubbing (nested dicts and lists)
 - Version bumping on merge (conflict detection)

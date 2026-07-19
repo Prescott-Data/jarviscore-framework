@@ -2,7 +2,7 @@
 WorkflowEngine - Orchestrates multi-step workflow execution.
 
 Phase 7B upgrade: Sequential per-step loop replaced by a sovereign reactive
-loop (IA/CA pattern). Steps launch the moment their dependencies are met,
+loop (earlier agent implementations pattern). Steps launch the moment their dependencies are met,
 not in batches — so step C can start as soon as B finishes even if B's
 peers are still running.
 
@@ -171,7 +171,7 @@ class WorkflowEngine:
         pre_results: Dict[str, Any] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Sovereign reactive loop adapted from IA/CA production pattern.
+        Sovereign reactive loop adapted from earlier agent implementations production pattern.
 
         Unlike asyncio.gather() over dependency layers, this loop lets each
         step start the instant its dependencies complete, giving maximum
@@ -335,11 +335,19 @@ class WorkflowEngine:
             f"{len(state.waiting_steps)} waiting"
         )
 
-        # Return in original step order
-        return [
-            results.get(s["id"], {"status": "skipped", "step_id": s["id"]})
-            for s in steps
-        ]
+        # Return in ORIGINAL STEP ORDER, every result carrying its identity.
+        # The engine only wrote step_id on failure/skip paths; a successful
+        # result was the agent's raw envelope, so consumers keying on
+        # step_id worked in every failure test and silently lost every
+        # success in production (issue #62). Stamp identity here, once,
+        # for all paths — results that already carry a step_id keep it.
+        ordered: List[Dict[str, Any]] = []
+        for s in steps:
+            result = results.get(s["id"], {"status": "skipped", "step_id": s["id"]})
+            if isinstance(result, dict) and "step_id" not in result:
+                result["step_id"] = s["id"]
+            ordered.append(result)
+        return ordered
 
     # ------------------------------------------------------------------
     # Crash Recovery

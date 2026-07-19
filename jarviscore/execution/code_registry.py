@@ -1,7 +1,7 @@
 """
 Function Registry - Graduated function storage with atom versioning.
 
-Ported from IA/CA FunctionRegistry patterns:
+Ported from earlier agent implementations FunctionRegistry patterns:
 - Graduated promotion: candidate → verified (1 success) → golden (5 successes)
 - Immutable atom versioning with SHA256 integrity checks
 - System capability bundles ({System}Capabilities classes)
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 class FunctionStatus(str, Enum):
     """Graduation stages for registered functions.
 
-    Matches IA/CA graduation model:
+    Matches earlier agent implementations graduation model:
     - CANDIDATE: Just generated, untested
     - VERIFIED: 1+ successful execution
     - GOLDEN: 5+ successful executions (production-ready)
@@ -92,7 +92,7 @@ class FunctionRegistry:
         bundle_code = registry.create_system_bundle("shopify")
     """
 
-    # Graduation thresholds (matching IA/CA)
+    # Graduation thresholds (matching earlier agent implementations)
     VERIFIED_SUCCESS_THRESHOLD = 1
     GOLDEN_SUCCESS_THRESHOLD = 5
 
@@ -110,7 +110,7 @@ class FunctionRegistry:
             blob_storage: Optional BlobStorage for distributed sync
             redis_store: Optional RedisContextStore for cognitive projection
         """
-        # Storage paths (matching IA/CA layout)
+        # Storage paths (matching earlier agent implementations layout)
         self.storage_path = Path(
             storage_path
             or os.environ.get("FUNCTION_REGISTRY_PATH", "./logs/function_registry")

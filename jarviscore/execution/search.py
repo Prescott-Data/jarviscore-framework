@@ -29,7 +29,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote_plus, urlparse
 
 import aiohttp
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -642,6 +641,9 @@ class InternetSearch:
                     return {"url": url, "success": False, "error": f"HTTP {response.status}"}
 
                 html = await response.text()
+                # Lazy import (issue #63/JC-004): bs4 is a web-scraping dep —
+                # importing the LLM client must not require it.
+                from bs4 import BeautifulSoup
                 soup = BeautifulSoup(html, "html.parser")
 
                 title = soup.title.string if soup.title else urlparse(url).netloc
