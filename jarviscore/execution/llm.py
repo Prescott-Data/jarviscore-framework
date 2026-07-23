@@ -5,6 +5,8 @@ Supports: vLLM, Azure OpenAI, Gemini, Vertex AI, Claude with automatic fallback
 import asyncio
 import aiohttp
 import logging
+import random
+import re
 import time
 from typing import Optional, Dict, List, Any
 from enum import Enum
@@ -268,7 +270,7 @@ class UnifiedLLMClient:
         prompt: Optional[str] = None,
         messages: Optional[List[Dict]] = None,
         temperature: float = 0.7,
-        max_tokens: int = 4000,
+        max_tokens: Optional[int] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -297,6 +299,13 @@ class UnifiedLLMClient:
         # Callers from the integration agent pattern may pass this explicitly.
         if "max_completion_tokens" in kwargs:
             max_tokens = kwargs.pop("max_completion_tokens")
+
+        # Default output cap is config-driven. Reasoning models (gpt-5.x) bill
+        # internal reasoning against max_completion_tokens, so the legacy 4000
+        # default truncates answers mid-JSON — set llm_default_max_tokens
+        # accordingly (e.g. 16000) when using reasoning deployments.
+        if max_tokens is None:
+            max_tokens = int(self.config.get("llm_default_max_tokens", 4000))
 
         # Convert prompt to messages if needed
         if not messages:
@@ -350,7 +359,16 @@ class UnifiedLLMClient:
                         or "rate limit" in error_str.lower()
                     )
                     if is_rate_limit and attempt < max_429_retries:
+                        # Exponential backoff with full jitter — without jitter,
+                        # N concurrent callers rate-limited at the same instant
+                        # retry at the same instant and storm the window again.
                         delay = min(base_delay * (2 ** attempt), 60.0)
+                        delay *= random.uniform(0.5, 1.5)
+                        # Azure 429 bodies say "retry after N seconds" — that is
+                        # the authoritative wait; never retry before it.
+                        hint = re.search(r"retry after (\d+) second", error_str, re.IGNORECASE)
+                        if hint:
+                            delay = max(delay, float(hint.group(1)) + random.uniform(0.5, 2.0))
                         logger.warning(
                             f"Provider {provider.value} rate-limited (429). "
                             f"Retry {attempt + 1}/{max_429_retries} in {delay:.1f}s"
@@ -525,8 +543,22 @@ class UnifiedLLMClient:
             if response_format is not None:
                 call_kwargs["response_format"] = response_format
 
+            # Codex deployments (gpt-5.x-codex) are Responses-API-only on Azure:
+            # chat.completions returns 400 "The requested operation is unsupported".
+            is_responses_only = "codex" in deployment.lower()
+
             try:
-                response = await self.azure_client.chat.completions.create(**call_kwargs)
+                if is_responses_only:
+                    resp_kwargs = {
+                        "model": deployment,
+                        "input": attempt_messages,
+                        "max_output_tokens": max_tokens,
+                    }
+                    if response_format is not None:
+                        resp_kwargs["text"] = {"format": response_format}
+                    response = await self.azure_client.responses.create(**resp_kwargs)
+                else:
+                    response = await self.azure_client.chat.completions.create(**call_kwargs)
             except Exception as e:
                 error_str = str(e)
                 is_content_filter = (
@@ -560,24 +592,33 @@ class UnifiedLLMClient:
                 raise  # non-filter error or already sanitized — propagate
 
             duration = time.time() - start_time
-            content = response.choices[0].message.content
-            usage = response.usage
+            if is_responses_only:
+                content = response.output_text
+                prompt_tokens = response.usage.input_tokens
+                completion_tokens = response.usage.output_tokens
+                total_tokens = response.usage.total_tokens
+            else:
+                content = response.choices[0].message.content
+                usage = response.usage
+                prompt_tokens = usage.prompt_tokens
+                completion_tokens = usage.completion_tokens
+                total_tokens = usage.total_tokens
 
             if label == "provider_repaired":
                 logger.info("Azure content filter retry succeeded with opt-in provider prompt repair.")
 
             # Calculate cost
             pricing = TOKEN_PRICING.get(deployment, {"input": 3.0, "output": 15.0})
-            cost = (usage.prompt_tokens * pricing['input'] +
-                    usage.completion_tokens * pricing['output']) / 1_000_000
+            cost = (prompt_tokens * pricing['input'] +
+                    completion_tokens * pricing['output']) / 1_000_000
 
             return {
                 "content": content,
                 "provider": "azure",
                 "tokens": {
-                    "input": usage.prompt_tokens,
-                    "output": usage.completion_tokens,
-                    "total": usage.total_tokens
+                    "input": prompt_tokens,
+                    "output": completion_tokens,
+                    "total": total_tokens
                 },
                 "cost_usd": cost,
                 "model": deployment,
