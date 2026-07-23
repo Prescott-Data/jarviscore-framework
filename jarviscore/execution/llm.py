@@ -364,11 +364,24 @@ class UnifiedLLMClient:
                         # retry at the same instant and storm the window again.
                         delay = min(base_delay * (2 ** attempt), 60.0)
                         delay *= random.uniform(0.5, 1.5)
-                        # Azure 429 bodies say "retry after N seconds" — that is
-                        # the authoritative wait; never retry before it.
+                        # Azure 429 bodies say "retry after N seconds". Honor it
+                        # as a floor — but CAPPED. When a quota window is fully
+                        # exhausted Azure can say "retry after 3600+ seconds";
+                        # sleeping that long inside the concurrency semaphore
+                        # put an entire agent into a silent hours-long coma
+                        # (2026-07-23). A huge hint means the provider is DOWN
+                        # for this window: fail fast so callers can degrade.
                         hint = re.search(r"retry after (\d+) second", error_str, re.IGNORECASE)
                         if hint:
-                            delay = max(delay, float(hint.group(1)) + random.uniform(0.5, 2.0))
+                            hinted = float(hint.group(1))
+                            if hinted > 300.0:
+                                logger.error(
+                                    f"Provider {provider.value} quota exhausted "
+                                    f"(retry-after {hinted:.0f}s > 300s cap) — failing fast."
+                                )
+                                last_error = e
+                                break  # provider is out for this window
+                            delay = max(delay, min(hinted, 120.0) + random.uniform(0.5, 2.0))
                         logger.warning(
                             f"Provider {provider.value} rate-limited (429). "
                             f"Retry {attempt + 1}/{max_429_retries} in {delay:.1f}s"
