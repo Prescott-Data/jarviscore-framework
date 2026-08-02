@@ -688,7 +688,18 @@ class P2PCoordinator:
     async def _handle_peer_notify(self, sender, message):
         """Handle peer notification message."""
         try:
-            payload = message.get('payload', {})
+            # Parse payload — remote transport may deliver it as a JSON string,
+            # exactly as in _handle_peer_request.
+            import json
+            payload_raw = message.get('payload', {})
+            if isinstance(payload_raw, str):
+                try:
+                    payload = json.loads(payload_raw)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Peer notify: failed to parse payload JSON: {e}")
+                    return
+            else:
+                payload = payload_raw
             target = payload.get('target')
 
             # Find target agent's PeerClient
