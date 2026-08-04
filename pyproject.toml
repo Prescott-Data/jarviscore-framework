@@ -124,6 +124,7 @@ jarviscore = [
     "docs/*.md",
     "data/.env.example",
     "data/examples/*.py",
+    "skills/jarviscore/SKILL.md",
     # Nexus local-stack data — bundled so pip install users don't need the repo
     "nexus/_data/docker-compose.nexus.yml",
     "nexus/_data/001_initial_schema.sql",
