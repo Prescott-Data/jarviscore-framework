@@ -8,7 +8,7 @@ icon: material/home
 
 # Agents that survive production
 
-Most frameworks get you a demo. JarvisCore gets you an operator: agents that run unattended for weeks, remember last month, fail loudly, and leave a flight record you can read. We run our own agents on it with real budgets, and every hardening release comes from those scars.
+Most frameworks get you a demo. JarvisCore gets you an operator: agents that run unattended for weeks, remember last month, fail loudly, and leave a flight record you can read. We run our own agents on it, with real budgets. Every hardening release comes from those scars.
 
 <div class="jc-cta-text" markdown>
 [Get started](getting-started.md) [Why JarvisCore](#why-jarviscore) [Reference](reference/configuration.md)
@@ -41,20 +41,12 @@ Most frameworks get you a demo. JarvisCore gets you an operator: agents that run
 
 ## Why JarvisCore
 
-Agent frameworks fail in the same three places. We built against all three.
+Built by running our own agents unattended, with real budgets. Four rules fell out of that, and they are enforced in code, not promised in prose:
 
-**Your agent should never lie to itself.** When context fills up, most frameworks quietly drop things: old turns, the middle of a tool result, half a summary. The agent then reasons from evidence it does not know is missing. Our rule: truncation is lossiness, not compression. Clips are labeled, originals are archived with a retrieval path, summaries say what they summarize.
-
-**Failures must be loud.** Failed steps say so. Evaluators see full evidence before passing a verdict. Partial work survives a failed goal. Rate-limit storms are absorbed with jittered backoff instead of crashing the loop. When something breaks, the record shows where.
-
-**Autonomy is a spectrum.** Two profiles, nothing in between. CustomAgent is a thin infrastructure shell: you bring the brain, you keep deterministic control. AutoAgent is the full cognitive stack: classification, typed routing, specialist sub-agents, sandboxed code generation with self-repair, and a registry where verified work graduates for reuse. Pick your point per agent, not per framework.
-
-Underneath sit structural choices no glue layer gives you:
-
-- **Self-organising mesh.** Agents discover each other over SWIM gossip with ZMQ transport. No central orchestrator to die. The same PeerClient code runs in one process or across a fleet.
-- **Memory that compounds.** Set `ATHENA_URL` and every agent gains a fourth memory tier: cross-session, semantic, consolidated over time. The agent you run in week six works from what it learned in week one. Without it, three in-process tiers still cover working, episodic, and long-term context.
-- **Agents that write their own integrations.** When AutoAgent lacks a capability, it writes the code, runs it in a sandbox, repairs it until it passes, and files it in a registry: candidate, verified, golden. Your agents grow a tool catalog instead of consuming one.
-- **Zero-trust credentials.** With Nexus, agents never see a raw secret. Prompt injection cannot exfiltrate what the agent never had.
+- **Honest context.** Nothing is truncated silently. Clips are labeled, originals archived, summaries say what they summarize.
+- **Loud failures.** Failed steps say so. Partial work survives. Rate-limit storms are absorbed, not crashed on.
+- **Two profiles, no mushy middle.** `CustomAgent`: you bring the brain. `AutoAgent`: the full cognitive stack. It writes its own integrations, repairs them in a sandbox, and banks verified work for reuse.
+- **No single point of death.** Agents coordinate over a SWIM gossip mesh. Memory compounds across sessions via Athena. Credentials stay out of agent reasoning via Nexus.
 
 ---
 
