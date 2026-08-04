@@ -184,6 +184,21 @@ Expected output when everything is correctly configured:
 
 ---
 
+## Choose Your Agent Profile
+
+JarvisCore ships exactly two agent profiles. This is the first decision in every project:
+
+| | `AutoAgent` | `CustomAgent` |
+|---|---|---|
+| Who brings the logic | The framework: LLM reasoning, sandboxed code generation, self-repair | You: plain Python in `execute_task` |
+| You write | `role`, `capabilities`, `system_prompt` | The implementation |
+| Use for | Tasks you can describe: research, analysis, content, data extraction | Logic you can code: API workers, wrapping existing services, deterministic pipelines |
+| Guide | [AutoAgent guide](guides/autoagent.md) | [CustomAgent guide](guides/customagent.md) |
+
+Both run on the same mesh and mix freely in one system. Not sure? Start with `AutoAgent` below; switch any agent to `CustomAgent` later without touching the rest.
+
+---
+
 ## Your First Agent
 
 Create a file named `main.py`:
@@ -228,6 +243,23 @@ python main.py
 ```
 
 The agent will reason through the task using the OODA loop and return a structured response. Because no infrastructure is configured beyond the LLM key, all state is held in process memory and discarded when the script exits.
+
+The same agent as a `CustomAgent`, when you want to own the logic instead of describing the task:
+
+```python title="main.py (CustomAgent variant)"
+from jarviscore.profiles import CustomAgent
+
+
+class ResearcherAgent(CustomAgent):
+    role = "researcher"
+    capabilities = ["research"]
+
+    async def execute_task(self, task):
+        findings = await my_research_pipeline(task["task"])   # your code
+        return {"status": "success", "output": findings}
+```
+
+Everything else on this page works identically for both profiles.
 
 ---
 
