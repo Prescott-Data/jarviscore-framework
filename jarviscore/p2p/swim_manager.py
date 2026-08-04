@@ -7,19 +7,24 @@ Adapted from an earlier internal agent codebase/src/swim_thread_manager.py
 - Kept core functionality identical
 """
 import asyncio
+import contextlib
+import io
 import logging
 import threading
-import time
 from typing import Optional
 
-from swim.transport.hybrid import HybridTransport
-from swim.protocol.node import Node
-from swim.config import get_config as get_swim_config, validate_config as validate_swim_config
-from swim.events.dispatcher import EventDispatcher
-from swim.integration.agent import ZMQAgentIntegration
-from swim.main import SWIMZMQBridge, parse_address as swim_parse_address
+# swim-p2p announces itself on stdout at import; a library must stay quiet
+with contextlib.redirect_stdout(io.StringIO()) as _swim_import_noise:
+    from swim.transport.hybrid import HybridTransport
+    from swim.protocol.node import Node
+    from swim.config import get_config as get_swim_config, validate_config as validate_swim_config
+    from swim.events.dispatcher import EventDispatcher
+    from swim.integration.agent import ZMQAgentIntegration
+    from swim.main import SWIMZMQBridge, parse_address as swim_parse_address
 
 logger = logging.getLogger(__name__)
+if _swim_import_noise.getvalue():
+    logger.debug("swim-p2p import output: %s", _swim_import_noise.getvalue().strip())
 
 
 class SWIMThreadManager:
