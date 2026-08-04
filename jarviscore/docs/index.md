@@ -6,12 +6,12 @@ icon: material/home
 
 <img src="assets/combo-brand.svg" class="jc-hero-logo" alt="JarvisCore Logo" />
 
-# Build autonomous multi-agent systems
+# Agents that survive production
 
-JarvisCore is a Python framework for production multi-agent AI. Peer-to-peer coordination, composable memory, 46 service integrations, and full observability — from a single agent to a fleet.
+Most frameworks get you a demo. JarvisCore gets you an operator: agents that run unattended for weeks, remember what happened last month, fail loudly instead of silently, and leave a flight record you can actually read. We know because we run our own agents on it, with real budgets and real consequences, and every hardening release comes from those scars.
 
 <div class="jc-cta-text" markdown>
-[Get started](getting-started.md) [Reference](reference/configuration.md) [View Changelog](CHANGELOG.md)
+[Get started](getting-started.md) [Why JarvisCore](#why-jarviscore) [Reference](reference/configuration.md)
 </div>
 
 </div>
@@ -20,22 +20,34 @@ JarvisCore is a Python framework for production multi-agent AI. Peer-to-peer coo
 
 <div class="jc-stats" markdown>
 <div class="jc-stat" markdown>
+<span class="jc-stat-value">1 key</span>
+<span class="jc-stat-label">To First Agent</span>
+</div>
+<div class="jc-stat" markdown>
+<span class="jc-stat-value">0</span>
+<span class="jc-stat-label">Silent Truncations</span>
+</div>
+<div class="jc-stat" markdown>
+<span class="jc-stat-value">24/7</span>
+<span class="jc-stat-label">Unattended Operation</span>
+</div>
+<div class="jc-stat" markdown>
 <span class="jc-stat-value">46</span>
 <span class="jc-stat-label">Service Integrations</span>
 </div>
-<div class="jc-stat" markdown>
-<span class="jc-stat-value">237+</span>
-<span class="jc-stat-label">Prebuilt Actions</span>
 </div>
-<div class="jc-stat" markdown>
-<span class="jc-stat-value">4-tier</span>
-<span class="jc-stat-label">Agent Memory</span>
-</div>
-<div class="jc-stat" markdown>
-<span class="jc-stat-value">P2P</span>
-<span class="jc-stat-label">Agent Mesh</span>
-</div>
-</div>
+
+---
+
+## Why JarvisCore
+
+Agent frameworks fail in the same three places. We built against all three, because our own agents hit them first.
+
+**Your agent should never lie to itself.** Context windows fill up, and most frameworks quietly cut things out: the oldest turns, the middle of a tool result, half of a step summary. The agent then reasons confidently from evidence it does not know is missing. JarvisCore has a standing rule: truncation is not compression, it is lossiness. Anything clipped is labeled as clipped, originals are archived with a retrieval path, and summaries say what they summarize. Your agent knows what it knows.
+
+**Failures must be loud.** An autonomous agent that fails silently is a liability you discover at the worst moment. Steps that fail say so, evaluators see full evidence before passing a verdict, partial work survives a failed goal instead of vanishing, and rate-limit storms are absorbed with jittered backoff instead of crashing the loop. When something breaks, the record shows you exactly where.
+
+**Autonomy is a spectrum, not a slider.** JarvisCore ships exactly two agent profiles. CustomAgent is a thin infrastructure shell where you bring the brain and keep deterministic control. AutoAgent is the full cognitive stack: task classification, typed routing, specialist sub-agents on an observe-orient-decide-act loop, code generation with sandboxed execution and self-repair, and a registry where verified work graduates for reuse. Pick your point on the spectrum per agent, not per framework.
 
 ---
 
@@ -47,7 +59,7 @@ JarvisCore is a Python framework for production multi-agent AI. Peer-to-peer coo
 
 ### Two execution models
 
-`AutoAgent` runs a full OODA loop internally — observe, orient, decide, act. `CustomAgent` exposes the execution loop directly for deterministic control. Both share the same infrastructure.
+`AutoAgent` runs a full cognitive loop internally: observe, orient, decide, act. `CustomAgent` exposes the execution loop directly for deterministic control. Both share the same infrastructure.
 </div>
 
 <div class="jc-card" markdown>
@@ -71,7 +83,7 @@ Agents discover and message each other via a `PeerClient` API. Routing, request-
 
 ### 46 service integrations
 
-Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and 40 more. 237+ prebuilt actions your agents can call directly — no glue code, no auth wiring.
+Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and 40 more. 237+ prebuilt actions your agents can call directly. No glue code, no auth wiring.
 
 [Browse integrations →](guides/integrations.md)
 </div>
@@ -81,7 +93,7 @@ Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and 40 more. 237+ preb
 
 ### Nexus credential layer
 
-Agents call third-party APIs without ever touching raw credentials. OAuth2, API keys, and basic auth — all managed by Nexus and kept out of agent reasoning.
+Agents call third-party APIs without ever touching raw credentials. OAuth2, API keys, and basic auth are all managed by Nexus and kept out of agent reasoning.
 
 [Nexus guide →](guides/nexus.md)
 </div>
@@ -149,20 +161,20 @@ asyncio.run(main())
 
 If you are new to JarvisCore, read in this order:
 
-1. [Getting Started](getting-started.md) — install, configure, and run your first agent
-2. [Architecture Overview](concepts/architecture.md) — the mental model for how the framework fits together
-3. [Agents](concepts/agents.md) — what an agent is, its identity and lifecycle
-4. [Language Models](concepts/language-models.md) — how JarvisCore uses multiple LLMs simultaneously
-5. [Memory](concepts/memory.md) — how agents maintain and recover context
-6. [Agent Personas](concepts/agent-personas.md) — how profiles shape autonomous behaviour
+1. [Getting Started](getting-started.md): install, configure, and run your first agent
+2. [Architecture Overview](concepts/architecture.md): the mental model for how the framework fits together
+3. [Agents](concepts/agents.md): what an agent is, its identity and lifecycle
+4. [Language Models](concepts/language-models.md): how JarvisCore uses multiple LLMs simultaneously
+5. [Memory](concepts/memory.md): how agents maintain and recover context
+6. [Agent Personas](concepts/agent-personas.md): how profiles shape autonomous behaviour
 
 If you are evaluating for a specific use case:
 
-- [AutoAgent Guide](guides/autoagent.md) — autonomous reasoning agents
-- [CustomAgent Guide](guides/customagent.md) — deterministic worker agents
-- [System Bundles & Integrations](guides/integrations.md) — the full atom catalog
-- [Configuration Reference](reference/configuration.md) — all environment variables
-- [JarvisCore Enterprise](infrastructure/enterprise.md) — managed deployment and SLAs
+- [AutoAgent Guide](guides/autoagent.md): autonomous reasoning agents
+- [CustomAgent Guide](guides/customagent.md): deterministic worker agents
+- [System Bundles & Integrations](guides/integrations.md): the full atom catalog
+- [Configuration Reference](reference/configuration.md): all environment variables
+- [JarvisCore Enterprise](infrastructure/enterprise.md): managed deployment and SLAs
 
 ---
 
@@ -170,10 +182,10 @@ If you are evaluating for a specific use case:
 
 | | |
 |---|---|
-| **Reference** | Full API surface, configuration keys, and CLI flags — [view reference](reference/configuration.md) |
-| **Source** | Browse the code, open issues, and submit PRs — [GitHub](https://github.com/Prescott-Data/jarviscore-framework){ target="_blank" rel="noopener" } |
-| **Community** | Questions, showcases, and early feature previews — [Discord](https://discord.gg/jarviscore){ target="_blank" rel="noopener" } |
-| **Blog** | Engineering deep-dives and architecture walkthroughs — [read the blog](https://developers.prescottdata.io/blog){ target="_blank" rel="noopener" } |
+| **Reference** | Full API surface, configuration keys, and CLI flags: [view reference](reference/configuration.md) |
+| **Source** | Browse the code, open issues, and submit PRs: [GitHub](https://github.com/Prescott-Data/jarviscore-framework){ target="_blank" rel="noopener" } |
+| **Community** | Questions, showcases, and early feature previews: [Discord](https://discord.gg/jarviscore){ target="_blank" rel="noopener" } |
+| **Blog** | Engineering deep-dives and architecture walkthroughs: [read the blog](https://developers.prescottdata.io/blog){ target="_blank" rel="noopener" } |
 
 ---
 
