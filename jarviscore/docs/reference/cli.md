@@ -200,34 +200,42 @@ Manages the Athena MemOS memory infrastructure.
 
 ### memory init
 
-Builds and starts the Athena Docker stack from source. Run this once per environment.
+Pulls the published Athena image and starts the Docker stack. Run this once per environment.
 
 ```bash
 jarviscore memory init
 ```
 
-Before running this command, clone the Athena repository:
+Contributors working on Athena itself can build from a local clone:
 
 ```bash
 git clone https://github.com/Prescott-Data/athena ~/athena
+jarviscore memory init --from-source
 ```
 
-If your Athena clone is in a non-standard location, set `ATHENA_DIR`:
+With `--from-source`, a non-standard clone location is set with `ATHENA_DIR`:
 
 ```bash
-ATHENA_DIR=/path/to/athena jarviscore memory init
+ATHENA_DIR=/path/to/athena jarviscore memory init --from-source
 ```
 
 The `init` command:
 
-1. Locates the Athena source repository.
-2. Detects an LLM API key from the environment (Gemini, then Anthropic, then OpenAI).
-3. Builds all Athena services with `docker compose up -d --build`.
-4. Waits up to 90 seconds for the health endpoint at `http://localhost:8080/api/v1/health` to return `ok`.
-5. Writes `ATHENA_URL=http://localhost:8080` to the project `.env` file.
+1. Detects an LLM API key from the environment (Gemini, then Anthropic, then OpenAI).
+2. Starts all Athena services with `docker compose up -d`.
+3. Waits up to 90 seconds for the health endpoint at `http://localhost:8080/api/v1/health` to return `ok`.
+4. Writes `ATHENA_URL=http://localhost:8080` to the project `.env` file.
 
-!!! note "First-build duration"
-    The initial build takes approximately two minutes because Milvus is compiled from source. Subsequent starts use Docker layer caching and complete in under 10 seconds.
+!!! note "First-start duration"
+    The first run takes about two minutes to pull images. Subsequent starts complete in under 10 seconds.
+
+### memory up
+
+Alias for `memory init`. Starting the stack is idempotent: services already running are left untouched.
+
+```bash
+jarviscore memory up
+```
 
 ### memory status
 
