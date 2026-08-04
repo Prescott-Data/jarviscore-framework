@@ -1,5 +1,5 @@
 site_name: JarvisCore
-site_description: Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth.
+site_description: Open source Python framework for building autonomous multi-agent AI systems in production. Peer-to-peer agent orchestration, persistent memory, zero-trust auth, and full observability.
 site_url: https://jarviscore.developers.prescottdata.io/
 repo_url: https://github.com/Prescott-Data/jarviscore-framework
 repo_name: Prescott-Data/jarviscore-framework

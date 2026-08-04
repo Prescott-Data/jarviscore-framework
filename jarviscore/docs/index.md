@@ -1,5 +1,7 @@
 ---
 icon: material/home
+title: Python Multi-Agent AI Framework for Production
+description: Open source Python framework for building autonomous multi-agent AI systems. Peer-to-peer agent orchestration, persistent agent memory, zero-trust credentials, and full observability.
 ---
 
 <div class="jc-hero" markdown>
@@ -8,33 +10,12 @@ icon: material/home
 
 # Agents that survive production
 
-Most frameworks get you a demo. JarvisCore gets you an operator: agents that run unattended for weeks, remember last month, fail loudly, and leave a flight record you can read. We run our own agents on it, with real budgets. Every hardening release comes from those scars.
+JarvisCore is an open source Python framework for building autonomous multi-agent AI systems. Most agent frameworks get you a demo; JarvisCore gets you an operator: agents that run unattended for weeks, remember last month, fail loudly, and leave a flight record you can read. We run our own agents on it, with real budgets. Every hardening release comes from those scars.
 
 <div class="jc-cta-text" markdown>
 [Get started](getting-started.md) [Why JarvisCore](#why-jarviscore) [Reference](reference/configuration.md)
 </div>
 
-</div>
-
----
-
-<div class="jc-stats" markdown>
-<div class="jc-stat" markdown>
-<span class="jc-stat-value">1 key</span>
-<span class="jc-stat-label">To First Agent</span>
-</div>
-<div class="jc-stat" markdown>
-<span class="jc-stat-value">0</span>
-<span class="jc-stat-label">Silent Truncations</span>
-</div>
-<div class="jc-stat" markdown>
-<span class="jc-stat-value">24/7</span>
-<span class="jc-stat-label">Unattended Operation</span>
-</div>
-<div class="jc-stat" markdown>
-<span class="jc-stat-value">46</span>
-<span class="jc-stat-label">Service Integrations</span>
-</div>
 </div>
 
 ---
@@ -47,6 +28,8 @@ Built by running our own agents unattended, with real budgets. Four rules fell o
 - **Loud failures.** Failed steps say so. Partial work survives. Rate-limit storms are absorbed, not crashed on.
 - **Two profiles, no mushy middle.** `CustomAgent`: you bring the brain. `AutoAgent`: the full cognitive stack. It writes its own integrations, repairs them in a sandbox, and banks verified work for reuse.
 - **No single point of death.** Agents coordinate over a SWIM gossip mesh. Memory compounds across sessions via Athena. Credentials stay out of agent reasoning via Nexus.
+
+Here is what those rules buy you in practice.
 
 ---
 
@@ -64,7 +47,7 @@ Built by running our own agents unattended, with real budgets. Four rules fell o
 <div class="jc-card" markdown>
 <span class="jc-card-label">Memory</span>
 
-### Four-tier memory
+### Four-tier agent memory
 
 Working scratchpad, episodic ledger, LLM-compressed long-term summaries, and optional cross-session semantic memory via Athena MemOS. Wired into AutoAgent automatically when `ATHENA_URL` is set. Context that survives restarts and compounds across weeks.
 </div>
@@ -72,7 +55,7 @@ Working scratchpad, episodic ledger, LLM-compressed long-term summaries, and opt
 <div class="jc-card" markdown>
 <span class="jc-card-label">Communication</span>
 
-### Self-organising mesh
+### Self-organising agent mesh
 
 Agents discover and message each other via a `PeerClient` API over SWIM gossip and ZMQ. No central orchestrator to die: nodes join, fail, and rejoin. Identical code on a single process or across distributed machines.
 </div>
@@ -121,6 +104,8 @@ Every agent turn, tool call, and LLM request is traced automatically. Redis PubS
 ---
 
 ## Quickstart
+
+One LLM provider key is the only required configuration. Install, initialise, and run your first autonomous agent:
 
 ```bash title="Install & initialise"
 pip install jarviscore-framework
