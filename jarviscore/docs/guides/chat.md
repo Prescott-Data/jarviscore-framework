@@ -4,7 +4,7 @@ icon: material/chat-processing
 
 # Chat Endpoint
 
-JarvisCore agents are not just task executors — they can function as conversational interfaces. The `create_chat_router` factory produces a FastAPI router with a `POST /chat` endpoint and a real-time Server-Sent Events stream, letting you build a chat UI backed by any JarvisCore `AutoAgent` in minutes.
+JarvisCore agents are not just task executors: they can function as conversational interfaces. The `create_chat_router` factory produces a FastAPI router with a `POST /chat` endpoint and a real-time Server-Sent Events stream, letting you build a chat UI backed by any JarvisCore `AutoAgent` in minutes.
 
 ---
 
@@ -123,7 +123,7 @@ curl -X POST http://localhost:8000/api/v1/chat \
 
 ### `GET /api/v1/chat/stream/{workflow_id}`
 
-Real-time SSE stream of trace events for a workflow. Connect before or after the `POST /chat` call — missed events are replayed from Redis on connection.
+Real-time SSE stream of trace events for a workflow. Connect before or after the `POST /chat` call: missed events are replayed from Redis on connection.
 
 ```javascript title="Browser SSE client"
 const workflowId = "chat-a3f2b1";
@@ -163,7 +163,7 @@ es.onmessage = (e) => {
 | `tool_result` | `tool: str, result: str, success: bool, error: str\|null` | Tool result returned |
 | `llm_request` | `system_preview: str, user_preview: str` | LLM call dispatched |
 | `llm_response` | `content_preview: str, latency_ms: float` | LLM response received |
-| `step_complete` | `success: bool, summary: str` | Execution finished — read `answer` and `sources` from the POST response |
+| `step_complete` | `success: bool, summary: str` | Execution finished: read `answer` and `sources` from the POST response |
 | `error` | `message: str` | Something went wrong |
 | `timeout` | `message: str` | Stream timed out (default: 300 seconds) |
 
@@ -195,7 +195,7 @@ curl http://localhost:8000/api/v1/chat/history/chat-a3f2b1/step-1
 
 ## Multi-Turn Conversations
 
-Pass the same `workflow_id` across multiple `POST /chat` calls to give the Kernel a shared memory anchor. Each call generates its own `step_id` (a timestamp-based key), so the episodic ledger entries are separate. What persists across calls is the Athena and long-term memory context — the Kernel rehydrates that on each request using the same `workflow_id` as the lookup key.
+Pass the same `workflow_id` across multiple `POST /chat` calls to give the Kernel a shared memory anchor. Each call generates its own `step_id` (a timestamp-based key), so the episodic ledger entries are separate. What persists across calls is the Athena and long-term memory context: the Kernel rehydrates that on each request using the same `workflow_id` as the lookup key.
 
 In practice this means the agent can refer to what it learned in an earlier turn when Athena is configured. Without Athena, each call is stateless regardless of `workflow_id`.
 
@@ -208,7 +208,7 @@ client = httpx.Client(base_url="http://localhost:8000")
 r1 = client.post("/api/v1/chat", json={"message": "Tell me about transformer attention."})
 workflow_id = r1.json()["workflow_id"]
 
-# Turn 2 — same workflow_id; Kernel rehydrates shared memory context
+# Turn 2: same workflow_id; Kernel rehydrates shared memory context
 r2 = client.post("/api/v1/chat", json={
     "message": "How does that compare to state space models?",
     "workflow_id": workflow_id,
@@ -222,7 +222,7 @@ r2 = client.post("/api/v1/chat", json={
 
 ## Adding a System Prompt Per Request
 
-The `system_prompt` field in the request is passed directly to `kernel.execute()` as the system prompt for the Kernel's subagent dispatch. It replaces the subagent's default system prompt for that request. The AutoAgent class's own `system_prompt` attribute is not affected — this field is a per-request override, not an extension of it.
+The `system_prompt` field in the request is passed directly to `kernel.execute()` as the system prompt for the Kernel's subagent dispatch. It replaces the subagent's default system prompt for that request. The AutoAgent class's own `system_prompt` attribute is not affected: this field is a per-request override, not an extension of it.
 
 The `context` dict is injected into the agent's task context alongside the message:
 
@@ -238,6 +238,6 @@ httpx.post("/api/v1/chat", json={
 
 ## Further Reading
 
-- [FastAPI Integration](fastapi.md) — Full FastAPI setup with `JarvisLifespan` and `mesh.workflow()`
-- [Observability](observability.md) — How trace events are stored and what metrics are emitted
-- [AutoAgent Guide](autoagent.md) — The Kernel OODA loop that drives the chat endpoint
+- [FastAPI Integration](fastapi.md): Full FastAPI setup with `JarvisLifespan` and `mesh.workflow()`
+- [Observability](observability.md): How trace events are stored and what metrics are emitted
+- [AutoAgent Guide](autoagent.md): The Kernel OODA loop that drives the chat endpoint

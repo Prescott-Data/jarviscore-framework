@@ -6,9 +6,9 @@ icon: material/puzzle
 
 JarvisCore's integration model is built around two related ideas: **atoms** and **system bundles**.
 
-An **atom** is a single, versioned, self-contained Python function that performs one action against one external system — send a Slack message, create a GitHub issue, read a Google Sheet row. It has a fixed signature, it owns its HTTP transport, and it never holds state.
+An **atom** is a single, versioned, self-contained Python function that performs one action against one external system: send a Slack message, create a GitHub issue, read a Google Sheet row. It has a fixed signature, it owns its HTTP transport, and it never holds state.
 
-A **system bundle** is a generated Python class that groups all atoms for a given system together — `SlackCapabilities`, `GitHubCapabilities`, `StripeCapabilities` — making them available to agent code and the code sandbox as a typed, injectable unit.
+A **system bundle** is a generated Python class that groups all atoms for a given system together (`SlackCapabilities`, `GitHubCapabilities`, `StripeCapabilities`) making them available to agent code and the code sandbox as a typed, injectable unit.
 
 > [!NOTE]
 > **Coming from MCP?** System bundles are JarvisCore's native alternative to MCP tool servers. They are simpler (plain Python functions, no server process), tighter to the agent runtime, and carry an execution history that drives automatic promotion to production-ready status. [See the MCP comparison below.](#this-is-not-mcp)
@@ -45,11 +45,11 @@ def slack_send_message(auth_info: dict, channel: str, text: str, thread_ts: str 
 
 | Property | Rule |
 |---|---|
-| First parameter | Always `auth_info: dict` — populated by Nexus at call time |
-| Return type | Always `dict` — structured, never raw HTTP response |
-| Transport | Self-contained — imports requests internally |
-| State | Stateless — no class, no instance, no side effects beyond the API call |
-| Error handling | Raises on failure — the sandbox catches and reports |
+| First parameter | Always `auth_info: dict`: populated by Nexus at call time |
+| Return type | Always `dict`: structured, never raw HTTP response |
+| Transport | Self-contained: imports requests internally |
+| State | Stateless: no class, no instance, no side effects beyond the API call |
+| Error handling | Raises on failure: the sandbox catches and reports |
 
 Atoms intentionally embed their own `import requests` rather than relying on a shared HTTP client. This makes them independently executable in the code sandbox and portable across contexts.
 
@@ -120,7 +120,7 @@ Stage advances automatically when `update_execution_stats(success=True)` is call
 
 ## JIT: Just-In-Time Compilation
 
-The registry's most powerful capability is JIT — agent code generation for systems and actions that don't yet have a pre-built atom.
+The registry's most powerful capability is JIT: agent code generation for systems and actions that don't yet have a pre-built atom.
 
 When a task requires calling an external system and no matching atom exists in the registry, `CoderSubAgent` follows this fallback ladder:
 
@@ -144,9 +144,9 @@ When a task requires calling an external system and no matching atom exists in t
    └── Atom available for reuse in future calls
 ```
 
-This means the first time your agent needs to call, say, `quickbooks_create_invoice`, it writes and tests that function live. Every subsequent call skips straight to step 1 — the atom is already in the registry.
+This means the first time your agent needs to call, say, `quickbooks_create_invoice`, it writes and tests that function live. Every subsequent call skips straight to step 1: the atom is already in the registry.
 
-**Naming convention:** All atoms registered by CoderSubAgent follow `{system}_{action}` — e.g. `stripe_create_payment_intent`, `notion_create_page`, `github_list_open_prs`.
+**Naming convention:** All atoms registered by CoderSubAgent follow `{system}_{action}`: e.g. `stripe_create_payment_intent`, `notion_create_page`, `github_list_open_prs`.
 
 ---
 
@@ -207,7 +207,7 @@ JarvisCore ships with 77 pre-built atoms across 19 system bundles, seeded at sta
 
 ## This Is Not MCP
 
-The Model Context Protocol (MCP) by Anthropic is a standard for connecting LLM applications to external tools via a client-server protocol. It's a well-designed standard — MCP servers run as separate processes, expose tools via a JSON-RPC-like protocol, and clients discover and call them at runtime.
+The Model Context Protocol (MCP) by Anthropic is a standard for connecting LLM applications to external tools via a client-server protocol. It's a well-designed standard: MCP servers run as separate processes, expose tools via a JSON-RPC-like protocol, and clients discover and call them at runtime.
 
 JarvisCore's atom model takes a different approach, and it's worth being explicit about the trade-offs:
 
@@ -217,11 +217,11 @@ JarvisCore's atom model takes a different approach, and it's worth being explici
 | **Discovery** | MCP client discovers tools at runtime from the server | Registry lookup; JIT generation if missing |
 | **Transport** | JSON-RPC over stdio/HTTP | Direct Python call in sandbox |
 | **Versioning** | Server manages versions | Immutable `_v1`, `_v2` files + SHA256 |
-| **Execution history** | Not tracked | Tracked — drives candidate→verified→golden promotion |
+| **Execution history** | Not tracked | Tracked: drives candidate→verified→golden promotion |
 | **New tools** | Write a new MCP server handler | `CoderSubAgent` generates the atom JIT from a task description |
-| **Auth** | Varies by implementation | Always via Nexus — credentials never in agent code |
+| **Auth** | Varies by implementation | Always via Nexus: credentials never in agent code |
 
-**Does JarvisCore support MCP tools?** Not natively — there is no built-in MCP client. However, `CustomAgent` is flexible enough to wrap an MCP client directly:
+**Does JarvisCore support MCP tools?** Not natively: there is no built-in MCP client. However, `CustomAgent` is flexible enough to wrap an MCP client directly:
 
 ```python
 class MCPAgent(CustomAgent):
@@ -240,7 +240,7 @@ class MCPAgent(CustomAgent):
         return result
 ```
 
-This pattern lets teams adopt JarvisCore's orchestration, memory, and P2P mesh while keeping existing MCP tool servers intact. The atom model and MCP are not mutually exclusive — they operate at different layers.
+This pattern lets teams adopt JarvisCore's orchestration, memory, and P2P mesh while keeping existing MCP tool servers intact. The atom model and MCP are not mutually exclusive: they operate at different layers.
 
 **The pragmatic question** for teams evaluating JarvisCore: if you have MCP servers already built and working, wrap them in a `CustomAgent`. If you are starting fresh, atoms give you versioning, execution history, and JIT generation out of the box.
 
@@ -248,6 +248,6 @@ This pattern lets teams adopt JarvisCore's orchestration, memory, and P2P mesh w
 
 ## Further Reading
 
-- [System Bundles & Integrations Guide](../guides/integrations.md) — how to use pre-built atoms in agent code
-- [Nexus: Credential Federation](nexus.md) — how `auth_info` is populated at call time
-- [AutoAgent Guide](../guides/autoagent.md) — how `CoderSubAgent` selects and executes atoms
+- [System Bundles & Integrations Guide](../guides/integrations.md): how to use pre-built atoms in agent code
+- [Nexus: Credential Federation](nexus.md): how `auth_info` is populated at call time
+- [AutoAgent Guide](../guides/autoagent.md): how `CoderSubAgent` selects and executes atoms

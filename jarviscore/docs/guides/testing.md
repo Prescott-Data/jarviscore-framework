@@ -101,7 +101,7 @@ client.reset()
 
 ## MockBlobStorage
 
-In-memory blob storage. All data lives in a dict — no filesystem access required.
+In-memory blob storage. All data lives in a dict: no filesystem access required.
 
 ```python
 from jarviscore.testing import MockBlobStorage
@@ -130,7 +130,7 @@ storage.clear()
 
 ## MockRedisContextStore
 
-Backed by `fakeredis` — provides a real Redis-compatible API without a running server. All `RedisContextStore` methods work identically.
+Backed by `fakeredis`: provides a real Redis-compatible API without a running server. All `RedisContextStore` methods work identically.
 
 ```python
 from jarviscore.testing import MockRedisContextStore
@@ -173,7 +173,7 @@ When the queue is exhausted, `MockLLMClient` returns `{"content": "DONE: no more
 
 ## ExampleMockLLMClient
 
-A higher-level mock that interprets message content and **validates tool names against the `tools` parameter** before returning a tool-use response. Use it when testing agents that call `chat_with_tools()` — it prevents mock deadlocks caused by returning a tool that is not in scope for the current turn.
+A higher-level mock that interprets message content and **validates tool names against the `tools` parameter** before returning a tool-use response. Use it when testing agents that call `chat_with_tools()`: it prevents mock deadlocks caused by returning a tool that is not in scope for the current turn.
 
 ```python
 from jarviscore.testing import ExampleMockLLMClient
@@ -195,7 +195,7 @@ response = llm.chat_with_tools(
 # → {"type": "text", "content": "Mock analysis: ..."}
 ```
 
-**Tool routing logic** — `chat_with_tools()` inspects the user message and available tool names:
+**Tool routing logic**: `chat_with_tools()` inspects the user message and available tool names:
 
 | Message contains | Tool in scope | Returns |
 |-----------------|---------------|---------|
@@ -206,7 +206,7 @@ response = llm.chat_with_tools(
 
 **`continue_with_tool_result()`** always returns a text response summarising the tool result.
 
-**`chat()`** returns a short mock string — use it for agents that call the simple chat path rather than tool use.
+**`chat()`** returns a short mock string: use it for agents that call the simple chat path rather than tool use.
 
 ```python
 result = llm.chat("Summarise this report")

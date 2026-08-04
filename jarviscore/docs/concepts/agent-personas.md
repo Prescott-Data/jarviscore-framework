@@ -9,7 +9,7 @@ Every JarvisCore agent has a **persona** composed of two complementary layers: c
 Understanding personas is important because it is the mechanism through which the Kernel receives grounded domain knowledge. Without a well-defined persona, an agent reasons from general LLM priors. With a complete persona, the agent reasons from a specific, authoritative operational context.
 
 > [!NOTE]
-> **Coming from Anthropic's `SKILLS.md`?** JarvisCore's persona system is the equivalent — but structured, typed, and automatically wired into your agent's system prompt and peer discovery. [See the comparison below.](#skillsmd-and-the-personas-equivalent)
+> **Coming from Anthropic's `SKILLS.md`?** JarvisCore's persona system is the equivalent: but structured, typed, and automatically wired into your agent's system prompt and peer discovery. [See the comparison below.](#skillsmd-and-the-personas-equivalent)
 
 ---
 
@@ -51,15 +51,15 @@ An agent profile is a YAML file that adds structured, domain-specific intelligen
 
 Profiles are loaded by `AgentProfile.load(role_name)`, which is called automatically by `AutoAgent.setup()`. The framework looks for the profile YAML at:
 
-1. `{JARVISCORE_PROFILES_DIR}/{role_name}.yaml` — your application's profile directory (set this in your `.env`).
-2. `jarviscore/profiles/agents/{role_name}.yaml` — bundled fallback profiles (example only).
+1. `{JARVISCORE_PROFILES_DIR}/{role_name}.yaml`: your application's profile directory (set this in your `.env`).
+2. `jarviscore/profiles/agents/{role_name}.yaml`: bundled fallback profiles (example only).
 
 Always set `JARVISCORE_PROFILES_DIR` in your application. The bundled profiles are provided as a reference template, not as production profiles.
 
 ### Profile YAML Schema
 
 ```yaml title="profiles/agents/researcher.yaml"
-role: "Researcher — Market Intelligence Agent"
+role: "Researcher, Market Intelligence Agent"
 
 expertise:
   - Systematic primary and secondary source research
@@ -107,7 +107,7 @@ default_kernel_role: "researcher"
 `AgentProfile.to_prompt_block()` renders the YAML fields into a structured markdown section:
 
 ```
-## ROLE INTELLIGENCE: RESEARCHER — MARKET INTELLIGENCE AGENT
+## ROLE INTELLIGENCE: RESEARCHER: MARKET INTELLIGENCE AGENT
 
 ### Expertise
 - Systematic primary and secondary source research
@@ -123,7 +123,7 @@ default_kernel_role: "researcher"
 - Research reports in the standardised company template
 ...
 
-### Standing Operating Procedures (follow autonomously — do not wait to be asked)
+### Standing Operating Procedures (follow autonomously: do not wait to be asked)
 1. Always cross-reference findings across at least three independent sources before asserting a claim.
 2. Flag conflicting data points explicitly rather than resolving them silently.
 ...
@@ -200,7 +200,7 @@ The combination of `role` and `capabilities` gives you both exact-match and capa
 
 ## SKILLS.md and the Personas Equivalent
 
-Anthropic popularised `SKILLS.md` — a markdown file that describes what an agent can do, what tools it has access to, and how it should behave. It's a simple, portable convention for grounding an LLM in a specific context.
+Anthropic popularised `SKILLS.md`: a markdown file that describes what an agent can do, what tools it has access to, and how it should behave. It's a simple, portable convention for grounding an LLM in a specific context.
 
 JarvisCore's persona system covers the same ground, with more structure:
 
@@ -208,17 +208,17 @@ JarvisCore's persona system covers the same ground, with more structure:
 |---|---|
 | Freeform markdown | Typed YAML schema with enforced fields |
 | Written once, manually maintained | Per-role YAML, loaded automatically by the framework |
-| No enforcement — LLM reads it as instructions | `sops:` rendered as numbered SOPs; `escalates_to:` wired into HITL |
+| No enforcement: LLM reads it as instructions | `sops:` rendered as numbered SOPs; `escalates_to:` wired into HITL |
 | Separate from code | `capabilities:` drives live P2P peer discovery |
 | Tool descriptions are free text | System Bundles provide typed, versioned atoms (see [System Bundles](system-bundles.md)) |
 
-The key difference is that a `SKILLS.md` describes what an agent *might* do. A JarvisCore persona shapes what the agent *is* — and the `capabilities` list directly controls how other agents discover and route to it at runtime.
+The key difference is that a `SKILLS.md` describes what an agent *might* do. A JarvisCore persona shapes what the agent *is*: and the `capabilities` list directly controls how other agents discover and route to it at runtime.
 
 **The migration pattern** for teams coming from `SKILLS.md` is straightforward:
 
 ```yaml title="profiles/agents/analyst.yaml"
 # Your SKILLS.md content maps to:
-role: "Analyst — Financial Intelligence"       # was: # Role: Financial Analyst
+role: "Analyst: Financial Intelligence"       # was: # Role: Financial Analyst
 
 expertise:                                      # was: ## Skills\n- Financial modelling
   - Financial modelling and DCF analysis

@@ -4,7 +4,7 @@ icon: material/sitemap
 
 # Workflow DAGs
 
-JarvisCore's `WorkflowBuilder` lets you compose multi-agent workflows as Directed Acyclic Graphs (DAGs). Each step is assigned to a specific agent role, steps declare their dependencies, and the framework executes them in topological order — parallelising independent steps automatically.
+JarvisCore's `WorkflowBuilder` lets you compose multi-agent workflows as Directed Acyclic Graphs (DAGs). Each step is assigned to a specific agent role, steps declare their dependencies, and the framework executes them in topological order: parallelising independent steps automatically.
 
 This guide covers the full `WorkflowBuilder` API, the result reference syntax for chaining step outputs, Redis-backed persistence, and production patterns.
 

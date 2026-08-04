@@ -34,15 +34,15 @@ The agent doesn't change. You don't modify system prompts. The RAG layer is plum
 
 ## Installation
 
-RAG dependencies are optional — install the `rag` extra:
+RAG dependencies are optional: install the `rag` extra:
 
 ```bash
 pip install "jarviscore[rag]"
 ```
 
 This installs:
-- `sentence-transformers` — local embedding generation (no API key required)
-- `faiss-cpu` — FAISS vector store
+- `sentence-transformers`: local embedding generation (no API key required)
+- `faiss-cpu`: FAISS vector store
 
 ---
 
@@ -72,14 +72,14 @@ print(result)
 # {"status": "success", "documents": 2, "chunks": 47}
 ```
 
-`ingest_documents()` chunks each document into overlapping segments, embeds them, and adds them to the FAISS index. The index is persisted to disk immediately — you only need to ingest once.
+`ingest_documents()` chunks each document into overlapping segments, embeds them, and adds them to the FAISS index. The index is persisted to disk immediately: you only need to ingest once.
 
 ### Document format
 
 | Key | Required | Description |
 |---|---|---|
 | `content` | Yes | The document text (markdown, plain text, extracted PDF, etc.) |
-| `source` | Yes | A stable identifier — used for citation and deduplication |
+| `source` | Yes | A stable identifier: used for citation and deduplication |
 | `metadata` | No | Arbitrary dict stored alongside each chunk (author, date, topic, etc.) |
 
 ---
@@ -161,7 +161,7 @@ For large wikis, split by page and ingest each page as a separate document. The 
 
 ## Keeping the Index Fresh
 
-The FAISS index accumulates documents — there is no automatic deduplication by `source`. If you re-ingest the same source, you get duplicate chunks. Manage this by deleting and rebuilding the index when your source documents change:
+The FAISS index accumulates documents: there is no automatic deduplication by `source`. If you re-ingest the same source, you get duplicate chunks. Manage this by deleting and rebuilding the index when your source documents change:
 
 ```bash
 rm ~/.jarviscore/rag/faiss.index
@@ -183,7 +183,7 @@ print(rag.stats())
 ## Configuration
 
 ```bash title=".env"
-# Embedding model (default: all-MiniLM-L6-v2 — fast, 384-dim)
+# Embedding model (default: all-MiniLM-L6-v2: fast, 384-dim)
 RAG_EMBED_MODEL=all-MiniLM-L6-v2
 
 # Use a larger model for higher recall quality (slower)
@@ -205,7 +205,7 @@ RAG_CHUNK_OVERLAP=200
 | Variable | Default | Description |
 |---|---|---|
 | `RAG_EMBED_MODEL` | `all-MiniLM-L6-v2` | Sentence-transformers model name or HuggingFace ID |
-| `RAG_EMBED_MODEL_PATH` | — | Path to a local model directory |
+| `RAG_EMBED_MODEL_PATH` |: | Path to a local model directory |
 | `RAG_INDEX_PATH` | `~/.jarviscore/rag/faiss.index` | FAISS index file location |
 | `RAG_META_PATH` | `~/.jarviscore/rag/faiss_meta.json` | Chunk metadata sidecar |
 | `RAG_TOP_K` | `5` | Number of chunks returned per query |
@@ -216,6 +216,6 @@ RAG_CHUNK_OVERLAP=200
 
 ## Further Reading
 
-- [Internet Search](internet-search.md) — Web search providers that ResearcherSubAgent runs alongside RAG
-- [AutoAgent Guide](autoagent.md) — How ResearcherSubAgent fits into the OODA loop
-- [Integrations](integrations.md) — Atoms and system bundles that extend what agents can do
+- [Internet Search](internet-search.md): Web search providers that ResearcherSubAgent runs alongside RAG
+- [AutoAgent Guide](autoagent.md): How ResearcherSubAgent fits into the OODA loop
+- [Integrations](integrations.md): Atoms and system bundles that extend what agents can do

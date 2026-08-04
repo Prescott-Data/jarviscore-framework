@@ -201,7 +201,7 @@ Mesh(config: Optional[Dict[str, Any]] = None)
 | `checkpoint_interval` | `int` | `1` | Save workflow checkpoints every N steps |
 | `max_parallel` | `int` | `5` | Maximum parallel step execution |
 
-The Mesh auto-detects available infrastructure at `start()` time. Do not pass `mode=` — that argument is deprecated and has no effect.
+The Mesh auto-detects available infrastructure at `start()` time. Do not pass `mode=`: that argument is deprecated and has no effect.
 
 ### Methods
 
@@ -327,14 +327,14 @@ def create_jarvis_app(
 ) -> FastAPI
 ```
 
-Convenience wrapper for single-agent deployments. Creates a `FastAPI` app with `JarvisLifespan` pre-configured. The Mesh auto-detects its operational mode from available infrastructure at startup — no `mode` argument is accepted. For multi-agent deployments or more control, use `JarvisLifespan` directly.
+Convenience wrapper for single-agent deployments. Creates a `FastAPI` app with `JarvisLifespan` pre-configured. The Mesh auto-detects its operational mode from available infrastructure at startup: no `mode` argument is accepted. For multi-agent deployments or more control, use `JarvisLifespan` directly.
 
 ---
 
 ## Further Reading
 
-- [AutoAgent guide](../guides/autoagent.md) — usage walkthrough with examples
-- [CustomAgent guide](../guides/customagent.md) — usage walkthrough with examples
-- [Planning](../concepts/planning.md) — goal-oriented mode for `AutoAgent`
-- [Configuration Reference](configuration.md) — all environment variables
-- [Chat API Reference](chat-api.md) — HTTP chat endpoint contract
+- [AutoAgent guide](../guides/autoagent.md): usage walkthrough with examples
+- [CustomAgent guide](../guides/customagent.md): usage walkthrough with examples
+- [Planning](../concepts/planning.md): goal-oriented mode for `AutoAgent`
+- [Configuration Reference](configuration.md): all environment variables
+- [Chat API Reference](chat-api.md): HTTP chat endpoint contract

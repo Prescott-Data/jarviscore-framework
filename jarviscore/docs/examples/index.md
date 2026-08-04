@@ -4,7 +4,7 @@ icon: material/book-open-variant
 
 # Examples
 
-Real, runnable programs that demonstrate JarvisCore in production-grade scenarios. Each example is a complete Python script (or multi-script cluster) in the [`examples/`](https://github.com/Prescott-Data/jarviscore-framework/tree/main/examples) directory of the repo — clone it, set up infra, and run.
+Real, runnable programs that demonstrate JarvisCore in production-grade scenarios. Each example is a complete Python script (or multi-script cluster) in the [`examples/`](https://github.com/Prescott-Data/jarviscore-framework/tree/main/examples) directory of the repo: clone it, set up infra, and run.
 
 ## Prerequisites
 
@@ -46,7 +46,7 @@ pip install -e ".[redis,prometheus]"
 
 === "Want the full picture?"
 
-    **[Investment Committee](investment-committee.md)** is the most advanced example — it mixes `AutoAgent` and `CustomAgent` profiles in a single mesh with a real multi-role deliberation pipeline.
+    **[Investment Committee](investment-committee.md)** is the most advanced example: it mixes `AutoAgent` and `CustomAgent` profiles in a single mesh with a real multi-role deliberation pipeline.
 
 ---
 
@@ -58,7 +58,7 @@ from jarviscore import Mesh
 # The Mesh requires no mode= argument.
 # It probes available infrastructure at start() and enables features accordingly.
 
-mesh = Mesh()                        # Minimal — workflow engine only
+mesh = Mesh()                        # Minimal: workflow engine only
 mesh = Mesh(config={"redis_url": "redis://localhost:6379/0"})  # + Redis persistence
 mesh = Mesh(config={"p2p_enabled": True})   # + SWIM discovery + ZMQ messaging
 
@@ -67,9 +67,9 @@ await mesh.start()
 # Inspect what was detected
 mesh.has_capability("redis")         # True when Redis is reachable
 mesh.has_capability("peer_swim")     # True when P2P stack is active
-mesh.has_capability("blob")          # True — LocalBlobStorage always available
-mesh.has_capability("workflow")      # True — WorkflowEngine always enabled
+mesh.has_capability("blob")          # True: LocalBlobStorage always available
+mesh.has_capability("workflow")      # True: WorkflowEngine always enabled
 ```
 
 > [!TIP]
-> You can also set `REDIS_URL` and `P2P_ENABLED=true` in your `.env` file — the Mesh reads these automatically, so you don't need to pass them in the `config` dict.
+> You can also set `REDIS_URL` and `P2P_ENABLED=true` in your `.env` file: the Mesh reads these automatically, so you don't need to pass them in the `config` dict.

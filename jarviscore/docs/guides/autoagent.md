@@ -202,7 +202,7 @@ Use this for tasks where the whole job is the answer: analysis, classification, 
 
 ## Coder Sandbox
 
-When the Kernel routes a task to the `CoderSubAgent`, code executes inside `CoderSandbox` — a deliberately file-capable execution environment that is distinct from the `SandboxExecutor` used by other sub-agents.
+When the Kernel routes a task to the `CoderSubAgent`, code executes inside `CoderSandbox`: a deliberately file-capable execution environment that is distinct from the `SandboxExecutor` used by other sub-agents.
 
 `SandboxExecutor` (used by ResearcherSubAgent and CommunicatorSubAgent) blocks `open()`, `subprocess`, and filesystem access. `CoderSandbox` intentionally grants those capabilities, scoped to a controlled workspace directory.
 
@@ -211,7 +211,7 @@ Inside every execution, generated code receives these names in its namespace:
 | Name | Type | Description |
 |---|---|---|
 | `workspace` | `Path` | Project root directory. All file reads and writes are expected here. |
-| `output_dir` | `Path` | `workspace/output/` — the preferred write location for produced files. |
+| `output_dir` | `Path` | `workspace/output/`: the preferred write location for produced files. |
 | `blob_path(name)` | `Path` | Shorthand for `output_dir / name`. Creates parent directories. |
 | `bash(cmd)` | `BashExecutor` | Run allowed shell commands. Returns `{success, stdout, stderr, returncode}`. |
 | `git` | `GitHelper` | High-level git: `checkout_branch`, `add_all`, `commit`, `push`, `describe_pr`. |
@@ -222,7 +222,7 @@ The Coder can `import` any installed package from within the sandbox. The securi
 
 The bash allow-list covers: `git`, `pip`, `pip3`, `cp`, `mv`, `mkdir`, `rm`, `ls`, `cat`, `echo`, `touch`, `find`, `grep`, `sed`, `awk`, `pandoc`, `npm`, `npx`, `node`, `python`, `python3`, `curl`. Hard-blocked regardless: `sudo`, `rm -rf /`, `eval`, `curl | bash`, and pipe-to-shell patterns.
 
-The `CoderResult` output shape — what gets written to `result` by generated code and surfaced in `step["payload"]`:
+The `CoderResult` output shape: what gets written to `result` by generated code and surfaced in `step["payload"]`:
 
 ```python
 result = {
@@ -239,7 +239,7 @@ result = {
 Configure the workspace root and timeouts:
 
 ```bash title=".env"
-# Workspace directory — defaults to the process working directory
+# Workspace directory: defaults to the process working directory
 CODER_WORKSPACE=/path/to/your/project
 
 # Sandbox execution timeout in seconds (default: 300)
@@ -252,7 +252,7 @@ When writing system prompts for agents that route to the Coder, always tell the 
 
 ## Execution Budgets
 
-Every sub-agent dispatch runs against an `ExecutionLease` — a token, turn, and wall-clock budget specific to the sub-agent role. When the lease is exhausted, the Kernel stops the sub-agent and returns whatever has been produced so far.
+Every sub-agent dispatch runs against an `ExecutionLease`: a token, turn, and wall-clock budget specific to the sub-agent role. When the lease is exhausted, the Kernel stops the sub-agent and returns whatever has been produced so far.
 
 | Role | Thinking tokens | Action tokens | Total tokens | Wall clock | Turn fuse |
 |---|---|---|---|---|---|
@@ -263,7 +263,7 @@ Every sub-agent dispatch runs against an `ExecutionLease` — a token, turn, and
 
 The turn fuse is an emergency hard-stop. If a sub-agent reaches 32 turns without completing, the Kernel terminates it regardless of token budget. This prevents runaway loops on adversarial or ambiguous tasks.
 
-You do not configure lease budgets per-agent — they are role-level defaults. If a specific task consistently exhausts the budget, the right fix is usually to narrow the task scope (break it into smaller steps in the workflow DAG), not to increase the budget.
+You do not configure lease budgets per-agent: they are role-level defaults. If a specific task consistently exhausts the budget, the right fix is usually to narrow the task scope (break it into smaller steps in the workflow DAG), not to increase the budget.
 
 Token budget consumption appears in `step["metadata"]["tokens"]` on every workflow result:
 
@@ -281,7 +281,7 @@ print(step["metadata"]["tokens"])
 
 ## Model Routing
 
-JarvisCore routes each sub-agent dispatch to a capability tier — `nano`, `standard`, or `heavy` — based on the role and an optional per-step hint. Pass `complexity` in a workflow step to override the default for that dispatch:
+JarvisCore routes each sub-agent dispatch to a capability tier (`nano`, `standard`, or `heavy`) based on the role and an optional per-step hint. Pass `complexity` in a workflow step to override the default for that dispatch:
 
 ```python
 results = await mesh.workflow("task-001", [
@@ -290,7 +290,7 @@ results = await mesh.workflow("task-001", [
 ])
 ```
 
-When `complexity` is omitted, the role's built-in default applies — `communicator` defaults to `nano`, `researcher` and `browser` default to `standard`. See [Model Routing](../concepts/model-routing.md) for the full tier configuration, fallback chain, and provider compatibility reference.
+When `complexity` is omitted, the role's built-in default applies: `communicator` defaults to `nano`, `researcher` and `browser` default to `standard`. See [Model Routing](../concepts/model-routing.md) for the full tier configuration, fallback chain, and provider compatibility reference.
 
 ---
 
@@ -301,7 +301,7 @@ The Mesh injects infrastructure stores into every agent before `setup()` runs. T
 | Attribute | Available when |
 |---|---|
 | `self._redis_store` | `REDIS_URL` is set |
-| `self._blob_storage` | Always — falls back to local filesystem |
+| `self._blob_storage` | Always: falls back to local filesystem |
 | `self.mailbox` | `REDIS_URL` is set |
 
 ```python
@@ -330,9 +330,9 @@ prior = raw.get("output", raw) if isinstance(raw, dict) else {}
 
 ### Checkpointing
 
-Checkpointing happens automatically. After every OODA loop turn, the Kernel calls `UnifiedMemory.save_checkpoint()` which writes the current `KernelState` — all accumulated findings, tool history, and reasoning progress — to Redis under `checkpoint:{workflow_id}:{step_id}`. If the process crashes and the workflow restarts, the `WorkflowEngine` detects the existing checkpoint and resumes from that turn rather than restarting from scratch.
+Checkpointing happens automatically. After every OODA loop turn, the Kernel calls `UnifiedMemory.save_checkpoint()` which writes the current `KernelState` (all accumulated findings, tool history, and reasoning progress) to Redis under `checkpoint:{workflow_id}:{step_id}`. If the process crashes and the workflow restarts, the `WorkflowEngine` detects the existing checkpoint and resumes from that turn rather than restarting from scratch.
 
-You do not call `save_checkpoint()` or `load_checkpoint()` in application code. The framework manages this transparently when `REDIS_URL` is configured. Without Redis, there is no persistence and no crash recovery — the workflow starts from the beginning on failure.
+You do not call `save_checkpoint()` or `load_checkpoint()` in application code. The framework manages this transparently when `REDIS_URL` is configured. Without Redis, there is no persistence and no crash recovery: the workflow starts from the beginning on failure.
 
 ---
 
@@ -458,13 +458,13 @@ HITL_MAX_CONFIDENCE=0.8
 HITL_MIN_RISK_SCORE=0.7
 ```
 
-Per-agent escalation targets are configured in the agent profile YAML under `escalates_to`. See the [Agent Personas](../concepts/agent-personas.md) concept page for the full schema. For the full HITL API — `request()`, `wait()`, `check()`, `resolve()` — see the [HITL Escalation guide](hitl.md).
+Per-agent escalation targets are configured in the agent profile YAML under `escalates_to`. See the [Agent Personas](../concepts/agent-personas.md) concept page for the full schema. For the full HITL API (`request()`, `wait()`, `check()`, `resolve()`) see the [HITL Escalation guide](hitl.md).
 
 ---
 
 ## Production Example: Financial Pipeline
 
-The `financial_pipeline.py` example runs three AutoAgents sequentially — a market data fetcher, an analyst, and a report writer — with Redis crash recovery, UnifiedMemory episodic logging, and blob storage output.
+The `financial_pipeline.py` example runs three AutoAgents sequentially (a market data fetcher, an analyst, and a report writer) with Redis crash recovery, UnifiedMemory episodic logging, and blob storage output.
 
 ```bash
 docker compose -f docker-compose.infra.yml up -d
@@ -488,4 +488,4 @@ Running with the same `workflow_id` a second time skips already-completed steps.
 
 If a task returns a success status with `execution_time` under 10 milliseconds and a null payload, the generated code failed instantly before doing any real work. This almost always means `context` was not passed in the task dict, so the generated code raised a `NameError` on the first line that referenced it. Make sure every step dict includes a `"context"` key, even if empty.
 
-If code keeps failing after autonomous repairs, improve the system prompt. The LLM generates code from the prompt. Vague prompts produce fragile code — the more explicit you are about available tools, input format, and the exact shape of `result`, the fewer repairs are needed.
+If code keeps failing after autonomous repairs, improve the system prompt. The LLM generates code from the prompt. Vague prompts produce fragile code: the more explicit you are about available tools, input format, and the exact shape of `result`, the fewer repairs are needed.

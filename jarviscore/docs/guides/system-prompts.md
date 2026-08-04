@@ -23,7 +23,7 @@ When the Kernel starts an OODA loop turn, it assembles a full context bundle:
 [Athena Context]         ← Semantic memory from prior sessions (if configured)
 ```
 
-The base system prompt sits between the profile block and the runtime context. It is the part you control at the class level. The Kernel prepends the profile block — the system prompt should never repeat what the profile block already defines (role, expertise, SOPs).
+The base system prompt sits between the profile block and the runtime context. It is the part you control at the class level. The Kernel prepends the profile block: the system prompt should never repeat what the profile block already defines (role, expertise, SOPs).
 
 ---
 
@@ -31,9 +31,9 @@ The base system prompt sits between the profile block and the runtime context. I
 
 Three things are required in every AutoAgent system prompt:
 
-1. **What the agent is** — role identity in one sentence
-2. **What `result` must contain** — exact variable name and structure
-3. **What to do when something fails** — error handling instruction
+1. **What the agent is**: role identity in one sentence
+2. **What `result` must contain**: exact variable name and structure
+3. **What to do when something fails**: error handling instruction
 
 ```python
 system_prompt = """
@@ -61,13 +61,13 @@ Missing any of these three creates predictable failure modes: vague identity →
 The Kernel always reads from a Python variable named `result` in the sandbox. It does not infer output from print statements, return values, or side effects. The system prompt must explicitly instruct the agent to assign its output to `result`.
 
 ```python
-# ✅ Correct — result is assigned
+# ✅ Correct: result is assigned
 result = {"summary": "...", "items": [...]}
 
-# ❌ Wrong — the Kernel will not find this
+# ❌ Wrong: the Kernel will not find this
 print(json.dumps({"summary": "..."}))
 
-# ❌ Wrong — function return values are not captured
+# ❌ Wrong: function return values are not captured
 def get_summary():
     return {"summary": "..."}
 ```
@@ -131,7 +131,7 @@ Final output stored in `result` as:
     "recommendation": str
   }
 
-If a research step finds no data, note the gap and continue — do not abort.
+If a research step finds no data, note the gap and continue. Do not abort.
 """
 ```
 
@@ -168,10 +168,10 @@ Setting `default_kernel_role = "communicator"` tells the Kernel and Planner the 
 
 ## Using Agent Profiles for Domain Intelligence
 
-The system prompt is for task-level instructions. Domain intelligence — who the agent is, what it knows, what its standing procedures are — belongs in an `AgentProfile` YAML file:
+The system prompt is for task-level instructions. Domain intelligence (who the agent is, what it knows, what its standing procedures are) belongs in an `AgentProfile` YAML file:
 
 ```yaml title="profiles/researcher.yaml"
-role: "Researcher — Data Intelligence Agent"
+role: "Researcher, Data Intelligence Agent"
 default_kernel_role: researcher
 
 expertise:
@@ -202,7 +202,7 @@ escalates_to:
 JARVISCORE_PROFILES_DIR=/your-app/profiles/agents
 ```
 
-The profile block is prepended automatically. The system prompt only needs task-level instructions — no need to repeat the agent's role or expertise.
+The profile block is prepended automatically. The system prompt only needs task-level instructions: no need to repeat the agent's role or expertise.
 
 ---
 
@@ -210,7 +210,7 @@ The profile block is prepended automatically. The system prompt only needs task-
 
 ### Vague identity
 ```python
-# ❌ Too vague — the Kernel doesn't know which sub-agent to route to
+# ❌ Too vague: the Kernel doesn't know which sub-agent to route to
 system_prompt = "You are a helpful AI assistant."
 
 # ✅ Specific identity tells the Kernel exactly what to do
@@ -219,7 +219,7 @@ system_prompt = "You are a Python code reviewer. Analyse pull request diffs and 
 
 ### Missing `result` assignment
 ```python
-# ❌ Result not stored — step["payload"] will be None
+# ❌ Result not stored: step["payload"] will be None
 system_prompt = "Fetch and summarise the top 5 news stories."
 
 # ✅ Explicit output contract
@@ -231,12 +231,12 @@ Store in `result` as a list of {"title": str, "summary": str, "url": str}.
 
 ### Injecting prior step data manually
 ```python
-# ❌ Never do this — the WorkflowEngine injects prior steps automatically
+# ❌ Never do this: the WorkflowEngine injects prior steps automatically
 system_prompt = """
 You are an analyst. Access previous step data via context.get('fetch', {}).
 """
 
-# ✅ Just declare depends_on — prior step outputs appear automatically
+# ✅ Just declare depends_on: prior step outputs appear automatically
 results = await mesh.workflow("pipeline", [
     {"id": "fetch", "agent": "fetcher", "task": "Fetch data"},
     {"id": "analyse", "agent": "analyst", "task": "Analyse the data", "depends_on": ["fetch"]},
@@ -252,7 +252,7 @@ SOP 2: Cross-reference at least two sources
 ...
 """
 
-# ✅ SOPs belong in the AgentProfile YAML — hot-reloadable, versionable
+# ✅ SOPs belong in the AgentProfile YAML: hot-reloadable, versionable
 ```
 
 ---
@@ -265,9 +265,9 @@ A battle-tested template for production `AutoAgent` deployments:
 system_prompt = """
 You are a [ROLE] specialising in [DOMAIN].
 
-[AVAILABLE TOOLS — list any system bundle methods the agent can call]
+[AVAILABLE TOOLS: list any system bundle methods the agent can call]
 
-[DATA SOURCES — API endpoints, authentication notes]
+[DATA SOURCES: API endpoints, authentication notes]
 
 Your output must be stored in `result` as:
   {
@@ -275,9 +275,9 @@ Your output must be stored in `result` as:
     ...
   }
 
-[EDGE CASE HANDLING — what to do when data is missing, API fails, etc.]
+[EDGE CASE HANDLING: what to do when data is missing, API fails, etc.]
 
-[QUALITY CONSTRAINTS — max length, format requirements, citation rules]
+[QUALITY CONSTRAINTS: max length, format requirements, citation rules]
 """
 ```
 
@@ -287,6 +287,6 @@ Apply this template for every new agent. The more precisely you fill each sectio
 
 ## Further Reading
 
-- [AutoAgent Guide](autoagent.md) — How the Kernel uses the system prompt in the OODA loop
-- [Agent Personas](../concepts/agent-personas.md) — Full AgentProfile YAML schema and profile loading
-- [Workflow DAGs](workflows.md) — How depends_on replaces manual context injection in system prompts
+- [AutoAgent Guide](autoagent.md): How the Kernel uses the system prompt in the OODA loop
+- [Agent Personas](../concepts/agent-personas.md): Full AgentProfile YAML schema and profile loading
+- [Workflow DAGs](workflows.md): How depends_on replaces manual context injection in system prompts

@@ -4,14 +4,14 @@ icon: material/chart-line
 
 # Observability & Telemetry
 
-JarvisCore ships with a built-in, two-layer observability system. Every agent turn, tool call, LLM request, mailbox message, and HITL event is captured automatically — no instrumentation required in your agent code.
+JarvisCore ships with a built-in, two-layer observability system. Every agent turn, tool call, LLM request, mailbox message, and HITL event is captured automatically: no instrumentation required in your agent code.
 
 The two layers serve different purposes:
 
 | Layer | What it does | Where data goes |
 |---|---|---|
-| **Structured Tracing** (`TraceManager`) | Records *what happened* — the full execution narrative | Redis List (persistent), Redis PubSub (real-time), JSONL (compliance fallback) |
-| **Operational Metrics** (`metrics.py`) | Records *how it performed* — counters, histograms, and gauges | Prometheus (scrape endpoint on port 9090) |
+| **Structured Tracing** (`TraceManager`) | Records *what happened*: the full execution narrative | Redis List (persistent), Redis PubSub (real-time), JSONL (compliance fallback) |
+| **Operational Metrics** (`metrics.py`) | Records *how it performed*: counters, histograms, and gauges | Prometheus (scrape endpoint on port 9090) |
 
 Both layers are **non-blocking by design**. If Redis is unavailable, tracing falls back to JSONL. If `prometheus-client` is not installed, metrics become silent no-ops. Neither failure will crash your agent.
 
@@ -29,7 +29,7 @@ from jarviscore.telemetry import TraceManager
 tracer = TraceManager(
     workflow_id="wf-abc123",
     step_id="step-001",
-    redis_store=redis_store,   # optional — omit to use JSONL-only mode
+    redis_store=redis_store,   # optional: omit to use JSONL-only mode
     trace_dir="traces",        # directory for JSONL fallback files
 )
 ```
@@ -54,7 +54,7 @@ Subscribe from a dashboard, alerting system, or log aggregator to receive events
 ```
 Path: {trace_dir}/{workflow_id}_{step_id}.jsonl
 ```
-Written even when Redis is unavailable. Each line is a self-contained JSON event — parseable with any standard tooling.
+Written even when Redis is unavailable. Each line is a self-contained JSON event: parseable with any standard tooling.
 
 ### Trace Event Shape
 
@@ -134,12 +134,12 @@ All event types are defined in `TraceEventType` (a typed `str` enum). The full s
 The kernel handles all standard events automatically. If you are building a custom subagent or tool, you can emit custom events directly:
 
 ```python
-# Convenience methods — the recommended approach
+# Convenience methods: the recommended approach
 tracer.log_tool_start("my_custom_tool", params={"key": "value"})
 tracer.log_tool_result("my_custom_tool", result="Done")
 tracer.log_thinking("Evaluating whether the output meets the acceptance criteria")
 
-# Raw event — for custom types not covered by convenience methods
+# Raw event: for custom types not covered by convenience methods
 tracer.log_event("my_custom_event", data={"detail": "something happened"})
 ```
 
@@ -177,7 +177,7 @@ cat traces/*.jsonl | jq 'select(.type == "llm_response") | .data.latency_ms' | a
 
 ### Installation
 
-Prometheus metrics require the `prometheus-client` package. Without it, all metric calls are silent no-ops — your agent runs normally but no metrics are collected.
+Prometheus metrics require the `prometheus-client` package. Without it, all metric calls are silent no-ops: your agent runs normally but no metrics are collected.
 
 ```bash
 pip install "jarviscore-framework[prometheus]"
@@ -213,8 +213,8 @@ Metrics are then available at `http://localhost:9090/metrics` for Prometheus to 
 |---|---|---|---|
 | `jarviscore_workflow_steps_total` | Counter | `status` | Steps processed by outcome |
 | `jarviscore_step_execution_duration_seconds` | Histogram | `status` | Step duration in seconds |
-| `jarviscore_active_workflows` | Gauge | — | Currently running workflows |
-| `jarviscore_active_steps` | Gauge | — | Currently executing steps |
+| `jarviscore_active_workflows` | Gauge |: | Currently running workflows |
+| `jarviscore_active_steps` | Gauge |: | Currently executing steps |
 
 #### Event Metrics
 
@@ -298,7 +298,7 @@ Use `prometheus-remote-write` or the Grafana Agent to forward metrics directly w
 
 ### Splunk / ELK
 
-The JSONL trace files are the simplest integration point. Point a Filebeat or Splunk Universal Forwarder at the `traces/` directory — each line is already structured JSON, with `workflow_id`, `step_id`, `timestamp`, and `type` as top-level fields for indexing.
+The JSONL trace files are the simplest integration point. Point a Filebeat or Splunk Universal Forwarder at the `traces/` directory: each line is already structured JSON, with `workflow_id`, `step_id`, `timestamp`, and `type` as top-level fields for indexing.
 
 ---
 
@@ -312,4 +312,4 @@ JarvisCore observability works in three modes:
 | **JSONL-only** | No Redis | Traces written to JSONL files only; no real-time stream |
 | **Local dev** | No Redis, no `prometheus-client` | JSONL traces only; metrics are silent no-ops |
 
-No configuration flag is needed — the system detects what is available at runtime and degrades gracefully.
+No configuration flag is needed: the system detects what is available at runtime and degrades gracefully.
