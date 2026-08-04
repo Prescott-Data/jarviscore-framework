@@ -58,7 +58,7 @@ Written even when Redis is unavailable. Each line is a self-contained JSON event
 
 ### Reading Traces: `jarviscore inspect`
 
-The JSONL channel means every run leaves a flight record on disk. The `inspect` command reads it back without Redis, without the framework running, and without writing your own parser:
+Every run leaves a flight record on disk. `inspect` reads it back: no Redis, no running mesh, no custom parser.
 
 ```bash
 jarviscore inspect                      # list recorded runs
@@ -68,7 +68,7 @@ jarviscore inspect wf-abc123 --step step-001
 jarviscore inspect --dir /var/traces    # non-default trace directory
 ```
 
-The run list shows steps, tokens, failure count, duration, and final status per workflow. The timeline groups events by step and renders each one on a single line: agent claims, thinking, delegations, tool calls with results, LLM calls with token counts and latency, and failures marked with `!!`. Workflow ids match by prefix, and long values are clipped with an explicit `[clipped: showing N of M chars]` marker, never silently.
+The run list shows steps, tokens, failures, duration, and status per workflow. The timeline groups events by step, one line each: claims, thinking, delegations, tool calls, LLM latency and tokens, failures marked `!!`. Workflow ids match by prefix. Long values are clipped with an explicit `[clipped: showing N of M chars]` marker, never silently.
 
 ### Trace Event Shape
 
