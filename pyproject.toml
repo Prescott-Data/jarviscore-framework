@@ -129,6 +129,7 @@ jarviscore = [
     "nexus/_data/001_initial_schema.sql",
     # Athena MemOS local-stack compose — bundled for same reason
     "memory/_data/docker-compose.athena.yml",
+    "memory/_data/init-mongo.js",
 ]
 
 [tool.pytest.ini_options]
