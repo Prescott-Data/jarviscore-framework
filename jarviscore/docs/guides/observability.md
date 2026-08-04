@@ -54,7 +54,21 @@ Subscribe from a dashboard, alerting system, or log aggregator to receive events
 ```
 Path: {trace_dir}/{workflow_id}_{step_id}.jsonl
 ```
-Written even when Redis is unavailable. Each line is a self-contained JSON event — parseable with any standard tooling.
+Written even when Redis is unavailable. Each line is a self-contained JSON event, parseable with any standard tooling.
+
+### Reading Traces: `jarviscore inspect`
+
+The JSONL channel means every run leaves a flight record on disk. The `inspect` command reads it back without Redis, without the framework running, and without writing your own parser:
+
+```bash
+jarviscore inspect                      # list recorded runs
+jarviscore inspect wf-abc123            # per-step timeline for one run
+jarviscore inspect wf-abc123 --errors   # failures and recoveries only
+jarviscore inspect wf-abc123 --step step-001
+jarviscore inspect --dir /var/traces    # non-default trace directory
+```
+
+The run list shows steps, tokens, failure count, duration, and final status per workflow. The timeline groups events by step and renders each one on a single line: agent claims, thinking, delegations, tool calls with results, LLM calls with token counts and latency, and failures marked with `!!`. Workflow ids match by prefix, and long values are clipped with an explicit `[clipped: showing N of M chars]` marker, never silently.
 
 ### Trace Event Shape
 
