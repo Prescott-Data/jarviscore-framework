@@ -29,19 +29,20 @@ def get_data_path() -> Path:
         return Path(jarviscore.data.__file__).parent
 
 
-def copy_env_example(dest_dir: Path, force: bool = False) -> bool:
+def copy_env_example(dest_dir: Path, force: bool = False, full: bool = False) -> bool:
     """
-    Copy .env.example to destination directory.
+    Copy the env template to the destination directory.
 
     Args:
         dest_dir: Destination directory
         force: Overwrite if exists
+        full: Copy the complete reference template instead of the minimal one
 
     Returns:
         True if copied, False if skipped
     """
     data_path = get_data_path()
-    src = data_path / '.env.example'
+    src = data_path / ('.env.example' if full else '.env.minimal')
     dest = dest_dir / '.env.example'
 
     if not src.exists():
@@ -53,7 +54,8 @@ def copy_env_example(dest_dir: Path, force: bool = False) -> bool:
         return False
 
     shutil.copy2(src, dest)
-    print(f"✓ Created {dest.name}")
+    label = 'full reference' if full else 'minimal; run with --full for every option'
+    print(f"✓ Created {dest.name} ({label})")
     return True
 
 
@@ -77,7 +79,7 @@ def copy_examples(dest_dir: Path, force: bool = False) -> bool:
         return False
 
     if dest.exists() and not force:
-        print(f"⚠ examples/ directory already exists (use --force to overwrite)")
+        print("⚠ examples/ directory already exists (use --force to overwrite)")
         return False
 
     if dest.exists() and force:
@@ -138,6 +140,11 @@ def main():
         help='Also copy example agent files'
     )
     parser.add_argument(
+        '--full',
+        action='store_true',
+        help='Write the complete configuration reference instead of the minimal template'
+    )
+    parser.add_argument(
         '--force',
         action='store_true',
         help='Overwrite existing files'
@@ -159,7 +166,7 @@ def main():
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy files
-    env_created = copy_env_example(dest_dir, args.force)
+    env_created = copy_env_example(dest_dir, args.force, full=args.full)
 
     examples_created = False
     if args.examples:
