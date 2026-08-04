@@ -49,6 +49,13 @@ Agent frameworks fail in the same three places. We built against all three, beca
 
 **Autonomy is a spectrum, not a slider.** JarvisCore ships exactly two agent profiles. CustomAgent is a thin infrastructure shell where you bring the brain and keep deterministic control. AutoAgent is the full cognitive stack: task classification, typed routing, specialist sub-agents on an observe-orient-decide-act loop, code generation with sandboxed execution and self-repair, and a registry where verified work graduates for reuse. Pick your point on the spectrum per agent, not per framework.
 
+And underneath those positions sit structural choices no glue layer gives you:
+
+- **A self-organising mesh, not a supervisor.** Agents find each other over the SWIM gossip protocol with ZMQ transport. There is no central orchestrator to die: nodes join, fail, and rejoin, and the mesh reorganises. The same PeerClient code runs in one process or across a fleet of machines.
+- **Memory that compounds.** Set one URL and every agent gains a fourth memory tier through Athena MemOS: cross-session, semantic, and consolidated over time, so the agent you run in week six is working from what it learned in week one. No wiring code. Without it, the three in-process tiers still carry working, episodic, and long-term context.
+- **Agents that write their own integrations.** When AutoAgent needs capability it does not have, it writes the code, runs it in a sandbox, repairs it until it passes, and files it in a registry where it graduates from candidate to verified to golden. Your agents do not just consume a tool catalog. They grow one.
+- **Zero-trust credentials.** With Nexus, agents call third-party APIs without ever seeing a raw secret. Tokens live outside agent reasoning entirely, so a prompt injection cannot exfiltrate what the agent never had.
+
 ---
 
 ## What JarvisCore provides
@@ -67,15 +74,15 @@ Agent frameworks fail in the same three places. We built against all three, beca
 
 ### Four-tier memory
 
-Working scratchpad → episodic ledger → LLM-compressed long-term summaries → optional cross-session semantic memory via Athena MemOS. Context that survives restarts, scales across steps.
+Working scratchpad, episodic ledger, LLM-compressed long-term summaries, and optional cross-session semantic memory via Athena MemOS. Wired into AutoAgent automatically when `ATHENA_URL` is set. Context that survives restarts and compounds across weeks.
 </div>
 
 <div class="jc-card" markdown>
 <span class="jc-card-label">Communication</span>
 
-### Peer-to-peer mesh
+### Self-organising mesh
 
-Agents discover and message each other via a `PeerClient` API. Routing, request-response, and broadcast work identically on a single process or across distributed machines.
+Agents discover and message each other via a `PeerClient` API over SWIM gossip and ZMQ. No central orchestrator to die: nodes join, fail, and rejoin. Identical code on a single process or across distributed machines.
 </div>
 
 <div class="jc-card" markdown>
