@@ -12,6 +12,7 @@ Tier availability:
   neither               → all writes are no-ops (pure in-memory run)
 """
 import logging
+import os
 import time
 from typing import Any, Dict, Optional
 
@@ -69,18 +70,23 @@ class UnifiedMemory:
             if (redis_store and blob_storage) else None
         )
 
-        # ── Tier 4: Athena MemOS (optional) ──────────────────────────────────
-        # AthenaMemory bridges this session to Athena's STM/MTM/LTM pipeline.
-        # Created lazily via AthenaMemory.create() (async) the first time
-        # get_athena_memory() is awaited. Stored after first creation.
+        # ── Tier 4: cross-session memory (Athena MemOS or local SQLite) ─────
+        # Athena when ATHENA_URL is configured; otherwise a local SQLite file
+        # so agents remember across restarts with zero infrastructure.
+        # Disable entirely with JARVISCORE_MEMORY_PATH=off. Created lazily on
+        # first awaited access.
         self._athena_client = athena_client              # the HTTP client
-        self._athena_memory = None                       # AthenaMemory instance (set lazily)
+        self._athena_memory = None                       # tier-4 instance (set lazily)
+        self._tier4_disabled = (
+            athena_client is None
+            and os.environ.get("JARVISCORE_MEMORY_PATH", "").lower() == "off"
+        )
 
         tiers = [
             "scratchpad" if self.working else None,
             "episodic" if self.episodic else None,
             "ltm" if self.ltm else None,
-            "athena" if athena_client else None,
+            "athena" if athena_client else (None if self._tier4_disabled else "local"),
         ]
         active = [t for t in tiers if t]
         logger.info(
@@ -89,11 +95,19 @@ class UnifiedMemory:
         )
 
     async def _get_athena_memory(self):
-        """Lazy init: create AthenaMemory on first access. Thread-safe for async."""
+        """Lazy init of the tier-4 backend: Athena when configured, local otherwise."""
         if self._athena_memory is not None:
             return self._athena_memory
-        if self._athena_client is None:
+        if self._tier4_disabled:
             return None
+        if self._athena_client is None:
+            try:
+                from .local_memory import LocalMemory
+                self._athena_memory = await LocalMemory.create(agent_id=self._agent)
+            except Exception as exc:
+                logger.warning("[UnifiedMemory] local memory init failed (non-fatal): %s", exc)
+                self._tier4_disabled = True   # do not retry on every turn
+            return self._athena_memory
         try:
             from .athena_memory import AthenaMemory
             self._athena_memory = await AthenaMemory.create(
@@ -104,6 +118,7 @@ class UnifiedMemory:
         except Exception as exc:
             logger.warning("[UnifiedMemory] Athena init failed (non-fatal): %s", exc)
             self._athena_client = None   # disable so we don't retry on every turn
+            self._tier4_disabled = True
         return self._athena_memory
 
 
