@@ -8,7 +8,7 @@ icon: material/home
 
 # Agents that survive production
 
-Most frameworks get you a demo. JarvisCore gets you an operator: agents that run unattended for weeks, remember what happened last month, fail loudly instead of silently, and leave a flight record you can actually read. We know because we run our own agents on it, with real budgets and real consequences, and every hardening release comes from those scars.
+Most frameworks get you a demo. JarvisCore gets you an operator: agents that run unattended for weeks, remember last month, fail loudly, and leave a flight record you can read. We run our own agents on it with real budgets, and every hardening release comes from those scars.
 
 <div class="jc-cta-text" markdown>
 [Get started](getting-started.md) [Why JarvisCore](#why-jarviscore) [Reference](reference/configuration.md)
@@ -41,20 +41,20 @@ Most frameworks get you a demo. JarvisCore gets you an operator: agents that run
 
 ## Why JarvisCore
 
-Agent frameworks fail in the same three places. We built against all three, because our own agents hit them first.
+Agent frameworks fail in the same three places. We built against all three.
 
-**Your agent should never lie to itself.** Context windows fill up, and most frameworks quietly cut things out: the oldest turns, the middle of a tool result, half of a step summary. The agent then reasons confidently from evidence it does not know is missing. JarvisCore has a standing rule: truncation is not compression, it is lossiness. Anything clipped is labeled as clipped, originals are archived with a retrieval path, and summaries say what they summarize. Your agent knows what it knows.
+**Your agent should never lie to itself.** When context fills up, most frameworks quietly drop things: old turns, the middle of a tool result, half a summary. The agent then reasons from evidence it does not know is missing. Our rule: truncation is lossiness, not compression. Clips are labeled, originals are archived with a retrieval path, summaries say what they summarize.
 
-**Failures must be loud.** An autonomous agent that fails silently is a liability you discover at the worst moment. Steps that fail say so, evaluators see full evidence before passing a verdict, partial work survives a failed goal instead of vanishing, and rate-limit storms are absorbed with jittered backoff instead of crashing the loop. When something breaks, the record shows you exactly where.
+**Failures must be loud.** Failed steps say so. Evaluators see full evidence before passing a verdict. Partial work survives a failed goal. Rate-limit storms are absorbed with jittered backoff instead of crashing the loop. When something breaks, the record shows where.
 
-**Autonomy is a spectrum, not a slider.** JarvisCore ships exactly two agent profiles. CustomAgent is a thin infrastructure shell where you bring the brain and keep deterministic control. AutoAgent is the full cognitive stack: task classification, typed routing, specialist sub-agents on an observe-orient-decide-act loop, code generation with sandboxed execution and self-repair, and a registry where verified work graduates for reuse. Pick your point on the spectrum per agent, not per framework.
+**Autonomy is a spectrum.** Two profiles, nothing in between. CustomAgent is a thin infrastructure shell: you bring the brain, you keep deterministic control. AutoAgent is the full cognitive stack: classification, typed routing, specialist sub-agents, sandboxed code generation with self-repair, and a registry where verified work graduates for reuse. Pick your point per agent, not per framework.
 
-And underneath those positions sit structural choices no glue layer gives you:
+Underneath sit structural choices no glue layer gives you:
 
-- **A self-organising mesh, not a supervisor.** Agents find each other over the SWIM gossip protocol with ZMQ transport. There is no central orchestrator to die: nodes join, fail, and rejoin, and the mesh reorganises. The same PeerClient code runs in one process or across a fleet of machines.
-- **Memory that compounds.** Set one URL and every agent gains a fourth memory tier through Athena MemOS: cross-session, semantic, and consolidated over time, so the agent you run in week six is working from what it learned in week one. No wiring code. Without it, the three in-process tiers still carry working, episodic, and long-term context.
-- **Agents that write their own integrations.** When AutoAgent needs capability it does not have, it writes the code, runs it in a sandbox, repairs it until it passes, and files it in a registry where it graduates from candidate to verified to golden. Your agents do not just consume a tool catalog. They grow one.
-- **Zero-trust credentials.** With Nexus, agents call third-party APIs without ever seeing a raw secret. Tokens live outside agent reasoning entirely, so a prompt injection cannot exfiltrate what the agent never had.
+- **Self-organising mesh.** Agents discover each other over SWIM gossip with ZMQ transport. No central orchestrator to die. The same PeerClient code runs in one process or across a fleet.
+- **Memory that compounds.** Set `ATHENA_URL` and every agent gains a fourth memory tier: cross-session, semantic, consolidated over time. The agent you run in week six works from what it learned in week one. Without it, three in-process tiers still cover working, episodic, and long-term context.
+- **Agents that write their own integrations.** When AutoAgent lacks a capability, it writes the code, runs it in a sandbox, repairs it until it passes, and files it in a registry: candidate, verified, golden. Your agents grow a tool catalog instead of consuming one.
+- **Zero-trust credentials.** With Nexus, agents never see a raw secret. Prompt injection cannot exfiltrate what the agent never had.
 
 ---
 

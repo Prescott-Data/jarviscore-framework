@@ -281,14 +281,12 @@ if __name__ == "__main__":
 
 ---
 
-## One Thing to Know: Two Ways to Run
+## Two Ways to Run
 
-You will see two execution calls in these docs and it matters which one you reach for:
+- `mesh.run_task(agent=..., task=...)` runs one task on one agent. Use it for single asks and hand-rolled pipelines where your code decides what happens between steps.
+- `mesh.workflow(id, steps)` runs declared steps as one traced unit: ordering, dependencies, retries, and a single workflow id. Use it when steps belong together.
 
-- `mesh.run_task(agent=..., task=...)` runs one task on one agent and returns its result. Use it for single asks and for hand-rolled pipelines like the example above, where your own code decides what happens between steps.
-- `mesh.workflow(id, steps)` runs a declared list of steps as one traced unit: the framework handles ordering, dependencies, retries, and records the whole thing under a single workflow id. Use it the moment you have more than one step that belongs together.
-
-A useful rule: if you are passing one agent's output into another agent's prompt by hand, you probably want `workflow`. See the [Workflow DAGs guide](guides/workflows.md).
+Rule of thumb: passing one agent's output into another agent's prompt by hand means you want `workflow`. See [Workflow DAGs](guides/workflows.md).
 
 ---
 
