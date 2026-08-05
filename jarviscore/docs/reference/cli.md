@@ -322,7 +322,7 @@ jarviscore atom test --bundle slack --mode dry-run
 # Check a single atom
 jarviscore atom test --bundle slack --atom slack_send_message --mode dry-run
 
-# Check every atom across all 46 bundles
+# Check every atom across all 150 bundles
 jarviscore atom test --mode dry-run --all
 ```
 
@@ -379,7 +379,7 @@ jarviscore/integrations/atoms
     · slack_list_users
     · slack_send_message
 
-46 bundles  ·  237 atoms total
+150 bundles  ·  1224 atoms total
 ```
 
 See [Testing Atoms](../guides/testing-atoms.md) for the full workflow: from writing a new atom to promoting it to `verified`.
