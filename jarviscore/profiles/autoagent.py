@@ -310,6 +310,19 @@ class AutoAgent(Profile):
             self._logger.debug("[AutoAgent] Profile load failed (non-fatal): %s", _pe)
 
     async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a task and return an envelope with a guaranteed
+        ``result_summary``: always present, always plain prose, never JSON
+        (issue #40). Structured data stays in ``output`` / ``payload`` /
+        ``goal_execution``. Delegates to the pipeline below.
+        """
+        from jarviscore.core.envelope import attach_result_summary
+
+        envelope = await self._execute_task_pipeline(task)
+        if isinstance(envelope, dict):
+            attach_result_summary(envelope)
+        return envelope
+
+    async def _execute_task_pipeline(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute task through the production Kernel pipeline.
 
@@ -466,11 +479,16 @@ class AutoAgent(Profile):
                 )
 
                 meta = output.metadata or {}
+                from jarviscore.core.envelope import derive_result_summary
                 result = {
                     "status": output.status,
                     "output": output.payload,
                     "payload": output.payload,
                     "error": None if output.status == "success" else output.summary,
+                    "result_summary": derive_result_summary(
+                        output.status, output.payload, None if output.status == "success" else output.summary,
+                        summary=output.summary,
+                    ),
                     "tokens": meta.get("tokens", {"input": 0, "output": 0, "total": 0}),
                     "cost_usd": meta.get("cost_usd", 0.0),
                     "repairs": 0,
