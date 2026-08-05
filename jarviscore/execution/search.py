@@ -24,8 +24,7 @@ import logging
 import os
 import re
 import time
-import xml.etree.ElementTree as ET
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus, urlparse
 
 import aiohttp
@@ -133,20 +132,11 @@ class InternetSearch:
     # ──────────────────────────────────────────────────────────────────────
 
     async def initialize(self) -> None:
-        """Initialize aiohttp session with SSL fallback (macOS compat)."""
+        """Initialize aiohttp session with a verifying SSL context."""
         if self.session is None or self.session.closed:
-            import ssl
-            ssl_ctx = None
-            try:
-                import certifi
-                ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-            except (ImportError, Exception):
-                ssl_ctx = ssl.create_default_context()
-                ssl_ctx.check_hostname = False
-                ssl_ctx.verify_mode = ssl.CERT_NONE
-                logger.debug("SSL: lenient context (certifi unavailable)")
+            from jarviscore.core.tls import create_ssl_context
 
-            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+            connector = aiohttp.TCPConnector(ssl=create_ssl_context())
             self.session = aiohttp.ClientSession(
                 connector=connector,
                 timeout=aiohttp.ClientTimeout(total=10),
@@ -443,7 +433,7 @@ class InternetSearch:
                         ]
                         logger.info("Serper: %d results", len(results))
                         return results
-                except Exception as e:
+                except Exception:
                     if attempt == 2:
                         raise
                     await asyncio.sleep(1.0 * (2 ** attempt))
