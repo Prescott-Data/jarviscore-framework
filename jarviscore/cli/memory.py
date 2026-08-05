@@ -362,7 +362,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     athena_url = "http://localhost:8080"
     for attempt in range(90):
         try:
-            resp = urllib.request.urlopen(f"{athena_url}/api/v1/health", timeout=2)
+            resp = urllib.request.urlopen(f"{athena_url}/health", timeout=2)
             data = json.loads(resp.read())
             if data.get("status") in ("ok", "healthy", "pass", "UP"):
                 break
@@ -390,7 +390,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(f"""
   Memory tiers:     STM → Redis   MTM → MongoDB + Milvus   LTM → ArangoDB
   Athena URL:       {athena_url}
-  Health check:     {athena_url}/api/v1/health
+  Health check:     {athena_url}/health
 
   Verify from JarvisCore:
     jarviscore memory status
