@@ -77,3 +77,6 @@ site/
 # Runtime artifacts
 hitl_inbox/
 output/
+
+# test scratch dirs must never be committed
+pytest-of-*/
