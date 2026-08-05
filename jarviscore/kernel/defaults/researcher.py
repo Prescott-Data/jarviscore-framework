@@ -1414,7 +1414,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         If `auth_info` is not supplied, credentials are resolved from the
         current step's auth context.
         """
-        import aiohttp, ssl, json as _json
+        import aiohttp, json as _json
 
         logger.info("[RESEARCHER] probe_target_api: base_url=%s", base_url)
 
@@ -1442,9 +1442,9 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 headers.update(resolved_auth["headers"])
 
         base = base_url.rstrip("/")
-        ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
+        from jarviscore.core.tls import create_ssl_context
+
+        ssl_ctx = create_ssl_context()
 
         # Protocol-standard discovery paths — no vendor hardcoding.
         # base_url is already the API root; we append standard suffixes only.

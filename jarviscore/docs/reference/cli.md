@@ -20,6 +20,7 @@ Commands:
   nexus       Manage credential infrastructure
   memory      Manage agent memory infrastructure
   atom        Validate, test, and list integration atoms
+  inspect     Read recorded traces from past runs
 ```
 
 ---
@@ -200,34 +201,42 @@ Manages the Athena MemOS memory infrastructure.
 
 ### memory init
 
-Builds and starts the Athena Docker stack from source. Run this once per environment.
+Pulls the published Athena image and starts the Docker stack. Run this once per environment.
 
 ```bash
 jarviscore memory init
 ```
 
-Before running this command, clone the Athena repository:
+Contributors working on Athena itself can build from a local clone:
 
 ```bash
 git clone https://github.com/Prescott-Data/athena ~/athena
+jarviscore memory init --from-source
 ```
 
-If your Athena clone is in a non-standard location, set `ATHENA_DIR`:
+With `--from-source`, a non-standard clone location is set with `ATHENA_DIR`:
 
 ```bash
-ATHENA_DIR=/path/to/athena jarviscore memory init
+ATHENA_DIR=/path/to/athena jarviscore memory init --from-source
 ```
 
 The `init` command:
 
-1. Locates the Athena source repository.
-2. Detects an LLM API key from the environment (Gemini, then Anthropic, then OpenAI).
-3. Builds all Athena services with `docker compose up -d --build`.
-4. Waits up to 90 seconds for the health endpoint at `http://localhost:8080/api/v1/health` to return `ok`.
-5. Writes `ATHENA_URL=http://localhost:8080` to the project `.env` file.
+1. Detects an LLM API key from the environment (Gemini, then Anthropic, then OpenAI).
+2. Starts all Athena services with `docker compose up -d`.
+3. Waits up to 90 seconds for the health endpoint at `http://localhost:8080/api/v1/health` to return `ok`.
+4. Writes `ATHENA_URL=http://localhost:8080` to the project `.env` file.
 
-!!! note "First-build duration"
-    The initial build takes approximately two minutes because Milvus is compiled from source. Subsequent starts use Docker layer caching and complete in under 10 seconds.
+!!! note "First-start duration"
+    The first run takes about two minutes to pull images. Subsequent starts complete in under 10 seconds.
+
+### memory up
+
+Alias for `memory init`. Starting the stack is idempotent: services already running are left untouched.
+
+```bash
+jarviscore memory up
+```
 
 ### memory status
 
@@ -374,3 +383,32 @@ jarviscore/integrations/atoms
 ```
 
 See [Testing Atoms](../guides/testing-atoms.md) for the full workflow — from writing a new atom to promoting it to `verified`.
+
+---
+
+## jarviscore inspect
+
+Reads recorded traces and shows what your agents actually did. Requires `TRACE_ENABLED=true` on the runs you want to inspect.
+
+```bash
+# List recorded runs
+jarviscore inspect
+
+# Timeline for one run (workflow id prefix is enough)
+jarviscore inspect wf-2024
+
+# Failures and recoveries only
+jarviscore inspect wf-2024 --errors
+
+# Events for a single step
+jarviscore inspect wf-2024 --step analyze
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `workflow` | `str` | (none) | Workflow id, prefix match accepted; omit to list runs |
+| `--dir` | `str` | `./traces` | Directory containing trace JSONL files |
+| `--step` | `str` | (none) | Only show events for this step id |
+| `--errors` | flag | off | Only show failures and recoveries |
+
+See [Observability](../guides/observability.md) for how traces are recorded and what each event means.

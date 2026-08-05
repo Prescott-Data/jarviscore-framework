@@ -14,6 +14,8 @@ Usage:
     jarviscore memory init
     jarviscore atom test --bundle slack --mode dry-run
     jarviscore atom list
+    jarviscore inspect                       # List recorded runs
+    jarviscore inspect <workflow_id>         # Timeline for one run
 """
 
 import sys
@@ -29,6 +31,7 @@ def main():
         print("  nexus      - Manage Nexus auth (init, register, status, list, test)")
         print("  memory     - Manage Athena MemOS (init, status, context, search)")
         print("  atom       - Validate, test, and list integration atoms")
+        print("  inspect    - Read recorded traces: what did my agents do?")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -52,9 +55,12 @@ def main():
     elif command == 'atom':
         from .atom import main as atom_main
         atom_main()
+    elif command == 'inspect':
+        from .inspect import main as inspect_main
+        inspect_main()
     else:
         print(f"Unknown command: {command}")
-        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom")
+        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom, inspect")
         sys.exit(1)
 
 
