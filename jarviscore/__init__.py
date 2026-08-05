@@ -45,7 +45,14 @@ Autonomous agents (with run() loops):
     await mesh.run_forever()   # Starts run() loops, blocks until Ctrl+C
 """
 
-__version__ = "1.2.0"
+# Single-sourced from package metadata (pyproject version), so releases
+# cannot drift the way the hardcoded 1.2.0 string did.
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+try:
+    __version__ = _pkg_version("jarviscore-framework")
+except PackageNotFoundError:  # running from a source tree without install
+    __version__ = "0.0.0.dev0"
 __author__ = "JarvisCore Contributors"
 __license__ = "Apache-2.0"
 
