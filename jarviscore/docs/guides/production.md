@@ -236,10 +236,9 @@ ATHENA_HTTP_TIMEOUT=10.0      # Seconds before an Athena HTTP call times out
 ATHENA_SESSION_TTL_DAYS=30    # How long the session_id is cached in Redis
 ```
 
-Set up the Athena stack:
+Set up the Athena stack (pulls the published image, no clone required):
 
 ```bash
-git clone https://github.com/Prescott-Data/athena ~/athena
 jarviscore memory init
 ```
 

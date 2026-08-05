@@ -65,7 +65,7 @@ Agents discover and message each other via a `PeerClient` API over SWIM gossip a
 
 ### 46 service integrations
 
-Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and 40 more. 237+ prebuilt actions your agents can call directly. No glue code, no auth wiring.
+Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and 140 more. 1200+ prebuilt actions your agents can call directly. No glue code, no auth wiring.
 
 [Browse integrations →](guides/integrations.md)
 </div>

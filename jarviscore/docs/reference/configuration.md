@@ -119,17 +119,16 @@ Athena provides three-tier persistent memory (STM, MTM, and LTM graph) that span
 | `ATHENA_HTTP_TIMEOUT` | `10.0` | Seconds before an Athena HTTP call times out. Increase if your Athena instance is remote or under load. |
 | `ATHENA_SESSION_TTL_DAYS` | `30` | How long a session ID is cached in Redis before Athena re-issues it. |
 
-Initial setup:
+Initial setup (pulls the published image, no clone required):
 
 ```bash
-git clone https://github.com/Prescott-Data/athena ~/athena
 jarviscore memory init
 ```
 
-If your Athena clone is not at `~/athena`:
+Contributors building Athena from a local clone use `--from-source`, with `ATHENA_DIR` pointing at a non-standard clone location:
 
 ```bash
-ATHENA_DIR=/path/to/athena jarviscore memory init
+ATHENA_DIR=/path/to/athena jarviscore memory init --from-source
 ```
 
 ---
@@ -251,6 +250,16 @@ Enables multi-node agent discovery and message routing using the SWIM gossip pro
     `JC_SWIM_PORT` must be different for each node running on the same machine. The ZMQ data port is set automatically to `JC_SWIM_PORT + 1000`.
 
 The seed node does not set `JC_SEED_NODES`. All other nodes point at the seed node (or any other live node) to join the cluster.
+
+---
+
+## TLS
+
+All outbound HTTPS from the framework verifies certificates against the certifi CA bundle. There is exactly one opt-out, intended for corporate-proxy debugging.
+
+| Variable | Default | Description |
+|---|---|---|
+| `JARVISCORE_TLS_INSECURE` | `false` | Disables TLS certificate verification on outbound HTTPS. Logs a warning on every use. Never enable in production |
 
 ---
 

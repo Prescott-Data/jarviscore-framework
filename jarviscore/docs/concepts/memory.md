@@ -182,20 +182,21 @@ The `get_athena_client()` factory reads `ATHENA_URL` and `ATHENA_TENANT_ID` from
 
 ## Setting Up Athena
 
-Athena runs as a Docker-composed stack. The `jarviscore memory init` command automates the setup from source.
+Athena runs as a Docker-composed stack backed by the published image. No clone or build is required.
 
 ```bash
-git clone https://github.com/Prescott-Data/athena ~/athena
 jarviscore memory init
 ```
 
 `memory init` performs the following steps automatically:
 
-1. Locates the Athena source repository at `~/athena` or at the path set in `ATHENA_DIR`.
+1. Pulls the published Athena image (`ghcr.io/prescott-data/athena`) and its service dependencies.
 2. Detects an LLM API key from the current environment (prefers Gemini, then Anthropic, then OpenAI).
-3. Builds and starts all Athena services with `docker compose up -d --build`.
+3. Starts all Athena services with Docker Compose.
 4. Waits up to 90 seconds for the Athena health endpoint to return `ok`.
 5. Writes `ATHENA_URL=http://localhost:8080` to the project `.env` file.
+
+Contributors working on Athena itself can build from a local clone with `jarviscore memory init --from-source` (set `ATHENA_DIR` if the clone is not at `~/athena`).
 
 After setup, verify that all memory tiers are reachable:
 
@@ -203,8 +204,8 @@ After setup, verify that all memory tiers are reachable:
 jarviscore memory status
 ```
 
-!!! note "First-build duration"
-    The first `memory init` build takes approximately two minutes because it compiles the Milvus vector database from source. Subsequent starts use Docker layer caching and complete in under 10 seconds.
+!!! note "First-run duration"
+    The first `memory init` downloads the Athena images. Subsequent starts use the local images and complete in seconds.
 
 ---
 

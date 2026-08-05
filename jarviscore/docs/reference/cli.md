@@ -27,17 +27,18 @@ Commands:
 
 ## jarviscore init
 
-Scaffolds a new project by creating an `.env.example` file in the current directory.
+Scaffolds a new project by creating an `.env.example` file in the current directory. The default template is minimal: one LLM provider key gets you running.
 
 ```bash
 jarviscore init
 ```
 
-Use the `--examples` flag to also copy example agent scripts into the project:
-
-```bash
-jarviscore init --examples
-```
+| Option | Description |
+|--------|-------------|
+| `--examples` | Also copy example agent scripts into the project |
+| `--full` | Write the complete configuration reference instead of the minimal template |
+| `--skill` | Install the JarvisCore skill for AI editors (GitHub Copilot, Claude Code) |
+| `--force` | Overwrite existing files |
 
 After running `init`, copy the example file and populate it with your configuration:
 
