@@ -545,13 +545,15 @@ class BaseSubAgent(ABC):
 
             # ── Emergency guards ──
             if self._cognition.lease.is_expired():
-                self._log.warning("Lease expired")
+                exhausted = ", ".join(self._cognition.lease.expired_dimensions()) or "unknown"
+                self._log.warning(f"Lease expired: {exhausted}")
                 return AgentOutput(
                     status="yield",
-                    summary=f"Lease budget exhausted after {turn} turns",
+                    summary=f"Lease budget exhausted after {turn} turns: {exhausted}",
                     payload=state.get_final_output(),
                     trajectory=trajectory,
                     metadata={"tokens": total_tokens, "cost_usd": total_cost,
+                              "lease_exhausted": exhausted,
                               "typed_outcome": "YIELD_LEASE_EXHAUSTED"},
                 )
 

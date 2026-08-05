@@ -12,7 +12,7 @@ Role-based profiles configure different budgets per subagent type.
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Optional
 
 
 # Role-specific lease profiles
@@ -95,17 +95,28 @@ class ExecutionLease:
 
     def is_expired(self) -> bool:
         """Check if any budget dimension is exhausted."""
-        if self.thinking_used + self.action_used >= self.max_total_tokens:
-            return True
+        return bool(self.expired_dimensions())
+
+    def expired_dimensions(self) -> list:
+        """Name every exhausted budget dimension as "name(used/limit)".
+
+        Five dimensions can end a lease; each needs a different remedy,
+        so the yield summary must say which one fired.
+        """
+        dims = []
+        total_used = self.thinking_used + self.action_used
+        if total_used >= self.max_total_tokens:
+            dims.append(f"total_tokens({total_used}/{self.max_total_tokens})")
         if self.thinking_used >= self.thinking_budget:
-            return True
+            dims.append(f"thinking({self.thinking_used}/{self.thinking_budget})")
         if self.action_used >= self.action_budget:
-            return True
+            dims.append(f"action({self.action_used}/{self.action_budget})")
         if self.turns_used >= self.emergency_turn_fuse:
-            return True
-        if self.elapsed_ms() >= self.wall_clock_ms:
-            return True
-        return False
+            dims.append(f"turn_fuse({self.turns_used}/{self.emergency_turn_fuse})")
+        elapsed = int(self.elapsed_ms())
+        if elapsed >= self.wall_clock_ms:
+            dims.append(f"wall_clock({elapsed}ms/{self.wall_clock_ms}ms)")
+        return dims
 
     def remaining_thinking(self) -> int:
         """Remaining thinking tokens."""
