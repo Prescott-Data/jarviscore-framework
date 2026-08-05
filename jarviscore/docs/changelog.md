@@ -24,6 +24,48 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.3.0 <span class="changelog-date">2026-08-05</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.3.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+A developer-experience and integrations release. The atom catalog more
+than triples, memory setup becomes a one-command flow backed by a
+published image, traces become readable from the CLI, and AI editors
+get a first-class skill. Backward compatible; one security default
+changed (see Security below).
+
+**Added**
+
+- **[#111] Atom catalog expansion**: 104 new provider bundles (987 atoms) imported from our production function registry, bringing the catalog to 150 providers and 1224 atoms. Every ported provider was hand-verified atom by atom against the official vendor API documentation.
+- **[#103] `jarviscore inspect`**: read recorded traces from the CLI. Run list with steps, tokens, failures, and duration; per-step timelines; `--errors` and `--step` filters; workflow id prefix matching; honest `[clipped]` markers on long values.
+- **[#109] AI editor skill**: `jarviscore init --skill` installs a verified SKILL.md for GitHub Copilot and Claude Code, covering the real API contracts, profile decision rule, and common mistakes. The doc site now serves `llms.txt` and an AI Editors guide.
+- **[#108] Image-first memory init**: `jarviscore memory init` pulls the published Athena image instead of cloning and building from source. `--from-source` keeps the old path for contributors; `memory up` is now a working alias.
+- **[#106] Minimal env scaffold**: `jarviscore init` writes a focused 35-line .env template (one provider key gets you running); `--full` writes the complete reference.
+
+**Fixed**
+
+- **[#106] Fresh-clone init**: an unanchored `data/` gitignore pattern meant packaged data files were never tracked, so `jarviscore init` failed from any fresh clone.
+- **[#111] Atoms never shipped**: `integrations/atoms` was neither a package nor declared package-data, so pip-installed wheels contained zero atom files and `seed_registry` found nothing at runtime.
+- **[#105] Silent import**: `import jarviscore` no longer prints four lines of peer-to-peer module banners; the swim-p2p output is captured into debug logging and the p2p re-exports are lazy.
+- **[#108] Memory CLI crashes**: `memory init` raised `NameError` (missing `Path` import) and `memory up` did not exist.
+
+**Security**
+
+- **[#110] TLS verification enforced**: three code paths disabled certificate verification on outbound HTTPS, one of them while sending Bearer tokens. All outbound HTTPS now verifies against the certifi CA bundle. If you genuinely need to disable verification behind a corporate proxy, set `JARVISCORE_TLS_INSECURE=1`; it logs a warning on every use.
+
+**Changed**
+
+- **[#104] Documentation overhaul**: landing page rewritten around enforced production rules, getting-started leads with a profile decision table, site-wide style pass, and the changelog page renders correctly.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.2.0 <span class="changelog-date">2026-07-19</span>
 
 <div class="changelog-meta" markdown>
