@@ -99,7 +99,7 @@ services:
       - athena_net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/v1/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 15s
       timeout: 5s
       retries: 8
@@ -154,6 +154,7 @@ services:
       - athena_etcd_data:/etcd
     networks:
       - athena_net
+    restart: unless-stopped
 
   # ── MinIO — Milvus blob store ────────────────────────────────────────────────
   minio:
@@ -170,6 +171,7 @@ services:
       - athena_minio_data:/minio_data
     networks:
       - athena_net
+    restart: unless-stopped
 
   minio-setup:
     image: minio/mc
@@ -204,6 +206,7 @@ services:
       - minio
     networks:
       - athena_net
+    restart: unless-stopped
 
   # ── ArangoDB — LTM knowledge graph ──────────────────────────────────────────
   arangodb:
