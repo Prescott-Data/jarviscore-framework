@@ -20,6 +20,7 @@ Commands:
   nexus       Manage credential infrastructure
   memory      Manage agent memory infrastructure
   atom        Validate, test, and list integration atoms
+  inspect     Read recorded traces from past runs
 ```
 
 ---
@@ -374,3 +375,32 @@ jarviscore/integrations/atoms
 ```
 
 See [Testing Atoms](../guides/testing-atoms.md) for the full workflow — from writing a new atom to promoting it to `verified`.
+
+---
+
+## jarviscore inspect
+
+Reads recorded traces and shows what your agents actually did. Requires `TRACE_ENABLED=true` on the runs you want to inspect.
+
+```bash
+# List recorded runs
+jarviscore inspect
+
+# Timeline for one run (workflow id prefix is enough)
+jarviscore inspect wf-2024
+
+# Failures and recoveries only
+jarviscore inspect wf-2024 --errors
+
+# Events for a single step
+jarviscore inspect wf-2024 --step analyze
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `workflow` | `str` | (none) | Workflow id, prefix match accepted; omit to list runs |
+| `--dir` | `str` | `./traces` | Directory containing trace JSONL files |
+| `--step` | `str` | (none) | Only show events for this step id |
+| `--errors` | flag | off | Only show failures and recoveries |
+
+See [Observability](../guides/observability.md) for how traces are recorded and what each event means.
