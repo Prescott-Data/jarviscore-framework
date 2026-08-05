@@ -4,7 +4,7 @@ icon: material/brain
 
 # Concepts
 
-Core concepts behind the JarvisCore framework — how agents are structured, how they coordinate, and how the system scales from a single agent to a fleet.
+Core concepts behind the JarvisCore framework: how agents are structured, how they coordinate, and how the system scales from a single agent to a fleet.
 
 <div class="grid cards" markdown>
 
@@ -16,7 +16,7 @@ Core concepts behind the JarvisCore framework — how agents are structured, how
 
 -   :material-robot: **Agents**
 
-    AutoAgent, CustomAgent, and sub-agents — the building blocks of every system.
+    AutoAgent, CustomAgent, and sub-agents: the building blocks of every system.
 
     [Read more →](agents.md)
 
@@ -40,7 +40,7 @@ Core concepts behind the JarvisCore framework — how agents are structured, how
 
 -   :material-package-variant-closed: **System Bundles & Atoms**
 
-    Composable units of logic — Atoms inside Bundles.
+    Composable units of logic: Atoms inside Bundles.
 
     [Read more →](system-bundles.md)
 

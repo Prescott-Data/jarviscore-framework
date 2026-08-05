@@ -163,8 +163,8 @@ if response:
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `target` | `str` | — | Target agent role or `agent_id` |
-| `message` | `dict` | — | Request payload |
+| `target` | `str` |: | Target agent role or `agent_id` |
+| `message` | `dict` |: | Request payload |
 | `timeout` | `float` | `30.0` | Seconds to wait for a response |
 | `context` | `dict` | `None` | Optional metadata |
 
@@ -240,8 +240,8 @@ Sends a request without blocking. Returns a `request_id` immediately.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `target` | `str` | — | Target agent role or `agent_id` |
-| `message` | `dict` | — | Request payload |
+| `target` | `str` |: | Target agent role or `agent_id` |
+| `message` | `dict` |: | Request payload |
 | `timeout` | `float` | `120.0` | Time to keep the request active before expiry |
 | `context` | `dict` | `None` | Optional metadata |
 
@@ -253,7 +253,7 @@ Checks for a response to a previously sent async request.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `request_id` | `str` | — | ID returned by `ask_async()` |
+| `request_id` | `str` |: | ID returned by `ask_async()` |
 | `timeout` | `float` | `0.0` | Seconds to wait if no response is available yet |
 | `remove` | `bool` | `True` | Remove the entry from the inbox after reading |
 

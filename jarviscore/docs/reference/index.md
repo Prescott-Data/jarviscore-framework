@@ -42,6 +42,6 @@ Complete API reference, configuration options, CLI commands, and troubleshooting
 
     Release history, version notes, and upgrade guides.
 
-    [Read more →](../CHANGELOG.md)
+    [Read more →](../changelog.md)
 
 </div>

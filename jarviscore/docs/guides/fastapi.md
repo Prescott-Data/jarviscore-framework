@@ -4,7 +4,7 @@ icon: material/api
 
 # FastAPI Integration
 
-JarvisCore integrates with FastAPI through `JarvisLifespan` — a lifespan context manager that starts the Mesh on app startup, runs agent loops as background tasks, and shuts everything down cleanly when the server stops.
+JarvisCore integrates with FastAPI through `JarvisLifespan`: a lifespan context manager that starts the Mesh on app startup, runs agent loops as background tasks, and shuts everything down cleanly when the server stops.
 
 The integration reduces ~100 lines of boilerplate to 3.
 
@@ -151,7 +151,7 @@ class AnalystAgent(CustomAgent):
         return {"analysis": analysis, "confidence": 0.9}
 
     async def run(self, task: str = "", context: dict = None) -> dict:
-        """Receive loop — keeps the agent alive to handle peer messages."""
+        """Receive loop: keeps the agent alive to handle peer messages."""
         while not self.shutdown_requested:
             message = await self.peers.receive(timeout=5)
             if not message:
@@ -190,10 +190,10 @@ asyncio.run(main())
 ```
 
 ```bash
-# Terminal 1 — start the FastAPI server with embedded agents
+# Terminal 1: start the FastAPI server with embedded agents
 uvicorn app:app --host 0.0.0.0 --port 8000
 
-# Terminal 2 — join the mesh from a separate process
+# Terminal 2: join the mesh from a separate process
 python standalone_scout.py
 ```
 

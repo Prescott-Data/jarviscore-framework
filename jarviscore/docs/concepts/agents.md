@@ -6,7 +6,7 @@ icon: material/robot-outline
 
 An agent in JarvisCore is a Python class with two things: an **identity** and an **execution model**. The identity tells the mesh *who* the agent is and *what* it can do. The execution model defines *how* it processes work.
 
-Every other concept in the framework — memory, model routing, personas, peer communication — operates on top of this foundation. Read this page before any of the others.
+Every other concept in the framework (memory, model routing, personas, peer communication) operates on top of this foundation. Read this page before any of the others.
 
 ---
 
@@ -60,7 +60,7 @@ The `role` and `capabilities` are common to all agents. What differs is how each
 
 ### AutoAgent
 
-`AutoAgent` gives the agent an internal OODA reasoning loop. You provide the system prompt and optional configuration; the framework handles the rest — LLM calls, tool selection, code generation, web search, sandboxed execution, autonomous repair, and replanning.
+`AutoAgent` gives the agent an internal OODA reasoning loop. You provide the system prompt and optional configuration; the framework handles the rest: LLM calls, tool selection, code generation, web search, sandboxed execution, autonomous repair, and replanning.
 
 ```python
 class ResearcherAgent(AutoAgent):
@@ -71,11 +71,11 @@ class ResearcherAgent(AutoAgent):
 
 The Kernel inside `AutoAgent` decides which sub-agent to route each task to (Coder, Researcher, Communicator, or Browser), executes it through the OODA loop, and returns a structured result. You do not write the execution logic.
 
-Use `AutoAgent` when the steps needed to complete a task are not known in advance — when the agent needs to reason about what to do next.
+Use `AutoAgent` when the steps needed to complete a task are not known in advance: when the agent needs to reason about what to do next.
 
 ### CustomAgent
 
-`CustomAgent` exposes the execution loop directly. You implement `on_peer_request()` (for P2P messages) and optionally `execute_task()` (for workflow tasks). The framework still provides memory, peer communication, and credential injection — you control what runs.
+`CustomAgent` exposes the execution loop directly. You implement `on_peer_request()` (for P2P messages) and optionally `execute_task()` (for workflow tasks). The framework still provides memory, peer communication, and credential injection: you control what runs.
 
 ```python
 from jarviscore import CustomAgent
@@ -90,7 +90,7 @@ class DataTransformerAgent(CustomAgent):
         return {"status": "success", "result": result}
 ```
 
-Use `CustomAgent` when the execution sequence is deterministic and known in advance — pipelines, formatters, gateways, or wrappers around existing code.
+Use `CustomAgent` when the execution sequence is deterministic and known in advance: pipelines, formatters, gateways, or wrappers around existing code.
 
 ---
 
@@ -112,7 +112,7 @@ Mesh.start()
     │       └── self._auth_manager   # injected when requires_auth=True + NEXUS_GATEWAY_URL set
     │
     ▼
-Running — processes tasks and/or peer messages
+Running: processes tasks and/or peer messages
     │
     ▼
 Mesh.stop()
@@ -131,7 +131,7 @@ async def teardown(self):
     await super().teardown()         # always call super last
 ```
 
-Do not do expensive work in `__init__` — the Mesh injects infrastructure *after* construction and *before* `setup()`. Anything that requires `self._redis_store` or `self.peers` belongs in `setup()`.
+Do not do expensive work in `__init__`: the Mesh injects infrastructure *after* construction and *before* `setup()`. Anything that requires `self._redis_store` or `self.peers` belongs in `setup()`.
 
 ---
 
@@ -142,7 +142,7 @@ The Mesh injects infrastructure stores into every agent between `__init__` and `
 | Attribute | Type | Available when |
 |---|---|---|
 | `self._redis_store` | `RedisStore` | `REDIS_URL` is set |
-| `self._blob_storage` | `BlobStorage` | Always — local filesystem by default |
+| `self._blob_storage` | `BlobStorage` | Always: local filesystem by default |
 | `self.peers` | `PeerClient` | `P2P_ENABLED=true` |
 | `self.mailbox` | `MailboxManager` | `REDIS_URL` is set |
 | `self._auth_manager` | `AuthenticationManager` | `requires_auth = True` on the class and `NEXUS_GATEWAY_URL` is set |
@@ -154,7 +154,7 @@ None of these are required. Every injected attribute is `None` when its infrastr
 
 ## How Identity Drives Everything
 
-The `role` and `capabilities` you set on the class are not just labels — they actively control how the framework routes and connects your agent.
+The `role` and `capabilities` you set on the class are not just labels: they actively control how the framework routes and connects your agent.
 
 | What it controls | Driven by |
 |---|---|
@@ -165,7 +165,7 @@ The `role` and `capabilities` you set on the class are not just labels — they 
 | Workflow step routing (`{"agent": "researcher", "task": "..."}`) | `role` |
 | HITL escalation targets | Defined in the agent's YAML profile |
 
-The `role` is the primary key for the entire mesh. Choose it deliberately — it should be a stable slug that reflects the agent's function, not its implementation.
+The `role` is the primary key for the entire mesh. Choose it deliberately: it should be a stable slug that reflects the agent's function, not its implementation.
 
 ---
 
@@ -191,9 +191,9 @@ asyncio.run(main())
 
 ## Further Reading
 
-- [Architecture Overview](./architecture.md) — the Mesh, Kernel, and OODA loop
-- [Agent Personas](./agent-personas.md) — how YAML profiles add domain intelligence to identity
-- [Model Routing](./model-routing.md) — how `role` determines which LLM tier is used
-- [P2P Communication](./p2p.md) — how agents discover and message each other
-- [AutoAgent Guide](../guides/autoagent.md) — full reference for autonomous reasoning agents
-- [CustomAgent Guide](../guides/customagent.md) — full reference for deterministic worker agents
+- [Architecture Overview](./architecture.md): the Mesh, Kernel, and OODA loop
+- [Agent Personas](./agent-personas.md): how YAML profiles add domain intelligence to identity
+- [Model Routing](./model-routing.md): how `role` determines which LLM tier is used
+- [P2P Communication](./p2p.md): how agents discover and message each other
+- [AutoAgent Guide](../guides/autoagent.md): full reference for autonomous reasoning agents
+- [CustomAgent Guide](../guides/customagent.md): full reference for deterministic worker agents

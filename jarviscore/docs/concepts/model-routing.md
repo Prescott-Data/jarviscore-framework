@@ -140,12 +140,12 @@ results = await mesh.workflow("report-001", [
     {
         "agent": "analyst",
         "task": "Is the word 'quarterly' in this text?",
-        "complexity": "nano",    # simple lookup — use the fast tier
+        "complexity": "nano",    # simple lookup: use the fast tier
     },
     {
         "agent": "analyst",
         "task": "Model the 5-year cashflow impact of our pricing change across all segments.",
-        "complexity": "heavy",   # deep reasoning — use the most capable tier
+        "complexity": "heavy",   # deep reasoning: use the most capable tier
     },
 ])
 ```
@@ -233,8 +233,8 @@ The tier system works with any provider that implements this interface. Complexi
 
 ## Further Reading
 
-- [Language Models](./language-models.md) — LLM roles, the completion interface, and CUA vs multimodal for browser automation
-- [Architecture Overview](./architecture.md) — how the Kernel, sub-agents, and ExecutionLease fit together
-- [AutoAgent Guide](../guides/autoagent.md) — `complexity` overrides and execution budgets
-- [Configuration Reference](../reference/configuration.md) — all environment variables including LLM tier keys
-- [Observability](../guides/observability.md) — tracing which model and provider handled each LLM call
+- [Language Models](./language-models.md): LLM roles, the completion interface, and CUA vs multimodal for browser automation
+- [Architecture Overview](./architecture.md): how the Kernel, sub-agents, and ExecutionLease fit together
+- [AutoAgent Guide](../guides/autoagent.md): `complexity` overrides and execution budgets
+- [Configuration Reference](../reference/configuration.md): all environment variables including LLM tier keys
+- [Observability](../guides/observability.md): tracing which model and provider handled each LLM call

@@ -17,7 +17,7 @@ icon: material/magnify
 
 ## What it does
 
-A four-node cluster where each process runs a single specialist researcher. The `Synthesizer` acts as the workflow coordinator and SWIM seed — it submits a 4-step research workflow to Redis and then all nodes race to claim matching steps based on their declared `capabilities`.
+A four-node cluster where each process runs a single specialist researcher. The `Synthesizer` acts as the workflow coordinator and SWIM seed: it submits a 4-step research workflow to Redis and then all nodes race to claim matching steps based on their declared `capabilities`.
 
 ```
 Terminal A: Synthesizer    → Submits workflow, waits for results
@@ -34,7 +34,7 @@ No manual wiring. Each node declares its capabilities and the mesh's distributed
 ## Run order
 
 ```bash
-# Terminal A — start synthesizer FIRST (it is the SWIM seed)
+# Terminal A: start synthesizer FIRST (it is the SWIM seed)
 python examples/research_synthesizer.py
 
 # Then start nodes in any order
@@ -61,8 +61,8 @@ mesh.add(SynthesizerAgent)
 await mesh.start()
 
 # Check what the Mesh detected
-print(mesh.has_capability("redis"))         # True — Redis connected
-print(mesh.has_capability("peer_swim"))     # True — SWIM/ZMQ active
+print(mesh.has_capability("redis"))         # True: Redis connected
+print(mesh.has_capability("peer_swim"))     # True: SWIM/ZMQ active
 ```
 
 1. Set `p2p_enabled: True` (or `P2P_ENABLED=true` in `.env`) to activate the SWIM peer transport. The Mesh detects Redis automatically from `REDIS_URL`.
@@ -89,7 +89,7 @@ class TechResearchAgent(AutoAgent):
 ```
 
 1. The distributed worker loop scans for pending workflow steps whose `agent` field matches any string in `capabilities`. No explicit routing needed.
-2. `step_id` must match the `id` field in the workflow definition — this is how the worker claims the step atomically via Redis `SETNX`.
+2. `step_id` must match the `id` field in the workflow definition: this is how the worker claims the step atomically via Redis `SETNX`.
 
 ---
 

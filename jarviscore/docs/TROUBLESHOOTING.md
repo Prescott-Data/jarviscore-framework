@@ -4,7 +4,7 @@ icon: material/wrench
 
 # Troubleshooting
 
-Common issues and solutions for JarvisCore developers — from installation through production mesh deployments.
+Common issues and solutions for JarvisCore developers: from installation through production mesh deployments.
 
 ---
 
@@ -71,15 +71,15 @@ Then validate:
 jarviscore check --validate-llm
 ```
 
-### `Error code: 401 — Unauthorized`
+### `Error code: 401: Unauthorized`
 
 Invalid or expired API key. Verify the key value, check expiry, and for Azure confirm `AZURE_ENDPOINT` and `AZURE_DEPLOYMENT` are set.
 
-### `Error code: 429 — Rate limit exceeded`
+### `Error code: 429: Rate limit exceeded`
 
 Wait 60 seconds, then retry. If persistent, upgrade your API plan or switch to a less-loaded model.
 
-### `Error code: 529 — Overloaded`
+### `Error code: 529: Overloaded`
 
 Provider temporarily overloaded (common with Claude). The smoke test retries automatically 3 times. Retry manually after a few seconds or add a secondary provider.
 
@@ -92,7 +92,7 @@ Provider temporarily overloaded (common with Claude). The smoke test retries aut
 Default timeout is controlled by `SANDBOX_TIMEOUT`. Increase it in `.env`:
 
 ```bash
-SANDBOX_TIMEOUT=600   # seconds — default is 300
+SANDBOX_TIMEOUT=600   # seconds: default is 300
 ```
 
 ### `Sandbox execution failed`
@@ -105,7 +105,7 @@ The framework auto-repairs up to 3 times. If all attempts fail:
    cat traces/<workflow>_<step>.jsonl | python -m json.tool | grep error
    ```
 
-2. Make the task more explicit — the agent needs to know exactly what to produce:
+2. Make the task more explicit: the agent needs to know exactly what to produce:
    ```python
    system_prompt = """
    You are a Python expert. Generate clean, working code.
@@ -125,7 +125,7 @@ The LLM could not generate working code in 3 tries. Simplify the task or add mor
 
 **This is a known diagnostic tell.** Real LLM-driven computation takes 1–30 seconds. Sub-10ms means the sandbox code crashed instantly.
 
-**Cause:** Agent-generated code raised `NameError: name 'context' is not defined` — the sandbox caught it silently.
+**Cause:** Agent-generated code raised `NameError: name 'context' is not defined`. The sandbox caught it silently.
 
 **Fix:** Confirm `autoagent.py` passes context to the sandbox:
 
@@ -170,15 +170,15 @@ results = await mesh.workflow("wf-1", [
 
 ### `self.mailbox is None` / `self._redis_store is None`
 
-Infrastructure attributes are injected by the Mesh **after** `__init__` runs — they are only available inside `setup()`:
+Infrastructure attributes are injected by the Mesh **after** `__init__` runs: they are only available inside `setup()`:
 
 ```python
-# ❌ Wrong — __init__ runs before injection
+# ❌ Wrong: __init__ runs before injection
 class MyAgent(CustomAgent):
     def __init__(self):
         self.memory = UnifiedMemory(redis_store=self._redis_store)  # None!
 
-# ✅ Correct — setup() runs after injection
+# ✅ Correct: setup() runs after injection
 class MyAgent(CustomAgent):
     async def setup(self):
         await super().setup()
@@ -214,7 +214,7 @@ grep REDIS_URL .env
 ```
 
 > [!NOTE]
-> Without `REDIS_URL`, the Mesh degrades gracefully — `_redis_store` and `mailbox` become `None`. Workflow execution still works but checkpointing, mailboxes, and distributed coordination are disabled.
+> Without `REDIS_URL`, the Mesh degrades gracefully: `_redis_store` and `mailbox` become `None`. Workflow execution still works but checkpointing, mailboxes, and distributed coordination are disabled.
 
 ### `EpisodicLedger.append()` fails / events not in Redis
 
@@ -271,14 +271,14 @@ redis-cli del "claim:wf-id:step-id"
 
 Each process needs a **unique port**. A shared `.env` with a single `BIND_PORT` won't work for four nodes.
 
-**Recommended approach — explicit config dict:**
+**Recommended approach: explicit config dict:**
 
 ```python
-BIND_PORT = 7949   # this script's port — part of its identity
+BIND_PORT = 7949   # this script's port: part of its identity
 mesh = Mesh(config={"bind_port": BIND_PORT, ...})
 ```
 
-**Production approach — per-process env var:**
+**Production approach: per-process env var:**
 
 ```bash
 JARVISCORE_BIND_PORT=7949 python synthesizer.py
@@ -332,7 +332,7 @@ LLM_ENDPOINT=http://localhost:8000
 LLM_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
 ```
 
-Also simplify the system prompt — shorter, more specific prompts generate faster.
+Also simplify the system prompt: shorter, more specific prompts generate faster.
 
 ### High API costs
 
@@ -352,7 +352,7 @@ The smoke test is stricter than examples. Run with `--verbose` to see which asse
 jarviscore smoketest --verbose
 ```
 
-If retrying eventually passes, it is temporary LLM overload — not a code issue.
+If retrying eventually passes, it is temporary LLM overload: not a code issue.
 
 ### All tests pass but my agent fails
 

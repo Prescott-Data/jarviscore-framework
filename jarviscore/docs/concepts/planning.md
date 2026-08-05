@@ -88,7 +88,7 @@ Two outcomes short-circuit the LLM call entirely:
 
 If the step execution returned `status == "failure"`, the evaluator immediately returns `fail` without calling the LLM. The agent already knows it failed.
 
-If the step returned `status == "yield"`, the evaluator checks the yield type. Routine budget exhaustion (`YIELD_BUDGET_EXHAUSTED`, `YIELD_LEASE_EXHAUSTED`, `YIELD_EMERGENCY_TURN_FUSE`) is treated as `partial`, not `hitl`. The goal loop replans with smaller, more bounded steps rather than pausing for human review. Only convergence stalls — where the agent tried multiple strategies and still could not make progress — produce a genuine `hitl` verdict.
+If the step returned `status == "yield"`, the evaluator checks the yield type. Routine budget exhaustion (`YIELD_BUDGET_EXHAUSTED`, `YIELD_LEASE_EXHAUSTED`, `YIELD_EMERGENCY_TURN_FUSE`) is treated as `partial`, not `hitl`. The goal loop replans with smaller, more bounded steps rather than pausing for human review. Only convergence stalls (where the agent tried multiple strategies and still could not make progress) produce a genuine `hitl` verdict.
 
 ---
 
@@ -106,7 +106,7 @@ Valid routing hints are: `researcher`, `coder`, `communicator`, `browser`.
 
 A `PlannerError` is a hard failure. The Planner does not retry with a degraded plan and does not silently return a partial result. If the LLM call fails, the JSON is malformed, the response contains no valid steps array, or a step is missing `task` or `success_criterion`, the error surfaces immediately to the caller.
 
-The goal execution layer handles this by marking the goal as failed. There is no automatic retry of the planning call itself — planning failures typically indicate a prompt issue, a model configuration issue, or an unreachable LLM, none of which benefit from a blind retry.
+The goal execution layer handles this by marking the goal as failed. There is no automatic retry of the planning call itself: planning failures typically indicate a prompt issue, a model configuration issue, or an unreachable LLM, none of which benefit from a blind retry.
 
 An `EvaluatorError` follows the same pattern: invalid or unparseable evaluation responses raise immediately rather than defaulting to any verdict.
 

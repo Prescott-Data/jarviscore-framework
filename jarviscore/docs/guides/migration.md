@@ -119,7 +119,7 @@ asyncio.run(main())
 ```
 
 **Key differences:**
-- `Task(context=[...])` → `"depends_on": [...]` in the step dict. Prior outputs are injected automatically — no manual context passing needed.
+- `Task(context=[...])` → `"depends_on": [...]` in the step dict. Prior outputs are injected automatically: no manual context passing needed.
 - `Agent(role=..., goal=..., backstory=...)` → one `system_prompt` string that covers all three. Be explicit about `result` shape.
 - `Crew(process=Process.sequential)` → implicit via `depends_on`. Steps without dependencies run in parallel automatically.
 
@@ -142,7 +142,7 @@ researcher = Agent(
 
 **JarvisCore:**
 
-Internet search is built in — `ResearcherSubAgent` runs multi-provider search automatically when the agent routes to it. No `tools=[]` argument needed.
+Internet search is built in: `ResearcherSubAgent` runs multi-provider search automatically when the agent routes to it. No `tools=[]` argument needed.
 
 For custom tools, write an atom function and register it:
 
@@ -182,9 +182,9 @@ Some CrewAI patterns map to a different primitive in JarvisCore rather than a di
 
 | CrewAI pattern | How JarvisCore does it |
 |---|---|
-| `Process.hierarchical` — manager agent auto-routes tasks | An `AutoAgent` orchestrator sends peer messages with `await self._peer_client.send(...)`. You control routing logic explicitly in Python — no hidden manager. |
-| `Agent(allow_delegation=True)` | All `AutoAgent` instances can delegate to peers via the mesh peer tool — delegation is on by default, not opt-in. |
-| Built-in `FileReadTool`, `DirectoryReadTool` | Write an atom function — 5 lines of Python, registered once, available to all agents. No wrapper class needed. |
+| `Process.hierarchical` (manager agent auto-routes tasks | An `AutoAgent` orchestrator sends peer messages with `await self._peer_client.send(...)`. You control routing logic explicitly in Python) no hidden manager. |
+| `Agent(allow_delegation=True)` | All `AutoAgent` instances can delegate to peers via the mesh peer tool: delegation is on by default, not opt-in. |
+| Built-in `FileReadTool`, `DirectoryReadTool` | Write an atom function: 5 lines of Python, registered once, available to all agents. No wrapper class needed. |
 | `Crew(planning=True)` | Set `goal_oriented = True` on the `AutoAgent`. The Kernel runs a planning phase before execution. |
 
 ---
@@ -206,7 +206,7 @@ Some CrewAI patterns map to a different primitive in JarvisCore rather than a di
 | `app = graph.compile()` | `await mesh.start()` | Mesh compiles and starts all agents |
 | `app.invoke(input)` | `await mesh.workflow(id, steps)` | Returns list of step results |
 | `app.stream(input)` | Chat SSE stream via `create_chat_router` | `GET /chat/stream/{workflow_id}` |
-| Checkpointer | Automatic — Redis `step_output:wf:step` | Crash-safe by default when Redis is set |
+| Checkpointer | Automatic: Redis `step_output:wf:step` | Crash-safe by default when Redis is set |
 | `ToolNode` | `SystemBundle` + `Registry` | Atoms are plain functions in a bundle class |
 | `HumanNode` | `self.hitl.request()` in agent code | HITL escalation with async wait |
 
@@ -297,7 +297,7 @@ from jarviscore.context.truth import TruthContext, TruthFact, Evidence
 # Initialise shared truth store for a workflow
 truth = TruthContext()
 
-# Agent A writes a fact — assign directly to truth.facts
+# Agent A writes a fact: assign directly to truth.facts
 truth.facts["competitors"] = TruthFact(
     value=["CompanyX", "CompanyY"],
     confidence=0.9,
@@ -342,7 +342,7 @@ class EvaluatorAgent(CustomAgent):
     async def on_peer_request(self, msg) -> dict:
         result = await self._evaluate(msg.data["content"])
         if result["confidence"] < 0.7:
-            # Escalate to HITL — human reviews and responds
+            # Escalate to HITL: human reviews and responds
             await self.hitl.request(
                 question="Please review this output",
                 context=result,
@@ -361,15 +361,15 @@ Conditional routing is expressed as agent logic in `on_peer_request()`. This giv
 
 ### Architectural Differences from LangGraph
 
-LangGraph is a graph execution engine — JarvisCore is an agent runtime. The mental model shifts from "nodes and edges" to "agents and steps". Some patterns have direct equivalents under different names; a few reflect a genuinely different philosophy:
+LangGraph is a graph execution engine: JarvisCore is an agent runtime. The mental model shifts from "nodes and edges" to "agents and steps". Some patterns have direct equivalents under different names; a few reflect a genuinely different philosophy:
 
 | LangGraph pattern | How JarvisCore does it |
 |---|---|
 | Typed `State` schema enforced across all nodes | `TruthContext` provides typed, evidence-backed facts shared across agents. Per-agent schema enforcement sits in the system prompt and result contract. |
-| Built-in graph visualisation | No built-in DAG visualiser. The observability dashboard shows live execution traces, OODA loop thoughts, tool calls, and token usage — richer than a static graph. |
+| Built-in graph visualisation | No built-in DAG visualiser. The observability dashboard shows live execution traces, OODA loop thoughts, tool calls, and token usage: richer than a static graph. |
 | `interrupt_before` / `interrupt_after` hooks | `CustomAgent.on_peer_request()` with pre/post logic, or HITL escalation via `self.hitl.request()`. |
-| Studio (LangSmith graph UI) | JarvisCore Observability — trace events to Redis + JSONL, Prometheus metrics, and the `GET /chat/stream` SSE feed for live agent reasoning. |
-| `Pregel` parallel execution model | Steps without shared `depends_on` dependencies run concurrently automatically — no explicit parallel primitives needed. |
+| Studio (LangSmith graph UI) | JarvisCore Observability: trace events to Redis + JSONL, Prometheus metrics, and the `GET /chat/stream` SSE feed for live agent reasoning. |
+| `Pregel` parallel execution model | Steps without shared `depends_on` dependencies run concurrently automatically: no explicit parallel primitives needed. |
 
 ---
 
@@ -378,18 +378,18 @@ LangGraph is a graph execution engine — JarvisCore is an agent runtime. The me
 - [ ] Replace `Agent(role=..., goal=..., backstory=...)` with an `AutoAgent` subclass with `system_prompt`
 - [ ] Replace `Task(description=..., expected_output=...)` with a step dict and explicit `result` variable in the system prompt
 - [ ] Replace `context=[prior_task]` / `add_edge()` with `"depends_on": ["step_id"]`
-- [ ] Remove manual state passing — prior step outputs are injected automatically via `depends_on`
+- [ ] Remove manual state passing: prior step outputs are injected automatically via `depends_on`
 - [ ] Replace `Tool` classes with atom functions in a `SystemBundle`
-- [ ] Set `REDIS_URL` in your environment — enables crash-safe execution, mailboxes, and memory
-- [ ] Remove `LLM(model=...)` from agent constructors — configure with `TASK_MODEL_STANDARD=` in `.env`
+- [ ] Set `REDIS_URL` in your environment: enables crash-safe execution, mailboxes, and memory
+- [ ] Remove `LLM(model=...)` from agent constructors: configure with `TASK_MODEL_STANDARD=` in `.env`
 - [ ] Add `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) to `.env`
 
 ---
 
 ## Further Reading
 
-- [AutoAgent Guide](autoagent.md) — Full AutoAgent API
-- [CustomAgent Guide](customagent.md) — For deterministic, scripted agents
-- [Workflow DAGs](workflows.md) — `depends_on`, parallelism, crash recovery
-- [System Prompts](system-prompts.md) — How to write effective system prompts
-- [Getting Started](../getting-started.md) — Install and run your first agent in 5 minutes
+- [AutoAgent Guide](autoagent.md): Full AutoAgent API
+- [CustomAgent Guide](customagent.md): For deterministic, scripted agents
+- [Workflow DAGs](workflows.md): `depends_on`, parallelism, crash recovery
+- [System Prompts](system-prompts.md): How to write effective system prompts
+- [Getting Started](../getting-started.md): Install and run your first agent in 5 minutes

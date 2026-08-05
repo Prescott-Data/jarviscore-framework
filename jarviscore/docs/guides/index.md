@@ -4,19 +4,19 @@ icon: material/book-open-page-variant
 
 # Guides
 
-Step-by-step implementation guides for building with JarvisCore — from your first AutoAgent to production deployments.
+Step-by-step implementation guides, from your first agent to production deployment.
 
 <div class="grid cards" markdown>
 
 -   :material-robot: **AutoAgent**
 
-    The fastest path to a working agent — just define role, capabilities, and system_prompt.
+    The framework brings the brain. Describe the task; the agent plans, generates code in a sandbox, and self-repairs. Use when you can describe the work but not code it.
 
     [Read more →](autoagent.md)
 
 -   :material-code-braces: **CustomAgent**
 
-    Full control over agent lifecycle, message handling, and tool execution.
+    You bring the brain. Plain Python in `execute_task`, deterministic control, same mesh. Use when you can code the logic.
 
     [Read more →](customagent.md)
 

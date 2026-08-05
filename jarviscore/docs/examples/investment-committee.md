@@ -17,7 +17,7 @@ icon: material/cash-multiple
 
 ## What it does
 
-The flagship example. Seven specialist agents form a real investment committee that deliberates over a stock allocation decision. Each agent plays a distinct professional role — market analyst, financial analyst, technical analyst, risk officer, knowledge agent, memo writer, and committee chair.
+The flagship example. Seven specialist agents form a real investment committee that deliberates over a stock allocation decision. Each agent plays a distinct professional role: market analyst, financial analyst, technical analyst, risk officer, knowledge agent, memo writer, and committee chair.
 
 This is the only example that **mixes** `AutoAgent` and `CustomAgent` profiles in the same mesh, and uses the most complex workflow DAG across all examples.
 
@@ -39,10 +39,10 @@ The committee chair reads the full memo and all prior analyses, then outputs a s
 ```bash
 cd examples/investment_committee
 
-# Quick mode — fundamentals only (1 step, fast)
+# Quick mode: fundamentals only (1 step, fast)
 python committee.py --mode quick --ticker AAPL
 
-# Full mode — complete deliberation pipeline (6 steps)
+# Full mode: complete deliberation pipeline (6 steps)
 python committee.py --mode full --ticker NVDA --amount 1500000
 python committee.py --mode full --ticker AMD  --amount 2000000
 ```
@@ -57,13 +57,13 @@ from jarviscore import Mesh
 mesh = Mesh(config={"redis_url": REDIS_URL})   # (1)!
 
 for AgentClass in [
-    MarketAnalystAgent,      # AutoAgent — uses yfinance + LLM analysis
-    FinancialAnalystAgent,   # AutoAgent — pulls P/E, P/S, EV/EBITDA
-    TechnicalAnalystAgent,   # AutoAgent — RSI, MA crossover, trend
-    RiskOfficerAgent,        # AutoAgent — VaR, mandate compliance
-    KnowledgeAgent,          # CustomAgent — reads from LTM, no LLM needed (2)!
-    MemoWriterAgent,         # AutoAgent — synthesises all prior outputs
-    CommitteeChairAgent,     # AutoAgent — final BUY/HOLD/PASS decision
+    MarketAnalystAgent,      # AutoAgent: uses yfinance + LLM analysis
+    FinancialAnalystAgent,   # AutoAgent: pulls P/E, P/S, EV/EBITDA
+    TechnicalAnalystAgent,   # AutoAgent: RSI, MA crossover, trend
+    RiskOfficerAgent,        # AutoAgent: VaR, mandate compliance
+    KnowledgeAgent,          # CustomAgent: reads from LTM, no LLM needed (2)!
+    MemoWriterAgent,         # AutoAgent: synthesises all prior outputs
+    CommitteeChairAgent,     # AutoAgent: final BUY/HOLD/PASS decision
 ]:
     mesh.add(AgentClass)
 
@@ -71,7 +71,7 @@ await mesh.start()
 ```
 
 1. No `mode=` argument. `Mesh()` detects Redis and activates the workflow engine with persistence automatically.
-2. `KnowledgeAgent` is a `CustomAgent` that reads from long-term memory — mixing profiles lets you use the right tool for each role.
+2. `KnowledgeAgent` is a `CustomAgent` that reads from long-term memory: mixing profiles lets you use the right tool for each role.
 
 ---
 
@@ -113,7 +113,7 @@ results = await mesh.workflow(wf_id, steps)
 ```
 
 1. `risk_assessment` fans in from two parallel analyses. The `WorkflowEngine` waits for both before dispatching.
-2. `memo_draft` is the convergence point — it waits for all five preceding steps and receives all their outputs as `previous_step_results` in the execution context.
+2. `memo_draft` is the convergence point: it waits for all five preceding steps and receives all their outputs as `previous_step_results` in the execution context.
 
 ---
 
@@ -149,7 +149,7 @@ print(f"Allocation: ${out.get('allocation_usd', 0):,.0f}")
 print(f"Conviction: {out.get('conviction')}")
 ```
 
-1. `_extract_output()` strips Markdown fences, attempts `json.loads()`, and falls back to an empty dict — so the rest of your code never has to branch on whether the output is a string or a dict.
+1. `_extract_output()` strips Markdown fences, attempts `json.loads()`, and falls back to an empty dict: so the rest of your code never has to branch on whether the output is a string or a dict.
 
 The same pattern applies inside `CommitteeChairAgent` when reading the memo from a prior step:
 

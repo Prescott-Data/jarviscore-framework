@@ -74,9 +74,9 @@ mem = UnifiedMemory(
     workflow_id="wf-abc123",
     step_id="step-1",
     agent_id="researcher",
-    redis_store=redis_store,        # Optional — enables Tiers 2 and 3
-    blob_storage=blob_storage,      # Optional — enables Tiers 1 and 3
-    athena_client=athena_client,    # Optional — enables Tier 4
+    redis_store=redis_store,        # Optional: enables Tiers 2 and 3
+    blob_storage=blob_storage,      # Optional: enables Tiers 1 and 3
+    athena_client=athena_client,    # Optional: enables Tier 4
 )
 ```
 
@@ -89,7 +89,7 @@ await mem.log_turn(
     turn_id="t1",
     thought="Identifying relevant data sources for the market analysis.",
     action="http_get",
-    result="200 OK — retrieved 42 records",
+    result="200 OK, retrieved 42 records",
     tokens=1240,
 )
 ```
@@ -126,11 +126,11 @@ Assembles the full context bundle for Kernel cold-start or crash recovery. Retur
 
 | Key | Type | Source |
 |---|---|---|
-| `ltm_summary` | `str` or `None` | LongTermMemory — compressed narrative |
-| `recent_turns` | `list` | EpisodicLedger — last N turns |
-| `checkpoint` | `str` or `None` | Redis — last Kernel state snapshot |
-| `scratchpad` | `str` | WorkingScratchpad — current working notes |
-| `athena_context` | `dict` or `None` | Athena — STM events and MTM chains |
+| `ltm_summary` | `str` or `None` | LongTermMemory: compressed narrative |
+| `recent_turns` | `list` | EpisodicLedger: last N turns |
+| `checkpoint` | `str` or `None` | Redis: last Kernel state snapshot |
+| `scratchpad` | `str` | WorkingScratchpad: current working notes |
+| `athena_context` | `dict` or `None` | Athena: STM events and MTM chains |
 
 ```python
 bundle = await mem.rehydrate_bundle(ledger_tail=10)
@@ -229,6 +229,6 @@ See the [CLI Reference](../reference/cli.md) for the complete argument specifica
 
 ## Further Reading
 
-- [Athena MemOS (GitHub)](https://github.com/Prescott-Data/athena) — Open-source memory operating system: STM/MTM/LTM pipeline, vector store, and knowledge graph
-- [CLI Reference: memory](../reference/cli.md#jarviscore-memory) — Full argument specification for `jarviscore memory` subcommands
-- [Architecture Overview](architecture.md) — How memory fits into the OODA loop and the Kernel execution model
+- [Athena MemOS (GitHub)](https://github.com/Prescott-Data/athena): Open-source memory operating system with an STM/MTM/LTM pipeline, vector store, and knowledge graph
+- [CLI Reference: memory](../reference/cli.md#jarviscore-memory): Full argument specification for `jarviscore memory` subcommands
+- [Architecture Overview](architecture.md): How memory fits into the OODA loop and the Kernel execution model
