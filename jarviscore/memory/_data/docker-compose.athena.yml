@@ -14,6 +14,14 @@
 # Required environment variables (set by `jarviscore memory init`):
 #   ATHENA_LLM_API_KEY     — Gemini / OpenAI API key for MTM summarisation
 #
+# ── HOST PORTS ───────────────────────────────────────────────────────────────
+# Every published port is overridable, so the stack can co-locate with
+# other services. Defaults in parentheses:
+#   ATHENA_PORT (8080), ATHENA_REDIS_PORT (6380), ATHENA_MONGO_PORT (27017),
+#   ATHENA_MINIO_PORT (9000), ATHENA_MINIO_CONSOLE_PORT (9001),
+#   ATHENA_MILVUS_PORT (19530), ATHENA_MILVUS_METRICS_PORT (9091),
+#   ATHENA_ARANGO_PORT (8529)
+#
 # ── ARCHITECTURE ─────────────────────────────────────────────────────────────
 #   athena         (:8080)  — Go memory server (STM→MTM→LTM pipeline)
 #   redis          (:6379)  — STM hot cache
@@ -38,7 +46,7 @@ services:
     image: ${ATHENA_IMAGE:-ghcr.io/prescott-data/athena:latest}
     container_name: athena
     ports:
-      - "8080:8080"
+      - "${ATHENA_PORT:-8080}:8080"
     environment:
       MEMORY_OS_PORT: 8080
       APP_ENV: local
@@ -110,7 +118,7 @@ services:
     image: redis:7-alpine
     container_name: athena-redis
     ports:
-      - "6380:6379"   # 6380 on host to avoid conflict with jarviscore redis
+      - "${ATHENA_REDIS_PORT:-6380}:6379"   # 6380 on host to avoid conflict with jarviscore redis
     command: redis-server --appendonly yes --requirepass devpassword
     volumes:
       - athena_redis_data:/data
@@ -128,7 +136,7 @@ services:
     image: mongo:7
     container_name: athena-mongodb
     ports:
-      - "27017:27017"
+      - "${ATHENA_MONGO_PORT:-27017}:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: admin123
@@ -165,8 +173,8 @@ services:
       MINIO_SECRET_KEY: minioadmin
     command: minio server /minio_data --console-address ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${ATHENA_MINIO_PORT:-9000}:9000"
+      - "${ATHENA_MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - athena_minio_data:/minio_data
     networks:
@@ -197,8 +205,8 @@ services:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
     ports:
-      - "19530:19530"
-      - "9091:9091"
+      - "${ATHENA_MILVUS_PORT:-19530}:19530"
+      - "${ATHENA_MILVUS_METRICS_PORT:-9091}:9091"
     volumes:
       - athena_milvus_data:/var/lib/milvus
     depends_on:
@@ -213,7 +221,7 @@ services:
     image: arangodb:latest
     container_name: athena-arangodb
     ports:
-      - "8529:8529"
+      - "${ATHENA_ARANGO_PORT:-8529}:8529"
     environment:
       ARANGO_ROOT_PASSWORD: athena_dev
     volumes:
