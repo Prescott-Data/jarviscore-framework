@@ -34,6 +34,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.25.0",
     "aiohttp>=3.9.0",
+    "certifi",
 
     # LLM Providers — the engine. Always available, zero-config.
     # Developer picks which provider to use via env vars, not pip extras.
@@ -127,11 +128,13 @@ jarviscore = [
     # Integration atom bundles: atom sources are data files (registered by
     # seed_registry at runtime), so they must be declared or the wheel ships none
     "integrations/atoms/*/*.py",
+    "skills/jarviscore/SKILL.md",
     # Nexus local-stack data — bundled so pip install users don't need the repo
     "nexus/_data/docker-compose.nexus.yml",
     "nexus/_data/001_initial_schema.sql",
     # Athena MemOS local-stack compose — bundled for same reason
     "memory/_data/docker-compose.athena.yml",
+    "memory/_data/init-mongo.js",
 ]
 
 [tool.pytest.ini_options]

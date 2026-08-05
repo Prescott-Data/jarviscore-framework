@@ -357,7 +357,7 @@ For non-containerised deployments, use a process supervisor to keep agents runni
 ```ini
 # /etc/systemd/system/my-agent.service
 [Unit]
-Description=JarvisCore Agent — my-agent
+Description=JarvisCore Agent (my-agent)
 After=network.target redis.service
 
 [Service]
@@ -384,13 +384,13 @@ JarvisCore's P2P layer uses a SWIM-based gossip protocol for peer discovery and 
 Bind port and bind host are per-process settings. They cannot be set once in a shared `.env` file because every node needs a different port. Set them at process launch:
 
 ```bash
-# Node 1 — the seed node that other nodes join through
+# Node 1: the seed node that other nodes join through
 JARVISCORE_BIND_HOST=0.0.0.0 \
 JARVISCORE_BIND_PORT=7946 \
 JARVISCORE_NODE_NAME=researcher-01 \
 python researcher.py
 
-# Node 2 — joins the cluster through the seed node
+# Node 2: joins the cluster through the seed node
 JARVISCORE_BIND_HOST=0.0.0.0 \
 JARVISCORE_BIND_PORT=7947 \
 JARVISCORE_NODE_NAME=coder-01 \

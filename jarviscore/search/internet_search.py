@@ -14,7 +14,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from io import BytesIO
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import quote_plus, urlparse, urljoin
 
 # beautifulsoup4 — required for HTML→Markdown extraction.
@@ -119,14 +119,9 @@ class InternetSearch:
     async def initialize(self):
         """Initialize the HTTP session"""
         if self.session is None or self.session.closed:
-            # Create a custom SSL context that ignores verification errors
-            import ssl
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            
-            # Create connector with the custom SSL context
-            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            from jarviscore.core.tls import create_ssl_context
+
+            connector = aiohttp.TCPConnector(ssl=create_ssl_context())
             
             self.session = aiohttp.ClientSession(
                 connector=connector,
@@ -137,7 +132,7 @@ class InternetSearch:
                     "Accept-Language": "en-US,en;q=0.5"
                 }
             )
-            logger.info("HTTP session initialized (SSL verification disabled)")
+            logger.info("HTTP session initialized")
 
     @property
     def _session(self) -> aiohttp.ClientSession:

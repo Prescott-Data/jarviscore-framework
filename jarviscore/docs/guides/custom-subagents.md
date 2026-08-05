@@ -37,7 +37,7 @@ def register_tool(
     name: str,           # String the LLM emits in TOOL: <name>
     func: Callable,      # Async or sync callable
     description: str,    # Shown to LLM; include param schema
-    phase: str = "action",  # "action" or "thinking" — informational only
+    phase: str = "action",  # "action" or "thinking": informational only
 )
 ```
 
@@ -53,7 +53,7 @@ class DatabaseSubAgent(BaseSubAgent):
     SYSTEM_PROMPT = """
     You are a DATABASE QUERY SPECIALIST.
     Rules:
-    1. Only use SELECT — never INSERT, UPDATE, DELETE, or DROP.
+    1. Only use SELECT, never INSERT, UPDATE, DELETE, or DROP.
     2. Limit results to 100 rows unless the task says otherwise.
     3. Include the query and row count in your DONE summary.
     """
@@ -136,7 +136,7 @@ Called when the LLM emits `DONE`. Return `(True, "")` to allow, or `(False, "rea
 ```python
 def _can_complete(self, state, parsed) -> tuple:
     if not parsed.get("result", {}).get("rows"):
-        return False, "No rows returned — run a query before finishing."
+        return False, "No rows returned. Run a query before finishing."
     return True, ""
 ```
 

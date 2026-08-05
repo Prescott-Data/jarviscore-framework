@@ -66,7 +66,7 @@ results = await mesh.workflow("financial-daily-001", [
 
 1. Pass `redis_url` in the config dict. The Mesh detects the Redis connection at `start()` time and activates the workflow engine with persistence automatically. No `mode=` argument needed.
 2. `depends_on` tells the `WorkflowEngine` to wait until `fetch` succeeds. The `fetch` output is injected into the analyst's execution context automatically.
-3. Chained dependency — `report` waits for `analyse`. Context includes both prior step outputs.
+3. Chained dependency: `report` waits for `analyse`. Context includes both prior step outputs.
 
 ---
 
@@ -76,7 +76,7 @@ results = await mesh.workflow("financial-daily-001", [
 class MarketDataAgent(AutoAgent):
     role = "market_data"
     capabilities = ["market_data", "data_collection", "finance"]
-    system_prompt = "..."  # LLM prompt — store result in variable named 'result'
+    system_prompt = "..."  # LLM prompt: store result in variable named 'result'
 
     async def setup(self):
         await super().setup()
@@ -91,8 +91,8 @@ class MarketDataAgent(AutoAgent):
         )
 ```
 
-1. `self._redis_store` — a live `RedisMemoryStore`, ready to use. `None` if Redis is unavailable (example degrades gracefully).
-2. `self._blob_storage` — a `LocalBlobStorage` instance. On cloud deployments swap for `S3BlobStorage` via config.
+1. `self._redis_store`: a live `RedisMemoryStore`, ready to use. `None` if Redis is unavailable (example degrades gracefully).
+2. `self._blob_storage`: a `LocalBlobStorage` instance. On cloud deployments swap for `S3BlobStorage` via config.
 
 ---
 

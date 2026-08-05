@@ -1,0 +1,30 @@
+# JarvisCore
+
+> Open source Python framework for building autonomous multi-agent AI systems in production. Peer-to-peer agent orchestration over a SWIM gossip mesh, four-tier agent memory with cross-session semantics via Athena MemOS, zero-trust credentials via Nexus, sandboxed code generation with self-repair, and automatic full-stack tracing.
+
+Package: `jarviscore-framework` on PyPI. Import name: `jarviscore`. Python 3.10+.
+
+## Start here
+
+- [Getting Started](https://jarviscore.developers.prescottdata.io/getting-started/): install, one-key configuration, first agent
+- [Architecture](https://jarviscore.developers.prescottdata.io/concepts/architecture/): the mental model
+- [Agents](https://jarviscore.developers.prescottdata.io/concepts/agents/): identity and lifecycle
+
+## Core guides
+
+- [AutoAgent](https://jarviscore.developers.prescottdata.io/guides/autoagent/): autonomous agents with the full cognitive stack
+- [CustomAgent](https://jarviscore.developers.prescottdata.io/guides/customagent/): deterministic worker agents
+- [Workflow DAGs](https://jarviscore.developers.prescottdata.io/guides/workflows/): multi-step orchestration
+- [Memory](https://jarviscore.developers.prescottdata.io/concepts/memory/): four tiers, Athena MemOS setup
+- [P2P Communication](https://jarviscore.developers.prescottdata.io/concepts/p2p/): the agent mesh
+- [Observability](https://jarviscore.developers.prescottdata.io/guides/observability/): tracing, metrics, jarviscore inspect
+- [HITL Escalation](https://jarviscore.developers.prescottdata.io/guides/hitl/): human-in-the-loop
+- [Nexus Credentials](https://jarviscore.developers.prescottdata.io/guides/nexus/): zero-trust auth
+- [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/): 46 services, 237+ prebuilt actions
+- [Production Deployment](https://jarviscore.developers.prescottdata.io/guides/production/)
+
+## Reference
+
+- [Configuration](https://jarviscore.developers.prescottdata.io/reference/configuration/): every environment variable
+- [CLI](https://jarviscore.developers.prescottdata.io/reference/cli/): init, check, memory, nexus, atom, inspect
+- [AI Editor Setup](https://jarviscore.developers.prescottdata.io/guides/ai-editors/): skill for Copilot, Claude Code, Cursor

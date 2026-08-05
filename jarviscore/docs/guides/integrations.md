@@ -20,14 +20,14 @@ When a task arrives, before generating any code the Kernel searches the registry
 Task: "Send a Slack notification to #ops"
   → Kernel Option A: semantic_search("Send a Slack notification")
   → Finds: slack_send_message (stage=verified, score=4.2)
-  → Injects code directly into sandbox — skips code generation entirely
+  → Injects code directly into sandbox, skips code generation entirely
 ```
 
 If the search finds a `verified` or `golden` match above the confidence threshold, the Kernel reuses it. If not, `CoderSubAgent` generates fresh code.
 
 ### What devs actually write
 
-An agent that calls Slack, Jira, and Notion needs nothing special — just a clear `system_prompt`:
+An agent that calls Slack, Jira, and Notion needs nothing special: just a clear `system_prompt`:
 
 ```python
 from jarviscore import AutoAgent
@@ -40,7 +40,7 @@ class OpsAgent(AutoAgent):
     """
 ```
 
-The Kernel auto-picks the right atom when the task matches. The `capabilities` field on an agent is **descriptive metadata** — it does not control which atoms are loaded.
+The Kernel auto-picks the right atom when the task matches. The `capabilities` field on an agent is **descriptive metadata**: it does not control which atoms are loaded.
 
 ### Seeding the registry
 
@@ -377,7 +377,7 @@ CRM contacts, deals, and pipeline management.
 ---
 
 #### Salesforce
-Enterprise CRM — leads, opportunities, contacts, and SOQL.
+Enterprise CRM: leads, opportunities, contacts, and SOQL.
 
 | Atom | Description |
 |---|---|
@@ -451,7 +451,7 @@ ERP records, customers, and financial data.
 ---
 
 #### Odoo
-Open-source ERP — leads, partners, and invoices.
+Open-source ERP: leads, partners, and invoices.
 
 | Atom | Description |
 |---|---|
@@ -547,7 +547,7 @@ Invoicing, clients, and expense tracking for SMBs.
 ---
 
 #### Zoho Books
-Cloud accounting — invoices, expenses, and contacts.
+Cloud accounting: invoices, expenses, and contacts.
 
 | Atom | Description |
 |---|---|

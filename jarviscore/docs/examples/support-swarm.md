@@ -17,7 +17,7 @@ icon: material/lifebuoy
 
 ## What it does
 
-Four `CustomAgent` specialists form a P2P swarm. There is no central workflow orchestrator — routing is event-driven via the mailbox. A `GatewayAgent` receives inbound queries, classifies them by keyword, and routes each to the correct specialist via a mailbox message.
+Four `CustomAgent` specialists form a P2P swarm. There is no central workflow orchestrator: routing is event-driven via the mailbox. A `GatewayAgent` receives inbound queries, classifies them by keyword, and routes each to the correct specialist via a mailbox message.
 
 ```
 Customer query → GatewayAgent
@@ -46,7 +46,7 @@ mesh = Mesh(config={
     "bind_host": "127.0.0.1",
     "bind_port": 7960,
     "node_name": "support-swarm",
-    # Auth — optional, only needed for Nexus flow testing
+    # Auth: optional, only needed for Nexus flow testing
     "auth_mode": "production",
     "nexus_gateway_url": NEXUS_GATEWAY,
 })
@@ -57,7 +57,7 @@ mesh.add(BillingAgent)
 mesh.add(EscalationAgent)
 await mesh.start()
 
-# P2P agents drive themselves — use run_forever() for persistent loops
+# P2P agents drive themselves: use run_forever() for persistent loops
 # or call agent methods directly for scripted tests (as this example does)
 ```
 
@@ -116,7 +116,7 @@ class TechnicalAgent(CustomAgent):
 ```
 
 1. Setting `requires_auth = True` tells `Mesh.start()` to inject an `AuthenticationManager` as `self._auth_manager`.
-2. `self._auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set — guard with `if self._auth_manager` to degrade gracefully.
+2. `self._auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set: guard with `if self._auth_manager` to degrade gracefully.
 3. `get_connection_id()` drives the full Nexus protocol: `POST /v1/request-connection` → browser OAuth consent → `GET /v1/check-connection/{id}` poll until `ACTIVE` → `GET /v1/token/{id}` resolve strategy. The `connection_id` is then passed to `NexusCallProxy` which injects the correct `Authorization` header for every outbound request.
 
 **To test the real Nexus flow**, set in `.env`:

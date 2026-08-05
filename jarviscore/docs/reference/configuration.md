@@ -16,31 +16,31 @@ Configure exactly one LLM provider. JarvisCore auto-detects the active provider 
 
     | Variable | Required | Default | Description |
     |---|---|---|---|
-    | `CLAUDE_API_KEY` | Yes | — | API key starting with `sk-ant-` |
+    | `CLAUDE_API_KEY` | Yes | (none) | API key starting with `sk-ant-` |
     | `CLAUDE_MODEL` | No | `claude-sonnet-4` | Model name |
 
 === "Google Gemini"
 
     | Variable | Required | Default | Description |
     |---|---|---|---|
-    | `GEMINI_API_KEY` | Yes | — | API key starting with `AIza` |
+    | `GEMINI_API_KEY` | Yes | (none) | API key starting with `AIza` |
     | `GEMINI_MODEL` | No | `gemini-2.0-flash` | Model name |
 
 === "Azure OpenAI"
 
     | Variable | Required | Default | Description |
     |---|---|---|---|
-    | `AZURE_API_KEY` | Yes | — | Azure OpenAI API key |
-    | `AZURE_ENDPOINT` | Yes | — | Resource endpoint, e.g. `https://your-resource.openai.azure.com/` |
-    | `AZURE_DEPLOYMENT` | Yes | — | Deployment name, e.g. `gpt-4o` |
+    | `AZURE_API_KEY` | Yes | (none) | Azure OpenAI API key |
+    | `AZURE_ENDPOINT` | Yes | (none) | Resource endpoint, e.g. `https://your-resource.openai.azure.com/` |
+    | `AZURE_DEPLOYMENT` | Yes | (none) | Deployment name, e.g. `gpt-4o` |
     | `AZURE_API_VERSION` | No | `2024-02-15-preview` | API version string |
 
 === "Local / vLLM"
 
     | Variable | Required | Default | Description |
     |---|---|---|---|
-    | `LLM_ENDPOINT` | Yes | — | OpenAI-compatible endpoint URL |
-    | `LLM_MODEL` | Yes | — | Model name as expected by the endpoint |
+    | `LLM_ENDPOINT` | Yes | (none) | OpenAI-compatible endpoint URL |
+    | `LLM_MODEL` | Yes | (none) | Model name as expected by the endpoint |
 
 ---
 
@@ -93,10 +93,10 @@ Without Redis, JarvisCore runs in in-process mode: workflows execute locally, ma
 
 | Variable | Default | Description |
 |---|---|---|
-| `REDIS_URL` | — | Full connection URL; takes precedence over host/port variables. Example: `redis://host:6379/0` |
+| `REDIS_URL` | (none) | Full connection URL; takes precedence over host/port variables. Example: `redis://host:6379/0` |
 | `REDIS_HOST` | `localhost` | Used when `REDIS_URL` is not set |
 | `REDIS_PORT` | `6379` | Used when `REDIS_URL` is not set |
-| `REDIS_PASSWORD` | — | Authentication password |
+| `REDIS_PASSWORD` | (none) | Authentication password |
 | `REDIS_DB` | `0` | Database number |
 | `REDIS_CONTEXT_TTL_DAYS` | `7` | Number of days to retain agent context keys |
 
@@ -114,7 +114,7 @@ Athena provides three-tier persistent memory (STM, MTM, and LTM graph) that span
 
 | Variable | Default | Description |
 |---|---|---|
-| `ATHENA_URL` | — | Athena API base URL, e.g. `http://localhost:8080` |
+| `ATHENA_URL` | (none) | Athena API base URL, e.g. `http://localhost:8080` |
 | `ATHENA_TENANT_ID` | `default` | Tenant namespace for memory isolation across teams or environments |
 | `ATHENA_HTTP_TIMEOUT` | `10.0` | Seconds before an Athena HTTP call times out. Increase if your Athena instance is remote or under load. |
 | `ATHENA_SESSION_TTL_DAYS` | `30` | How long a session ID is cached in Redis before Athena re-issues it. |
@@ -142,7 +142,7 @@ Blob storage is used by agents to persist large outputs (reports, datasets, gene
 |---|---|---|
 | `STORAGE_BACKEND` | `local` | `local` or `azure` |
 | `STORAGE_BASE_PATH` | `./blob_storage` | Base directory path for the local backend |
-| `AZURE_STORAGE_CONNECTION_STRING` | — | Required when `STORAGE_BACKEND=azure` |
+| `AZURE_STORAGE_CONNECTION_STRING` | (none) | Required when `STORAGE_BACKEND=azure` |
 
 For Azure:
 
@@ -159,7 +159,7 @@ AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
 
 ## Search
 
-JarvisCore runs multiple search providers in parallel and merges results. All providers have circuit breakers — a failing provider is skipped automatically. See the [Internet Search guide](../guides/internet-search.md) for provider details, ranking logic, and usage patterns.
+JarvisCore runs multiple search providers in parallel and merges results. All providers have circuit breakers: a failing provider is skipped automatically. See the [Internet Search guide](../guides/internet-search.md) for provider details, ranking logic, and usage patterns.
 
 ### Google Grounded Search <span class="jc-badge jc-badge-primary">Primary</span>
 
@@ -169,14 +169,14 @@ Active automatically when `GEMINI_API_KEY` is set (which is already required for
 |---|---|---|
 | `GEMINI_GROUNDING_API_KEY` | `GEMINI_API_KEY` | Override the key used specifically for grounded search |
 | `GEMINI_GROUNDING_MODEL` | `gemini-2.5-flash` | Gemini model used for grounded search |
-| `GOOGLE_CLOUD_PROJECT` | — | Vertex AI path (alternative to API key) |
+| `GOOGLE_CLOUD_PROJECT` | (none) | Vertex AI path (alternative to API key) |
 | `GOOGLE_CLOUD_LOCATION` | `global` | GCP location for Vertex AI |
 
 ### Serper <span class="jc-badge jc-badge-optional">Optional</span>
 
 | Variable | Default | Description |
 |---|---|---|
-| `SERPER_API_KEY` | — | API key from [serper.dev](https://serper.dev). Provider is skipped if unset. |
+| `SERPER_API_KEY` | (none) | API key from [serper.dev](https://serper.dev). Provider is skipped if unset. |
 
 ### SearXNG <span class="jc-badge jc-badge-optional">Optional</span> <span class="jc-badge jc-badge-free">Self-hosted</span>
 
@@ -215,8 +215,8 @@ Required only when agents call third-party services (GitHub, Slack, Jira, Stripe
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEXUS_GATEWAY_URL` | — | Gateway URL, e.g. `http://localhost:8090` |
-| `NEXUS_BROKER_URL` | — | Broker URL, e.g. `http://localhost:8080`. Used by dashboard and SDK to POST credentials directly to the Broker's `/auth/capture-credential` endpoint for non-OAuth providers. |
+| `NEXUS_GATEWAY_URL` | (none) | Gateway URL, e.g. `http://localhost:8090` |
+| `NEXUS_BROKER_URL` | (none) | Broker URL, e.g. `http://localhost:8080`. Used by dashboard and SDK to POST credentials directly to the Broker's `/auth/capture-credential` endpoint for non-OAuth providers. |
 | `NEXUS_RETURN_URL` | `http://localhost:8000/oauth/callback` | OAuth callback URL; the Nexus broker redirects here after consent. |
 | `NEXUS_DEFAULT_USER_ID` | `jarviscore-agent` | User identity passed to Nexus for credential lookups. |
 | `AUTH_STRATEGY_CACHE_TTL` | `300` | Seconds before the resolved auth strategy is re-fetched from the Gateway. |
@@ -245,7 +245,7 @@ Enables multi-node agent discovery and message routing using the SWIM gossip pro
 | `P2P_ENABLED` | `false` | Activates the SWIM coordinator and ZMQ transport |
 | `JC_SWIM_HOST` | `0.0.0.0` | Bind address; `0.0.0.0` listens on all interfaces |
 | `JC_SWIM_PORT` | `7946` | SWIM gossip port; must be unique per node on the same machine |
-| `JC_SEED_NODES` | — | Comma-separated list of seed node addresses, e.g. `10.0.0.1:7946,10.0.0.2:7946` |
+| `JC_SEED_NODES` | (none) | Comma-separated list of seed node addresses, e.g. `10.0.0.1:7946,10.0.0.2:7946` |
 
 !!! warning "Port uniqueness"
     `JC_SWIM_PORT` must be different for each node running on the same machine. The ZMQ data port is set automatically to `JC_SWIM_PORT + 1000`.
