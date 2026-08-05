@@ -30,6 +30,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 <div class="changelog-contributors">
 <a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
 </div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.2.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
 </div>
 
 A large, fully backward-compatible release. It hardens the AutoAgent
@@ -69,8 +70,6 @@ removed or altered, so upgrading from 1.1.0 is a drop-in.
 - Removed internal-project references and development artifacts from the public tree.
 
 </div>
-<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.2.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
-</div>
 
 <div class="changelog-release" markdown>
 
@@ -80,6 +79,7 @@ removed or altered, so upgrading from 1.1.0 is a drop-in.
 <div class="changelog-contributors">
 <a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
 </div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.1.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
 </div>
 
 This release fixes all critical regressions introduced in v1.0.3 that rendered AutoAgent unusable, adds new AI engineering primitives (cognitive routing, intent normalization, structured output validation), and marks the beginning of strict SemVer compliance. **Versions 1.0.3 and 1.0.4 are deprecated and will be yanked from PyPI.**
