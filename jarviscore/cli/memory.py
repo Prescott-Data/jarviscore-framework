@@ -258,18 +258,33 @@ def _find_athena_repo() -> Optional[Path]:
     return None
 
 
-def _pick_llm_key() -> tuple[str, str]:
+def _pick_llm_key() -> tuple[str, str, str]:
     """
     Find an LLM API key from the current environment.
-    Returns (provider, key) — prefers Gemini, then Anthropic, then OpenAI.
+    Returns (provider, key, model). Prefers Gemini, then Azure OpenAI,
+    then OpenAI, then Anthropic.
     """
+    # Azure needs the endpoint too; the compose passes AZURE_OPENAI_* through
+    azure_key = os.environ.get("AZURE_OPENAI_API_KEY", "").strip() or os.environ.get("AZURE_API_KEY", "").strip()
+    azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip() or os.environ.get("AZURE_ENDPOINT", "").strip()
     checks = [
         ("gemini", "GEMINI_API_KEY", "gemini-2.0-flash"),
         ("gemini", "GOOGLE_API_KEY", "gemini-2.0-flash"),
         ("openai", "OPENAI_API_KEY", "gpt-4o-mini"),
         ("anthropic", "ANTHROPIC_API_KEY", "claude-3-haiku-20240307"),
     ]
-    for provider, env_var, model in checks:
+    for provider, env_var, model in checks[:2]:
+        key = os.environ.get(env_var, "").strip()
+        if key:
+            return provider, key, model
+    if azure_key and azure_endpoint:
+        model = os.environ.get("AZURE_DEPLOYMENT", "").strip() or "gpt-4o"
+        os.environ.setdefault("AZURE_OPENAI_API_KEY", azure_key)
+        os.environ.setdefault("AZURE_OPENAI_ENDPOINT", azure_endpoint)
+        return "azure", azure_key, model
+    if azure_key and not azure_endpoint:
+        _warn("AZURE_OPENAI_API_KEY is set but AZURE_OPENAI_ENDPOINT is not; skipping Azure")
+    for provider, env_var, model in checks[2:]:
         key = os.environ.get(env_var, "").strip()
         if key:
             return provider, key, model
@@ -319,7 +334,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     # LLM key
     provider, llm_key, model = _pick_llm_key()
     if not llm_key:
-        _err("No LLM API key found. Set one of: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY")
+        _err("No LLM API key found. Set one of: GEMINI_API_KEY, AZURE_OPENAI_API_KEY (+ AZURE_OPENAI_ENDPOINT), OPENAI_API_KEY, ANTHROPIC_API_KEY")
         sys.exit(1)
     print(f"  ✅  LLM: {provider} / {model}")
 
@@ -359,7 +374,8 @@ def cmd_init(args: argparse.Namespace) -> None:
     # 4. Wait for Athena health (up to 90s — Milvus init is slow)
     print()
     print("  Waiting for Athena to be ready (Milvus takes ~60s on first boot)...")
-    athena_url = "http://localhost:8080"
+    athena_port = os.environ.get("ATHENA_PORT", "8080").strip() or "8080"
+    athena_url = f"http://localhost:{athena_port}"
     for attempt in range(90):
         try:
             resp = urllib.request.urlopen(f"{athena_url}/api/v1/health", timeout=2)
