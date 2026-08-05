@@ -1,0 +1,155 @@
+import requests
+from typing import Any, Dict, List, Optional
+
+# monday.com GraphQL API — Official docs:
+# https://developer.monday.com/api-reference/reference/items
+
+
+MONDAY_API = "https://api.monday.com/v2"
+
+
+
+def monday_create_item(auth_info: dict, payload: Dict[str, Any], timeout: int = 30, verify_ssl: bool = True, base_url: str = None) -> dict:
+    """Create item via GraphQL create_item mutation. Official: https://developer.monday.com/api-reference/reference/items"""
+    try:
+        base, err = _md_root(base_url)
+        if err:
+            return {"records": [], "data_count": 0, "status": 400, "message": err, "provision_ids": []}
+        headers, aerr = _md_auth(auth_info)
+        if aerr:
+            return {"records": [], "data_count": 0, "status": 401, "message": aerr, "provision_ids": []}
+        body = payload if isinstance(payload, dict) else {}
+        board_id, berr = _md_board_id(auth_info, body)
+        if berr:
+            return {"records": [], "data_count": 0, "status": 400, "message": berr, "provision_ids": []}
+        item_name = body.get("item_name") or body.get("name")
+        if not item_name:
+            return {"records": [], "data_count": 0, "status": 400, "message": "payload.item_name is required", "provision_ids": []}
+        vars_ = {"board_id": str(board_id), "item_name": str(item_name)}
+        if body.get("group_id") not in (None, ""):
+            vars_["group_id"] = str(body.get("group_id"))
+        col_vals = body.get("column_values")
+        if isinstance(col_vals, dict):
+            import json
+            vars_["column_values"] = json.dumps(col_vals)
+        elif col_vals not in (None, ""):
+            vars_["column_values"] = str(col_vals)
+        q = "mutation($board_id: ID!, $item_name: String!, $group_id: String, $column_values: JSON) { create_item(board_id: $board_id, item_name: $item_name, group_id: $group_id, column_values: $column_values) { id name url state } }"
+        resp = _md_gql(base, headers, q, vars_, timeout, verify_ssl)
+        data, status, msg = _md_parse(resp)
+        if status >= 400:
+            return {"records": [], "data_count": 0, "status": status, "message": msg, "provision_ids": []}
+        out = _md_provision(data, "create_item")
+        out["status"] = status
+        return out
+    except Exception as e:
+        return {"records": [], "data_count": 0, "status": 500, "message": str(e), "provision_ids": []}
+
+
+
+def _md_root(base_url):
+    root = (base_url or MONDAY_API).rstrip("/")
+    if "monday.com" not in root:
+        return None, "base_url must be https://api.monday.com/v2"
+    if not root.endswith("/v2"):
+        root = root + "/v2" if root.endswith("monday.com") or root.endswith("api.monday.com") else root
+    return root, None
+
+
+def _md_auth(auth_info):
+    auth_info = auth_info or {}
+    token = auth_info.get("api_key")
+    if not token:
+        return None, "auth_info.api_token is required"
+    tok = str(token).strip()
+    if tok.lower().startswith("bearer "):
+        auth = tok
+    else:
+        auth = tok
+    return {"Content-Type": "application/json", "Accept": "application/json", "Authorization": auth}, None
+
+
+def _md_board_id(auth_info, payload=None):
+    auth_info = auth_info or {}
+    payload = payload if isinstance(payload, dict) else {}
+    bid = payload.get("board_id") or auth_info.get("board_id")
+    if bid in (None, ""):
+        return None, "board_id is required (payload.board_id or auth_info.board_id)"
+    return str(bid), None
+
+
+def _md_gql(base, headers, query, variables, timeout, verify_ssl):
+    return requests.post(base, headers=headers, json={"query": query, "variables": variables or {}}, timeout=timeout, verify=verify_ssl)
+
+
+def _md_parse(resp):
+    try:
+        body = resp.json() if resp.text else {}
+    except Exception:
+        body = {}
+    if resp.status_code >= 400:
+        return None, resp.status_code, (resp.text or f"HTTP {resp.status_code}")[:1000]
+    errors = body.get("errors")
+    if errors:
+        msg = errors[0].get("message") if isinstance(errors[0], dict) else str(errors[0])
+        return body.get("data"), 400, msg
+    return body.get("data") or {}, resp.status_code, "ok"
+
+
+def _md_cap(limit):
+    return min(max(int(limit or 25), 1), 500)
+
+
+def _md_records(items):
+    if isinstance(items, list):
+        return [x for x in items if isinstance(x, dict)]
+    if isinstance(items, dict):
+        return [items]
+    return []
+
+
+def _md_provision(data, key, fallback_id=None):
+    obj = (data or {}).get(key) if isinstance(data, dict) else None
+    if isinstance(obj, list):
+        obj = obj[0] if obj else None
+    if isinstance(obj, dict):
+        pid = obj.get("id") or fallback_id
+        ids = [pid] if pid not in (None, "") else []
+        return {"records": [obj], "data_count": 1, "status": 200, "message": "ok", "provision_ids": ids}
+    if obj is True or obj is not None:
+        ids = [fallback_id] if fallback_id not in (None, "") else []
+        rec = {"id": fallback_id, "success": True} if ids else {"success": True}
+        return {"records": [rec], "data_count": 1, "status": 200, "message": "ok", "provision_ids": ids}
+    return {"records": [], "data_count": 0, "status": 400, "message": "mutation returned no data", "provision_ids": []}
+
+
+def _md_items_page(base, headers, board_id, limit, query_params, timeout, verify_ssl):
+    cap = _md_cap(limit)
+    records = []
+    cursor = None
+    status = 200
+    pages = 0
+    while len(records) < cap and pages < 50:
+        pages += 1
+        batch_size = min(cap - len(records), 100)
+        if cursor:
+            q = "query($cursor: String!, $limit: Int!) { next_items_page(cursor: $cursor, limit: $limit) { cursor items { id name state created_at updated_at url } } }"
+            vars_ = {"cursor": cursor, "limit": batch_size}
+        else:
+            q = "query($board_id: [ID!], $limit: Int!, $query_params: ItemsQuery) { boards(ids: $board_id) { items_page(limit: $limit, query_params: $query_params) { cursor items { id name state created_at updated_at url } } } }"
+            vars_ = {"board_id": [str(board_id)], "limit": batch_size, "query_params": query_params}
+        resp = _md_gql(base, headers, q, vars_, timeout, verify_ssl)
+        data, status, msg = _md_parse(resp)
+        if status >= 400 and not data:
+            return records, status, msg
+        if cursor:
+            page = (data or {}).get("next_items_page") or {}
+        else:
+            boards = (data or {}).get("boards") or []
+            page = boards[0].get("items_page") if boards and isinstance(boards[0], dict) else {}
+        items = _md_records((page or {}).get("items"))
+        records.extend(items)
+        cursor = (page or {}).get("cursor")
+        if not items or not cursor:
+            break
+    return records[:cap], status, "ok"

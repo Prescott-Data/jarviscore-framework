@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 
@@ -111,7 +112,7 @@ async def cmd_context(args: argparse.Namespace) -> None:
         _err("ATHENA_URL is not set. Run 'jarviscore memory up' for setup instructions.")
         sys.exit(1)
 
-    from jarviscore.memory import get_athena_client, AthenaMemory
+    from jarviscore.memory import get_athena_client
 
     client = get_athena_client()
     if not client:
@@ -275,17 +276,21 @@ def _pick_llm_key() -> tuple[str, str]:
     return "gemini", "", "gemini-2.0-flash"
 
 
-def cmd_init(_args: argparse.Namespace) -> None:
+def cmd_init(args: argparse.Namespace) -> None:
     """
     One-command Athena setup — same philosophy as 'jarviscore nexus init'.
 
-    1. Find the Athena source repo (~/athena or ATHENA_DIR)
-    2. Pick an LLM API key from the existing environment
-    3. Build + start all 7 services via docker compose
-    4. Wait for Athena to be healthy (up to 90s — Milvus is slow)
-    5. Write ATHENA_URL to the project .env
+    1. Pick an LLM API key from the existing environment
+    2. Pull + start all 7 services via docker compose
+       (--from-source builds Athena from a local clone instead)
+    3. Wait for Athena to be healthy (up to 90s — Milvus is slow)
+    4. Write ATHENA_URL to the project .env
     """
-    import shutil, subprocess, time, urllib.request, urllib.error
+    import shutil
+    import subprocess
+    import time
+    import urllib.error
+    import urllib.request
 
     _banner("JarvisCore — Athena MemOS Init", "═")
 
@@ -293,47 +298,57 @@ def cmd_init(_args: argparse.Namespace) -> None:
         _err("Docker not found. Install Docker Desktop: https://www.docker.com/products/docker-desktop")
         sys.exit(1)
 
-    # 1. Find Athena source
-    athena_dir = _find_athena_repo()
-    if not athena_dir:
-        _err("Athena source repo not found.")
-        print()
-        print("  Clone the Athena repo first:")
-        print("    git clone https://github.com/Prescott-Data/athena ~/athena")
-        print()
-        print("  Or set ATHENA_DIR to point at an existing clone:")
-        print("    export ATHENA_DIR=/path/to/athena")
-        print()
-        print("  Then re-run:  jarviscore memory init")
-        print()
-        sys.exit(1)
+    from_source = bool(getattr(args, "from_source", False))
+    athena_dir = None
+    if from_source:
+        athena_dir = _find_athena_repo()
+        if not athena_dir:
+            _err("--from-source needs an Athena clone.")
+            print()
+            print("  Clone the Athena repo first:")
+            print("    git clone https://github.com/Prescott-Data/athena ~/athena")
+            print()
+            print("  Or set ATHENA_DIR to point at an existing clone:")
+            print("    export ATHENA_DIR=/path/to/athena")
+            print()
+            sys.exit(1)
+        print(f"  ✅  Athena source: {athena_dir}")
+    else:
+        print("  ✅  Athena image: ghcr.io/prescott-data/athena:latest")
 
-    print(f"  ✅  Athena source: {athena_dir}")
-
-    # 2. Pick LLM key
+    # LLM key
     provider, llm_key, model = _pick_llm_key()
     if not llm_key:
         _err("No LLM API key found. Set one of: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY")
         sys.exit(1)
     print(f"  ✅  LLM: {provider} / {model}")
 
-    # 3. Prepare env for compose
+    # Prepare env for compose
     env = {
         **os.environ,
-        "ATHENA_BUILD_CONTEXT": str(athena_dir),
         "ATHENA_LLM_API_KEY":   llm_key,
         "ATHENA_LLM_PROVIDER":  provider,
         "ATHENA_LLM_MODEL":     model,
     }
+    compose_cmd = ["docker", "compose", "-f", None, "up", "-d"]
+    if from_source:
+        env["ATHENA_BUILD_CONTEXT"] = str(athena_dir)
+        env["ATHENA_IMAGE"] = "athena-memos:local"
+        compose_cmd.append("--build")
 
     compose = _compose_file()
+    compose_cmd[3] = str(compose)
+    env["ATHENA_MONGO_INIT"] = str(compose.parent / "init-mongo.js")
     print(f"  ✅  Compose file: {compose}")
     print()
-    print("  Building Athena from source (first build takes ~2 min)...")
+    if from_source:
+        print("  Building Athena from source (first build takes ~2 min)...")
+    else:
+        print("  Pulling images and starting the stack (first pull takes ~2 min)...")
     print()
 
     result = subprocess.run(
-        ["docker", "compose", "-f", str(compose), "up", "-d", "--build"],
+        compose_cmd,
         env=env,
         text=True,
     )
@@ -368,7 +383,7 @@ def cmd_init(_args: argparse.Namespace) -> None:
         env_file.write_text(env_text)
         print(f"  ✅  Wrote ATHENA_URL={athena_url} to {env_file}")
     else:
-        print(f"  ✅  ATHENA_URL already set")
+        print("  ✅  ATHENA_URL already set")
 
     print()
     _banner("Athena is live!", "─")
@@ -383,9 +398,6 @@ def cmd_init(_args: argparse.Namespace) -> None:
   Once an agent runs, inspect its memory:
     jarviscore memory context --agent <agent-name>
     jarviscore memory search  --agent <agent-name> --query "market research"
-
-  When a pre-built Docker image is available, swap to:
-    jarviscore memory pull     # (coming soon)
 """)
 
 
@@ -399,7 +411,12 @@ def run(argv: Optional[list] = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     # init
-    sub.add_parser("init", help="First-time setup: build + start Athena stack (run once)")
+    p_init = sub.add_parser("init", help="First-time setup: pull + start the Athena stack (run once)")
+    p_init.add_argument(
+        "--from-source",
+        action="store_true",
+        help="Build Athena from a local clone (~/athena or ATHENA_DIR) instead of pulling the image",
+    )
 
     # status
     sub.add_parser("status", help="Health check all memory tiers")
@@ -415,8 +432,8 @@ def run(argv: Optional[list] = None) -> None:
     p_srch.add_argument("--query", required=True, help="Natural language query")
     p_srch.add_argument("--limit", type=int, default=5, help="Max results")
 
-    # up
-    sub.add_parser("up", help="Instructions to start Athena locally")
+    # up (alias for init: kept because docs and error messages reference it)
+    sub.add_parser("up", help="Start the Athena stack (alias for init)")
 
     args = parser.parse_args(argv)
 
@@ -429,7 +446,10 @@ def run(argv: Optional[list] = None) -> None:
     elif args.command == "search":
         asyncio.run(cmd_search(args))
     elif args.command == "up":
-        cmd_up(args)
+        # pre-existing bug: cmd_up never existed, so 'memory up' crashed with
+        # NameError. init is idempotent (compose up), so alias it.
+        args.from_source = False
+        cmd_init(args)
 
 
 if __name__ == "__main__":

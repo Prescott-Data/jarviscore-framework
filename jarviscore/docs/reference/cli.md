@@ -20,6 +20,7 @@ Commands:
   nexus       Manage credential infrastructure
   memory      Manage agent memory infrastructure
   atom        Validate, test, and list integration atoms
+  inspect     Read recorded traces from past runs
 ```
 
 ---
@@ -200,34 +201,42 @@ Manages the Athena MemOS memory infrastructure.
 
 ### memory init
 
-Builds and starts the Athena Docker stack from source. Run this once per environment.
+Pulls the published Athena image and starts the Docker stack. Run this once per environment.
 
 ```bash
 jarviscore memory init
 ```
 
-Before running this command, clone the Athena repository:
+Contributors working on Athena itself can build from a local clone:
 
 ```bash
 git clone https://github.com/Prescott-Data/athena ~/athena
+jarviscore memory init --from-source
 ```
 
-If your Athena clone is in a non-standard location, set `ATHENA_DIR`:
+With `--from-source`, a non-standard clone location is set with `ATHENA_DIR`:
 
 ```bash
-ATHENA_DIR=/path/to/athena jarviscore memory init
+ATHENA_DIR=/path/to/athena jarviscore memory init --from-source
 ```
 
 The `init` command:
 
-1. Locates the Athena source repository.
-2. Detects an LLM API key from the environment (Gemini, then Anthropic, then OpenAI).
-3. Builds all Athena services with `docker compose up -d --build`.
-4. Waits up to 90 seconds for the health endpoint at `http://localhost:8080/api/v1/health` to return `ok`.
-5. Writes `ATHENA_URL=http://localhost:8080` to the project `.env` file.
+1. Detects an LLM API key from the environment (Gemini, then Anthropic, then OpenAI).
+2. Starts all Athena services with `docker compose up -d`.
+3. Waits up to 90 seconds for the health endpoint at `http://localhost:8080/api/v1/health` to return `ok`.
+4. Writes `ATHENA_URL=http://localhost:8080` to the project `.env` file.
 
-!!! note "First-build duration"
-    The initial build takes approximately two minutes because Milvus is compiled from source. Subsequent starts use Docker layer caching and complete in under 10 seconds.
+!!! note "First-start duration"
+    The first run takes about two minutes to pull images. Subsequent starts complete in under 10 seconds.
+
+### memory up
+
+Alias for `memory init`. Starting the stack is idempotent: services already running are left untouched.
+
+```bash
+jarviscore memory up
+```
 
 ### memory status
 
@@ -241,7 +250,7 @@ Example output:
 
 ```
 ════════════════════════════════════════════════════════════════════════
-  JarvisCore Memory — Status
+  JarvisCore Memory Status
 ════════════════════════════════════════════════════════════════════════
   Athena MemOS  http://localhost:8080  [ok]
     Redis: ok
@@ -300,11 +309,11 @@ jarviscore atom test --bundle <bundle> --mode <dry-run|integration> [options]
 | `--bundle` | Bundle name to test (e.g. `slack`, `github`, `stripe`) |
 | `--atom` | Test a single atom instead of the whole bundle |
 | `--mode` | `dry-run` (default) or `integration` |
-| `--connection-id` | Nexus connection handle — required for `integration` mode |
+| `--connection-id` | Nexus connection handle: required for `integration` mode |
 | `--nexus-url` | Gateway URL (defaults to `NEXUS_GATEWAY_URL` or `http://localhost:8090`) |
-| `--all` | Test every atom across all bundles — `dry-run` only |
+| `--all` | Test every atom across all bundles: `dry-run` only |
 
-**Dry-run mode** — structural checks only, no network required:
+**Dry-run mode**: structural checks only, no network required:
 
 ```bash
 # Check all atoms in the slack bundle
@@ -313,7 +322,7 @@ jarviscore atom test --bundle slack --mode dry-run
 # Check a single atom
 jarviscore atom test --bundle slack --atom slack_send_message --mode dry-run
 
-# Check every atom across all 46 bundles
+# Check every atom across all 150 bundles
 jarviscore atom test --mode dry-run --all
 ```
 
@@ -330,7 +339,7 @@ Dry-run validates:
 | Return statement | At least one `return` with a value |
 | Forbidden usage | No `subprocess`, `pickle`, `ctypes`, `eval`, `exec` |
 
-**Integration mode** — passes dry-run, then verifies a Nexus `connection_id` resolves:
+**Integration mode**: passes dry-run, then verifies a Nexus `connection_id` resolves:
 
 ```bash
 jarviscore atom test \
@@ -339,7 +348,7 @@ jarviscore atom test \
     --mode integration
 ```
 
-The integration check does not call the provider API — it confirms the Nexus Gateway is reachable and the `connection_id` resolves to a token payload. API behaviour must be verified manually.
+The integration check does not call the provider API: it confirms the Nexus Gateway is reachable and the `connection_id` resolves to a token payload. API behaviour must be verified manually.
 
 !!! note "Gateway required for integration mode"
     `--mode integration` requires `NEXUS_GATEWAY_URL` to be set and the Nexus stack to be running. Use `jarviscore nexus status` to confirm the gateway is healthy first.
@@ -370,7 +379,36 @@ jarviscore/integrations/atoms
     · slack_list_users
     · slack_send_message
 
-46 bundles  ·  237 atoms total
+150 bundles  ·  1224 atoms total
 ```
 
-See [Testing Atoms](../guides/testing-atoms.md) for the full workflow — from writing a new atom to promoting it to `verified`.
+See [Testing Atoms](../guides/testing-atoms.md) for the full workflow: from writing a new atom to promoting it to `verified`.
+
+---
+
+## jarviscore inspect
+
+Reads recorded traces and shows what your agents actually did. Requires `TRACE_ENABLED=true` on the runs you want to inspect.
+
+```bash
+# List recorded runs
+jarviscore inspect
+
+# Timeline for one run (workflow id prefix is enough)
+jarviscore inspect wf-2024
+
+# Failures and recoveries only
+jarviscore inspect wf-2024 --errors
+
+# Events for a single step
+jarviscore inspect wf-2024 --step analyze
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `workflow` | `str` | (none) | Workflow id, prefix match accepted; omit to list runs |
+| `--dir` | `str` | `./traces` | Directory containing trace JSONL files |
+| `--step` | `str` | (none) | Only show events for this step id |
+| `--errors` | flag | off | Only show failures and recoveries |
+
+See [Observability](../guides/observability.md) for how traces are recorded and what each event means.

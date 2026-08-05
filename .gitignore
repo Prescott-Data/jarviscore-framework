@@ -45,8 +45,8 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
-# Event store data (local dev)
-data/
+# Event store data (local dev): root only. jarviscore/data/ is packaged source
+/data/
 *.jsonl
 
 # Environment variables
@@ -77,3 +77,6 @@ site/
 # Runtime artifacts
 hitl_inbox/
 output/
+
+# test scratch dirs must never be committed
+pytest-of-*/

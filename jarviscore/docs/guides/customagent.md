@@ -4,7 +4,7 @@ icon: material/code-braces
 
 # CustomAgent Guide
 
-`CustomAgent` is JarvisCore's structured execution agent. You implement the handlers yourself, which gives you complete control over what happens when a message arrives. The framework provides the infrastructure layer — memory, peer communication, Nexus auth, mailbox, blob storage, and mesh connectivity — all injected automatically before your `setup()` runs.
+`CustomAgent` is JarvisCore's structured execution agent. You implement the handlers yourself, which gives you complete control over what happens when a message arrives. The framework provides the infrastructure layer (memory, peer communication, Nexus auth, mailbox, blob storage, and mesh connectivity) all injected automatically before your `setup()` runs.
 
 Use `CustomAgent` when the steps required to complete a task are known in advance, when you are wrapping an existing service or LangChain agent, when you need deterministic auditable execution, or when you want to build a long-running message-driven worker rather than a one-shot task executor.
 
@@ -12,7 +12,7 @@ Use `CustomAgent` when the steps required to complete a task are known in advanc
 
 ## The Core Interface
 
-`CustomAgent` is a message-driven agent. The primary method to implement is `on_peer_request()`, not `run()`. The `run()` method is the framework's internal listener loop — it receives P2P messages and dispatches them to your handlers. You do not override it.
+`CustomAgent` is a message-driven agent. The primary method to implement is `on_peer_request()`, not `run()`. The `run()` method is the framework's internal listener loop: it receives P2P messages and dispatches them to your handlers. You do not override it.
 
 ```python title="agents/analyst.py"
 from jarviscore import CustomAgent
@@ -41,7 +41,7 @@ The `msg` parameter is an `IncomingMessage` object. Its fields are:
 | `msg.sender` | Sender agent ID or role string |
 | `msg.data` | Payload dict |
 | `msg.type` | `MessageType.REQUEST` or `MessageType.NOTIFY` |
-| `msg.correlation_id` | For response matching — handled automatically |
+| `msg.correlation_id` | For response matching: handled automatically |
 
 Return a dict from `on_peer_request()` and the framework sends it back to the requester automatically (controlled by `auto_respond = True`, the default). Return `None` to skip sending a response.
 
@@ -65,7 +65,7 @@ Return a dict from `on_peer_request()` and the framework sends it back to the re
 
 ### setup
 
-Called once by the Mesh after instantiation. Override to initialise connections, load configuration, or perform one-time setup. Always call `await super().setup()` first — this connects the agent to memory tiers and the peer registry:
+Called once by the Mesh after instantiation. Override to initialise connections, load configuration, or perform one-time setup. Always call `await super().setup()` first: this connects the agent to memory tiers and the peer registry:
 
 ```python
 async def setup(self):
@@ -113,13 +113,13 @@ The Mesh injects these stores into every agent before `setup()` runs. All three 
 | Attribute | Type | Available when |
 |---|---|---|
 | `self._redis_store` | `RedisStore` | `REDIS_URL` is set |
-| `self._blob_storage` | `LocalBlobStorage` or `AzureBlobStorage` | Always — falls back to local filesystem |
+| `self._blob_storage` | `LocalBlobStorage` or `AzureBlobStorage` | Always: falls back to local filesystem |
 | `self.mailbox` | `MailboxManager` | `REDIS_URL` is set |
 
 ```python
 async def setup(self):
     await super().setup()
-    # All three already injected — use them immediately
+    # All three already injected: use them immediately
     self.memory = UnifiedMemory(
         workflow_id="wf-001", step_id=self.role,
         agent_id=self.role,
@@ -244,7 +244,7 @@ For the complete `PeerClient` API, see the [P2P Communication](../concepts/p2p.m
 
 ## Nexus Auth: requires_auth
 
-Set `requires_auth = True` on agents that call third-party services. The Mesh creates an `AuthenticationManager` backed by Nexus and injects it as `self._auth_manager` after `setup()` completes. The full OAuth flow — browser consent, token refresh — is handled automatically.
+Set `requires_auth = True` on agents that call third-party services. The Mesh creates an `AuthenticationManager` backed by Nexus and injects it as `self._auth_manager` after `setup()` completes. The full OAuth flow (browser consent, token refresh) is handled automatically.
 
 ```python
 class TechnicalAgent(CustomAgent):
@@ -264,13 +264,13 @@ class TechnicalAgent(CustomAgent):
         return {"status": "success", "output": result}
 ```
 
-`_auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set. Always check `if self._auth_manager:` before using it — this is the graceful degradation path for environments without Nexus configured.
+`_auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set. Always check `if self._auth_manager:` before using it: this is the graceful degradation path for environments without Nexus configured.
 
 ---
 
 ## Workflow Compatibility
 
-`CustomAgent` can participate in `mesh.workflow()` calls, not just P2P message loops. The `execute_task()` method is already implemented — it creates a synthetic `IncomingMessage` from the workflow step dict and delegates to `on_peer_request()`. You get workflow participation for free by implementing `on_peer_request()`.
+`CustomAgent` can participate in `mesh.workflow()` calls, not just P2P message loops. The `execute_task()` method is already implemented: it creates a synthetic `IncomingMessage` from the workflow step dict and delegates to `on_peer_request()`. You get workflow participation for free by implementing `on_peer_request()`.
 
 ```python
 results = await mesh.workflow("support-pipeline", [
@@ -410,7 +410,7 @@ class MCPAgent(CustomAgent):
 
 ## Production Examples
 
-The [Support Swarm example](../examples/support-swarm.md) shows four `CustomAgent` instances running in a single process with P2P messaging. A `GatewayAgent` reads incoming queries and routes them via mailbox to specialist agents — `TechnicalAgent` (with `requires_auth = True` for GitHub), `BillingAgent`, and `EscalationAgent`.
+The [Support Swarm example](../examples/support-swarm.md) shows four `CustomAgent` instances running in a single process with P2P messaging. A `GatewayAgent` reads incoming queries and routes them via mailbox to specialist agents: `TechnicalAgent` (with `requires_auth = True` for GitHub), `BillingAgent`, and `EscalationAgent`.
 
 ```bash
 docker compose -f docker-compose.infra.yml up -d
@@ -424,7 +424,7 @@ The [Content Pipeline example](../examples/content-pipeline.md) shows a `CustomA
 
 ## Scheduled Tasks
 
-JarvisCore does not include a built-in scheduler or cron primitive. Recurring tasks are implemented with `CustomAgent` and `asyncio` — the `run_forever()` loop is async, so you can add timed work directly inside the agent:
+JarvisCore does not include a built-in scheduler or cron primitive. Recurring tasks are implemented with `CustomAgent` and `asyncio`: the `run_forever()` loop is async, so you can add timed work directly inside the agent:
 
 ```python
 import asyncio
@@ -487,4 +487,4 @@ response = await self._peer_client.send("operator", {
 })
 ```
 
-JarvisCore provides the peer messaging infrastructure. You wire the human-facing interface — Slack, web dashboard, mobile app, or CLI.
+JarvisCore provides the peer messaging infrastructure. You wire the human-facing interface: Slack, web dashboard, mobile app, or CLI.

@@ -14,7 +14,7 @@ Nexus is JarvisCore's credential management system and an [open-source framework
 ## How It Works
 
 1. You register a provider's credentials once using `jarviscore nexus register`.
-2. Credentials are written to `~/.jarviscore/nexus.enc` — an AES-256-GCM encrypted file keyed to your machine.
+2. Credentials are written to `~/.jarviscore/nexus.enc`: an AES-256-GCM encrypted file keyed to your machine.
 3. When an agent calls a registered provider, the `NexusLocalStore` retrieves and decrypts the credentials at call time and passes them to the provider's atom function.
 4. Agent code never sees the raw credentials.
 
@@ -62,7 +62,7 @@ stripe     api_key     sk_l****     2026-05-01
 
 Credentials are stored in `~/.jarviscore/nexus.enc`:
 
-- **Encryption:** AES-256-GCM (authenticated encryption — integrity + confidentiality)
+- **Encryption:** AES-256-GCM (authenticated encryption: integrity + confidentiality)
 - **Key derivation:** PBKDF2-HMAC-SHA256, 260,000 iterations (OWASP 2024 recommendation)
 - **Salt:** Per-machine, generated once and stored at `~/.jarviscore/.salt`. Never changes.
 - **Secret input:** `NEXUS_SECRET` env var if set; falls back to machine UUID (MAC address).
@@ -80,7 +80,7 @@ Without `NEXUS_SECRET`, the key is derived from the machine's hardware UUID. Cre
 
 ## Using Nexus in Agent Code
 
-The `NexusLocalStore` is accessed via `jarviscore.nexus.store.get_store()`. In normal usage you do not call it directly — provider atom functions receive `auth_info` automatically. For custom integrations, you can retrieve credentials as follows:
+The `NexusLocalStore` is accessed via `jarviscore.nexus.store.get_store()`. In normal usage you do not call it directly: provider atom functions receive `auth_info` automatically. For custom integrations, you can retrieve credentials as follows:
 
 ```python
 from jarviscore.nexus.store import get_store
@@ -118,12 +118,12 @@ auth_info = store.build_auth_info("github")
 The local encrypted store handles credentials for single-developer and small team use. For multi-user deployments where agents act on behalf of individual users (each with their own OAuth tokens), the **Nexus Gateway** provides full OAuth flow management.
 
 > [!NOTE]
-> **The two modes are not mutually exclusive — the CLI chooses automatically.**
-> When you run `jarviscore nexus register`, the CLI checks whether `NEXUS_GATEWAY_URL` is set and reachable. If it is, credentials are registered with the gateway. If it is not set, or if the gateway is unreachable, credentials are written to the local store (`~/.jarviscore/nexus.enc`) and a warning is printed. You can start without a gateway and migrate to one later — the local store keeps working regardless.
+> **The two modes are not mutually exclusive: the CLI chooses automatically.**
+> When you run `jarviscore nexus register`, the CLI checks whether `NEXUS_GATEWAY_URL` is set and reachable. If it is, credentials are registered with the gateway. If it is not set, or if the gateway is unreachable, credentials are written to the local store (`~/.jarviscore/nexus.enc`) and a warning is printed. You can start without a gateway and migrate to one later: the local store keeps working regardless.
 
 
 
-The gateway is managed entirely via the `jarviscore` CLI — no separate install required. It runs as a Docker-composed stack. Set it up once per environment:
+The gateway is managed entirely via the `jarviscore` CLI: no separate install required. It runs as a Docker-composed stack. Set it up once per environment:
 
 ```bash
 jarviscore nexus init
@@ -151,7 +151,7 @@ jarviscore nexus status
 
 ## Gateway API Contract
 
-When `NEXUS_GATEWAY_URL` is set, the CLI registers providers by calling the Gateway directly. You should not need to call this manually — `jarviscore nexus register` handles it — but the contract is documented here for completeness.
+When `NEXUS_GATEWAY_URL` is set, the CLI registers providers by calling the Gateway directly. You should not need to call this manually (`jarviscore nexus register` handles it) but the contract is documented here for completeness.
 
 **Register a provider:** `POST /v1/providers`
 
@@ -198,7 +198,7 @@ The payload must wrap all fields in a `profile` object and use `name` (not `prov
 **Check gateway health:** `GET /health`
 
 > [!NOTE]
-> All examples assume `http://localhost:8090` — the default local Docker stack started by `jarviscore nexus init`. Substitute your own Gateway URL in production. **Do not point developers at a third-party hosted gateway** — each team runs their own Nexus stack.
+> All examples assume `http://localhost:8090` (the default local Docker stack started by `jarviscore nexus init`. Substitute your own Gateway URL in production. **Do not point developers at a third-party hosted gateway**) each team runs their own Nexus stack.
 
 ---
 

@@ -10,12 +10,12 @@ This guide takes you from a fresh Python environment to a running JarvisCore age
 
 ## Requirements
 
-JarvisCore requires Python 3.10 or later. No infrastructure is required to run a minimal agent — the first working example in this guide uses only an LLM API key.
+JarvisCore requires Python 3.10 or later. No infrastructure is required to run a minimal agent. The first working example in this guide uses only an LLM API key.
 
 **Optional: Docker** is required for two capabilities:
 
-- `jarviscore nexus up` — starts the local Nexus broker and gateway for OAuth2 credential management
-- `jarviscore-framework[browser]` — Playwright runs in a Docker-managed Chromium for browser automation
+- `jarviscore nexus up` starts the local Nexus broker and gateway for OAuth2 credential management
+- `jarviscore-framework[browser]` runs Playwright in a Docker-managed Chromium for browser automation
 
 If you are not using Nexus or browser automation, Docker is not needed.
 
@@ -64,7 +64,7 @@ To install optional extras for specific capabilities:
     ```bash
     pip install "jarviscore-framework[research]"
     ```
-    Full researcher stack — installs `browser` + `rag` + BeautifulSoup4. Everything `ResearcherSubAgent` needs for deep web research.
+    Full researcher stack: installs `browser` + `rag` + BeautifulSoup4. Everything `ResearcherSubAgent` needs for deep web research.
 
 === "Athena Memory"
     ```bash
@@ -88,7 +88,7 @@ To install optional extras for specific capabilities:
     ```bash
     pip install "jarviscore-framework[full]"
     ```
-    Installs every optional dependency — use for production deployments where you need all capabilities enabled.
+    Installs every optional dependency. Use for production deployments where you need all capabilities enabled.
 
 ---
 
@@ -103,7 +103,7 @@ jarviscore init
 This creates:
 
 ```
-.env.example        — environment variable template
+.env.example: environment variable template
 ```
 
 Copy the example to create your working configuration:
@@ -167,7 +167,7 @@ Expected output when everything is correctly configured:
 
 [System Requirements]
   Python Version:             3.12.2
-  JarvisCore Package:         v1.2.0
+  JarvisCore Package:         v1.3.0
 
 [Dependencies]
   pydantic:                   Core validation
@@ -181,6 +181,21 @@ Expected output when everything is correctly configured:
 
   All checks passed. Ready to use JarvisCore.
 ```
+
+---
+
+## Choose Your Agent Profile
+
+JarvisCore ships exactly two agent profiles. This is the first decision in every project:
+
+| | `AutoAgent` | `CustomAgent` |
+|---|---|---|
+| Who brings the logic | The framework: LLM reasoning, sandboxed code generation, self-repair | You: plain Python in `execute_task` |
+| You write | `role`, `capabilities`, `system_prompt` | The implementation |
+| Use for | Tasks you can describe: research, analysis, content, data extraction | Logic you can code: API workers, wrapping existing services, deterministic pipelines |
+| Guide | [AutoAgent guide](guides/autoagent.md) | [CustomAgent guide](guides/customagent.md) |
+
+Both run on the same mesh and mix freely in one system. Not sure? Start with `AutoAgent` below; switch any agent to `CustomAgent` later without touching the rest.
 
 ---
 
@@ -228,6 +243,23 @@ python main.py
 ```
 
 The agent will reason through the task using the OODA loop and return a structured response. Because no infrastructure is configured beyond the LLM key, all state is held in process memory and discarded when the script exits.
+
+The same agent as a `CustomAgent`, when you want to own the logic instead of describing the task:
+
+```python title="main.py (CustomAgent variant)"
+from jarviscore.profiles import CustomAgent
+
+
+class ResearcherAgent(CustomAgent):
+    role = "researcher"
+    capabilities = ["research"]
+
+    async def execute_task(self, task):
+        findings = await my_research_pipeline(task["task"])   # your code
+        return {"status": "success", "output": findings}
+```
+
+Everything else on this page works identically for both profiles.
 
 ---
 
@@ -278,6 +310,15 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+---
+
+## Two Ways to Run
+
+- `mesh.run_task(agent=..., task=...)` runs one task on one agent. Use it for single asks and hand-rolled pipelines where your code decides what happens between steps.
+- `mesh.workflow(id, steps)` runs declared steps as one traced unit: ordering, dependencies, retries, and a single workflow id. Use it when steps belong together.
+
+Rule of thumb: passing one agent's output into another agent's prompt by hand means you want `workflow`. See [Workflow DAGs](guides/workflows.md).
 
 ---
 

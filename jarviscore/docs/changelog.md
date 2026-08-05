@@ -9,18 +9,60 @@ hide:
 All notable changes to JarvisCore Framework are documented here. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 !!! warning "Versioning Policy (effective v1.1.0)"
-    Releases prior to v1.1.0 did not follow SemVer consistently — new features
+    Releases prior to v1.1.0 did not follow SemVer consistently: new features
     were shipped in patch releases and a breaking change landed in v0.3.1 (a
     patch). Starting with **v1.1.0**, this project adheres to strict SemVer:
 
-    - **PATCH** (1.1.**x**) — backward-compatible bug fixes only.
-    - **MINOR** (1.**x**.0) — new features, new public API surface, backward-compatible behavioral changes.
-    - **MAJOR** (**x**.0.0) — breaking changes to the public API.
+    - **PATCH** (1.1.**x**): backward-compatible bug fixes only.
+    - **MINOR** (1.**x**.0): new features, new public API surface, backward-compatible behavioral changes.
+    - **MAJOR** (**x**.0.0): breaking changes to the public API.
 
     Versions **1.0.3** and **1.0.4** contain critical regressions and should be
     avoided. They will be yanked from PyPI. Pin `jarviscore-framework>=1.1.0`.
 
 ---
+
+<div class="changelog-release" markdown>
+
+## 1.3.0 <span class="changelog-date">2026-08-05</span>
+
+<div class="changelog-meta" markdown>
+<div class="changelog-contributors">
+<a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
+</div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.3.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+A developer-experience and integrations release. The atom catalog more
+than triples, memory setup becomes a one-command flow backed by a
+published image, traces become readable from the CLI, and AI editors
+get a first-class skill. Backward compatible; one security default
+changed (see Security below).
+
+**Added**
+
+- **[#111] Atom catalog expansion**: 104 new provider bundles (987 atoms) imported from our production function registry, bringing the catalog to 150 providers and 1224 atoms. Every ported provider was hand-verified atom by atom against the official vendor API documentation.
+- **[#103] `jarviscore inspect`**: read recorded traces from the CLI. Run list with steps, tokens, failures, and duration; per-step timelines; `--errors` and `--step` filters; workflow id prefix matching; honest `[clipped]` markers on long values.
+- **[#109] AI editor skill**: `jarviscore init --skill` installs a verified SKILL.md for GitHub Copilot and Claude Code, covering the real API contracts, profile decision rule, and common mistakes. The doc site now serves `llms.txt` and an AI Editors guide.
+- **[#108] Image-first memory init**: `jarviscore memory init` pulls the published Athena image instead of cloning and building from source. `--from-source` keeps the old path for contributors; `memory up` is now a working alias.
+- **[#106] Minimal env scaffold**: `jarviscore init` writes a focused 35-line .env template (one provider key gets you running); `--full` writes the complete reference.
+
+**Fixed**
+
+- **[#106] Fresh-clone init**: an unanchored `data/` gitignore pattern meant packaged data files were never tracked, so `jarviscore init` failed from any fresh clone.
+- **[#111] Atoms never shipped**: `integrations/atoms` was neither a package nor declared package-data, so pip-installed wheels contained zero atom files and `seed_registry` found nothing at runtime.
+- **[#105] Silent import**: `import jarviscore` no longer prints four lines of peer-to-peer module banners; the swim-p2p output is captured into debug logging and the p2p re-exports are lazy.
+- **[#108] Memory CLI crashes**: `memory init` raised `NameError` (missing `Path` import) and `memory up` did not exist.
+
+**Security**
+
+- **[#110] TLS verification enforced**: three code paths disabled certificate verification on outbound HTTPS, one of them while sending Bearer tokens. All outbound HTTPS now verifies against the certifi CA bundle. If you genuinely need to disable verification behind a corporate proxy, set `JARVISCORE_TLS_INSECURE=1`; it logs a warning on every use.
+
+**Changed**
+
+- **[#104] Documentation overhaul**: landing page rewritten around enforced production rules, getting-started leads with a profile decision table, site-wide style pass, and the changelog page renders correctly.
+
+</div>
 
 <div class="changelog-release" markdown>
 
@@ -30,6 +72,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 <div class="changelog-contributors">
 <a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
 </div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.2.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
 </div>
 
 A large, fully backward-compatible release. It hardens the AutoAgent
@@ -69,8 +112,6 @@ removed or altered, so upgrading from 1.1.0 is a drop-in.
 - Removed internal-project references and development artifacts from the public tree.
 
 </div>
-<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.2.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
-</div>
 
 <div class="changelog-release" markdown>
 
@@ -80,41 +121,42 @@ removed or altered, so upgrading from 1.1.0 is a drop-in.
 <div class="changelog-contributors">
 <a href="https://github.com/ekizito96" title="Muyukani Ephraim Kizito"><img src="https://github.com/ekizito96.png?size=32" alt="ekizito96"></a>
 </div>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v1.1.0" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
 </div>
 
 This release fixes all critical regressions introduced in v1.0.3 that rendered AutoAgent unusable, adds new AI engineering primitives (cognitive routing, intent normalization, structured output validation), and marks the beginning of strict SemVer compliance. **Versions 1.0.3 and 1.0.4 are deprecated and will be yanked from PyPI.**
 
 **Fixed**
 
-- **[#32] Output schema enforcement** — `Agent.output_schema` (Pydantic `BaseModel`) is now passed through the Kernel into `CoderSubAgent`, which validates sandbox output against the schema via `model_validate()`. Schema violations fail fast with a clear error instead of silently returning unstructured data.
-- **[#33] CoderSubAgent sandbox hallucination** — `CoderSubAgent.get_system_prompt()` now appends a dynamic `SANDBOX ENVIRONMENT` manifest listing all pre-loaded modules and globals in the sandbox namespace. This grounds the LLM in what is actually available, preventing hallucinated imports and undefined-name errors.
-- **[#34] Complexity gate before Planner** — `AutoAgent.execute_task()` now runs a `TaskComplexityClassifier` before dispatching to the Planner DAG. Non-complex tasks bypass the full Plan → Execute → Evaluate loop, while classifier contract failures now fail visibly instead of silently falling through to the Planner.
-- **[#35] FunctionRegistry semantic search miss** — `CoderSubAgent._tool_check_registry()` now normalizes verbose task descriptions into concise canonical intents via `IntentNormalizer` before calling `semantic_search()`. This eliminates embedding distance drift caused by prompt verbosity.
-- **[#36] AutoAgent vs CustomAgent boundary** — Added `p2p_responder` attribute to the `Agent` base class (`False` by default, `True` on `CustomAgent`). `JarvisLifespan` now only creates background `asyncio.Task` instances for agents with `p2p_responder=True`, and raises `RuntimeError` at startup if a `p2p_responder` agent does not override `run()`.
-- **[#37] Semantic vs execution status** — `ResultHandler.process_result()` now tracks `semantic_success` separately from execution status. `CoderSubAgent._tool_execute_code()` includes an evaluator hook that flags outputs where `success=False` or `status="failure"` even when the sandbox execution itself succeeded. Fixed `TypeError` when `cost_usd` is `None`.
-- **[#38] Sandbox namespace leak into ZMQ coroutine cleanup** — `SandboxExecutor._execute_sync()` and `_execute_async()` now restore `namespace['__builtins__']` to the actual `builtins` module in a `finally` block. This prevents `KeyError: '__builtins__'` crashes in ZMQ's Cython backend during coroutine garbage collection.
-- **Structured Kernel routing** — keyword role matching has been replaced by a typed `TaskRouter`. Explicit planner/profile roles are honored first; otherwise the router returns a validated role, confidence, reason, and evidence flag. Invalid or low-confidence routing fails visibly. Custom roles must register `kernel_role_profiles`.
-- **Strict subagent completion protocol** — unparseable LLM responses now fail as protocol violations instead of being returned as successful raw content.
-- **Coder proof-of-work contract** — `CoderSubAgent` must produce sandbox execution evidence before completion; structured prose results alone are no longer accepted for coder work.
-- **Workflow terminal status handling** — only `success` completes a workflow step. `yield`, `hitl`, `blocked`, `error`, and unknown statuses are recorded as failures rather than satisfying dependencies.
-- **WorkflowBuilder failure visibility** — agent-returned `failure`, `yield`, `blocked`, `hitl`, or unknown statuses are now preserved instead of being wrapped as step `success`.
-- **Distributed workflow output integrity** — a remote step marked `completed` without persisted output now returns failure rather than fabricating a successful empty result.
-- **AutoAgent Kernel failure visibility** — Kernel exceptions now return an explicit failure instead of silently falling back to the legacy direct-codegen pipeline.
-- **Profile routing explicitness** — missing `default_kernel_role` in a profile no longer implies `communicator`; applications must opt into profile-level routing hints.
-- **`_run_context` AttributeError in CoderSubAgent** — Changed direct attribute access to `getattr(self, '_run_context', {})` to prevent `AttributeError` when `_run_context` is not yet initialized.
+- **[#32] Output schema enforcement**: `Agent.output_schema` (Pydantic `BaseModel`) is now passed through the Kernel into `CoderSubAgent`, which validates sandbox output against the schema via `model_validate()`. Schema violations fail fast with a clear error instead of silently returning unstructured data.
+- **[#33] CoderSubAgent sandbox hallucination**: `CoderSubAgent.get_system_prompt()` now appends a dynamic `SANDBOX ENVIRONMENT` manifest listing all pre-loaded modules and globals in the sandbox namespace. This grounds the LLM in what is actually available, preventing hallucinated imports and undefined-name errors.
+- **[#34] Complexity gate before Planner**: `AutoAgent.execute_task()` now runs a `TaskComplexityClassifier` before dispatching to the Planner DAG. Non-complex tasks bypass the full Plan → Execute → Evaluate loop, while classifier contract failures now fail visibly instead of silently falling through to the Planner.
+- **[#35] FunctionRegistry semantic search miss**: `CoderSubAgent._tool_check_registry()` now normalizes verbose task descriptions into concise canonical intents via `IntentNormalizer` before calling `semantic_search()`. This eliminates embedding distance drift caused by prompt verbosity.
+- **[#36] AutoAgent vs CustomAgent boundary**: Added `p2p_responder` attribute to the `Agent` base class (`False` by default, `True` on `CustomAgent`). `JarvisLifespan` now only creates background `asyncio.Task` instances for agents with `p2p_responder=True`, and raises `RuntimeError` at startup if a `p2p_responder` agent does not override `run()`.
+- **[#37] Semantic vs execution status**: `ResultHandler.process_result()` now tracks `semantic_success` separately from execution status. `CoderSubAgent._tool_execute_code()` includes an evaluator hook that flags outputs where `success=False` or `status="failure"` even when the sandbox execution itself succeeded. Fixed `TypeError` when `cost_usd` is `None`.
+- **[#38] Sandbox namespace leak into ZMQ coroutine cleanup**: `SandboxExecutor._execute_sync()` and `_execute_async()` now restore `namespace['__builtins__']` to the actual `builtins` module in a `finally` block. This prevents `KeyError: '__builtins__'` crashes in ZMQ's Cython backend during coroutine garbage collection.
+- **Structured Kernel routing**: keyword role matching has been replaced by a typed `TaskRouter`. Explicit planner/profile roles are honored first; otherwise the router returns a validated role, confidence, reason, and evidence flag. Invalid or low-confidence routing fails visibly. Custom roles must register `kernel_role_profiles`.
+- **Strict subagent completion protocol**: unparseable LLM responses now fail as protocol violations instead of being returned as successful raw content.
+- **Coder proof-of-work contract**: `CoderSubAgent` must produce sandbox execution evidence before completion; structured prose results alone are no longer accepted for coder work.
+- **Workflow terminal status handling**: only `success` completes a workflow step. `yield`, `hitl`, `blocked`, `error`, and unknown statuses are recorded as failures rather than satisfying dependencies.
+- **WorkflowBuilder failure visibility**: agent-returned `failure`, `yield`, `blocked`, `hitl`, or unknown statuses are now preserved instead of being wrapped as step `success`.
+- **Distributed workflow output integrity**: a remote step marked `completed` without persisted output now returns failure rather than fabricating a successful empty result.
+- **AutoAgent Kernel failure visibility**: Kernel exceptions now return an explicit failure instead of silently falling back to the legacy direct-codegen pipeline.
+- **Profile routing explicitness**: missing `default_kernel_role` in a profile no longer implies `communicator`; applications must opt into profile-level routing hints.
+- **`_run_context` AttributeError in CoderSubAgent**: Changed direct attribute access to `getattr(self, '_run_context', {})` to prevent `AttributeError` when `_run_context` is not yet initialized.
 
 **Added**
 
-- `TaskComplexityClassifier` (`jarviscore.planning.classifier`) — LLM-based cognitive router that classifies tasks as "trivial", "moderate", or "complex" to determine whether the full Planner DAG is needed.
-- `IntentNormalizer` (`jarviscore.execution.intent_normalizer`) — Distills verbose task descriptions into concise canonical intents for accurate embedding-based semantic search.
-- `Agent.p2p_responder` attribute — Boolean flag distinguishing reactive task workers (AutoAgent) from proactive mesh citizens (CustomAgent) at the framework level.
-- `Agent.output_schema` attribute — Optional Pydantic `BaseModel` class for end-to-end structured output validation through the Kernel pipeline.
-- `semantic_success` field in `ResultHandler` result data — Enables downstream consumers to distinguish between "code ran without errors" and "task actually achieved its goal".
-- `SandboxExecutor.get_manifest()` / `CoderSandbox.get_manifest()` — Introspect the sandbox namespace for prompt injection into the CoderSubAgent system prompt.
+- `TaskComplexityClassifier` (`jarviscore.planning.classifier`): LLM-based cognitive router that classifies tasks as "trivial", "moderate", or "complex" to determine whether the full Planner DAG is needed.
+- `IntentNormalizer` (`jarviscore.execution.intent_normalizer`): Distills verbose task descriptions into concise canonical intents for accurate embedding-based semantic search.
+- `Agent.p2p_responder` attribute: Boolean flag distinguishing reactive task workers (AutoAgent) from proactive mesh citizens (CustomAgent) at the framework level.
+- `Agent.output_schema` attribute: Optional Pydantic `BaseModel` class for end-to-end structured output validation through the Kernel pipeline.
+- `semantic_success` field in `ResultHandler` result data: Enables downstream consumers to distinguish between "code ran without errors" and "task actually achieved its goal".
+- `SandboxExecutor.get_manifest()` / `CoderSandbox.get_manifest()`: Introspect the sandbox namespace for prompt injection into the CoderSubAgent system prompt.
 
 **Deprecated**
 
-- Versions `1.0.3` and `1.0.4` — contain critical AutoAgent regressions. Will be yanked from PyPI. Users should pin `>=1.1.0`.
+- Versions `1.0.3` and `1.0.4`: contain critical AutoAgent regressions. Will be yanked from PyPI. Users should pin `>=1.1.0`.
 
 </div>
 
@@ -134,7 +176,7 @@ This release fixes all critical regressions introduced in v1.0.3 that rendered A
 **Documentation**
 
 - Mobile drawer fully resolved: Level 1 nav items clickable on all viewports, back arrow restored, site name text hidden in mobile view.
-- Section `index.md` entry points added for Concepts, Guides, and Reference — each section now has an overview landing page with icon cards.
+- Section `index.md` entry points added for Concepts, Guides, and Reference: each section now has an overview landing page with icon cards.
 - CSS tab icons removed from sections that use frontmatter-defined icons, eliminating duplication.
 - README expanded and restructured with additional examples and API reference.
 
@@ -161,33 +203,33 @@ This release fixes all critical regressions introduced in v1.0.3 that rendered A
 
 **Documentation**
 
-- Launched the full MkDocs documentation site — Getting Started, Concepts, Guides, Reference, Examples, and Enterprise sections.
+- Launched the full MkDocs documentation site: Getting Started, Concepts, Guides, Reference, Examples, and Enterprise sections.
 - New guides: AutoAgent, CustomAgent, Workflows, Chat, HITL, Nexus, Knowledge Base, System Prompts, Observability, FastAPI Integration, Internet Search, Migration (CrewAI + LangGraph), Testing.
 - New concept pages: Architecture, Memory, Nexus, P2P, System Bundles, Agent Personas.
 - New examples: Financial Pipeline, Research Network, Support Swarm, Content Pipeline, Investment Committee.
 - Synced all 15 brand SVG variants to `docs/assets/` and removed legacy unreferenced `logo.png` / `logo.svg`.
-- `guides/testing.md`: documented `ExampleMockLLMClient` — tool-validating mock LLM for unit testing agents with tool use.
+- `guides/testing.md`: documented `ExampleMockLLMClient`: tool-validating mock LLM for unit testing agents with tool use.
 - Fixed deprecated `Mesh(mode=...)` calls in `README.md`, `guides/production.md`, `guides/browser-automation.md`, and `guides/adapters.md`.
 
 **Added**
 
-- `mesh.run_task(agent, task, context, complexity)` — primary user-facing API for dispatching a single task to an agent by role with multi-tier model routing.
-- `P2P_ENABLED=true` env var support — `Settings.p2p_enabled` is now merged into Mesh config at startup.
-- `HITLCategory` enum with hard enforcement on `HITLQueue.request()` — valid categories: `auth_required`, `data_required`, `critical_action`. Invalid categories raise `ValueError`.
-- Planner subagent hints are strict — valid hints are accepted exactly and invalid hints fail visibly instead of being remapped.
-- `STEP_OUTPUT_MAX_BYTES` (default 200 KB) and `STEP_OUTPUT_PREVIEW_BYTES` (default 20 KB) — large step outputs stored as truncated preview with `_overflow` flag.
-- Idempotent write guard on `RedisStore.save_step_output()` — a successful result will not be overwritten by a subsequent error payload from a stalled re-execution.
-- Azure Content Filter visibility in `LLMClient` — raw provider content-filter rejections now fail visibly by default. `AZURE_CONTENT_FILTER_REPAIR_ENABLED=true` explicitly opts into Azure-specific prompt repair after the raw prompt is rejected.
-- `Kernel._get_model_for_tier()` — clean multi-tier model resolution: complexity hint → `TASK_MODEL_NANO` / `TASK_MODEL_STANDARD` / `TASK_MODEL_HEAVY` → legacy fallback.
-- `MailboxManager` schema normalisation — handles both the current flat envelope schema and the pre-v1.0.2 double-nested schema transparently.
-- **Vertex AI provider** (`LLMProvider.VERTEX_AI`): GCP-native Gemini access via Application Default Credentials (ADC). No API key required — authenticate with `gcloud auth application-default login` or attach a service account. Config: `VERTEX_AI_ENABLED=true`, `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION` (default `us-central1`), `VERTEX_AI_MODEL` (default `gemini-2.5-flash`). Slots into the fallback chain after Gemini: **Azure → Claude → vLLM → Gemini → Vertex AI**.
-- `_normalize_tools_for_gemini()` static method — auto-converts tool schemas to Gemini `function_declarations` format. Accepts Anthropic/PeerTool (`input_schema`), flat (`name`+`parameters`), or already-native formats.
+- `mesh.run_task(agent, task, context, complexity)`: primary user-facing API for dispatching a single task to an agent by role with multi-tier model routing.
+- `P2P_ENABLED=true` env var support: `Settings.p2p_enabled` is now merged into Mesh config at startup.
+- `HITLCategory` enum with hard enforcement on `HITLQueue.request()`: valid categories: `auth_required`, `data_required`, `critical_action`. Invalid categories raise `ValueError`.
+- Planner subagent hints are strict: valid hints are accepted exactly and invalid hints fail visibly instead of being remapped.
+- `STEP_OUTPUT_MAX_BYTES` (default 200 KB) and `STEP_OUTPUT_PREVIEW_BYTES` (default 20 KB): large step outputs stored as truncated preview with `_overflow` flag.
+- Idempotent write guard on `RedisStore.save_step_output()`: a successful result will not be overwritten by a subsequent error payload from a stalled re-execution.
+- Azure Content Filter visibility in `LLMClient`: raw provider content-filter rejections now fail visibly by default. `AZURE_CONTENT_FILTER_REPAIR_ENABLED=true` explicitly opts into Azure-specific prompt repair after the raw prompt is rejected.
+- `Kernel._get_model_for_tier()`: clean multi-tier model resolution: complexity hint → `TASK_MODEL_NANO` / `TASK_MODEL_STANDARD` / `TASK_MODEL_HEAVY` → legacy fallback.
+- `MailboxManager` schema normalisation: handles both the current flat envelope schema and the pre-v1.0.2 double-nested schema transparently.
+- **Vertex AI provider** (`LLMProvider.VERTEX_AI`): GCP-native Gemini access via Application Default Credentials (ADC). No API key required: authenticate with `gcloud auth application-default login` or attach a service account. Config: `VERTEX_AI_ENABLED=true`, `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION` (default `us-central1`), `VERTEX_AI_MODEL` (default `gemini-2.5-flash`). Slots into the fallback chain after Gemini: **Azure → Claude → vLLM → Gemini → Vertex AI**.
+- `_normalize_tools_for_gemini()` static method: auto-converts tool schemas to Gemini `function_declarations` format. Accepts Anthropic/PeerTool (`input_schema`), flat (`name`+`parameters`), or already-native formats.
 - Shared `_call_genai_client()` helper: both `_call_gemini` and `_call_vertex_ai` delegate here for consistent token accounting and cost calculation.
 - Tool-call response parsing in `_call_genai_client`: when a Gemini/Vertex AI response contains `function_call` parts, `tool_calls` is populated and `content` is set to `""`.
 - Token pricing entries for `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.1-pro`, `gemini-3.1-pro-preview`.
-- Process-wide LLM concurrency semaphore (`LLM_MAX_CONCURRENT` env var) — prevents thundering-herd 429s in multi-agent deployments.
-- `llm.nano_model` and `llm.planner_model` properties — tier-aware model selection for `StepEvaluator` and `Planner`.
-- `max_completion_tokens` alias in `generate()` — callers can use GPT-5.x SDK naming convention interchangeably with `max_tokens`.
+- Process-wide LLM concurrency semaphore (`LLM_MAX_CONCURRENT` env var): prevents thundering-herd 429s in multi-agent deployments.
+- `llm.nano_model` and `llm.planner_model` properties: tier-aware model selection for `StepEvaluator` and `Planner`.
+- `max_completion_tokens` alias in `generate()`: callers can use GPT-5.x SDK naming convention interchangeably with `max_tokens`.
 
 **Fixed**
 
@@ -204,7 +246,7 @@ This release fixes all critical regressions introduced in v1.0.3 that rendered A
 
 **Changed**
 
-- `mesh.workflow()` no longer restricted to autonomous mode — works across all mesh configurations.
+- `mesh.workflow()` no longer restricted to autonomous mode: works across all mesh configurations.
 - CLI references updated from `python -m jarviscore.cli.*` to the `jarviscore` entry-point CLI.
 
 </div>
@@ -275,7 +317,7 @@ This release fixes all critical regressions introduced in v1.0.3 that rendered A
 
 **Changed**
 
-- Version: 0.4.0 → 1.0.0 — stable public release.
+- Version: 0.4.0 → 1.0.0: stable public release.
 - Documentation URL updated to custom domain: `https://jarviscore.developers.prescottdata.io/`
 
 **Added**
@@ -284,7 +326,7 @@ This release fixes all critical regressions introduced in v1.0.3 that rendered A
 - CONTRIBUTING.md with CLA links, ruff tooling, PR checklist.
 - CODE_OF_CONDUCT.md community standards.
 - ENTERPRISE.md for OSS vs Enterprise comparison.
-- `examples/investment_committee/` — 7-agent multi-step workflow with web dashboard (AutoAgent + CustomAgent, parallel step execution, LTM institutional memory, FastAPI dashboard on port 8004).
+- `examples/investment_committee/`: 7-agent multi-step workflow with web dashboard (AutoAgent + CustomAgent, parallel step execution, LTM institutional memory, FastAPI dashboard on port 8004).
 
 </div>
 
@@ -303,52 +345,52 @@ This release fixes all critical regressions introduced in v1.0.3 that rendered A
 
 This was the largest release in JarvisCore history, introducing the complete infrastructure stack across nine phases. It added persistent storage, context distillation, telemetry, the mailbox messaging system, the function registry, the Kernel OODA loop, distributed workflow execution, Nexus authentication, and the unified memory architecture.
 
-**Phase 1 — Foundation Layer**
+**Phase 1: Foundation Layer**
 
 `LocalBlobStorage` / `AzureBlobStorage` with `save(path, data)` / `load(path)` for any artifact. `RedisContextStore` for full Redis-backed step output, workflow graph, mailbox, HITL, and checkpoint methods. Configured via `STORAGE_BACKEND`, `STORAGE_BASE_PATH`, and `REDIS_URL`.
 
-**Phase 2 — Context Distillation**
+**Phase 2: Context Distillation**
 
 `Evidence`, `TruthFact`, `TruthContext`, `AgentOutput` Pydantic models. `distill_output()`, `scrub_sensitive()`, `merge_facts()` utilities. `ContextManager` for token-budget aware prompt building (priority stack: mission → plan → scratchpad → LTM → tool history → variables). `JarvisContext` enhanced with `truth`, `mailbox`, `tracer`, `human_tasks` fields.
 
-**Phase 3 — Telemetry and Tracing**
+**Phase 3: Telemetry and Tracing**
 
 `TraceEventType` enum covering workflow, step, kernel cognition, tool, mailbox, HITL, and context events. `TraceManager` with three output channels: Redis List (persistent), Redis PubSub (real-time), and JSONL (compliance fallback). `record_step_execution(duration, status)` Prometheus histogram and counter, enabled via `PROMETHEUS_ENABLED=true`.
 
-**Phase 4 — MailboxManager**
+**Phase 4: MailboxManager**
 
 `self.mailbox.send(target_id, payload)` / `read(max_messages)` for async agent messaging. Backed by Redis Streams, available in all modes when `REDIS_URL` is set.
 
-**Phase 5 — Function Registry**
+**Phase 5: Function Registry**
 
 `CodeRegistry` auto-registers successfully executed code per task and promotes to `VERIFIED` on first success. Available as `agent.code_registry` in AutoAgent, persisted to `{log_dir}/function_registry/`. Includes `update_execution_stats(func_name, success, execution_time)` for graduation tracking.
 
-**Phase 6 — Kernel / SubAgent OODA Loop**
+**Phase 6: Kernel / SubAgent OODA Loop**
 
 The `Kernel` replaces AutoAgent's linear codegen → sandbox → repair pipeline with a supervised OODA loop. `ExecutionLease` enforces token/turn/wall-clock budgets per subagent role. `AgentCognitionManager` tracks budget spend per phase, detects spinning (same tool 3+ times), and enforces cognitive gates. `AdaptiveHITLPolicy` with `HumanTask` pauses execution when confidence or risk triggers fire. Coder dispatches require executable proof of work before completion.
 
-**Phase 7 — Distributed WorkflowEngine**
+**Phase 7: Distributed WorkflowEngine**
 
 `WorkflowEngine` persists DAG to Redis hash `workflow_graph:{wf_id}` for crash recovery. When no local agent matches a step, the engine resets status to `"pending"` and polls Redis. `Mesh._run_distributed_worker()` scans `jarviscore:active_workflows`, checks `are_dependencies_met()`, atomically claims steps via SETNX, executes, and writes output to Redis.
 
-**Phase 7D — AuthenticationManager (Nexus)**
+**Phase 7D: AuthenticationManager (Nexus)**
 
 Set `requires_auth = True` on any agent and the Mesh injects `self._auth_manager` before `setup()`. Full NexusClient flow: `request_connection → browser OAuth → poll ACTIVE → resolve_strategy → apply headers`. Graceful degradation when `NEXUS_GATEWAY_URL` is not set.
 
-**Phase 8 — Memory Architecture**
+**Phase 8: Memory Architecture**
 
 `UnifiedMemory(workflow_id, step_id, agent_id, redis_store, blob_storage)` with `.episodic` (EpisodicLedger via Redis Streams), `.ltm` (LongTermMemory via Redis), and `.scratch` (in-memory WorkingScratchpad). `RedisMemoryAccessor` reads step outputs across the workflow.
 
-**Phase 9 — Mesh Integration and Auto-Injection**
+**Phase 9: Mesh Integration and Auto-Injection**
 
 Before each agent's `setup()`, the Mesh injects `_redis_store`, `_blob_storage`, and `mailbox`. Prometheus server starts automatically when `PROMETHEUS_ENABLED=true`. Agents use injected infrastructure directly with zero boilerplate.
 
 **Production Examples**
 
-- `financial_pipeline.py` — AutoAgent autonomous, 3-step financial analysis pipeline.
-- `research_synthesizer.py` + `research_node_1/2/3.py` — AutoAgent 4-node SWIM research cluster.
-- `support_swarm.py` — CustomAgent P2P, 4-agent support routing with Nexus auth.
-- `content_pipeline.py` — CustomAgent distributed, content pipeline with LTM.
+- `financial_pipeline.py`: AutoAgent autonomous, 3-step financial analysis pipeline.
+- `research_synthesizer.py` + `research_node_1/2/3.py`: AutoAgent 4-node SWIM research cluster.
+- `support_swarm.py`: CustomAgent P2P, 4-agent support routing with Nexus auth.
+- `content_pipeline.py`: CustomAgent distributed, content pipeline with LTM.
 
 **Fixed**
 

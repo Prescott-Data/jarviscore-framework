@@ -6,13 +6,13 @@ icon: material/earth
 
 JarvisCore includes a built-in `InternetSearch` module used primarily by `ResearcherSubAgent`. It runs multiple search providers in parallel, deduplicates and ranks results by relevance and source trust, then returns a unified result list your agents can reason over.
 
-No configuration is required to get started — if you have `GEMINI_API_KEY` set, search is active immediately.
+No configuration is required to get started: if you have `GEMINI_API_KEY` set, search is active immediately.
 
 ---
 
 ## How it works
 
-When an agent triggers a search, the module fans out to all configured providers simultaneously, collects results, deduplicates by URL, and ranks them by a weighted trust score. All providers have circuit breakers — a failing provider is automatically bypassed after 8 consecutive failures and retried after 5 minutes.
+When an agent triggers a search, the module fans out to all configured providers simultaneously, collects results, deduplicates by URL, and ranks them by a weighted trust score. All providers have circuit breakers: a failing provider is automatically bypassed after 8 consecutive failures and retried after 5 minutes.
 
 ```
 Agent → InternetSearch.search(query)
@@ -37,7 +37,7 @@ Agent → InternetSearch.search(query)
 
 Uses the Gemini API with Google Search grounding enabled. The model queries Google Search in real time and returns structured web results alongside a synthesised summary grounded in those sources.
 
-**Required:** one of the following —
+**Required:** one of the following:
 
 | Variable | Description |
 |---|---|
@@ -63,7 +63,7 @@ Serper calls the Google Search API via [serper.dev](https://serper.dev). It adds
 
 | Variable | Default | Description |
 |---|---|---|
-| `SERPER_API_KEY` | — | API key from [serper.dev](https://serper.dev). Provider is skipped if unset. |
+| `SERPER_API_KEY` |: | API key from [serper.dev](https://serper.dev). Provider is skipped if unset. |
 
 Serper results score slightly lower than Google Grounded Search in the ranking (1.2 vs 1.4) because they don't carry grounding metadata or synthesised summaries.
 
@@ -71,7 +71,7 @@ Serper results score slightly lower than Google Grounded Search in the ranking (
 
 ### SearXNG <span class="jc-badge jc-badge-optional">Optional</span> <span class="jc-badge jc-badge-free">Self-hosted</span>
 
-SearXNG is a self-hosted, privacy-respecting metasearch engine that aggregates results from Google, Bing, and dozens of other engines — without API keys. It is always attempted unless you point `SEARXNG_INSTANCE_URL` at a non-responsive host, in which case the circuit breaker takes it offline.
+SearXNG is a self-hosted, privacy-respecting metasearch engine that aggregates results from Google, Bing, and dozens of other engines: without API keys. It is always attempted unless you point `SEARXNG_INSTANCE_URL` at a non-responsive host, in which case the circuit breaker takes it offline.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -89,7 +89,7 @@ docker run -d \
 > [!IMPORTANT]
 > SearXNG's JSON format must be enabled. Add `- json` under `search.formats` in `settings.yml`, or pass the env var shown above.
 
-If SearXNG is not running, the connection fails silently and the circuit breaker skips it — no error reaches your agent.
+If SearXNG is not running, the connection fails silently and the circuit breaker skips it: no error reaches your agent.
 
 ---
 
@@ -97,8 +97,8 @@ If SearXNG is not running, the connection fails silently and the circuit breaker
 
 Both are always active. They use free public APIs with no authentication.
 
-- **arXiv** — searches academic preprints via `export.arxiv.org`. Best for research-heavy queries.
-- **Crossref** — searches published academic papers via `api.crossref.org`. Returns DOI links.
+- **arXiv**: searches academic preprints via `export.arxiv.org`. Best for research-heavy queries.
+- **Crossref**: searches published academic papers via `api.crossref.org`. Returns DOI links.
 
 These providers score lower by default (0.9 and 0.8) because they are domain-specific. Use `exclude_providers` to skip them for non-academic tasks.
 
@@ -106,14 +106,14 @@ These providers score lower by default (0.9 and 0.8) because they are domain-spe
 
 ### Wikipedia <span class="jc-badge jc-badge-free">No config needed</span>
 
-Always active. Uses the Wikipedia search API. Scores lowest (0.6) — useful as a broad fallback but not a primary signal for real-time queries.
+Always active. Uses the Wikipedia search API. Scores lowest (0.6): useful as a broad fallback but not a primary signal for real-time queries.
 
 ---
 
 ## Configuration summary
 
 ```bash
-# .env — minimum for search to work (also needed for agents)
+# .env: minimum for search to work (also needed for agents)
 GEMINI_API_KEY=AIza...
 
 # Optional: add Serper for dual Google-source coverage
@@ -144,13 +144,13 @@ results = await search.search(
 )
 ```
 
-This prevents wasted network calls — the provider is skipped entirely, not just filtered from results.
+This prevents wasted network calls: the provider is skipped entirely, not just filtered from results.
 
 ---
 
 ## Browser escalation (SPAs and paywalled content)
 
-When HTTP extraction returns empty content — common for single-page applications and some paywalled sites — the module can escalate to a headless browser. This is an opt-in extra:
+When HTTP extraction returns empty content (common for single-page applications and some paywalled sites) the module can escalate to a headless browser. This is an opt-in extra:
 
 ```bash
 pip install "jarviscore[browser]"
@@ -159,7 +159,7 @@ pip install "jarviscore[browser]"
 | Variable | Default | Description |
 |---|---|---|
 | `BROWSER_HEADLESS` | `true` | Run browser in headless mode |
-| `BROWSER_CONTROL_URL` | — | CDP endpoint for remote browser (e.g. Browserless, Playwright server) |
+| `BROWSER_CONTROL_URL` |: | CDP endpoint for remote browser (e.g. Browserless, Playwright server) |
 
 ---
 
@@ -180,7 +180,7 @@ Once a provider's breaker opens, it is skipped entirely until the recovery windo
 
 | Scenario | Recommendation |
 |---|---|
-| **Getting started** | Just `GEMINI_API_KEY` — Google Grounded Search alone is sufficient |
+| **Getting started** | Just `GEMINI_API_KEY`: Google Grounded Search alone is sufficient |
 | **High-volume research agents** | Add `SERPER_API_KEY` to reduce Gemini quota usage |
 | **Privacy-sensitive deployments** | Add self-hosted SearXNG, exclude `google_grounded` and `serper` |
 | **Academic / scientific research** | Keep arXiv and Crossref enabled (they are by default) |

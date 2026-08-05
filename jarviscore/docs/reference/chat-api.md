@@ -15,7 +15,7 @@ app.include_router(
 )
 ```
 
-The `kernel` argument must be a `jarviscore.kernel.kernel.Kernel` instance. The router is stateless — the same Kernel can be shared across multiple router mounts or agent instances.
+The `kernel` argument must be a `jarviscore.kernel.kernel.Kernel` instance. The router is stateless: the same Kernel can be shared across multiple router mounts or agent instances.
 
 ---
 
@@ -63,7 +63,7 @@ Trace events stream in real time on `GET /chat/stream/{workflow_id}` while the P
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `message` | `str` | Yes | — | Natural language task or question |
+| `message` | `str` | Yes |: | Natural language task or question |
 | `workflow_id` | `str` | No | auto-generated (`chat_<12hex>`) | Workflow identifier; supply your own to correlate with the SSE stream |
 | `agent_id` | `str` | No | `"chat"` | Agent identity passed to the Kernel |
 | `system_prompt` | `str` | No | `""` | System prompt prepended to the Kernel call |
@@ -89,7 +89,7 @@ HTTP 200 on success. HTTP 500 with `{"error": "...", "workflow_id": "..."}` on K
 |---|---|---|
 | `workflow_id` | `str` | Workflow identifier (use this to open the SSE stream) |
 | `step_id` | `str` | Step identifier, formatted as `step_<unix_timestamp>` |
-| `status` | `str` | `"success"`, `"failure"`, or `"yield"` — taken directly from `output.status` |
+| `status` | `str` | `"success"`, `"failure"`, or `"yield"`: taken directly from `output.status` |
 | `answer` | `str` | Final answer text. Taken from `output.summary`, falling back to `str(output.payload)[:2000]` |
 | `sources` | `List[dict]` | Citation sources extracted from researcher output. Each entry is `{"title": "...", "url": "...", "source": "..."}`. Capped at 10 entries |
 | `tokens` | `dict` | Token usage from `output.metadata["tokens"]`. Keys depend on the provider |
@@ -189,6 +189,6 @@ Requires Redis to be configured. Events are read from the trace files in the `tr
 
 ## Further Reading
 
-- [Chat Endpoint guide](../guides/chat.md) — integration walkthrough with full examples
-- [Configuration Reference](configuration.md) — `REDIS_URL` required for live SSE streaming
-- [Model Routing](../concepts/model-routing.md) — how the Kernel classifies and routes chat messages
+- [Chat Endpoint guide](../guides/chat.md): integration walkthrough with full examples
+- [Configuration Reference](configuration.md): `REDIS_URL` required for live SSE streaming
+- [Model Routing](../concepts/model-routing.md): how the Kernel classifies and routes chat messages

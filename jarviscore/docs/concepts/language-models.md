@@ -6,7 +6,7 @@ icon: material/chip
 
 JarvisCore is built for a world where no single model does everything well. A model that excels at code generation tends to be overkill for classifying a yes/no decision. A model capable of deep multi-step reasoning is too slow and expensive for summarising a conversation. A model that drives a browser needs to see screenshots; a model writing a Slack message does not.
 
-Rather than exposing this complexity to developers, JarvisCore assigns every LLM call to a **role** — a named capability that determines how the model is prompted, what it returns, and which model tier it runs on.
+Rather than exposing this complexity to developers, JarvisCore assigns every LLM call to a **role**: a named capability that determines how the model is prompted, what it returns, and which model tier it runs on.
 
 ---
 
@@ -20,7 +20,7 @@ The `Planner` and `ResearcherSubAgent` use the reasoning role by default.
 
 ### Coding
 
-The coding role generates, reviews, and repairs executable code. It is given explicit tool schemas, a working scratchpad, and structured feedback on execution failures. The expected output is always code or a structured tool call — never free-form prose.
+The coding role generates, reviews, and repairs executable code. It is given explicit tool schemas, a working scratchpad, and structured feedback on execution failures. The expected output is always code or a structured tool call: never free-form prose.
 
 `CoderSubAgent` owns this role. It is the only role with no generic fallback tier: if `CODING_MODEL` is unset, it inherits the provider default deployment.
 
@@ -34,7 +34,7 @@ A text-only model assigned to the browser role will run but cannot interpret scr
 
 ### Nano / Fast
 
-The nano role handles classification, short message drafting, and context compression — tasks where low latency and cost matter more than depth. Prompts are short, outputs are small, and the expected result is a verdict or a brief string.
+The nano role handles classification, short message drafting, and context compression: tasks where low latency and cost matter more than depth. Prompts are short, outputs are small, and the expected result is a verdict or a brief string.
 
 `CommunicatorSubAgent`, `StepEvaluator`, and the auto-summariser run on the nano role.
 
@@ -42,7 +42,7 @@ The nano role handles classification, short message drafting, and context compre
 
 ## The Completion Interface
 
-All four roles go through a single client — `UnifiedLLMClient` — which normalises provider differences before the call and after the response.
+All four roles go through a single client (`UnifiedLLMClient`) which normalises provider differences before the call and after the response.
 
 **Before the call**, the client handles parameter incompatibilities automatically:
 
@@ -50,7 +50,7 @@ All four roles go through a single client — `UnifiedLLMClient` — which norma
 - `gpt-5.x` rejects non-default `temperature` → parameter is stripped
 - Providers that do not support `response_format: json_object` → parameter is silently omitted
 
-**After the call**, every response — regardless of provider — arrives in the same shape:
+**After the call**, every response (regardless of provider) arrives in the same shape:
 
 ```python
 {
@@ -63,7 +63,7 @@ All four roles go through a single client — `UnifiedLLMClient` — which norma
 }
 ```
 
-Structured output (JSON mode) is requested by passing `response_format={"type": "json_object"}` to `llm.generate()`. The client forwards this when the provider supports it. If the returned content is not valid JSON, the Kernel retries the call with an explicit repair prompt before surfacing a failure — you do not handle JSON parse errors in agent code.
+Structured output (JSON mode) is requested by passing `response_format={"type": "json_object"}` to `llm.generate()`. The client forwards this when the provider supports it. If the returned content is not valid JSON, the Kernel retries the call with an explicit repair prompt before surfacing a failure: you do not handle JSON parse errors in agent code.
 
 **Provider fallback** runs automatically when a provider is unavailable or returns a 5xx. The order is: Azure OpenAI → Claude → vLLM → Gemini. Rate limit responses (HTTP 429) trigger exponential backoff before the fallback chain is tried.
 
@@ -71,12 +71,12 @@ Structured output (JSON mode) is requested by passing `response_format={"type": 
 
 ## Embedding
 
-Embedding calls — used by `UnifiedMemory` for semantic search and RAG retrieval — run outside the four roles above. They are handled by a dedicated embedding client and are not routed through `UnifiedLLMClient`. Configure the embedding model separately if you are using Athena MemOS or a custom retrieval layer.
+Embedding calls (used by `UnifiedMemory` for semantic search and RAG retrieval) run outside the four roles above. They are handled by a dedicated embedding client and are not routed through `UnifiedLLMClient`. Configure the embedding model separately if you are using Athena MemOS or a custom retrieval layer.
 
 ---
 
 ## What Comes Next
 
-Each of the four roles maps to a **capability tier** — a named slot in your environment configuration that you point at a specific deployment. That mapping, the fallback chain between tiers, and how to override complexity per task are covered in the next section.
+Each of the four roles maps to a **capability tier**: a named slot in your environment configuration that you point at a specific deployment. That mapping, the fallback chain between tiers, and how to override complexity per task are covered in the next section.
 
 **[Model Routing →](model-routing.md)**

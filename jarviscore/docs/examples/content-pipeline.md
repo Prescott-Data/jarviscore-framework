@@ -17,7 +17,7 @@ icon: material/text-box-edit
 
 ## What it does
 
-Four `CustomAgent` specialists run a content production pipeline. Unlike the Financial Pipeline (which uses `AutoAgent` with LLM code generation), these agents implement `execute_task()` directly in pure Python — deterministic, testable, no LLM required.
+Four `CustomAgent` specialists run a content production pipeline. Unlike the Financial Pipeline (which uses `AutoAgent` with LLM code generation), these agents implement `execute_task()` directly in pure Python: deterministic, testable, no LLM required.
 
 Cross-step data flows via `RedisMemoryAccessor`: each subsequent agent reads the previous step's output from Redis rather than receiving it as a function argument.
 
@@ -46,7 +46,7 @@ await mesh.start()
 
 # Verify what was detected
 print(mesh.has_capability("redis"))   # True when Redis is up
-print(mesh.has_capability("blob"))    # True — LocalBlobStorage always available
+print(mesh.has_capability("blob"))    # True: LocalBlobStorage always available
 ```
 
 1. No `mode=` argument. The Mesh detects Redis from `REDIS_URL` (or the config dict) at `start()` time and activates the workflow engine with Redis persistence automatically.
@@ -70,7 +70,7 @@ class WriterAgent(CustomAgent):
 ```
 
 1. `RedisMemoryAccessor` wraps the `RedisMemoryStore` with workflow-scoped key lookups.
-2. `accessor.get("research")` reads `step_output:{workflow_id}:research` from Redis — written by `WorkflowEngine` immediately after the research step completes.
+2. `accessor.get("research")` reads `step_output:{workflow_id}:research` from Redis, written by `WorkflowEngine` immediately after the research step completes.
 
 ---
 
@@ -91,7 +91,7 @@ class PublisherAgent(CustomAgent):
             await self.memory.ltm.save_summary(style_summary)  # (1)!
 ```
 
-1. On the next run, `WriterAgent.setup()` loads this via `self.memory.ltm.load_summary()` and injects it into the draft — the pipeline gets progressively smarter across runs without any code changes.
+1. On the next run, `WriterAgent.setup()` loads this via `self.memory.ltm.load_summary()` and injects it into the draft: the pipeline gets progressively smarter across runs without any code changes.
 
 ---
 

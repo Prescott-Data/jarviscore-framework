@@ -4,7 +4,7 @@ icon: material/account-supervisor
 
 # Human-in-the-Loop (HITL) Escalation
 
-JarvisCore agents are designed to operate autonomously. The Human-in-the-Loop (HITL) system exists for the narrow set of situations where a human decision is genuinely required — not for quality checks or uncertainty the agent should resolve itself.
+JarvisCore agents are designed to operate autonomously. The Human-in-the-Loop (HITL) system exists for the narrow set of situations where a human decision is genuinely required: not for quality checks or uncertainty the agent should resolve itself.
 
 This guide covers when to escalate, the complete `HITLQueue` API, how resolutions are delivered back to the agent, and how to wire up a review dashboard.
 
@@ -75,7 +75,7 @@ item_id = self.hitl.request(
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `title` | `str` | Yes | Headline shown in the review list. Never truncated — keep it descriptive. |
+| `title` | `str` | Yes | Headline shown in the review list. Never truncated: keep it descriptive. |
 | `content` | `str` | Yes | Full details for the reviewer. Markdown is supported. Truncated to 2,000 characters. |
 | `urgency` | `str` | No | One of `"low"`, `"normal"`, `"high"`, `"critical"`. Default: `"normal"`. |
 | `category` | `str` | Yes | One of `"auth_required"`, `"data_required"`, `"critical_action"`. Any other value raises `ValueError`. |
@@ -170,7 +170,7 @@ class CampaignSenderAgent(CustomAgent):
         context = msg.data.get("context", {})
         campaign = await self.prepare_campaign(msg.data.get("task", ""))
 
-        # 1. Escalate — declare the irreversible action
+        # 1. Escalate: declare the irreversible action
         item_id = self.hitl.request(
             title=f"Approve email campaign: {campaign['name']}",
             content=(
@@ -255,6 +255,6 @@ The agent's `wait()` loop detects the status change on its next poll cycle.
 | `HITL_ENABLED` | `false` | Enable automatic Kernel escalation when confidence is below threshold |
 | `HITL_MAX_CONFIDENCE` | `0.8` | Confidence threshold below which the Kernel escalates to HITL |
 
-When `HITL_ENABLED=true`, the Kernel escalates automatically. When `HITL_ENABLED=false` (the default), HITL is still available to agents via `self.hitl.request()` — only the automatic Kernel escalation is disabled.
+When `HITL_ENABLED=true`, the Kernel escalates automatically. When `HITL_ENABLED=false` (the default), HITL is still available to agents via `self.hitl.request()`: only the automatic Kernel escalation is disabled.
 
-For testing HITL flows in unit tests without a running agent, see [Testing Agents — HITL flows](testing.md#testing-hitl-flows).
+For testing HITL flows in unit tests without a running agent, see [Testing Agents: HITL flows](testing.md#testing-hitl-flows).
