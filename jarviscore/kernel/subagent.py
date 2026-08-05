@@ -42,6 +42,7 @@ OODA Loop Architecture:
 """
 
 import inspect
+import ast
 import json
 import logging
 import os
@@ -178,7 +179,25 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     try:
         return json.loads(repaired)
     except (json.JSONDecodeError, ValueError):
-        return None
+        pass
+
+    # Repair path: trailing commas before } or ] (valid python, invalid JSON).
+    detrailed = re.sub(r",(\s*[}\]])", r"\1", repaired)
+    if detrailed != repaired:
+        try:
+            return json.loads(detrailed)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Repair path: python-literal dicts (single quotes, True/False/None).
+    # Normalization of common structured variants, never prose guessing.
+    try:
+        result = ast.literal_eval(candidate)
+        if isinstance(result, dict):
+            return result
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        pass
+    return None
 
 
 def _repair_json_strings(text: str) -> str:
