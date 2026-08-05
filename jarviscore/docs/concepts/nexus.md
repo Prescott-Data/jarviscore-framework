@@ -27,7 +27,7 @@ cred = base64.b64encode(f"{email}:{api_token}".encode()).decode()
 headers = {"Authorization": f"Basic {cred}"}
 ```
 
-Three providers, three auth patterns, three environment variables, and three separate token expiry and refresh paths. Scaled to 46 integrations across a multi-agent fleet, this becomes a maintenance problem that never ends.
+Three providers, three auth patterns, three environment variables, and three separate token expiry and refresh paths. Scaled to 150 integrations across a multi-agent fleet, this becomes a maintenance problem that never ends.
 
 **Nexus collapses all of this to one interface:**
 
@@ -38,7 +38,7 @@ response = await nexus_call("POST", "https://slack.com/api/chat.postMessage", js
 response = await nexus_call("GET", "https://your-org.atlassian.net/rest/api/3/issue/JC-1")
 ```
 
-The agent and the LLM-generated code never know whether a provider uses OAuth2, API keys, or Basic Auth. Nexus resolves the correct strategy and applies it transparently.
+The agent and the LLM-generated code never know whether a provider uses OAuth2, API keys, or Basic Auth. Nexus resolves the correct strategy and applies it transparently. Inside the execution sandbox, `nexus_call` is awaited from an `async def main()` function; the sandbox awaits `main()` and uses its return value as the output.
 
 ---
 

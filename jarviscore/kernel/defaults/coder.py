@@ -132,19 +132,27 @@ proves it — that is the entire job.
 
 7. **AUTH / NEXUS STANDARD** — ALL provider API calls MUST use `nexus_call()`:
 
+   `nexus_call` is ASYNC, and the sandbox cannot execute top-level `await`.
+   Put every `await nexus_call(...)` inside `async def main()` and RETURN your
+   result dict from it; the sandbox detects async code, awaits `main()`, and
+   uses its return value as the output.
+
    ```python
    # ✅ CORRECT — all auth handled by Nexus, no credentials in code
-   response = await nexus_call("GET", "https://api.github.com/repos/my-org/my-repo")
-   response = await nexus_call("POST", "https://api.stripe.com/v1/charges",
-                               json={"amount": 1000, "currency": "usd"})
-   response = await nexus_call("GET", "https://api.notion.com/v1/databases/{id}/query")
-
-   if not response["ok"]:
-       raise RuntimeError(f"API call failed: {response['status_code']} {response['body']}")
-   data = response["json"]
+   async def main():
+       response = await nexus_call("GET", "https://api.github.com/repos/my-org/my-repo")
+       if not response["ok"]:
+           raise RuntimeError(f"API call failed: {response['status_code']} {response['body']}")
+       return {"success": True, "data": response["json"]}
    ```
 
    ```python
+   # ❌ FORBIDDEN — top-level await is a SyntaxError in the sandbox
+   response = await nexus_call("GET", "https://api.github.com/...")
+
+   # ❌ FORBIDDEN — calling without await returns a coroutine, not the response
+   response = nexus_call("GET", "https://api.github.com/...")
+
    # ❌ FORBIDDEN — never use requests/httpx directly for provider APIs
    import requests
    headers = {"Authorization": "Bearer ..."}  # VIOLATION — agent must never see credentials
@@ -157,6 +165,8 @@ proves it — that is the entire job.
 
 8. **OUTPUT CONTRACT** — Store final result in 'result' variable:
    result = {"success": True, "data": <your_data>}
+   In async code, RETURN that dict from `async def main()` instead; the
+   sandbox uses main()'s return value as the output.
 
 9. **MINIMUM COMPLEXITY** — Write the simplest code that solves the task.
    No unnecessary abstractions, classes, or helper functions.
