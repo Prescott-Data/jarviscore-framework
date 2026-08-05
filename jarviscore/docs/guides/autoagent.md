@@ -117,6 +117,8 @@ async def research(request: dict):
 
 Always check `step["status"] == "success"` before reading `step["payload"]`. A `"failure"` result has a populated `"summary"` explaining what went wrong.
 
+When calling `agent.execute_task()` directly, the returned envelope always carries `result_summary`: plain prose suitable for display, never JSON. Failure envelopes put a human-readable error sentence there. Structured data stays in `output` / `payload` / `goal_execution` for programmatic consumers.
+
 ---
 
 ## Lifecycle Hooks

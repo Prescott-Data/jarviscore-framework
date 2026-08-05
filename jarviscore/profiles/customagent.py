@@ -355,7 +355,9 @@ class CustomAgent(Profile):
         result = await self.on_peer_request(synthetic_msg)
 
         if result is not None:
-            return {"status": "success", "output": result}
+            from jarviscore.core.envelope import attach_result_summary
+
+            return attach_result_summary({"status": "success", "output": result})
 
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement on_peer_request() or execute_task()\n\n"
