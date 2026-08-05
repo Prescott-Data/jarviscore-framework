@@ -167,7 +167,7 @@ Expected output when everything is correctly configured:
 
 [System Requirements]
   Python Version:             3.12.2
-  JarvisCore Package:         v1.2.0
+  JarvisCore Package:         v1.3.0
 
 [Dependencies]
   pydantic:                   Core validation
