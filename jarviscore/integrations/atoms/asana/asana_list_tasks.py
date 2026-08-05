@@ -1,0 +1,100 @@
+import requests
+from typing import Any, Dict, List, Optional
+
+_ASANA_API_SUFFIX = "/api/1.0"
+
+
+def asana_list_tasks(auth_info: dict, project_id: Optional[str] = None, limit: int = 25, timeout: int = 30, verify_ssl: bool = True, base_url: str = None) -> dict:
+    """List tasks in a project (GET /tasks?project=). Asana REST API v1.0. Official: https://developers.asana.com/reference/rest-api-reference"""
+    try:
+        if not base_url:
+            return {"records": [], "data_count": 0, "status": 400, "message": "base_url is required"}
+        api_root, root_err = _asana_api_root(base_url)
+        if root_err:
+            return {"records": [], "data_count": 0, "status": 400, "message": root_err}
+        auth_info = auth_info or {}
+        project_gid = (
+            project_id
+            or auth_info.get("project_id")
+            or auth_info.get("project_gid")
+            or auth_info.get("project")
+        )
+        if not project_gid:
+            return {
+                "records": [],
+                "data_count": 0,
+                "status": 400,
+                "message": "project_id (or project_gid in auth_info) is required",
+            }
+        headers, auth_err = _asana_headers(auth_info)
+
+        if auth_err:
+
+            return {"records": [], "data_count": 0, "status": 401, "message": auth_err}
+        records, status, message = _asana_paginate(
+            f"{api_root}/tasks",
+            headers,
+            limit,
+            timeout,
+            verify_ssl,
+            {"project": str(project_gid)},
+        )
+        if message != "ok":
+            return {"records": records, "data_count": len(records), "status": status, "message": message}
+        return {"records": records, "data_count": len(records), "status": status, "message": "ok"}
+    except Exception as e:
+        return {"records": [], "data_count": 0, "status": 500, "message": str(e)}
+
+
+
+def _asana_api_root(base_url: str):
+    root = base_url.rstrip("/")
+    if root.endswith("/api/1.0"):
+        return root, None
+    if root.endswith("/api"):
+        return root + "/1.0", None
+    if root == "https://app.asana.com" or root.endswith("app.asana.com"):
+        return root + "/api/1.0", None
+    return None, "base_url must be https://app.asana.com/api/1.0"
+
+
+def _asana_headers(auth_info):
+    auth_info = auth_info or {}
+    token = auth_info.get("access_token")
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _asana_paginate(url, headers, limit, timeout, verify_ssl, extra_params=None):
+    records: List[Dict[str, Any]] = []
+    offset = None
+    page_size = min(max(limit, 1), 100)
+    status = 0
+    extra_params = dict(extra_params or {})
+    while len(records) < limit:
+        params = dict(extra_params)
+        params["limit"] = min(page_size, limit - len(records))
+        if offset:
+            params["offset"] = offset
+        resp = requests.get(url, headers=headers, params=params, timeout=timeout, verify=verify_ssl)
+        status = resp.status_code
+        if status >= 400:
+            return records, status, resp.text[:1000]
+        body = resp.json()
+        if not isinstance(body, dict):
+            return records, status, "Unexpected response format"
+        batch = body.get("data") or []
+        if not isinstance(batch, list):
+            batch = [batch] if isinstance(batch, dict) else []
+        for item in batch:
+            if isinstance(item, dict):
+                records.append(item)
+                if len(records) >= limit:
+                    break
+        next_page = body.get("next_page")
+        if not isinstance(next_page, dict) or not next_page.get("offset") or len(records) >= limit:
+            break
+        offset = next_page.get("offset")
+    return records[:limit], status, "ok"

@@ -4,7 +4,7 @@ icon: material/connection
 
 # System Bundles & Integrations
 
-JarvisCore ships with **46 built-in system bundles** covering 237+ discrete, versioned atoms. Each atom is a self-contained, ready-to-use tool your agents can call directly — no wrapper code required. Bundles span communication, productivity, CRM, ERP, finance, HR, developer tools, content, advertising, storage, healthcare, and more.
+JarvisCore ships with **150 built-in system bundles** covering 1224 discrete, versioned atoms. Each atom is a self-contained, ready-to-use tool your agents can call directly: no wrapper code required. Bundles span communication, productivity, CRM, ERP, finance, HR, developer tools, content, advertising, storage, healthcare, and more.
 
 ---
 
@@ -44,7 +44,7 @@ The Kernel auto-picks the right atom when the task matches. The `capabilities` f
 
 ### Seeding the registry
 
-`seed_registry` runs automatically when the framework initialises. All 46 bundles are seeded into the registry on first startup. You can also call it manually:
+`seed_registry` runs automatically when the framework initialises. All 150 bundles are seeded into the registry on first startup. You can also call it manually:
 
 ```python
 from jarviscore.integrations.seed_registry import seed_registry
@@ -776,6 +776,38 @@ Google Search results via API.
 
 ---
 
+### Expanded catalog: hand-audited providers
+
+The 104 bundles below were imported from a production
+function registry after an atom-by-atom audit against each vendor's
+official API documentation. List any bundle's atoms with:
+
+```bash
+jarviscore atom list --bundle <name>
+```
+
+| Category | Bundles |
+|---|---|
+| Advertising | Google Ads (26), Reddit Ads (9), Snapchat Ads (9), TikTok Ads (9), X Ads (9) |
+| Analytics | Amplitude (6), FullStory (5), Google Analytics (1), Kissmetrics (5), LogRocket (5), Matomo (8), Mixpanel (8), Pendo (6), Plausible (6), PostHog (8), Segment (9) |
+| CMS | WordPress (13) |
+| CRM | ActiveCampaign (12), Agile CRM (13), Attio (13), Capsule CRM (13), Close (13), Folk (13), Freshsales (13), Insightly (16), Keap (16), Less Annoying CRM (16), Nimble (13), Nutshell (13), Pipedrive (13), Salesflare (13), Streak (13), Zoho CRM (13) |
+| Communication | Africa's Talking (2), Google Chat (4), Mattermost (9), Rocket.Chat (9), Telegram (5), Twilio (9), WhatsApp Business (4) |
+| Customer Support | Crisp (9), Drift (4), Freshchat (6), Gorgias (8), Intercom (15), LiveChat (9), Zendesk Chat (9), tawk.to (3) |
+| DevOps & CI | CircleCI (6), Jenkins (15), TeamCity (9), Travis CI (9) |
+| Developer Tools | Assembla (9), Beanstalk (13), GitLab (13), Perforce (5), Phabricator (11), SourceForge (3), Sourcegraph (1) |
+| Ecommerce | Etsy (9), Jumia Seller Center (9), PrestaShop (13), Shift4Shop (13), Shopify (13), Wix Stores (13), WooCommerce (13) |
+| Finance & Accounting | Sage Accounting (13), Sage One (ZA) (13), Wave (13), Xero (13) |
+| Geo & Location | Google Maps (2), what3words (5) |
+| HR & Payroll | SimplePay (9) |
+| Identity & Verification | Okta (13), Prembly (7) |
+| Marketing | Klaviyo (11) |
+| Payments | M-Pesa (Daraja) (3), Paystack (12), Square (13) |
+| Productivity | Coda (9), Dropbox Sign (9), Google People (3), Infobip (8), PagerDuty (13), Zoho Desk (13) |
+| Project Management | Asana (12), Freedcamp (8), Height (9), LiquidPlanner (9), Monday (9), Nifty (8), Pivotal Tracker (9), Podio (9), Proofhub (9), Shortcut (9), Targetprocess (9), Trello (13), Workfront (9), Wrike (9) |
+| Storage | Amazon S3 (4), Backblaze B2 (5), Box (9), Egnyte (9), Google Cloud Storage (7) |
+
+---
 ## Configuration
 
 All credentials are read from environment variables at call time. Set them in your `.env` file or secrets manager:
@@ -866,4 +898,6 @@ To contribute an atom to the framework, open a pull request to [jarviscore-frame
 | Healthcare | OpenMRS | 6 |
 | Government | KRA | 4 |
 | Search | Serper | 2 |
-| **Total** | **46 bundles** | **~237 atoms** |
+| **Total** | **150 bundles** | **1224 atoms** |
+
+The table above covers the original bundles (46 bundles, 237 atoms). The expanded catalog adds 104 more bundles (987 atoms) listed in the previous section.
