@@ -29,19 +29,20 @@ def get_data_path() -> Path:
         return Path(jarviscore.data.__file__).parent
 
 
-def copy_env_example(dest_dir: Path, force: bool = False) -> bool:
+def copy_env_example(dest_dir: Path, force: bool = False, full: bool = False) -> bool:
     """
-    Copy .env.example to destination directory.
+    Copy the env template to the destination directory.
 
     Args:
         dest_dir: Destination directory
         force: Overwrite if exists
+        full: Copy the complete reference template instead of the minimal one
 
     Returns:
         True if copied, False if skipped
     """
     data_path = get_data_path()
-    src = data_path / '.env.example'
+    src = data_path / ('.env.example' if full else '.env.minimal')
     dest = dest_dir / '.env.example'
 
     if not src.exists():
@@ -53,7 +54,8 @@ def copy_env_example(dest_dir: Path, force: bool = False) -> bool:
         return False
 
     shutil.copy2(src, dest)
-    print(f"✓ Created {dest.name}")
+    label = 'full reference' if full else 'minimal; run with --full for every option'
+    print(f"✓ Created {dest.name} ({label})")
     return True
 
 
@@ -77,7 +79,7 @@ def copy_examples(dest_dir: Path, force: bool = False) -> bool:
         return False
 
     if dest.exists() and not force:
-        print(f"⚠ examples/ directory already exists (use --force to overwrite)")
+        print("⚠ examples/ directory already exists (use --force to overwrite)")
         return False
 
     if dest.exists() and force:
@@ -127,6 +129,37 @@ def print_next_steps(env_created: bool, examples_created: bool):
     print()
 
 
+def copy_skill(dest_dir: Path, force: bool = False) -> bool:
+    """
+    Install the JarvisCore skill for AI coding editors.
+
+    Writes SKILL.md to the two locations editors discover today:
+    .github/skills/jarviscore/ (GitHub Copilot) and
+    .claude/skills/jarviscore/ (Claude Code). Cursor and other tools
+    that read AGENTS.md can reference either copy.
+    """
+    try:
+        from importlib import resources
+        src = Path(str(resources.files('jarviscore'))) / 'skills' / 'jarviscore' / 'SKILL.md'
+    except Exception:
+        src = Path(__file__).parent.parent / 'skills' / 'jarviscore' / 'SKILL.md'
+    if not src.exists():
+        print(f"✗ Skill file not found: {src}")
+        return False
+
+    wrote = False
+    for editor_dir in ('.github', '.claude'):
+        dest = dest_dir / editor_dir / 'skills' / 'jarviscore' / 'SKILL.md'
+        if dest.exists() and not force:
+            print(f"⚠ {dest.relative_to(dest_dir)} already exists (use --force to overwrite)")
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        print(f"✓ Installed {dest.relative_to(dest_dir)}")
+        wrote = True
+    return wrote
+
+
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -136,6 +169,16 @@ def main():
         '--examples',
         action='store_true',
         help='Also copy example agent files'
+    )
+    parser.add_argument(
+        '--skill',
+        action='store_true',
+        help='Install the JarvisCore skill for AI editors (Copilot, Claude Code)'
+    )
+    parser.add_argument(
+        '--full',
+        action='store_true',
+        help='Write the complete configuration reference instead of the minimal template'
     )
     parser.add_argument(
         '--force',
@@ -159,14 +202,18 @@ def main():
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy files
-    env_created = copy_env_example(dest_dir, args.force)
+    env_created = copy_env_example(dest_dir, args.force, full=args.full)
 
     examples_created = False
     if args.examples:
         examples_created = copy_examples(dest_dir, args.force)
 
+    skill_created = False
+    if args.skill:
+        skill_created = copy_skill(dest_dir, args.force)
+
     # Summary
-    if env_created or examples_created:
+    if env_created or examples_created or skill_created:
         print_next_steps(env_created, examples_created)
         sys.exit(0)
     else:

@@ -9,11 +9,9 @@
 #   jarviscore memory init
 #
 # Or manually:
-#   ATHENA_BUILD_CONTEXT=/path/to/athena \
-#   docker compose -f docker-compose.athena.yml up -d --build
+#   docker compose -f docker-compose.athena.yml up -d
 #
 # Required environment variables (set by `jarviscore memory init`):
-#   ATHENA_BUILD_CONTEXT   — absolute path to the athena repo clone
 #   ATHENA_LLM_API_KEY     — Gemini / OpenAI API key for MTM summarisation
 #
 # ── ARCHITECTURE ─────────────────────────────────────────────────────────────
@@ -25,14 +23,11 @@
 #   minio          (:9000)  — Milvus blob store
 #   arangodb       (:8529)  — LTM knowledge graph
 #
-# ── NO PUBLISHED IMAGE YET ───────────────────────────────────────────────────
-# Athena is built from source using the local repo clone.
-# Once ghcr.io/prescott-data/athena:latest is published, swap:
-#   image: ghcr.io/prescott-data/athena:latest
-# for:
-#   build:
-#     context: ${ATHENA_BUILD_CONTEXT}
-#     dockerfile: Dockerfile
+# ── IMAGE SOURCE ─────────────────────────────────────────────────────────────
+# Pulls ghcr.io/prescott-data/athena by default. Contributors hacking on
+# Athena itself can build from a local clone instead:
+#   ATHENA_IMAGE=athena-memos:local ATHENA_BUILD_CONTEXT=/path/to/athena \
+#     docker compose -f docker-compose.athena.yml up -d --build
 # ─────────────────────────────────────────────────────────────────────────────
 
 version: "3.9"
@@ -40,10 +35,7 @@ version: "3.9"
 services:
   # ── Athena Memory Server ────────────────────────────────────────────────────
   athena:
-    build:
-      context: ${ATHENA_BUILD_CONTEXT:?Run 'jarviscore memory init' or set ATHENA_BUILD_CONTEXT}
-      dockerfile: Dockerfile
-    image: athena-memos:local
+    image: ${ATHENA_IMAGE:-ghcr.io/prescott-data/athena:latest}
     container_name: athena
     ports:
       - "8080:8080"
@@ -143,7 +135,7 @@ services:
       MONGO_INITDB_DATABASE: memory_os
     volumes:
       - athena_mongodb_data:/data/db
-      - ${ATHENA_BUILD_CONTEXT:-.}/mongo-init/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+      - ${ATHENA_MONGO_INIT:-./init-mongo.js}:/docker-entrypoint-initdb.d/init-mongo.js:ro
     networks:
       - athena_net
     restart: unless-stopped
