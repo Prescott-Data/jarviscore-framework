@@ -111,7 +111,7 @@ def print_next_steps(env_created: bool, examples_created: bool):
     if env_created:
         steps.append("1. Copy and configure your environment:\n"
                     "   cp .env.example .env\n"
-                    "   # Edit .env and add your LLM API key")
+                    "   # Edit .env and add a provider key or promotional token")
 
     steps.append(f"{'2' if env_created else '1'}. Validate your setup:\n"
                 "   python -m jarviscore.cli.check --validate-llm")

@@ -116,7 +116,18 @@ cp .env.example .env
 
 ## Configure an LLM Provider
 
-JarvisCore supports four LLM providers. Configure exactly one by adding the appropriate variables to your `.env` file.
+Configure exactly one provider by adding the appropriate variables to your `.env` file.
+
+=== "Launch promotion"
+    Eligible early developers can register at
+    [jarviscore.developers.prescottdata.io/promo](https://jarviscore.developers.prescottdata.io/promo/)
+    and set the issued Prescott entitlement token:
+
+    ```bash title=".env"
+    JARVISCORE_PROMO_TOKEN=jc_trial_...
+    ```
+
+    This is limited hosted inference access, not an upstream provider API key.
 
 === "Anthropic Claude"
     ```bash title=".env"
@@ -174,10 +185,10 @@ Expected output when everything is correctly configured:
   pydantic_settings:          Configuration management
 
 [LLM Configuration]
-  Claude:                     CLAUDE_API_KEY=sk-a...key
+  JarvisCore Promotion:       JARVISCORE_PROMO_TOKEN=jc_t...oken
 
 [LLM Connectivity Test]
-  Claude API:                 Connected
+  JarvisCore Promotion API:   Connected
 
   All checks passed. Ready to use JarvisCore.
 ```

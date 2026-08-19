@@ -55,7 +55,7 @@ All four roles go through a single client (`UnifiedLLMClient`) which normalises 
 ```python
 {
     "content":          str,    # the model's output, always a string
-    "provider":         str,    # "azure" | "claude" | "gemini" | "vllm"
+    "provider":         str,    # "promo" | "azure" | "claude" | "gemini" | "vllm"
     "model":            str,    # the exact deployment name used
     "tokens":           {"input": int, "output": int, "total": int},
     "cost_usd":         float,
@@ -65,7 +65,7 @@ All four roles go through a single client (`UnifiedLLMClient`) which normalises 
 
 Structured output (JSON mode) is requested by passing `response_format={"type": "json_object"}` to `llm.generate()`. The client forwards this when the provider supports it. If the returned content is not valid JSON, the Kernel retries the call with an explicit repair prompt before surfacing a failure: you do not handle JSON parse errors in agent code.
 
-**Provider fallback** runs automatically when a provider is unavailable or returns a 5xx. The order is: Azure OpenAI → Claude → vLLM → Gemini. Rate limit responses (HTTP 429) trigger exponential backoff before the fallback chain is tried.
+**Provider fallback** runs automatically for developer-configured providers when one is unavailable or returns a 5xx. The order is Azure OpenAI → Claude → vLLM → Gemini → Vertex AI. Promotional access, when configured, is selected first and is terminal: expiry, exhaustion, and service failures never silently route to a developer's paid provider. Rate-limit responses from developer-configured providers trigger exponential backoff before the fallback chain is tried.
 
 ---
 

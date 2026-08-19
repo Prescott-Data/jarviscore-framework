@@ -10,7 +10,24 @@ This is the complete reference for all JarvisCore environment variables. Copy `.
 
 ## LLM Providers
 
-Configure exactly one LLM provider. JarvisCore auto-detects the active provider from the environment variables present. Multiple providers can be set; the framework tries them in priority order: vLLM → Azure → Gemini → Claude.
+Configure exactly one LLM provider. JarvisCore auto-detects the active provider from the environment variables present. The promotional provider is selected first when its token is present. The existing provider order after it is Azure → Claude → vLLM → Gemini → Vertex AI.
+
+### JarvisCore launch promotion
+
+Eligible developers can register at `https://jarviscore.developers.prescottdata.io/promo/`
+and set `JARVISCORE_PROMO_TOKEN`. This is a limited, revocable Prescott
+entitlement token—not an upstream model-provider API key. Promotional access is
+selected first when configured. Expiry, exhaustion, and service errors fail
+explicitly and never silently fall through to another configured paid provider.
+
+Every promotional call preserves the complete request and HTTP response under a
+stable call ID in `./traces/promo_calls`. Set
+`JARVISCORE_PROMO_RAW_ARTIFACT_DIR` to choose another local directory.
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `JARVISCORE_PROMO_TOKEN` | Yes | (none) | Unique promotional entitlement issued by Prescott |
+| `JARVISCORE_PROMO_RAW_ARTIFACT_DIR` | No | `./traces/promo_calls` | Durable complete call artifacts |
 
 === "Anthropic Claude"
 

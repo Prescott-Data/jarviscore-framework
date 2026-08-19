@@ -24,6 +24,20 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## Unreleased
+
+**Added**
+
+- Temporary JarvisCore launch-promotion provider. A unique
+  `JARVISCORE_PROMO_TOKEN` grants restricted hosted inference without exposing
+  an upstream provider API key. Calls use a fixed HTTPS endpoint, preserve the
+  complete exchange under a stable call ID, and fail explicitly on expiry,
+  exhaustion, or service errors rather than falling through to a paid provider.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.3.0 <span class="changelog-date">2026-08-05</span>
 
 <div class="changelog-meta" markdown>

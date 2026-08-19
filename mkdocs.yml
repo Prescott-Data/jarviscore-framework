@@ -134,6 +134,7 @@ nav:
   - Reference:
       - Overview: reference/index.md
       - Configuration: reference/configuration.md
+      - Launch Promotion API: reference/promotion-api.md
       - Agent API: reference/agent-api.md
       - Chat API: reference/chat-api.md
       - CLI Reference: reference/cli.md
