@@ -30,7 +30,8 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 - Temporary JarvisCore launch-promotion provider. A unique
   `JARVISCORE_PROMO_TOKEN` grants restricted hosted inference without exposing
-  an upstream provider API key. Calls use a fixed HTTPS endpoint, preserve the
+  an upstream provider API key. Calls use a fixed, non-configurable HTTPS
+  endpoint, expose only the `jarviscore-promo` model alias, preserve the
   complete exchange under a stable call ID, and fail explicitly on expiry,
   exhaustion, or service errors rather than falling through to a paid provider.
 

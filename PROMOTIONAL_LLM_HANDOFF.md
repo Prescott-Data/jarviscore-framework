@@ -121,7 +121,12 @@ jarviscore/promo/client.py
 It:
 
 - activates when `JARVISCORE_PROMO_TOKEN` is configured;
-- calls one fixed HTTPS endpoint;
+- calls one fixed HTTPS endpoint that is not configurable;
+- uses a fixed promotional model alias; the endpoint and alias are module
+  constants, not constructor or configuration state;
+- never sends a requested upstream model; the server alone selects it, and an
+  explicit non-alias model request fails visibly;
+- rejects responses that name any model other than the promotional alias;
 - sends the token only in the `Authorization` header;
 - never includes the token in the request body or raw call artifact;
 - generates a stable `jcp_...` call ID for every request;
@@ -238,6 +243,8 @@ The server must:
 - reject unknown, revoked, expired, or exhausted tokens;
 - enforce request, token, concurrency, and campaign-level limits;
 - use a fixed server-approved model or model allowlist;
+- return only the promotional model alias, keeping the actual upstream
+  deployment identity in private server telemetry;
 - reject unsupported options instead of silently dropping them;
 - echo the client-provided call ID;
 - return complete content, tool calls, arguments, usage, and finish reason;
@@ -259,7 +266,7 @@ A successful response must contain:
     "output": 34,
     "total": 46
   },
-  "model": "actual-server-selected-model",
+  "model": "jarviscore-promo",
   "finish_reason": "stop",
   "entitlement": {
     "expires_at": "2026-09-30T00:00:00Z",
@@ -354,13 +361,21 @@ The library tests cover:
 - response and usage validation;
 - durable error-response artifacts;
 - terminal expiration and quota failures without paid-provider fallback;
-- rejection of non-HTTPS endpoints.
+- a fixed, non-configurable HTTPS endpoint;
+- a fixed, non-configurable model alias (constructor and configuration
+  overrides are rejected);
+- kernel tier routing resolving every tier to the alias during promotional
+  access;
+- visible failure of explicit non-alias model requests;
+- rejection of responses exposing a real upstream model name.
 
 At implementation time, the relevant suites reported:
 
 ```text
-23 passed, 4 credential-dependent provider tests skipped
-10 CLI/scaffold tests passed
+13 promotional client tests passed
+16 LLM fallback tests passed, 4 credential-dependent provider tests skipped
+6 CLI scaffold tests passed
+63 kernel tests passed
 ```
 
 ## Developer-site acceptance checklist

@@ -81,9 +81,9 @@ class Settings(BaseSettings):
     llm_429_base_delay: float = 2.0
 
     # JarvisCore launch promotion. This is a revocable Prescott entitlement
-    # token, never an upstream model-provider API key.
+    # token, never an upstream model-provider API key. The endpoint and model
+    # alias are fixed module constants in jarviscore.promo, not configuration.
     promo_token: Optional[str] = Field(None, validation_alias="JARVISCORE_PROMO_TOKEN")
-    promo_model: str = "jarviscore-promo"
     promo_raw_artifact_dir: str = Field(
         "./traces/promo_calls",
         validation_alias="JARVISCORE_PROMO_RAW_ARTIFACT_DIR",

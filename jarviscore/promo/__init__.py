@@ -1,5 +1,17 @@
 """Temporary hosted LLM access for the JarvisCore launch promotion."""
 
-from .client import PromoAccessError, PromoLLMClient, PromoProtocolError
+from .client import (
+    PROMO_ENDPOINT,
+    PROMO_MODEL,
+    PromoAccessError,
+    PromoLLMClient,
+    PromoProtocolError,
+)
 
-__all__ = ["PromoAccessError", "PromoLLMClient", "PromoProtocolError"]
+__all__ = [
+    "PROMO_ENDPOINT",
+    "PROMO_MODEL",
+    "PromoAccessError",
+    "PromoLLMClient",
+    "PromoProtocolError",
+]

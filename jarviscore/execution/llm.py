@@ -11,6 +11,8 @@ import time
 from typing import Optional, Dict, List, Any
 from enum import Enum
 
+from jarviscore.promo import PROMO_MODEL
+
 logger = logging.getLogger(__name__)
 
 # ─── Global LLM concurrency limiter ──────────────────────────────────────────
@@ -159,7 +161,6 @@ class UnifiedLLMClient:
 
             self.promo_client = PromoLLMClient(
                 token=promo_token,
-                model=self.config.get("promo_model", "jarviscore-promo"),
                 timeout=self.config.get("llm_timeout", 120),
                 artifact_dir=self.config.get("promo_raw_artifact_dir", "./traces/promo_calls"),
             )
@@ -261,7 +262,7 @@ class UnifiedLLMClient:
         Falls back to AZURE_DEPLOYMENT if nano not configured.
         """
         return (
-            self.config.get("promo_model") if self.provider_order[:1] == [LLMProvider.PROMO] else None
+            PROMO_MODEL if self.provider_order[:1] == [LLMProvider.PROMO] else None
         ) or (
             self.config.get("task_model_nano")
             or self.config.get("azure_deployment")
@@ -277,7 +278,7 @@ class UnifiedLLMClient:
         Maps to gpt-5.2-chat in the Sky Team configuration.
         """
         return (
-            self.config.get("promo_model") if self.provider_order[:1] == [LLMProvider.PROMO] else None
+            PROMO_MODEL if self.provider_order[:1] == [LLMProvider.PROMO] else None
         ) or (
             self.config.get("task_model_heavy")
             or self.config.get("task_model_standard")
@@ -437,12 +438,18 @@ class UnifiedLLMClient:
         """Call the restricted Prescott launch-promotion endpoint."""
         if not self.promo_client:
             raise RuntimeError("Promotional LLM client not initialized")
-        requested_model = kwargs.pop("model", None)
+        # Explicit contract: the server alone selects the model. Anything but
+        # the alias is a caller error and must fail, not be silently dropped.
+        model = kwargs.pop("model", None)
+        if model not in (None, PROMO_MODEL):
+            raise ValueError(
+                f"Promotional access cannot request model {model!r}; the server "
+                f"selects the model and only the alias {PROMO_MODEL!r} is valid"
+            )
         return await self.promo_client.generate(
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            requested_model=requested_model,
             options=kwargs,
         )
 

@@ -6,18 +6,39 @@ from unittest.mock import AsyncMock
 import pytest
 
 from jarviscore.execution.llm import LLMProvider, UnifiedLLMClient
-from jarviscore.promo import PromoAccessError, PromoLLMClient
+from jarviscore.kernel.kernel import Kernel
+from jarviscore.promo import PROMO_MODEL, PromoAccessError, PromoLLMClient, PromoProtocolError
 from jarviscore.promo.client import _HTTPResult
 
 
-def _success_body(call_id: str, content: str, tool_calls=None) -> str:
+def _promo_only_config(tmp_path, **extra):
+    config = {
+        "promo_token": "jc_trial_secret",
+        "promo_raw_artifact_dir": str(tmp_path),
+        "azure_api_key": None,
+        "azure_openai_key": None,
+        "azure_endpoint": None,
+        "azure_openai_endpoint": None,
+        "claude_api_key": None,
+        "anthropic_api_key": None,
+        "gemini_api_key": None,
+        "vertex_ai_enabled": False,
+        "vertex_ai_project": None,
+        "llm_endpoint": None,
+        "vllm_endpoint": None,
+    }
+    config.update(extra)
+    return config
+
+
+def _success_body(call_id: str, content: str, tool_calls=None, model="jarviscore-promo") -> str:
     return json.dumps(
         {
             "call_id": call_id,
             "content": content,
             "tool_calls": tool_calls or [],
             "usage": {"input": 101, "output": 202, "total": 303},
-            "model": "server-selected-model",
+            "model": model,
             "finish_reason": "stop",
             "entitlement": {
                 "expires_at": "2026-09-30T00:00:00Z",
@@ -67,7 +88,6 @@ async def test_large_tail_evidence_and_relation_labels_are_preserved(tmp_path):
         messages,
         temperature=0.0,
         max_tokens=30_000,
-        requested_model="internal-role-model",
         options=options,
     )
 
@@ -209,12 +229,117 @@ def test_promo_is_auto_detected_first_and_uses_fixed_https_endpoint(tmp_path):
     assert llm.planner_model == "jarviscore-promo"
 
 
-def test_promo_client_rejects_non_https_endpoint(tmp_path):
-    with pytest.raises(ValueError, match="must use HTTPS"):
+def test_promo_client_endpoint_is_fixed_and_not_configurable(tmp_path):
+    with pytest.raises(TypeError):
         PromoLLMClient(
             token="jc_trial_secret",
-            endpoint="http://example.test/generate",
+            endpoint="https://attacker.example/generate",
             artifact_dir=str(tmp_path),
+        )
+
+    client = PromoLLMClient(token="jc_trial_secret", artifact_dir=str(tmp_path))
+    with pytest.raises(AttributeError):
+        client.endpoint = "https://attacker.example/generate"
+
+
+def test_promo_client_model_is_fixed_and_not_configurable(tmp_path):
+    with pytest.raises(TypeError):
+        PromoLLMClient(
+            token="jc_trial_secret",
+            model="gpt-4o-private-deployment",
+            artifact_dir=str(tmp_path),
+        )
+
+    client = PromoLLMClient(token="jc_trial_secret", artifact_dir=str(tmp_path))
+    assert not hasattr(client, "model")
+
+
+def test_promo_model_configuration_is_ignored(tmp_path):
+    llm = UnifiedLLMClient(
+        config=_promo_only_config(tmp_path, promo_model="gpt-4o-private-deployment")
+    )
+
+    assert llm.provider_order == [LLMProvider.PROMO]
+    assert llm.nano_model == PROMO_MODEL
+    assert llm.planner_model == PROMO_MODEL
+    assert not hasattr(llm.promo_client, "model")
+
+
+def test_kernel_tiers_resolve_to_promo_alias(tmp_path):
+    llm = UnifiedLLMClient(config=_promo_only_config(tmp_path))
+    kernel = Kernel(
+        llm_client=llm,
+        config={
+            "coding_model": "gpt-5-codex",
+            "browser_model": "cua-preview",
+            "task_model": "gpt-5",
+            "task_model_nano": "gpt-5.4-nano",
+            "task_model_standard": "gpt-5-mini",
+            "task_model_heavy": "gpt-5.2-chat",
+        },
+    )
+
+    tiers = [
+        ("coding", None),
+        ("browser", None),
+        ("task", None),
+        ("task", "nano"),
+        ("task", "standard"),
+        ("task", "heavy"),
+    ]
+    for tier, complexity in tiers:
+        assert kernel._get_model_for_tier(tier, complexity) == PROMO_MODEL
+
+
+@pytest.mark.asyncio
+async def test_direct_model_override_fails_visibly(tmp_path):
+    llm = UnifiedLLMClient(config=_promo_only_config(tmp_path))
+    sent_payloads = []
+
+    async def send(payload, call_id):
+        sent_payloads.append(payload)
+        return _HTTPResult(status=200, headers={}, body=_success_body(call_id, "ok"))
+
+    llm.promo_client._send = send
+    with pytest.raises(ValueError, match="cannot request model"):
+        await llm.generate(prompt="hello", max_tokens=10, model="gpt-4o")
+    assert sent_payloads == []
+
+
+@pytest.mark.asyncio
+async def test_payload_never_contains_a_requested_model(tmp_path):
+    llm = UnifiedLLMClient(config=_promo_only_config(tmp_path))
+    captured = {}
+
+    async def send(payload, call_id):
+        captured["payload"] = payload
+        return _HTTPResult(status=200, headers={}, body=_success_body(call_id, "ok"))
+
+    llm.promo_client._send = send
+    # Internal tier routing passes the alias; the payload must carry only it.
+    await llm.generate(prompt="hello", max_tokens=10, model=PROMO_MODEL)
+
+    assert "requested_model" not in captured["payload"]
+    assert captured["payload"]["model"] == PROMO_MODEL
+
+
+@pytest.mark.asyncio
+async def test_response_naming_a_real_model_is_rejected(tmp_path):
+    client = PromoLLMClient(token="jc_trial_secret", artifact_dir=str(tmp_path))
+
+    async def send(payload, call_id):
+        return _HTTPResult(
+            status=200,
+            headers={},
+            body=_success_body(call_id, "leaky", model="gpt-4o-eastus-deployment"),
+        )
+
+    client._send = send
+    with pytest.raises(PromoProtocolError, match="promotional alias"):
+        await client.generate(
+            [{"role": "user", "content": "hello"}],
+            temperature=0.0,
+            max_tokens=10,
         )
 
 

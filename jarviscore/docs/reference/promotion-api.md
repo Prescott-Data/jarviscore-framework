@@ -30,18 +30,18 @@ calling the upstream model.
   "messages": [{"role": "user", "content": "Hello"}],
   "temperature": 0.7,
   "max_tokens": 4000,
-  "requested_model": "gpt-4o",
   "options": {
     "response_format": {"type": "json_object"}
   }
 }
 ```
 
-`model` is the fixed promotional model alias. `requested_model` preserves the
-framework's internal routing request as evidence; it does not authorize that
-model. The server chooses the permitted upstream deployment. It must either
-honor each field in `options` or reject the request with `unsupported_option`;
-it must not silently omit request arguments.
+`model` is always the fixed promotional model alias. The client cannot request
+a specific upstream deployment; the server alone chooses the permitted
+deployment. The server must either honor each field in `options` or reject the
+request with `unsupported_option`; it must not silently omit request
+arguments. Fields that attempt to redirect routing — such as `base_url`,
+provider credentials, or deployment names — must be rejected.
 
 The server must use and echo the supplied `call_id`.
 
@@ -53,7 +53,7 @@ The server must use and echo the supplied `call_id`.
   "content": "Complete model output",
   "tool_calls": [],
   "usage": {"input": 12, "output": 34, "total": 46},
-  "model": "actual-server-selected-model",
+  "model": "jarviscore-promo",
   "finish_reason": "stop",
   "entitlement": {
     "expires_at": "2026-09-30T00:00:00Z",
@@ -61,6 +61,10 @@ The server must use and echo the supplied `call_id`.
   }
 }
 ```
+
+`model` must be exactly the promotional alias `jarviscore-promo`. The actual
+upstream deployment identity must remain in private server telemetry; the
+client rejects any response naming a different model.
 
 Every required field must be present. `content`, `tool_calls`, tool arguments,
 usage, relation labels, ranked entities, and other evidence must be complete.

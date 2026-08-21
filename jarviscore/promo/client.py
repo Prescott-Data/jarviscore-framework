@@ -19,7 +19,8 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-DEFAULT_PROMO_ENDPOINT = "https://jarviscore.developers.prescottdata.io/api/promo/v1/generate"
+PROMO_ENDPOINT = "https://jarviscore.developers.prescottdata.io/api/promo/v1/generate"
+PROMO_MODEL = "jarviscore-promo"
 
 
 class PromoAccessError(RuntimeError):
@@ -61,21 +62,20 @@ class PromoLLMClient:
         self,
         token: str,
         *,
-        endpoint: str = DEFAULT_PROMO_ENDPOINT,
-        model: str = "jarviscore-promo",
         timeout: float = 120.0,
         artifact_dir: str = "./traces/promo_calls",
     ) -> None:
         if not token or not token.strip():
             raise ValueError("A non-empty JARVISCORE_PROMO_TOKEN is required")
-        if not endpoint.startswith("https://"):
-            raise ValueError("The promotional inference endpoint must use HTTPS")
 
         self._token = token.strip()
-        self.endpoint = endpoint
-        self.model = model
         self.timeout = timeout
         self.artifact_dir = Path(artifact_dir)
+
+    @property
+    def endpoint(self) -> str:
+        """The fixed Prescott promotional endpoint; not configurable by design."""
+        return PROMO_ENDPOINT
 
     async def generate(
         self,
@@ -83,18 +83,16 @@ class PromoLLMClient:
         *,
         temperature: float,
         max_tokens: int,
-        requested_model: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Generate one completion and preserve the complete exchange locally."""
         call_id = f"jcp_{uuid.uuid4().hex}"
         payload: Dict[str, Any] = {
             "call_id": call_id,
-            "model": self.model,
+            "model": PROMO_MODEL,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "requested_model": requested_model,
             "options": options or {},
         }
 
@@ -171,6 +169,15 @@ class PromoLLMClient:
         if not isinstance(usage, dict) or not {"input", "output", "total"}.issubset(usage):
             raise PromoProtocolError(
                 f"Promotion endpoint returned invalid usage for call {call_id}; "
+                f"complete response preserved at {artifact_path}"
+            )
+
+        # The contract requires the alias only; a real deployment name is a
+        # server-side information leak and must fail loudly, not propagate.
+        if data["model"] != PROMO_MODEL:
+            raise PromoProtocolError(
+                f"Promotion endpoint returned model {data['model']!r} instead of "
+                f"the promotional alias {PROMO_MODEL!r} for call {call_id}; "
                 f"complete response preserved at {artifact_path}"
             )
 
