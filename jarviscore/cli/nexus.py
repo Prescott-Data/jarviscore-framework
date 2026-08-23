@@ -487,15 +487,43 @@ def cmd_list(args):
         try:
             req = urllib.request.urlopen(f"{gateway_url}/v1/providers", timeout=5)
             providers = json.loads(req.read())
-            if providers:
-                print(_bold("  Gateway providers:"))
-                for p in providers:
-                    name = p.get("provider", p.get("name", "?"))
-                    atype = p.get("auth_type", "?")
+
+            # The gateway returns {auth_type: {provider_name: {...}}}. Older
+            # builds returned a flat list, so accept both shapes.
+            rows = []
+            if isinstance(providers, dict):
+                for auth_type, bundle in providers.items():
+                    if isinstance(bundle, dict):
+                        rows.extend((name, auth_type) for name in bundle)
+                    else:
+                        rows.append((str(bundle), auth_type))
+            elif isinstance(providers, list):
+                rows = [
+                    (p.get("provider", p.get("name", "?")), p.get("auth_type", "?"))
+                    for p in providers if isinstance(p, dict)
+                ]
+
+            needle = (getattr(args, "search", None) or "").lower()
+            if needle:
+                rows = [r for r in rows if needle in r[0].lower()]
+
+            if rows:
+                total = len(rows)
+                label = f"  Gateway providers ({total})"
+                if needle:
+                    label += f" matching {needle!r}"
+                print(_bold(label + ":"))
+                for name, atype in sorted(rows):
                     print(f"  {_ok(name):<30} {atype}")
                 print()
-        except Exception:
-            pass  # gateway optional — don't fail if unreachable
+            elif needle:
+                print(_warn(f"  No gateway provider matches {needle!r}."))
+                print(_info(f"  Register it: jarviscore nexus register {needle} --client-id=... --client-secret=..."))
+                print()
+        except Exception as e:
+            # Gateway is optional — never fail the command, but say why it's missing.
+            print(_warn(f"  Gateway providers unavailable: {e}"))
+            print()
 
 
 def cmd_test(args):
@@ -587,7 +615,9 @@ def build_parser() -> argparse.ArgumentParser:
     reg.add_argument("--api-key",       default=None, help="API key (for api_key providers)")
 
     # list
-    sub.add_parser("list", help="List registered providers")
+    lst = sub.add_parser("list", help="List registered providers")
+    lst.add_argument("--search", default=None,
+                     help="Only show gateway providers whose name contains this text")
 
     # test
     tst = sub.add_parser("test", help="Test a provider connection end-to-end")
