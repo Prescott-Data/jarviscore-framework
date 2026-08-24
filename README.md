@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="jarviscore/docs/assets/banner.svg" alt="JarvisCore — the runtime for multi-agent systems" width="100%" />
+  <img src="jarviscore/docs/assets/combo-brand.svg" alt="JarvisCore" height="72" />
 </p>
 
 <p align="center">
