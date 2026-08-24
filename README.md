@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>The production runtime for multi-agent systems — a peer-to-peer mesh with no central orchestrator, zero-trust credentials, durable state that survives <code>kill -9</code>, and 237 typed atoms across 46 services. Observability included, not upsold.</strong>
+  <strong>The production runtime for multi-agent systems — a peer-to-peer mesh with no central orchestrator, zero-trust credentials, durable state that survives <code>kill -9</code>, and 1,224 typed atoms across 150 services. Observability included, not upsold.</strong>
 </p>
 
 <p align="center">
@@ -35,7 +35,7 @@ Six things you get here that you will not assemble from a typical agent framewor
 
 **1. Agents never touch credentials.** Nexus, a zero-trust credential broker, ships inside the framework. Set `requires_auth = True` and the runtime injects scoped, encrypted credentials into atoms at call time — no raw keys in prompts, agent context, or `.env` sprawl. A leaked agent trace leaks no secrets.
 
-**2. Tools without MCP plumbing.** 237 typed atoms across 46 services (`jarviscore atom list`), auth injected at runtime. Missing one? Write a Python function, validate it with `jarviscore atom test`, drop it in the registry — no server to stand up, no wiring. And when no atom exists, AutoAgents write their own sandboxed code with self-repair and keep what worked in a verified-work registry.
+**2. Tools without MCP plumbing.** 1,224 typed atoms across 150 services (`jarviscore atom list`), auth injected at runtime. Missing one? Write a Python function, validate it with `jarviscore atom test`, drop it in the registry — no server to stand up, no wiring. And when no atom exists, AutoAgents write their own sandboxed code with self-repair and keep what worked in a verified-work registry.
 
 **3. No central orchestrator to babysit.** Agents form a SWIM gossip mesh over ZMQ, discover each other by capability, and claim workflow steps atomically from Redis. Any node can die — another claims its work. There is no coordinator process whose crash takes the fleet down.
 
@@ -49,7 +49,7 @@ Six things you get here that you will not assemble from a typical agent framewor
 
 ## What is JarvisCore?
 
-JarvisCore is a Python framework for building AI agent systems that can plan, reason, execute code, browse the web, search the internet, and connect to 46 external services out of the box. A single agent runs with three attributes. A fleet scales across machines with peer-to-peer discovery, shared memory, and crash recovery.
+JarvisCore is a Python framework for building AI agent systems that can plan, reason, execute code, browse the web, search the internet, and connect to 150 external services out of the box. A single agent runs with three attributes. A fleet scales across machines with peer-to-peer discovery, shared memory, and crash recovery.
 
 ## Architecture
 
@@ -198,28 +198,32 @@ The Kernel runs an Observe-Orient-Decide-Act (OODA) loop for every AutoAgent tas
 | **GoalContext** | Tracks plan state, step history, and convergence signals |
 | **EpistemicLedger** | Records what the agent knows, assumes, and has verified |
 
-### Service Integrations (46 bundles, 237 atoms)
+### Service Integrations (150 bundles, 1,224 atoms)
 
 Every integration is a single-file Python function called an **atom**. Atoms are registered in the seed registry and discovered by agents at runtime. No SDK wiring required.
 
 <details>
-<summary><strong>View all 46 integration bundles</strong></summary>
+<summary><strong>View the 150 integration bundles by category</strong></summary>
 
 | Category | Bundles |
 |----------|---------|
-| **CRM and Sales** | Salesforce, HubSpot, Apollo, Oracle CX, Dynamics 365 |
-| **Project Management** | Jira, Linear, ClickUp, Todoist, Notion, Airtable |
-| **Communication** | Slack, Discord, Gmail, MS Graph (Teams/Outlook), Webex, Brevo |
-| **Developer Tools** | GitHub, Confluence, Serper (web search) |
-| **Cloud Storage** | Google Drive, Google Sheets, Dropbox, Azure Blob Storage |
-| **Finance and Accounting** | Stripe, QuickBooks, FreshBooks, Zoho Books, NetSuite |
-| **ERP** | SAP, Oracle ERP, Odoo |
-| **HR** | BambooHR, Zoho People, Zoho Shifts |
-| **Social and Content** | LinkedIn, LinkedIn Ads, Twitter/X, YouTube, Reddit |
-| **Meetings** | Zoom, Google Calendar |
-| **Email Marketing** | Mailchimp, SendGrid |
+| **CRM and Sales** | Salesforce, HubSpot, Zoho CRM, Pipedrive, Dynamics 365, Oracle CX, Attio, Close, Keap, Insightly, Nutshell, Nimble, Streak, Salesflare, Capsule, Agile CRM, Less Annoying CRM, Folk, Apollo and more |
+| **Project Management** | Jira, Linear, Asana, Monday, Trello, ClickUp, Notion, Airtable, Todoist, Shortcut, Wrike, Workfront, Height, Coda, Podio, Nifty, ProofHub, LiquidPlanner, Freedcamp, Pivotal Tracker, Targetprocess |
+| **Communication** | Slack, Discord, Telegram, WhatsApp Business, Twilio, Gmail, MS Graph (Teams/Outlook), Google Chat, Webex, Mattermost, Rocket.Chat, Zoom |
+| **Developer Tools** | GitHub, GitLab, Jenkins, CircleCI, Travis CI, TeamCity, Sourcegraph, Phabricator, Perforce, Confluence, Beanstalk, Assembla, SourceForge, Serper (web search) |
+| **Support and Chat** | Zendesk Chat, Intercom, Freshchat, Crisp, Drift, Gorgias, LiveChat, Tawk.to, Zoho Desk |
+| **Cloud Storage** | Google Drive, Google Sheets, Dropbox, Box, Amazon S3, GCS, Azure Blob Storage, Egnyte, Backblaze B2, Dropbox Sign |
+| **Finance and Accounting** | Stripe, Square, QuickBooks, Xero, FreshBooks, Zoho Books, Wave, Sage Business Cloud, Sage Pastel, NetSuite |
+| **African Fintech and Infra** | M-Pesa (Safaricom), Paystack, SimplePay, Africa's Talking, Infobip, Jumia Seller Center, Prembly, KRA (Kenya Revenue Authority) |
+| **Marketing and Ads** | Mailchimp, SendGrid, Klaviyo, Brevo, ActiveCampaign, Google Ads, LinkedIn Ads, Twitter Ads, Reddit Ads, TikTok Ads, Snapchat Ads |
+| **Analytics** | Google Analytics, Mixpanel, Amplitude, Segment, PostHog, Plausible, Matomo, FullStory, LogRocket, Pendo, Kissmetrics |
+| **E-commerce and CMS** | Shopify, WooCommerce, WordPress, Wix Stores, PrestaShop, Etsy, Shift4Shop |
+| **ERP and HR** | SAP, Oracle ERP, Odoo, BambooHR, Zoho People, Zoho Shifts |
+| **Social and Content** | LinkedIn, Twitter/X, YouTube, Reddit |
+| **Ops and Identity** | PagerDuty, Okta, Google Calendar, Google Maps, Google People, what3words |
 | **Healthcare** | OpenMRS |
-| **Government** | KRA (Kenya Revenue Authority) |
+
+The registry is the source of truth — `jarviscore atom list` prints every bundle and atom in your installed version.
 
 </details>
 
@@ -390,7 +394,7 @@ If you build multi-agent systems, star the repo ⭐ to support open-source agent
 | [Getting Started](https://jarviscore.developers.prescottdata.io/getting-started/) | Install, scaffold, and run your first agent in 5 minutes |
 | [Concepts](https://jarviscore.developers.prescottdata.io/concepts/architecture/) | Architecture, model routing, planning, memory, Nexus |
 | [Guides](https://jarviscore.developers.prescottdata.io/guides/autoagent/) | AutoAgent, CustomAgent, workflows, HITL, browser, testing, production |
-| [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/) | All 46 service bundles with usage examples |
+| [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/) | All 150 service bundles with usage examples |
 | [Reference](https://jarviscore.developers.prescottdata.io/reference/agent-api/) | Agent API, CLI, configuration, and troubleshooting |
 | [Changelog](https://jarviscore.developers.prescottdata.io/changelog/) | Full release history |
 
@@ -418,7 +422,7 @@ python committee.py --mode full --ticker NVDA --amount 1500000
 
 ## Version
 
-**1.0.4**
+**1.3.0**
 
 ## License
 
