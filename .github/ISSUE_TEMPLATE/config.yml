@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Developer Office Hours (Discord)
+    url: https://discord.gg/jbRBAsMgM
+    about: Live agent debugging every other week. Bring a broken agent.
+  - name: Documentation
+    url: https://jarviscore.developers.prescottdata.io/
+    about: Getting started, concepts, guides, and the full API reference.
+  - name: Troubleshooting guide
+    url: https://jarviscore.developers.prescottdata.io/TROUBLESHOOTING/
+    about: Common failures and their fixes — check here before filing.

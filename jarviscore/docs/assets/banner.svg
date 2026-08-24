@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="300" viewBox="0 0 1280 300" role="img" aria-label="JarvisCore — the runtime for multi-agent systems">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#130f26"/>
+      <stop offset="1" stop-color="#1b1438"/>
+    </linearGradient>
+    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7d55fa"/>
+      <stop offset="1" stop-color="#7d55fa" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="300" fill="url(#bg)"/>
+
+  <!-- grid field -->
+  <g stroke="#7d55fa" stroke-opacity="0.07">
+    <path d="M0 60H1280M0 120H1280M0 180H1280M0 240H1280"/>
+    <path d="M80 0V300M160 0V300M240 0V300M320 0V300M400 0V300M480 0V300M560 0V300M640 0V300M720 0V300M800 0V300M880 0V300M960 0V300M1040 0V300M1120 0V300M1200 0V300"/>
+  </g>
+
+  <!-- mesh motif: three agent nodes routed through a hub -->
+  <g transform="translate(985,150)">
+    <g stroke="#7d55fa" stroke-width="1.5" stroke-opacity="0.55" fill="none">
+      <path d="M-150 -70 L0 0 L-150 70"/>
+      <path d="M-165 0 L0 0"/>
+      <path d="M0 0 L140 0"/>
+    </g>
+    <g fill="#130f26" stroke="#7d55fa" stroke-width="2">
+      <rect x="-186" y="-86" width="40" height="32" rx="3"/>
+      <rect x="-186" y="-16" width="40" height="32" rx="3"/>
+      <rect x="-186" y="54" width="40" height="32" rx="3"/>
+    </g>
+    <rect x="-26" y="-26" width="52" height="52" rx="4" transform="rotate(45)" fill="#7d55fa" fill-opacity="0.16" stroke="#7d55fa" stroke-width="2.5"/>
+    <rect x="140" y="-20" width="46" height="40" rx="3" fill="#7d55fa"/>
+    <g fill="#a68dfc" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12" letter-spacing="1">
+      <text x="-166" y="112" text-anchor="middle">agents</text>
+      <text x="0" y="52" text-anchor="middle">mesh</text>
+      <text x="163" y="42" text-anchor="middle">result</text>
+    </g>
+  </g>
+
+  <!-- wordmark -->
+  <g font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+    <text x="84" y="118" font-size="18" font-weight="700" letter-spacing="6" fill="#a68dfc">PRESCOTT DATA · OPEN SOURCE</text>
+    <text x="80" y="182" font-size="64" font-weight="800" letter-spacing="-1" fill="#ffffff">JarvisCore</text>
+    <rect x="84" y="204" width="360" height="3" fill="url(#rule)"/>
+    <text x="84" y="243" font-size="21" fill="#cfc6ee">Planning, memory, P2P mesh, and 237 atoms — batteries included.</text>
+  </g>
+</svg>

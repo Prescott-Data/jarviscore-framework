@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="jarviscore/docs/assets/combo-brand.svg" alt="JarvisCore" height="56" />
+  <img src="jarviscore/docs/assets/banner.svg" alt="JarvisCore — the runtime for multi-agent systems" width="100%" />
 </p>
 
 <p align="center">
@@ -9,8 +9,20 @@
 <p align="center">
   <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/v/jarviscore-framework?style=flat-square&color=1758F5" alt="PyPI" /></a>
   <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/pyversions/jarviscore-framework?style=flat-square" alt="Python" /></a>
+  <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/dm/jarviscore-framework?style=flat-square&color=1758F5" alt="Downloads" /></a>
   <a href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Prescott-Data/jarviscore-framework?style=flat-square" alt="License" /></a>
   <a href="https://jarviscore.developers.prescottdata.io/"><img src="https://img.shields.io/badge/docs-jarviscore-blue?style=flat-square" alt="Docs" /></a>
+</p>
+
+```bash
+pip install jarviscore-framework
+```
+
+<p align="center">
+  <img src="jarviscore/docs/assets/demo.gif" alt="kill -9 a workflow mid-step — rerun with the same id, completed steps recover from Redis, only the unfinished work runs" width="800" />
+</p>
+<p align="center">
+  <sub><code>kill -9</code> mid-workflow. Rerun. Nothing re-runs, nothing is lost — state lives in Redis, not the process.<br/>Real run, real timing — reproduce it with <a href="examples/readme_crash_demo.py"><code>examples/readme_crash_demo.py</code></a></sub>
 </p>
 
 ---
@@ -18,6 +30,44 @@
 ## What is JarvisCore?
 
 JarvisCore is a Python framework for building AI agent systems that can plan, reason, execute code, browse the web, search the internet, and connect to 46 external services out of the box. A single agent runs with three attributes. A fleet scales across machines with peer-to-peer discovery, shared memory, and crash recovery.
+
+## Architecture
+
+You write agents. JarvisCore owns the runtime underneath them: identity, memory, retrieval, routing, and recovery.
+
+```text
+                       your agents
+            AutoAgent  ·  CustomAgent  ·  Workflows
+                            │
+  ┌─────────────────────────┴──────────────────────────┐
+  │                jarviscore-framework                │
+  │                                                    │
+  │   kernel · planning · P2P mesh · atoms · HITL      │
+  │                                                    │
+  │   ┌───────────┐   ┌───────────┐   ┌────────────┐   │
+  │   │   Nexus   │   │  Athena   │   │ RAG+Search │   │
+  │   │ identity  │   │  memory   │   │ retrieval  │   │
+  │   └───────────┘   └───────────┘   └────────────┘   │
+  │      bundled         backend         built-in      │
+  │                                                    │
+  │   workflow state · step outputs · traces ⇄ Redis   │
+  │   kill the process — state survives, steps resume  │
+  └─────────────────────────┬──────────────────────────┘
+                            │  called like any library
+                            ▼
+                     ┌──────────────┐
+                     │     Odin     │   graph intelligence
+                     │ odin-engine  │   separate package
+                     └──────────────┘
+```
+
+| Layer | Role | How you reach it |
+|-------|------|------------------|
+| **Durable state** | Workflow state, step outputs, and traces live in Redis — `kill -9` the process, rerun the same workflow id, completed steps recover instead of re-running. | Automatic when `REDIS_URL` is set |
+| **Nexus** | Zero-trust identity. Encrypts OAuth tokens and API keys, injects them into atoms at runtime so agents never touch raw credentials. | Ships inside the framework — `jarviscore nexus init` |
+| **Athena** | Structured knowledge graph with heat-based scoring and cross-agent memory sharing. | Memory backend — `jarviscore memory init` |
+| **RAG + Search** | Document retrieval and live internet search. | Built in — see [Features](#features) |
+| **Odin** | Graph intelligence: ranks high-signal paths in graphs with 10K–5M entities. | Companion library — `pip install odin-engine` |
 
 ## Installation
 
@@ -96,6 +146,17 @@ results = await mesh.workflow("demo", [
 ])
 print(results[0]["output"])  # [2, 4, 6]
 ```
+
+## See it running
+
+Real systems built on JarvisCore, recorded end to end.
+
+<!-- Replace each PLACEHOLDER with the published video URL before this section goes live. -->
+
+| Demo | What it shows |
+|------|---------------|
+| [ContentForge](PLACEHOLDER_CONTENTFORGE_URL) | Six named agents turn mixed sources into a cited, reviewed draft — Apollo routes on the mesh, Heimdall gates the output |
+| [Office Hours](https://discord.gg/jbRBAsMgM) | Live sessions where we debug real agents, every other week |
 
 ## Features
 
@@ -286,6 +347,19 @@ LOG_LEVEL=INFO                          # Avoid token content in logs
 ```
 
 See the [Production Deployment Guide](https://jarviscore.developers.prescottdata.io/guides/production/) for the full checklist, fleet scaling, and kernel tuning.
+
+## The Prescott OSS ecosystem
+
+JarvisCore is the runtime. These build on it or plug into it.
+
+| Project | What it does | License |
+|---------|--------------|---------|
+| **[jarviscore-framework](https://github.com/Prescott-Data/jarviscore-framework)** | The agent runtime — planning, memory, mesh, atoms | Apache 2.0 |
+| **[Odin-1](https://github.com/Prescott-Data/Odin-1)** | Graph intelligence for agents navigating knowledge graphs | MIT |
+
+Nexus and Athena ship inside this repository — see [Architecture](#architecture).
+
+If you build multi-agent systems, star the repo ⭐ to support open-source agent infrastructure.
 
 ## Documentation
 
