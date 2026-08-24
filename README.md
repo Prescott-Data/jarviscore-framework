@@ -1,23 +1,93 @@
 <p align="center">
-  <img src="jarviscore/docs/assets/combo-brand.svg" alt="JarvisCore" height="56" />
+  <img src="jarviscore/docs/assets/combo-brand.svg" alt="JarvisCore" height="72" />
 </p>
 
 <p align="center">
-  <strong>Build, orchestrate, and deploy multi-agent systems with peer-to-peer coordination, unified memory, 46 prebuilt service bundles (237 atoms), and full observability.</strong>
+  <strong>The production runtime for multi-agent systems — a peer-to-peer mesh with no central orchestrator, zero-trust credentials, durable state that survives <code>kill -9</code>, and 1,224 typed atoms across 150 services. Observability included, not upsold.</strong>
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/v/jarviscore-framework?style=flat-square&color=1758F5" alt="PyPI" /></a>
   <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/pyversions/jarviscore-framework?style=flat-square" alt="Python" /></a>
+  <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/dm/jarviscore-framework?style=flat-square&color=1758F5" alt="Downloads" /></a>
   <a href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Prescott-Data/jarviscore-framework?style=flat-square" alt="License" /></a>
   <a href="https://jarviscore.developers.prescottdata.io/"><img src="https://img.shields.io/badge/docs-jarviscore-blue?style=flat-square" alt="Docs" /></a>
 </p>
+
+```bash
+pip install jarviscore-framework
+```
+
+<p align="center">
+  <img src="jarviscore/docs/assets/demo.gif" alt="7-agent investment committee evaluates a $1.5M position; the process is kill -9'd mid-deliberation, rerun with the same workflow id, and finishes without re-running the four analysts" width="820" />
+</p>
+<p align="center">
+  <sub>A 7-agent committee deliberates a $1.5M position on live market data. We <code>kill -9</code> it mid-deliberation.<br/>
+  Rerun with the same workflow id: the four analyst results come back from Redis — not re-run, not re-billed — and the committee finishes the job.<br/>
+  Real output, time compressed — reproduce it with <a href="examples/investment_committee"><code>examples/investment_committee</code></a> (<code>kill_watcher.py</code> stages the crash)</sub>
+</p>
+
+---
+
+## Why developers switch
+
+Six things you get here that you will not assemble from a typical agent framework:
+
+**1. Agents never touch credentials.** Nexus, a zero-trust credential broker, ships inside the framework. Set `requires_auth = True` and the runtime injects scoped, encrypted credentials into atoms at call time — no raw keys in prompts, agent context, or `.env` sprawl. A leaked agent trace leaks no secrets.
+
+**2. Tools without MCP plumbing.** 1,224 typed atoms across 150 services (`jarviscore atom list`), auth injected at runtime. Missing one? Write a Python function, validate it with `jarviscore atom test`, drop it in the registry — no server to stand up, no wiring. And when no atom exists, AutoAgents write their own sandboxed code with self-repair and keep what worked in a verified-work registry.
+
+**3. No central orchestrator to babysit.** Agents form a SWIM gossip mesh over ZMQ, discover each other by capability, and claim workflow steps atomically from Redis. Any node can die — another claims its work. There is no coordinator process whose crash takes the fleet down.
+
+**4. State outlives the process.** You just watched it: `kill -9` mid-deliberation, rerun the same workflow id, completed steps return `recovered` from Redis — not re-run, not re-billed.
+
+**5. Observability is not an enterprise upsell.** Per-step traces (`jarviscore inspect <workflow>`), episodic ledgers, and Prometheus + Grafana in the bundled compose file — all in the Apache-2.0 package. No control-plane subscription to see what your agents did.
+
+**6. Memory agents share, not just keep.** Athena is a structured knowledge graph with heat-based scoring — fleet memory that compounds across agents and sessions, not one agent's private diary.
 
 ---
 
 ## What is JarvisCore?
 
-JarvisCore is a Python framework for building AI agent systems that can plan, reason, execute code, browse the web, search the internet, and connect to 46 external services out of the box. A single agent runs with three attributes. A fleet scales across machines with peer-to-peer discovery, shared memory, and crash recovery.
+JarvisCore is a Python framework for building AI agent systems that can plan, reason, execute code, browse the web, search the internet, and connect to 150 external services out of the box. A single agent runs with three attributes. A fleet scales across machines with peer-to-peer discovery, shared memory, and crash recovery.
+
+## Architecture
+
+You write agents. JarvisCore owns the runtime underneath them: identity, memory, retrieval, routing, and recovery.
+
+```text
+                       your agents
+            AutoAgent  ·  CustomAgent  ·  Workflows
+                            │
+  ┌─────────────────────────┴──────────────────────────┐
+  │                jarviscore-framework                │
+  │                                                    │
+  │   kernel · planning · P2P mesh · atoms · HITL      │
+  │                                                    │
+  │   ┌───────────┐   ┌───────────┐   ┌────────────┐   │
+  │   │   Nexus   │   │  Athena   │   │ RAG+Search │   │
+  │   │ identity  │   │  memory   │   │ retrieval  │   │
+  │   └───────────┘   └───────────┘   └────────────┘   │
+  │      bundled         backend         built-in      │
+  │                                                    │
+  │   workflow state · step outputs · traces ⇄ Redis   │
+  │   kill the process — state survives, steps resume  │
+  └─────────────────────────┬──────────────────────────┘
+                            │  called like any library
+                            ▼
+                     ┌──────────────┐
+                     │     Odin     │   graph intelligence
+                     │ odin-engine  │   separate package
+                     └──────────────┘
+```
+
+| Layer | Role | How you reach it |
+|-------|------|------------------|
+| **Durable state** | Workflow state, step outputs, and traces live in Redis — `kill -9` the process, rerun the same workflow id, completed steps recover instead of re-running. | Automatic when `REDIS_URL` is set |
+| **Nexus** | Zero-trust identity. Encrypts OAuth tokens and API keys, injects them into atoms at runtime so agents never touch raw credentials. | Ships inside the framework — `jarviscore nexus init` |
+| **Athena** | Structured knowledge graph with heat-based scoring and cross-agent memory sharing. | Memory backend — `jarviscore memory init` |
+| **RAG + Search** | Document retrieval and live internet search. | Built in — see [Features](#features) |
+| **Odin** | Graph intelligence: ranks high-signal paths in graphs with 10K–5M entities. | Companion library — `pip install odin-engine` |
 
 ## Installation
 
@@ -97,6 +167,17 @@ results = await mesh.workflow("demo", [
 print(results[0]["output"])  # [2, 4, 6]
 ```
 
+## See it running
+
+Real systems built on JarvisCore, recorded end to end.
+
+<!-- Replace each PLACEHOLDER with the published video URL before this section goes live. -->
+
+| Demo | What it shows |
+|------|---------------|
+| [ContentForge](PLACEHOLDER_CONTENTFORGE_URL) | Six named agents turn mixed sources into a cited, reviewed draft — Apollo routes on the mesh, Heimdall gates the output |
+| [Office Hours](https://discord.gg/jbRBAsMgM) | Live sessions where we debug real agents, every other week |
+
 ## Features
 
 ### Agent Profiles
@@ -117,28 +198,32 @@ The Kernel runs an Observe-Orient-Decide-Act (OODA) loop for every AutoAgent tas
 | **GoalContext** | Tracks plan state, step history, and convergence signals |
 | **EpistemicLedger** | Records what the agent knows, assumes, and has verified |
 
-### Service Integrations (46 bundles, 237 atoms)
+### Service Integrations (150 bundles, 1,224 atoms)
 
 Every integration is a single-file Python function called an **atom**. Atoms are registered in the seed registry and discovered by agents at runtime. No SDK wiring required.
 
 <details>
-<summary><strong>View all 46 integration bundles</strong></summary>
+<summary><strong>View the 150 integration bundles by category</strong></summary>
 
 | Category | Bundles |
 |----------|---------|
-| **CRM and Sales** | Salesforce, HubSpot, Apollo, Oracle CX, Dynamics 365 |
-| **Project Management** | Jira, Linear, ClickUp, Todoist, Notion, Airtable |
-| **Communication** | Slack, Discord, Gmail, MS Graph (Teams/Outlook), Webex, Brevo |
-| **Developer Tools** | GitHub, Confluence, Serper (web search) |
-| **Cloud Storage** | Google Drive, Google Sheets, Dropbox, Azure Blob Storage |
-| **Finance and Accounting** | Stripe, QuickBooks, FreshBooks, Zoho Books, NetSuite |
-| **ERP** | SAP, Oracle ERP, Odoo |
-| **HR** | BambooHR, Zoho People, Zoho Shifts |
-| **Social and Content** | LinkedIn, LinkedIn Ads, Twitter/X, YouTube, Reddit |
-| **Meetings** | Zoom, Google Calendar |
-| **Email Marketing** | Mailchimp, SendGrid |
+| **CRM and Sales** | Salesforce, HubSpot, Zoho CRM, Pipedrive, Dynamics 365, Oracle CX, Attio, Close, Keap, Insightly, Nutshell, Nimble, Streak, Salesflare, Capsule, Agile CRM, Less Annoying CRM, Folk, Apollo and more |
+| **Project Management** | Jira, Linear, Asana, Monday, Trello, ClickUp, Notion, Airtable, Todoist, Shortcut, Wrike, Workfront, Height, Coda, Podio, Nifty, ProofHub, LiquidPlanner, Freedcamp, Pivotal Tracker, Targetprocess |
+| **Communication** | Slack, Discord, Telegram, WhatsApp Business, Twilio, Gmail, MS Graph (Teams/Outlook), Google Chat, Webex, Mattermost, Rocket.Chat, Zoom |
+| **Developer Tools** | GitHub, GitLab, Jenkins, CircleCI, Travis CI, TeamCity, Sourcegraph, Phabricator, Perforce, Confluence, Beanstalk, Assembla, SourceForge, Serper (web search) |
+| **Support and Chat** | Zendesk Chat, Intercom, Freshchat, Crisp, Drift, Gorgias, LiveChat, Tawk.to, Zoho Desk |
+| **Cloud Storage** | Google Drive, Google Sheets, Dropbox, Box, Amazon S3, GCS, Azure Blob Storage, Egnyte, Backblaze B2, Dropbox Sign |
+| **Finance and Accounting** | Stripe, Square, QuickBooks, Xero, FreshBooks, Zoho Books, Wave, Sage Business Cloud, Sage Pastel, NetSuite |
+| **African Fintech and Infra** | M-Pesa (Safaricom), Paystack, SimplePay, Africa's Talking, Infobip, Jumia Seller Center, Prembly, KRA (Kenya Revenue Authority) |
+| **Marketing and Ads** | Mailchimp, SendGrid, Klaviyo, Brevo, ActiveCampaign, Google Ads, LinkedIn Ads, Twitter Ads, Reddit Ads, TikTok Ads, Snapchat Ads |
+| **Analytics** | Google Analytics, Mixpanel, Amplitude, Segment, PostHog, Plausible, Matomo, FullStory, LogRocket, Pendo, Kissmetrics |
+| **E-commerce and CMS** | Shopify, WooCommerce, WordPress, Wix Stores, PrestaShop, Etsy, Shift4Shop |
+| **ERP and HR** | SAP, Oracle ERP, Odoo, BambooHR, Zoho People, Zoho Shifts |
+| **Social and Content** | LinkedIn, Twitter/X, YouTube, Reddit |
+| **Ops and Identity** | PagerDuty, Okta, Google Calendar, Google Maps, Google People, what3words |
 | **Healthcare** | OpenMRS |
-| **Government** | KRA (Kenya Revenue Authority) |
+
+The registry is the source of truth — `jarviscore atom list` prints every bundle and atom in your installed version.
 
 </details>
 
@@ -287,6 +372,19 @@ LOG_LEVEL=INFO                          # Avoid token content in logs
 
 See the [Production Deployment Guide](https://jarviscore.developers.prescottdata.io/guides/production/) for the full checklist, fleet scaling, and kernel tuning.
 
+## The Prescott OSS ecosystem
+
+JarvisCore is the runtime. These build on it or plug into it.
+
+| Project | What it does | License |
+|---------|--------------|---------|
+| **[jarviscore-framework](https://github.com/Prescott-Data/jarviscore-framework)** | The agent runtime — planning, memory, mesh, atoms | Apache 2.0 |
+| **[Odin-1](https://github.com/Prescott-Data/Odin-1)** | Graph intelligence for agents navigating knowledge graphs | MIT |
+
+Nexus and Athena ship inside this repository — see [Architecture](#architecture).
+
+If you build multi-agent systems, star the repo ⭐ to support open-source agent infrastructure.
+
 ## Documentation
 
 **[https://jarviscore.developers.prescottdata.io/](https://jarviscore.developers.prescottdata.io/)**
@@ -296,7 +394,7 @@ See the [Production Deployment Guide](https://jarviscore.developers.prescottdata
 | [Getting Started](https://jarviscore.developers.prescottdata.io/getting-started/) | Install, scaffold, and run your first agent in 5 minutes |
 | [Concepts](https://jarviscore.developers.prescottdata.io/concepts/architecture/) | Architecture, model routing, planning, memory, Nexus |
 | [Guides](https://jarviscore.developers.prescottdata.io/guides/autoagent/) | AutoAgent, CustomAgent, workflows, HITL, browser, testing, production |
-| [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/) | All 46 service bundles with usage examples |
+| [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/) | All 150 service bundles with usage examples |
 | [Reference](https://jarviscore.developers.prescottdata.io/reference/agent-api/) | Agent API, CLI, configuration, and troubleshooting |
 | [Changelog](https://jarviscore.developers.prescottdata.io/changelog/) | Full release history |
 
@@ -324,7 +422,7 @@ python committee.py --mode full --ticker NVDA --amount 1500000
 
 ## Version
 
-**1.1.0**
+**1.3.0**
 
 ## License
 
