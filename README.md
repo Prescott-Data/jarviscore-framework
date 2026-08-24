@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Build, orchestrate, and deploy multi-agent systems with peer-to-peer coordination, unified memory, 46 prebuilt service bundles (237 atoms), and full observability.</strong>
+  <strong>The production runtime for multi-agent systems — a peer-to-peer mesh with no central orchestrator, zero-trust credentials, durable state that survives <code>kill -9</code>, and 237 typed atoms across 46 services. Observability included, not upsold.</strong>
 </p>
 
 <p align="center">
@@ -19,11 +19,31 @@ pip install jarviscore-framework
 ```
 
 <p align="center">
-  <img src="jarviscore/docs/assets/demo.gif" alt="kill -9 a workflow mid-step — rerun with the same id, completed steps recover from Redis, only the unfinished work runs" width="800" />
+  <img src="jarviscore/docs/assets/demo.gif" alt="7-agent investment committee evaluates a $1.5M position; the process is kill -9'd mid-deliberation, rerun with the same workflow id, and finishes without re-running the four analysts" width="820" />
 </p>
 <p align="center">
-  <sub><code>kill -9</code> mid-workflow. Rerun. Nothing re-runs, nothing is lost — state lives in Redis, not the process.<br/>Real run, real timing — reproduce it with <a href="examples/readme_crash_demo.py"><code>examples/readme_crash_demo.py</code></a></sub>
+  <sub>A 7-agent committee deliberates a $1.5M position on live market data. We <code>kill -9</code> it mid-deliberation.<br/>
+  Rerun with the same workflow id: the four analyst results come back from Redis — not re-run, not re-billed — and the committee finishes the job.<br/>
+  Real output, time compressed — reproduce it with <a href="examples/investment_committee"><code>examples/investment_committee</code></a> (<code>kill_watcher.py</code> stages the crash)</sub>
 </p>
+
+---
+
+## Why developers switch
+
+Six things you get here that you will not assemble from a typical agent framework:
+
+**1. Agents never touch credentials.** Nexus, a zero-trust credential broker, ships inside the framework. Set `requires_auth = True` and the runtime injects scoped, encrypted credentials into atoms at call time — no raw keys in prompts, agent context, or `.env` sprawl. A leaked agent trace leaks no secrets.
+
+**2. Tools without MCP plumbing.** 237 typed atoms across 46 services (`jarviscore atom list`), auth injected at runtime. Missing one? Write a Python function, validate it with `jarviscore atom test`, drop it in the registry — no server to stand up, no wiring. And when no atom exists, AutoAgents write their own sandboxed code with self-repair and keep what worked in a verified-work registry.
+
+**3. No central orchestrator to babysit.** Agents form a SWIM gossip mesh over ZMQ, discover each other by capability, and claim workflow steps atomically from Redis. Any node can die — another claims its work. There is no coordinator process whose crash takes the fleet down.
+
+**4. State outlives the process.** You just watched it: `kill -9` mid-deliberation, rerun the same workflow id, completed steps return `recovered` from Redis — not re-run, not re-billed.
+
+**5. Observability is not an enterprise upsell.** Per-step traces (`jarviscore inspect <workflow>`), episodic ledgers, and Prometheus + Grafana in the bundled compose file — all in the Apache-2.0 package. No control-plane subscription to see what your agents did.
+
+**6. Memory agents share, not just keep.** Athena is a structured knowledge graph with heat-based scoring — fleet memory that compounds across agents and sessions, not one agent's private diary.
 
 ---
 
@@ -398,7 +418,7 @@ python committee.py --mode full --ticker NVDA --amount 1500000
 
 ## Version
 
-**1.1.0**
+**1.0.4**
 
 ## License
 

@@ -163,6 +163,11 @@ def _print_results(results, mode: str, steps: list):
         print(f"  P/S:   {out.get('price_to_sales')}")
         print(f"  Score: {out.get('overall_score')}/10  ({out.get('verdict', '')})")
     else:
+        print()
+        for step in steps:
+            res = by_id.get(step["id"], {})
+            tag = "recovered from redis — not re-run" if res.get("recovered") else res.get("status", "?")
+            print(f"  {step['id']:<22} {tag}")
         dec = by_id.get("final_decision", {})
         out = _extract_output(dec)
         alloc = out.get("allocation_usd", 0)
@@ -180,7 +185,7 @@ def _print_results(results, mode: str, steps: list):
 
 # ── Main Runner ──────────────────────────────────────────────────────────────
 
-async def run_committee(ticker: str, amount: float, mode: str = "full"):
+async def run_committee(ticker: str, amount: float, mode: str = "full", workflow_id: str = None):
     portfolio = load_portfolio()
 
     mesh = Mesh(config={"redis_url": REDIS_URL})
@@ -202,7 +207,9 @@ async def run_committee(ticker: str, amount: float, mode: str = "full"):
     print(f"{'='*60}\n")
 
     base_steps = QUICK_STEPS if mode == "quick" else FULL_STEPS
-    wf_id  = f"committee-{ticker}-{int(time.time())}"
+    # A caller-supplied id makes the run resumable: rerun with the same id after a
+    # crash and completed steps recover from Redis instead of re-executing.
+    wf_id  = workflow_id or f"committee-{ticker}-{int(time.time())}"
 
     # Inject workflow-level vars via step["params"] — the CommitteeAutoAgent
     # base class merges these into task["context"] before sandbox execution.
@@ -230,6 +237,8 @@ if __name__ == "__main__":
     parser.add_argument("--mode",   default="full",    choices=["quick", "full", "portfolio"])
     parser.add_argument("--ticker", default="NVDA")
     parser.add_argument("--amount", type=float, default=1_500_000)
+    parser.add_argument("--workflow-id", default=None,
+                        help="Stable id makes the run resumable after a crash")
     args = parser.parse_args()
 
-    asyncio.run(run_committee(args.ticker, args.amount, args.mode))
+    asyncio.run(run_committee(args.ticker, args.amount, args.mode, args.workflow_id))
