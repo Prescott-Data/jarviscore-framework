@@ -20,12 +20,6 @@ Complete API reference, configuration options, CLI commands, and troubleshooting
 
     [Read more →](agent-api.md)
 
--   :material-gift: **Launch Promotion API**
-
-    Exact request, response, authentication, and error contract for the temporary promotional client.
-
-    [Read more →](promotion-api.md)
-
 -   :material-chat: **Chat API**
 
     REST API reference for the chat endpoint, message formats, and streaming.
