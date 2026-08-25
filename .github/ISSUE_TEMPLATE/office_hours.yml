@@ -1,0 +1,129 @@
+name: Office Hours — Bring a Broken Agent
+description: Queue your agent for a live debugging session before Office Hours
+title: "[OH] "
+labels: ["office-hours"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We debug real agents live every other week. File this before the session and we will
+        come prepared — the more reproducible your case, the further we get on the call.
+
+        Not urgent enough for a live session? Use [Bug Report](?template=bug_report.yml) instead.
+
+  - type: textarea
+    id: intent
+    attributes:
+      label: What is your agent supposed to do?
+      description: One or two sentences on the outcome you are building toward.
+      placeholder: "A research agent that pulls filings, extracts risk factors, and writes a summary with citations."
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens instead?
+      description: Where it breaks, stalls, loops, or returns the wrong thing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: The smallest agent or workflow that still shows the problem. Redact keys.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Traceback, logs, or trace ID
+      description: "Paste the error, or the trace ID from `jarviscore trace inspect`."
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you already tried?
+      description: Saves us from re-running the paths you have ruled out.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it break?
+      options:
+        - Not sure — help me narrow it down
+        - Planning / kernel
+        - P2P mesh or distributed workflow
+        - Memory (Athena, long-term, scratchpad)
+        - Nexus credentials or auth
+        - Atoms / service integrations
+        - Browser automation
+        - RAG or internet search
+        - HITL / approvals
+        - Deployment or infrastructure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: JarvisCore version
+      options:
+        - "1.3.0"
+        - "1.2.0"
+        - "1.1.0"
+        - "1.0.x"
+        - "main (unreleased)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: LLM provider in use
+      multiple: true
+      options:
+        - Azure OpenAI
+        - Claude (Anthropic)
+        - Gemini
+        - Vertex AI
+        - vLLM
+        - Other
+    validations:
+      required: false
+
+  - type: dropdown
+    id: live
+    attributes:
+      label: Can you join the session live?
+      description: Live attendance means we can iterate with you in real time.
+      options:
+        - "Yes — I can join and screen share"
+        - "Yes — I can join but cannot share"
+        - "No — please review it without me"
+    validations:
+      required: true
+
+  - type: input
+    id: discord
+    attributes:
+      label: Discord handle (optional)
+      description: So we can reach you during the session.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed API keys, tokens, and customer data from the code and logs above
+          required: true
