@@ -17,10 +17,59 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from urllib.parse import urlparse
+
 import aiohttp
 
-PROMO_ENDPOINT = "https://jarviscore.developers.prescottdata.io/api/promo/v1/generate"
+PROMO_ENDPOINT = "https://jarviscore-promo.developers.prescottdata.io/api/promo/v1/generate"
 PROMO_MODEL = "jarviscore-promo"
+
+# The endpoint may be overridden, but only to somewhere Prescott controls.
+#
+# An unrestricted override would be a credential-theft primitive rather than a
+# convenience: the promotional token travels as a bearer header, so whatever
+# can change this value can collect tokens from every environment it reaches.
+# Restricting the destination means a leaked or mistaken value cannot send
+# credentials off Prescott infrastructure.
+#
+# Loopback is permitted because a redirect there steals nothing, and it is how
+# the promotion service is tested against a local instance.
+_ALLOWED_ENDPOINT_SUFFIXES = (".prescottdata.io",)
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def resolve_endpoint() -> str:
+    """Return the promotional endpoint, honouring a restricted override.
+
+    Set ``JARVISCORE_PROMO_ENDPOINT`` to point at staging or a local instance.
+    HTTPS is required except on loopback, and the host must be one Prescott
+    controls.
+
+    An invalid override raises rather than falling back to the default. Falling
+    back would be worse: the caller would believe they were talking to their
+    override while their token went somewhere else entirely.
+    """
+    override = os.getenv("JARVISCORE_PROMO_ENDPOINT", "").strip()
+    if not override:
+        return PROMO_ENDPOINT
+
+    parsed = urlparse(override)
+    host = (parsed.hostname or "").lower()
+    is_loopback = host in _LOOPBACK_HOSTS
+
+    if parsed.scheme != "https" and not is_loopback:
+        raise ValueError(
+            f"JARVISCORE_PROMO_ENDPOINT must use HTTPS; got {override!r}. The "
+            f"promotional token is sent as a bearer credential."
+        )
+    if not is_loopback and not host.endswith(_ALLOWED_ENDPOINT_SUFFIXES):
+        raise ValueError(
+            f"JARVISCORE_PROMO_ENDPOINT must point at a Prescott host "
+            f"({' or '.join(_ALLOWED_ENDPOINT_SUFFIXES)}) or loopback; got "
+            f"{host!r}. This restriction exists because the promotional token "
+            f"is sent to whatever this points at."
+        )
+    return override
 
 
 class PromoAccessError(RuntimeError):
@@ -74,8 +123,12 @@ class PromoLLMClient:
 
     @property
     def endpoint(self) -> str:
-        """The fixed Prescott promotional endpoint; not configurable by design."""
-        return PROMO_ENDPOINT
+        """The promotional endpoint for this call.
+
+        Resolved per access rather than captured at construction, so a test or
+        a long-lived process picks up an override without rebuilding clients.
+        """
+        return resolve_endpoint()
 
     async def generate(
         self,

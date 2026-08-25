@@ -227,7 +227,7 @@ status
 The Python package calls exactly:
 
 ```text
-POST https://jarviscore.developers.prescottdata.io/api/promo/v1/generate
+POST https://jarviscore-promo.developers.prescottdata.io/api/promo/v1/generate
 ```
 
 The complete request, response, and error schema is documented in:

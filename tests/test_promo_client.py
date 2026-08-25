@@ -8,6 +8,7 @@ import pytest
 from jarviscore.execution.llm import LLMProvider, UnifiedLLMClient
 from jarviscore.kernel.kernel import Kernel
 from jarviscore.promo import PROMO_MODEL, PromoAccessError, PromoLLMClient, PromoProtocolError
+from jarviscore.promo import client as promo_client
 from jarviscore.promo.client import _HTTPResult
 
 
@@ -223,7 +224,7 @@ def test_promo_is_auto_detected_first_and_uses_fixed_https_endpoint(tmp_path):
 
     assert llm.provider_order == [LLMProvider.PROMO]
     assert llm.promo_client.endpoint == (
-        "https://jarviscore.developers.prescottdata.io/api/promo/v1/generate"
+        "https://jarviscore-promo.developers.prescottdata.io/api/promo/v1/generate"
     )
     assert llm.nano_model == "jarviscore-promo"
     assert llm.planner_model == "jarviscore-promo"
@@ -386,3 +387,65 @@ async def test_send_uses_bearer_header_and_never_places_token_in_payload(tmp_pat
     assert captured["headers"]["Authorization"] == f"Bearer {token}"
     assert captured["headers"]["X-JarvisCore-Call-ID"] == "jcp_header_test"
     assert token not in json.dumps(captured["payload"])
+
+
+# ── Endpoint override ────────────────────────────────────────────────────────
+#
+# The override exists so the promotion can be pointed at staging or a local
+# instance without republishing. Its restrictions are a security control, not
+# validation politeness: the promotional token is sent to whatever this
+# resolves to, so an unrestricted override would let anything that can set an
+# environment variable harvest tokens from every developer it reaches.
+
+
+def test_endpoint_defaults_when_no_override(monkeypatch):
+    monkeypatch.delenv("JARVISCORE_PROMO_ENDPOINT", raising=False)
+    assert promo_client.resolve_endpoint() == promo_client.PROMO_ENDPOINT
+
+
+def test_endpoint_accepts_a_prescott_https_override(monkeypatch):
+    override = "https://staging.prescottdata.io/api/promo/v1/generate"
+    monkeypatch.setenv("JARVISCORE_PROMO_ENDPOINT", override)
+    assert promo_client.resolve_endpoint() == override
+
+
+def test_endpoint_accepts_plain_http_on_loopback_only(monkeypatch):
+    # Redirecting to loopback steals nothing, and it is how the promotion
+    # service is exercised against a local instance.
+    override = "http://localhost:8080/api/promo/v1/generate"
+    monkeypatch.setenv("JARVISCORE_PROMO_ENDPOINT", override)
+    assert promo_client.resolve_endpoint() == override
+
+
+def test_endpoint_rejects_plain_http_off_loopback(monkeypatch):
+    monkeypatch.setenv(
+        "JARVISCORE_PROMO_ENDPOINT", "http://staging.prescottdata.io/api/promo/v1/generate"
+    )
+    with pytest.raises(ValueError, match="HTTPS"):
+        promo_client.resolve_endpoint()
+
+
+def test_endpoint_rejects_a_non_prescott_host(monkeypatch):
+    # The case that matters: an attacker-controlled destination for the token.
+    monkeypatch.setenv("JARVISCORE_PROMO_ENDPOINT", "https://evil.example.com/api/promo/v1/generate")
+    with pytest.raises(ValueError, match="Prescott host"):
+        promo_client.resolve_endpoint()
+
+
+def test_endpoint_rejects_a_lookalike_suffix(monkeypatch):
+    # "notprescottdata.io" must not pass a naive substring check, and
+    # "prescottdata.io.evil.com" must not pass a naive prefix one.
+    for host in ("https://notprescottdata.io/x", "https://prescottdata.io.evil.com/x"):
+        monkeypatch.setenv("JARVISCORE_PROMO_ENDPOINT", host)
+        with pytest.raises(ValueError, match="Prescott host"):
+            promo_client.resolve_endpoint()
+
+
+def test_invalid_override_raises_rather_than_falling_back(monkeypatch):
+    # Falling back would be worse than failing: the caller would believe they
+    # were talking to their override while the token went to the default.
+    monkeypatch.setenv("JARVISCORE_PROMO_ENDPOINT", "https://evil.example.com/x")
+    with pytest.raises(ValueError):
+        promo_client.resolve_endpoint()
+    monkeypatch.delenv("JARVISCORE_PROMO_ENDPOINT")
+    assert promo_client.resolve_endpoint() == promo_client.PROMO_ENDPOINT

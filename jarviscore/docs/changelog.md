@@ -24,16 +24,31 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## Unreleased
+## 1.3.1
 
 **Added**
 
-- Temporary JarvisCore launch-promotion provider. A unique
-  `JARVISCORE_PROMO_TOKEN` grants restricted hosted inference without exposing
-  an upstream provider API key. Calls use a fixed, non-configurable HTTPS
-  endpoint, expose only the `jarviscore-promo` model alias, preserve the
-  complete exchange under a stable call ID, and fail explicitly on expiry,
-  exhaustion, or service errors rather than falling through to a paid provider.
+- Optional JarvisCore launch-promotion provider, for invited developers only.
+  A `JARVISCORE_PROMO_TOKEN` grants restricted hosted inference without
+  exposing an upstream provider API key. **Without a token nothing changes**:
+  JarvisCore uses your own configured providers exactly as before, and the
+  promotion is neither reachable nor active.
+
+    Promotional calls use a fixed Prescott endpoint, expose only the
+    `jarviscore-promo` model alias rather than the upstream deployment,
+    preserve the complete exchange under a stable call ID, and fail explicitly
+    on expiry, exhaustion, or service errors rather than falling through to a
+    paid provider — so an expired free entitlement can never quietly start
+    billing your own account.
+
+    The endpoint may be pointed at staging or a local instance with
+    `JARVISCORE_PROMO_ENDPOINT`. Overrides must be HTTPS and must resolve to a
+    Prescott host or loopback: the promotional token is sent as a bearer
+    credential, so an unrestricted override would be a way to harvest tokens
+    rather than a convenience.
+
+- `jarviscore check --validate-llm` reports promotional configuration and
+  performs a real promotional inference request when asked.
 
 </div>
 

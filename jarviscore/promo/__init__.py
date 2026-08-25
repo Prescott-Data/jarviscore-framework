@@ -3,6 +3,7 @@
 from .client import (
     PROMO_ENDPOINT,
     PROMO_MODEL,
+    resolve_endpoint,
     PromoAccessError,
     PromoLLMClient,
     PromoProtocolError,
@@ -11,6 +12,7 @@ from .client import (
 __all__ = [
     "PROMO_ENDPOINT",
     "PROMO_MODEL",
+    "resolve_endpoint",
     "PromoAccessError",
     "PromoLLMClient",
     "PromoProtocolError",

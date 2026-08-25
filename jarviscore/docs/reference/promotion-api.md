@@ -8,8 +8,15 @@ This contract is the only developer-site backend required by the temporary
 JarvisCore launch promotion. The Python client uses a fixed endpoint:
 
 ```text
-POST https://jarviscore.developers.prescottdata.io/api/promo/v1/generate
+POST https://jarviscore-promo.developers.prescottdata.io/api/promo/v1/generate
 ```
+
+The endpoint may be redirected with `JARVISCORE_PROMO_ENDPOINT`, for staging
+or a local instance. Overrides must use HTTPS and must resolve to a Prescott
+host or loopback — the promotional token is sent as a bearer credential, so an
+unrestricted override would be a token-harvesting primitive rather than a
+convenience. An invalid override raises instead of falling back, so a typo is
+visible rather than silently sending the token to the default endpoint.
 
 ## Authentication
 
