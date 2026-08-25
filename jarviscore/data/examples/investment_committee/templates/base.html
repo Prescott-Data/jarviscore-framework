@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{% block title %}Investment Committee{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans min-h-screen flex flex-col">
+
+  <!-- Header -->
+  <header class="bg-slate-900 text-white px-6 py-3 flex items-center justify-between shadow z-10">
+    <div class="flex items-center gap-3">
+      <span class="text-lg font-bold tracking-tight">&#9632; Investment Committee</span>
+    </div>
+    <div class="flex items-center gap-4 text-sm">
+      <span id="redis-status" class="flex items-center gap-1">
+        <span class="inline-block w-2 h-2 rounded-full bg-slate-500"></span>
+        <span class="text-slate-400">Redis</span>
+      </span>
+      <span id="ltm-status" class="flex items-center gap-1">
+        <span class="inline-block w-2 h-2 rounded-full bg-slate-500"></span>
+        <span class="text-slate-400">LTM</span>
+      </span>
+    </div>
+  </header>
+
+  <div class="flex flex-1 overflow-hidden">
+
+    <!-- Sidebar -->
+    <nav class="w-48 bg-slate-800 text-slate-300 flex flex-col py-6 gap-1 shrink-0">
+      {% set nav = [
+        ("home",      "/",          "&#8962;",  "Home"),
+        ("run",       "/run",       "&#9654;",  "Run"),
+        ("memos",     "/memos",     "&#128196;","Memos"),
+        ("portfolio", "/portfolio", "&#128200;","Portfolio"),
+        ("history",   "/history",   "&#128336;","History"),
+        ("system",    "/system",    "&#9881;",  "System"),
+      ] %}
+      {% for key, href, icon, label in nav %}
+      <a href="{{ href }}"
+         class="flex items-center gap-3 px-5 py-2.5 text-sm rounded-r-full transition-colors
+                {% if page == key %}bg-slate-600 text-white font-semibold{% else %}hover:bg-slate-700 hover:text-white{% endif %}">
+        <span>{{ icon | safe }}</span>{{ label }}
+      </a>
+      {% endfor %}
+    </nav>
+
+    <!-- Main content -->
+    <main class="flex-1 overflow-y-auto p-6">
+      {% block content %}{% endblock %}
+    </main>
+
+  </div>
+
+  <script src="/static/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

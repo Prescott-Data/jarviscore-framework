@@ -26,10 +26,12 @@ from typing import Any, Dict, List, Optional, cast
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.context.context_manager import ContextManager, BudgetConfig
+from jarviscore.execution.llm import LLMProvider
 from jarviscore.kernel.lease import ExecutionLease, ROLE_LEASE_PROFILES
 from jarviscore.kernel.cognition import AgentCognitionManager
 from jarviscore.kernel.state import KernelState
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
+from jarviscore.promo import PROMO_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +268,12 @@ class Kernel:
         Falls back to task_model / coding_model if tier-specific setting unset.
         Legacy claude-specific settings are checked last for backward compat.
         """
+        # Promotional access has exactly one server-selected model. Every tier
+        # resolves to the alias so no real deployment name is ever requested.
+        provider_order = getattr(self.llm_client, "provider_order", None) or []
+        if provider_order[:1] == [LLMProvider.PROMO]:
+            return PROMO_MODEL
+
         if tier == "coding":
             return (
                 self.config.get("coding_model")

@@ -1,6 +1,6 @@
 """
 Unified LLM Client - All providers in one file with zero-config setup
-Supports: vLLM, Azure OpenAI, Gemini, Vertex AI, Claude with automatic fallback
+Supports: JarvisCore promotion, vLLM, Azure OpenAI, Gemini, Vertex AI, Claude
 """
 import asyncio
 import aiohttp
@@ -10,6 +10,8 @@ import re
 import time
 from typing import Optional, Dict, List, Any
 from enum import Enum
+
+from jarviscore.promo import PROMO_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,7 @@ except ImportError:
 
 class LLMProvider(Enum):
     """Available LLM providers."""
+    PROMO = "promo"
     VLLM = "vllm"
     AZURE = "azure"
     GEMINI = "gemini"
@@ -100,11 +103,9 @@ class UnifiedLLMClient:
     """
     Zero-config LLM client with automatic provider detection and fallback.
 
-    Philosophy: Developer writes NOTHING. Framework tries providers in order:
-    1. vLLM (local, free)
-    2. Azure OpenAI (if configured)
-    3. Gemini (if configured)
-    4. Claude (if configured)
+    The framework auto-detects configured providers. Promotional access is
+    selected first and fails explicitly. Developer-configured providers retain
+    their existing fallback behavior.
 
     Example:
         client = UnifiedLLMClient()
@@ -129,6 +130,7 @@ class UnifiedLLMClient:
 
         # Provider clients
         self.vllm_endpoint = None
+        self.promo_client = None
         self.azure_client = None
         self.gemini_client = None
         self.vertex_ai_client = None
@@ -149,6 +151,21 @@ class UnifiedLLMClient:
 
     def _setup_providers(self):
         """Auto-detect and setup available LLM providers."""
+
+        # Launch promotion: a unique, revocable Prescott entitlement token.
+        # Promotion failures are terminal and never fall through to a user's
+        # separately configured paid provider.
+        promo_token = self.config.get("promo_token")
+        if promo_token:
+            from jarviscore.promo import PromoLLMClient
+
+            self.promo_client = PromoLLMClient(
+                token=promo_token,
+                timeout=self.config.get("llm_timeout", 120),
+                artifact_dir=self.config.get("promo_raw_artifact_dir", "./traces/promo_calls"),
+            )
+            self.provider_order.append(LLMProvider.PROMO)
+            logger.info("✓ JarvisCore promotional LLM access configured")
 
         # 1. Try Azure OpenAI first (primary provider)
         if AZURE_AVAILABLE:
@@ -226,6 +243,7 @@ class UnifiedLLMClient:
         if not self.provider_order:
             logger.warning(
                 "⚠️  No LLM providers configured! Set at least one:\n"
+                "  - JARVISCORE_PROMO_TOKEN for promotional access\n"
                 "  - llm_endpoint for vLLM\n"
                 "  - azure_api_key + azure_endpoint for Azure\n"
                 "  - gemini_api_key for Gemini\n"
@@ -244,6 +262,8 @@ class UnifiedLLMClient:
         Falls back to AZURE_DEPLOYMENT if nano not configured.
         """
         return (
+            PROMO_MODEL if self.provider_order[:1] == [LLMProvider.PROMO] else None
+        ) or (
             self.config.get("task_model_nano")
             or self.config.get("azure_deployment")
             or None
@@ -258,6 +278,8 @@ class UnifiedLLMClient:
         Maps to gpt-5.2-chat in the Sky Team configuration.
         """
         return (
+            PROMO_MODEL if self.provider_order[:1] == [LLMProvider.PROMO] else None
+        ) or (
             self.config.get("task_model_heavy")
             or self.config.get("task_model_standard")
             or self.config.get("task_model")
@@ -289,7 +311,7 @@ class UnifiedLLMClient:
         Returns:
             {
                 "content": "generated text",
-                "provider": "vllm|azure|gemini|vertex_ai|claude",
+                "provider": "promo|vllm|azure|gemini|vertex_ai|claude",
                 "tokens": {"input": 100, "output": 200, "total": 300},
                 "cost_usd": 0.015,
                 "model": "gpt-4o"
@@ -341,7 +363,9 @@ class UnifiedLLMClient:
             for attempt in range(max_429_retries + 1):
                 try:
                     logger.debug(f"Trying provider: {provider.value} (attempt {attempt})")
-                    if provider == LLMProvider.VLLM:
+                    if provider == LLMProvider.PROMO:
+                        return await self._call_promo(messages, temperature, max_tokens, **kwargs)
+                    elif provider == LLMProvider.VLLM:
                         return await self._call_vllm(messages, temperature, max_tokens, **kwargs)
                     elif provider == LLMProvider.AZURE:
                         return await self._call_azure(messages, temperature, max_tokens, **kwargs)
@@ -352,6 +376,8 @@ class UnifiedLLMClient:
                     elif provider == LLMProvider.CLAUDE:
                         return await self._call_claude(messages, temperature, max_tokens, **kwargs)
                 except Exception as e:
+                    if provider == LLMProvider.PROMO:
+                        raise
                     error_str = str(e)
                     is_rate_limit = (
                         "429" in error_str
@@ -400,6 +426,32 @@ class UnifiedLLMClient:
         )
 
 
+
+
+    async def _call_promo(
+        self,
+        messages: List[Dict],
+        temperature: float,
+        max_tokens: int,
+        **kwargs,
+    ) -> Dict:
+        """Call the restricted Prescott launch-promotion endpoint."""
+        if not self.promo_client:
+            raise RuntimeError("Promotional LLM client not initialized")
+        # Explicit contract: the server alone selects the model. Anything but
+        # the alias is a caller error and must fail, not be silently dropped.
+        model = kwargs.pop("model", None)
+        if model not in (None, PROMO_MODEL):
+            raise ValueError(
+                f"Promotional access cannot request model {model!r}; the server "
+                f"selects the model and only the alias {PROMO_MODEL!r} is valid"
+            )
+        return await self.promo_client.generate(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            options=kwargs,
+        )
 
 
     async def _call_vllm(self, messages: List[Dict], temperature: float, max_tokens: int, **kwargs) -> Dict:

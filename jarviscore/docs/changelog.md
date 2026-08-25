@@ -24,6 +24,45 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.3.1
+
+**Added**
+
+- Optional JarvisCore launch-promotion provider, for invited developers only.
+  A `JARVISCORE_PROMO_TOKEN` grants restricted hosted inference without
+  exposing an upstream provider API key. **Without a token nothing changes**:
+  JarvisCore uses your own configured providers exactly as before, and the
+  promotion is neither reachable nor active.
+
+    Promotional calls use a fixed Prescott endpoint, expose only the
+    `jarviscore-promo` model alias rather than the upstream deployment,
+    preserve the complete exchange under a stable call ID, and fail explicitly
+    on expiry, exhaustion, or service errors rather than falling through to a
+    paid provider — so an expired free entitlement can never quietly start
+    billing your own account.
+
+    The endpoint may be pointed at staging or a local instance with
+    `JARVISCORE_PROMO_ENDPOINT`. Overrides must be HTTPS and must resolve to a
+    Prescott host or loopback: the promotional token is sent as a bearer
+    credential, so an unrestricted override would be a way to harvest tokens
+    rather than a convenience.
+
+- `jarviscore check --validate-llm` reports promotional configuration and
+  performs a real promotional inference request when asked.
+
+**Fixed**
+
+- `jarviscore init` failed on a pip-installed package with
+  `Source file not found: .../jarviscore/data/.env.minimal`. The file was read
+  by the scaffold command but never declared as package data, so it was absent
+  from every published wheel and the first command a new user runs created
+  nothing. Declared, along with the bundled `data/examples/*.py` that were
+  similarly declared but missing from the repository.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.3.0 <span class="changelog-date">2026-08-05</span>
 
 <div class="changelog-meta" markdown>

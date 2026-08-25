@@ -112,6 +112,7 @@ class HealthChecker:
     def check_llm_config(self) -> Dict[str, bool]:
         """Check which LLM providers are configured."""
         providers = {
+            'JarvisCore Promotion': ['JARVISCORE_PROMO_TOKEN'],
             'Claude': ['CLAUDE_API_KEY', 'ANTHROPIC_API_KEY'],
             'Azure OpenAI': ['AZURE_API_KEY', 'AZURE_OPENAI_KEY'],
             'Gemini': ['GEMINI_API_KEY'],
@@ -154,7 +155,9 @@ class HealthChecker:
                 continue
 
             try:
-                if provider == "Claude":
+                if provider == "JarvisCore Promotion":
+                    success = await self._test_promo()
+                elif provider == "Claude":
                     success = await self._test_claude()
                 elif provider == "Azure OpenAI":
                     success = await self._test_azure()
@@ -175,6 +178,21 @@ class HealthChecker:
             except Exception as e:
                 self.issues.append(f"{provider} test failed: {str(e)}")
                 self._print_status(f"  {provider} API", False, str(e))
+
+    async def _test_promo(self) -> bool:
+        """Test promotional inference with the public client contract."""
+        from jarviscore.promo import PromoLLMClient
+
+        token = os.getenv("JARVISCORE_PROMO_TOKEN")
+        if not token:
+            return False
+        client = PromoLLMClient(token=token)
+        response = await client.generate(
+            [{"role": "user", "content": "Reply with just 'OK'"}],
+            temperature=0.0,
+            max_tokens=10,
+        )
+        return response["content"].strip().upper() == "OK"
 
     async def _test_claude(self) -> bool:
         """Test Claude API connectivity."""
@@ -309,6 +327,7 @@ class HealthChecker:
             print("\n2. Configure your environment:")
             print("   cp .env.example .env")
             print("   # Edit .env and add one of:")
+            print("   #   JARVISCORE_PROMO_TOKEN=jc_trial_...")
             print("   #   CLAUDE_API_KEY=sk-ant-...")
             print("   #   AZURE_API_KEY=...")
             print("   #   GEMINI_API_KEY=...")

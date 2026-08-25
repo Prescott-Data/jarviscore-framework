@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Memos — Investment Committee{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <h1 class="text-2xl font-bold text-slate-800 mb-5">Memo Archive</h1>
+
+  {% if not all_memos %}
+    <div class="bg-white rounded-xl shadow p-8 text-center text-slate-400">
+      No memos yet. <a href="/run" class="text-blue-500 hover:underline">Run the committee</a> to generate one.
+    </div>
+  {% else %}
+  <div class="flex gap-5">
+
+    <!-- Sidebar: file list -->
+    <div class="w-56 shrink-0 space-y-1">
+      {% for m in all_memos %}
+      <a href="/memos?file={{ m.file }}"
+         class="block px-3 py-2.5 rounded-lg text-sm transition-colors
+                {% if m.file == selected_file %}bg-slate-800 text-white{% else %}bg-white hover:bg-slate-50 text-slate-700 shadow-sm{% endif %}">
+        <div class="flex items-center justify-between">
+          <span class="font-mono font-bold text-xs">{{ m.ticker }}</span>
+          <span class="px-1.5 py-0.5 rounded text-xs font-bold
+            {% if m.action == 'BUY' %}bg-emerald-100 text-emerald-700
+            {% elif m.action == 'HOLD' %}bg-amber-100 text-amber-700
+            {% else %}bg-red-100 text-red-700{% endif %}
+            {% if m.file == selected_file %}opacity-80{% endif %}">
+            {{ m.action }}
+          </span>
+        </div>
+        <p class="text-xs mt-0.5 {% if m.file == selected_file %}text-slate-300{% else %}text-slate-400{% endif %}">
+          {{ m.timestamp }}
+        </p>
+      </a>
+      {% endfor %}
+    </div>
+
+    <!-- Main: rendered memo -->
+    <div class="flex-1 bg-white rounded-xl shadow p-6">
+      {% if selected_file %}
+      <div class="flex items-center justify-between mb-4">
+        <p class="text-xs text-slate-400 font-mono">{{ selected_file }}</p>
+        <a href="/memos/download/{{ selected_file }}"
+           class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1 rounded-lg transition-colors">
+          ⬇ Download
+        </a>
+      </div>
+      <div class="prose prose-sm max-w-none memo-content">
+        {{ memo_html | safe }}
+      </div>
+      {% else %}
+        <p class="text-slate-400 text-sm">Select a memo from the list.</p>
+      {% endif %}
+    </div>
+
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

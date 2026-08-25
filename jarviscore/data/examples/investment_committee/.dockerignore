@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+!.env.example
+data/memos/
+blob_storage/
+logs/
+*.md
+!README.md
+PLAN.md
+DASHBOARD_PLAN.md
+DASHBOARD_GUIDE.md

@@ -80,3 +80,6 @@ output/
 
 # test scratch dirs must never be committed
 pytest-of-*/
+
+# Memos written by the investment-committee demo at runtime
+examples/investment_committee/data/
