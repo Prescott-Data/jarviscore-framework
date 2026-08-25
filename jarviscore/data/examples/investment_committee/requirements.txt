@@ -1,0 +1,10 @@
+jarviscore-framework[redis]
+yfinance
+pandas
+numpy
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+aiofiles
+markdown

@@ -50,6 +50,15 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - `jarviscore check --validate-llm` reports promotional configuration and
   performs a real promotional inference request when asked.
 
+**Fixed**
+
+- `jarviscore init` failed on a pip-installed package with
+  `Source file not found: .../jarviscore/data/.env.minimal`. The file was read
+  by the scaffold command but never declared as package data, so it was absent
+  from every published wheel and the first command a new user runs created
+  nothing. Declared, along with the bundled `data/examples/*.py` that were
+  similarly declared but missing from the repository.
+
 </div>
 
 <div class="changelog-release" markdown>

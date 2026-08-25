@@ -124,6 +124,7 @@ jarviscore = "jarviscore.cli.__main__:main"
 jarviscore = [
     "docs/*.md",
     "data/.env.example",
+    "data/.env.minimal",
     "data/examples/*.py",
     # Integration atom bundles: atom sources are data files (registered by
     # seed_registry at runtime), so they must be declared or the wheel ships none

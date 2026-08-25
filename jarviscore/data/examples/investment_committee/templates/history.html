@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}History — Investment Committee{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto space-y-6">
+
+  <h1 class="text-2xl font-bold text-slate-800">Decision History</h1>
+
+  <!-- Filters -->
+  <div class="bg-white rounded-xl shadow p-4 flex flex-wrap gap-3 items-center text-sm">
+    <select id="filter-ticker"
+            class="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+      <option value="">All Tickers</option>
+      {% for t in tickers %}
+      <option value="{{ t }}">{{ t }}</option>
+      {% endfor %}
+    </select>
+
+    <select id="filter-action"
+            class="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+      <option value="">All Actions</option>
+      <option value="BUY">BUY</option>
+      <option value="HOLD">HOLD</option>
+      <option value="PASS">PASS</option>
+    </select>
+
+    <input id="filter-search" type="text" placeholder="Search…"
+           class="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+
+    <span class="text-slate-400 text-xs ml-auto" id="row-count">{{ memos | length }} decisions</span>
+  </div>
+
+  <!-- Decision table -->
+  <div class="bg-white rounded-xl shadow overflow-hidden">
+    {% if memos %}
+    <table class="w-full text-sm" id="history-table">
+      <thead class="bg-slate-50 border-b border-slate-100">
+        <tr class="text-xs text-slate-500 uppercase tracking-wide">
+          <th class="text-left px-4 py-3">Timestamp</th>
+          <th class="text-left px-4 py-3">Ticker</th>
+          <th class="text-left px-4 py-3">Action</th>
+          <th class="text-right px-4 py-3">Allocation</th>
+          <th class="text-left px-4 py-3">Conviction</th>
+          <th class="text-right px-4 py-3">Score</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in memos %}
+        <tr class="history-row border-b border-slate-50 hover:bg-slate-50 transition-colors"
+            data-ticker="{{ m.ticker }}" data-action="{{ m.action }}"
+            data-search="{{ m.ticker }} {{ m.action }} {{ m.rationale }}">
+          <td class="px-4 py-3 text-slate-500 text-xs font-mono">{{ m.timestamp }}</td>
+          <td class="px-4 py-3 font-mono font-bold">{{ m.ticker }}</td>
+          <td class="px-4 py-3">
+            <span class="px-2 py-0.5 rounded text-xs font-bold
+              {% if m.action == 'BUY' %}bg-emerald-100 text-emerald-700
+              {% elif m.action == 'HOLD' %}bg-amber-100 text-amber-700
+              {% else %}bg-red-100 text-red-700{% endif %}">
+              {{ m.action }}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-right">
+            {% if m.allocation_usd %}${{ "{:,.0f}".format(m.allocation_usd) }}{% else %}—{% endif %}
+          </td>
+          <td class="px-4 py-3 text-slate-600">{{ m.conviction or "—" }}</td>
+          <td class="px-4 py-3 text-right">
+            {% if m.overall_score %}
+            <span class="font-semibold {% if m.overall_score >= 7 %}text-emerald-600{% elif m.overall_score >= 5 %}text-amber-600{% else %}text-red-500{% endif %}">
+              {{ m.overall_score }}/10
+            </span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="px-4 py-3">
+            <a href="/memos?file={{ m.file }}" class="text-blue-500 hover:underline text-xs whitespace-nowrap">View →</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="p-8 text-center text-slate-400">
+        No decisions yet. <a href="/run" class="text-blue-500 hover:underline">Run the committee</a> to start.
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- LTM Institutional Learnings -->
+  <div class="bg-white rounded-xl shadow p-5">
+    <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">
+      Institutional Learnings (LTM)
+    </h2>
+    {% if ltm %}
+    <pre class="text-xs text-slate-600 bg-slate-50 rounded-lg p-4 whitespace-pre-wrap font-mono leading-relaxed">{{ ltm }}</pre>
+    {% else %}
+    <p class="text-sm text-slate-400">No learnings stored yet. Complete a full committee run to populate LTM.</p>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  initHistoryFilters();
+</script>
+{% endblock %}
