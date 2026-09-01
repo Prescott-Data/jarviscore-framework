@@ -135,6 +135,8 @@ Athena provides three-tier persistent memory (STM, MTM, and LTM graph) that span
 | `ATHENA_TENANT_ID` | `default` | Tenant namespace for memory isolation across teams or environments |
 | `ATHENA_HTTP_TIMEOUT` | `10.0` | Seconds before an Athena HTTP call times out. Increase if your Athena instance is remote or under load. |
 | `ATHENA_SESSION_TTL_DAYS` | `30` | How long a session ID is cached in Redis before Athena re-issues it. |
+| `ATHENA_API_KEY` | — | Optional API key sent as `X-API-Key`. Keep it out of prompts and logs. |
+| `ATHENA_JWT_TOKEN` | — | Optional JWT sent as `X-JWT-Token` for tenant/user isolation. |
 | `ATHENA_PORT` | `8080` | Host port for the Athena server when the stack is started by `memory init` |
 
 Every published port in the local stack is overridable for co-located deployments: `ATHENA_REDIS_PORT` (6380), `ATHENA_MONGO_PORT` (27017), `ATHENA_MINIO_PORT` (9000), `ATHENA_MINIO_CONSOLE_PORT` (9001), `ATHENA_MILVUS_PORT` (19530), `ATHENA_MILVUS_METRICS_PORT` (9091), `ATHENA_ARANGO_PORT` (8529).

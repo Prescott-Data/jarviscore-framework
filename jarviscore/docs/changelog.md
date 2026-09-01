@@ -24,6 +24,26 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.4.0 <span class="changelog-date">2026-09-01</span>
+
+**Added**
+
+- Athena v0.1.6 client parity for session reads/deletes, interactions,
+  query-aware context, metadata-filtered semantic search, topics, segments,
+  graph analytics, structured payloads, source timestamps, and durable event
+  IDs through `store_event_with_id()`.
+- Optional `ATHENA_API_KEY` and `ATHENA_JWT_TOKEN` authentication headers.
+
+**Changed**
+
+- `store_event()` remains boolean for compatibility while accepting optional
+  timestamp, payload, and MIME arguments. Closed HTTP clients are recreated on
+  the next request instead of permanently disabling Athena access.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.3.2 <span class="changelog-date">2026-09-01</span>
 
 **Fixed**
