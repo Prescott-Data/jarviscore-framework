@@ -12,7 +12,9 @@ It adds zero dependencies — httpx is already in jarviscore core.
 
 Configuration:
     ATHENA_URL=http://localhost:8080   (required to enable Athena)
-    ATHENA_TENANT_ID=my-app          (default: "default")
+    ATHENA_TENANT_ID=my-app            (default: "default")
+    ATHENA_API_KEY=...                 (optional X-API-Key authentication)
+    ATHENA_JWT_TOKEN=...               (optional X-JWT-Token authentication)
 
 Graceful degradation:
     If ATHENA_URL is not set, all methods return empty/None and log a
@@ -35,8 +37,10 @@ Athena API reference (memory.proto → HTTP gateway):
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -72,10 +76,14 @@ class AthenaClient:
         base_url: str,
         tenant_id: str = "default",
         timeout: float = 10.0,
+        api_key: Optional[str] = None,
+        jwt_token: Optional[str] = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._tenant_id = tenant_id
         self._timeout = timeout
+        self._api_key = api_key
+        self._jwt_token = jwt_token
         self._client = None  # lazy-init httpx.AsyncClient
 
     @classmethod
@@ -99,16 +107,30 @@ class AthenaClient:
             )
             return None
         tenant = os.getenv("ATHENA_TENANT_ID", "default")
-        return cls(base_url=url, tenant_id=tenant)
+        timeout = float(os.getenv("ATHENA_HTTP_TIMEOUT", "10.0"))
+        return cls(
+            base_url=url,
+            tenant_id=tenant,
+            timeout=timeout,
+            api_key=os.getenv("ATHENA_API_KEY") or None,
+            jwt_token=os.getenv("ATHENA_JWT_TOKEN") or None,
+        )
 
-    async def _http(self) :
+    async def _http(self):
         """Lazy-init httpx.AsyncClient (imported only when actually used)."""
-        if self._client is None:
+        is_closed = getattr(self._client, "is_closed", False)
+        if self._client is None or is_closed is True:
             import httpx  # already in jarviscore core deps
+
+            headers = {"Content-Type": "application/json"}
+            if self._api_key:
+                headers["X-API-Key"] = self._api_key
+            if self._jwt_token:
+                headers["X-JWT-Token"] = self._jwt_token
             self._client = httpx.AsyncClient(
                 base_url=self._base_url,
                 timeout=self._timeout,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
             )
         return self._client
 
@@ -119,6 +141,29 @@ class AthenaClient:
             self._client = None
 
     # ── Session Management ────────────────────────────────────────────────────
+
+    async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return one Athena session, or ``None`` when it cannot be read."""
+        try:
+            http = await self._http()
+            resp = await http.get(f"/api/v1/sessions/{session_id}")
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("session") or data
+        except Exception as exc:
+            logger.debug(f"[Athena] get_session failed for '{session_id}': {exc}")
+            return None
+
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete one Athena session."""
+        try:
+            http = await self._http()
+            resp = await http.delete(f"/api/v1/sessions/{session_id}")
+            resp.raise_for_status()
+            return bool(resp.json().get("success", False))
+        except Exception as exc:
+            logger.warning(f"[Athena] delete_session failed for '{session_id}': {exc}")
+            return False
 
     async def create_session(
         self,
@@ -208,6 +253,39 @@ class AthenaClient:
 
     # ── Memory Writes ─────────────────────────────────────────────────────────
 
+    async def store_interaction(
+        self,
+        session_id: str,
+        user_message: str,
+        agent_response: str,
+        metadata: Optional[Dict[str, str]] = None,
+        timestamp: Optional[datetime | str] = None,
+    ) -> bool:
+        """Store one user-agent exchange through Athena's interaction API."""
+        try:
+            http = await self._http()
+            payload: Dict[str, Any] = {
+                "session_id": session_id,
+                "user_message": user_message,
+                "agent_response": agent_response,
+                "metadata": {
+                    "tenant_id": self._tenant_id,
+                    "origin_service": "jarviscore",
+                    **(metadata or {}),
+                },
+            }
+            serialized_timestamp = _rfc3339(timestamp)
+            if serialized_timestamp:
+                payload["timestamp"] = serialized_timestamp
+            resp = await http.post(
+                f"/api/v1/sessions/{session_id}/interactions", json=payload
+            )
+            resp.raise_for_status()
+            return bool(resp.json().get("success", False))
+        except Exception as exc:
+            logger.warning(f"[Athena] store_interaction failed: {exc}")
+            return False
+
     async def store_event(
         self,
         session_id: str,
@@ -215,6 +293,10 @@ class AthenaClient:
         event_type: str,
         content: str,
         metadata: Optional[Dict[str, str]] = None,
+        *,
+        timestamp: Optional[datetime | str] = None,
+        payload: Optional[bytes] = None,
+        mime_type: Optional[str] = None,
     ) -> bool:
         """
         Store a single typed event in Athena STM.
@@ -227,13 +309,69 @@ class AthenaClient:
             event_type:  TYPE_MESSAGE / TYPE_THOUGHT / TYPE_ACTION / TYPE_OBSERVATION
             content:     The event text content
             metadata:    Optional k/v enrichment (task_id, workflow_id, etc.)
+            timestamp:   Optional occurrence time as datetime or RFC3339 string
+            payload:     Optional exact binary payload, base64-encoded for REST
+            mime_type:   Required MIME type when payload is provided
 
         Returns:
             True if stored successfully, False on error.
         """
+        result = await self._store_event(
+            session_id,
+            role,
+            event_type,
+            content,
+            metadata,
+            timestamp=timestamp,
+            payload=payload,
+            mime_type=mime_type,
+        )
+        return result is not None
+
+    async def store_event_with_id(
+        self,
+        session_id: str,
+        role: str,
+        event_type: str,
+        content: str,
+        metadata: Optional[Dict[str, str]] = None,
+        *,
+        timestamp: Optional[datetime | str] = None,
+        payload: Optional[bytes] = None,
+        mime_type: Optional[str] = None,
+    ) -> Optional[str]:
+        """Store an event and return its durable Athena event ID."""
+        result = await self._store_event(
+            session_id,
+            role,
+            event_type,
+            content,
+            metadata,
+            timestamp=timestamp,
+            payload=payload,
+            mime_type=mime_type,
+        )
+        if result is None:
+            return None
+        return str(result.get("eventId") or result.get("event_id") or "") or None
+
+    async def _store_event(
+        self,
+        session_id: str,
+        role: str,
+        event_type: str,
+        content: str,
+        metadata: Optional[Dict[str, str]],
+        *,
+        timestamp: Optional[datetime | str],
+        payload: Optional[bytes],
+        mime_type: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        if payload is not None and not mime_type:
+            raise ValueError("mime_type is required when payload is provided")
         try:
             http = await self._http()
-            payload: Dict[str, Any] = {
+            request: Dict[str, Any] = {
                 "session_id": session_id,
                 "role": role,
                 "type": event_type,
@@ -244,14 +382,21 @@ class AthenaClient:
                     **(metadata or {}),
                 },
             }
+            serialized_timestamp = _rfc3339(timestamp)
+            if serialized_timestamp:
+                request["timestamp"] = serialized_timestamp
+            if payload is not None:
+                request["payload"] = base64.b64encode(payload).decode("ascii")
+                request["mime_type"] = mime_type
             resp = await http.post(
-                f"/api/v1/sessions/{session_id}/events", json=payload
+                f"/api/v1/sessions/{session_id}/events", json=request
             )
             resp.raise_for_status()
-            return True
+            data = resp.json()
+            return data if data.get("success", True) else None
         except Exception as exc:
             logger.warning(f"[Athena] store_event failed: {exc}")
-            return False
+            return None
 
     # ── Memory Reads ──────────────────────────────────────────────────────────
 
@@ -259,6 +404,9 @@ class AthenaClient:
         self,
         session_id: str,
         limit: int = 20,
+        *,
+        query: str = "",
+        include_segments: bool = False,
     ) -> Dict[str, Any]:
         """
         Retrieve recent STM events + relevant MTM chains from Athena.
@@ -281,10 +429,12 @@ class AthenaClient:
         """
         try:
             http = await self._http()
-            resp = await http.get(
-                f"/api/v1/sessions/{session_id}/context",
-                params={"limit": limit},
-            )
+            params: Dict[str, Any] = {"limit": limit}
+            if query:
+                params["query"] = query
+            if include_segments:
+                params["includeSegments"] = True
+            resp = await http.get(f"/api/v1/sessions/{session_id}/context", params=params)
             resp.raise_for_status()
             data = resp.json()
             return {
@@ -324,6 +474,7 @@ class AthenaClient:
         query: str,
         limit: int = 5,
         similarity_threshold: float = 0.7,
+        metadata_filter: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Semantic search across the agent's memory (MTM vector store).
@@ -345,6 +496,7 @@ class AthenaClient:
                 "query": query,
                 "limit": limit,
                 "similarity_threshold": similarity_threshold,
+                "filter": metadata_filter or {},
             }
             resp = await http.post(
                 f"/api/v1/sessions/{session_id}/context/search", json=payload
@@ -355,6 +507,41 @@ class AthenaClient:
         except Exception as exc:
             logger.debug(f"[Athena] search_memory failed: {exc}")
             return []
+
+    async def analyze_topics(self, session_id: str) -> List[Dict[str, Any]]:
+        """Return Athena's topic analysis for a session."""
+        try:
+            http = await self._http()
+            resp = await http.get(f"/api/v1/sessions/{session_id}/analysis/topics")
+            resp.raise_for_status()
+            return resp.json().get("topics", [])
+        except Exception as exc:
+            logger.debug(f"[Athena] analyze_topics failed: {exc}")
+            return []
+
+    async def get_segments(self, session_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return Athena memory segments for a session."""
+        try:
+            http = await self._http()
+            resp = await http.get(
+                f"/api/v1/sessions/{session_id}/segments", params={"limit": limit}
+            )
+            resp.raise_for_status()
+            return resp.json().get("segments", [])
+        except Exception as exc:
+            logger.debug(f"[Athena] get_segments failed: {exc}")
+            return []
+
+    async def trigger_graph_analytics(self) -> bool:
+        """Trigger Athena's administrative graph-analytics job."""
+        try:
+            http = await self._http()
+            resp = await http.post("/api/v1/admin/analytics/trigger", json={})
+            resp.raise_for_status()
+            return bool(resp.json().get("success", False))
+        except Exception as exc:
+            logger.warning(f"[Athena] trigger_graph_analytics failed: {exc}")
+            return False
 
     async def get_heat_metrics(self, session_id: str) -> Dict[str, Any]:
         """
@@ -370,7 +557,8 @@ class AthenaClient:
             http = await self._http()
             resp = await http.get(f"/api/v1/sessions/{session_id}/analysis/heat")
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            return data.get("heatMetrics", data.get("heat_metrics", data))
         except Exception as exc:
             logger.debug(f"[Athena] get_heat_metrics failed: {exc}")
             return {}
@@ -399,3 +587,12 @@ class AthenaClient:
             return resp.json()
         except Exception as exc:
             return {"status": "unreachable", "error": str(exc)}
+
+
+def _rfc3339(value: Optional[datetime | str]) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    moment = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

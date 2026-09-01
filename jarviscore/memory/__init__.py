@@ -58,6 +58,8 @@ def get_athena_client(settings=None) -> "AthenaClient | None":
         if athena:
             am = await AthenaMemory.create("my-agent", athena, redis_store)
     """
+    import os
+
     if settings is None:
         try:
             from jarviscore.config.settings import settings as _s
@@ -67,7 +69,6 @@ def get_athena_client(settings=None) -> "AthenaClient | None":
 
     url = (getattr(settings, "athena_url", None) or "").strip()
     if not url:
-        import os
         url = os.getenv("ATHENA_URL", "").strip()
 
     if not url:
@@ -75,4 +76,12 @@ def get_athena_client(settings=None) -> "AthenaClient | None":
 
     tenant = getattr(settings, "athena_tenant_id", "default")
     timeout = getattr(settings, "athena_http_timeout", 10.0)
-    return AthenaClient(base_url=url, tenant_id=tenant, timeout=timeout)
+    api_key = getattr(settings, "athena_api_key", None) or os.getenv("ATHENA_API_KEY")
+    jwt_token = getattr(settings, "athena_jwt_token", None) or os.getenv("ATHENA_JWT_TOKEN")
+    return AthenaClient(
+        base_url=url,
+        tenant_id=tenant,
+        timeout=timeout,
+        api_key=api_key,
+        jwt_token=jwt_token,
+    )
