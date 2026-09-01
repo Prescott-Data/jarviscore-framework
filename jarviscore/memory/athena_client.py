@@ -274,6 +274,9 @@ class AthenaClient:
             Dict with keys:
                 stm_events: List[dict]  — recent turn events
                 mtm_chains: List[dict]  — summarised cognitive chains
+                segments: List[dict]    — Athena memory segments
+                user_persona: dict | None — inferred user persona
+                ltpm: dict | None       — long-term persistent-memory status
                 heat_score: float       — session heat (0.0–1.0)
         """
         try:
@@ -285,13 +288,35 @@ class AthenaClient:
             resp.raise_for_status()
             data = resp.json()
             return {
-                "stm_events": data.get("events", data.get("stmEvents", [])),
-                "mtm_chains": data.get("chains", data.get("mtmChains", [])),
-                "heat_score": data.get("heatScore", 0.0),
+                "stm_events": data.get(
+                    "stmEvents", data.get("stm_events", data.get("events", []))
+                ),
+                "mtm_chains": data.get(
+                    "relevantPages",
+                    data.get(
+                        "relevant_pages",
+                        data.get("mtmChains", data.get("chains", [])),
+                    ),
+                ),
+                "segments": data.get("segments", []),
+                "user_persona": data.get(
+                    "userPersona", data.get("user_persona")
+                ),
+                "ltpm": data.get("ltpm"),
+                "heat_score": data.get(
+                    "heatScore", data.get("heat_score", 0.0)
+                ),
             }
         except Exception as exc:
             logger.debug(f"[Athena] get_context failed: {exc}")
-            return {"stm_events": [], "mtm_chains": [], "heat_score": 0.0}
+            return {
+                "stm_events": [],
+                "mtm_chains": [],
+                "segments": [],
+                "user_persona": None,
+                "ltpm": None,
+                "heat_score": 0.0,
+            }
 
     async def search_memory(
         self,

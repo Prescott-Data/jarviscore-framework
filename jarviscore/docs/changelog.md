@@ -24,6 +24,19 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.3.2 <span class="changelog-date">2026-09-01</span>
+
+**Fixed**
+
+- Athena v0.1.5 `GetContext` responses now retain canonical `relevantPages`
+  as MTM chains instead of silently dropping cross-session summaries. The
+  client also preserves segments, user persona, and LTPM status while keeping
+  compatibility with legacy response aliases.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.3.1
 
 **Added**

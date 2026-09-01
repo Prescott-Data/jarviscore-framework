@@ -5,6 +5,9 @@ AthenaMemory — plugs into UnifiedMemory as an optional fourth tier.
 
 When an AthenaClient is wired in, every log_turn() write goes to BOTH
 the Redis EpisodicLedger AND Athena STM. The kernel's rehydrate_bundle()
+                            "segments": [...],     # memory segments when requested/available
+                            "user_persona": {...}, # inferred persona when available
+                            "ltpm": {...},         # long-term persistent-memory status
 call also pulls Athena MTM chains (summarised cognitive chains) as
 additional context, giving agents cross-session, semantically searchable
 memory instead of just the raw Redis stream.
@@ -31,7 +34,6 @@ from typing import Any, Dict, List, Optional
 from .athena_client import (
     AthenaClient,
     ROLE_AGENT,
-    ROLE_SYSTEM,
     TYPE_ACTION,
     TYPE_OBSERVATION,
     TYPE_THOUGHT,
