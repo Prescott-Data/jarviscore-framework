@@ -36,10 +36,10 @@ def nifty_get_project(auth_info: dict, project_id: str, timeout: int = 30, verif
 
 def _nf_root(base_url):
     root = (base_url or NIFTY_API).rstrip("/")
-    if "niftypm.com" not in root:
+    if not _host_is(root, "niftypm.com"):
         return None, "base_url must be https://openapi.niftypm.com/api/v1.0"
     if not root.endswith("/api/v1.0"):
-        if root.endswith("openapi.niftypm.com"):
+        if "/" not in root.split("://", 1)[-1]:
             root = root + "/api/v1.0"
     return root, None
 
@@ -132,3 +132,16 @@ def _nf_paginate(url, headers, base_params, items_key, limit, timeout, verify_ss
             break
         offset += len(batch)
     return records[:cap], status, "ok"
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

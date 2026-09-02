@@ -40,7 +40,7 @@ def _assembla_api_root(base_url: str):
         return root, None
     if root.endswith("/api"):
         return root + "/v1", None
-    if root == "https://api.assembla.com" or root.endswith("api.assembla.com"):
+    if root == "https://api.assembla.com" or (_host_is(root, "api.assembla.com") and "/" not in root.split("://", 1)[-1]):
         return root + "/v1", None
     return None, "base_url must be https://api.assembla.com/v1"
 
@@ -133,3 +133,16 @@ def _assembla_paginate_page(
         if page > 200:
             break
     return records[:limit], status, "ok"
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

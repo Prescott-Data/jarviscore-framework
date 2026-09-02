@@ -78,7 +78,7 @@ def _asana_api_root(base_url: str):
         return root, None
     if root.endswith("/api"):
         return root + "/1.0", None
-    if root == "https://app.asana.com" or root.endswith("app.asana.com"):
+    if root == "https://app.asana.com" or (_host_is(root, "app.asana.com") and "/" not in root.split("://", 1)[-1]):
         return root + "/api/1.0", None
     return None, "base_url must be https://app.asana.com/api/1.0"
 
@@ -100,3 +100,16 @@ def _asana_workspace(auth_info, workspace=None):
         or auth_info.get("workspace_gid")
         or auth_info.get("workspace_id")
     )
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

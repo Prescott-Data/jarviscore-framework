@@ -27,7 +27,7 @@ def circleci_list_projects(auth_info: dict, timeout: int = 30, verify_ssl: bool 
 
 def _circleci_api_root(base_url):
     root = (base_url or CIRCLECI_API).rstrip("/")
-    if "circleci.com" in root and "/api/v2" not in root:
+    if _host_is(root, "circleci.com") and "/api/v2" not in root:
         root = root + "/api/v2" if not root.endswith("/api") else root + "/v2"
     return root
 
@@ -122,3 +122,16 @@ def _circleci_pipeline_body(payload, branch=None, parameters=None):
     if parameters is not None:
         body["parameters"] = parameters
     return body
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

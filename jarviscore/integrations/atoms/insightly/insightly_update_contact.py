@@ -36,7 +36,7 @@ def insightly_update_contact(auth_info: dict, contact_id: str, payload: Dict[str
 def _in_api_root(base_url):
     root = (base_url or INSIGHTLY_API).rstrip("/")
     if "/v3.1" not in root:
-        if "insightly.com" in root:
+        if _host_is(root, "insightly.com"):
             root = root + "/v3.1" if not root.endswith("/v3") else root + ".1"
         else:
             return None, "base_url must be https://api.{pod}.insightly.com/v3.1"
@@ -112,3 +112,16 @@ def _in_provision_id(data):
         if data.get(key) not in (None, ""):
             return [data[key]]
     return []
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

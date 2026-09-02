@@ -37,7 +37,7 @@ def _pn_root(base_url, auth_info):
     if "/api/v1" not in root:
         if root.endswith("/api"):
             root = root + "/v1"
-        elif "pendo.io" in root:
+        elif _host_is(root, "pendo.io"):
             root = root + "/api/v1"
     if not root:
         return None, "base_url is required (https://app.pendo.io/api/v1)"
@@ -175,3 +175,16 @@ def _pn_match(record, query):
         if val is not None and q in str(val).lower():
             return True
     return False
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

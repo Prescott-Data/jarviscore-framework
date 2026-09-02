@@ -25,7 +25,7 @@ def _close_api_root(base_url):
         return root
     if root.endswith("/api"):
         return root + "/v1"
-    if "api.close.com" in root and "/api/v1" not in root:
+    if _host_is(root, "api.close.com") and "/api/v1" not in root:
         return root + "/api/v1" if not root.endswith("/v1") else root
     if "/api/v1" not in root:
         return root + "/api/v1"
@@ -124,3 +124,16 @@ def _close_search_query(query, limit):
         },
         "_limit": min(max(int(limit), 1), 100),
     }
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

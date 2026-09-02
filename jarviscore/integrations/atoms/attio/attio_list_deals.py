@@ -44,7 +44,7 @@ def _attio_api_root(base_url: str):
         return root, None
     if root.endswith("/v1"):
         root = root[: -len("/v1")]
-    if root == _ATTIO_HOST or root.endswith("api.attio.com"):
+    if root == _ATTIO_HOST or _host_is(root, "api.attio.com"):
         return _ATTIO_HOST + "/v2", None
     return None, "base_url must be https://api.attio.com"
 
@@ -154,3 +154,16 @@ def _attio_search_filter(query: str):
             {"domains": {"domain": {"$contains": q}}},
         ]
     }
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

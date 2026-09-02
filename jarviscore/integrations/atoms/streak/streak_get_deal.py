@@ -23,7 +23,7 @@ def _st_root(base_url, auth_info):
     auth_info = auth_info or {}
     root = (base_url or auth_info.get("streak_url") or auth_info.get("base_url") or "https://www.streak.com/api/v1").strip().rstrip("/")
     if not root.endswith("/v1"):
-        if "streak.com" in root and "/v1" not in root:
+        if _host_is(root, "streak.com") and "/v1" not in root:
             root = root + "/api/v1" if "/api" not in root else root + "/v1"
     return root, None
 
@@ -57,3 +57,16 @@ def _st_provision(data, status, msg, fallback_id=None):
 
 def _st_err(resp):
     return (resp.text or f"HTTP {resp.status_code}")[:1000]
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

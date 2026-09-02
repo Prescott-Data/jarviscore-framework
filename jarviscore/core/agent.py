@@ -303,7 +303,7 @@ class Agent(ABC):
         if "bind_port" not in mesh_config or mesh_config.get("bind_port") == 0:
             import socket
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('', 0))
+                s.bind(('127.0.0.1', 0))
                 mesh_config["bind_port"] = s.getsockname()[1]
 
         mesh_config["node_name"] = f"agent-{self.agent_id}"

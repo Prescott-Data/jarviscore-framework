@@ -49,7 +49,7 @@ def _etsy_api_root(base_url: str):
     if not root.endswith("/v3/application"):
         if root.endswith("/v3"):
             root = f"{root}/application"
-        elif "etsy.com" in root and _ETSY_API_SUFFIX not in root:
+        elif _host_is(root, "etsy.com") and _ETSY_API_SUFFIX not in root:
             return None, "base_url must be the Etsy Open API v3 root (https://openapi.etsy.com/v3/application)"
     return root, None
 
@@ -178,3 +178,16 @@ def _etsy_provision_id(data, keys):
 
 def _etsy_not_supported(msg):
     return {"records": [], "data_count": 0, "status": 501, "message": msg}
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

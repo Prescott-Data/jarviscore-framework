@@ -20,7 +20,7 @@ def _sh_root(base_url, shop, auth_info):
     auth_info = auth_info or {}
     shop = (shop or auth_info.get("shop") or auth_info.get("shop_domain") or "").strip().rstrip("/")
     if shop and not shop.startswith("http"):
-        shop = f"https://{shop}" if ".myshopify.com" in shop else f"https://{shop}.myshopify.com"
+        shop = f"https://{shop}" if shop.endswith(".myshopify.com") else f"https://{shop}.myshopify.com"
     root = (base_url or auth_info.get("shopify_url") or shop or auth_info.get("base_url") or "").strip().rstrip("/")
     if not root:
         return None, "base_url or shop is required (https://{shop}.myshopify.com)"

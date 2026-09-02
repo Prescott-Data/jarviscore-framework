@@ -28,7 +28,7 @@ def keap_delete_contact(auth_info: dict, contact_id: str, timeout: int = 30, ver
 def _kp_api_root(base_url):
     root = (base_url or KEAP_API).rstrip("/")
     if "/rest/v2" not in root:
-        if "infusionsoft.com" in root or "keap.com" in root:
+        if _host_is(root, "infusionsoft.com", "keap.com"):
             root = root + "/crm/rest/v2" if "/crm" not in root else root + "/rest/v2" if not root.endswith("/v2") else root
         else:
             return None, "base_url must be https://api.infusionsoft.com/crm/rest/v2"
@@ -48,3 +48,16 @@ def _kp_auth(auth_info):
 
 def _kp_delete(url, headers, timeout, verify_ssl):
     return requests.delete(url, headers=headers, timeout=timeout, verify=verify_ssl)
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

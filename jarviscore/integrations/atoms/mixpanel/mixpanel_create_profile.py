@@ -38,7 +38,7 @@ def _mp_ingest_root(base_url):
 def _mp_query_root(base_url):
     root = (base_url or MP_QUERY).rstrip("/")
     if not root.endswith("/api/query"):
-        if "mixpanel.com" in root and "/api/query" not in root:
+        if _host_is(root, "mixpanel.com") and "/api/query" not in root:
             root = root + "/api/query"
     return root, None
 
@@ -46,7 +46,7 @@ def _mp_query_root(base_url):
 def _mp_export_root(base_url):
     root = (base_url or MP_EXPORT).rstrip("/")
     if not root.endswith("/api/2.0"):
-        if "mixpanel.com" in root and "/api/2.0" not in root:
+        if _host_is(root, "mixpanel.com") and "/api/2.0" not in root:
             root = root + "/api/2.0"
     return root, None
 
@@ -159,3 +159,16 @@ def _mp_engage_query(base_url, auth_info, project_id, form_data, timeout, verify
         return resp.json(), resp.status_code, "ok"
     except Exception:
         return None, resp.status_code, resp.text[:1000]
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

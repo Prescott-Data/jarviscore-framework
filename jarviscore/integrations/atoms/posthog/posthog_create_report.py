@@ -44,9 +44,9 @@ def _pg_ingest_host(base_url, auth_info):
     if ingest:
         return str(ingest).strip().rstrip("/")
     app = _pg_app_host(base_url, auth_info)
-    if "eu.posthog.com" in app:
+    if _host_is(app, "eu.posthog.com"):
         return "https://eu.i.posthog.com"
-    if "posthog.com" in app:
+    if _host_is(app, "posthog.com"):
         return "https://us.i.posthog.com"
     return app
 
@@ -182,3 +182,16 @@ def _pg_query(base_url, auth_info, hogql, timeout=30, verify_ssl=True):
     host = _pg_app_host(base_url, auth_info)
     body = {"query": {"kind": "HogQLQuery", "query": hogql}}
     return _pg_request("post", host + f"/api/projects/{project_id}/query/", auth_info, json_body=body, timeout=timeout, verify_ssl=verify_ssl)
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)
