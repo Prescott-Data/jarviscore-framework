@@ -169,6 +169,8 @@ class AthenaClient:
         self,
         agent_id: str,
         metadata: Optional[Dict[str, str]] = None,
+        *,
+        user_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Create an Athena memory session for an agent.
@@ -179,6 +181,7 @@ class AthenaClient:
         Args:
             agent_id:  Unique agent identifier (e.g. "researcher", "analyst")
             metadata:  Optional k/v tags (e.g. {"team": "data"})
+            user_id:   Athena user scope. Defaults to ``agent_id`` for compatibility.
 
         Returns:
             Athena session_id string, or None on failure.
@@ -187,7 +190,8 @@ class AthenaClient:
             http = await self._http()
             payload: Dict[str, Any] = {
                 "tenant_id": self._tenant_id,
-                "user_id": agent_id,
+                "user_id": user_id or agent_id,
+                "agent_id": agent_id,
                 "metadata": {
                     "agent_id": agent_id,
                     "origin_service": "jarviscore",
@@ -209,6 +213,8 @@ class AthenaClient:
         agent_id: str,
         redis_store=None,
         metadata: Optional[Dict[str, str]] = None,
+        *,
+        user_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Return the existing Athena session for this agent, or create one.
@@ -221,16 +227,23 @@ class AthenaClient:
             agent_id:    Unique agent identifier
             redis_store: Optional RedisContextStore for session caching
             metadata:    Tags forwarded to create_session if creating new
+            user_id:     Athena user scope. Defaults to ``agent_id``.
 
         Returns:
             session_id string, or None if creation fails.
         """
-        redis_key = f"athena_session:{agent_id}"
+        resolved_user_id = user_id or agent_id
+        redis_key = f"athena_session:{self._tenant_id}:{resolved_user_id}:{agent_id}"
+        legacy_redis_key = f"athena_session:{agent_id}"
 
         # 1. Try Redis cache
         if redis_store:
             try:
                 cached = redis_store._redis.get(redis_key)
+                if not cached:
+                    cached = redis_store._redis.get(legacy_redis_key)
+                    if cached:
+                        redis_store._redis.set(redis_key, cached, ex=30 * 86400)
                 if cached:
                     logger.debug(f"[Athena] Reusing session for '{agent_id}': {cached}")
                     return cached
@@ -238,7 +251,9 @@ class AthenaClient:
                 pass
 
         # 2. Create new session
-        session_id = await self.create_session(agent_id, metadata)
+        session_id = await self.create_session(
+            agent_id, metadata, user_id=resolved_user_id
+        )
         if not session_id:
             return None
 

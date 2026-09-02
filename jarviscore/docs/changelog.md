@@ -24,6 +24,19 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.4.1 <span class="changelog-date">2026-09-02</span>
+
+**Fixed**
+
+- Athena session creation now sends distinct `user_id` and `agent_id` fields.
+  Existing callers retain their prior user scope, while applications may opt
+  into a shared user with separate agent memories. Redis session keys now
+  include tenant, user, and agent identity to prevent cross-scope collisions.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.4.0 <span class="changelog-date">2026-09-01</span>
 
 **Added**
