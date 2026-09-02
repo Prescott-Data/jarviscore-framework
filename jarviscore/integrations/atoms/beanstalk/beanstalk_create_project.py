@@ -30,7 +30,7 @@ def _beanstalk_api_root(base_url, account=None):
     if not root:
         return None, "base_url or account is required (https://{account}.beanstalkapp.com)"
     if not root.endswith("/api"):
-        if ".beanstalkapp.com" in root and not root.endswith("/api"):
+        if _host_is(root, "beanstalkapp.com") and not root.endswith("/api"):
             root = root + "/api"
     return root, None
 
@@ -98,3 +98,16 @@ def _beanstalk_paginate(api_root, path, headers, basic, limit, timeout, verify_s
         if page > 200:
             break
     return records[:limit], status, "ok"
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

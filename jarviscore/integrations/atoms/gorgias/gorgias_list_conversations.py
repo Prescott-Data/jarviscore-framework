@@ -24,7 +24,7 @@ def gorgias_list_conversations(auth_info: dict, limit: int = 25, timeout: int = 
 def _gorgias_api_root(base_url):
     root = (base_url or GORGIAS_API).rstrip("/")
     if not root.endswith("/api"):
-        if ".gorgias.com" in root:
+        if _host_is(root, "gorgias.com"):
             root = root + "/api"
         else:
             return None, "base_url must be https://{domain}.gorgias.com/api"
@@ -115,3 +115,16 @@ def _gorgias_ticket_id(auth_info, payload, conversation_id=None):
         or auth_info.get("ticket_id")
     )
     return str(tid).strip() if tid not in (None, "") else None
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

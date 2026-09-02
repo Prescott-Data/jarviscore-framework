@@ -140,7 +140,7 @@ def _box_api_root(base_url):
         if root.endswith("/2"):
             root = root + ".0"
         elif not root.endswith("/2.0"):
-            root = root + "/2.0" if "box.com" in root else BOX_API
+            root = root + "/2.0" if _host_is(root, "box.com") else BOX_API
     return root
 
 
@@ -223,3 +223,16 @@ def _box_paginate_typed_items(url, headers, limit, timeout, verify_ssl, item_typ
         if offset > 100000:
             break
     return records[:limit], status, "ok"
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

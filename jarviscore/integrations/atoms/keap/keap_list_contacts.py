@@ -23,7 +23,7 @@ def keap_list_contacts(auth_info: dict, limit: int = 25, timeout: int = 30, veri
 def _kp_api_root(base_url):
     root = (base_url or KEAP_API).rstrip("/")
     if "/rest/v2" not in root:
-        if "infusionsoft.com" in root or "keap.com" in root:
+        if _host_is(root, "infusionsoft.com", "keap.com"):
             root = root + "/crm/rest/v2" if "/crm" not in root else root + "/rest/v2" if not root.endswith("/v2") else root
         else:
             return None, "base_url must be https://api.infusionsoft.com/crm/rest/v2"
@@ -98,3 +98,16 @@ def _kp_provision_id(data):
     if recs:
         return [recs[0]["id"]]
     return []
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

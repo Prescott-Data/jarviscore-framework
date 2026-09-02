@@ -43,7 +43,7 @@ def drift_list_messages(auth_info: dict, conversation_id: str, timeout: int = 30
 
 def _drift_conv_root(base_url):
     root = (base_url or DRIFT_CONV_HOST).rstrip("/")
-    if "api.drift.com" in root and "driftapi.com" not in root:
+    if _host_is(root, "api.drift.com") and not _host_is(root, "driftapi.com"):
         root = root.replace("api.drift.com", "driftapi.com")
     if root.endswith("/conversations"):
         root = root[: -len("/conversations")]
@@ -76,3 +76,16 @@ def _drift_messages_batch(data):
     if isinstance(data.get("messages"), list):
         return data["messages"]
     return []
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

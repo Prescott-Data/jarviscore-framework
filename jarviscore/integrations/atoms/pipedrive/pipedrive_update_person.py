@@ -21,7 +21,7 @@ def _pi_root(base_url, auth_info):
     root = (base_url or auth_info.get("pipedrive_url") or auth_info.get("company_domain") or auth_info.get("base_url") or "").strip().rstrip("/")
     if not root:
         return None, "base_url is required (https://company.pipedrive.com)"
-    if root.startswith("http") and ".pipedrive.com" in root and "/api/" not in root:
+    if root.startswith("http") and _host_is(root, "pipedrive.com") and "/api/" not in root:
         root = root + "/api/v2"
     elif "/api/v1" in root:
         root = root.replace("/api/v1", "/api/v2")
@@ -181,3 +181,16 @@ def _pi_write(method, path, base_url, auth_info, payload, obj_id=None, timeout=3
         return body if isinstance(body, dict) else {}, status, msg
     data = body.get("data") if isinstance(body, dict) else {}
     return data if isinstance(data, dict) else {}, status, "ok"
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

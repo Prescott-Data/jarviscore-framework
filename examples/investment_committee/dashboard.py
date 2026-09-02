@@ -314,6 +314,8 @@ async def run_submit(
     mode:   str  = Form("full"),
 ):
     ticker = ticker.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9.\-]{1,12}", ticker):
+        return HTMLResponse("Invalid ticker", status_code=400)
     ts     = int(time.time())
     run_id = f"{ticker}-{ts}"
     wf_id  = f"committee-{ticker}-{ts}"
@@ -356,14 +358,26 @@ async def run_stream(run_id: str):
     )
 
 
+def _safe_memo_path(name: str) -> Optional[Path]:
+    """Resolve a memo filename inside MEMO_DIR, rejecting path traversal."""
+    if not name or name != Path(name).name:
+        return None
+    base      = os.path.realpath(MEMO_DIR)
+    candidate = os.path.normpath(os.path.join(base, name))
+    if not candidate.startswith(base + os.sep):
+        return None
+    path = Path(candidate)
+    return path if path.is_file() else None
+
+
 @app.get("/memos", response_class=HTMLResponse)
 async def memos_page(request: Request, file: Optional[str] = None):
     all_memos     = parse_memo_index()
     selected_file = file or (all_memos[0]["file"] if all_memos else None)
     memo_html     = ""
     if selected_file:
-        path = MEMO_DIR / selected_file
-        if path.exists():
+        path = _safe_memo_path(selected_file)
+        if path:
             raw       = path.read_text()
             memo_html = md_lib.markdown(raw, extensions=["tables", "fenced_code"])
     return templates.TemplateResponse("memos.html", {
@@ -377,10 +391,10 @@ async def memos_page(request: Request, file: Optional[str] = None):
 
 @app.get("/memos/download/{filename}")
 async def memo_download(filename: str):
-    path = MEMO_DIR / filename
-    if not path.exists():
+    path = _safe_memo_path(filename)
+    if not path:
         return HTMLResponse("Not found", status_code=404)
-    return FileResponse(str(path), filename=filename, media_type="text/markdown")
+    return FileResponse(str(path), filename=path.name, media_type="text/markdown")
 
 
 @app.get("/portfolio", response_class=HTMLResponse)

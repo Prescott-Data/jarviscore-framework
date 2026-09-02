@@ -31,7 +31,7 @@ def freedcamp_create_task(auth_info: dict, payload: Dict[str, Any], timeout: int
 def _fc_api_root(base_url: str):
     root = (base_url or _FC_API_ROOT).rstrip("/")
     if not root.endswith("/api/v1"):
-        if "freedcamp.com" in root:
+        if _host_is(root, "freedcamp.com"):
             root = root if root.endswith("/api/v1") else f"{root.rstrip('/')}/api/v1"
         else:
             return None, "base_url must be Freedcamp API root (https://freedcamp.com/api/v1)"
@@ -81,3 +81,16 @@ def _fc_provision(data: Any, status: int) -> Dict[str, Any]:
         pid = records[0].get("id") or records[0].get("project_id") or records[0].get("task_id")
     provision_ids = [pid] if pid not in (None, "") else []
     return {"records": records, "data_count": len(records), "status": status, "message": "ok", "provision_ids": provision_ids}
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

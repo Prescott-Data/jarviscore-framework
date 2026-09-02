@@ -37,7 +37,7 @@ def _fs_api_root(base_url: str):
         return None, "base_url is required (https://{domain}.myfreshworks.com/crm/sales/api)"
     if _FS_API_SUFFIX in root:
         return root, None
-    if root.endswith("/api") and ("freshsales.io" in root or "myfreshworks.com" in root):
+    if root.endswith("/api") and (_host_is(root, "freshsales.io", "myfreshworks.com")):
         return root, None
     return None, "base_url must be the Freshsales API root (https://{domain}.myfreshworks.com/crm/sales/api)"
 
@@ -109,3 +109,16 @@ def _fs_paginate_view(url, headers, collection_key, limit, timeout, verify_ssl):
             break
         page += 1
     return records[:cap], status, "ok"
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

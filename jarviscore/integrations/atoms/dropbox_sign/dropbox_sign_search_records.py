@@ -61,7 +61,7 @@ def _sign_api_root(base_url: str):
     root = (base_url or SIGN_API).rstrip("/")
     if root.endswith("/v3"):
         return root, None
-    if "hellosign.com" in root or "dropboxsign.com" in root:
+    if _host_is(root, "hellosign.com", "dropboxsign.com"):
         if "/v3" not in root:
             if root.endswith("/v1"):
                 root = root[:-3] + "/v3"
@@ -82,3 +82,16 @@ def _sign_auth(auth_info: Optional[Dict[str, Any]], json_body: bool = False):
     if not api_key:
         return None, None, "auth_info.api_key is required"
     return headers, (str(api_key).strip(), ""), None
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

@@ -26,7 +26,7 @@ def coda_create_project(auth_info: dict, payload: Dict[str, Any], timeout: int =
 # Coda API v1 — https://coda.io/apis/v1
 def _coda_api_root(base_url):
     root = (base_url or CODA_API).rstrip("/")
-    if "coda.io" in root and "/apis/v1" not in root:
+    if _host_is(root, "coda.io") and "/apis/v1" not in root:
         if root.endswith("/apis"):
             root = root + "/v1"
         else:
@@ -181,3 +181,16 @@ def _coda_not_supported(catalog_path, real_hint):
             "See https://coda.io/developers/apis/v1."
         ),
     }
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

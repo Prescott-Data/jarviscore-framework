@@ -32,9 +32,9 @@ def nimble_get_deal(auth_info: dict, deal_id: str, timeout: int = 30, verify_ssl
 
 def _nb_v1_root(base_url):
     root = (base_url or NIMBLE_V1).rstrip("/")
-    if "nimble.com" not in root:
+    if not _host_is(root, "nimble.com"):
         return None, "base_url must be https://api.nimble.com/api/v1 or https://app.nimble.com/api/v1"
-    if root.endswith("nimble.com"):
+    if "/" not in root.split("://", 1)[-1]:
         root = root + "/api/v1"
     elif "/api/v2" in root:
         root = root.replace("/api/v2", "/api/v1")
@@ -176,3 +176,16 @@ def _nb_get_one(url, headers, timeout, verify_ssl):
     if not recs and isinstance(data, dict) and (data.get("deal_id") or data.get("id")):
         recs = [data]
     return recs, status, "ok"
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

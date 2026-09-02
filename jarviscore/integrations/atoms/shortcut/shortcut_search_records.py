@@ -28,7 +28,7 @@ def _sc_root(base_url, auth_info):
     auth_info = auth_info or {}
     root = (base_url or auth_info.get("shortcut_url") or auth_info.get("base_url") or "https://api.app.shortcut.com/api/v3").strip().rstrip("/")
     if not root.endswith("/v3"):
-        if "shortcut.com" in root and "/v3" not in root:
+        if _host_is(root, "shortcut.com") and "/v3" not in root:
             root = root + "/api/v3" if "/api" not in root else root + "/v3"
     return root, None
 
@@ -77,3 +77,16 @@ def _sc_match(record, query):
         val = record.get(key)
         if val is not None and q in str(val).lower(): return True
     return False
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

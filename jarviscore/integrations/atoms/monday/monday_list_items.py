@@ -30,10 +30,10 @@ def monday_list_items(auth_info: dict, limit: int = 25, timeout: int = 30, verif
 
 def _md_root(base_url):
     root = (base_url or MONDAY_API).rstrip("/")
-    if "monday.com" not in root:
+    if not _host_is(root, "monday.com"):
         return None, "base_url must be https://api.monday.com/v2"
     if not root.endswith("/v2"):
-        root = root + "/v2" if root.endswith("monday.com") or root.endswith("api.monday.com") else root
+        root = root + "/v2" if "/" not in root.split("://", 1)[-1] else root
     return root, None
 
 
@@ -134,3 +134,16 @@ def _md_items_page(base, headers, board_id, limit, query_params, timeout, verify
         if not items or not cursor:
             break
     return records[:cap], status, "ok"
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)

@@ -26,7 +26,7 @@ def less_annoying_crm_get_account(auth_info: dict, account_id: str, timeout: int
 def _lacrm_root(base_url):
     root = (base_url or LACRM_API).rstrip("/")
     if not root.endswith("/v2"):
-        if "lessannoyingcrm.com" in root:
+        if _host_is(root, "lessannoyingcrm.com"):
             root = root + "/v2" if not root.endswith("/v2") else root
         else:
             return None, "base_url must be https://api.lessannoyingcrm.com/v2"
@@ -146,3 +146,16 @@ def _lacrm_pipeline_ids(base, headers, timeout, verify_ssl):
             if isinstance(p, dict) and p.get("PipelineId"):
                 ids.append(p["PipelineId"])
     return ids, resp.status_code, None
+
+
+def _host_is(url, *domains):
+    """True only if url's hostname equals or is a subdomain of one of domains."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)
