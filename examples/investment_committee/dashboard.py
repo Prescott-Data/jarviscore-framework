@@ -362,8 +362,12 @@ def _safe_memo_path(name: str) -> Optional[Path]:
     """Resolve a memo filename inside MEMO_DIR, rejecting path traversal."""
     if not name or name != Path(name).name:
         return None
-    path = (MEMO_DIR / name).resolve()
-    return path if path.parent == MEMO_DIR.resolve() and path.is_file() else None
+    base      = os.path.realpath(MEMO_DIR)
+    candidate = os.path.normpath(os.path.join(base, name))
+    if not candidate.startswith(base + os.sep):
+        return None
+    path = Path(candidate)
+    return path if path.is_file() else None
 
 
 @app.get("/memos", response_class=HTMLResponse)
