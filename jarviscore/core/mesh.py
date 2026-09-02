@@ -1030,7 +1030,9 @@ class Mesh:
             _spec.loader.exec_module(_mod)
             PeerClient = _mod.PeerClient
 
-        is_p2p = self.mode == MeshMode.P2P
+        # Derive P2P from the live coordinator, not self.mode — the mode shim is
+        # assigned later in start(), so it is still "auto" at injection time.
+        is_p2p = self._p2p_coordinator is not None
 
         node_id = ""
         if is_p2p and self._p2p_coordinator and self._p2p_coordinator.swim_manager:
