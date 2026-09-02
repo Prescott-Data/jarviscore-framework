@@ -77,6 +77,8 @@ class AthenaMemory:
         client: AthenaClient,
         redis_store=None,
         metadata: Optional[Dict[str, str]] = None,
+        *,
+        user_id: Optional[str] = None,
     ) -> "AthenaMemory":
         """
         Factory: creates or reuses an Athena session for this agent.
@@ -86,6 +88,7 @@ class AthenaMemory:
             client:      Initialised AthenaClient
             redis_store: Optional — caches session_id so it survives restarts
             metadata:    Tags forwarded to Athena session on creation
+            user_id:     Athena user scope. Defaults to ``agent_id``.
 
         Returns:
             AthenaMemory instance, ready to write/read.
@@ -96,7 +99,10 @@ class AthenaMemory:
             **(metadata or {}),
         }
         session_id = await client.get_or_create_session(
-            agent_id, redis_store=redis_store, metadata=merged_meta
+            agent_id,
+            redis_store=redis_store,
+            metadata=merged_meta,
+            user_id=user_id,
         )
         if not session_id:
             raise RuntimeError(

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -248,6 +248,92 @@ async def test_http_recreates_only_a_boolean_closed_client():
         assert await client._http() is replacement
 
     assert constructor.call_args.kwargs["headers"]["X-API-Key"] == "api-secret"
+
+
+@pytest.mark.asyncio
+async def test_create_session_sends_distinct_user_and_agent_identity():
+    client = AthenaClient("http://athena.test", tenant_id="tenant-1")
+    http = AsyncMock()
+    http.post.return_value = _response({"sessionId": "session-1"})
+    client._client = http
+
+    session_id = await client.create_session(
+        "billy-conversation", {"channel": "telegram"}, user_id="owner"
+    )
+
+    assert session_id == "session-1"
+    assert http.post.await_args.kwargs["json"] == {
+        "tenant_id": "tenant-1",
+        "user_id": "owner",
+        "agent_id": "billy-conversation",
+        "metadata": {
+            "agent_id": "billy-conversation",
+            "origin_service": "jarviscore",
+            "channel": "telegram",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_session_defaults_user_to_agent_for_compatibility():
+    client = AthenaClient("http://athena.test")
+    http = AsyncMock()
+    http.post.return_value = _response({"sessionId": "session-1"})
+    client._client = http
+
+    await client.create_session("researcher")
+
+    request = http.post.await_args.kwargs["json"]
+    assert request["user_id"] == "researcher"
+    assert request["agent_id"] == "researcher"
+
+
+@pytest.mark.asyncio
+async def test_session_cache_key_isolates_tenant_user_and_agent():
+    client = AthenaClient("http://athena.test", tenant_id="tenant-1")
+    redis = MagicMock()
+    redis._redis.get.return_value = None
+    redis._redis.set = MagicMock()
+    client.create_session = AsyncMock(return_value="session-1")
+
+    session_id = await client.get_or_create_session(
+        "analyst", redis_store=redis, user_id="owner"
+    )
+
+    assert session_id == "session-1"
+    assert redis._redis.get.call_args_list == [
+        call("athena_session:tenant-1:owner:analyst"),
+        call("athena_session:analyst"),
+    ]
+    redis._redis.set.assert_called_once_with(
+        "athena_session:tenant-1:owner:analyst", "session-1", ex=30 * 86400
+    )
+    client.create_session.assert_awaited_once_with(
+        "analyst", None, user_id="owner"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_cache_promotes_legacy_agent_key():
+    client = AthenaClient("http://athena.test", tenant_id="tenant-1")
+    redis = MagicMock()
+    redis._redis.get.side_effect = [None, "legacy-session"]
+    redis._redis.set = MagicMock()
+
+    session_id = await client.get_or_create_session(
+        "analyst", redis_store=redis, user_id="owner"
+    )
+
+    assert session_id == "legacy-session"
+    assert redis._redis.get.call_args_list == [
+        call("athena_session:tenant-1:owner:analyst"),
+        call("athena_session:analyst"),
+    ]
+    redis._redis.set.assert_called_once_with(
+        "athena_session:tenant-1:owner:analyst",
+        "legacy-session",
+        ex=30 * 86400,
+    )
 
 
 def test_public_factory_uses_environment_auth_fallback(monkeypatch):
