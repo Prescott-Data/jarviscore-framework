@@ -80,7 +80,14 @@ class StepClaimer:
         agents = self._capability_index.get(required, [])
 
         if not agents:
-            logger.warning(f"No agent found for requirement: {required}")
+            # Normal in distributed mode: no LOCAL agent means the step goes to
+            # Redis for a remote node to claim. The engine decides whether that
+            # is a failure; logging it as an alarming warning here misled every
+            # operator who read it (surfaced while filming the mesh demo).
+            logger.info(
+                f"No local agent for requirement '{required}' — "
+                f"eligible for remote claim"
+            )
             return None
 
         # Return first matching agent
