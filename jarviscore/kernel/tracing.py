@@ -55,10 +55,10 @@ class _NoOpTrace:
     ) -> None:
         pass
 
-    def log_llm_request(self, system_preview: str, user_preview: str) -> None:
+    def log_llm_request(self, system_preview: str, user_preview: str, model: Optional[str] = None) -> None:
         pass
 
-    def log_llm_response(self, content_preview: str, latency_ms: float) -> None:
+    def log_llm_response(self, content_preview: str, latency_ms: float, tokens: Optional[int] = None, model: Optional[str] = None) -> None:
         pass
 
     def log_step_complete(self, success: bool, summary: str) -> None:
@@ -205,8 +205,13 @@ class TraceManager:
     def _scrub(self, value: Any) -> Any:
         """Recursively redact secrets from trace data."""
         if isinstance(value, dict):
+            # Only string values can be credentials — numeric fields like
+            # "tokens" (a count) must survive scrubbing.
             return {
-                k: "***" if any(s in str(k).lower() for s in self._SENSITIVE_KEYS) else self._scrub(v)
+                k: "***"
+                if isinstance(v, (str, bytes))
+                and any(s in str(k).lower() for s in self._SENSITIVE_KEYS)
+                else self._scrub(v)
                 for k, v in value.items()
             }
         if isinstance(value, list):
@@ -254,25 +259,27 @@ class TraceManager:
                 payload["screenshot_path"] = result["screenshot_path"]
         self.log_event("tool_result", payload)
 
-    def log_llm_request(self, system_preview: str, user_preview: str) -> None:
+    def log_llm_request(self, system_preview: str, user_preview: str, model: Optional[str] = None) -> None:
         """LLM API call dispatched."""
-        self.log_event(
-            "llm_request",
-            {
-                "system_preview": self._scrub(system_preview[:300]),
-                "user_preview": self._scrub(user_preview[:500]),
-            },
-        )
+        data = {
+            "system_preview": self._scrub(system_preview[:300]),
+            "user_preview": self._scrub(user_preview[:500]),
+        }
+        if model:
+            data["model"] = model
+        self.log_event("llm_request", data)
 
-    def log_llm_response(self, content_preview: str, latency_ms: float) -> None:
+    def log_llm_response(self, content_preview: str, latency_ms: float, tokens: Optional[int] = None, model: Optional[str] = None) -> None:
         """LLM API call returned."""
-        self.log_event(
-            "llm_response",
-            {
-                "content_preview": self._scrub(content_preview[:500]),
-                "latency_ms": round(latency_ms, 1),
-            },
-        )
+        data = {
+            "content_preview": self._scrub(content_preview[:500]),
+            "latency_ms": round(latency_ms, 1),
+        }
+        if tokens is not None:
+            data["tokens"] = tokens
+        if model:
+            data["model"] = model
+        self.log_event("llm_response", data)
 
     def log_step_complete(self, success: bool, summary: str) -> None:
         """

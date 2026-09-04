@@ -759,14 +759,34 @@ class Kernel:
 
             # Wire Nexus connection — agents receive connection_id only, never credentials.
             # NexusCallProxy (injected into CoderSandbox) is the sole credential boundary.
-            if role == "coder" and self.auth_manager:
+            if role == "coder":
                 system_name = (
                     enriched_context.get("system")
                     or (context.get("system") if context else None)
                 )
                 if system_name:
-                    try:
-                        conn_id = await self.auth_manager.get_connection_id(system_name)
+                    conn_id = None
+                    if self.auth_manager:
+                        try:
+                            conn_id = await self.auth_manager.get_connection_id(system_name)
+                        except Exception as auth_exc:
+                            logger.debug(
+                                "[Kernel] Nexus gateway unavailable for system=%s — "
+                                "trying local vault: %s",
+                                system_name, auth_exc,
+                            )
+                    if conn_id is None:
+                        # Local-vault mode: connection_id IS the provider name —
+                        # NexusCallProxy resolves it from NexusLocalStore at call time.
+                        try:
+                            from jarviscore.nexus.store import get_store
+                            if get_store().get(system_name):
+                                conn_id = system_name
+                        except Exception as store_exc:
+                            logger.debug(
+                                "[Kernel] Nexus local vault unavailable: %s", store_exc
+                            )
+                    if conn_id is not None:
                         # Only the opaque handle goes into context — NEVER tokens or keys
                         enriched_context["_nexus_connection_id"] = conn_id
                         enriched_context["_nexus_provider"] = system_name
@@ -774,11 +794,12 @@ class Kernel:
                             "[Kernel] Nexus connection_id tagged for system=%s",
                             system_name,
                         )
-                    except Exception as auth_exc:
+                    else:
                         logger.warning(
-                            "[Kernel] Nexus connection unavailable for system=%s "
-                            "(set NEXUS_GATEWAY_URL): %s",
-                            system_name, auth_exc,
+                            "[Kernel] No Nexus credentials for system=%s — "
+                            "register with: jarviscore nexus register %s (local vault) "
+                            "or set NEXUS_GATEWAY_URL (gateway)",
+                            system_name, system_name,
                         )
 
 
