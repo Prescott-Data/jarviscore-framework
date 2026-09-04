@@ -212,10 +212,10 @@ class CampaignSenderAgent(CustomAgent):
 
 The `HITLQueue` uses dual persistence.
 
-**File store (always active):** Every `request()` call writes a JSON file to the `hitl_inbox/` directory in the project root. Any dashboard or script can poll this directory to display pending items.
+**File store (always active):** Every `request()` call writes a JSON file to the `.jarviscore/hitl_inbox/` directory in the project root (created on first request). Any dashboard or script can poll this directory to display pending items.
 
 ```
-hitl_inbox/
+.jarviscore/hitl_inbox/
   hitl-20260501-143022-a1b2c3d4.json
   hitl-20260501-150047-e5f6a7b8.json
 ```
@@ -235,7 +235,7 @@ import json
 from pathlib import Path
 
 def resolve_item(request_id: str, decision: str, reason: str = ""):
-    filepath = Path("hitl_inbox") / f"{request_id}.json"
+    filepath = Path(".jarviscore/hitl_inbox") / f"{request_id}.json"
     data = json.loads(filepath.read_text())
     data["status"] = decision        # "approved" or "rejected"
     data["decision"] = decision

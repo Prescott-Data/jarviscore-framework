@@ -213,7 +213,7 @@ Inside every execution, generated code receives these names in its namespace:
 | Name | Type | Description |
 |---|---|---|
 | `workspace` | `Path` | Project root directory. All file reads and writes are expected here. |
-| `output_dir` | `Path` | `workspace/output/`: the preferred write location for produced files. |
+| `output_dir` | `Path` | `workspace/.jarviscore/output/`: the preferred write location for produced files. |
 | `blob_path(name)` | `Path` | Shorthand for `output_dir / name`. Creates parent directories. |
 | `bash(cmd)` | `BashExecutor` | Run allowed shell commands. Returns `{success, stdout, stderr, returncode}`. |
 | `git` | `GitHelper` | High-level git: `checkout_branch`, `add_all`, `commit`, `push`, `describe_pr`. |

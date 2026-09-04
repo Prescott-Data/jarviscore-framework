@@ -21,13 +21,13 @@ selected first when configured. Expiry, exhaustion, and service errors fail
 explicitly and never silently fall through to another configured paid provider.
 
 Every promotional call preserves the complete request and HTTP response under a
-stable call ID in `./traces/promo_calls`. Set
+stable call ID in `./.jarviscore/traces/promo_calls`. Set
 `JARVISCORE_PROMO_RAW_ARTIFACT_DIR` to choose another local directory.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `JARVISCORE_PROMO_TOKEN` | Yes | (none) | Unique promotional entitlement issued by Prescott |
-| `JARVISCORE_PROMO_RAW_ARTIFACT_DIR` | No | `./traces/promo_calls` | Durable complete call artifacts |
+| `JARVISCORE_PROMO_RAW_ARTIFACT_DIR` | No | `./jarviscore/traces/promo_calls` | Durable complete call artifacts |
 
 === "Anthropic Claude"
 
@@ -165,7 +165,7 @@ Blob storage is used by agents to persist large outputs (reports, datasets, gene
 | Variable | Default | Description |
 |---|---|---|
 | `STORAGE_BACKEND` | `local` | `local` or `azure` |
-| `STORAGE_BASE_PATH` | `./blob_storage` | Base directory path for the local backend |
+| `STORAGE_BASE_PATH` | `./jarviscore/blob_storage` | Base directory path for the local backend |
 | `AZURE_STORAGE_CONNECTION_STRING` | (none) | Required when `STORAGE_BACKEND=azure` |
 
 For Azure:
@@ -353,7 +353,7 @@ See [System Bundles and Atoms](../concepts/system-bundles.md) for a full explana
 | Variable | Default | Description |
 |---|---|---|
 | `TELEMETRY_ENABLED` | `true` | Write execution trace files to disk. |
-| `TELEMETRY_TRACE_DIR` | `./traces` | Directory for execution trace files. |
+| `TELEMETRY_TRACE_DIR` | `./jarviscore/traces` | Directory for execution trace files. |
 | `PROMETHEUS_ENABLED` | `false` | Start a Prometheus metrics endpoint. |
 | `PROMETHEUS_PORT` | `9090` | Port for the `/metrics` endpoint. |
 

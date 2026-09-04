@@ -183,7 +183,7 @@ HTTP 200 on success. HTTP 500 with `{"error": "..."}` if the trace cannot be rea
 
 `events` is a list of trace event objects in the same format as the SSE stream messages.
 
-Requires Redis to be configured. Events are read from the trace files in the `traces/` directory.
+Requires Redis to be configured. Events are read from the trace files in the `.jarviscore/traces/` directory.
 
 ---
 
