@@ -19,6 +19,15 @@ pip install jarviscore-framework
 ```
 
 <p align="center">
+  <img src="jarviscore/docs/assets/mesh_demo.gif" alt="4 agents in 4 separate processes discover each other over SWIM gossip, claim research steps from a shared ledger, research the live web, and deliver the synthesized brief to Slack through the encrypted credential vault" width="820" />
+</p>
+<p align="center">
+  <sub>4 agents, 4 separate processes, no MCP, no orchestrator. They discover each other over SWIM gossip, claim steps from a shared ledger,<br/>
+  research the live web, and deliver the brief to Slack — the token never visible to agent code, resolved by the encrypted vault at the call boundary.<br/>
+  Real run, time compressed — <a href="https://github.com/Prescott-Data/jarviscore-framework/releases/download/v1.5.1/mesh_demo_full.mp4">full 4-minute narrated video</a> · reproduce it with <a href="examples/demo_synthesizer.py"><code>examples/demo_synthesizer.py</code></a> + <code>demo_node_1/2/3.py</code></sub>
+</p>
+
+<p align="center">
   <img src="jarviscore/docs/assets/demo.gif" alt="7-agent investment committee evaluates a $1.5M position; the process is kill -9'd mid-deliberation, rerun with the same workflow id, and finishes without re-running the four analysts" width="820" />
 </p>
 <p align="center">
