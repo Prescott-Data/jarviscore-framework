@@ -198,7 +198,17 @@ class AutoAgent(Profile):
         # 4. Initialize coder sandbox (file-capable runtime for CoderSubAgent)
         timeout = config.get('execution_timeout', 300)
         self._logger.info(f"Initializing coder sandbox ({timeout}s timeout)...")
-        self.sandbox = create_coder_sandbox(timeout=timeout)
+        # nexus_call() must work in gateway mode AND local-vault mode: the
+        # proxy tries the gateway first and falls back to NexusLocalStore.
+        nexus_proxy = None
+        try:
+            from jarviscore.auth.manager import AuthenticationManager
+            from jarviscore.nexus.call_proxy import NexusCallProxy
+            auth_mgr = getattr(self, '_auth_manager', None) or AuthenticationManager(config)
+            nexus_proxy = NexusCallProxy(auth_mgr)
+        except Exception as _nexus_exc:
+            self._logger.debug("Nexus call proxy unavailable: %s", _nexus_exc)
+        self.sandbox = create_coder_sandbox(timeout=timeout, nexus_call_proxy=nexus_proxy)
 
         # 5. Initialize autonomous repair
         max_repairs = config.get('max_repair_attempts', 3)

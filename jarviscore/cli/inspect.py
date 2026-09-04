@@ -94,7 +94,10 @@ def _run_summary(paths: List[str]) -> Dict[str, Any]:
             etype = event.get("type", "")
             data = event.get("data", {}) or {}
             if etype == "llm_response":
-                tokens += int(data.get("tokens", 0) or 0)
+                try:
+                    tokens += int(data.get("tokens", 0) or 0)
+                except (ValueError, TypeError):
+                    pass  # legacy traces may carry scrubbed placeholders
             elif etype in ("step_failed", "error_recovery"):
                 failures += 1
             elif etype == "workflow_complete":
@@ -143,7 +146,9 @@ _RENDERERS = {
     "subagent_yield": lambda d: f"subagent {d.get('subagent', '?')} yielded: {_clip(d.get('reason', ''))}",
     "tool_start": lambda d: f"tool {d.get('tool_name', d.get('tool', '?'))} {_clip(d.get('params', ''))}",
     "tool_result": lambda d: f"  -> {_clip(d.get('result', d))}",
-    "llm_request": lambda d: f"llm call ({d.get('provider', '?')}/{d.get('model', '?')})",
+    "llm_request": lambda d: (
+        f"llm call ({d['model']})" if d.get("model") else "llm call"
+    ),
     "llm_response": lambda d: (
         f"  -> {d.get('tokens', '?')} tokens in {d.get('latency_ms', '?')}ms"
     ),

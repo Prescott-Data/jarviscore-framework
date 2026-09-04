@@ -681,7 +681,7 @@ class BaseSubAgent(ABC):
                 messages.append({"role": "user", "content": hist_entry["observation"]})
             messages.append({"role": "user", "content": user_prompt})
 
-            _trace.log_llm_request(system_prompt[:300], user_prompt[:500])
+            _trace.log_llm_request(system_prompt[:300], user_prompt[:500], model=model)
 
             kwargs = {}
             if model:
@@ -712,7 +712,12 @@ class BaseSubAgent(ABC):
             total_tokens["output"] += tokens.get("output", 0)
             total_tokens["total"] += tokens.get("total", 0)
             total_cost += llm_result.get("cost_usd", 0.0)
-            _trace.log_llm_response(content[:500], round((__import__('time').monotonic() - _llm_t0) * 1000, 1))
+            _trace.log_llm_response(
+                content[:500],
+                round((__import__('time').monotonic() - _llm_t0) * 1000, 1),
+                tokens=tokens.get("total", 0),
+                model=llm_result.get("model") or model,
+            )
             llm_tokens_this_turn = tokens.get("total", 0)
             state.tokens_used = total_tokens["total"]
 
