@@ -11,6 +11,8 @@ from typing import Dict, Any, Optional
 from enum import Enum
 from pathlib import Path
 
+from jarviscore.config.paths import runtime_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,7 +53,7 @@ class ResultHandler:
     Zero-config: No external dependencies (no Redis, no DB)
     """
 
-    def __init__(self, log_directory: str = "./logs", max_cache_size: int = 100):
+    def __init__(self, log_directory: str = runtime_path("logs"), max_cache_size: int = 100):
         """
         Initialize result handler.
 
@@ -334,7 +336,7 @@ class ResultHandler:
             logger.debug(f"Evicted {oldest_id} from cache (LRU)")
 
 
-def create_result_handler(log_directory: str = "./logs") -> ResultHandler:
+def create_result_handler(log_directory: str = runtime_path("logs")) -> ResultHandler:
     """
     Factory function to create result handler.
 
