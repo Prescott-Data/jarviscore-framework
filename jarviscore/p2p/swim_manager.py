@@ -145,6 +145,24 @@ class SWIMThreadManager:
                 "STABILITY_TIMEOUT_SECONDS": 3.0
             })
 
+            # Transport must tolerate co-resident inference (issue #138).
+            # Adaptive timing tunes PING_TIMEOUT toward idle sub-ms RTTs; a GIL
+            # pause from LLM/tokenizer work then blows the probe and flaps live
+            # peers to SUSPECT/DEAD. Until transport runs in its own process,
+            # probe budgets must assume inference pauses, not idle latency.
+            # Env SWIM_* vars still win when explicitly set.
+            import os as _os
+            if "SWIM_PING_TIMEOUT" not in _os.environ:
+                swim_config["PING_TIMEOUT"] = max(
+                    float(swim_config.get("PING_TIMEOUT", 1.0)), 2.0
+                )
+            if "SWIM_SUSPECT_TIMEOUT" not in _os.environ:
+                swim_config["SUSPECT_TIMEOUT"] = max(
+                    float(swim_config.get("SUSPECT_TIMEOUT", 5.0)), 15.0
+                )
+            if "SWIM_ADAPTIVE_TIMING" not in _os.environ:
+                swim_config["ADAPTIVE_TIMING_ENABLED"] = False
+
             # Validate config
             errors = validate_swim_config(swim_config)
             if errors:

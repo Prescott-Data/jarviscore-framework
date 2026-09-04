@@ -336,6 +336,21 @@ class Mesh:
         if self._settings and getattr(self._settings, "p2p_enabled", False):
             self.config.setdefault("p2p_enabled", True)
 
+        # Merge explicitly-set Settings kernel/workflow knobs → config so env vars
+        # (KERNEL_WALL_CLOCK_MS=..., WORKFLOW_STEP_TIMEOUT=...) actually take effect.
+        # Config dict passed to Mesh() still wins over environment (issue #135).
+        if self._settings:
+            for knob in (
+                "kernel_max_turns",
+                "kernel_max_total_tokens",
+                "kernel_thinking_budget",
+                "kernel_action_budget",
+                "kernel_wall_clock_ms",
+                "workflow_step_timeout",
+            ):
+                if knob in self._settings.model_fields_set:
+                    self.config.setdefault(knob, getattr(self._settings, knob))
+
         if self.config.get("p2p_enabled", False):
             self._logger.info("Initializing P2P coordinator (SWIM)...")
             try:
@@ -453,7 +468,8 @@ class Mesh:
     async def workflow(
         self,
         workflow_id: str,
-        steps: List[Dict[str, Any]]
+        steps: List[Dict[str, Any]],
+        timeout_per_step: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Execute a multi-step workflow.
@@ -465,6 +481,10 @@ class Mesh:
                 - task: Task description
                 - depends_on: List of step indices this step depends on (optional)
                 - params: Additional parameters (optional)
+                - timeout: Max seconds to wait for this step (optional,
+                  overrides timeout_per_step and WORKFLOW_STEP_TIMEOUT)
+            timeout_per_step: Max seconds to wait for each step (optional;
+                default comes from config/env WORKFLOW_STEP_TIMEOUT, else 300)
 
         Returns:
             List of step results in ORIGINAL STEP ORDER (index i corresponds
@@ -504,7 +524,9 @@ class Mesh:
             )
 
         self._logger.info("Executing workflow: %s (%d steps)", workflow_id, len(steps))
-        return await self._workflow_engine.execute(workflow_id, steps)
+        return await self._workflow_engine.execute(
+            workflow_id, steps, timeout_per_step=timeout_per_step
+        )
 
     async def fanout(
         self,

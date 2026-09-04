@@ -40,7 +40,7 @@ class DependencyAccessor:
     async def wait_for(
         self,
         step_ids: List[str],
-        timeout: float = 300.0
+        timeout: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Wait for specific steps to complete.

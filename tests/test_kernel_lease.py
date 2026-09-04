@@ -59,6 +59,8 @@ class TestExecutionLeaseRoleProfiles:
         lease = ExecutionLease.for_role("researcher")
         assert lease.thinking_budget == 180_000
         assert lease.action_budget == 60_000
+        # Raised from 240s: real web research needs headroom (issue #136)
+        assert lease.wall_clock_ms == 600_000
         assert lease.model_tier == "task"
 
     def test_communicator_profile(self):
@@ -66,7 +68,7 @@ class TestExecutionLeaseRoleProfiles:
         assert lease.thinking_budget == 72_000
         assert lease.action_budget == 48_000
         assert lease.max_total_tokens == 120_000
-        assert lease.wall_clock_ms == 240_000
+        assert lease.wall_clock_ms == 360_000
         assert lease.emergency_turn_fuse == 18
 
     def test_unknown_role_raises(self):

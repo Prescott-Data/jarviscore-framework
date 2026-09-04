@@ -284,7 +284,7 @@ class TestGuardOrdering:
         """_can_complete appears before the AgentOutput return in DONE handler."""
         source = inspect.getsource(BaseSubAgent.run)
         done_idx = source.index("Handle DONE")
-        done_block = source[done_idx:done_idx + 2500]
+        done_block = source[done_idx:done_idx + 3500]
         gate_pos = done_block.index("_can_complete")
         return_pos = done_block.index("return AgentOutput")
         assert gate_pos < return_pos

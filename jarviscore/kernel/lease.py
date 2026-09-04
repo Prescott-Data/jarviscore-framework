@@ -34,7 +34,10 @@ ROLE_LEASE_PROFILES: Dict[str, Dict[str, Any]] = {
         "thinking_budget": 180_000,
         "action_budget": 60_000,
         "max_total_tokens": 240_000,
-        "wall_clock_ms": 240_000,
+        # Real web research (search + fetch + PDF parse + LLM turns) regularly
+        # needs more than 4 min wall clock; 240s killed the framework's own
+        # research example (issue #136).
+        "wall_clock_ms": 600_000,
         "emergency_turn_fuse": 36,
         "model_tier": "task",
         "complexity": "standard",  # Long-horizon web research — standard reasoning
@@ -43,7 +46,7 @@ ROLE_LEASE_PROFILES: Dict[str, Dict[str, Any]] = {
         "thinking_budget": 72_000,
         "action_budget": 48_000,
         "max_total_tokens": 120_000,
-        "wall_clock_ms": 240_000,
+        "wall_clock_ms": 360_000,  # synthesis over multiple research outputs (issue #136)
         "emergency_turn_fuse": 18,
         "model_tier": "task",
         "complexity": "nano",  # Short creative writing — fast tier is sufficient

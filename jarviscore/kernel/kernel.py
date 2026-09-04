@@ -245,8 +245,27 @@ class Kernel:
 
         # Subagent cache — reuse within same workflow step
         self._subagent_cache: Dict[str, Any] = {}
-        self._role_lease_profiles: Dict[str, Dict[str, Any]] = dict(ROLE_LEASE_PROFILES)
-        self._role_lease_profiles.update(self.config.get("kernel_role_profiles", {}) or {})
+        # Lease profile resolution (issue #135), lowest to highest precedence:
+        #   1. ROLE_LEASE_PROFILES built-in defaults
+        #   2. global kernel_* config knobs (env via Settings, or Mesh config)
+        #   3. per-role config["kernel_role_profiles"] entries (merged key-wise,
+        #      so a partial override no longer drops the rest of the profile)
+        self._role_lease_profiles: Dict[str, Dict[str, Any]] = {
+            role: dict(profile) for role, profile in ROLE_LEASE_PROFILES.items()
+        }
+        _global_lease_overrides = {
+            "max_total_tokens": self.config.get("kernel_max_total_tokens"),
+            "thinking_budget": self.config.get("kernel_thinking_budget"),
+            "action_budget": self.config.get("kernel_action_budget"),
+            "wall_clock_ms": self.config.get("kernel_wall_clock_ms"),
+        }
+        _global_lease_overrides = {
+            k: v for k, v in _global_lease_overrides.items() if v is not None
+        }
+        for _profile in self._role_lease_profiles.values():
+            _profile.update(_global_lease_overrides)
+        for _role, _override in (self.config.get("kernel_role_profiles", {}) or {}).items():
+            self._role_lease_profiles.setdefault(_role, {}).update(_override or {})
         self._role_catalog: Dict[str, str] = dict(self.config.get("kernel_role_catalog", {}) or {})
         self._task_router = TaskRouter(
             llm_client=llm_client,
