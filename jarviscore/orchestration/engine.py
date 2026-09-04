@@ -65,7 +65,9 @@ class WorkflowEngine:
         # Working memory (step_id → result)
         self.memory: Dict[str, Any] = {}
         self.dependency_manager = DependencyManager(
-            self.memory, redis_store=redis_store
+            self.memory,
+            redis_store=redis_store,
+            default_timeout=float(self.config.get("workflow_step_timeout", 300.0)),
         )
 
         self._started = False
@@ -96,6 +98,7 @@ class WorkflowEngine:
         self,
         workflow_id: str,
         steps: List[Dict[str, Any]],
+        timeout_per_step: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Execute a multi-step workflow.
@@ -125,6 +128,14 @@ class WorkflowEngine:
             raise RuntimeError("Workflow engine not started. Call start() first.")
 
         logger.info(f"Executing workflow {workflow_id} with {len(steps)} step(s)")
+
+        # Per-step wait budget (issue #137): explicit arg > config > 300s default.
+        # A step dict's "timeout" key overrides this for that step alone.
+        default_step_timeout = (
+            float(timeout_per_step)
+            if timeout_per_step is not None
+            else float(self.config.get("workflow_step_timeout", 300.0))
+        )
 
         normalized = self._normalize_steps(steps)
 
@@ -157,7 +168,9 @@ class WorkflowEngine:
         )
         self._save_state(state)
 
-        return await self._run_reactive_loop(workflow_id, normalized, state)
+        return await self._run_reactive_loop(
+            workflow_id, normalized, state, default_step_timeout=default_step_timeout
+        )
 
     # ------------------------------------------------------------------
     # Reactive Loop (Phase 7B core)
@@ -169,6 +182,7 @@ class WorkflowEngine:
         steps: List[Dict[str, Any]],
         state: WorkflowState,
         pre_results: Dict[str, Any] = None,
+        default_step_timeout: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Sovereign reactive loop adapted from earlier agent implementations production pattern.
@@ -181,6 +195,11 @@ class WorkflowEngine:
         starts — used by _resume() to surface previously-completed steps
         rather than returning them as "skipped".
         """
+        # Crash-recovery path enters here directly, so resolve the default
+        # locally when execute() did not pass one (issue #137).
+        if default_step_timeout is None:
+            default_step_timeout = float(self.config.get("workflow_step_timeout", 300.0))
+
         step_map = {s["id"]: s for s in steps}
         pending: Set[str] = set(step_map.keys())
         running_tasks: Dict[str, asyncio.Task] = {}
@@ -250,7 +269,12 @@ class WorkflowEngine:
 
                     state.running_steps[step_id] = time.time()
                     task = asyncio.create_task(
-                        self._execute_step(workflow_id, step, dep_outputs),
+                        self._execute_step(
+                            workflow_id,
+                            step,
+                            dep_outputs,
+                            step_timeout=float(step.get("timeout") or default_step_timeout),
+                        ),
                         name=f"step-{step_id}",
                     )
                     running_tasks[step_id] = task
@@ -394,6 +418,7 @@ class WorkflowEngine:
         workflow_id: str,
         step: Dict[str, Any],
         dep_outputs: Dict[str, Any],
+        step_timeout: float = 300.0,
     ) -> Dict[str, Any]:
         """Execute a single step and return its result dict."""
         step_id = step["id"]
@@ -408,7 +433,9 @@ class WorkflowEngine:
                     f"Step {step_id} has no local agent "
                     f"(requirement: {step.get('agent')}) — waiting for remote node"
                 )
-                result = await self._wait_remote_step(workflow_id, step_id)
+                result = await self._wait_remote_step(
+                    workflow_id, step_id, timeout=step_timeout
+                )
                 if result is not None:
                     return result
             return {

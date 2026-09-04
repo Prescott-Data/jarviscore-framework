@@ -202,7 +202,7 @@ Workflow submits after a 10s wait for nodes to join SWIM cluster.
                 # Phase 7: DependencyManager._wait_redis() polls until ALL 3 are COMPLETED
                 "depends_on": ["tech", "market", "reg"],
             },
-        ])
+        ], timeout_per_step=900)  # research steps do real web work (issue #137)
 
         # ── Results ───────────────────────────────────────────────────────────
         print("\n" + "=" * 70)

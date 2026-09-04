@@ -683,6 +683,11 @@ class AgentCognitionManager:
             return False
         return not self.lease.is_expired()
 
+    @property
+    def done_called(self) -> bool:
+        """True once the agent has signalled completion."""
+        return self._done_called
+
     def detect_spinning(self, tool_name: str) -> bool:
         """Legacy spinning check — DEPRECATED.
 
@@ -748,6 +753,24 @@ class AgentCognitionManager:
                 f"({total_remaining / total_budget:.0%} of budget). "
                 f"Consider wrapping up with what you have."
             )
+
+        # 4. Wall clock awareness (issue #139) — time is world state the agent
+        # must see coming, not an external executioner.
+        wall_budget = getattr(self.lease, "wall_clock_ms", 0)
+        if wall_budget > 0:
+            remaining_ms = self.lease.remaining_wall_clock_ms()
+            pct_left = remaining_ms / wall_budget
+            if pct_left < 0.15:
+                return (
+                    f"About {int(remaining_ms / 1000)}s of wall clock remaining. "
+                    f"Stop gathering. Synthesize your best answer from what you "
+                    f"already have and call done now."
+                )
+            if pct_left < 0.40:
+                return (
+                    f"About {int(remaining_ms / 1000)}s of wall clock remaining "
+                    f"({pct_left:.0%}). Prioritize finishing over exploring."
+                )
 
         return None
 

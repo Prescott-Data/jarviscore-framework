@@ -151,6 +151,12 @@ class Settings(BaseSettings):
     kernel_action_budget: int = 24000
     kernel_wall_clock_ms: int = 180000
 
+    # === Workflow orchestration ===
+    # Max seconds the coordinator waits for a step (local dependency gates and
+    # remote-claimed steps). Override per workflow via mesh.workflow(timeout_per_step=...)
+    # or per step via the step dict's "timeout" key (issue #137).
+    workflow_step_timeout: float = 300.0
+
     # === LLM Model Routing ===
     # Azure OpenAI deployments for kernel subagent routing.
     #

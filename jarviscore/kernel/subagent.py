@@ -446,6 +446,63 @@ class BaseSubAgent(ABC):
         ]
         return "\n".join(parts)
 
+    async def _landing_turn(
+        self,
+        state,
+        system_prompt: str,
+        conversation_history: list,
+        model,
+        total_tokens: dict,
+        total_cost: float,
+        exhausted: str,
+    ):
+        """One tools-disabled synthesis turn after lease expiry (issue #139).
+
+        Gives the agent a chance to land the plane: produce a final answer from
+        what it already gathered instead of yielding dead air. Returns an
+        AgentOutput on a usable synthesis, None to fall through to the yield.
+        """
+        if not conversation_history:
+            return None  # nothing gathered, nothing to synthesize
+        try:
+            messages = [{"role": "system", "content": system_prompt}]
+            for hist_entry in conversation_history[-10:]:
+                messages.append({"role": "assistant", "content": hist_entry["assistant"]})
+                messages.append({"role": "user", "content": hist_entry["observation"]})
+            messages.append({"role": "user", "content": (
+                f"Your execution budget is exhausted ({exhausted}). Tools are no "
+                "longer available. Produce your final answer NOW from what you "
+                "have already gathered. Respond with exactly:\n"
+                "DONE: <one-line summary>\nRESULT: <json result>\n"
+                "If your findings are partial, say so inside the result."
+            )})
+            kwargs = {"model": model} if model else {}
+            llm_result = await self.llm_client.generate(messages=messages, **kwargs)
+            content = llm_result.get("content", "")
+            tokens = llm_result.get("tokens", {})
+            total_tokens["input"] += tokens.get("input", 0)
+            total_tokens["output"] += tokens.get("output", 0)
+            total_tokens["total"] += tokens.get("total", 0)
+            parsed = self._parse_response(content)
+            if parsed.get("type") != "done":
+                return None
+            state.status = "completed"
+            state.output = parsed.get("result")
+            await self._persist_memory(state)
+            self._log.info("Landing turn produced a final result after lease expiry")
+            return AgentOutput(
+                status="success",
+                summary=f"Completed on landing turn after budget exhaustion ({exhausted}): {parsed['summary']}",
+                payload=state.get_final_output(),
+                trajectory=[{"turn": state.turn, "type": "landing", "summary": parsed["summary"]}],
+                metadata={"tokens": total_tokens, "cost_usd": total_cost,
+                          "lease_exhausted": exhausted, "landing_turn": True,
+                          "typed_outcome": "SUCCESS_ON_LANDING"},
+            )
+        except Exception as exc:
+            self._log.warning("Landing turn failed: %s", exc)
+            return None
+
     def _build_user_prompt(self, state: KernelState, context_block: str) -> str:
         """Build the user prompt for a single OODA turn.
 
@@ -566,6 +623,14 @@ class BaseSubAgent(ABC):
             if self._cognition.lease.is_expired():
                 exhausted = ", ".join(self._cognition.lease.expired_dimensions()) or "unknown"
                 self._log.warning(f"Lease expired: {exhausted}")
+                # Landing turn (issue #139): one tools-disabled synthesis attempt
+                # so exhaustion yields a partial result instead of dead air.
+                landing = await self._landing_turn(
+                    state, system_prompt, conversation_history, model,
+                    total_tokens, total_cost, exhausted,
+                )
+                if landing is not None:
+                    return landing
                 return AgentOutput(
                     status="yield",
                     summary=f"Lease budget exhausted after {turn} turns: {exhausted}",
@@ -577,12 +642,17 @@ class BaseSubAgent(ABC):
                 )
 
             if not self._cognition.should_continue():
+                reason = (
+                    ", ".join(self._cognition.lease.expired_dimensions())
+                    or ("completion already signalled" if self._cognition.done_called else "unknown")
+                )
                 return AgentOutput(
                     status="yield",
-                    summary="Cognitive budget exhausted",
+                    summary=f"Cognitive budget exhausted: {reason}",
                     payload=state.get_final_output(),
                     trajectory=trajectory,
                     metadata={"tokens": total_tokens, "cost_usd": total_cost,
+                              "exhausted": reason,
                               "typed_outcome": "YIELD_BUDGET_EXHAUSTED"},
                 )
 
@@ -674,7 +744,10 @@ class BaseSubAgent(ABC):
                             f"You must address this before calling DONE again."
                         ),
                     })
-                    self._cognition.track_usage("done", tokens=llm_tokens_this_turn)
+                    # Charge tokens WITHOUT the "done" label: track_usage("done")
+                    # sets done_called, which made should_continue() kill the agent
+                    # next turn for a completion that was just rejected (issue #139).
+                    self._cognition.track_usage("continue_after_done_gate", tokens=llm_tokens_this_turn)
                     continue
 
                 state.status = "completed"

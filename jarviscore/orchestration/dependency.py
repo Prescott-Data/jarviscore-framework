@@ -35,6 +35,7 @@ class DependencyManager:
         self,
         memory_cache: Optional[Dict] = None,
         redis_store=None,
+        default_timeout: float = 300.0,
     ):
         """
         Initialize dependency manager.
@@ -42,9 +43,12 @@ class DependencyManager:
         Args:
             memory_cache: Optional shared memory cache for step outputs
             redis_store: Optional RedisContextStore for cross-process dep checks
+            default_timeout: Wait budget in seconds used when wait_for() gets no
+                explicit timeout (config: workflow_step_timeout, issue #137)
         """
         self.memory = memory_cache or {}
         self.redis = redis_store  # Phase 7C: optional Redis backing
+        self.default_timeout = float(default_timeout)
         self.waiting_steps: Dict[str, List[str]] = {}  # step_id -> [dep_ids]
         logger.info("Dependency manager initialized")
 
@@ -52,7 +56,7 @@ class DependencyManager:
         self,
         dependencies: List[str],
         memory: Dict[str, Any],
-        timeout: float = 300.0,
+        timeout: Optional[float] = None,
         workflow_id: str = "",
     ) -> Dict[str, Any]:
         """
@@ -78,6 +82,9 @@ class DependencyManager:
             return {}
 
         logger.info(f"Waiting for {len(dependencies)} dependencies: {dependencies}")
+
+        if timeout is None:
+            timeout = self.default_timeout
 
         if self.redis and workflow_id:
             return await self._wait_redis(dependencies, workflow_id, timeout)
