@@ -216,7 +216,8 @@ class AutoAgent(Profile):
         self.repair = create_autonomous_repair(self.codegen, max_repairs)
 
         # 6. Initialize result handler (file + in-memory storage)
-        log_dir = config.get('log_directory', './logs')
+        from jarviscore.config.paths import runtime_path
+        log_dir = config.get('log_directory', runtime_path("logs"))
         self._logger.info(f"Initializing result handler (dir: {log_dir})...")
         self.result_handler = create_result_handler(log_dir)
 

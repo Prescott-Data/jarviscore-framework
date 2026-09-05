@@ -203,7 +203,7 @@ The framework uses blob storage for atom versioning, function registry persisten
 
 ```bash
 STORAGE_BACKEND=local
-STORAGE_BASE_PATH=./blob_storage
+STORAGE_BASE_PATH=./.jarviscore/blob_storage
 ```
 
 This writes to the local filesystem. In a containerised deployment, this data is lost on restart unless you mount a persistent volume at `STORAGE_BASE_PATH`.
@@ -304,7 +304,7 @@ The framework writes structured trace files regardless of whether Prometheus is 
 
 ```bash
 TELEMETRY_ENABLED=true          # Enabled by default
-TELEMETRY_TRACE_DIR=./traces    # Directory for trace JSON files
+TELEMETRY_TRACE_DIR=./.jarviscore/traces    # Directory for trace JSON files
 ```
 
 In production, mount `TELEMETRY_TRACE_DIR` to a persistent volume or configure your observability platform to ship traces from this directory.
@@ -343,12 +343,14 @@ Inject all secrets via environment variables at runtime. Never bake API keys or 
 
 Mount the following paths to persistent storage to survive container restarts:
 
-| Path | Purpose |
-|---|---|
-| `STORAGE_BASE_PATH` (default `./blob_storage`) | Atom registry and LTM artifacts |
-| `TELEMETRY_TRACE_DIR` (default `./traces`) | Trace files |
-| `LOG_DIRECTORY` (default `./logs`) | Log files |
-| `~/.jarviscore/` | Nexus local store, only required when not using Gateway mode |
+| Path                                                       | Purpose                                                      |
+| ---------------------------------------------------------- | ------------------------------------------------------------ |
+| `STORAGE_BASE_PATH` (default `./.jarviscore/blob_storage`) | Atom registry and LTM artifacts                              |
+| `TELEMETRY_TRACE_DIR` (default `./.jarviscore/traces`)     | Trace files                                                  |
+| `LOG_DIRECTORY` (default `./.jarviscore/logs`)             | Log files                                                    |
+| `~/.jarviscore/`                                           | Nexus local store, only required when not using Gateway mode |
+
+All relative runtime paths above default to subdirectories of `./.jarviscore/`, so mounting that single directory covers them at once.
 
 ### Process supervision
 

@@ -64,6 +64,10 @@ traces/
 .DS_Store
 Thumbs.db
 
+# Consolidated runtime artifacts
+.jarviscore/
+
+# Legacy runtime artifact locations (pre-consolidation)
 # Step Outputs
 StepOutputs/
 blob_storage/

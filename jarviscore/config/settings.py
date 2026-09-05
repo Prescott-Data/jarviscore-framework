@@ -25,6 +25,8 @@ from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+from .paths import runtime_path
+
 
 class Settings(BaseSettings):
     """
@@ -64,7 +66,8 @@ class Settings(BaseSettings):
     sandbox_service_url: Optional[str] = None  # URL for remote sandbox
 
     # === Storage Settings ===
-    log_directory: str = "./logs"
+    # Runtime artifacts are consolidated under ./.jarviscore/
+    log_directory: str = runtime_path("logs")
 
     # === LLM Configuration ===
     llm_timeout: float = 120.0
@@ -84,11 +87,9 @@ class Settings(BaseSettings):
     # alias are fixed module constants in jarviscore.promo, not configuration.
     promo_token: Optional[str] = Field(None, validation_alias="JARVISCORE_PROMO_TOKEN")
     promo_raw_artifact_dir: str = Field(
-        "./traces/promo_calls",
+        runtime_path("traces", "promo_calls"),
         validation_alias="JARVISCORE_PROMO_RAW_ARTIFACT_DIR",
     )
-
-
 
     # Claude
     claude_api_key: Optional[str] = None
@@ -134,13 +135,13 @@ class Settings(BaseSettings):
 
     # === Blob Storage ===
     storage_backend: str = "local"  # "local" or "azure"
-    storage_base_path: str = "./blob_storage"
+    storage_base_path: str = runtime_path("blob_storage")
     azure_storage_connection_string: Optional[str] = None
     azure_storage_container: str = "jarviscore"
 
     # === Telemetry ===
     telemetry_enabled: bool = True
-    telemetry_trace_dir: str = "./traces"
+    telemetry_trace_dir: str = runtime_path("traces")
     prometheus_enabled: bool = False
     prometheus_port: int = 9090
 
@@ -245,7 +246,6 @@ class Settings(BaseSettings):
 
     # Serper (secondary Google Search via serper.dev, optional)
     serper_api_key: Optional[str] = None
-
 
     # === Logging ===
     log_level: str = "INFO"

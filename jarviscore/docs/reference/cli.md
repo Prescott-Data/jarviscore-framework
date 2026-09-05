@@ -258,7 +258,7 @@ Example output:
     Milvus: ok
     ArangoDB: ok
   Redis  localhost:6379  [connected]
-  Blob  Local filesystem  [./blob_storage]
+  Blob  Local filesystem  [.jarviscore/blob_storage]
 ```
 
 ### memory context

@@ -34,6 +34,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from jarviscore.config.paths import runtime_path
 from jarviscore.contracts.hitl import (
     HITLCategory,
     HITLRequest,
@@ -93,7 +94,7 @@ class HITLQueue:
     VALID_URGENCY = {"low", "normal", "high", "critical"}
 
     # Default inbox location — can be overridden via inbox_dir parameter
-    _DEFAULT_INBOX = Path("hitl_inbox")
+    _DEFAULT_INBOX = Path(runtime_path("hitl_inbox"))
 
     def __init__(
         self,
@@ -103,7 +104,7 @@ class HITLQueue:
     ):
         self._agent_id = agent_id
         self._inbox_dir = Path(inbox_dir) if inbox_dir else self._DEFAULT_INBOX
-        self._inbox_dir.mkdir(parents=True, exist_ok=True)
+        # created lazily on first write; an unused HITL queue leaves no dir
         self._redis_store = redis_store
         self._logger = logging.getLogger(f"jarviscore.hitl.{agent_id}")
 
@@ -305,6 +306,8 @@ class HITLQueue:
         Useful for agents that want to avoid submitting duplicates.
         """
         items = []
+        if not self._inbox_dir.exists():    # hitl inbox dir created here
+            return items
         for f in sorted(self._inbox_dir.glob("hitl-*.json"), reverse=True):
             try:
                 data = json.loads(f.read_text())
@@ -406,6 +409,7 @@ class HITLQueue:
         }
         filepath = self._inbox_dir / f"{request_id}.json"
         try:
+            self._inbox_dir.mkdir(parents=True, exist_ok=True)  # ensure hitl inbox dir exists
             filepath.write_text(json.dumps(data, indent=2))
         except OSError as exc:
             self._logger.error("Failed to write HITL file %s: %s", filepath, exc)
