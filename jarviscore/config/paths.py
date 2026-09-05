@@ -12,8 +12,8 @@ directory live under a single gitignore-able root:
         step_outputs/   P2P step result cache
         traces/         execution / kernel traces
 
-Nothing in this module creates directories; components create their
-own subdirectory lazily on first write.
+Nothing in this module creates directories; each component remains responsible
+for creating its own subdirectory when needed.
 """
 import os
 
