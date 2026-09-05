@@ -27,7 +27,7 @@ stable call ID in `./.jarviscore/traces/promo_calls`. Set
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `JARVISCORE_PROMO_TOKEN` | Yes | (none) | Unique promotional entitlement issued by Prescott |
-| `JARVISCORE_PROMO_RAW_ARTIFACT_DIR` | No | `./jarviscore/traces/promo_calls` | Durable complete call artifacts |
+| `JARVISCORE_PROMO_RAW_ARTIFACT_DIR` | No | `./.jarviscore/traces/promo_calls` | Durable complete call artifacts |
 
 === "Anthropic Claude"
 
