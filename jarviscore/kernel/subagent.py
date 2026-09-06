@@ -432,8 +432,23 @@ class BaseSubAgent(ABC):
     # ──────────────────────────────────────────────────────────────────────
 
     def _build_system_prompt(self) -> str:
-        """Build the full system prompt including tool descriptions and protocol."""
-        parts = [
+        """Build the full system prompt including tool descriptions and protocol.
+
+        The calling agent's identity leads: a sub-agent prompt is an execution
+        harness, not a persona, and an application that trains its agent through
+        ``system_prompt`` must not lose that the moment work enters the kernel.
+        """
+        state = getattr(self, "_current_state", None)
+        identity = ((getattr(state, "context", None) or {}).get("system_prompt") or "").strip()
+        parts = []
+        if identity:
+            parts += [
+                identity,
+                "",
+                "═══ EXECUTION HARNESS (how you operate this turn) ═══",
+                "",
+            ]
+        parts += [
             self.get_system_prompt(),
             "",
             self.get_tool_descriptions(),
