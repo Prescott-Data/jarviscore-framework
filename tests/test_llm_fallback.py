@@ -310,6 +310,8 @@ async def test_vertex_ai_generate_returns_correct_shape():
     usage = MagicMock()
     usage.prompt_token_count = 10
     usage.candidates_token_count = 20
+    usage.thoughts_token_count = 0
+    usage.total_token_count = 30
     fake_response.usage_metadata = usage
 
     fake_aio = MagicMock()

@@ -15,19 +15,44 @@ from jarviscore.promo import PROMO_MODEL
 
 logger = logging.getLogger(__name__)
 
-def _metadata_value(value: Any) -> Any:
+# A provider response is a foreign object graph: it can nest without end, hold a
+# back-reference to its own client, or synthesise attributes on access. Traversal
+# is bounded so serializing the evidence can never outlive the call it describes.
+_METADATA_MAX_DEPTH = 6
+
+
+def _model_dump(value: Any) -> Optional[Dict[str, Any]]:
+    """Return a pydantic dump only when it actually yields a mapping."""
+    dump = getattr(value, "model_dump", None)
+    if not callable(dump):
+        return None
+    try:
+        dumped = dump(mode="json")
+    except Exception:  # noqa: BLE001 - telemetry must not break the generation it describes
+        return None
+    return dumped if isinstance(dumped, dict) else None
+
+
+def _metadata_value(value: Any, _depth: int = 0, _seen: frozenset = frozenset()) -> Any:
     """Serialize selected SDK completion fields, not the full provider response."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
     if isinstance(value, Enum):
-        return value.value
+        return _metadata_value(value.value, _depth, _seen)
+    if _depth >= _METADATA_MAX_DEPTH or id(value) in _seen:
+        return repr(value)
+    seen = _seen | {id(value)}
     if isinstance(value, dict):
-        return {key: _metadata_value(item) for key, item in value.items()}
+        return {str(key): _metadata_value(item, _depth + 1, seen) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_metadata_value(item) for item in value]
-    if hasattr(value, "model_dump"):
-        return _metadata_value(value.model_dump(mode="json"))
-    if hasattr(value, "__dict__"):
-        return _metadata_value(vars(value))
-    return value
+        return [_metadata_value(item, _depth + 1, seen) for item in value]
+    dumped = _model_dump(value)
+    if dumped is not None:
+        return _metadata_value(dumped, _depth + 1, seen)
+    attributes = getattr(value, "__dict__", None)
+    if isinstance(attributes, dict):
+        return _metadata_value(attributes, _depth + 1, seen)
+    return repr(value)
 
 
 def _completion_fields(finish_reason: Any, **metadata: Any) -> dict[str, Any]:
