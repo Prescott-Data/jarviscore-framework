@@ -24,6 +24,91 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.8.0 <span class="changelog-date">2026-09-06</span>
+
+!!! warning "1.6.0 and 1.7.0 were tagged but never published to PyPI"
+
+    Both contain #170 — the Athena event write sat inside a branch that nothing
+    triggered, so no agent event reached the memory tier — and a nested f-string
+    in `jarviscore/cli/atom.py` that raises `SyntaxError` on import under Python
+    3.10 and 3.11. Their GitHub releases and changelog entries stand as history.
+    On PyPI, 1.8.0 follows 1.5.1 and contains everything from both.
+
+**Fixed**
+
+- Athena has stored nothing since 1.4.0 (#170). `_store_event` built the request
+  and then posted it *inside* `if serialized_timestamp:`. `_rfc3339(None)` returns
+  `None` and nothing passes a timestamp — `record_thought`, `record_action`,
+  `record_observation` and every `on_*` helper call the write without one — so the
+  request was assembled and dropped, `store_event` returned `False`, and no caller
+  checks the return. Any deployment with `ATHENA_URL` set has an empty STM tier,
+  and therefore no MTM chains and no cross-session recall, since both are
+  summarised from events that were never written. The only test on the path used a
+  fake `AthenaMemory`, so it verified the layer above the broken one.
+- The Athena tier is self-healing and its delivery is countable (#128). Writes are
+  queued and shipped in order by one worker, so a slow Athena no longer adds
+  latency to a reasoning turn. A failed start opens a circuit breaker with a
+  cooldown probe instead of setting the client to `None` for the life of the
+  process, which turned a thirty-second restart into a dead memory tier. A cached
+  session id is checked before reuse: a 404 mints a new session and replaces the
+  mapping, while an unreachable Athena keeps the id, because a network blink is
+  not evidence that a session was deleted.
+- The planner and evaluator stop cutting inside a record (#166). Agent identity was
+  clipped to 400 characters twice, once by the caller and again in the `Planner`
+  constructor, so the component choosing the steps saw a persona without the rules
+  that constrain it. The evaluator clipped the step summary and payload and then
+  instructed the model never to fail a step merely because evidence was clipped —
+  managing the damage rather than removing it. Evidence now goes in whole, and that
+  instruction retires with the problem it was covering for.
+- `jarviscore/cli/atom.py` could not be imported on Python 3.10 or 3.11 (#167).
+  Three print statements nested an f-string inside an f-string and reused the same
+  quote in the replacement field, which is PEP 701 syntax valid only from 3.12.
+- PyYAML was never declared as a dependency although `AgentProfile.load()` reads
+  agent profiles from YAML on every `AutoAgent` load, and returned `None` with a
+  warning when the import failed — an agent silently missing its role intelligence.
+  It is now a dependency, and an unreadable profile raises.
+
+**Added**
+
+- A test job runs the suite on every pull request across Python 3.10, 3.11 and
+  3.12 (#167). CodeQL was previously the only check a pull request waited on. The
+  suite was believed to have 38 permanent failures; every one was a missing
+  dependency, and the real state is 1709 passing and none failing.
+- `jarviscore.context.fidelity` — spends a prompt budget on whole records in
+  priority order and names what did not fit, instead of halving values.
+- Athena delivery counters on `AthenaMemory.delivery_stats` and
+  `UnifiedMemory.athena_delivery_stats`: submitted, shipped, retried, dropped,
+  queue depth, breaker state and last success.
+- `AthenaClient.write_event`, which raises instead of reporting `False`, and
+  `AthenaClient.session_exists`.
+- Athena settings: `athena_outbox_max_events`, `athena_write_max_attempts`,
+  `athena_breaker_threshold`, `athena_breaker_cooldown_seconds`,
+  `athena_deduplicates_writes`. Planning budgets: `PLANNER_FACTS_BUDGET_CHARS`,
+  `PLANNER_CONTEXT_BUDGET_CHARS`, `EVALUATOR_FACTS_BUDGET_CHARS`.
+
+**Changed**
+
+- `EVALUATOR_SUMMARY_EVIDENCE_LIMIT` and `EVALUATOR_PAYLOAD_EVIDENCE_LIMIT` are
+  still read so existing configuration keeps importing, and no longer shorten
+  anything.
+
+**Behaviour changes to know about (compatible, but read this)**
+
+- **Athena writes are asynchronous.** `record_thought` and friends return once the
+  event is queued. Call `AthenaMemory.close()` or `UnifiedMemory.close()` on
+  shutdown to flush; both report whether anything was still unsent.
+- **Write retries are off by default.** Athena has no client-supplied deduplication
+  key, so replaying a write that actually landed would store it twice, and a memory
+  tier with invented corroboration is worse than one with a counted gap. JarvisCore
+  attaches an `idempotency_key` and retries only when `athena_deduplicates_writes`
+  is set — a claim about a deployment that only an operator can make.
+- **The planner receives the whole system prompt.** `system_prompt_excerpt` is
+  still accepted as an argument name.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.7.0 <span class="changelog-date">2026-09-06</span>
 
 **Fixed**
