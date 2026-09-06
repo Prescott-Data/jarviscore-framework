@@ -146,12 +146,14 @@ class UnifiedMemory:
             await self.episodic.append(entry)
 
         # ── Tier 4: Athena STM write ──────────────────────────────────────────
+        # Full fidelity, as written to the scratchpad and ledger above: Athena
+        # summarises into MTM chains, and it cannot summarise what it never saw.
         am = await self._get_athena_memory()
         if am:
             try:
                 if thought:
-                    await am.record_thought(thought[:500])
-                outcome = f"{action}: {result[:300]}" if result else action
+                    await am.record_thought(thought)
+                outcome = f"{action}: {result}" if result else action
                 await am.record_action(outcome)
             except Exception as exc:
                 logger.debug("[UnifiedMemory] Athena log_turn write failed (non-fatal): %s", exc)

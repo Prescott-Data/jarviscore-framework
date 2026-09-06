@@ -156,7 +156,7 @@ class AthenaMemory:
         """Emit an observation event when a task is completed."""
         content = f"Task completed: {title}"
         if output_summary:
-            content += f" — {output_summary[:300]}"
+            content += f" — {output_summary}"
         await self.record_observation(
             content,
             metadata={"task_id": task_id, "event": "task_completed"},
@@ -168,7 +168,7 @@ class AthenaMemory:
         """Emit an observation event when a meeting note is created."""
         content = f"Meeting recorded: {title}"
         if summary:
-            content += f" — {summary[:300]}"
+            content += f" — {summary}"
         await self.record_observation(
             content,
             metadata={"meeting_id": meeting_id, "event": "meeting_noted"},
@@ -180,7 +180,7 @@ class AthenaMemory:
         """Emit an observation event when a HITL request is resolved."""
         content = f"HITL resolved: {decision.upper()} — request {request_id}"
         if note:
-            content += f" (note: {note[:200]})"
+            content += f" (note: {note})"
         await self.record_observation(
             content,
             metadata={"request_id": request_id, "decision": decision, "event": "hitl_resolved"},
