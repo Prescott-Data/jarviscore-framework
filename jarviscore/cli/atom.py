@@ -434,7 +434,8 @@ def cmd_test(args):
         if not bundles:
             print(_info("No atom bundles found in integrations/atoms/"))
             sys.exit(0)
-        print(f"{_info(f'Testing {len(bundles)} bundle(s): {', '.join(bundles)}')}")
+        names = ", ".join(bundles)
+        print(_info(f"Testing {len(bundles)} bundle(s): {names}"))
         all_passed = True
         for bundle in bundles:
             atoms = _get_atoms_for_bundle(bundle)
@@ -465,7 +466,7 @@ def cmd_test(args):
         print(_err(f"No atoms found in bundle '{bundle}'"))
         sys.exit(1)
 
-    print(f"{_info(f'Bundle: {bundle}  |  Atoms: {len(atoms)}')}")
+    print(_info(f"Bundle: {bundle}  |  Atoms: {len(atoms)}"))
     all_passed = True
 
     for atom in atoms:
@@ -516,7 +517,7 @@ def cmd_list(args):
             print(f"    {_dim('·')} {atom}")
         print()
 
-    print(f"{_dim(f'{len(bundles)} bundles  ·  {total_atoms} atoms total')}")
+    print(_dim(f"{len(bundles)} bundles  ·  {total_atoms} atoms total"))
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
