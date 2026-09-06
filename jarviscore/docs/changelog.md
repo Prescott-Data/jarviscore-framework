@@ -24,6 +24,72 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.7.0 <span class="changelog-date">2026-09-06</span>
+
+**Fixed**
+
+- A rejected `DONE` now tells the agent what it produced instead of what rule it
+  broke (#144). The gate returned a verdict in its own vocabulary —
+  `DONE_VALIDATION_FAILED: evidence is required` — and the observation was
+  identical on every attempt, so nothing in the agent's input changed between the
+  first rejection and the eighth. The facts already existed:
+  `_validate_done_payload` computes `evidence_count`, `bad_evidence`,
+  `bad_api_specs` and `incomplete_specs` on every call, and the report was
+  discarded to return a sentence. A gate now names the check that did not hold,
+  what it reads, and what it observed. The harness recognises an attempt that
+  carries no new information — same check failing on the same values, same result
+  submitted, no tool run in between — reports that too, and ends the step after
+  `max_identical_done_attempts` (default 3) of them rather than spending the
+  remaining lease re-submitting a rejected artifact. An agent that is still
+  changing its output is never cut off.
+- `single_response` can no longer report an unfinished completion as success
+  (#148). A truncated answer, a refusal, a content-filter block and a completed
+  answer were indistinguishable to the caller, because the provider's finish
+  reason was discarded by every adapter before the profile could read it. Native
+  reasons and completion metadata now travel with the response, and success
+  requires a terminal reason. A missing reason stays `None` — a generation that
+  stops short of the cap is not evidence that it finished, and inferring one
+  would manufacture the confidence this removes. Gemini output tokens now include
+  `thoughts_token_count`, thought parts are excluded from content, and
+  `execution_contract.max_output_tokens` is honoured instead of ignored.
+- Search no longer cancels healthy grounded requests (#147). Every provider ran
+  under one hard six-second deadline, so Gemini grounded search — a generative
+  call — was routinely cut off and the run lost its highest-weight provider
+  without saying so. Deadlines are now per provider (45s grounded, 15s otherwise)
+  and configurable; a failing provider is named in the log with its error type
+  and the deadline it exceeded, instead of an anonymous "Search provider failed".
+- Docs and the packaged skill report the installed atom catalog rather than a
+  count that was true when the page was written (#149).
+
+**Added**
+
+- `jarviscore.kernel.gate`: `GateEvidence` for reporting a completion failure as
+  the check that did not hold plus what was observed, and the attempt ledger the
+  harness uses to recognise a repeat.
+- Per-provider search deadlines via `RESEARCH_GROUNDED_TIMEOUT_SECONDS` and
+  `RESEARCH_SEARCH_TIMEOUT_SECONDS`, or constructor arguments on either public
+  `InternetSearch` client.
+- `finish_reason` and `provider_metadata` on every LLM response.
+
+**Behaviour changes to know about (compatible, but read this)**
+
+- **A step can now end on an unsatisfied completion gate.** `_can_complete` keeps
+  its `(bool, reason)` signature and a bare string is still accepted — carried
+  through as a verdict with no observations behind it — but a gate that rejects
+  the same unchanged attempt three times ends the step as
+  `FAIL_DONE_GATE_UNSATISFIED` instead of running to the emergency turn fuse. The
+  outcome names the gate rather than reporting "out of turns".
+- **A single-response turn that used to succeed may now fail.** Truncated,
+  refused and filtered completions are reported as failures that name their cause.
+  They were already failures; they were being reported as successes.
+- **Grounded search takes longer before giving up.** The default grounded
+  deadline is 45s. A run that previously lost that provider at six seconds will
+  now wait for it, and return better evidence for the wait.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.6.0 <span class="changelog-date">2026-09-06</span>
 
 **Added**
