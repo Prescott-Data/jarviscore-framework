@@ -287,11 +287,12 @@ class TestKernelExecuteFailure:
             max_dispatches=2,
             agent_default_role="coder",
         )
-        assert output.status == "yield"
-        # A rejected DONE no longer marks the agent done and kills it next turn
-        # (issue #139); an agent that can never satisfy proof-of-work now runs
-        # to the emergency turn fuse, which is the honest outcome.
-        assert output.metadata["typed_outcome"] == "YIELD_EMERGENCY_TURN_FUSE"
+        assert output.status == "failure"
+        # An agent that resubmits the same rejected result without doing any work
+        # in between cannot converge, so each dispatch ends on the gate that
+        # stopped it instead of burning the turn fuse first (#144). The kernel
+        # then reports the honest workflow-level outcome.
+        assert output.metadata["typed_outcome"] == "FAIL_ALL_DISPATCHES_EXHAUSTED"
 
     @pytest.mark.asyncio
     async def test_failure_then_success(self, kernel, mock_llm):

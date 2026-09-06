@@ -54,6 +54,7 @@ from typing import Any, Callable, Dict, List, Optional, cast
 from jarviscore.context.truth import AgentOutput
 from jarviscore.kernel.cognition import AgentCognitionManager, ConvergenceGovernor, FailureLedger
 from jarviscore.kernel.epistemic import EpistemicLedger
+from jarviscore.kernel.gate import GateEvidence, as_evidence, record_attempt
 from jarviscore.kernel.state import KernelState, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -269,6 +270,12 @@ class BaseSubAgent(ABC):
     - Convergence detection and failure memory
     - AgentOutput construction
     """
+
+    #: How many times the same completion attempt may be rejected before the step
+    #: ends. An attempt only counts as the same when the gate observed identical
+    #: values, the agent submitted an identical result, and no tool ran in between
+    #: — so an agent that is still working is never cut off, however long it takes.
+    max_identical_done_attempts: int = 3
 
     def __init__(
         self,
@@ -752,16 +759,63 @@ class BaseSubAgent(ABC):
                 # ── Done-gate: subclasses can reject premature completion ──
                 can_exit, reject_reason = self._can_complete(state, parsed)
                 if not can_exit:
-                    self._log.info("Done rejected: %s", reject_reason)
-                    state.add_thought(
-                        f"[DONE_GATE] Cannot complete yet: {reject_reason}. "
-                        f"Continue working."
+                    evidence = as_evidence(reject_reason)
+                    attempts = state.internal_variables.setdefault("done_gate_attempts", [])
+                    _, streak, previous = record_attempt(
+                        attempts,
+                        turn=turn,
+                        evidence=evidence,
+                        payload=parsed.get("result"),
+                        tool_calls=len(state.tool_history),
                     )
+                    self._log.info(
+                        "Done rejected: check=%s attempt=%d", evidence.check, streak,
+                    )
+                    report = evidence.render()
+                    if previous is not None and streak > 1:
+                        report += (
+                            f"\n  unchanged  since turn {previous.turn}: same check, same values, "
+                            f"same result submitted, no tool call in between"
+                        )
+
+                    if streak >= self.max_identical_done_attempts:
+                        # A boundary, not a verdict on the work. The agent has the
+                        # facts and has stopped producing anything new, so another
+                        # turn cannot change the outcome — and an unsatisfied gate
+                        # is not a success to be granted on the way out.
+                        summary = (
+                            f"Completion gate '{evidence.check}' unsatisfied after "
+                            f"{streak} identical attempts"
+                        )
+                        state.status = "failed"
+                        state.add_thought(f"[DONE_GATE] {report}")
+                        trajectory.append({
+                            "turn": turn,
+                            "type": "done_gate_unsatisfied",
+                            "check": evidence.check,
+                            "attempts": streak,
+                        })
+                        _trace.log_step_complete(False, summary)
+                        return AgentOutput(
+                            status="failure",
+                            summary=summary,
+                            payload=state.get_final_output(),
+                            trajectory=trajectory,
+                            metadata={
+                                "tokens": total_tokens, "cost_usd": total_cost,
+                                "typed_outcome": "FAIL_DONE_GATE_UNSATISFIED",
+                                "gate_evidence": evidence.as_dict(),
+                                "gate_attempts": streak,
+                                "cognition": self._cognition.get_budget_summary(),
+                            },
+                        )
+
+                    state.add_thought(f"[DONE_GATE] {report}")
                     conversation_history.append({
                         "assistant": content,
                         "observation": (
-                            f"[Turn {turn}] DONE rejected: {reject_reason}\n"
-                            f"You must address this before calling DONE again."
+                            f"[Turn {turn}] {report}\n"
+                            f"DONE was not recorded. It may be attempted again."
                         ),
                     })
                     # Charge tokens WITHOUT the "done" label: track_usage("done")
@@ -1201,9 +1255,18 @@ class BaseSubAgent(ABC):
     ) -> tuple:
         """Called before accepting a DONE signal — subclass gate point.
 
-        Returns (True, "") to allow completion, or (False, reason) to
-        reject it. On rejection the loop continues — the LLM sees the
-        reason and must address it before calling DONE again.
+        Returns ``(True, "")`` to allow completion, or ``(False, reason)`` to
+        reject it. On rejection the loop continues and the agent sees the reason.
+
+        ``reason`` should be a :class:`~jarviscore.kernel.gate.GateEvidence`:
+        the check that did not hold, what it reads, and what was observed in the
+        agent's own output. A gate that reports a verdict instead ("evidence is
+        required") gives the agent nothing it can act on, so its next attempt is
+        a reworded version of the last one — which is how a rejection turns into
+        a loop. A bare string is still accepted and carried through unchanged.
+
+        Do not advise here. Naming the missing fact is this method's whole job;
+        deciding what to do about it is the agent's.
 
         Default: always allow.
         """

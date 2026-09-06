@@ -27,6 +27,7 @@ from typing import Dict, Any, List, Optional, Literal, cast, Set, Tuple
 from urllib.parse import urlparse
 
 from jarviscore.kernel.subagent import BaseSubAgent
+from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.state import KernelState
 from jarviscore.kernel.defaults.research_flow import ResearchFlow, ResearchPhase
 from jarviscore.kernel.cognition import AgentPhase
@@ -554,8 +555,21 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             }
         return None
 
-    def _can_complete(self, state, parsed: Dict[str, Any]) -> Tuple[bool, str]:
-        """Reject premature DONE if no meaningful research has been done."""
+    #: What each named done-payload check reads, stated once for the agent.
+    _DONE_REQUIREMENTS = {
+        "summary": "a non-empty summary",
+        "evidence": "at least one evidence entry, or a recorded research finding",
+        "evidence_pointers": "every evidence entry carries a pointer or url",
+        "api_specs": "every api_spec entry carries a method and a url or path",
+    }
+
+    _CONTENT_TOOLS = frozenset({
+        "read_web_content", "browser_get_text", "browser_get_page_text",
+        "rag_query", "read_file", "extract_api_details",
+    })
+
+    def _can_complete(self, state, parsed: Dict[str, Any]) -> Tuple[bool, Any]:
+        """Reject premature DONE, reporting what the result actually contains."""
         base_ok, base_reason = super()._can_complete(state, parsed)
         if not base_ok:
             return base_ok, base_reason
@@ -563,15 +577,38 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         params = parsed.get("result") or {}
         if not isinstance(params, dict):
             params = {}
-        meaningful_research = any(
-            t.status == "success" and t.tool_name in {"read_web_content", "browser_get_text", "browser_get_page_text", "rag_query", "read_file", "extract_api_details"}
-            for t in state.tool_history
+        evidence_items = params.get("evidence")
+        content_successes = sum(
+            1 for t in state.tool_history
+            if t.status == "success" and t.tool_name in self._CONTENT_TOOLS
         )
-        if not meaningful_research and not (params.get("evidence") or params.get("summary")):
-            return False, "Research completion requires at least one successful content/evidence tool result"
-        valid, reason, _ = self._validate_done_payload(state, params)
+        if not content_successes and not (evidence_items or params.get("summary")):
+            return False, GateEvidence(
+                check="research_performed",
+                requirement=(
+                    "one successful content tool call, or a summary or evidence "
+                    "in the submitted result"
+                ),
+                observed={
+                    "tool_calls": len(state.tool_history),
+                    "content_tool_successes": 0,
+                    "content_tools": sorted(self._CONTENT_TOOLS),
+                    "result_summary": bool(params.get("summary")),
+                    "result_evidence": (
+                        len(evidence_items) if isinstance(evidence_items, list) else 0
+                    ),
+                },
+            )
+        valid, _reason, report = self._validate_done_payload(state, params)
         if not valid:
-            return False, reason
+            check = report.get("check", "done_payload")
+            observed = {key: value for key, value in report.items() if key != "check"}
+            observed["content_tool_successes"] = content_successes
+            return False, GateEvidence(
+                check=check,
+                requirement=self._DONE_REQUIREMENTS.get(check, ""),
+                observed=observed,
+            )
         return True, ""
 
     def _validate_done_payload(self, state, params: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
@@ -632,13 +669,19 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         }
         if not strict:
             return True, "", report
+        # report["check"] names the failing contract so callers can identify it
+        # without reading the prose reason.
         if not summary:
+            report["check"] = "summary"
             return False, "DONE_VALIDATION_FAILED: summary is required", report
         if evidence_count == 0 and not has_finding_fallback:
+            report["check"] = "evidence"
             return False, "DONE_VALIDATION_FAILED: evidence is required", report
         if bad_evidence > 0:
+            report["check"] = "evidence_pointers"
             return False, "DONE_VALIDATION_FAILED: evidence entries must include pointer/url", report
         if bad_specs > 0:
+            report["check"] = "api_specs"
             return False, "DONE_VALIDATION_FAILED: api_specs entries need method + url/path", report
         if incomplete_specs:
             # Surface a clear warning — do not hard-fail since the Researcher may
