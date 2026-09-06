@@ -63,9 +63,9 @@ Agents discover and message each other via a `PeerClient` API over SWIM gossip a
 <div class="jc-card" markdown>
 <span class="jc-card-label">Integrations</span>
 
-### 46 service integrations
+### Built-in service integrations
 
-Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and 40 more. 237+ prebuilt actions your agents can call directly. No glue code, no auth wiring.
+Prebuilt actions for Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and more. No glue code, no auth wiring. Inspect the catalog in your installed version with [`jarviscore atom list`](reference/cli.md#atom-list).
 
 [Browse integrations →](guides/integrations.md)
 </div>

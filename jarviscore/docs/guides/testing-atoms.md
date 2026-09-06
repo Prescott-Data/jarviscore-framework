@@ -77,6 +77,9 @@ jarviscore atom test --mode dry-run --all
 
 ### List all bundles and their atoms
 
+Use [`jarviscore atom list`](../reference/cli.md#atom-list) as the source of truth
+for the catalog shipped with your installed version, rather than a fixed count.
+
 ```bash
 jarviscore atom list
 ```
@@ -211,6 +214,6 @@ Atoms root: jarviscore/integrations/atoms
 
 ## Further Reading
 
-- [Service Integrations](integrations.md) documents the 46 built-in atom bundles.
+- [Service Integrations](integrations.md) documents the built-in atom bundles.
 - [Nexus: Credential Management](nexus.md) covers credential registration, which is required before running integration tests.
 - [Concepts: System Bundles](../concepts/system-bundles.md) covers the immutable atom contract and the graduation model in depth.

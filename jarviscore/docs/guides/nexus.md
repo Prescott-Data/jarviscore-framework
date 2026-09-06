@@ -4,7 +4,7 @@ icon: material/key-variant
 
 # Nexus: Credential Management
 
-Nexus is JarvisCore's credential management system and an [open-source framework in its own right](https://github.com/Prescott-Data/nexus-framework). It solves the N+1 authentication problem by providing a single `nexus_call` interface that works for all 46 service integrations. Nexus handles credential resolution, token refresh, and auth strategy selection so that agents never deal with credentials directly.
+Nexus is JarvisCore's credential management system and an [open-source framework in its own right](https://github.com/Prescott-Data/nexus-framework). It solves the N+1 authentication problem by providing a single `nexus_call` interface for the built-in service integrations. Nexus handles credential resolution, token refresh, and auth strategy selection so that agents never deal with credentials directly. Inspect your installed integration catalog with [`jarviscore atom list`](../reference/cli.md#atom-list).
 
 > [!NOTE]
 > This page is the operational reference covering CLI commands, encryption details, and the Gateway API contract. For the conceptual model explaining why Nexus exists, how `NexusCallProxy` works, and the security design, see [Nexus: Credential Federation](../concepts/nexus.md).
