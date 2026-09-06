@@ -59,6 +59,27 @@ def classify_auth_error(error_msg: str) -> Optional[str]:
     return None
 
 
+def _produced_output(output: Any) -> bool:
+    """Did the run leave anything a caller could read?
+
+    The sandbox envelope (marked by ``success``) always reports its own
+    bookkeeping — timings, file lists — so its presence says only that code ran.
+    Answering requires a returned value, stdout, or a written file. Anything the
+    sandbox hands back that is not that envelope is already the result itself.
+    """
+    if output is None:
+        return False
+    if not isinstance(output, dict):
+        return str(output).strip() != ""
+    if "success" not in output:
+        return bool(output)
+    return (
+        output.get("data") is not None
+        or bool(str(output.get("stdout") or "").strip())
+        or bool(output.get("files_created") or output.get("files_modified"))
+    )
+
+
 # ─────────────────────────────────────────────────────────────────
 # CoderSubAgent
 # ─────────────────────────────────────────────────────────────────
@@ -445,10 +466,20 @@ proves it — that is the entire job.
         if execution_result.get("status") == "success":
             merged["status"] = "success"
             merged["output"] = execution_result.get("output")
-            merged["_auto_complete"] = True
             merged["message"] = (
                 f"Code validated and executed successfully (candidate_id={result['candidate_id']})."
             )
+            if _produced_output(execution_result.get("output")):
+                merged["_auto_complete"] = True
+            else:
+                # Running is not answering: let the loop continue so the agent can
+                # return a value or say plainly that there was nothing to report.
+                merged["message"] += (
+                    " The run returned no value and printed nothing, so there is no "
+                    "result to report yet. Return your findings from main() (or print "
+                    "them), then finish — or, if the task genuinely has no output, "
+                    "finish with DONE and say so explicitly."
+                )
         else:
             merged["status"] = "error"
             merged["error"] = execution_result.get("error", "Code execution failed.")
