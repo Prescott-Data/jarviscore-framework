@@ -91,8 +91,11 @@ jarviscore memory init     # pull + start the Athena memory stack (Docker)
 jarviscore memory status   # health of all memory tiers
 jarviscore nexus init      # zero-trust credential broker (Docker)
 jarviscore inspect [wf]    # read recorded traces: what did my agents do?
-jarviscore atom list       # 46 service integrations, 237+ prebuilt actions
+jarviscore atom list       # inspect bundles and atoms in the installed catalog
 ```
+
+Use the installed catalog rather than a fixed integration count. See the
+[`jarviscore atom list` reference](https://jarviscore.developers.prescottdata.io/reference/cli/#atom-list).
 
 ## House rules the framework enforces (do not fight them)
 

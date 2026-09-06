@@ -4,7 +4,7 @@ icon: material/shield-key
 
 # Nexus: Credential Federation
 
-Nexus is JarvisCore's answer to two compounding problems in agentic systems. Agents need credentials to call external services, but agents should never handle credentials. And with 46 integrations, writing authentication glue code for each one is unsustainable.
+Nexus is JarvisCore's answer to two compounding problems in agentic systems. Agents need credentials to call external services, but agents should never handle credentials. Across a growing integration catalog, writing authentication glue code for each service is unsustainable. Inspect your installed catalog with [`jarviscore atom list`](../reference/cli.md#atom-list).
 
 ---
 
@@ -27,7 +27,7 @@ cred = base64.b64encode(f"{email}:{api_token}".encode()).decode()
 headers = {"Authorization": f"Basic {cred}"}
 ```
 
-Three providers, three auth patterns, three environment variables, and three separate token expiry and refresh paths. Scaled to 150 integrations across a multi-agent fleet, this becomes a maintenance problem that never ends.
+Three providers, three auth patterns, three environment variables, and three separate token expiry and refresh paths. Scaled across the integration catalog and a multi-agent fleet, this becomes a maintenance problem that never ends.
 
 **Nexus collapses all of this to one interface:**
 
@@ -126,12 +126,12 @@ The two modes are not mutually exclusive. When `NEXUS_GATEWAY_URL` is set and re
 
 **It does not replace your application's auth.** If you are building an API on top of JarvisCore, user authentication for your end users is outside Nexus's scope.
 
-Nexus has one job: ensure that agent code can call 46 third-party APIs through a single authenticated interface, without handling credentials directly.
+Nexus has one job: ensure that agent code can call third-party APIs through a single authenticated interface, without handling credentials directly.
 
 ---
 
 ## Further Reading
 
 - [Nexus Setup Guide](../guides/nexus.md) covers credential registration, the CLI reference, the Gateway API contract, and production deployment.
-- [Service Integrations](../guides/integrations.md) lists the 46 provider bundles that use Nexus for authentication.
+- [Service Integrations](../guides/integrations.md) describes the built-in provider bundles that use Nexus for authentication.
 - [Nexus Framework on GitHub](https://github.com/Prescott-Data/nexus-framework) is the open-source repository for the Nexus credential federation framework.

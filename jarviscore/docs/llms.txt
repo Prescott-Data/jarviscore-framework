@@ -20,7 +20,7 @@ Package: `jarviscore-framework` on PyPI. Import name: `jarviscore`. Python 3.10+
 - [Observability](https://jarviscore.developers.prescottdata.io/guides/observability/): tracing, metrics, jarviscore inspect
 - [HITL Escalation](https://jarviscore.developers.prescottdata.io/guides/hitl/): human-in-the-loop
 - [Nexus Credentials](https://jarviscore.developers.prescottdata.io/guides/nexus/): zero-trust auth
-- [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/): 46 services, 237+ prebuilt actions
+- [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/): built-in service bundles and prebuilt actions; inspect the installed catalog with [jarviscore atom list](https://jarviscore.developers.prescottdata.io/reference/cli/#atom-list)
 - [Production Deployment](https://jarviscore.developers.prescottdata.io/guides/production/)
 
 ## Reference

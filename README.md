@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>The production runtime for multi-agent systems — a peer-to-peer mesh with no central orchestrator, zero-trust credentials, durable state that survives <code>kill -9</code>, and 1,224 typed atoms across 150 services. Observability included, not upsold.</strong>
+  <strong>The production runtime for multi-agent systems — a peer-to-peer mesh with no central orchestrator, zero-trust credentials, durable state that survives <code>kill -9</code>, and a built-in catalog of typed integration atoms. Observability included, not upsold.</strong>
 </p>
 
 <p align="center">
@@ -44,7 +44,7 @@ Six things you get here that you will not assemble from a typical agent framewor
 
 **1. Agents never touch credentials.** Nexus, a zero-trust credential broker, ships inside the framework. Set `requires_auth = True` and the runtime injects scoped, encrypted credentials into atoms at call time — no raw keys in prompts, agent context, or `.env` sprawl. A leaked agent trace leaks no secrets.
 
-**2. Tools without MCP plumbing.** 1,224 typed atoms across 150 services (`jarviscore atom list`), auth injected at runtime. Missing one? Write a Python function, validate it with `jarviscore atom test`, drop it in the registry — no server to stand up, no wiring. And when no atom exists, AutoAgents write their own sandboxed code with self-repair and keep what worked in a verified-work registry.
+**2. Tools without MCP plumbing.** Built-in typed atoms with auth injected at runtime; inspect your installed catalog with [`jarviscore atom list`](https://jarviscore.developers.prescottdata.io/reference/cli/#atom-list). Missing one? Write a Python function, validate it with `jarviscore atom test`, drop it in the registry — no server to stand up, no wiring. And when no atom exists, AutoAgents write their own sandboxed code with self-repair and keep what worked in a verified-work registry.
 
 **3. No central orchestrator to babysit.** Agents form a SWIM gossip mesh over ZMQ, discover each other by capability, and claim workflow steps atomically from Redis. Any node can die — another claims its work. There is no coordinator process whose crash takes the fleet down.
 
@@ -210,12 +210,12 @@ The Kernel runs an Observe-Orient-Decide-Act (OODA) loop for every AutoAgent tas
 | **GoalContext** | Tracks plan state, step history, and convergence signals |
 | **EpistemicLedger** | Records what the agent knows, assumes, and has verified |
 
-### Service Integrations (150 bundles, 1,224 atoms)
+### Service Integrations
 
 Every integration is a single-file Python function called an **atom**. Atoms are registered in the seed registry and discovered by agents at runtime. No SDK wiring required.
 
 <details>
-<summary><strong>View the 150 integration bundles by category</strong></summary>
+<summary><strong>Browse integration bundles by category</strong></summary>
 
 | Category | Bundles |
 |----------|---------|
@@ -406,7 +406,7 @@ If you build multi-agent systems, star the repo ⭐ to support open-source agent
 | [Getting Started](https://jarviscore.developers.prescottdata.io/getting-started/) | Install, scaffold, and run your first agent in 5 minutes |
 | [Concepts](https://jarviscore.developers.prescottdata.io/concepts/architecture/) | Architecture, model routing, planning, memory, Nexus |
 | [Guides](https://jarviscore.developers.prescottdata.io/guides/autoagent/) | AutoAgent, CustomAgent, workflows, HITL, browser, testing, production |
-| [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/) | All 150 service bundles with usage examples |
+| [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/) | Built-in service bundles with usage examples |
 | [Reference](https://jarviscore.developers.prescottdata.io/reference/agent-api/) | Agent API, CLI, configuration, and troubleshooting |
 | [Changelog](https://jarviscore.developers.prescottdata.io/changelog/) | Full release history |
 

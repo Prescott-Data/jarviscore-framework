@@ -322,7 +322,7 @@ jarviscore atom test --bundle slack --mode dry-run
 # Check a single atom
 jarviscore atom test --bundle slack --atom slack_send_message --mode dry-run
 
-# Check every atom across all 150 bundles
+# Check every atom across the installed bundles
 jarviscore atom test --mode dry-run --all
 ```
 
@@ -355,7 +355,10 @@ The integration check does not call the provider API: it confirms the Nexus Gate
 
 ### atom list
 
-Lists all registered atom bundles and their atoms.
+Lists the built-in bundle directories and atom files shipped with your installed
+version. Use this local inventory as the source of truth for catalog availability;
+it does not query a running registry or certify that atoms have been verified
+against live provider APIs.
 
 ```bash
 # All bundles
@@ -365,22 +368,25 @@ jarviscore atom list
 jarviscore atom list --bundle slack
 ```
 
-Example output:
+Illustrative output (names are abbreviated; counts come from your installation):
 
 ```
 JarvisCore Atom Registry
 jarviscore/integrations/atoms
 
-  slack  (6 atoms)
-    · slack_add_reaction
-    · slack_get_messages
-    · slack_get_user
-    · slack_list_channels
-    · slack_list_users
+  slack  (<atom count> atoms)
     · slack_send_message
+    · ...
 
-150 bundles  ·  1224 atoms total
+... remaining installed bundles ...
+
+<bundle count> bundles  ·  <total atom count> atoms total
 ```
+
+The complete output reports totals from the installed catalog, counting atom
+files rather than parsing their functions and excluding package initializers.
+These totals change as bundles and atoms are added or removed. Use `atom test`
+for structural validation; listing an atom is not a validation result.
 
 See [Testing Atoms](../guides/testing-atoms.md) for the full workflow: from writing a new atom to promoting it to `verified`.
 
