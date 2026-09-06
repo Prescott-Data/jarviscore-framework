@@ -102,9 +102,24 @@ class UnifiedMemory:
                 redis_store=self._redis,
             )
         except Exception as exc:
+            # Athena restarting is a condition to recover from, not a reason to
+            # disable the tier for the life of the process. The client's breaker
+            # keeps the retry cheap while it is down (#128).
             logger.warning("[UnifiedMemory] Athena init failed (non-fatal): %s", exc)
-            self._athena_client = None   # disable so we don't retry on every turn
         return self._athena_memory
+
+    @property
+    def athena_delivery_stats(self) -> Optional[Dict[str, Any]]:
+        """Delivery counters for the Athena tier, or None when it is not active."""
+        if self._athena_memory is None:
+            return None
+        return self._athena_memory.delivery_stats
+
+    async def close(self, timeout: float = 5.0) -> bool:
+        """Flush queued memory writes. False if anything was still unsent."""
+        if self._athena_memory is None:
+            return True
+        return await self._athena_memory.close(timeout=timeout)
 
 
     async def log_turn(
