@@ -17,6 +17,8 @@ from io import BytesIO
 from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import quote_plus, urlparse, urljoin
 
+from jarviscore.core.search_deadlines import search_deadline
+
 # beautifulsoup4 — required for HTML→Markdown extraction.
 # Part of [web] or [research] extras.
 try:
@@ -91,8 +93,17 @@ class InternetSearch:
         user_agent: Optional[str] = None,
         pdf_timeout_seconds: Optional[int] = None,
         pdf_max_retries: Optional[int] = None,
+        *,
+        search_timeout_seconds: float | None = None,
+        grounded_timeout_seconds: float | None = None,
     ):
         self.session = None
+        self.search_timeout_seconds = search_deadline(
+            search_timeout_seconds, "RESEARCH_SEARCH_TIMEOUT_SECONDS", 15.0,
+        )
+        self.grounded_timeout_seconds = search_deadline(
+            grounded_timeout_seconds, "RESEARCH_GROUNDED_TIMEOUT_SECONDS", 45.0,
+        )
         self.user_agent = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         self.pdf_timeout_seconds = pdf_timeout_seconds or int(
             os.environ.get("RESEARCH_PDF_TIMEOUT_SECONDS", "90")
@@ -197,16 +208,19 @@ class InternetSearch:
                 *(
                     asyncio.wait_for(
                         self._run_search_provider(provider, query, max_results),
-                        timeout=6,
+                        timeout=self._provider_timeout(provider),
                     )
                     for provider in providers
                 ),
                 return_exceptions=True,
             )
             results: List[Dict[str, Any]] = []
-            for batch in provider_results:
+            for provider, batch in zip(providers, provider_results):
                 if isinstance(batch, Exception):
-                    logger.warning("Search provider failed in tier %s: %s", tier_name, batch)
+                    logger.warning(
+                        "Search provider=%s tier=%s failed error_type=%s deadline_seconds=%s",
+                        provider, tier_name, type(batch).__name__, self._provider_timeout(provider),
+                    )
                     continue
                 if isinstance(batch, list):
                     results.extend(batch)
@@ -214,6 +228,12 @@ class InternetSearch:
             if ranked:
                 return ranked[:max_results]
         return []
+
+    def _provider_timeout(self, provider: str) -> float:
+        return (
+            self.grounded_timeout_seconds if provider == "google_grounded"
+            else self.search_timeout_seconds
+        )
 
     def _provider_tiers(self, skip: set) -> List[Tuple[str, List[str]]]:
         """Return ordered provider tiers from authoritative to fallback."""
