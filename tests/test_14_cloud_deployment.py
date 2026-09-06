@@ -267,7 +267,7 @@ class TestAgentJoinLeaveMesh:
         os.environ.pop("JARVISCORE_SEED_NODES", None)
 
         with pytest.raises(ValueError) as exc_info:
-            asyncio.get_event_loop().run_until_complete(agent.join_mesh())
+            asyncio.run(agent.join_mesh())
 
         assert "JARVISCORE_MESH_ENDPOINT" in str(exc_info.value)
 

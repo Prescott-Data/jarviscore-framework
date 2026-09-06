@@ -36,6 +36,9 @@ dependencies = [
     "aiohttp>=3.9.0",
     "certifi",
 
+    # Agent profiles ship as YAML and are read on every AutoAgent load.
+    "pyyaml>=6.0",
+
     # LLM Providers — the engine. Always available, zero-config.
     # Developer picks which provider to use via env vars, not pip extras.
     "openai>=1.0.0",
@@ -93,7 +96,7 @@ full = [
     "jarviscore-framework[p2p,web,redis,prometheus,azure,browser,rag,research,memory-athena]",
 ]
 dev = [
-    "jarviscore-framework[p2p,web,redis]",
+    "jarviscore-framework[p2p,web,redis,prometheus]",
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
