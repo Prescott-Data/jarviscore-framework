@@ -76,6 +76,29 @@ class TestTierAvailability:
 
 class TestLogTurn:
     @pytest.mark.asyncio
+    async def test_athena_receives_the_same_fidelity_as_the_other_tiers(self, store, blob):
+        """issue #153 — a clipped write destroys the original; only reads may abridge."""
+        recorded = {}
+
+        class RecordingAthena:
+            async def record_thought(self, content, metadata=None):
+                recorded["thought"] = content
+
+            async def record_action(self, content, metadata=None):
+                recorded["action"] = content
+
+        mem = UnifiedMemory("wf-1", "step1", "analyst", store, blob)
+        mem._athena_memory = RecordingAthena()
+        thought = "Reasoned about the account. " * 60      # ~1680 chars
+        result = "Found the renewal evidence. " * 40       # ~1120 chars
+        await mem.log_turn("t1", thought, "search", result)
+
+        assert recorded["thought"] == thought
+        assert result in recorded["action"]
+        # The ledger already stored it whole; Athena must not be the lossy tier.
+        assert (await mem.episodic.tail(1))[0]["thought"] == thought
+
+    @pytest.mark.asyncio
     async def test_log_turn_writes_to_scratchpad(self, mem, blob):
         await mem.log_turn("t1", "thinking", "search", "found 10 results")
         entries = await mem.working.read_all()
