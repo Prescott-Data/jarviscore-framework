@@ -1494,6 +1494,7 @@ def create_function_registry(
     storage_path: str = "./logs/function_registry",
     blob_storage=None,
     redis_store=None,
+    seed: bool = True,
 ) -> FunctionRegistry:
     """
     Factory function to create function registry.
@@ -1502,11 +1503,60 @@ def create_function_registry(
         storage_path: Directory for function storage
         blob_storage: Optional BlobStorage for distributed sync
         redis_store: Optional RedisContextStore for cognitive projection
+        seed: Load the shipped atom catalogue when the registry is empty.
 
     Returns:
         FunctionRegistry instance
     """
-    return FunctionRegistry(storage_path, blob_storage, redis_store)
+    registry = FunctionRegistry(storage_path, blob_storage, redis_store)
+    if seed and not registry.function_metadata:
+        _seed_shipped_atoms(registry)
+    return registry
+
+
+def _seed_shipped_atoms(registry: FunctionRegistry) -> None:
+    """Load the packaged atoms so a fresh registry is not an empty one.
+
+    The catalogue ships with the package and the docs describe it as available
+    from startup, but nothing loaded it, so every deployment began with an empty
+    registry and agents rewrote integrations that were already on disk. Seeding
+    happens only when the registry holds nothing: a registry with contents has a
+    history, and re-seeding over it would overwrite execution counts that were
+    earned by real runs.
+    """
+    try:
+        from jarviscore.integrations.seed_registry import seed_registry
+    except ImportError as exc:
+        logger.warning(
+            "Atom catalogue unavailable, registry starts empty "
+            "(agents will write integrations from scratch): %s", exc,
+        )
+        return
+
+    try:
+        report = seed_registry(registry)
+    except Exception as exc:  # noqa: BLE001 - a broken catalogue must not stop the agent
+        logger.warning(
+            "Atom catalogue failed to load, registry starts empty "
+            "(agents will write integrations from scratch): %s", exc,
+        )
+        return
+
+    registered = len(report.get("registered", []))
+    failed = report.get("failed", [])
+    logger.info(
+        "Seeded %d atom(s) from the shipped catalogue across %d system(s)",
+        registered, len({m.get("system") for m in registry.function_metadata.values()}),
+    )
+    if failed:
+        logger.warning("%d atom(s) in the catalogue could not be loaded", len(failed))
+    if not registered:
+        # A silent no-op here is what made an empty registry look like normal
+        # operation for as long as it did.
+        logger.warning(
+            "Atom catalogue produced no functions; agents will write every "
+            "integration from scratch"
+        )
 
 
 # Backward-compatible alias

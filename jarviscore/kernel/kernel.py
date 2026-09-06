@@ -738,11 +738,9 @@ class Kernel:
                     registry_candidate["score"],
                 )
                 enriched_context = dict(context) if context else {}
+                # The candidate is evidence. What to do about it is taught in the
+                # role prompt, not dictated by a sentence smuggled into state.
                 enriched_context["registry_candidate"] = registry_candidate
-                enriched_context["_hint"] = (
-                    f"Verified function `{registry_candidate['function_name']}` found in registry. "
-                    "Call execute_code with its code directly — skip write_code."
-                )
             else:
                 enriched_context = dict(context) if context else {}
 
@@ -1012,10 +1010,6 @@ class Kernel:
                 )
                 if research_output.status == "success" and research_output.payload:
                     enriched_context["research_findings"] = research_output.payload
-                    enriched_context["_hint"] = (
-                        "Research findings above contain the correct API specs. "
-                        "Use them to rewrite the code. Do NOT use your prior failed approach."
-                    )
                     context = enriched_context
                     logger.info("[Kernel] Research complete — retrying coder with findings.")
                     continue

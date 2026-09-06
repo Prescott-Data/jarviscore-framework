@@ -116,6 +116,43 @@ A result that never touched the sandbox is not a result. If you catch yourself
 about to report an answer you computed mentally, stop and write the code that
 proves it — that is the entire job.
 
+## THE CATALOGUE (this is how the swarm stops re-solving the same problem)
+
+The FunctionRegistry holds atoms: functions that already ran against a real API
+and worked, scoped to the provider they call. It is a ratchet — every task that
+succeeds should leave the next one less work. You are the only role that can
+turn it, so it turns when you decide to turn it and not otherwise.
+
+Reading it, before you write anything:
+
+- When the task names a system, call `check_registry` first. It costs one
+  thinking turn and can replace the entire write-and-debug cycle.
+- What comes back carries a `stage`, and the stage is the whole message.
+  `verified` or `golden` means it has run against a live API: execute it.
+  `candidate` means someone wrote it for this exact call and it passed a dry
+  run, but nothing has confirmed it against the real service — read that code
+  and use it as the starting point rather than writing the same thing blind.
+  Executing a candidate successfully is what promotes it to verified, so the
+  first agent to need it is the one that proves it.
+- When `registry_candidate` is present in your context, an atom has already been
+  matched to this task. Read its code. If it does what the task needs, execute
+  it and skip `write_code` entirely — rewriting it produces a second, unproven
+  version of something already verified.
+- A match is a match on meaning, not a promise. If the code plainly does not fit
+  the task, say why in your THOUGHT and write what is needed instead.
+
+Writing to it, after you succeed:
+
+- When you write new code that executes successfully against a provider, call
+  `register_function` to keep it, with the `system` set to that provider. It
+  enters as a candidate, becomes verified on its first success and golden after
+  five, and from then on it is what the next agent finds instead of starting
+  from a blank file.
+- Name it for what it does to what: `hubspot_list_contacts`, not `run_task` or
+  `main`. The name is how it will be found.
+- Code that only reshapes local data is not worth keeping. An atom earns its
+  place by reaching a system.
+
 ## CRITICAL RULES (read all before acting)
 
 1. **CODE, DON'T META-CODE** — Produce actual Python functions, not plans or descriptions.
@@ -123,10 +160,10 @@ proves it — that is the entire job.
    Right: TOOL: write_code, PARAMS: {"code": "import requests\\ndef run():\\n    ..."}
 
 2. **FALLBACK LADDER** (follow in order):
-   a. write_code → Use your training knowledge to write code directly
-   b. If execution fails with a CONCRETE unknown (wrong endpoint, unknown field, unexpected response shape):
+   a. check_registry when the task names a system — reuse beats rewriting
+   b. write_code → Use your training knowledge to write code directly
+   c. If execution fails with a CONCRETE unknown (wrong endpoint, unknown field, unexpected response shape):
       Use quick_api_search or read_api_docs to look up the specific detail you need
-   c. If still stuck: check_registry to search for existing working functions
    d. If stuck after 2 failed attempts + self-research: call delegate_research as ABSOLUTE LAST RESORT
    NEVER call delegate_research before attempting to write code AND self-research first.
 
@@ -522,39 +559,52 @@ proves it — that is the entire job.
             normalized_task = await normalizer.normalize(task)
 
             matches = self.code_registry.semantic_search(normalized_task, limit=5)
+            if system:
+                scoped = [m for m in matches if m.get("system") == system]
+                if scoped:
+                    matches = scoped
+            if not matches:
+                return {"found": False, "message": "No functions found for this task."}
+
+            # Candidates are shown, not hidden. A candidate is code already
+            # written for this exact call and dry-run, but never confirmed
+            # against a live API — worth reading before writing the same thing
+            # from scratch. The stage says what it is; the agent weighs it.
             production = [
                 m for m in matches
                 if m.get("registry_stage") in ("verified", "golden")
             ]
-            if system:
-                system_matches = [m for m in production if m.get("system") == system]
-                if system_matches:
-                    production = system_matches
-            if not production:
-                return {"found": False, "message": "No verified functions found for this task."}
-
-            top = production[0]
+            top = (production or matches)[0]
             code = self.code_registry.get_function_code(top["function_name"])
+            stage = top.get("registry_stage")
 
             # Surface the reuse candidate's identity in the envelope (#88).
             getattr(self, "_dispatch_metadata", {}).setdefault(
                 "registry_match", top["function_name"]
             )
 
+            if stage in ("verified", "golden"):
+                message = (
+                    f"`{top['function_name']}` is {stage} with "
+                    f"{top.get('success_count', 0)} successful execution(s) against a live API."
+                )
+            else:
+                message = (
+                    f"`{top['function_name']}` is a {stage}: written for this call and "
+                    "dry-run, never confirmed against a live API. Executing it "
+                    "successfully is what promotes it to verified."
+                )
+
             return {
                 "found": True,
                 "function_name": top["function_name"],
                 "system": top.get("system"),
-                "stage": top.get("registry_stage"),
+                "stage": stage,
                 "description": top.get("description"),
                 "capabilities": top.get("capabilities", []),
                 "success_count": top.get("success_count", 0),
-                "code_preview": (code or "")[:400] if code else None,
-                "message": (
-                    f"Found verified function `{top['function_name']}` "
-                    f"({top.get('success_count', 0)} successful executions). "
-                    "Consider reusing it directly via execute_code."
-                ),
+                "code": code,
+                "message": message,
             }
         except Exception as exc:
             logger.warning("CoderSubAgent.check_registry failed: %s", exc)
@@ -744,7 +794,7 @@ proves it — that is the entire job.
         exec_context: Dict[str, Any] = {}
         if hasattr(self, '_run_context') and self._run_context:
             SAFE_KEYS = {"task", "system", "workflow_id", "step_id",
-                         "prior_outputs", "registry_candidate", "_hint",
+                         "prior_outputs", "registry_candidate",
                          "_nexus_connection_id", "_nexus_provider"}
             for k in SAFE_KEYS:
                 if k in self._run_context:
