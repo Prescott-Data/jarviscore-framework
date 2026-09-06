@@ -186,6 +186,21 @@ The four sub-agents the Kernel routes to are the `CoderSubAgent` for tasks that 
 
 ### Analysis, not code: the `single_response` contract
 
+The answer must contain visible text and must not carry an explicit incomplete,
+filtered, refused, tool-call or unrecognized terminal reason. Otherwise the result
+uses `status="failure"`, retaining any partial `output`/`payload`, `finish_reason`,
+`provider_metadata`, provider/model, tokens and cost for diagnosis. It never retries
+or reports a new warning status. Nonempty responses from older/custom clients with
+no finish reason remain compatible; token counts alone never establish truncation.
+
+To set an output budget for this turn only, include a positive integer
+`max_output_tokens` in the execution contract, for example:
+`{"execution_shape": "single_response", "max_output_tokens": 8192}`.
+This is forwarded as `generate(max_tokens=8192)`. Invalid values fail before an
+LLM call. Omitting it retains the existing configured provider budget; model
+limits still apply. A reasoning model may spend part of that budget on internal
+reasoning rather than visible text.
+
 Many agent tasks need exactly one LLM completion: render the system prompt, ask the question, return the answer. No planner, no routing, no code generation. Declare this shape per task with an execution contract:
 
 ```python

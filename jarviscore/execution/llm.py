@@ -15,6 +15,29 @@ from jarviscore.promo import PROMO_MODEL
 
 logger = logging.getLogger(__name__)
 
+def _metadata_value(value: Any) -> Any:
+    """Serialize selected SDK completion fields, not the full provider response."""
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {key: _metadata_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_metadata_value(item) for item in value]
+    if hasattr(value, "model_dump"):
+        return _metadata_value(value.model_dump(mode="json"))
+    if hasattr(value, "__dict__"):
+        return _metadata_value(vars(value))
+    return value
+
+
+def _completion_fields(finish_reason: Any, **metadata: Any) -> dict[str, Any]:
+    """Expose the native reason and retain provider-specific completion evidence."""
+    reason = _metadata_value(finish_reason)
+    return {
+        "finish_reason": reason,
+        "provider_metadata": _metadata_value({"finish_reason": reason, **metadata}),
+    }
+
 # ─── Global LLM concurrency limiter ──────────────────────────────────────────
 # Shared across ALL UnifiedLLMClient instances in the process.
 # Prevents thundering-herd 429s when many agents fire LLM calls simultaneously.
@@ -314,8 +337,15 @@ class UnifiedLLMClient:
                 "provider": "promo|vllm|azure|gemini|vertex_ai|claude",
                 "tokens": {"input": 100, "output": 200, "total": 300},
                 "cost_usd": 0.015,
-                "model": "gpt-4o"
+                "model": "gpt-4o",
+                "finish_reason": "stop",
+                "provider_metadata": {"finish_reason": "stop", "usage": {}}
             }
+
+            Completion metadata preserves native provider reasons (e.g. Azure
+            ``length``, Claude ``max_tokens``, Gemini ``MAX_TOKENS``). A missing
+            reason is None, not inferred from token counts. A returned generation
+            is not itself a guarantee of a complete answer.
         """
         # Accept max_completion_tokens as an alias (gpt-5.x SDK naming convention)
         # Callers from the integration agent pattern may pass this explicitly.
@@ -489,6 +519,12 @@ class UnifiedLLMClient:
                 return {
                     "content": content,
                     "provider": "vllm",
+                    **_completion_fields(
+                        data['choices'][0].get("finish_reason"),
+                        usage=usage,
+                        refusal=data['choices'][0]['message'].get("refusal"),
+                        tool_calls=data['choices'][0]['message'].get("tool_calls"),
+                    ),
                     "tokens": {
                         "input": usage.get('prompt_tokens', 0),
                         "output": usage.get('completion_tokens', 0),
@@ -659,15 +695,40 @@ class UnifiedLLMClient:
             duration = time.time() - start_time
             if is_responses_only:
                 content = response.output_text
-                prompt_tokens = response.usage.input_tokens
-                completion_tokens = response.usage.output_tokens
-                total_tokens = response.usage.total_tokens
+                usage = getattr(response, "usage", None)
+                prompt_tokens = getattr(usage, "input_tokens", 0) or 0
+                completion_tokens = getattr(usage, "output_tokens", 0) or 0
+                total_tokens = getattr(usage, "total_tokens", 0) or 0
+                details = getattr(response, "incomplete_details", None)
+                status = getattr(response, "status", None)
+                detail_data = _metadata_value(details) or {}
+                output_items = _metadata_value(getattr(response, "output", None)) or []
+                refusals = [
+                    part.get("refusal")
+                    for item in output_items
+                    for part in (item.get("content") or [])
+                    if part.get("type") == "refusal"
+                ]
+                tool_calls = [item for item in output_items if item.get("type") == "function_call"]
+                completion = _completion_fields(
+                    detail_data.get("reason") or status,
+                    status=status, incomplete_details=details,
+                    error=getattr(response, "error", None),
+                    refusal=refusals or None, usage=usage, tool_calls=tool_calls,
+                )
             else:
                 content = response.choices[0].message.content
                 usage = response.usage
                 prompt_tokens = usage.prompt_tokens
                 completion_tokens = usage.completion_tokens
                 total_tokens = usage.total_tokens
+                choice = response.choices[0]
+                completion = _completion_fields(
+                    getattr(choice, "finish_reason", None), usage=usage,
+                    refusal=getattr(choice.message, "refusal", None),
+                    tool_calls=getattr(choice.message, "tool_calls", None),
+                    content_filter_results=getattr(choice, "content_filter_results", None),
+                )
 
             if label == "provider_repaired":
                 logger.info("Azure content filter retry succeeded with opt-in provider prompt repair.")
@@ -680,6 +741,7 @@ class UnifiedLLMClient:
             return {
                 "content": content,
                 "provider": "azure",
+                **completion,
                 "tokens": {
                     "input": prompt_tokens,
                     "output": completion_tokens,
@@ -761,23 +823,43 @@ class UnifiedLLMClient:
         duration = time.time() - start_time
 
         tool_calls = []
-        if response.candidates and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
+        candidate = response.candidates[0] if response.candidates else None
+        candidate_content = getattr(candidate, "content", None)
+        if candidate_content and candidate_content.parts:
+            for part in candidate_content.parts:
                 if hasattr(part, 'function_call') and part.function_call:
                     tool_calls.append({
                         "name": part.function_call.name,
                         "args": dict(part.function_call.args) if part.function_call.args else {}
                     })
 
-        content = response.text if not tool_calls else ""
+        if candidate_content and candidate_content.parts:
+            content = "".join(
+                part.text for part in candidate_content.parts
+                if getattr(part, "text", None) and not getattr(part, "thought", False)
+            )
+        else:
+            content = response.text
 
         usage_metadata = getattr(response, 'usage_metadata', None)
         if usage_metadata:
-            input_tokens = getattr(usage_metadata, 'prompt_token_count', 0)
-            output_tokens = getattr(usage_metadata, 'candidates_token_count', 0)
+            input_tokens = getattr(usage_metadata, 'prompt_token_count', 0) or 0
+            output_tokens = (
+                (getattr(usage_metadata, 'candidates_token_count', 0) or 0)
+                + (getattr(usage_metadata, 'thoughts_token_count', 0) or 0)
+            )
+            total_tokens = getattr(usage_metadata, 'total_token_count', None)
+            if total_tokens is None:
+                total_tokens = input_tokens + output_tokens
         else:
             input_tokens = int(len(prompt.split()) * 1.3)
             output_tokens = int(len(content.split()) * 1.3) if content else 0
+            total_tokens = input_tokens + output_tokens
+
+        prompt_feedback = getattr(response, "prompt_feedback", None)
+        finish_reason = getattr(candidate, "finish_reason", None)
+        if finish_reason is None:
+            finish_reason = getattr(prompt_feedback, "block_reason", None)
 
         pricing = TOKEN_PRICING.get(model_name, default_pricing)
         cost = (input_tokens * pricing['input'] + output_tokens * pricing['output']) / 1_000_000
@@ -785,11 +867,17 @@ class UnifiedLLMClient:
         return {
             "content": content,
             "provider": provider_label,
+            **_completion_fields(
+                finish_reason, usage=usage_metadata,
+                finish_message=getattr(candidate, "finish_message", None),
+                safety_ratings=getattr(candidate, "safety_ratings", None),
+                prompt_feedback=prompt_feedback,
+            ),
             "tool_calls": tool_calls,
             "tokens": {
                 "input": int(input_tokens),
                 "output": int(output_tokens),
-                "total": int(input_tokens + output_tokens),
+                "total": int(total_tokens),
             },
             "cost_usd": cost,
             "model": model_name,
@@ -899,7 +987,10 @@ class UnifiedLLMClient:
         )
 
         duration = time.time() - start_time
-        content = response.content[0].text
+        content = "".join(
+            block.text for block in (response.content or [])
+            if getattr(block, "text", None)
+        )
 
         # Calculate cost
         pricing = TOKEN_PRICING.get(model, {"input": 3.0, "output": 15.0})
@@ -909,6 +1000,12 @@ class UnifiedLLMClient:
         return {
             "content": content,
             "provider": "claude",
+            **_completion_fields(
+                getattr(response, "stop_reason", None),
+                stop_reason=getattr(response, "stop_reason", None),
+                stop_sequence=getattr(response, "stop_sequence", None),
+                usage=response.usage,
+            ),
             "tokens": {
                 "input": response.usage.input_tokens,
                 "output": response.usage.output_tokens,

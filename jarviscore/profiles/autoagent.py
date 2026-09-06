@@ -693,17 +693,26 @@ class AutoAgent(Profile):
             else self.system_prompt
         )
         try:
+            completion_options = {}
+            if "max_output_tokens" in contract:
+                budget = contract["max_output_tokens"]
+                if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+                    raise ValueError("execution_contract.max_output_tokens must be a positive integer")
+                completion_options["max_tokens"] = budget
             response = await self.llm.generate(
                 messages=[
                     {"role": "system", "content": effective_system_prompt or ""},
                     {"role": "user", "content": task_desc},
                 ],
                 temperature=0.0,
+                **completion_options,
             )
         except Exception as exc:  # noqa: BLE001 - provider errors become clean failures
             return {
                 "status": "failure",
                 "output": None,
+                "payload": None,
+                "execution_shape": "single_response",
                 "error": f"single_response completion failed: {type(exc).__name__}: {exc}",
                 "agent_id": self.agent_id,
                 "role": self.role,
@@ -711,12 +720,34 @@ class AutoAgent(Profile):
                 "cost_usd": 0.0,
                 "repairs": 0,
             }
-        content = (response.get("content") or "").strip()
+        content = response.get("content") or ""
+        finish_reason = response.get("finish_reason")
+        metadata = response.get("provider_metadata") or {}
+        # This is the terminal boundary for a one-answer contract, not a retry
+        # or routing policy. Unknown explicit reasons cannot certify completion.
+        completed_reasons = {"stop", "end_turn", "stop_sequence", "completed"}
+        reason = str(finish_reason).lower() if finish_reason is not None else None
+        error = None
+        if reason is not None and reason not in completed_reasons:
+            error = f"single_response did not complete: finish_reason={finish_reason}"
+        elif metadata.get("status") not in (None, "completed"):
+            error = f"single_response did not complete: status={metadata['status']}"
+        elif metadata.get("refusal"):
+            error = "single_response provider refused the completion"
+        elif response.get("tool_calls") or metadata.get("tool_calls"):
+            error = "single_response returned tool calls instead of a completed answer"
+        elif not content.strip():
+            error = "single_response returned empty output (completion cause unknown)"
         return {
-            "status": "success",
+            "status": "failure" if error else "success",
             "output": content,
             "payload": content,
-            "error": None,
+            "error": error,
+            "finish_reason": finish_reason,
+            "provider_metadata": metadata,
+            "provider": response.get("provider"),
+            "model": response.get("model"),
+            "tool_calls": response.get("tool_calls", []),
             "agent_id": self.agent_id,
             "role": self.role,
             "execution_shape": "single_response",
