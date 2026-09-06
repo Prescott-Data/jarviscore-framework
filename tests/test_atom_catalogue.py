@@ -176,6 +176,44 @@ class TestCheckRegistry:
         assert result["system"] == "hubspot"
 
     @pytest.mark.asyncio
+    async def test_a_verified_atom_for_the_wrong_provider_never_wins(self):
+        """Observed live: a HubSpot task was handed a verified AgileCRM atom.
+
+        Stage only ranks within the right system. An atom for another provider
+        calls a different API, so it is not a weaker match — it is wrong.
+        """
+        coder = _coder([
+            _match("agilecrm_get_account", "verified", system="agilecrm", success=1),
+            _match("hubspot_list_contacts", "candidate", system="hubspot"),
+        ])
+
+        result = await coder._tool_check_registry(task="count contacts", system="hubspot")
+
+        assert result["function_name"] == "hubspot_list_contacts"
+
+    @pytest.mark.asyncio
+    async def test_nothing_for_this_provider_is_said_plainly(self):
+        coder = _coder([_match("agilecrm_get_account", "verified", system="agilecrm")])
+
+        result = await coder._tool_check_registry(task="contacts", system="hubspot")
+
+        assert result["found"] is False
+        assert "No function in the registry targets hubspot" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_the_declared_system_is_taken_from_the_run_context(self):
+        """The provider is in state; the agent should not have to remember it."""
+        coder = _coder([
+            _match("agilecrm_get_account", "verified", system="agilecrm"),
+            _match("hubspot_list_contacts", "candidate", system="hubspot"),
+        ])
+        coder._run_context = {"system": "hubspot"}
+
+        result = await coder._tool_check_registry(task="count contacts")
+
+        assert result["function_name"] == "hubspot_list_contacts"
+
+    @pytest.mark.asyncio
     async def test_no_match_is_reported_plainly(self):
         coder = _coder([])
         result = await coder._tool_check_registry(task="contacts", system="hubspot")

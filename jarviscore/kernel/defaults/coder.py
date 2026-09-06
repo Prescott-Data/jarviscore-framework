@@ -559,17 +559,29 @@ Writing to it, after you succeed:
             normalized_task = await normalizer.normalize(task)
 
             matches = self.code_registry.semantic_search(normalized_task, limit=5)
-            if system:
-                scoped = [m for m in matches if m.get("system") == system]
-                if scoped:
-                    matches = scoped
+
+            # The declared provider is not a preference to be outweighed. An atom
+            # for another system is not a weaker match, it is the wrong API — and
+            # semantic search will happily rank a verified atom from one CRM above
+            # a candidate from the one actually being asked about.
+            declared = system or (getattr(self, "_run_context", None) or {}).get("system")
+            if declared:
+                matches = [m for m in matches if m.get("system") == declared]
+                if not matches:
+                    return {
+                        "found": False,
+                        "system": declared,
+                        "message": (
+                            f"No function in the registry targets {declared}. "
+                            "Write one, and register it against that system so the "
+                            "next agent finds it."
+                        ),
+                    }
             if not matches:
                 return {"found": False, "message": "No functions found for this task."}
 
-            # Candidates are shown, not hidden. A candidate is code already
-            # written for this exact call and dry-run, but never confirmed
-            # against a live API — worth reading before writing the same thing
-            # from scratch. The stage says what it is; the agent weighs it.
+            # Within the right system, stage decides: something confirmed against a
+            # live API beats something only dry-run.
             production = [
                 m for m in matches
                 if m.get("registry_stage") in ("verified", "golden")

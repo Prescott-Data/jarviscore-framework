@@ -625,16 +625,15 @@ class Kernel:
             return None
         try:
             matches = self.code_registry.semantic_search(task, limit=5)
-            # Filter: verified/golden only
+            # A declared provider is a constraint, not a preference: injecting an
+            # atom that calls a different API is worse than injecting nothing.
+            if system:
+                matches = [m for m in matches if m.get("system") == system]
             production = [
                 m for m in matches
                 if m.get("registry_stage") in ("verified", "golden")
                 and m.get("_score", 0) >= _REGISTRY_REUSE_SCORE_THRESHOLD
             ]
-            if system:
-                system_matches = [m for m in production if m.get("system") == system]
-                if system_matches:
-                    production = system_matches
             if not production:
                 return None
             top = production[0]
