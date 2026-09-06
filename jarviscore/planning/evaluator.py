@@ -23,6 +23,7 @@ import json
 import os
 from typing import Any, Optional
 
+from jarviscore.context.fidelity import Record, select_whole
 from .goal_context import GoalExecution, PlannedStep, StepEvaluation
 
 _EVAL_SCHEMA = """\
@@ -57,13 +58,10 @@ additional_findings:
   Return an empty object {} if there is nothing new to add.
   Do NOT duplicate facts already listed in accumulated_goal_facts.
 
-Truncated evidence:
-  Step output may end with a marker like "[truncated: showing N of M chars]".
-  That means the work exists but only part of it is visible to you. If the
-  visible portion satisfies the criterion and ONLY the truncation prevents
-  full verification, return "partial" and note what you could not see.
-  Never return "fail" solely because evidence was clipped — a hidden tail
-  is not a failed step, and "fail" burns a replan cycle on blindness.
+Withheld facts:
+  The accumulated goal facts may end with a note saying some records are not
+  shown. That note concerns the fact list only — the step output above is
+  always complete. Judge the criterion against the output as given.
 """
 
 
@@ -79,8 +77,9 @@ class EvaluatorError(Exception):
 def _honest_clip(text: str, limit: int) -> str:
     """Clip with an explicit marker — never silently (#55/#85).
 
-    Prompt views may be bounded, but a bound the model cannot see poisons
-    the judgment: markers are the floor.
+    Only used on an LLM response that failed to parse, where the text is being
+    quoted back as a diagnostic rather than judged. Evidence is never clipped:
+    see ``_format_output`` (#166).
     """
     if len(text) <= limit:
         return text
@@ -237,11 +236,15 @@ class StepEvaluator:
         goal_execution: GoalExecution,
     ) -> str:
         output_repr = self._format_output(output)
-        facts_limit = int(os.environ.get("EVALUATOR_FACTS_EVIDENCE_LIMIT", "2000"))
-        known = _honest_clip(
-            json.dumps(goal_execution.truth.to_flat_dict(), default=str),
-            facts_limit,
-        )
+        facts = goal_execution.truth.to_flat_dict()
+        records = [
+            Record(key=str(key), text=f"  - {key}: {value}", priority=1)
+            for key, value in facts.items()
+        ]
+        selection = select_whole(records, self._facts_budget())
+        known = selection.render() or "None yet."
+        if not selection.complete:
+            known += f"\n  {selection.notice('the goal truth store')}"
 
         return (
             f"Evaluate whether this agent step met its success criterion.\n\n"
@@ -250,7 +253,7 @@ class StepEvaluator:
             f"Success criterion: {step.success_criterion}\n"
             f"Expected findings: {step.expected_findings}\n\n"
             f"Step output:\n{output_repr}\n\n"
-            f"Accumulated goal facts (do not re-extract these): {known}\n\n"
+            f"Accumulated goal facts (do not re-extract these):\n{known}\n\n"
             f"{_EVAL_SCHEMA}"
         )
 
@@ -295,19 +298,25 @@ class StepEvaluator:
 
         return response.get("content", "") if isinstance(response, dict) else str(response)
 
+    @staticmethod
+    def _facts_budget() -> int:
+        return int(os.environ.get("EVALUATOR_FACTS_BUDGET_CHARS", "40000"))
+
     def _format_output(self, output: Any) -> str:
         """
         Render AgentOutput fields for the evaluation prompt.
         Keeps it focused: status, summary, and payload.
 
-        Evidence windows are generous and tunable, and clipping is announced
-        with an honest marker (issue #85). A blind verdict drives the whole
-        Plan-Execute-Evaluate loop, so a few KB of evidence is cheap next to
-        the replan cycle a false "fail" costs.
-        """
-        summary_limit = int(os.environ.get("EVALUATOR_SUMMARY_EVIDENCE_LIMIT", "2000"))
-        payload_limit = int(os.environ.get("EVALUATOR_PAYLOAD_EVIDENCE_LIMIT", "6000"))
+        The evidence is never cut (#166). A verdict is a judgment about this
+        output, so judging half of it is not a slightly worse judgment, it is a
+        judgment about something else — and a step whose proof of success fell
+        past a character limit gets marked failed, which costs a replan cycle
+        and buries the real result. Whatever the step produced goes in whole.
 
+        EVALUATOR_SUMMARY_EVIDENCE_LIMIT and EVALUATOR_PAYLOAD_EVIDENCE_LIMIT
+        are still read so existing configuration keeps working, but they no
+        longer shorten anything.
+        """
         parts = []
         status = getattr(output, "status", "unknown")
         summary = getattr(output, "summary", None)
@@ -315,13 +324,13 @@ class StepEvaluator:
 
         parts.append(f"status: {status}")
         if summary:
-            parts.append(f"summary: {_honest_clip(summary, summary_limit)}")
+            parts.append(f"summary: {summary}")
         if payload is not None:
             if isinstance(payload, dict):
                 payload_str = json.dumps(payload, default=str)
             else:
                 payload_str = str(payload)
-            parts.append(f"payload: {_honest_clip(payload_str, payload_limit)}")
+            parts.append(f"payload: {payload_str}")
 
         return "\n".join(parts)
 

@@ -869,7 +869,7 @@ class AutoAgent(Profile):
         )
 
         # Shared planner and evaluator — stateless, reused across steps
-        planner = Planner(self.llm, system_prompt_excerpt=str(self.system_prompt or "")[:400])
+        planner = Planner(self.llm, system_prompt=str(self.system_prompt or ""))
         evaluator = StepEvaluator(self.llm)
 
         # ── Resume path (issue #73) ──────────────────────────────────────────────

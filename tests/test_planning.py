@@ -327,34 +327,33 @@ class TestStepEvaluator:
         assert "END-OF-ARTIFACT" in rendered          # the whole artifact is evidence
         assert "[truncated" not in rendered           # nothing silently hidden
 
-    def test_clipped_evidence_is_announced(self):
-        """When evidence must be clipped, the marker is explicit (#55/#85)."""
+    def test_large_evidence_is_never_clipped(self):
+        """#166 — a verdict is about this output, so half of it is a different one."""
         ev = self._evaluator()
         huge = "y" * 10_000
         out = _make_output(summary="s" * 5_000, payload=huge)
         rendered = ev._format_output(out)
-        assert "[truncated: showing 2000 of 5000 chars]" in rendered
-        assert "[truncated: showing 6000 of 10000 chars]" in rendered
+        assert huge in rendered
+        assert "s" * 5_000 in rendered
+        assert "truncated" not in rendered
 
-    def test_evidence_limits_are_tunable(self, monkeypatch):
+    def test_legacy_evidence_limits_no_longer_clip(self, monkeypatch):
+        """The old knobs still import; they no longer shorten the evidence."""
         monkeypatch.setenv("EVALUATOR_PAYLOAD_EVIDENCE_LIMIT", "50")
         ev = self._evaluator()
         out = _make_output(payload="z" * 100)
         rendered = ev._format_output(out)
-        assert "[truncated: showing 50 of 100 chars]" in rendered
+        assert "z" * 100 in rendered
+        assert "truncated" not in rendered
 
-    def test_schema_teaches_truncation_semantics(self):
-        """The verdict contract says clipped evidence is partial, never fail."""
+    def test_schema_no_longer_teaches_around_truncated_evidence(self):
+        """The prompt patch retires with the truncation it was covering for."""
         from jarviscore.planning.evaluator import _EVAL_SCHEMA
-        assert "Truncated evidence" in _EVAL_SCHEMA
-        assert "Never return \"fail\" solely because evidence was clipped" in _EVAL_SCHEMA
+        assert "Truncated evidence" not in _EVAL_SCHEMA
+        assert "the step output above is" in _EVAL_SCHEMA
 
-    def test_accumulated_facts_never_clipped_silently(self):
-        """The facts block in the prompt clips with a marker, not silently (#55/#85).
-
-        Regression: the prompt told the model 'do not re-extract these' while
-        silently hiding everything past 500 chars.
-        """
+    def test_accumulated_facts_are_whole_or_named(self):
+        """#166 — the prompt says 'do not re-extract these', so they must be readable."""
         from jarviscore.context.truth import TruthFact
         ev = self._evaluator()
         ge = GoalExecution(goal="G", agent_id="a")
@@ -364,9 +363,22 @@ class TestStepEvaluator:
             )
         prompt = ev._build_prompt(_make_step(), _make_output(), ge)
         facts_block = prompt.split("Accumulated goal facts", 1)[1]
-        assert "[truncated: showing" in facts_block   # clipped, but honestly
-        # and the window is real: far more than the old 500 silent chars
-        assert "fact_20" in facts_block
+        assert "truncated" not in facts_block
+        assert "fact_20: " + "v" * 60 in facts_block
+
+    def test_facts_past_the_budget_are_named_not_halved(self, monkeypatch):
+        from jarviscore.context.truth import TruthFact
+        monkeypatch.setenv("EVALUATOR_FACTS_BUDGET_CHARS", "400")
+        ev = self._evaluator()
+        ge = GoalExecution(goal="G", agent_id="a")
+        for i in range(20):
+            ge.truth.facts[f"fact_{i:02d}"] = TruthFact(
+                value="v" * 100, source="t", confidence=0.9,
+            )
+        prompt = ev._build_prompt(_make_step(), _make_output(), ge)
+        facts_block = prompt.split("Accumulated goal facts", 1)[1]
+        assert "records are not shown here" in facts_block
+        assert "truncated" not in facts_block
 
     @pytest.mark.asyncio
     async def test_short_circuits_failure_status(self):
@@ -810,10 +822,13 @@ class TestHonestPlannerPrompts:
         prompt = llm.prompts[0]
         assert "25 fact(s) known:" in prompt
         assert "- fact_00: v0" in prompt
-        assert "…and 5 more facts not shown" in prompt
+        # An item cap is not a budget. 25 small facts fit, so all 25 are shown.
+        assert "- fact_24: v24" in prompt
+        assert "not shown" not in prompt
 
     @pytest.mark.asyncio
-    async def test_long_fact_values_carry_markers(self):
+    async def test_long_fact_values_are_never_cut(self):
+        """#166 — a fact the planner cannot read is one it plans to re-fetch."""
         import json
         from jarviscore.planning.planner import Planner
         from jarviscore.context.truth import TruthFact
@@ -821,7 +836,50 @@ class TestHonestPlannerPrompts:
         ge = GoalExecution(goal="G", agent_id="a")
         ge.truth.facts["huge"] = TruthFact(value="H" * 700, source="s", confidence=0.9)
         await Planner(llm).plan(goal="G", goal_execution=ge)
-        assert "…[truncated: showing 200 of 700 chars]" in llm.prompts[0]
+        assert "H" * 700 in llm.prompts[0]
+        assert "truncated" not in llm.prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_facts_past_the_budget_are_named_not_halved(self, monkeypatch):
+        import json
+        from jarviscore.planning.planner import Planner
+        from jarviscore.context.truth import TruthFact
+        monkeypatch.setenv("PLANNER_FACTS_BUDGET_CHARS", "300")
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        for i in range(10):
+            ge.truth.facts[f"fact_{i:02d}"] = TruthFact(
+                value="v" * 100, source="s", confidence=0.9
+            )
+        await Planner(llm).plan(goal="G", goal_execution=ge)
+        prompt = llm.prompts[0]
+        assert "records are not shown here" in prompt
+        assert "the goal truth store" in prompt
+        assert "truncated" not in prompt
+        # Whatever is shown is shown whole.
+        assert "v" * 100 in prompt
+
+    @pytest.mark.asyncio
+    async def test_identity_reaches_the_planner_whole(self):
+        """#166 — 400 chars is the persona without the rules that constrain it."""
+        import json
+        from jarviscore.planning.planner import Planner
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        identity = "You are Acme's analyst. " + ("RULE. " * 100) + "NEVER invoice a customer."
+        await Planner(llm, system_prompt=identity).plan(goal="G", goal_execution=ge)
+        assert "NEVER invoice a customer." in llm.prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_legacy_excerpt_argument_still_accepted(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        await Planner(llm, system_prompt_excerpt="legacy identity").plan(
+            goal="G", goal_execution=ge,
+        )
+        assert "legacy identity" in llm.prompts[0]
 
 
 class TestReplanTailAndBudget:
