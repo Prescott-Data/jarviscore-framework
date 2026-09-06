@@ -15,6 +15,8 @@ What these tests prove:
 - Prometheus server IS started when prometheus_enabled=True in settings
 """
 
+import importlib
+
 import pytest
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -297,8 +299,12 @@ class TestPrometheus:
         mock_settings.storage_backend = "local"
         mock_settings.storage_base_path = "./blob_storage"
 
-        with patch(
-            "jarviscore.config.settings.Settings", return_value=mock_settings
+        # jarviscore.config exports both the `settings` submodule and a `settings`
+        # instance, so a dotted patch target resolves to whichever import ran
+        # last. Patch the module object so the target cannot drift.
+        settings_module = importlib.import_module("jarviscore.config.settings")
+        with patch.object(
+            settings_module, "Settings", return_value=mock_settings
         ), patch(
             "jarviscore.telemetry.metrics.start_prometheus_server"
         ) as mock_start:
