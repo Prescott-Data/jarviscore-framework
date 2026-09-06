@@ -38,8 +38,31 @@ from .athena_client import (
     TYPE_OBSERVATION,
     TYPE_THOUGHT,
 )
+from .delivery import CircuitBreaker, Outbox
 
 logger = logging.getLogger(__name__)
+
+
+def _outbox_from_settings() -> Outbox:
+    """Build the write outbox from the Athena settings block.
+
+    Retries default off. Athena has no client-supplied deduplication key today,
+    so replaying a write that actually landed would store it twice — and a
+    memory tier with invented corroboration is worse than one with a counted
+    gap. Turning ``athena_deduplicates_writes`` on is a claim about the
+    deployment, which only an operator can make.
+    """
+    from jarviscore.config import settings
+
+    return Outbox(
+        max_queue=settings.athena_outbox_max_events,
+        max_attempts=settings.athena_write_max_attempts,
+        deduplicates=settings.athena_deduplicates_writes,
+        breaker=CircuitBreaker(
+            threshold=settings.athena_breaker_threshold,
+            cooldown=settings.athena_breaker_cooldown_seconds,
+        ),
+    )
 
 
 class AthenaMemory:
@@ -65,10 +88,14 @@ class AthenaMemory:
         agent_id: str,
         session_id: str,
         client: AthenaClient,
+        outbox: Optional[Outbox] = None,
     ) -> None:
         self._agent_id = agent_id
         self._session_id = session_id
         self._client = client
+        # Writes are this tier's problem, not the caller's: a turn should not
+        # wait on Athena, and a write it loses should be countable (#128).
+        self._outbox = outbox if outbox is not None else Outbox()
 
     @classmethod
     async def create(
@@ -79,6 +106,7 @@ class AthenaMemory:
         metadata: Optional[Dict[str, str]] = None,
         *,
         user_id: Optional[str] = None,
+        outbox: Optional[Outbox] = None,
     ) -> "AthenaMemory":
         """
         Factory: creates or reuses an Athena session for this agent.
@@ -110,36 +138,66 @@ class AthenaMemory:
                 f"Is Athena running at {client._base_url}?"
             )
         logger.info(f"[Athena] AthenaMemory ready: agent={agent_id} session={session_id}")
-        return cls(agent_id=agent_id, session_id=session_id, client=client)
+        return cls(
+            agent_id=agent_id,
+            session_id=session_id,
+            client=client,
+            outbox=outbox if outbox is not None else _outbox_from_settings(),
+        )
 
     # ── Write helpers ─────────────────────────────────────────────────────────
+    #
+    # These return once the event is queued. They use the client's raising write
+    # path, because the outbox has to see a failure in order to count or retry it.
+
+    def _submit(
+        self, event_type: str, content: str, metadata: Optional[Dict[str, str]]
+    ) -> None:
+        self._outbox.submit(
+            self._client.write_event,
+            session_id=self._session_id,
+            role=ROLE_AGENT,
+            event_type=event_type,
+            content=content,
+            metadata={"agent_id": self._agent_id, **(metadata or {})},
+        )
 
     async def record_thought(
         self, content: str, metadata: Optional[Dict[str, str]] = None
     ) -> None:
         """Record an internal agent reasoning step (maps to Athena TYPE_THOUGHT)."""
-        await self._client.store_event(
-            self._session_id, ROLE_AGENT, TYPE_THOUGHT, content,
-            metadata={"agent_id": self._agent_id, **(metadata or {})},
-        )
+        self._submit(TYPE_THOUGHT, content, metadata)
 
     async def record_action(
         self, content: str, metadata: Optional[Dict[str, str]] = None
     ) -> None:
         """Record a concrete agent action (task assignment, tool call)."""
-        await self._client.store_event(
-            self._session_id, ROLE_AGENT, TYPE_ACTION, content,
-            metadata={"agent_id": self._agent_id, **(metadata or {})},
-        )
+        self._submit(TYPE_ACTION, content, metadata)
 
     async def record_observation(
         self, content: str, metadata: Optional[Dict[str, str]] = None
     ) -> None:
         """Record the outcome of an action (task completed, meeting noted, HITL resolved)."""
-        await self._client.store_event(
-            self._session_id, ROLE_AGENT, TYPE_OBSERVATION, content,
-            metadata={"agent_id": self._agent_id, **(metadata or {})},
-        )
+        self._submit(TYPE_OBSERVATION, content, metadata)
+
+    # ── Delivery ──────────────────────────────────────────────────────────────
+
+    @property
+    def delivery_stats(self) -> Dict[str, Any]:
+        """Shipped, retried, dropped, queue depth, breaker state, last success.
+
+        A tier that is configured and silently storing nothing reads exactly
+        like a healthy one from the outside. These are how you tell.
+        """
+        return self._outbox.stats.to_dict()
+
+    async def flush(self, timeout: float = 5.0) -> bool:
+        """Wait for queued writes to reach Athena. False if any are still queued."""
+        return await self._outbox.flush(timeout=timeout)
+
+    async def close(self, timeout: float = 5.0) -> bool:
+        """Ship what is queued and stop the shipper."""
+        return await self._outbox.close(timeout=timeout)
 
     # ── Domain event helpers (called by the kernel at lifecycle points) ────────
 
