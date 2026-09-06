@@ -21,6 +21,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from jarviscore.kernel.subagent import BaseSubAgent
+from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.state import KernelState
 
 logger = logging.getLogger(__name__)
@@ -332,7 +333,13 @@ proves it — that is the entire job.
         # Scan history for execution proof
         has_executed = False
         last_success_output = None
+        execute_calls = 0
+        write_calls = 0
         for tool_res in state.tool_history:
+            if tool_res.tool_name == "execute_code":
+                execute_calls += 1
+            elif tool_res.tool_name == "write_code":
+                write_calls += 1
             if tool_res.tool_name == "execute_code" and tool_res.succeeded:
                 has_executed = True
                 last_success_output = tool_res.tool_output
@@ -349,9 +356,19 @@ proves it — that is the entire job.
         if not has_executed:
             return (
                 False,
-                "PROOF OF WORK REQUIRED: You cannot call DONE without executing code first.\n"
-                "You must use the `write_code` or `execute_code` tool to write and run actual Python code.\n"
-                "Do NOT just output the answer in the RESULT block. You MUST execute a Python script that sets the `result` variable."
+                GateEvidence(
+                    check="proof_of_work",
+                    requirement=(
+                        "one execute_code call that succeeded, or one write_code call "
+                        "whose execution_result reports success"
+                    ),
+                    observed={
+                        "tool_calls": len(state.tool_history),
+                        "execute_code_calls": execute_calls,
+                        "write_code_calls": write_calls,
+                        "successful_executions": 0,
+                    },
+                ),
             )
 
         # Force the payload to be the actual sandbox execution result.

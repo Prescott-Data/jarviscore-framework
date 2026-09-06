@@ -129,16 +129,36 @@ Both are `async`. The base class defaults are no-ops; you do not need to call `s
 
 Override these to intervene inside the loop without modifying it.
 
-### `_can_complete(state, parsed) -> tuple[bool, str]`
+### `_can_complete(state, parsed) -> tuple[bool, GateEvidence | str]`
 
-Called when the LLM emits `DONE`. Return `(True, "")` to allow, or `(False, "reason")` to reject and keep the loop running:
+Called when the LLM emits `DONE`. Return `(True, "")` to allow, or `(False, evidence)` to reject and keep the loop running.
+
+Report what the agent produced, not a verdict on it:
 
 ```python
+from jarviscore.kernel.gate import GateEvidence
+
 def _can_complete(self, state, parsed) -> tuple:
-    if not parsed.get("result", {}).get("rows"):
-        return False, "No rows returned. Run a query before finishing."
+    rows = parsed.get("result", {}).get("rows")
+    if not rows:
+        return False, GateEvidence(
+            check="rows_returned",
+            requirement="at least one row in the result",
+            observed={
+                "rows": len(rows or []),
+                "query_calls": sum(1 for t in state.tool_history if t.tool_name == "query"),
+            },
+        )
     return True, ""
 ```
+
+A verdict — *"No rows returned. Run a query before finishing."* — restates your rule in your vocabulary. The agent cannot map it onto anything it did, so its next attempt tends to be the last one reworded, and the gate becomes a loop. Counts move only when the work moves, so evidence gives the agent something it can act on and cannot talk its way past.
+
+Leave the advice out. Naming the missing fact is the gate's job; deciding what to do about it is the agent's.
+
+The harness watches for attempts that carry no new information — the same check failing on the same values, the same result submitted, and no tool run in between. It tells the agent when its last attempt changed nothing, and ends the step after `max_identical_done_attempts` (default 3) of them rather than letting a gate it cannot satisfy consume the lease. An agent that is still changing its output is never cut off, however many rejections it takes.
+
+A plain string is still accepted, and is passed through as a verdict with no observations behind it.
 
 ### `_pre_execute_hook(tool_name, params, state) -> Optional[dict]`
 

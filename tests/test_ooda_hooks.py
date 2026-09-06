@@ -36,6 +36,38 @@ def _make_state(**overrides):
     return KernelState(**defaults)
 
 
+def _done_reply(result: str = '{"a": 1}') -> str:
+    return f"THOUGHT: finishing\nDONE: summary\nRESULT: {result}"
+
+
+class _ReplayLLM:
+    def __init__(self, replies):
+        self._replies = list(replies)
+
+    async def generate(self, messages=None, **kwargs):
+        reply = self._replies.pop(0) if self._replies else _done_reply()
+        return {"content": reply, "tokens": {"input": 1, "output": 1, "total": 2}, "cost_usd": 0.0}
+
+
+class _RunnableAgent(BaseSubAgent):
+    """Minimal agent whose done-gate verdict is supplied per test."""
+
+    def __init__(self, replies, gate):
+        self._gate = gate
+        self.gate_calls = 0
+        super().__init__(agent_id="hooks", role="tester", llm_client=_ReplayLLM(replies))
+
+    def get_system_prompt(self, *args, **kwargs) -> str:
+        return "system"
+
+    def setup_tools(self) -> None:
+        return None
+
+    def _can_complete(self, state, parsed):
+        self.gate_calls += 1
+        return self._gate()
+
+
 # ──────────────────────────────────────────────────────────────────
 # 1. State-Driven Exit Tests
 # ──────────────────────────────────────────────────────────────────
@@ -168,32 +200,32 @@ class TestDoneGate:
         assert "parsed" in params
 
     def test_done_gate_called_before_exit(self):
-        """_can_complete must be called BEFORE setting state.status = 'completed'."""
-        source = inspect.getsource(BaseSubAgent.run)
-        # Find the DONE handler block
-        done_idx = source.index("Handle DONE")
-        done_block = source[done_idx:done_idx + 2000]
-        gate_pos = done_block.index("_can_complete")
-        completed_pos = done_block.index("state.status = \"completed\"")
-        assert gate_pos < completed_pos
+        """A rejected DONE must not complete the step."""
+        agent = _RunnableAgent([_done_reply()], gate=lambda: (False, "not yet"))
+
+        result = asyncio.run(agent.run(task="t", max_turns=1))
+
+        assert agent.gate_calls == 1
+        assert result.status != "success"
+        assert agent._current_state.status != "completed"
 
     def test_rejection_injects_thought(self):
-        """On rejection, a [DONE_GATE] thought should be injected."""
-        source = inspect.getsource(BaseSubAgent.run)
-        done_idx = source.index("Handle DONE")
-        done_block = source[done_idx:done_idx + 2000]
-        assert "DONE_GATE" in done_block
-        assert "Continue working" in done_block
+        """On rejection, a [DONE_GATE] thought is recorded on the state."""
+        agent = _RunnableAgent([_done_reply()], gate=lambda: (False, "not yet"))
+
+        asyncio.run(agent.run(task="t", max_turns=1))
+
+        assert any("[DONE_GATE]" in thought for thought in agent._current_state.thoughts)
 
     def test_rejection_continues_loop(self):
-        """On rejection, the loop should continue (not exit)."""
-        source = inspect.getsource(BaseSubAgent.run)
-        done_idx = source.index("Handle DONE")
-        # Find the not can_exit block
-        block = source[done_idx:done_idx + 2000]
-        gate_idx = block.index("_can_complete")
-        after_gate = block[gate_idx:gate_idx + 1200]
-        assert "continue" in after_gate
+        """A rejection continues the loop; a later DONE still completes."""
+        gates = iter([(False, "not yet"), (True, "")])
+        agent = _RunnableAgent([_done_reply(), _done_reply()], gate=lambda: next(gates))
+
+        result = asyncio.run(agent.run(task="t", max_turns=2))
+
+        assert agent.gate_calls == 2
+        assert result.status == "success"
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -240,11 +272,15 @@ class TestResearcherHookIntegration:
         assert "PHASE_TOOL_CONTRACT_VIOLATION" in source
 
     def test_researcher_can_complete_checks_evidence(self):
-        """The researcher's _can_complete checks for meaningful research."""
+        """The researcher rejects a DONE with no research behind it."""
         from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
-        source = inspect.getsource(ResearcherSubAgent._can_complete)
-        assert "meaningful_research" in source
-        assert "read_web_content" in source
+        researcher = ResearcherSubAgent.__new__(ResearcherSubAgent)
+
+        ok, evidence = researcher._can_complete(_make_state(), {"result": {}})
+
+        assert ok is False
+        assert evidence.check == "research_performed"
+        assert "read_web_content" in evidence.observed["content_tools"]
 
 
 # ──────────────────────────────────────────────────────────────────
