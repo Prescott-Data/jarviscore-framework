@@ -24,6 +24,133 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.6.0 <span class="changelog-date">2026-09-06</span>
+
+**Added**
+
+- Context pressure tiers replace per-value truncation (#154). Blocks are composed
+  at full fidelity and the least aggressive tier that fits the budget is chosen:
+  `NORMAL` → `COMPRESS` → `EVICT_P3` → `EVICT_P2` → `RECOVERY`. Under pressure whole
+  blocks stop being inlined in priority order — mission and goal state are never
+  evicted — and withheld records are named with the key they live under, so an agent
+  retrieves a whole artifact instead of reasoning from a fragment of one. The active
+  tier is rendered into the prompt and recorded in `internal_variables["context_pressure"]`.
+
+**Fixed**
+
+- An agent's `system_prompt` now reaches the LLM in every sub-agent dispatch (#91).
+  It was composed, passed to the kernel, stored in context and dropped: only the
+  coder read it back, and only as a keyword check. Every researcher and communicator
+  turn ran as a generic role stub, so authored personas, playbooks and guardrails
+  had no effect. Identity now leads the system message, with the role prompt
+  following as an execution harness.
+- A coder run that returns nothing no longer completes the task (#150). `_auto_complete`
+  fired on any clean sandbox exit, so a run with `data: None` and empty stdout was
+  reported as a success whose "answer" was the execution envelope. Completion now
+  requires a returned value, stdout, or a written file.
+- Missing credentials for a declared system yield for access instead of warning to
+  logs (#151). The kernel already knew no connection could be resolved; it now
+  returns the existing `YIELD_AUTH_REQUIRED` contract at that point rather than
+  spending a dispatch on code that cannot authenticate.
+- Athena memory writes keep full fidelity (#153). `log_turn` wrote the whole thought
+  and result to the scratchpad and episodic ledger, then wrote `thought[:500]` and
+  `result[:300]` to Athena — the longest-retention tier held the only damaged copy,
+  and mid-term chains were summarised from it. Domain events were clipped at 200–300
+  characters. A read may abridge and recover; a write cannot.
+
+**Changed**
+
+- `BudgetConfig`'s per-value character limits (`context_value_limit`,
+  `history_value_limit`, `memory_item_limit`, `belief_value_limit`,
+  `internal_var_limit`, `prior_step_value_limit`, `state_keys_limit`,
+  `summary_evidence_limit`) are retained so existing configuration keeps importing,
+  but no longer affect rendering. `total_tokens` still scales from the lease profile.
+
+**Behaviour changes to know about (compatible, but read this)**
+
+- **Prompts carry more, and reference the rest.** Values are no longer cut, so a turn
+  that previously showed 800 characters of a payload now shows all of it — or, under
+  budget pressure, none of it plus a pointer. Agents that silently reasoned from
+  fragments will now either see the whole record or be told where it is.
+- **A dispatch whose code returns nothing costs an extra turn** instead of ending with
+  a success it did not earn.
+- **A task declaring a system with no credentials yields instead of running.** Declaring
+  a provider is a statement of intent, so a mis-declaration now surfaces rather than
+  failing obscurely later.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 1.5.1 <span class="changelog-date">2026-09-04</span>
+
+**Fixed**
+
+- Local Nexus vault was unreachable from agents (#142). `jarviscore nexus register`
+  promised "no further setup needed", but `nexus_call()` in the agent sandbox was
+  always a raise-stub and the kernel only resolved connections through a gateway.
+  Agents now get a real call proxy in both gateway and local-vault modes, and the
+  kernel tags the opaque provider handle when the vault holds credentials. Agent
+  code, prompts and generated code never see the token.
+- Traces omitted model and token data, and the scrubber redacted token counts (#143).
+  LLM trace events now carry `model` and `tokens`; the secret scrubber only redacts
+  string values, since a token *count* is not a credential; `jarviscore inspect`
+  renders per-call models and no longer crashes on legacy scrubbed traces.
+- `claimer`: "No agent found" for a step with no local agent is normal in distributed
+  mode, and is now an info log with honest wording (#141).
+
+**Added**
+
+- `examples/demo_synthesizer.py` and `examples/demo_node_{1,2,3}.py`: the four-process
+  distributed research demo — SWIM gossip discovery, ledger-claimed steps, live web
+  research, synthesis, and Slack delivery through the credential vault.
+- `examples/slack_notify_demo.py`: minimal single-agent vault-to-Slack end-to-end.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 1.5.0 <span class="changelog-date">2026-09-04</span>
+
+**Fixed**
+
+- A rejected DONE no longer kills the agent as "Cognitive budget exhausted" (#139).
+  The done-gate rejection set `done_called`, so an agent that tried to finish early
+  was terminated the next turn under a label that named the wrong cause. Wall-clock
+  interventions now fire at 40% and 15% remaining, exhaustion yields always name the
+  dimension that expired, and a landing turn produces a partial result
+  (`SUCCESS_ON_LANDING`) instead of dead air.
+- Settings `kernel_*` and `WORKFLOW_STEP_TIMEOUT` env knobs now reach lease
+  enforcement (#135). Per-role profiles merge key-wise, so a partial override no
+  longer drops the rest of the profile.
+- Researcher wall clock raised 240s → 600s and communicator → 360s (#136): the
+  previous walls could not complete a modest real web-research task.
+- SWIM probe budgets stop assuming idle round-trip times (#138, mitigation):
+  `PING_TIMEOUT` floor 2s, `SUSPECT_TIMEOUT` floor 15s, adaptive timing off by
+  default. `SWIM_*` env vars still take precedence. Kept open for transport process
+  isolation.
+
+**Added**
+
+- `mesh.workflow(timeout_per_step=...)`, per-step `timeout` keys, and a
+  `WORKFLOW_STEP_TIMEOUT` setting (#137). The crash-recovery path resolves its own
+  default.
+
+**Behaviour changes to know about (compatible, but read this)**
+
+- **Agents run longer and may spend more by default.** Runs that previously died
+  early now keep working; pin your own budgets via `kernel_role_profiles` or
+  `KERNEL_*` env vars if you depended on the old walls.
+- **New success path.** Runs that previously yielded on lease expiry can return
+  `status="success"` with `typed_outcome=SUCCESS_ON_LANDING` and a partial result.
+  Check `metadata["landing_turn"]` to distinguish full from partial completions.
+- **Slower peer-death detection.** Set `SWIM_*` env vars to restore tighter probes
+  on dedicated transport hosts.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.4.1 <span class="changelog-date">2026-09-02</span>
 
 **Fixed**
