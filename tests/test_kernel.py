@@ -371,6 +371,58 @@ class TestKernelHITL:
 
 # ── Dispatch Records ──────────────────────────────────────────────────
 
+class TestDeclaredSystemCredentials:
+    """issue #151 — a declared provider with no credentials is a human decision."""
+
+    @pytest.mark.asyncio
+    async def test_missing_credentials_yield_before_spending_a_dispatch(
+        self, kernel, mock_llm, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "jarviscore.nexus.store.get_store",
+            lambda: type("EmptyVault", (), {"get": staticmethod(lambda name: None)})(),
+        )
+        mock_llm.responses = [_router_response("coder"), _coder_write_response()]
+        output = await kernel.execute(task="Read our CRM contacts", context={"system": "hubspot"})
+
+        assert output.status == "yield"
+        assert output.metadata["typed_outcome"] == "YIELD_AUTH_REQUIRED"
+        assert output.metadata["escalation_reason"] == "auth_required"
+        assert output.metadata["system"] == "hubspot"
+        assert output.metadata["yield_pending"] is True
+        assert "jarviscore nexus register hubspot" in output.summary
+        # Routing costs one call; the dispatch that could not authenticate never ran.
+        assert len(mock_llm.calls) == 1
+        assert output.metadata["dispatches"] == []
+
+    @pytest.mark.asyncio
+    async def test_registered_provider_still_dispatches(
+        self, kernel, mock_llm, mock_sandbox, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "jarviscore.nexus.store.get_store",
+            lambda: type("Vault", (), {"get": staticmethod(lambda name: {"auth_type": "oauth2"})})(),
+        )
+        mock_sandbox.responses = [{"status": "success", "output": {"contacts": 2}}]
+        mock_llm.responses = [
+            _router_response("coder"),
+            _coder_write_response('result = {"contacts": 2}'),
+        ]
+        output = await kernel.execute(task="Read our CRM contacts", context={"system": "hubspot"})
+        assert output.status == "success"
+        assert output.payload == {"contacts": 2}
+
+    @pytest.mark.asyncio
+    async def test_a_task_naming_no_system_is_unaffected(self, kernel, mock_llm, mock_sandbox):
+        mock_sandbox.responses = [{"status": "success", "output": {"v": 1}}]
+        mock_llm.responses = [
+            _router_response("coder"),
+            _coder_write_response('result = {"v": 1}'),
+        ]
+        output = await kernel.execute(task="Add two numbers")
+        assert output.status == "success"
+
+
 class TestDispatchRecords:
 
     @pytest.mark.asyncio
