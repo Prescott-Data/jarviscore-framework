@@ -233,14 +233,43 @@ class TestKernelExecuteSuccess:
             system_prompt="You are a data processor.",
         )
         assert output.status == "success"
-        # Verify context data reached the LLM — it appears in the user message
-        # (messages[1]) since the subagent injects context into the task prompt.
-        # The system message (messages[0]) is the subagent's own hardcoded persona.
+        # Context data reaches the LLM in the user message; the agent's identity
+        # leads the system message (issue #91).
         all_content = " ".join(
             str(m.get("content", "")) for m in mock_llm.calls[1]["messages"]
         )
         assert "data" in all_content
         assert "Process data" in all_content
+        assert mock_llm.calls[1]["messages"][0]["content"].startswith("You are a data processor.")
+
+    @pytest.mark.asyncio
+    async def test_agent_identity_leads_the_system_message(self, kernel, mock_llm):
+        """issue #91 — a sub-agent prompt is an execution harness, not a persona."""
+        mock_llm.responses = [
+            _router_response("communicator"),
+            _llm_response("THOUGHT: Answered\nDONE: Answered\nRESULT: {\"who\": \"Acme\"}"),
+        ]
+        await kernel.execute(
+            task="Who are you and what company do you work for?",
+            system_prompt="You are the VP of Marketing at Acme.",
+        )
+        system = mock_llm.calls[1]["messages"][0]["content"]
+        assert system.startswith("You are the VP of Marketing at Acme.")
+        assert system.index("Acme") < system.index("EXECUTION HARNESS")
+        # The harness still ships in full: role prompt, tools and protocol.
+        assert "COMMUNICATION SPECIALIST" in system.upper()
+        assert "Available tools:" in system and "Protocol:" in system
+
+    @pytest.mark.asyncio
+    async def test_callers_passing_no_identity_are_unchanged(self, kernel, mock_llm):
+        mock_llm.responses = [
+            _router_response("communicator"),
+            _llm_response("THOUGHT: Drafted\nDONE: Drafted\nRESULT: {}"),
+        ]
+        await kernel.execute(task="Draft a status report")
+        system = mock_llm.calls[1]["messages"][0]["content"]
+        assert "EXECUTION HARNESS" not in system
+        assert "Available tools:" in system
 
 
 # ── Execute: Failure + Retry ──────────────────────────────────────────
