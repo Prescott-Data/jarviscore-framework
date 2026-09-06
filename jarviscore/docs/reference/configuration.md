@@ -183,6 +183,21 @@ AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
 
 ## Search
 
+### Provider deadlines
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESEARCH_GROUNDED_TIMEOUT_SECONDS` | `45` | Per-call deadline for Google Grounded (generative search) |
+| `RESEARCH_SEARCH_TIMEOUT_SECONDS` | `15` | Per-call deadline for each other search provider |
+
+Both `InternetSearch` implementations accept `grounded_timeout_seconds` and
+`search_timeout_seconds` keyword arguments, which take precedence over these
+environment variables. Values must be positive finite seconds. For example,
+`InternetSearch(grounded_timeout_seconds=60, search_timeout_seconds=20)`.
+These deadlines bound each provider including its retries; existing HTTP-request
+timeouts still apply. They do not change agent leases or the overall task budget.
+Timeout diagnostics identify the provider, exception type and configured deadline.
+
 JarvisCore runs multiple search providers in parallel and merges results. All providers have circuit breakers: a failing provider is skipped automatically. See the [Internet Search guide](../guides/internet-search.md) for provider details, ranking logic, and usage patterns.
 
 ### Google Grounded Search <span class="jc-badge jc-badge-primary">Primary</span>

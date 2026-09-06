@@ -8,7 +8,7 @@ Provider hierarchy (by relevance weight):
   4. Wikipedia REST API                 (weight 0.6) — academic fallback
 
 All providers run in parallel (asyncio.gather) with per-provider circuit breakers
-and 6-second timeouts so a slow provider never blocks the others.
+and configurable deadlines (45s grounded, 15s other providers by default).
 
 Required env vars (Gemini grounded — primary):
   GEMINI_API_KEY            or GEMINI_GROUNDING_API_KEY   (API key mode)
@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus, urlparse
 
 import aiohttp
+
+from jarviscore.core.search_deadlines import search_deadline
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +101,20 @@ class InternetSearch:
         content = await search.extract_content(results[0]["url"])
     """
 
-    def __init__(self, user_agent: Optional[str] = None):
+    def __init__(
+        self,
+        user_agent: Optional[str] = None,
+        *,
+        search_timeout_seconds: float | None = None,
+        grounded_timeout_seconds: float | None = None,
+    ):
         self.session: Optional[aiohttp.ClientSession] = None
+        self.search_timeout_seconds = search_deadline(
+            search_timeout_seconds, "RESEARCH_SEARCH_TIMEOUT_SECONDS", 15.0,
+        )
+        self.grounded_timeout_seconds = search_deadline(
+            grounded_timeout_seconds, "RESEARCH_GROUNDED_TIMEOUT_SECONDS", 45.0,
+        )
         self.user_agent = user_agent or (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -193,35 +207,46 @@ class InternetSearch:
         skip = set(exclude_providers or ())
 
         provider_tasks = []
+        providers = []
 
         # 1. Gemini Grounded (primary — highest weight)
         if "google_grounded" not in skip and (self._gcp_project or self._gemini_api_key):
+            providers.append("google_grounded")
             provider_tasks.append(
                 self._search_google_grounded(query, max_results=max_results)
             )
 
         # 2. Serper (secondary)
         if self.serper_api_key and "serper" not in skip:
+            providers.append("serper")
             provider_tasks.append(self._search_serper(query, max_results=max_results))
 
         # 3. SearXNG (free metasearch fallback)
         if "searxng" not in skip:
+            providers.append("searxng")
             provider_tasks.append(self._search_searxng(query, max_results=max_results))
 
         # 4. Wikipedia (academic fallback)
         if "wikipedia" not in skip:
+            providers.append("wikipedia")
             provider_tasks.append(self._search_wikipedia(query, max_results=max_results))
 
-        # Run all providers in parallel — 6s timeout per provider
+        # Preserve parallel scheduling with a separate budget for generative grounding.
         provider_results = await asyncio.gather(
-            *(asyncio.wait_for(t, timeout=6) for t in provider_tasks),
+            *(
+                asyncio.wait_for(task, timeout=self._provider_timeout(provider))
+                for provider, task in zip(providers, provider_tasks)
+            ),
             return_exceptions=True,
         )
 
         results: List[Dict[str, Any]] = []
-        for batch in provider_results:
+        for provider, batch in zip(providers, provider_results):
             if isinstance(batch, Exception):
-                logger.warning("Search provider failed: %s", batch)
+                logger.warning(
+                    "Search provider=%s failed error_type=%s deadline_seconds=%s",
+                    provider, type(batch).__name__, self._provider_timeout(provider),
+                )
                 continue
             if isinstance(batch, list):
                 results.extend(batch)
@@ -229,6 +254,12 @@ class InternetSearch:
         ranked = self._rank_results(query, results)
         logger.info("Search '%s': %d results from %d providers", query, len(ranked), len(provider_tasks))
         return ranked[:max_results]
+
+    def _provider_timeout(self, provider: str) -> float:
+        return (
+            self.grounded_timeout_seconds if provider == "google_grounded"
+            else self.search_timeout_seconds
+        )
 
     # ──────────────────────────────────────────────────────────────────────
     # Provider: Google Grounded Search (Gemini)
