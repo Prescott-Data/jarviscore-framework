@@ -29,6 +29,7 @@ from jarviscore.context.context_manager import ContextManager, BudgetConfig
 from jarviscore.execution.llm import LLMProvider
 from jarviscore.kernel.lease import ExecutionLease, ROLE_LEASE_PROFILES
 from jarviscore.kernel.cognition import AgentCognitionManager
+from jarviscore.context.fidelity import Record, select_whole
 from jarviscore.kernel.state import KernelState
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
 from jarviscore.promo import PROMO_MODEL
@@ -42,6 +43,16 @@ _BUILTIN_KERNEL_ROLES = frozenset(ROLE_LEASE_PROFILES.keys())
 
 class RoutingError(RuntimeError):
     """Raised when Kernel cannot obtain a valid, typed routing decision."""
+
+
+#: Roles that can use a resolved Nexus credential. The coder sandbox holds the
+#: only call proxy, so every other role reaches a declared system unauthenticated.
+CREDENTIALED_ROLES = frozenset({"coder"})
+
+_ROUTING_ESSENTIAL_KEYS = frozenset({
+    "workflow_id", "step_id", "system", "system_credentials_available",
+})
+_ROUTER_CONTEXT_BUDGET_CHARS = 8000
 
 
 @dataclass(frozen=True)
@@ -71,6 +82,15 @@ Built-in role contract:
 - researcher: gather unknown facts from web/docs/files, investigate, compare evidence.
 - communicator: draft/review/summarize/structure decisions, reports, messages, requests, JSON contracts.
 - browser: operate an interactive browser/UI: navigation, clicks, screenshots, forms, login flows.
+
+Credentials:
+context_summary may carry system_credentials_available. When it is true, the task
+names a system this deployment can already authenticate to, and only coder can use
+that credential — every other role would have to reach the system unauthenticated
+and ask a human to log in to something access was already granted for. Treat such a
+task as API work and route it to coder, unless it genuinely requires interactive UI
+that no API exposes. When it is false, the credential is missing rather than unused,
+and the choice of role does not change that.
 
 Use the task, context summary, agent default role, and available registry/handoff context.
 For custom roles, use role_catalog from the payload as the authoritative contract.
@@ -162,17 +182,28 @@ processing is actually required.
             "step_id",
             "complexity",
             "system",
+            "system_credentials_available",
             "previous_step_results",
             "registry_candidate",
             "meeting_step_id",
             "task_id",
         ]
-        summary: Dict[str, Any] = {}
-        for key in keys:
-            if key in context:
-                value = context[key]
-                rendered = json.dumps(value, ensure_ascii=False, default=str)
-                summary[key] = rendered[:1200]
+        records = [
+            Record(
+                key=key,
+                text=json.dumps(context[key], ensure_ascii=False, default=str),
+                # Identity and credential availability decide the route; the rest
+                # is supporting detail that can be left out whole if it will not fit.
+                priority=0 if key in _ROUTING_ESSENTIAL_KEYS else 1,
+            )
+            for key in keys
+            if key in context
+        ]
+        selection = select_whole(records, _ROUTER_CONTEXT_BUDGET_CHARS)
+        summary: Dict[str, Any] = {record.key: record.text for record in selection.kept}
+        if not selection.complete:
+            # A router reading half a JSON value is reading a different value.
+            summary["withheld"] = selection.notice("the step context")
         return summary
 
     @staticmethod
@@ -333,6 +364,36 @@ class Kernel:
         return None
 
 
+    async def _resolve_connection(self, system_name: str) -> Optional[str]:
+        """Opaque connection handle for a declared system, or None if we hold none.
+
+        Asked twice per dispatch and answered the same way both times: once before
+        routing, so the router knows whether a credentialed path exists, and again
+        at dispatch to tag the coder's context. Never returns credential material.
+        """
+        if not system_name:
+            return None
+        if self.auth_manager:
+            try:
+                conn_id = await self.auth_manager.get_connection_id(system_name)
+                if conn_id is not None:
+                    return conn_id
+            except Exception as auth_exc:
+                logger.debug(
+                    "[Kernel] Nexus gateway unavailable for system=%s — "
+                    "trying local vault: %s",
+                    system_name, auth_exc,
+                )
+        # Local-vault mode: connection_id IS the provider name — NexusCallProxy
+        # resolves it from NexusLocalStore at call time.
+        try:
+            from jarviscore.nexus.store import get_store
+            if get_store().get(system_name):
+                return system_name
+        except Exception as store_exc:
+            logger.debug("[Kernel] Nexus local vault unavailable: %s", store_exc)
+        return None
+
     async def _route_task(
         self,
         task: str,
@@ -344,6 +405,11 @@ class Kernel:
         """
         Route a task into a subagent role using explicit contracts first, then
         a structured LLM router. Keyword routing is intentionally not used.
+
+        A declared system is resolved before routing so the router is told whether
+        credentials exist for it. Without that, it chose rationally from what it
+        had and sent tasks holding a working token to roles that cannot use one,
+        which then asked a human to log in (#152).
         """
         explicit_role = None
         if context:
@@ -361,11 +427,30 @@ class Kernel:
                 reason="Explicit planner/profile role.",
             )
 
-        return await self._task_router.route(
+        system_name = (context or {}).get("system")
+        routing_context = dict(context or {})
+        credentialed = False
+        if system_name:
+            credentialed = await self._resolve_connection(str(system_name)) is not None
+            routing_context["system_credentials_available"] = credentialed
+
+        decision = await self._task_router.route(
             task=task,
-            context=context,
+            context=routing_context,
             agent_default_role=agent_default_role,
         )
+
+        if credentialed and decision.role not in CREDENTIALED_ROLES:
+            # Not overridden: the router may have a reason this task needs a UI.
+            # But a credential we hold and did not use is worth saying out loud,
+            # because the symptom is an agent asking for access it already has.
+            logger.warning(
+                "[Kernel] system=%s has resolvable credentials, but routed to %s, "
+                "which has no credential path — the token will not be used and the "
+                "run may ask a human to log in. Router reason: %s",
+                system_name, decision.role, decision.reason,
+            )
+        return decision
 
     def _lease_for_role(self, role: str) -> ExecutionLease:
         """Create a lease from built-in or application-registered role profile."""
@@ -765,27 +850,7 @@ class Kernel:
                     or (context.get("system") if context else None)
                 )
                 if system_name:
-                    conn_id = None
-                    if self.auth_manager:
-                        try:
-                            conn_id = await self.auth_manager.get_connection_id(system_name)
-                        except Exception as auth_exc:
-                            logger.debug(
-                                "[Kernel] Nexus gateway unavailable for system=%s — "
-                                "trying local vault: %s",
-                                system_name, auth_exc,
-                            )
-                    if conn_id is None:
-                        # Local-vault mode: connection_id IS the provider name —
-                        # NexusCallProxy resolves it from NexusLocalStore at call time.
-                        try:
-                            from jarviscore.nexus.store import get_store
-                            if get_store().get(system_name):
-                                conn_id = system_name
-                        except Exception as store_exc:
-                            logger.debug(
-                                "[Kernel] Nexus local vault unavailable: %s", store_exc
-                            )
+                    conn_id = await self._resolve_connection(str(system_name))
                     if conn_id is not None:
                         # Only the opaque handle goes into context — NEVER tokens or keys
                         enriched_context["_nexus_connection_id"] = conn_id
