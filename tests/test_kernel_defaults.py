@@ -109,6 +109,48 @@ class TestCoderSubAgent:
         assert "No sandbox" in result["error"]
 
     @pytest.mark.asyncio
+    async def test_a_run_that_returns_nothing_does_not_complete_the_task(self, mock_llm, mock_sandbox):
+        """issue #150 — running is not answering."""
+        mock_sandbox.responses = [{
+            "status": "success", "error": None, "execution_time": 1.8,
+            "output": {"success": True, "data": None, "stdout": "",
+                       "files_created": [], "files_modified": []},
+        }]
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, sandbox=mock_sandbox)
+        result = await coder._execute_tool("write_code", {"code": "result = None"})
+        assert result["status"] == "success"
+        assert "_auto_complete" not in result
+        assert "returned no value and printed nothing" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_returns_a_value_still_completes_the_task(self, mock_llm, mock_sandbox):
+        mock_sandbox.responses = [{
+            "status": "success", "error": None, "execution_time": 0.2,
+            "output": {"success": True, "data": {"contacts": 1412}, "stdout": ""},
+        }]
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, sandbox=mock_sandbox)
+        result = await coder._execute_tool("write_code", {"code": "result = 1"})
+        assert result["_auto_complete"] is True
+        assert result["output"]["data"] == {"contacts": 1412}
+
+    @pytest.mark.parametrize("output, produced", [
+        ({"success": True, "data": None, "stdout": ""}, False),
+        ({"success": True, "data": None, "stdout": "1,412 contacts"}, True),
+        ({"success": True, "data": 0}, True),
+        ({"success": True, "data": None, "files_created": ["report.md"]}, True),
+        ({"success": True}, False),
+        # A plain returned value is the result, not sandbox bookkeeping.
+        ({"answer": 42}, True),
+        ({}, False),
+        ("plain output", True),
+        (None, False),
+    ])
+    def test_only_a_readable_result_counts_as_output(self, output, produced):
+        from jarviscore.kernel.defaults.coder import _produced_output
+
+        assert _produced_output(output) is produced
+
+    @pytest.mark.asyncio
     async def test_execute_code_classifies_auth_error(self, mock_llm, mock_sandbox):
         mock_sandbox.responses = [
             {"status": "failure", "output": None, "error": "Token expired for API", "execution_time": 0.1}
