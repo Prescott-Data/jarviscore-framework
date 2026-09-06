@@ -28,6 +28,19 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
+from jarviscore.context.pressure import (
+    LADDER,
+    PRESSURE_STATE_KEY,
+    PressureState,
+    PressureTier,
+    filter_input_context_keys,
+    format_pressure_notice,
+    format_step_references,
+    prior_step_mode,
+    set_pressure,
+    should_render_block,
+)
+
 if TYPE_CHECKING:
     from jarviscore.kernel.state import KernelState
 
@@ -66,24 +79,20 @@ class BudgetConfig:
         history_limit:             Max tokens to spend on tool history.
         summarization_threshold:   Fraction of total_tokens at which
                                    auto-summarisation is triggered.
-        prior_step_value_limit:    Chars of each prior step output shown inline.
-        context_value_limit:       Chars of each input-context value shown inline.
-        belief_value_limit:        Chars of each belief-state value shown inline.
-        memory_item_limit:         Chars of each finding / LTM item shown inline.
-        internal_var_limit:        Chars of each internal variable shown inline.
-        history_value_limit:       Chars of each tool-history input/output shown inline.
-        state_keys_limit:          Max keys rendered per state dict (overflow is
-                                   announced by name, never silently dropped).
 
-    All char limits default to the historical values; every cut they cause
-    is marked in the rendered context (see issue #55) — an agent that KNOWS
-    data is missing asks for the rest; one that doesn't confabulates.
+    Values are never cut to fit (issue #154). When the budget cannot hold
+    everything, whole blocks stop being inlined in priority order and the
+    withheld records are named, so the agent can retrieve them from the store
+    they still live in. The per-value character limits below are retained for
+    backward compatibility and no longer affect rendering.
     """
     total_tokens: int = 80_000
     output_reserve: int = 4_000
     system_reserve: int = 8_000
     history_limit: int = 20_000
     summarization_threshold: float = 0.8
+    # Deprecated (issue #154): retained so existing configs keep importing.
+    # Rendering no longer cuts values, so these have no effect.
     prior_step_value_limit: int = 2000
     context_value_limit: int = 800
     belief_value_limit: int = 200
@@ -91,9 +100,6 @@ class BudgetConfig:
     internal_var_limit: int = 200
     history_value_limit: int = 600
     state_keys_limit: int = 10
-    # Chars of each turn's output shown to the summarizer LLM. 100 chars was
-    # not a summarizable evidence base — the "summary" was confabulation by
-    # construction (issue #59).
     summary_evidence_limit: int = 800
     # How many compressed-away turns stay retrievable in the archive.
     archive_window: int = 50
@@ -102,7 +108,7 @@ class BudgetConfig:
     # fidelity. Incremental accumulation, never monolithic rewrite — the
     # context-collapse failure mode identified by ACE (arXiv:2510.04618).
     ltm_window: int = 20
-    # How many LTM entries the context block renders (was a silent [-5:]).
+    # How many LTM entries the context block renders.
     ltm_render_limit: int = 5
     # Token budget for the GOAL STATE block (issue #72) — the accumulated
     # facts and step history of a goal execution, rendered structured.
@@ -207,78 +213,29 @@ class ContextManager:
         if goal:
             revision = context.get("_plan_revision", 0)
             rev_note = f" (plan revision {revision})" if revision else ""
-            lines.append(f"**Goal:** {self._clip(goal, 300)}{rev_note}")
+            lines.append(f"**Goal:** {goal}{rev_note}")
 
         if isinstance(facts, dict) and facts:
             high_conf = context.get("_goal_facts_high_confidence") or {}
             lines.append(f"**Established facts ({len(facts)}):**")
             # High-confidence facts first — they are the plan's load-bearing truth
             ordered = sorted(facts.items(), key=lambda kv: kv[0] not in high_conf)
-            visible, overflow = self._visible_items(dict(ordered), self.config.state_keys_limit * 2)
-            for key, value in visible:
+            for key, value in ordered:
                 marker = " ✓" if key in high_conf else ""
-                lines.append(f"- `{key}`{marker}: {self._clip(value, self.config.belief_value_limit)}")
-            if overflow:
-                lines.append(overflow.rstrip())
+                lines.append(f"- `{key}`{marker}: {value}")
 
         if isinstance(completed, list) and completed:
             lines.append(f"**Completed steps ({len(completed)}):**")
-            for cs in completed[-8:]:
+            for cs in completed:
                 if isinstance(cs, dict):
                     sid = cs.get("step_id", "?")
                     verdict = cs.get("verdict", cs.get("status", "?"))
-                    summary = self._clip(cs.get("summary") or cs.get("task", ""), 160)
-                    lines.append(f"- [{verdict}] `{sid}`: {summary}")
+                    lines.append(f"- [{verdict}] `{sid}`: {cs.get('summary') or cs.get('task', '')}")
                 else:
-                    lines.append(f"- {self._clip(cs, 160)}")
-            hidden = len(completed) - 8
-            if hidden > 0:
-                lines.append(f"…and {hidden} earlier steps not shown")
+                    lines.append(f"- {cs}")
 
         return "\n".join(lines)
 
-
-    @staticmethod
-    def _clip(value: Any, limit: int) -> str:
-        """Render a value for the context window — cut honestly, never silently.
-
-        Values within the limit render byte-identical to ``str(value)``.
-        Longer values are cut WITH an explicit marker, because the agent
-        reads these blocks as its world state: a model that knows data is
-        missing asks for the rest; a model that doesn't confabulates.
-        """
-        text = str(value)
-        if len(text) <= limit:
-            return text
-        return f"{text[:limit]}…[truncated: showing {limit} of {len(text)} chars]"
-
-    @staticmethod
-    def _visible_items(
-        data: Dict[str, Any], limit: int
-    ) -> Tuple[List[Tuple[str, Any]], str]:
-        """Cap a state dict at *limit* keys — recency wins, overflow is named.
-
-        Returns (visible_items, overflow_notice). The MOST RECENTLY inserted
-        keys survive (dicts preserve insertion order; the newest state is the
-        most likely to matter). Hidden keys are announced BY NAME so the agent
-        keeps an index of its own state even when the values don't fit —
-        silent key loss decided by insertion order was issue #56.
-        """
-        items = list(data.items())
-        if len(items) <= limit:
-            return items, ""
-        visible = items[-limit:]
-        hidden = [k for k, _ in items[:-limit]]
-        notice = (
-            f"…and {len(hidden)} earlier key(s) not shown: "
-            + ", ".join(f"`{k}`" for k in hidden)
-            + " (values hidden — re-derive or ask if needed)\n"
-        )
-        return visible, notice
-
-    # ------------------------------------------------------------------
-    # Context building — KernelState input (preferred)
-    # ------------------------------------------------------------------
 
     def build_context(self, state: Any) -> str:
         """
@@ -294,32 +251,58 @@ class ContextManager:
         return self._build_context_from_state(state)
 
     def _build_context_from_state(self, state: "KernelState") -> str:
-        """Build context from a KernelState Pydantic model."""
+        """Build context from a KernelState Pydantic model.
+
+        Blocks are composed once at full fidelity, then the least aggressive
+        pressure tier that fits the budget is chosen. Values are never cut.
+        """
         budget = self.config.usable_tokens
-        blocks: List[str] = []
-        used = 0
+        candidates = self._compose_blocks(state)
+        full_cost = sum(self.count_tokens(text) for _, text in candidates)
 
-        def _add_block(block: str, max_tokens: Optional[int] = None) -> bool:
-            """Add a block if it fits within budget. Returns True if added."""
-            nonlocal used
-            cost = self.count_tokens(block)
-            limit = min(budget - used, max_tokens) if max_tokens else budget - used
-            if cost <= 0 or limit <= 0:
-                return False
-            if cost > limit:
-                # Truncate to fit — honestly (issue #55)
-                char_limit = int(limit * 4)  # ~4 chars per token
-                original_len = len(block)
-                block = (
-                    block[:char_limit]
-                    + f"\n…[block truncated to fit budget: showing {char_limit} of {original_len} chars]"
-                )
-                cost = self.count_tokens(block)
-            blocks.append(block)
-            used += cost
-            return True
+        for tier in LADDER:
+            blocks = self._render_at_tier(state, candidates, tier)
+            used = sum(self.count_tokens(text) for text in blocks)
+            if used <= budget or tier is LADDER[-1]:
+                break
 
-        # ═══ BLOCK 1: MISSION (Fixed — Never Trimmed) ═══
+        evicted = [key for key, _ in candidates if not should_render_block(key, tier)]
+        pressure = PressureState(tier=tier, evicted=evicted, tokens=full_cost, budget=budget)
+        if isinstance(state.internal_variables, dict):
+            set_pressure(state.internal_variables, pressure)
+        if tier is not PressureTier.NORMAL:
+            blocks.insert(1, format_pressure_notice(pressure))
+
+        blocks.append(
+            f"\n---\n**Context Budget:** {used}/{budget} tokens "
+            f"({100 * used // budget if budget else 0}% used)"
+        )
+        return "\n\n".join(blocks)
+
+    def _render_at_tier(self, state: "KernelState", candidates, tier) -> List[str]:
+        """Keep every block this tier allows, whole; reference the rest."""
+        rendered: List[str] = []
+        for key, text in candidates:
+            if key == "input_context" and tier is not PressureTier.NORMAL:
+                text = self._compose_input_context(state, tier)
+                if not text:
+                    continue
+            if should_render_block(key, tier):
+                rendered.append(text)
+        if prior_step_mode(tier) == "references":
+            prior = (state.context or {}).get("previous_step_results") or {}
+            if prior:
+                rendered.append(format_step_references(state.workflow_id, prior.keys()))
+        return rendered
+
+    def _compose_blocks(self, state: "KernelState") -> List[tuple]:
+        """Every block the turn could show, at full fidelity, in priority order."""
+        blocks: List[tuple] = []
+
+        def add(key: str, text: str) -> None:
+            if text and text.strip():
+                blocks.append((key, text))
+
         mission = f"""## MISSION
 **Workflow:** {state.workflow_id}
 **Step:** {state.step_id}
@@ -329,164 +312,117 @@ class ContextManager:
 """
         if state.last_error:
             mission += f"**CRITICAL ERROR TO FIX:** {state.last_error}\n"
-        _add_block(mission)
+        add("mission", mission)
+        add("goal_state", self._build_goal_state_block(state.context or {}))
 
-        # ═══ BLOCK 1b: GOAL STATE (High Priority — issue #72) ═══
-        # A goal execution's accumulated truth used to reach each step as ONE
-        # generic `_goal_facts: {...}` line clipped at the value limit — the
-        # plan's entire memory in 800 chars. Goal state is mission-level
-        # context: structured, one fact per line, honest overflow.
-        goal_block = self._build_goal_state_block(state.context or {})
-        if goal_block:
-            _add_block(goal_block, max_tokens=self.config.goal_state_budget)
-
-        # ═══ BLOCK 2: FAILURE MEMORY (High Priority) ═══
         if state.failure_ledger:
             lines = ["## FAILURE MEMORY (Do Not Repeat)"]
             for entry in state.failure_ledger[-5:]:
                 tool = entry.get("tool", "unknown")
                 err_type = entry.get("error_type", "UNKNOWN")
-                err_msg = self._clip(entry.get("error", ""), 180)
-                lines.append(f"- `{tool}` → `{err_type}`: {err_msg}")
+                lines.append(f"- `{tool}` → `{err_type}`: {entry.get('error', '')}")
             lines.append("Rule: if tool+params already failed recently, choose a different strategy.")
-            _add_block("\n".join(lines))
+            add("failure_memory", "\n".join(lines))
 
-        # ═══ BLOCK 3: KNOWLEDGE ACCUMULATOR (High Priority) ═══
-        # Surfaces accumulated research findings and API specs so the agent
-        # can see what it has already discovered — prevents blind re-searching.
         findings = state.internal_variables.get("research_findings", [])
         api_specs_accum = state.internal_variables.get("api_specs", [])
         if findings or api_specs_accum:
             kb_block = "## WHAT I KNOW SO FAR\n"
             if isinstance(api_specs_accum, list) and api_specs_accum:
                 kb_block += f"**API Specs Extracted:** {len(api_specs_accum)} endpoint(s)\n"
-                for spec in api_specs_accum[-8:]:
+                for spec in api_specs_accum:
                     if not isinstance(spec, dict):
                         continue
                     method = spec.get("method", "?")
                     path = spec.get("path") or spec.get("url") or "?"
-                    summary_text = self._clip(spec.get("summary", ""), 80)
-                    kb_block += f"  - `{method} {path}` — {summary_text}\n"
+                    kb_block += f"  - `{method} {path}` — {spec.get('summary', '')}\n"
             if isinstance(findings, list) and findings:
                 kb_block += f"**Research Findings:** {len(findings)} item(s)\n"
-                for finding in findings[-5:]:
+                for finding in findings:
                     if isinstance(finding, dict):
-                        kb_block += f"  - {self._clip(finding.get('summary', finding.get('content_preview', finding)), self.config.memory_item_limit)}\n"
+                        kb_block += f"  - {finding.get('summary', finding.get('content_preview', finding))}\n"
                     else:
-                        kb_block += f"  - {self._clip(finding, self.config.memory_item_limit)}\n"
-            _add_block(kb_block, max_tokens=4000)
+                        kb_block += f"  - {finding}\n"
+            add("knowledge", kb_block)
 
-        # ═══ BLOCK 4: INPUT CONTEXT (High Priority) ═══
-        if state.context:
-            input_block = "## INPUT CONTEXT\n"
-            # Prior step outputs get highest priority
-            prior = state.context.get("previous_step_results", {})
-            if prior:
-                for step_id, step_result in prior.items():
-                    output = step_result.get("output", step_result) if isinstance(step_result, dict) else step_result
-                    output_str = self._clip(output, self.config.prior_step_value_limit)
-                    input_block += f"**[Prior Step: {step_id}]**\n{output_str}\n\n"
+        add("input_context", self._compose_input_context(state, PressureTier.NORMAL))
 
-            # Other context fields (skip internal keys; goal keys are
-            # PROMOTED to the GOAL STATE block, not dropped)
-            skip_keys = {"previous_step_results", "workflow_id", "step_id",
-                          "system_prompt", "_jarvis_context", "_auth_credentials",
-                          "_agent_default_kernel_role",
-                          "_goal", "_goal_id", "_goal_facts",
-                          "_goal_facts_high_confidence", "_completed_steps",
-                          "_plan_revision"}
-            other = {k: v for k, v in state.context.items() if k not in skip_keys}
-            if other:
-                cleaned = self._scrub_dict(other)
-                visible, overflow = self._visible_items(cleaned, self.config.state_keys_limit)
-                for k, v in visible:
-                    if hasattr(v, "model_json_schema"):
-                        # Render Pydantic BaseModels as JSON schemas for the LLM
-                        try:
-                            import json
-                            val_str = json.dumps(v.model_json_schema(), indent=2)
-                        except Exception:
-                            val_str = self._clip(v, self.config.context_value_limit)
-                    else:
-                        val_str = self._clip(v, self.config.context_value_limit)
-                    input_block += f"- `{k}`: {val_str}\n"
-                input_block += overflow
-            _add_block(input_block, max_tokens=8000)
-
-        # ═══ BLOCK 5: BELIEF STATE (Medium Priority) ═══
         if state.belief_state:
             belief_block = "## BELIEF STATE\n"
-            visible, overflow = self._visible_items(state.belief_state, self.config.state_keys_limit)
-            for k, v in visible:
-                belief_block += f"- `{k}`: {self._clip(v, self.config.belief_value_limit)}\n"
-            belief_block += overflow
-            _add_block(belief_block, max_tokens=1000)
+            for key, value in state.belief_state.items():
+                belief_block += f"- `{key}`: {value}\n"
+            add("belief_state", belief_block)
 
-        # ═══ BLOCK 6: SCRATCHPAD / THOUGHTS (Medium Priority) ═══
         thoughts_content = ""
         if state.thoughts:
-            thoughts_content = "\n".join(f"- {t}" for t in state.thoughts[-10:])
+            thoughts_content = "\n".join(f"- {thought}" for thought in state.thoughts[-10:])
         if state.scratchpad_notes:
             thoughts_content += f"\n{state.scratchpad_notes}"
         if thoughts_content.strip():
-            _add_block(f"## WORKING MEMORY\n{thoughts_content.strip()}", max_tokens=3000)
+            add("working_memory", f"## WORKING MEMORY\n{thoughts_content.strip()}")
 
-        # ═══ BLOCK 7: LONG-TERM MEMORY (Medium Priority) ═══
         ltm = state.internal_variables.get("long_term_memory", [])
         if ltm:
             ltm_block = "## LONG-TERM MEMORY (Compressed History)\n"
             render_limit = self.config.ltm_render_limit
             for item in ltm[-render_limit:]:
-                if isinstance(item, dict):
-                    ltm_block += f"- {self._clip(item.get('summary', str(item)), self.config.memory_item_limit)}\n"
-                else:
-                    ltm_block += f"- {self._clip(item, self.config.memory_item_limit)}\n"
+                ltm_block += f"- {item.get('summary', item) if isinstance(item, dict) else item}\n"
             hidden = len(ltm) - render_limit
             if hidden > 0:
-                ltm_block += f"…and {hidden} older memories not shown\n"
-            _add_block(ltm_block, max_tokens=2000)
+                ltm_block += f"…and {hidden} older memories held in long-term memory\n"
+            add("long_term_memory", ltm_block)
 
-        # ═══ BLOCK 8: TOOL HISTORY (Sliding Window) ═══
-        history_budget = min(self.config.history_limit, budget - used - 2000)
-        if history_budget > 0 and state.tool_history:
-            history_block, history_tokens = self._format_tool_history(
-                state.tool_history, history_budget
+        if state.tool_history:
+            history_block, _ = self._format_tool_history(
+                state.tool_history, self.config.history_limit
             )
-            if history_block:
-                blocks.append(history_block)
-                used += history_tokens
+            add("tool_history", history_block)
 
-        # ═══ BLOCK 9: VARIABLES (Fill Remaining) ═══
-        remaining = budget - used
-        if remaining > 500 and state.internal_variables:
-            vars_block = "## INTERNAL STATE\n"
-            # Skip keys that are surfaced by dedicated blocks above.
-            # Filter FIRST, then cap — skipped keys must not consume the
-            # visibility budget of real ones (issue #56).
-            skip_var_keys = {"long_term_memory", "research_findings", "api_specs", "failure_ledger"}
+        if state.internal_variables:
+            skip_var_keys = {"long_term_memory", "research_findings", "api_specs",
+                             "failure_ledger", PRESSURE_STATE_KEY}
             renderable = {
                 key: value
                 for key, value in state.internal_variables.items()
                 if key not in skip_var_keys and not key.startswith("_")
             }
-            visible, overflow = self._visible_items(renderable, self.config.state_keys_limit)
-            for key, value in visible:
-                value_str = self._clip(self._scrub_value(key, value), self.config.internal_var_limit)
-                vars_block += f"- `{key}`: {value_str}\n"
-            vars_block += overflow
-            vars_cost = self.count_tokens(vars_block)
-            if vars_cost < remaining:
-                blocks.append(vars_block)
-                used += vars_cost
+            if renderable:
+                vars_block = "## INTERNAL STATE\n"
+                for key, value in renderable.items():
+                    vars_block += f"- `{key}`: {self._scrub_value(key, value)}\n"
+                add("internal_variables", vars_block)
 
-        # ═══ BUDGET STATUS ═══
-        budget_line = (
-            f"\n---\n"
-            f"**Context Budget:** {used}/{budget} tokens ({100*used//budget if budget else 0}% used)"
-        )
-        blocks.append(budget_line)
+        return blocks
 
-        return "\n\n".join(blocks)
+    def _compose_input_context(self, state: "KernelState", tier) -> str:
+        """Input context, whole values only; bulk keys drop entirely under pressure."""
+        if not state.context:
+            return ""
+        input_block = "## INPUT CONTEXT\n"
+        prior = state.context.get("previous_step_results", {})
+        if prior and prior_step_mode(tier) == "full":
+            for step_id, step_result in prior.items():
+                output = (step_result.get("output", step_result)
+                          if isinstance(step_result, dict) else step_result)
+                input_block += f"**[Prior Step: {step_id}]**\n{output}\n\n"
+
+        skip_keys = {"previous_step_results", "workflow_id", "step_id",
+                     "system_prompt", "_jarvis_context", "_auth_credentials",
+                     "_agent_default_kernel_role",
+                     "_goal", "_goal_id", "_goal_facts",
+                     "_goal_facts_high_confidence", "_completed_steps",
+                     "_plan_revision"}
+        other = {key: value for key, value in state.context.items() if key not in skip_keys}
+        allowed = set(filter_input_context_keys(other.keys(), tier))
+        cleaned = self._scrub_dict({k: v for k, v in other.items() if k in allowed})
+        for key, value in cleaned.items():
+            if hasattr(value, "model_json_schema"):
+                try:
+                    value = json.dumps(value.model_json_schema(), indent=2)
+                except Exception:
+                    pass
+            input_block += f"- `{key}`: {value}\n"
+        return input_block if input_block.strip() != "## INPUT CONTEXT" else ""
 
     def _format_tool_history(
         self,
@@ -495,36 +431,37 @@ class ContextManager:
     ) -> Tuple[str, int]:
         """Format recent tool history to fit within budget.
 
-        Works backwards (most recent first), then reverses for
-        chronological output. Each entry is truncated to prevent
-        a single large output from consuming the entire budget.
+        Works backwards (most recent first), then reverses for chronological
+        output. Entries are whole: a turn that does not fit is left out and
+        stays retrievable via ``read_turn_result``, rather than being cut.
         """
         header = "## RECENT ACTIONS\n"
         header_tokens = self.count_tokens(header)
         formatted = []
         current = header_tokens
+        withheld = 0
 
         # Process most-recent first (max 20 entries)
         for turn in reversed(history[-20:]):
             if hasattr(turn, "tool_name"):
                 # KernelState.ToolResult model
-                output_str = self._clip(turn.tool_output, self.config.history_value_limit)
                 entry = (
                     f"**{turn.tool_name}** [{turn.status}]\n"
-                    f"  Input: {self._clip(json.dumps(turn.tool_input, default=str), self.config.history_value_limit)}\n"
-                    f"  Output: {output_str}"
+                    f"  Input: {json.dumps(turn.tool_input, default=str)}\n"
+                    f"  Output: {turn.tool_output}"
                 )
                 if turn.error:
-                    entry += f"\n  Error: {self._clip(turn.error, 200)}"
+                    entry += f"\n  Error: {turn.error}"
             elif isinstance(turn, dict):
                 # Legacy dict format
-                entry = f"- {json.dumps(turn, default=str)[:500]}"
+                entry = f"- {json.dumps(turn, default=str)}"
             else:
                 continue
 
             cost = self.count_tokens(entry)
             if current + cost > budget:
-                break
+                withheld += 1
+                continue
             formatted.append(entry)
             current += cost
 
@@ -533,6 +470,11 @@ class ContextManager:
 
         # Restore chronological order
         formatted.reverse()
+        if withheld:
+            formatted.append(
+                f"…{withheld} earlier action(s) not inlined this turn — "
+                "call TOOL: read_turn_result to read any of them in full."
+            )
         return header + "\n\n".join(formatted), current
 
     # ------------------------------------------------------------------
@@ -683,14 +625,14 @@ class ContextManager:
                 "Focus on WHAT was discovered and WHAT was attempted:\n"
             )
             for tr in old_entries:
-                evidence = self._clip(tr.tool_output, self.config.summary_evidence_limit)
+                evidence = tr.tool_output
                 summary_prompt += f"- {tr.tool_name}: {evidence}\n"
 
             if hasattr(llm, "generate"):
                 result = await llm.generate(
                     messages=[{"role": "user", "content": summary_prompt}]
                 )
-                summary_text = self._clip(result.get("content", ""), 1000)
+                summary_text = result.get("content", "")
             else:
                 # No LLM attached: mechanical summary, but the originals are
                 # archived below — nothing is destroyed.
@@ -787,7 +729,7 @@ class ContextManager:
             result = await llm.generate(
                 messages=[{"role": "user", "content": merge_prompt}]
             )
-            epoch_text = self._clip(result.get("content", ""), 2000)
+            epoch_text = result.get("content", "")
         except Exception as e:
             # A failed merge must not cost memory — keep entries, retry later.
             logger.warning(f"LTM epoch merge failed ({e}) — keeping entries for retry")
