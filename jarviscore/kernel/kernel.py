@@ -795,11 +795,36 @@ class Kernel:
                             system_name,
                         )
                     else:
+                        # Deterministic: the task named a provider and neither the
+                        # gateway nor the vault has it. Ask for access instead of
+                        # spending a dispatch on code that cannot authenticate.
                         logger.warning(
                             "[Kernel] No Nexus credentials for system=%s — "
-                            "register with: jarviscore nexus register %s (local vault) "
+                            "yielding for human access grant. Register with: "
+                            "jarviscore nexus register %s (local vault) "
                             "or set NEXUS_GATEWAY_URL (gateway)",
                             system_name, system_name,
+                        )
+                        await self._cleanup_step(step_id)
+                        return AgentOutput(
+                            status="yield",
+                            summary=(
+                                f"No credentials for system={system_name}. A human must "
+                                f"grant access before this task can run: "
+                                f"jarviscore nexus register {system_name} (local vault) "
+                                f"or set NEXUS_GATEWAY_URL (gateway)."
+                            ),
+                            trajectory=[],
+                            metadata={
+                                "tokens": total_tokens,
+                                "cost_usd": total_cost,
+                                "dispatches": dispatches,
+                                "yield_pending": True,
+                                "escalation_reason": "auth_required",
+                                "system": system_name,
+                                "hitl_type": "auth",
+                                "typed_outcome": "YIELD_AUTH_REQUIRED",
+                            },
                         )
 
 
