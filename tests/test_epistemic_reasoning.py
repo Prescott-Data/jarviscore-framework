@@ -101,10 +101,9 @@ class TestKnowledgeAccumulator:
             internal_section = context[internal_idx:internal_idx + 500]
             assert "some_other_var" in internal_section
 
-    def test_knowledge_accumulator_budget_cap(self):
-        """Knowledge Accumulator should be capped at 4000 tokens."""
+    def test_knowledge_accumulator_keeps_every_item(self):
+        """Findings are evicted as a block under pressure, never silently trimmed (#154)."""
         state = _make_state()
-        # Create a very large set of findings
         state.internal_variables["research_findings"] = [
             {"summary": f"Finding {i}: " + "x" * 200} for i in range(50)
         ]
@@ -112,14 +111,14 @@ class TestKnowledgeAccumulator:
             {"method": "GET", "path": f"/v1/resource_{i}", "summary": f"Resource {i}"} for i in range(50)
         ]
 
-        cm = ContextManager()
-        context = cm.build_context(state)
+        context = ContextManager().build_context(state)
 
-        # Block should exist but be bounded (not explode the context)
         assert "WHAT I KNOW SO FAR" in context
-        # Only last 8 specs and last 5 findings should be shown
+        # The oldest discovery is as retrievable as the newest.
         assert "resource_49" in context
-        assert "resource_0" not in context  # Too old, should be trimmed
+        assert "resource_0" in context
+        assert "Finding 0:" in context
+        assert "truncated" not in context
 
 
 # ──────────────────────────────────────────────────────────────────────
