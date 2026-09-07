@@ -1,13 +1,14 @@
 """
 Local filesystem blob storage implementation.
 
-Stores files under a configurable base path (default: ./blob_storage).
+Stores files under a configurable base path (default: ./.jarviscore/blob_storage).
 """
 
 import logging
 import os
 from typing import List, Optional, Union
 
+from jarviscore.config.paths import runtime_path
 from .base import BlobStorage
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 class LocalBlobStorage(BlobStorage):
     """Blob storage backed by local filesystem."""
 
-    def __init__(self, base_path: str = "./blob_storage"):
+    def __init__(self, base_path: str = runtime_path("blob_storage")):
         self.base_path = os.path.abspath(base_path)
         os.makedirs(self.base_path, exist_ok=True)
         logger.info(f"LocalBlobStorage initialized: {self.base_path}")

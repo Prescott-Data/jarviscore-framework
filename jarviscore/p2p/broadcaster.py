@@ -11,6 +11,8 @@ import uuid
 from typing import Dict, Any, Optional, List, Set, Tuple
 from dataclasses import dataclass, asdict
 
+from jarviscore.config.paths import runtime_path
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -50,10 +52,10 @@ class StepOutputBroadcaster:
         
         # Track message acknowledgments for broadcasts
         self.pending_acks: Dict[str, Dict[str, Any]] = {}
-        
-        # Create directories for persistence
-        os.makedirs("StepOutputs", exist_ok=True)
-        
+
+        # persistence dir; created lazily on first write
+        self.output_dir = runtime_path("step_outputs")
+
         logger.info(f"Step Output Broadcaster service initialized for agent {agent_id}")
     
     async def broadcast_step_result(
@@ -284,9 +286,10 @@ class StepOutputBroadcaster:
     async def _persist_step_result(self, result: StepExecutionResult):
         """Persist step result to file"""
         try:
+            os.makedirs(self.output_dir, exist_ok=True)
             filename = f"step_{result.step_id}_{result.workflow_id}_result.json"
-            filepath = os.path.join("StepOutputs", filename)
-            
+            filepath = os.path.join(self.output_dir, filename)
+
             with open(filepath, 'w') as f:
                 json.dump(asdict(result), f, indent=2)
                 
@@ -330,7 +333,7 @@ class StepOutputBroadcaster:
                 logger.info(f"Cleaned up {len(keys_to_remove)} old step outputs from cache")
             
             # Clean up files
-            output_dir = "StepOutputs"
+            output_dir = self.output_dir
             if os.path.exists(output_dir):
                 files_removed = 0
                 for filename in os.listdir(output_dir):

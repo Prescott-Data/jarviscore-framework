@@ -15,7 +15,7 @@ Architecture:
    (7-day TTL)               (real-time → SSE endpoint)
          │
          ▼
-   File fallback: traces/{mission_id}.jsonl
+   File fallback: .jarviscore/traces/{mission_id}.jsonl
 
 Design choices (OSS-clean port from CA TraceManager):
   - All trace values are secret-scrubbed before writing
@@ -31,7 +31,12 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from jarviscore.config.paths import runtime_path
+
 logger = logging.getLogger(__name__)
+
+# single source of truth for the on-disk trace location
+DEFAULT_TRACE_DIR = runtime_path("traces")
 
 
 class _NoOpTrace:
@@ -98,7 +103,7 @@ class TraceManager:
         self,
         workflow_id: str,
         step_id: str,
-        trace_dir: str = "traces",
+        trace_dir: str = DEFAULT_TRACE_DIR,
         redis_client=None,
     ):
         self.workflow_id = workflow_id

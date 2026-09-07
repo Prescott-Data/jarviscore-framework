@@ -30,7 +30,7 @@ tracer = TraceManager(
     workflow_id="wf-abc123",
     step_id="step-001",
     redis_store=redis_store,   # optional: omit to use JSONL-only mode
-    trace_dir="traces",        # directory for JSONL fallback files
+    trace_dir=".jarviscore/traces",  # directory for JSONL fallback files (default)
 )
 ```
 
@@ -176,13 +176,13 @@ for message in ps.listen():
 **Replay from JSONL:**
 ```bash
 # All events for a workflow
-cat traces/wf-abc123_step-001.jsonl | jq .
+cat .jarviscore/traces/wf-abc123_step-001.jsonl | jq .
 
 # Filter for tool events only
-cat traces/wf-abc123_step-001.jsonl | jq 'select(.type | startswith("tool_"))'
+cat .jarviscore/traces/wf-abc123_step-001.jsonl | jq 'select(.type | startswith("tool_"))'
 
 # LLM cost summary
-cat traces/*.jsonl | jq 'select(.type == "llm_response") | .data.latency_ms' | awk '{sum+=$1} END {print "Total latency:", sum, "ms"}'
+cat .jarviscore/traces/*.jsonl | jq 'select(.type == "llm_response") | .data.latency_ms' | awk '{sum+=$1} END {print "Total latency:", sum, "ms"}'
 ```
 
 ---
@@ -312,7 +312,7 @@ Use `prometheus-remote-write` or the Grafana Agent to forward metrics directly w
 
 ### Splunk / ELK
 
-The JSONL trace files are the simplest integration point. Point a Filebeat or Splunk Universal Forwarder at the `traces/` directory: each line is already structured JSON, with `workflow_id`, `step_id`, `timestamp`, and `type` as top-level fields for indexing.
+The JSONL trace files are the simplest integration point. Point a Filebeat or Splunk Universal Forwarder at the `.jarviscore/traces/` directory: each line is already structured JSON, with `workflow_id`, `step_id`, `timestamp`, and `type` as top-level fields for indexing.
 
 ---
 

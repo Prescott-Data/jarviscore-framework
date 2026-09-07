@@ -230,8 +230,8 @@ grep REDIS_URL .env
 The file was saved with a different `STORAGE_BASE_PATH` or in a different process's working directory.
 
 ```bash
-ls -la blob_storage/
-find blob_storage/ -name "*.json" -o -name "*.md" | head -20
+ls -la .jarviscore/blob_storage/
+find .jarviscore/blob_storage/ -name "*.json" -o -name "*.md" | head -20
 ```
 
 Fix: pin `STORAGE_BASE_PATH` in `.env` to an absolute path:

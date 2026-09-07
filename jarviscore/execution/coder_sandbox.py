@@ -39,6 +39,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from jarviscore.config.paths import runtime_path
+
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────
@@ -297,7 +299,7 @@ class CoderSandbox:
         - nexus_call     : async fn(method, url, **kwargs) → HTTP response via Nexus
         - Path           : pathlib.Path — for path manipulation
         - common libs    : json, os, re, datetime, dataclasses, etc.
-        - blob_path(name): helper to get a path inside workspace/output/
+        - blob_path(name): helper to get a path inside workspace/.jarviscore/output/
 
     Agents NEVER see raw credentials — nexus_call() internally resolves
     the DynamicStrategy via NexusCallProxy.
@@ -308,13 +310,13 @@ class CoderSandbox:
         workspace_dir: Optional[Path] = None,
         timeout: int = 300,
         bash_timeout: int = 120,
-        output_subdir: str = "output",
+        output_subdir: str = runtime_path("output"),
         nexus_call_proxy=None,  # Optional[NexusCallProxy]
     ):
         self.workspace = Path(workspace_dir) if workspace_dir else Path.cwd()
         self.timeout = timeout
+        # created lazily at execute() time; idle sandbox leaves no dir
         self.output_dir = self.workspace / output_subdir
-        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self._bash = BashExecutor(self.workspace, timeout=bash_timeout)
         self._git = GitHelper(self._bash, self.workspace)
@@ -373,6 +375,7 @@ class CoderSandbox:
         timeout = timeout or self.timeout
         start = time.time()
 
+        self.output_dir.mkdir(parents=True, exist_ok=True)  # sandbox output dir created here
         namespace = self._build_namespace(context)
         stdout_capture = io.StringIO()
 
@@ -531,7 +534,7 @@ class CoderSandbox:
         git = self._git
 
         def blob_path(filename: str) -> Path:
-            """Return a path inside workspace/output/ — safe write location."""
+            """Return a path inside workspace/.jarviscore/output/ — safe write location."""
             p = output_dir / filename
             p.parent.mkdir(parents=True, exist_ok=True)
             return p
@@ -695,7 +698,7 @@ Store the final outcome in a variable called `result` (dict matching the contrac
 Your code runs inside CoderSandbox with these pre-injected names:
 
   workspace   : pathlib.Path  — project root (safe to read/write recursively)
-  output_dir  : pathlib.Path  — workspace/output/ (preferred write location)
+  output_dir  : pathlib.Path  — workspace/.jarviscore/output/ (preferred write location)
   blob_path(n): Path          — shorthand: output_dir / n (creates parent dirs)
   bash(cmd)   : BashExecutor  — run allowed shell commands (git, pip, pandoc, etc.)
   git         : GitHelper     — high-level git: checkout_branch, add_all, commit, push
