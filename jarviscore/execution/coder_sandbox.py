@@ -57,6 +57,7 @@ class CoderResult:
     error: Optional[str] = None
     error_type: Optional[str] = None
     execution_time: float = 0.0
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict:
         return {
@@ -69,6 +70,7 @@ class CoderResult:
             "error": self.error,
             "error_type": self.error_type,
             "execution_time": self.execution_time,
+            "artifacts": self.artifacts,
         }
 
 
@@ -310,11 +312,17 @@ class CoderSandbox:
         bash_timeout: int = 120,
         output_subdir: str = "output",
         nexus_call_proxy=None,  # Optional[NexusCallProxy]
+        blob_storage=None,      # Optional[BlobStorage]
+        artifact_prefix: str = "artifacts",
     ):
         self.workspace = Path(workspace_dir) if workspace_dir else Path.cwd()
         self.timeout = timeout
         self.output_dir = self.workspace / output_subdir
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Where a run's files end up is the developer's choice: any BlobStorage
+        # backend, local or remote. The sandbox only decides that they leave.
+        self.blob_storage = blob_storage
+        self.artifact_prefix = artifact_prefix
 
         self._bash = BashExecutor(self.workspace, timeout=bash_timeout)
         self._git = GitHelper(self._bash, self.workspace)
@@ -375,6 +383,7 @@ class CoderSandbox:
 
         namespace = self._build_namespace(context)
         stdout_capture = io.StringIO()
+        before = self._snapshot_output()
 
         try:
             # Syntax check before execution
@@ -417,8 +426,9 @@ class CoderSandbox:
                 )
                 return self._to_sandbox_dict(cr)
 
-            raw = namespace.get("result") or {}
+            raw = namespace.get("result")
             cr = self._parse_result(raw, stdout_capture.getvalue(), time.time() - start)
+            await self._collect_artifacts(cr, before)
             return self._to_sandbox_dict(cr)
 
         except asyncio.TimeoutError:
@@ -476,10 +486,17 @@ class CoderSandbox:
         try:
             with redirect_stdout(stdout_capture):
                 exec(code, namespace)  # noqa: S102
+                entry = None
                 if "main" in namespace and callable(namespace["main"]):
-                    await namespace["main"]()
+                    entry = namespace["main"]
                 elif "run" in namespace and callable(namespace["run"]):
-                    await namespace["run"]()
+                    entry = namespace["run"]
+                if entry is not None:
+                    returned = await entry()
+                    # What the entry point returns is the outcome. Code that
+                    # assigns `result` itself still wins when it returns nothing.
+                    if returned is not None:
+                        namespace["result"] = returned
             return {}
         except Exception as e:
             return {"error": str(e), "error_type": type(e).__name__}
@@ -536,6 +553,29 @@ class CoderSandbox:
             p.parent.mkdir(parents=True, exist_ok=True)
             return p
 
+        storage = self.blob_storage
+
+        async def fetch_artifact(key: str) -> Path:
+            """Bring an artifact from a previous run back into this workspace.
+
+            Long-horizon work needs yesterday's output to still be reachable,
+            wherever the developer configured storage to be.
+            """
+            if storage is None:
+                raise RuntimeError(
+                    "No blob storage is configured, so artifacts from earlier "
+                    "runs cannot be fetched. Configure one on the mesh."
+                )
+            content = await storage.read(key)
+            if content is None:
+                raise FileNotFoundError(f"No artifact stored at {key!r}")
+            local = blob_path(key.rsplit("/", 1)[-1])
+            if isinstance(content, str):
+                local.write_text(content, encoding="utf-8")
+            else:
+                local.write_bytes(content)
+            return local
+
         namespace = {
             "__builtins__": builtins,
             "result": None,
@@ -544,6 +584,7 @@ class CoderSandbox:
             "workspace": workspace,
             "output_dir": output_dir,
             "blob_path": blob_path,
+            "fetch_artifact": fetch_artifact,
 
             # Controlled execution tools
             "bash": bash,
@@ -629,11 +670,60 @@ class CoderSandbox:
             "git_branch":     cr.git_branch,
             "data":           cr.data,
             "stdout":         cr.stdout,
+            "artifacts":      cr.artifacts,
         }
 
     # ─────────────────────────────────────────────────────────────
     # Result Parsing
     # ─────────────────────────────────────────────────────────────
+
+    #: Keys that only this sandbox's result contract uses. `success` and `error`
+    #: are excluded on purpose: atoms return those as part of their own answer.
+    _ENVELOPE_KEYS = frozenset({
+        "files_created", "files_modified", "git_branch", "data", "error_type", "stdout",
+    })
+
+    def _snapshot_output(self) -> Dict[str, float]:
+        """Modification times under output_dir, to tell apart what a run produced."""
+        snapshot = {}
+        for path in self.output_dir.rglob("*"):
+            if path.is_file():
+                snapshot[str(path)] = path.stat().st_mtime_ns
+        return snapshot
+
+    async def _collect_artifacts(self, cr: "CoderResult", before: Dict[str, float]) -> None:
+        """Hand what the run produced to storage, and report it as a handle.
+
+        An agent that downloads a file has to be able to say what it produced
+        and reach it again in a later run. Reporting is observed rather than
+        declared, because code that forgets to list a file has still made one.
+        """
+        after = self._snapshot_output()
+        produced = [p for p, stamp in after.items() if before.get(p) != stamp]
+        if not produced:
+            return
+
+        for path in sorted(produced):
+            local = Path(path)
+            record: Dict[str, Any] = {
+                "name": str(local.relative_to(self.output_dir)),
+                "path": str(local),
+                "bytes": local.stat().st_size,
+                "key": None,
+            }
+            if self.blob_storage is not None:
+                key = f"{self.artifact_prefix}/{record['name']}"
+                try:
+                    await self.blob_storage.save(key, local.read_bytes())
+                    record["key"] = key
+                except Exception as exc:  # noqa: BLE001 - storage must not fail the run
+                    logger.warning("Could not store artifact %s: %s", key, exc)
+                    record["error"] = str(exc)
+            cr.artifacts.append(record)
+            if path not in before:
+                cr.files_created.append(path)
+            elif path not in cr.files_modified:
+                cr.files_modified.append(path)
 
     def _parse_result(
         self,
@@ -658,6 +748,19 @@ class CoderSandbox:
 
         if not isinstance(raw, dict):
             return CoderResult(success=True, data=raw, stdout=stdout, execution_time=elapsed)
+
+        # A dict is only this sandbox's envelope when it carries a key that
+        # belongs to the envelope. An atom returns its own answer shape, often
+        # with `success` and `error` of its own, and reading `data` out of that
+        # would discard the very thing that was asked for.
+        if not (raw.keys() & self._ENVELOPE_KEYS):
+            return CoderResult(
+                success=bool(raw.get("success", True)),
+                data=raw,
+                stdout=stdout,
+                error=raw.get("error"),
+                execution_time=elapsed,
+            )
 
         # Normalise file lists — accept str or list
         def _as_list(val) -> List[str]:
@@ -740,6 +843,8 @@ def create_coder_sandbox(
     timeout: int = 300,
     bash_timeout: int = 120,
     nexus_call_proxy=None,  # Optional[NexusCallProxy] — wires nexus_call() into sandbox
+    blob_storage=None,      # Optional[BlobStorage] — where a run's files end up
+    artifact_prefix: str = "artifacts",
 ) -> CoderSandbox:
     """
     Create a CoderSandbox scoped to the given workspace directory.
@@ -761,4 +866,6 @@ def create_coder_sandbox(
         timeout=timeout,
         bash_timeout=bash_timeout,
         nexus_call_proxy=nexus_call_proxy,
+        blob_storage=blob_storage,
+        artifact_prefix=artifact_prefix,
     )
