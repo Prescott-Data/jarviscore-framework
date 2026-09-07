@@ -26,49 +26,83 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ## Unreleased
 
-### Fixed
+</div>
 
-- Credential placement was guessed, and the two code paths guessed differently.
-  The gateway path sent `X-Api-Key` while the local store path sent
-  `Authorization: Bearer`, so which header a provider received depended on
-  whether the gateway happened to be reachable. Both paths now apply one
-  strategy, and placement is recorded per provider.
-- `resolve_strategy` read the auth type from the wrong key. The gateway returns
-  it nested under `strategy`, so every connection resolved as `oauth2` and
-  received a bearer header regardless of its real type.
-- `jarviscore nexus register` rejected any provider missing from the built-in
-  catalog, which limited registration to 22 providers even though the framework
-  ships atoms for 150. The catalog is now defaults only, and any provider can be
-  registered.
-- The coder registered sandbox scripts as atoms after a successful run, which
-  put entries in the catalog that could not be called, named from the task text,
-  and promoted them on a success that had not happened.
+---
+
+<div class="changelog-release" markdown>
+
+## 1.9.0 <span class="changelog-date">2026-09-07</span>
+
+The shipped atom catalogue is callable. It was loaded but unusable: the atoms
+took a raw credential dict and built their own headers, and no caller for that
+shape existed, so agents rewrote integrations that were already on disk.
 
 ### Added
 
+- The atom catalogue is seeded when the registry is empty, so the Kernel's
+  registry-first search and the coder's `check_registry` find what ships.
+- 1,174 atoms across 150 providers migrated onto `nexus_call`. An atom is now
+  `async def`, authenticates through the call proxy, and returns provider errors
+  rather than raising them. The credential never appears in the atom, so proving
+  one works is running it.
+- An atom for the connected system arrives as a tool, the way every other tool
+  does, rather than something the agent has to remember to look for.
 - `--auth-type`, `--header-name`, `--value-prefix`, `--param-name` and
   `--credential-field` on `jarviscore nexus register`, so a provider that uses
   `SSWS`, `Zoho-oauthtoken`, `PRIVATE-TOKEN`, `X-API-KEY` or a query parameter
   can be registered without a code change.
+- Files written in the sandbox reach blob storage and come back as a durable
+  handle, so an agent can read in a later run what it produced in an earlier
+  one. Which backend that is remains the developer's choice.
+
+### Fixed
+
+- **Agent results were discarded.** The sandbox awaited `main()` and threw away
+  its return value, so a run that succeeded reported "finished without returning
+  any content". A returned dict was then read as the sandbox's own envelope, so
+  an atom's payload vanished unless it happened to use a key named `data`.
+- **Credential placement was guessed, and the two paths guessed differently.**
+  The gateway path sent `X-Api-Key` while the local store path sent
+  `Authorization: Bearer`, so which header a provider received depended on
+  whether the gateway happened to be reachable. Both paths now apply one
+  strategy, and placement is recorded per provider.
+- `resolve_strategy` read the auth type from the wrong key. The gateway nests it
+  under `strategy`, so every connection resolved as `oauth2` and received a
+  bearer header regardless of its real type.
+- The local store passed a client secret off as an access token. Registering a
+  provider's app is not the same as connecting an account, and saying otherwise
+  turned a missing consent step into an opaque 401 inside an agent run.
 - An API key registered without a stated location is refused with the flag to
   add, rather than sent as a bearer token the provider ignores.
+- `jarviscore nexus register` rejected any provider missing from the built-in
+  catalog, limiting registration to 22 providers while the framework ships atoms
+  for 150. The catalog is defaults; flags override it.
+- The coder registered sandbox scripts as atoms after a successful run, putting
+  entries in the catalog that could not be called, named from the task text, and
+  promoting them on a success that had not happened.
+- `google_drive` and `kra` each shipped atoms twice under different filenames,
+  both files defining the same function. The catalogue advertised 1,224 where
+  1,218 exist.
 
 ### Changed
 
-- HubSpot and Serper atoms now authenticate with `nexus_call` and are offered to
-  agents as callable capabilities. A capability call loads the atom and runs it
-  in the sandbox, so proving an atom is running it. Atoms still on the earlier
-  `auth_info` shape remain catalogued as reference and are not offered.
-- The local Nexus stack pins `nexus-broker` and `nexus-gateway` to a release
-  rather than following `latest`, so an upgrade is a decision. From v0.3.0 the
-  broker carries its own migrations and applies them on boot, so JarvisCore no
-  longer ships a copy of the broker's schema or mounts one into Postgres. That
-  copy was the source of registration failures naming a column that did not
-  exist.
-- The bundled Nexus stack no longer expects a Redis container from another
-  compose project, publishes its ports through `NEXUS_BROKER_PORT` and
-  `NEXUS_GATEWAY_PORT` so it can coexist with other services, and tells the
-  broker its own address so OAuth redirect URIs are absolute.
+- The bundled Nexus stack stands on its own: it ships its own Redis instead of
+  expecting a container from another compose project, publishes its ports
+  through `NEXUS_BROKER_PORT` and `NEXUS_GATEWAY_PORT` so it can coexist with
+  other services, and tells the broker its own address so OAuth redirect URIs
+  are absolute rather than relative.
+- `nexus-broker` and `nexus-gateway` are pinned to a release rather than
+  following `latest`, so an upgrade is a decision. From broker v0.3.0 the broker
+  carries and applies its own migrations, so JarvisCore no longer ships a copy of
+  its schema. That copy is what drifted, surfacing as registration failures
+  naming a column that did not exist.
+
+### Note for contributors
+
+44 atoms across 11 providers still take `auth_info`. Each needs account
+configuration, such as a tenant URL, turned into a parameter before it can move.
+They are pinned in `tests/test_atom_corpus.py` so the number can only fall.
 
 </div>
 
