@@ -1,0 +1,551 @@
+{
+  "activecampaign": [
+    "developers.activecampaign.com",
+    "{}.api-{}.com"
+  ],
+  "africas_talking": [
+    "api.africastalking.com",
+    "api.sandbox.africastalking.com",
+    "developers.africastalking.com"
+  ],
+  "agilecrm": [
+    "github.com",
+    "{}.agilecrm.com"
+  ],
+  "airtable": [
+    "api.airtable.com"
+  ],
+  "amazon_s3": [
+    "docs.aws.amazon.com",
+    "{bucket}.s3.{region}.amazonaws.com"
+  ],
+  "amplitude": [
+    "amplitude.com",
+    "analytics.eu.amplitude.com",
+    "api.eu.amplitude.com",
+    "api2.amplitude.com",
+    "www.docs.developers.amplitude.com"
+  ],
+  "apollo": [
+    "api.apollo.io"
+  ],
+  "asana": [
+    "app.asana.com",
+    "developers.asana.com"
+  ],
+  "assembla": [
+    "api-docs.assembla.cc",
+    "api.assembla.com"
+  ],
+  "attio": [
+    "api.attio.com",
+    "docs.attio.com"
+  ],
+  "azure_storage": [
+    "{}.blob.core.windows.net"
+  ],
+  "backblaze_b2": [
+    "api.backblazeb2.com",
+    "www.backblaze.com"
+  ],
+  "bamboo": [
+    "api.atlassian.com"
+  ],
+  "beanstalk": [
+    "api.beanstalkapp.com",
+    "{account}.beanstalkapp.com)",
+    "{}.beanstalkapp.com"
+  ],
+  "box": [
+    "api.box.com",
+    "developer.box.com",
+    "upload.box.com"
+  ],
+  "brevo": [
+    "api.brevo.com"
+  ],
+  "capsulecrm": [
+    "api.capsulecrm.com",
+    "developer.capsulecrm.com"
+  ],
+  "circleci": [
+    "circleci.com"
+  ],
+  "clickup": [
+    "api.clickup.com"
+  ],
+  "close": [
+    "api.close.com",
+    "developer.close.com"
+  ],
+  "coda": [
+    "coda.io"
+  ],
+  "confluence": [
+    "api.atlassian.com"
+  ],
+  "crisp": [
+    "api.crisp.chat",
+    "docs.crisp.chat"
+  ],
+  "discord": [
+    "discord.com"
+  ],
+  "drift": [
+    "api.drift.com",
+    "devdocs.drift.com",
+    "driftapi.com"
+  ],
+  "dropbox": [
+    "api.dropboxapi.com",
+    "content.dropboxapi.com"
+  ],
+  "dropbox_sign": [
+    "api.hellosign.com",
+    "developers.hellosign.com"
+  ],
+  "egnyte": [
+    "developers.egnyte.com",
+    "{domain}.egnyte.com"
+  ],
+  "etsy": [
+    "developers.etsy.com",
+    "openapi.etsy.com"
+  ],
+  "folk": [
+    "api.folk.app",
+    "api.folk.app)",
+    "developer.folk.app"
+  ],
+  "freedcamp": [
+    "freedcamp.com"
+  ],
+  "freshbooks": [
+    "api.freshbooks.com"
+  ],
+  "freshchat": [
+    "developers.freshchat.com",
+    "{domain}.freshchat.com"
+  ],
+  "freshsales": [
+    "developers.freshworks.com",
+    "{domain}.myfreshworks.com"
+  ],
+  "fullstory": [
+    "api.fullstory.com",
+    "api.fullstory.com)",
+    "developer.fullstory.com"
+  ],
+  "gcs": [
+    "cloud.google.com",
+    "storage.googleapis.com"
+  ],
+  "github": [
+    "api.github.com"
+  ],
+  "gitlab": [
+    "docs.gitlab.com",
+    "gitlab.com"
+  ],
+  "gmail": [
+    "gmail.googleapis.com"
+  ],
+  "google_ads": [
+    "developers.google.com",
+    "googleads.googleapis.com"
+  ],
+  "google_analytics": [
+    "analyticsadmin.googleapis.com",
+    "analyticsdata.googleapis.com",
+    "developers.google.com"
+  ],
+  "google_calendar": [
+    "www.googleapis.com"
+  ],
+  "google_chat": [
+    "chat.googleapis.com",
+    "developers.google.com"
+  ],
+  "google_drive": [
+    "www.googleapis.com"
+  ],
+  "google_maps": [
+    "developers.google.com",
+    "places.googleapis.com"
+  ],
+  "google_people": [
+    "developers.google.com",
+    "people.googleapis.com"
+  ],
+  "google_sheets": [
+    "sheets.googleapis.com"
+  ],
+  "gorgias": [
+    "developers.gorgias.com",
+    "your-domain.gorgias.com",
+    "{domain}.gorgias.com"
+  ],
+  "height": [
+    "api.height.app",
+    "height.app"
+  ],
+  "hubspot": [
+    "api.hubapi.com"
+  ],
+  "infobip": [
+    "api.infobip.com",
+    "www.infobip.com"
+  ],
+  "insightly": [
+    "api.na1.insightly.com",
+    "api.{pod}.insightly.com"
+  ],
+  "intercom": [
+    "api.intercom.io",
+    "developers.intercom.com"
+  ],
+  "jenkins": [
+    "jenkins.example.com)",
+    "www.jenkins.io"
+  ],
+  "jira": [
+    "api.atlassian.com"
+  ],
+  "jumia_seller_center": [
+    "sellerapi.sellercenter.jumia.com",
+    "sellerapi.sellercenter.jumia.com)"
+  ],
+  "keap": [
+    "api.infusionsoft.com",
+    "developer.keap.com"
+  ],
+  "kissmetrics": [
+    "query.kissmetrics.io",
+    "support.kissmetrics.io",
+    "www.kissmetrics.io"
+  ],
+  "klaviyo": [
+    "a.klaviyo.com",
+    "developers.klaviyo.com"
+  ],
+  "kra": [
+    "sbx.kra.go.ke"
+  ],
+  "less_annoying_crm": [
+    "account.lessannoyingcrm.com",
+    "api.lessannoyingcrm.com"
+  ],
+  "linear": [
+    "api.linear.app"
+  ],
+  "linkedin": [
+    "api.linkedin.com",
+    "www.linkedin.com"
+  ],
+  "linkedin_ads": [
+    "api.linkedin.com"
+  ],
+  "liquidplanner": [
+    "app.liquidplanner.com",
+    "developer.liquidplanner.com"
+  ],
+  "livechat": [
+    "api.livechatinc.com",
+    "platform.text.com"
+  ],
+  "logrocket": [
+    "api.logrocket.com",
+    "docs.logrocket.com"
+  ],
+  "mailchimp": [
+    "{}.api.mailchimp.com"
+  ],
+  "matomo": [
+    "developer.matomo.org"
+  ],
+  "mattermost": [
+    "api.mattermost.com"
+  ],
+  "mixpanel": [
+    "api.mixpanel.com",
+    "data.mixpanel.com",
+    "developer.mixpanel.com",
+    "mixpanel.com"
+  ],
+  "monday": [
+    "api.monday.com",
+    "developer.monday.com"
+  ],
+  "msgraph": [
+    "graph.microsoft.com"
+  ],
+  "netsuite": [
+    "{}.suitetalk.api.netsuite.com"
+  ],
+  "nifty": [
+    "developers.niftypm.com",
+    "openapi.niftypm.com"
+  ],
+  "nimble": [
+    "api.nimble.com",
+    "app.nimble.com",
+    "www.nimble.com"
+  ],
+  "notion": [
+    "api.notion.com"
+  ],
+  "nutshell": [
+    "app.nutshell.com",
+    "developers-rpc.nutshell.com"
+  ],
+  "okta": [
+    "developer.okta.com",
+    "{youroktadomain}"
+  ],
+  "openmrs": [
+    "o2.openmrs.org"
+  ],
+  "pagerduty": [
+    "api.pagerduty.com",
+    "api.pagerduty.com)",
+    "developer.pagerduty.com"
+  ],
+  "paystack": [
+    "api.paystack.co",
+    "api.paystack.co)",
+    "paystack.com"
+  ],
+  "pendo": [
+    "app.pendo.io",
+    "engageapi.pendo.io",
+    "support.pendo.io",
+    "www.pendo.io"
+  ],
+  "perforce": [
+    "help.perforce.com",
+    "my-swarm-host"
+  ],
+  "phabricator": [
+    "phabricator.example.com)",
+    "secure.phabricator.com"
+  ],
+  "pipedrive": [
+    "company.pipedrive.com)",
+    "developers.pipedrive.com"
+  ],
+  "pivotal_tracker": [
+    "www.pivotaltracker.com"
+  ],
+  "plausible": [
+    "plausible.io"
+  ],
+  "podio": [
+    "api.podio.com",
+    "developers.podio.com"
+  ],
+  "posthog": [
+    "eu.i.posthog.com",
+    "posthog.com",
+    "us.i.posthog.com",
+    "us.posthog.com"
+  ],
+  "prembly": [
+    "api.prembly.com",
+    "docs.prembly.com"
+  ],
+  "prestashop": [
+    "devdocs.prestashop-project.org",
+    "shop.example.com",
+    "www.w3.org"
+  ],
+  "proofhub": [
+    "company.proofhub.com",
+    "github.com"
+  ],
+  "quickbooks": [
+    "quickbooks.api.intuit.com"
+  ],
+  "reddit": [
+    "oauth.reddit.com"
+  ],
+  "reddit_ads": [
+    "ads-api.reddit.com"
+  ],
+  "rocket_chat": [
+    "developer.rocket.chat"
+  ],
+  "safaricom_mpesa": [
+    "developer.safaricom.co.ke",
+    "sandbox.safaricom.co.ke"
+  ],
+  "sage_business_cloud_accounting": [
+    "api.accounting.sage.com",
+    "developer.sage.com"
+  ],
+  "sage_pastel": [
+    "accounting.sageone.co.za"
+  ],
+  "salesflare": [
+    "api.salesflare.com"
+  ],
+  "sap": [
+    "{}.s4hana.ondemand.com"
+  ],
+  "segment": [
+    "api.segmentapis.com",
+    "segment.com"
+  ],
+  "sendgrid": [
+    "api.sendgrid.com"
+  ],
+  "serper": [
+    "google.serper.dev"
+  ],
+  "shift4shop": [
+    "developers.3dcart.com",
+    "store.example.com)"
+  ],
+  "shopify": [
+    "shopify.dev",
+    "{shop}.myshopify.com)",
+    "{}.myshopify.com"
+  ],
+  "shortcut": [
+    "api.app.shortcut.com",
+    "developer.shortcut.com"
+  ],
+  "simplepay": [
+    "api.payroll.simplepay.cloud",
+    "www.simplepay.co.za"
+  ],
+  "slack": [
+    "slack.com"
+  ],
+  "snapchat_ads": [
+    "adsapi.snapchat.com",
+    "marketingapi.snapchat.com"
+  ],
+  "sourceforge": [
+    "sourceforge.net"
+  ],
+  "sourcegraph": [
+    "docs.sourcegraph.com",
+    "sourcegraph.example.com)"
+  ],
+  "square": [
+    "connect.squareup.com",
+    "developer.squareup.com"
+  ],
+  "streak": [
+    "streak.com",
+    "www.streak.com"
+  ],
+  "stripe": [
+    "api.stripe.com"
+  ],
+  "targetprocess": [
+    "dev.targetprocess.com",
+    "example.tpondemand.com",
+    "{account}.tpondemand.com"
+  ],
+  "tawkto": [
+    "api.tawk.to",
+    "developer.tawk.to"
+  ],
+  "teamcity": [
+    "teamcity.example.com)",
+    "www.jetbrains.com"
+  ],
+  "telegram": [
+    "core.telegram.org"
+  ],
+  "tiktok_ads": [
+    "business-api.tiktok.com"
+  ],
+  "todoist": [
+    "api.todoist.com"
+  ],
+  "travis_ci": [
+    "api.travis-ci.com",
+    "developer.travis-ci.com"
+  ],
+  "trello": [
+    "api.trello.com",
+    "developer.atlassian.com"
+  ],
+  "twilio": [
+    "api.twilio.com",
+    "www.twilio.com"
+  ],
+  "twitter": [
+    "api.twitter.com"
+  ],
+  "twitter_ads": [
+    "ads-api.x.com",
+    "developer.x.com"
+  ],
+  "wave_accounting": [
+    "developer.waveapps.com",
+    "gql.waveapps.com"
+  ],
+  "webex": [
+    "webexapis.com"
+  ],
+  "what3words": [
+    "api.what3words.com",
+    "developer.what3words.com"
+  ],
+  "whatsapp_business": [
+    "developers.facebook.com",
+    "graph.facebook.com"
+  ],
+  "wix_stores": [
+    "dev.wix.com",
+    "www.wixapis.com"
+  ],
+  "woocommerce": [
+    "example.com",
+    "woocommerce.github.io"
+  ],
+  "wordpress": [
+    "developer.wordpress.org",
+    "example.com"
+  ],
+  "workfront": [
+    "developer.adobe.com",
+    "example.my.workfront.com"
+  ],
+  "wrike": [
+    "developers.wrike.com",
+    "www.wrike.com"
+  ],
+  "xero": [
+    "api.xero.com",
+    "developer.xero.com"
+  ],
+  "youtube": [
+    "www.googleapis.com"
+  ],
+  "zendesk_chat": [
+    "developer.zendesk.com"
+  ],
+  "zoho_books": [
+    "www.zohoapis.com"
+  ],
+  "zoho_crm": [
+    "www.zoho.com",
+    "www.zohoapis.com"
+  ],
+  "zoho_desk": [
+    "desk.zoho.com"
+  ],
+  "zoho_people": [
+    "people.zoho.com"
+  ],
+  "zoho_shifts": [
+    "shifts.zoho.com"
+  ],
+  "zoom": [
+    "api.zoom.us"
+  ]
+}

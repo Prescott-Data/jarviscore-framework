@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from .strategy import apply_strategy
+from .hosts import ensure_host_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,15 @@ class NexusCallProxy:
             auth_manager: jarviscore.auth.manager.AuthenticationManager instance.
         """
         self._auth = auth_manager
+
+    def _provider_for(self, connection_id: str) -> str:
+        """The provider behind an opaque handle, so its hosts can be checked."""
+        connections = getattr(self._auth, "_connections", None) or {}
+        for provider, cid in connections.items():
+            if cid == connection_id:
+                return str(provider).lower()
+        # Local-vault mode: the handle is the provider name ("github:user123").
+        return connection_id.split(":")[0].lower()
 
     async def call(
         self,
@@ -91,6 +101,12 @@ class NexusCallProxy:
         from jarviscore.nexus.client import NexusClient
         from jarviscore.nexus.store import get_store
 
+        store = get_store()
+        provider = self._provider_for(connection_id)
+        # Before a credential is placed, not after: the destination is chosen by
+        # generated code, so it is the least trustworthy part of the request.
+        ensure_host_allowed(provider, url, store.get(provider))
+
         strategy = None
         request_kwargs = None
 
@@ -109,9 +125,6 @@ class NexusCallProxy:
 
         # ── Local store fallback (zero-dep mode) ──────────────────────────────
         if request_kwargs is None:
-            store = get_store()
-            # connection_id is treated as provider name in local mode
-            provider = connection_id.split(":")[0].lower()   # e.g. "github:user123" → "github"
             strategy = store.build_strategy(provider)
             if strategy is None:
                 raise RuntimeError(
