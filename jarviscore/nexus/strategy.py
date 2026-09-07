@@ -122,3 +122,19 @@ def apply_strategy(
     credential = _credential(strategy, placement["credential_field"])
     headers[placement["header_name"]] = f"{placement['value_prefix']}{credential}"
     return {"method": method, "url": url, "headers": headers, **kwargs}
+
+
+def unmet_requirement(strategy: Optional[DynamicStrategy]) -> Optional[str]:
+    """Why this strategy could not authenticate a request, or None if it can.
+
+    Answered by dry-running the real placement rather than restating its rules:
+    a second opinion about which credentials suffice is a second opinion that
+    can drift from the code that actually performs the call.
+    """
+    if strategy is None:
+        return "no credentials are registered for this provider"
+    try:
+        apply_strategy(strategy, "GET", "https://example.invalid/")
+    except StrategyError as exc:
+        return str(exc)
+    return None
