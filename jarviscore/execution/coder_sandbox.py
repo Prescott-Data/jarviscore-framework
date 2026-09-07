@@ -45,6 +45,49 @@ logger = logging.getLogger(__name__)
 # Result Model
 # ─────────────────────────────────────────────────────────────────
 
+class _SealedEnviron(dict):
+    """The process environment, withheld from generated code.
+
+    Empty rather than absent so ordinary lookups return nothing instead of
+    crashing, and explicit about why on any attempt to read a name.
+    """
+
+    def __getitem__(self, key):
+        raise KeyError(
+            f"{key!r}: the process environment is not readable from here. "
+            "Credentials are attached by nexus_call outside the sandbox, so "
+            "nothing in here needs them."
+        )
+
+
+class _SealedOS:
+    """`os` with the environment withheld from the injected namespace.
+
+    The real module handed generated code NEXUS_ENCRYPTION_KEY, the key the
+    credential vault is encrypted with, alongside every other secret this process
+    holds, and an agent duly listed them into a user-facing answer.
+
+    This is a guard rail, not a boundary: the sandbox executes in-process, so
+    `import os` still reaches the real environment. Closing that needs the
+    generated code to run somewhere without the secrets, which is process
+    isolation, not a namespace substitution.
+    """
+
+    environ = _SealedEnviron()
+    environb = _SealedEnviron()
+
+    @staticmethod
+    def getenv(key, default=None):
+        return default
+
+    @staticmethod
+    def putenv(*args, **kwargs):
+        raise PermissionError("The process environment cannot be changed from here.")
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+
 @dataclass
 class CoderResult:
     """Structured result from a CoderSandbox execution."""
@@ -58,6 +101,10 @@ class CoderResult:
     error_type: Optional[str] = None
     execution_time: float = 0.0
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    #: What the credential boundary refused, if it refused. Recorded there rather
+    #: than read back out of a message, because generated code catches broadly and
+    #: a stringified exception loses the only reliable statement of what happened.
+    access_failure: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict:
         return {
@@ -69,6 +116,7 @@ class CoderResult:
             "data": self.data,
             "error": self.error,
             "error_type": self.error_type,
+            "access_failure": self.access_failure,
             "execution_time": self.execution_time,
             "artifacts": self.artifacts,
         }
@@ -381,6 +429,7 @@ class CoderSandbox:
         timeout = timeout or self.timeout
         start = time.time()
 
+        self._access_failure = None
         namespace = self._build_namespace(context)
         stdout_capture = io.StringIO()
         before = self._snapshot_output()
@@ -593,7 +642,7 @@ class CoderSandbox:
             # Standard library convenience
             "Path": pathlib.Path,
             "json": json,
-            "os": os,
+            "os": _SealedOS(),
             "re": _re,
             "sys": sys,
             "datetime": datetime,
@@ -612,15 +661,18 @@ class CoderSandbox:
         _conn_id = (context or {}).get("_nexus_connection_id") if context else None
         if self._nexus_call_proxy and _conn_id:
             from jarviscore.nexus.call_proxy import NexusCallProxy
-            namespace["nexus_call"] = NexusCallProxy.make_nexus_call_fn(
-                self._nexus_call_proxy, _conn_id
+            namespace["nexus_call"] = self._recording_nexus_call(
+                NexusCallProxy.make_nexus_call_fn(self._nexus_call_proxy, _conn_id),
+                str((context or {}).get("_nexus_provider") or _conn_id),
             )
         else:
             # No Nexus connection available — inject a stub that raises clearly
             async def _nexus_unavailable(method: str, url: str, **kwargs):
                 raise RuntimeError(
-                    "nexus_call is not available: no Nexus connection_id for this task. "
-                    "Ensure NEXUS_GATEWAY_URL is set and the agent task specifies a 'system'."
+                    "No provider account is connected for this task, so this call "
+                    "cannot be signed. Name the provider you need with "
+                    "write_code(system=...), and if it is registered but not yet "
+                    "connected, request_access will ask someone to approve it."
                 )
             namespace["nexus_call"] = _nexus_unavailable
 
@@ -655,6 +707,7 @@ class CoderSandbox:
         We satisfy that contract while also promoting CoderResult-specific
         fields to the top level so Coder.execute_task() can read them directly.
         """
+        cr.access_failure = cr.access_failure or getattr(self, "_access_failure", None)
         d = cr.to_dict()
         return {
             # SandboxExecutor contract (what CoderSubAgent reads)
@@ -662,6 +715,7 @@ class CoderSandbox:
             "output":         d,           # full CoderResult dict lives here
             "error":          cr.error,
             "error_type":     cr.error_type,
+            "access_failure": cr.access_failure,
             "execution_time": cr.execution_time,
             "mode":           "coder_sandbox",
             # Promoted fields (convenience for Coder.execute_task())
@@ -672,6 +726,42 @@ class CoderSandbox:
             "stdout":         cr.stdout,
             "artifacts":      cr.artifacts,
         }
+
+    def _recording_nexus_call(self, call_fn, provider: str):
+        """Wrap nexus_call so a refusal at the credential boundary is kept as fact."""
+        from jarviscore.nexus.hosts import HostNotAllowed
+        from jarviscore.nexus.strategy import StrategyError
+
+        async def nexus_call(method: str, url: str, **kwargs):
+            try:
+                response = await call_fn(method, url, **kwargs)
+            except StrategyError as exc:
+                self._access_failure = {
+                    "kind": "no_usable_credential",
+                    "provider": provider,
+                    "detail": str(exc),
+                }
+                raise
+            except HostNotAllowed as exc:
+                self._access_failure = {
+                    "kind": "destination_not_owned_by_provider",
+                    "provider": provider,
+                    "detail": str(exc),
+                }
+                raise
+            if not response.get("ok") and response.get("status_code") in (401, 403):
+                # Evidence, not a verdict: the credential was formed and placed,
+                # and the provider rejected it. What that means is decided with
+                # the connection state, not here.
+                self._access_failure = {
+                    "kind": "provider_rejected_credential",
+                    "provider": provider,
+                    "status_code": response.get("status_code"),
+                    "detail": str(response.get("body") or "")[:400],
+                }
+            return response
+
+        return nexus_call
 
     # ─────────────────────────────────────────────────────────────
     # Result Parsing

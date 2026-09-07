@@ -42,6 +42,16 @@ from typing import Any, Callable, Dict, List, Optional, Set, Union
 
 logger = logging.getLogger(__name__)
 
+#: Words that appear in almost any task and so separate nothing. Scored equally
+#: with real terms before, which is how "a" and "is" outranked "slack".
+_NON_DISCRIMINATING = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "get", "has",
+    "have", "how", "in", "into", "is", "it", "its", "me", "my", "of", "on", "or",
+    "our", "out", "please", "so", "that", "the", "their", "them", "then", "there",
+    "these", "they", "this", "to", "up", "us", "was", "we", "were", "what", "when",
+    "which", "who", "why", "with", "you", "your",
+})
+
 
 # ─────────────────────────────────────────────────────────────────
 # Function Status Enum
@@ -699,7 +709,13 @@ class FunctionRegistry:
 
     def semantic_search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
-        Full-text search across function metadata fields.
+        Rank functions by word overlap with the query.
+
+        Lexical, despite the name: it counts query words appearing in the stored
+        metadata. That is serviceable for ordering atoms *within* a provider, and
+        must not be used to choose the provider itself — the terms are matched as
+        substrings, so a single letter scores as highly as the subject of the
+        task, and "crm" scores inside the vendor name "agilecrm".
 
         Searches: name, description, system, capabilities, tags.
 
@@ -710,7 +726,7 @@ class FunctionRegistry:
         Returns:
             List of matching metadata dicts, sorted by relevance
         """
-        terms = query.lower().split()
+        terms = [t for t in query.lower().split() if t not in _NON_DISCRIMINATING]
         matches = []
 
         for name, metadata in self.function_metadata.items():
@@ -723,11 +739,12 @@ class FunctionRegistry:
                 " ".join(metadata.get("tags", [])).lower(),
             ]
             searchable = " ".join(searchable_parts)
+            name_words = set(re.split(r"[^a-z0-9]+", name.lower()))
 
             score = 0
             for term in terms:
-                if term in name.lower():
-                    score += 3  # Name match is highest
+                if term in name_words:
+                    score += 3  # Whole-word name match is highest
                 elif term in (metadata.get("system") or "").lower():
                     score += 2  # System match
                 elif term in searchable:

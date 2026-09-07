@@ -9,7 +9,7 @@ import json
 
 import pytest
 from jarviscore.kernel.defaults import CoderSubAgent, ResearcherSubAgent, CommunicatorSubAgent
-from jarviscore.kernel.defaults.coder import classify_auth_error
+from jarviscore.kernel.defaults.coder import classify_access_failure
 from jarviscore.testing import MockLLMClient, MockSandboxExecutor
 
 
@@ -152,12 +152,38 @@ class TestCoderSubAgent:
 
     @pytest.mark.asyncio
     async def test_execute_code_classifies_auth_error(self, mock_llm, mock_sandbox):
+        """The verdict rides on what the boundary recorded, not the message text."""
         mock_sandbox.responses = [
-            {"status": "failure", "output": None, "error": "Token expired for API", "execution_time": 0.1}
+            {
+                "status": "failure",
+                "output": None,
+                "error": "the call did not complete",
+                "access_failure": {
+                    "kind": "no_usable_credential", "provider": "slack",
+                },
+                "execution_time": 0.1,
+            }
         ]
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, sandbox=mock_sandbox)
         result = await coder._tool_execute_code(code="api_call()")
-        assert result["auth_error_type"] == "expired_token"
+        assert result["auth_error_type"] == "missing_auth"
+        assert result["hitl_required"] is True
+
+    @pytest.mark.asyncio
+    async def test_execute_code_does_not_invent_an_auth_error(self, mock_llm, mock_sandbox):
+        """A failure that never touched the credential boundary is not an auth failure."""
+        mock_sandbox.responses = [
+            {
+                "status": "failure",
+                "output": None,
+                "error": "Created 401 contacts but then hit a bug",
+                "execution_time": 0.1,
+            }
+        ]
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, sandbox=mock_sandbox)
+        result = await coder._tool_execute_code(code="api_call()")
+        assert "auth_error_type" not in result
+        assert "hitl_required" not in result
 
     @pytest.mark.asyncio
     async def test_full_run_done_immediately(self, mock_llm):
@@ -458,26 +484,32 @@ class TestCommunicatorSubAgent:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Auth Error Classification Tests
+# Auth Outcome Tests
 # ══════════════════════════════════════════════════════════════════════
 
-class TestAuthErrorClassification:
-    """Tests for classify_auth_error utility."""
+class TestAccessFailureClassification:
+    """The verdict comes from the credential boundary, not from message text."""
 
-    def test_expired_token(self):
-        assert classify_auth_error("Token expired for this request") == "expired_token"
+    def test_no_usable_credential_is_an_access_grant_a_human_can_give(self):
+        failure = {"kind": "no_usable_credential", "provider": "slack"}
+        assert classify_access_failure(failure) == "missing_auth"
 
-    def test_missing_auth(self):
-        assert classify_auth_error("Authentication required") == "missing_auth"
+    def test_a_rejected_credential_we_hold_reads_as_gone_stale(self):
+        failure = {"kind": "provider_rejected_credential", "status_code": 401}
+        assert classify_access_failure(failure, "connected") == "expired_token"
 
-    def test_invalid_token(self):
-        assert classify_auth_error("Invalid token provided") == "invalid_token"
+    def test_a_rejection_without_a_connection_reads_as_never_connected(self):
+        failure = {"kind": "provider_rejected_credential", "status_code": 401}
+        assert classify_access_failure(failure, "registered") == "missing_auth"
 
-    def test_permission_denied(self):
-        assert classify_auth_error("Access denied: insufficient scope") == "permission_denied"
+    def test_a_wrong_destination_is_not_an_auth_problem(self):
+        """No credential a human can grant fixes calling the wrong provider."""
+        failure = {"kind": "destination_not_owned_by_provider", "provider": "hubspot"}
+        assert classify_access_failure(failure) is None
 
-    def test_unrelated_error(self):
-        assert classify_auth_error("Connection timeout") is None
+    def test_nothing_recorded_means_no_auth_verdict(self):
+        assert classify_access_failure(None) is None
 
-    def test_case_insensitive(self):
-        assert classify_auth_error("TOKEN EXPIRED") == "expired_token"
+    def test_a_success_message_mentioning_401_is_not_an_auth_failure(self):
+        """'Created 401 contacts successfully' used to escalate to a human."""
+        assert classify_access_failure(None) is None

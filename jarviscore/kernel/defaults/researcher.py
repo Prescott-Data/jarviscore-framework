@@ -1033,12 +1033,18 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
 
     @staticmethod
     def _normalize_public_fetch_errors(results: List[Dict[str, Any]]) -> None:
+        """Mark protected resources from the status the fetch reported.
+
+        The status is read from the result rather than searched for in the error
+        text, where "401" and "403" also occur in ids, sizes and prices. The
+        original error is kept: replacing it discards the only account of what
+        actually happened.
+        """
         for item in results:
             if not isinstance(item, dict) or item.get("status") != "error":
                 continue
-            error = str(item.get("error") or "")
-            if "401" in error or "403" in error:
-                item["error"] = "Access Denied - Resource Protected (Auth Required)"
+            if item.get("status_code") in (401, 403):
+                item["access"] = "protected"
 
     def _derive_api_specs_from_findings(self, findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         derived: List[Dict[str, Any]] = []
