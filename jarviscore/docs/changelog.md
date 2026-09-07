@@ -24,6 +24,58 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## Unreleased
+
+### Fixed
+
+- Credential placement was guessed, and the two code paths guessed differently.
+  The gateway path sent `X-Api-Key` while the local store path sent
+  `Authorization: Bearer`, so which header a provider received depended on
+  whether the gateway happened to be reachable. Both paths now apply one
+  strategy, and placement is recorded per provider.
+- `resolve_strategy` read the auth type from the wrong key. The gateway returns
+  it nested under `strategy`, so every connection resolved as `oauth2` and
+  received a bearer header regardless of its real type.
+- `jarviscore nexus register` rejected any provider missing from the built-in
+  catalog, which limited registration to 22 providers even though the framework
+  ships atoms for 150. The catalog is now defaults only, and any provider can be
+  registered.
+- The coder registered sandbox scripts as atoms after a successful run, which
+  put entries in the catalog that could not be called, named from the task text,
+  and promoted them on a success that had not happened.
+
+### Added
+
+- `--auth-type`, `--header-name`, `--value-prefix`, `--param-name` and
+  `--credential-field` on `jarviscore nexus register`, so a provider that uses
+  `SSWS`, `Zoho-oauthtoken`, `PRIVATE-TOKEN`, `X-API-KEY` or a query parameter
+  can be registered without a code change.
+- An API key registered without a stated location is refused with the flag to
+  add, rather than sent as a bearer token the provider ignores.
+
+### Changed
+
+- HubSpot and Serper atoms now authenticate with `nexus_call` and are offered to
+  agents as callable capabilities. A capability call loads the atom and runs it
+  in the sandbox, so proving an atom is running it. Atoms still on the earlier
+  `auth_info` shape remain catalogued as reference and are not offered.
+- The local Nexus stack pins `nexus-broker` and `nexus-gateway` to a release
+  rather than following `latest`, so an upgrade is a decision. From v0.3.0 the
+  broker carries its own migrations and applies them on boot, so JarvisCore no
+  longer ships a copy of the broker's schema or mounts one into Postgres. That
+  copy was the source of registration failures naming a column that did not
+  exist.
+- The bundled Nexus stack no longer expects a Redis container from another
+  compose project, publishes its ports through `NEXUS_BROKER_PORT` and
+  `NEXUS_GATEWAY_PORT` so it can coexist with other services, and tells the
+  broker its own address so OAuth redirect URIs are absolute.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
 ## 1.8.0 <span class="changelog-date">2026-09-06</span>
 
 !!! warning "1.6.0 and 1.7.0 were tagged but never published to PyPI"
