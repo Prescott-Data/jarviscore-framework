@@ -46,17 +46,47 @@ def _kernel(router, *, vault=None):
 
 @pytest.fixture
 def local_vault(monkeypatch):
-    """Stand in for the Nexus local store."""
-    registered = set()
+    """Stand in for the Nexus local store.
+
+    Models the distinction the real store draws: holding a provider's app is not
+    the same as holding a credential that can sign a call for it.
+    """
+    from jarviscore.nexus.store import ConnectionState
 
     class Store:
-        def get(self, name):
-            return {"token": "..."} if name in registered else None
+        def __init__(self):
+            self._connected = set()
+            self._unconsented = set()
 
+        def add(self, name):
+            self._connected.add(name)
+
+        def awaiting_consent(self, name):
+            self._unconsented.add(name)
+
+        def list(self):
+            return sorted(self._connected | self._unconsented)
+
+        def get(self, name):
+            if name in self._connected or name in self._unconsented:
+                return {"token": "..."}
+            return None
+
+        def connection_state(self, name):
+            if name in self._connected:
+                return ConnectionState.CONNECTED
+            if name in self._unconsented:
+                return ConnectionState.REGISTERED
+            return ConnectionState.ABSENT
+
+        def needs_consent(self, name):
+            return name in self._unconsented
+
+    store = Store()
     monkeypatch.setattr(
-        "jarviscore.nexus.store.get_store", lambda: Store(), raising=False,
+        "jarviscore.nexus.store.get_store", lambda: store, raising=False,
     )
-    return registered
+    return store
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -83,6 +113,58 @@ class TestRouterSeesCredentials:
         await kernel._route_task("Read our CRM", {"system": "hubspot"})
 
         assert router.contexts[0]["system_credentials_available"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_registered_but_unconsented_system_is_unavailable(self, local_vault):
+        """An app nobody has consented to cannot sign a call, so it is not a credential."""
+        local_vault.awaiting_consent("slack")
+        router = RecordingRouter(role="coder")
+        kernel = _kernel(router)
+
+        await kernel._route_task("Post to Slack", {"system": "slack"})
+
+        assert router.contexts[0]["system_credentials_available"] is False
+
+
+class TestRouterSeesWhatIsReachable:
+    """A task rarely names its provider, so the inventory travels with every route.
+
+    "List our Google Drive files" was routed to browser, which navigated to
+    drive.google.com, hit the sign-in wall and asked the human to log in by hand
+    to an account whose app was already registered and one click from connected.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_router_is_told_what_can_be_reached(self, local_vault):
+        local_vault.add("hubspot")
+        local_vault.awaiting_consent("google_drive")
+        router = RecordingRouter(role="coder")
+
+        await _kernel(router)._route_task("List our Google Drive files", {})
+
+        inventory = router.contexts[0]["providers_reachable_by_api"]
+        assert inventory["hubspot"] == "connected"
+        assert inventory["google_drive"] == "one_consent_away"
+
+    @pytest.mark.asyncio
+    async def test_an_empty_vault_says_nothing(self, local_vault):
+        """No providers is not the same as providers that cannot be used."""
+        router = RecordingRouter(role="coder")
+
+        await _kernel(router)._route_task("Summarise the quarter", {})
+
+        assert "providers_reachable_by_api" not in router.contexts[0]
+
+    @pytest.mark.asyncio
+    async def test_the_inventory_reaches_the_summarised_context(self, local_vault):
+        """Dropped in summarisation, it would be as if it were never gathered."""
+        from jarviscore.kernel.kernel import TaskRouter
+
+        local_vault.add("hubspot")
+        summary = TaskRouter._summarize_context(
+            {"providers_reachable_by_api": {"hubspot": "connected"}}
+        )
+        assert "providers_reachable_by_api" in summary
 
     @pytest.mark.asyncio
     async def test_no_declared_system_says_nothing_either_way(self, local_vault):

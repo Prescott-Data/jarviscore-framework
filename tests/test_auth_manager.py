@@ -39,6 +39,15 @@ def _make_manager_with_mock_nexus(**extra_config):
 
 class TestNoNexusConfigured:
 
+    @pytest.fixture(autouse=True)
+    def _no_gateway(self, monkeypatch):
+        """State the precondition: these assert what happens with no gateway at all.
+
+        The manager reads NEXUS_GATEWAY_URL from the environment, so a developer
+        who has one exported is a configured deployment, not an unconfigured one.
+        """
+        monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+
     def test_manager_created_without_nexus_client(self):
         """AuthenticationManager can be created without gateway_url (no Nexus client)."""
         manager = AuthenticationManager({})
@@ -48,7 +57,7 @@ class TestNoNexusConfigured:
     async def test_authenticate_raises_when_no_nexus(self):
         """authenticate() raises RuntimeError when NEXUS_GATEWAY_URL is not set."""
         manager = AuthenticationManager({})
-        with pytest.raises(RuntimeError, match="NEXUS_GATEWAY_URL is not configured"):
+        with pytest.raises(RuntimeError, match="no way to run a consent flow"):
             await manager.authenticate("shopify")
 
     @pytest.mark.asyncio
@@ -84,8 +93,9 @@ class TestNoNexusConfigured:
 
 class TestProdMode:
 
-    def test_no_nexus_client_when_gateway_url_absent(self):
+    def test_no_nexus_client_when_gateway_url_absent(self, monkeypatch):
         """Without gateway_url, nexus_client is None — no hard error at construction."""
+        monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
         manager = AuthenticationManager({"auth_mode": "production"})
         assert manager.nexus_client is None
 
@@ -222,8 +232,9 @@ class TestResolveStrategy:
         await manager.close()
 
     @pytest.mark.asyncio
-    async def test_resolve_strategy_raises_when_no_nexus(self):
+    async def test_resolve_strategy_raises_when_no_nexus(self, monkeypatch):
         """resolve_strategy raises AttributeError when nexus_client is None."""
+        monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
         manager = AuthenticationManager({})
         with pytest.raises(AttributeError):
             await manager.resolve_strategy("conn_xyz")

@@ -17,7 +17,7 @@ resolve_strategy() is intentionally package-private — used only by NexusCallPr
 
 Production OAuth flow:
   1. request_connection() → auth_url returned by Nexus Gateway
-  2. CLIFlowHandler / DashboardFlowHandler opens browser + presents URL
+  2. CLIFlowHandler opens a browser, or HostedFlowHandler hands the link to a UI
   3. User completes OAuth consent
   4. Nexus Broker receives callback, encrypts tokens, connection → ACTIVE
   5. Framework polls Gateway until ACTIVE
@@ -35,6 +35,7 @@ from jarviscore.nexus.lifecycle import LifecycleMonitor
 from jarviscore.nexus.models import DynamicStrategy
 from jarviscore.nexus.providers import get_scopes, get_provider
 from jarviscore.auth.oauth_flow import OAuthFlowHandler, CLIFlowHandler
+from jarviscore.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -57,19 +58,24 @@ class AuthenticationManager:
 
     Custom flow handlers:
         manager = AuthenticationManager(config)
-        manager.flow_handler = SlackFlowHandler()   # or DashboardFlowHandler()
+        manager.flow_handler = HostedFlowHandler(present)   # or SlackFlowHandler()
     """
 
     def __init__(self, config: Dict[str, Any]):
-        gateway_url = config.get("nexus_gateway_url")
+        # Settings are the fallback, not an alternative: NEXUS_GATEWAY_URL is how
+        # the gateway is configured everywhere else, and a manager that only read
+        # the config dict reported it unset while the rest of the mesh used it.
+        settings = Settings()
+        gateway_url = config.get("nexus_gateway_url") or getattr(
+            settings, "nexus_gateway_url", None
+        )
 
         self.user_id = config.get("nexus_default_user_id", "jarviscore-agent")
         self.cache_ttl = config.get("auth_strategy_cache_ttl", 300)
         self.auth_timeout = config.get("auth_flow_timeout", 300)
         self.auth_poll_interval = config.get("auth_poll_interval", 2.0)
-        self.return_url = config.get(
-            "nexus_return_url",
-            "http://localhost:8000/oauth/callback",
+        self.return_url = config.get("nexus_return_url") or getattr(
+            settings, "nexus_return_url", "http://localhost:8000/oauth/callback"
         )
 
         # Nexus clients — only instantiated when gateway_url is provided.
@@ -135,10 +141,17 @@ class AuthenticationManager:
             RuntimeError if the OAuth flow fails or times out.
         """
         if not self.nexus_client:
+            logger.error(
+                "Cannot authenticate provider %r: no Nexus gateway configured. "
+                "Set NEXUS_GATEWAY_URL, or run "
+                "'docker compose -f docker-compose.nexus.yml up' for local dev.",
+                provider,
+            )
             raise RuntimeError(
-                f"Cannot authenticate provider {provider!r}: NEXUS_GATEWAY_URL is not configured. "
-                "Add NEXUS_GATEWAY_URL=<url> to your .env file. "
-                "For local development, run: docker compose -f docker-compose.nexus.yml up"
+                f"No account can be connected to {provider!r} right now, because "
+                "this deployment has no way to run a consent flow. Nobody can "
+                "approve access until an administrator fixes that, so treat "
+                f"{provider!r} as unavailable and say so plainly."
             )
 
         if provider in self._connections:

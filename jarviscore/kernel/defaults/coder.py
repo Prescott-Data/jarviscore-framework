@@ -18,7 +18,7 @@ Doctrine:
 import ast
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from jarviscore.kernel.subagent import BaseSubAgent
 from jarviscore.kernel.gate import GateEvidence
@@ -28,35 +28,34 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────
-# Auth Error Classification
+# Auth Outcome
 # ─────────────────────────────────────────────────────────────────
 
-_AUTH_ERROR_PATTERNS = {
-    "expired_token": [
-        "token expired", "token has expired", "jwt expired",
-        "access token expired", "refresh token expired",
-    ],
-    "missing_auth": [
-        "authentication required", "no auth", "missing token",
-        "unauthorized", "401",
-    ],
-    "invalid_token": [
-        "invalid token", "bad token", "malformed token",
-        "invalid credentials", "invalid access token",
-    ],
-    "permission_denied": [
-        "forbidden", "permission denied", "insufficient scope",
-        "access denied", "403", "not authorized",
-    ],
-}
 
+def classify_access_failure(
+    access_failure: Optional[Dict[str, Any]],
+    connection_state: Optional[str] = None,
+) -> Optional[str]:
+    """Name what went wrong at the credential boundary, from what it recorded.
 
-def classify_auth_error(error_msg: str) -> Optional[str]:
-    """Classify error message into auth category, or None if not auth-related."""
-    lower = error_msg.lower()
-    for category, patterns in _AUTH_ERROR_PATTERNS.items():
-        if any(p in lower for p in patterns):
-            return category
+    Reads the boundary's own statement rather than the rendered message. The
+    message was matched against substrings before, which classified "Created 401
+    contacts successfully" as an authentication failure and asked a human to log
+    in after a run that worked.
+
+    A provider rejecting a credential is evidence, not a verdict: whether that
+    means "never connected" or "the token went stale" is answered by what the
+    vault holds, so the state is asked for rather than guessed.
+    """
+    if not access_failure:
+        return None
+    kind = access_failure.get("kind")
+    if kind == "no_usable_credential":
+        return "missing_auth"
+    if kind == "destination_not_owned_by_provider":
+        return None  # a routing mistake, not an access grant a human can give
+    if kind == "provider_rejected_credential":
+        return "expired_token" if connection_state == "connected" else "missing_auth"
     return None
 
 
@@ -122,15 +121,44 @@ The FunctionRegistry holds atoms: functions that already ran against a real API
 and worked, scoped to the provider they call. It is a ratchet — every task that
 succeeds should leave the next one less work.
 
-When the task names a connected system, that system's proven capabilities are
-already in your tool list, named for what they do — `hubspot_list_contacts`,
-`slack_send_message`. They run where the credentials are, so you call one the
-way you call any other tool and get a result; you never handle a token and never
-see how the call was authenticated.
+When the provider for a task is known — because the task named a connected
+system, or because the registry already matched a proven atom to it — that
+provider's capabilities are already in your tool list, named for what they do —
+`hubspot_list_contacts`, `slack_send_message`. They run where the credentials
+are, so you call one the way you call any other tool and get a result; you never
+handle a token and never see how the call was authenticated.
 
 Call one when it does what the task needs. Writing code to make a request that
 is already sitting in your tools is slower, unproven, and leaves a second
 version of something that already works.
+
+## WHEN A PROVIDER IS REGISTERED BUT NOBODY HAS CONNECTED
+
+Registering a provider's app and connecting an account are two different events.
+The first is done by whoever set the system up; the second needs a person to
+consent once, and until they do there is no token and nothing can be signed.
+
+When that is the case you will have `request_access` instead of that provider's
+capabilities. Call it when the task actually needs that provider. It shows a
+human the consent link and waits for them, so the cost of asking is time, not
+tokens. When it returns, the capabilities are in your tools and you carry on
+with the task in the same run.
+
+Do not write code to work around a missing connection, and do not report the
+provider as unavailable without asking. Both leave the human with a dead end
+they could have cleared with one click.
+
+## WHEN YOU CANNOT DO IT
+
+Say what the task needed and what stopped you, in the terms of the person who
+asked. They asked about their customers, their files, their messages — so the
+answer is "the Slack account is not connected yet", not a report on environment
+variables, gateway URLs or container state.
+
+How this deployment is wired is not your subject and not your finding. If you
+notice something an operator would need to fix, one plain sentence names it and
+you stop; do not go looking for it, do not probe configuration to confirm it,
+and never hand back a diagnosis of the plumbing as if it were the work.
 
 The registry also holds atoms that are not yet callable, and `check_registry`
 finds them. A `candidate` has been dry-run but never confirmed against a live
@@ -588,20 +616,28 @@ Writing to it, after you succeed:
             # semantic search will happily rank a verified atom from one CRM above
             # a candidate from the one actually being asked about.
             declared = system or (getattr(self, "_run_context", None) or {}).get("system")
-            if declared:
-                matches = [m for m in matches if m.get("system") == declared]
-                if not matches:
-                    return {
-                        "found": False,
-                        "system": declared,
-                        "message": (
-                            f"No function in the registry targets {declared}. "
-                            "Write one, and register it against that system so the "
-                            "next agent finds it."
-                        ),
-                    }
+            if not declared:
+                # Ranking across every provider let word overlap choose one, and
+                # it is not a judgement worth trusting to substring counting.
+                return {
+                    "found": False,
+                    "message": (
+                        "Name the provider to search within, as system=<name>. "
+                        "Which API a task needs is yours to decide; the registry "
+                        "only says what already works for a provider you name."
+                    ),
+                }
+            matches = [m for m in matches if m.get("system") == declared]
             if not matches:
-                return {"found": False, "message": "No functions found for this task."}
+                return {
+                    "found": False,
+                    "system": declared,
+                    "message": (
+                        f"No function in the registry targets {declared}. "
+                        "Write one, and register it against that system so the "
+                        "next agent finds it."
+                    ),
+                }
 
             # Within the right system, stage decides: something confirmed against a
             # live API beats something only dry-run.
@@ -657,6 +693,11 @@ Writing to it, after you succeed:
     ) -> Dict[str, Any]:
         """Record + validate a code candidate."""
         self._has_written_code = True  # Unlock delegate_research gate
+
+        # Often the agent is the first to work out which provider the task needs.
+        # Offerings are refreshed here so a proven atom or a missing consent is
+        # discovered at that moment rather than after a failed call.
+        access_note = self._refresh_offerings_for(system)
 
         candidate_id = len(self._candidates) + 1
 
@@ -737,12 +778,15 @@ Writing to it, after you succeed:
         }
         self._candidates.append(candidate)
 
-        return {
+        result = {
             "candidate_id": candidate_id,
             "status": "validated",
             "length": len(code),
             "message": f"Code validated (candidate_id={candidate_id}). Call execute_code next.",
         }
+        if access_note:
+            result["system_access"] = access_note
+        return result
 
     # ─────────────────────────────────────────────────────────────
     # Tool: validate_code
@@ -840,9 +884,13 @@ Writing to it, after you succeed:
         exec_time = time.time() - start_ts
 
 
-        # Classify auth errors
-        if result.get("status") == "failure" and result.get("error"):
-            auth_category = classify_auth_error(result["error"])
+        # Classify auth outcomes from what the credential boundary recorded.
+        access_failure = result.get("access_failure")
+        if access_failure:
+            provider = access_failure.get("provider")
+            auth_category = classify_access_failure(
+                access_failure, self._connection_state(provider).value
+            )
             if auth_category:
                 result["auth_error_type"] = auth_category
                 result["hitl_required"] = True
@@ -1227,12 +1275,47 @@ Writing to it, after you succeed:
         self._registered_this_run = False
         self._current_task = str(task)
         self._run_context = context or {}
-        self._offer_system_capabilities(self._run_context.get("system"))
+        self._prepare_access(self._resolved_system())
         try:
             return await super().run(task, context, max_turns, model, **kwargs)
         finally:
             self._current_task = ""
             self._run_context = {}
+
+    def _resolved_system(self) -> Optional[str]:
+        """The system whose capabilities belong in this dispatch.
+
+        A declared system is the task naming a provider. A registry candidate is
+        the registry having already found the provider's verified atom for this
+        task. Both identify the same thing, so both make the atoms callable.
+        Only the declared one carries credential-gate semantics; that stays in
+        the kernel and is deliberately not read here.
+        """
+        declared = self._run_context.get("system")
+        if declared:
+            return str(declared)
+        candidate = self._run_context.get("registry_candidate") or {}
+        resolved = candidate.get("system") if isinstance(candidate, dict) else None
+        return str(resolved) if resolved else None
+
+    def _valid_atoms(self, system: Optional[str]) -> Dict[str, Any]:
+        """The atoms for a system that are actually callable in their current shape."""
+        from jarviscore.execution.atom_contract import read_contract
+
+        atoms: Dict[str, Any] = {}
+        if not system or not self.code_registry:
+            return atoms
+        for entry in self.code_registry.get_functions_by_system(system):
+            name = entry.get("function_name")
+            code = self.code_registry.get_function_code(name) if name else None
+            if not code:
+                continue
+            contract = read_contract(code, system=system, expected_name=name)
+            # Only the current shape is offered; a legacy atom cannot be called.
+            if not contract.ok or contract.atom.legacy:
+                continue
+            atoms[name] = contract.atom
+        return atoms
 
     def _offer_system_capabilities(self, system: Optional[str]) -> None:
         """Register the connected system's atoms as tools for this dispatch.
@@ -1244,26 +1327,15 @@ Writing to it, after you succeed:
         for name in getattr(self, "_atom_tools", ()):
             self._tools.pop(name, None)
         self._atom_tools = []
-        self._atoms = {}
-        if not system or not self.code_registry:
+        self._atoms = self._valid_atoms(system)
+        if not system:
             return
 
-        from jarviscore.execution.atom_contract import read_contract
-
-        for entry in self.code_registry.get_functions_by_system(system):
-            name = entry.get("function_name")
-            code = self.code_registry.get_function_code(name) if name else None
-            if not code:
-                continue
-            contract = read_contract(code, system=system, expected_name=name)
-            # Only the current shape is offered; a legacy atom cannot be called.
-            if not contract.ok or contract.atom.legacy:
-                continue
-            self._atoms[name] = contract.atom
+        for name, atom in self._atoms.items():
             self.register_tool(
                 name,
                 self._atom_tool(name),
-                f"{contract.atom.describe()} Runs against {system} with "
+                f"{atom.describe()} Runs against {system} with "
                 "credentials resolved outside the sandbox; you never handle them.",
                 phase="action",
             )
@@ -1274,6 +1346,151 @@ Writing to it, after you succeed:
                 "Offering %d %s capability(ies): %s",
                 len(self._atom_tools), system, ", ".join(self._atom_tools),
             )
+
+    def _connection_state(self, system: Optional[str]):
+        from jarviscore.nexus.store import ConnectionState, get_store
+
+        if not system:
+            return ConnectionState.ABSENT
+        try:
+            return get_store().connection_state(system)
+        except Exception as exc:
+            self._log.debug("Connection state unavailable for %s: %s", system, exc)
+            return ConnectionState.ABSENT
+
+    def _prepare_access(self, system: Optional[str]) -> None:
+        """Offer what this system can do right now, and nothing it cannot.
+
+        Offering an atom for a provider with no usable credential produces a
+        confident call that cannot be signed, which reads as a broken capability
+        rather than a missing connection.
+        """
+        from jarviscore.nexus.store import ConnectionState
+
+        self._offered_system = system
+        connected = self._connection_state(system) is ConnectionState.CONNECTED
+        self._offer_system_capabilities(system if connected else None)
+        self._offer_access_request(system)
+        if connected and system:
+            # Local-vault handle is the provider name; keeps the credential and
+            # the capability pointing at the same provider.
+            self._run_context.setdefault("_nexus_connection_id", system)
+            if self._run_context.get("_nexus_provider") != system:
+                self._run_context["_nexus_connection_id"] = system
+                self._run_context["_nexus_provider"] = system
+
+    def _refresh_offerings_for(self, system: Optional[str]) -> Optional[str]:
+        """Re-offer for a system named after the run began; note what changed."""
+        if not system or system == getattr(self, "_offered_system", None):
+            return None
+        self._prepare_access(system)
+        if self._atom_tools:
+            return (
+                f"{system} has {len(self._atom_tools)} proven capabilities, now in "
+                f"your tools: {', '.join(self._atom_tools)}. Prefer them over code "
+                "that repeats what they already do."
+            )
+        if self._access_tools:
+            return (
+                f"{system}'s app is registered but no account is connected, so no "
+                "call to it can be signed, and its capabilities are held back "
+                "until one is. request_access is now in your tools; it asks a "
+                "human to consent and returns when they have."
+            )
+        return None
+
+    def _providers_awaiting_consent(self) -> List[Tuple[str, int]]:
+        """Registered apps with no consented account, and what each would unlock."""
+        try:
+            from jarviscore.nexus.store import get_store
+            store = get_store()
+            return [
+                (provider, len(self._valid_atoms(provider)))
+                for provider in store.list()
+                if store.needs_consent(provider)
+            ]
+        except Exception as exc:
+            self._log.debug("Consent states unavailable: %s", exc)
+            return []
+
+    def _offer_access_request(self, system: Optional[str] = None) -> None:
+        """Offer a way to get connected, for anything that is one consent away.
+
+        Not keyed to a system resolved before the run: the agent is often the
+        first to work out which provider a task needs, and a capability it can
+        only ask for after naming it is one it will never think to ask for.
+        """
+        for name in getattr(self, "_access_tools", ()):
+            self._tools.pop(name, None)
+        self._access_tools = []
+
+        pending = self._providers_awaiting_consent()
+        if not pending:
+            return
+        described = ", ".join(
+            f"{provider} ({count} capabilities)" for provider, count in pending
+        )
+        self.register_tool(
+            "request_access",
+            self._access_tool(),
+            "Ask a human to connect an account for a provider whose app is "
+            f"registered but which nobody has consented to yet: {described}. "
+            "Nothing can be signed for these, so their capabilities are held "
+            "back. Pass system=<name>. This shows the human a consent link and "
+            "waits for them; when it returns, that provider's capabilities are "
+            "in your tools and you continue with the task.",
+            phase="action",
+        )
+        self._access_tools = ["request_access"]
+
+    def _access_tool(self):
+        async def request_access(system: str):
+            if not system:
+                return {
+                    "status": "error",
+                    "error": "request_access needs the system to connect.",
+                    "semantic_error": "SYSTEM_NOT_NAMED",
+                }
+            if not self.auth_manager:
+                self._log.error(
+                    "%s needs a consent flow but no Nexus gateway is configured "
+                    "to run one; set NEXUS_GATEWAY_URL.", system,
+                )
+                return {
+                    "status": "error",
+                    "error": (
+                        f"Nobody can approve access to {system} from here, so it "
+                        "cannot be used for this task. Say plainly that the task "
+                        f"needs {system} and that access to it is unavailable."
+                    ),
+                    "semantic_error": "NO_CONSENT_CHANNEL",
+                }
+            try:
+                connection_id = await self.auth_manager.authenticate(system)
+            except Exception as exc:
+                return {
+                    "status": "error",
+                    "error": f"The {system} consent flow did not complete: {exc}",
+                    "semantic_error": "CONSENT_NOT_COMPLETED",
+                }
+            # The token now lives at the gateway, so the sandbox must call through
+            # it rather than the local vault that still holds only the app.
+            self._run_context["_nexus_connection_id"] = connection_id
+            self._run_context["_nexus_provider"] = system
+            self._offered_system = system
+            self._offer_system_capabilities(system)
+            self._offer_access_request()
+            return {
+                "status": "success",
+                "system": system,
+                "capabilities": list(self._atom_tools),
+                "detail": (
+                    f"A {system} account is connected. Its capabilities are now "
+                    "in your tools; continue the task with them."
+                ),
+            }
+
+        return request_access
 
     def _atom_tool(self, name: str):
         async def call(**params):

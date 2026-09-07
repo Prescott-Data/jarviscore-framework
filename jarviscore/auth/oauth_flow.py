@@ -7,9 +7,9 @@ Handles the interactive OAuth consent flow:
 3. Polls Nexus Gateway until connection becomes ACTIVE
 4. Returns control to AuthenticationManager
 
-Pluggable: users can replace the default CLIFlowHandler with their own
-(e.g., SlackFlowHandler that sends the URL via DM and waits for webhook,
-or DashboardFlowHandler that renders the URL in the application dashboard).
+Pluggable: users can replace the default CLIFlowHandler with their own.
+HostedFlowHandler is the one for agents running behind a UI: it hands the link
+to the host to display, rather than opening a browser on the server.
 
 IMPORTANT: The local callback server port must NOT be 8080 — that port
 belongs to the Nexus Broker. Use a different port (default: 8000) or
@@ -62,6 +62,34 @@ class OAuthFlowHandler(ABC):
             Final status string (ACTIVE, FAILED, etc.)
         """
         ...
+
+
+class HostedFlowHandler(OAuthFlowHandler):
+    """OAuth flow for an agent running inside a UI rather than a terminal.
+
+    Hands the consent link to whatever is hosting the run so it can be shown
+    where the person actually is, then polls the same way the CLI flow does.
+    Printing to stdout is useless in a dashboard, and opening a browser on the
+    server is worse than useless when the server is not where the user is.
+    """
+
+    def __init__(self, present, poll_handler: Optional[OAuthFlowHandler] = None):
+        self._present = present
+        self._poll = poll_handler or CLIFlowHandler(open_browser=False)
+
+    async def present_auth_url(self, auth_url: str, provider: str) -> None:
+        await self._present(auth_url, provider)
+
+    async def wait_for_completion(
+        self,
+        connection_id: str,
+        check_status_fn,
+        timeout: float = 300,
+        poll_interval: float = 2.0,
+    ) -> str:
+        return await self._poll.wait_for_completion(
+            connection_id, check_status_fn, timeout, poll_interval
+        )
 
 
 class CLIFlowHandler(OAuthFlowHandler):
