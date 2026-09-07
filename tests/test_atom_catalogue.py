@@ -1,11 +1,11 @@
 """The atom catalogue is loaded, offered, and added to.
 
-The framework ships 1,224 atoms across 150 providers, the docs describe them as
-available from startup, and nothing ever loaded them. Every deployment began
-with an empty registry, so the Kernel's registry-first search found nothing, the
-coder's `check_registry` found nothing, and agents rewrote integrations that
-were already on disk — then threw the new code away, because the coder path
-never wrote back either.
+The framework ships a catalogue of atoms across 150 providers, the docs describe
+them as available from startup, and nothing ever loaded them. Every deployment
+began with an empty registry, so the Kernel's registry-first search found
+nothing, the coder's `check_registry` found nothing, and agents rewrote
+integrations that were already on disk, then threw the new code away, because
+the coder path never wrote back either.
 
 These tests hold the three links: the catalogue is seeded, a match is offered
 with its stage stated rather than filtered out, and what the agent is told to do

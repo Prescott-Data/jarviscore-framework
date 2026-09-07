@@ -1,69 +1,54 @@
-import requests
 from typing import Any, Dict, List, Optional
+KM_API = 'https://query.kissmetrics.io/v3'
 
-# Kissmetrics REST API v3 — https://support.kissmetrics.io/reference/fetch-reports
-KM_API = "https://query.kissmetrics.io/v3"
-
-
-def kissmetrics_list_reports(auth_info: dict, product_id: str, limit: int = 25, offset: int = 0, timeout: int = 30, verify_ssl: bool = True, base_url: str = None) -> dict:
+async def kissmetrics_list_reports(product_id: str, limit: int=25, offset: int=0, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Kissmetrics reports for a product (GET /v3/products/{product_id}/reports). Official: https://support.kissmetrics.io/reference/fetch-reports"""
     try:
-        pid = _km_product_id(auth_info, product_id)
+        pid = _km_product_id(product_id)
         if not pid:
-            return {"records": [], "data_count": 0, "status": 400, "message": "product_id is required"}
+            return {'records': [], 'data_count': 0, 'status': 400, 'message': 'product_id is required'}
         api, err = _km_api_root(base_url)
         if err:
-            return {"records": [], "data_count": 0, "status": 400, "message": err}
-        headers, basic, auth_err = _km_auth(auth_info)
+            return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
+        headers, basic, auth_err = _km_auth()
         if auth_err:
-            return {"records": [], "data_count": 0, "status": 401, "message": auth_err}
-        params = {"limit": min(max(int(limit or 25), 1), 50), "offset": int(offset or 0)}
-        resp = _km_get(f"{api}/products/{pid}/reports", headers, basic, params, timeout, verify_ssl)
-        if resp.status_code >= 400:
-            return {"records": [], "data_count": 0, "status": resp.status_code, "message": resp.text[:1000]}
-        records = _km_records(resp.json() if resp.text else {})[: params["limit"]]
-        return {"records": records, "data_count": len(records), "status": resp.status_code, "message": "ok"}
+            return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
+        params = {'limit': min(max(int(limit or 25), 1), 50), 'offset': int(offset or 0)}
+        resp = await _km_get(f'{api}/products/{pid}/reports', headers, basic, params, timeout, verify_ssl)
+        if resp['status_code'] >= 400:
+            return {'records': [], 'data_count': 0, 'status': resp['status_code'], 'message': resp['body'][:1000]}
+        records = _km_records(resp['json'] if resp['body'] else {})[:params['limit']]
+        return {'records': records, 'data_count': len(records), 'status': resp['status_code'], 'message': 'ok'}
     except Exception as e:
-        return {"records": [], "data_count": 0, "status": 500, "message": str(e)}
-
-
+        return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}
 
 def _km_api_root(base_url):
-    root = (base_url or KM_API).rstrip("/")
-    if "kissmetrics.io" not in root:
-        return None, "base_url must be https://query.kissmetrics.io/v3"
-    if not root.endswith("/v3"):
-        if root.endswith("/v3.0"):
+    root = (base_url or KM_API).rstrip('/')
+    if 'kissmetrics.io' not in root:
+        return (None, 'base_url must be https://query.kissmetrics.io/v3')
+    if not root.endswith('/v3'):
+        if root.endswith('/v3.0'):
             root = root[:-2]
-        elif "/v3" not in root:
-            root = f"{root}/v3"
-    return root, None
+        elif '/v3' not in root:
+            root = f'{root}/v3'
+    return (root, None)
 
+def _km_auth():
+    return ({'Accept': 'application/json'}, None, None)
 
-def _km_auth(auth_info):
-    auth_info = auth_info or {}
-    api_key = auth_info.get("api_key")
-    if not api_key:
-        return {"Accept": "application/json"}, None, "auth_info requires api_key"
-    return {"Accept": "application/json"}, (str(api_key).strip(), ""), None
-
-
-def _km_get(url, headers, basic, params, timeout, verify_ssl):
-    return requests.get(url, headers=headers, auth=basic, params=params, timeout=timeout, verify=verify_ssl)
-
+async def _km_get(url, headers, basic, params, timeout, verify_ssl):
+    return await nexus_call('GET', url, headers=headers, params=params)
 
 def _km_records(data):
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in ("events", "reports", "data", "results"):
+        for key in ('events', 'reports', 'data', 'results'):
             batch = data.get(key)
             if isinstance(batch, list):
                 return batch
     return []
 
-
-def _km_product_id(auth_info, product_id=None):
-    auth_info = auth_info or {}
-    pid = product_id or auth_info.get("product_id") or auth_info.get("productId")
-    return str(pid).strip() if pid not in (None, "") else None
+def _km_product_id(product_id=None):
+    pid = product_id or None or None
+    return str(pid).strip() if pid not in (None, '') else None

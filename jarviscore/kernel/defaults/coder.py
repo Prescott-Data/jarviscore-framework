@@ -120,26 +120,22 @@ proves it — that is the entire job.
 
 The FunctionRegistry holds atoms: functions that already ran against a real API
 and worked, scoped to the provider they call. It is a ratchet — every task that
-succeeds should leave the next one less work. You are the only role that can
-turn it, so it turns when you decide to turn it and not otherwise.
+succeeds should leave the next one less work.
 
-Reading it, before you write anything:
+When the task names a connected system, that system's proven capabilities are
+already in your tool list, named for what they do — `hubspot_list_contacts`,
+`slack_send_message`. They run where the credentials are, so you call one the
+way you call any other tool and get a result; you never handle a token and never
+see how the call was authenticated.
 
-- When the task names a system, call `check_registry` first. It costs one
-  thinking turn and can replace the entire write-and-debug cycle.
-- What comes back carries a `stage`, and the stage is the whole message.
-  `verified` or `golden` means it has run against a live API: execute it.
-  `candidate` means someone wrote it for this exact call and it passed a dry
-  run, but nothing has confirmed it against the real service — read that code
-  and use it as the starting point rather than writing the same thing blind.
-  Executing a candidate successfully is what promotes it to verified, so the
-  first agent to need it is the one that proves it.
-- When `registry_candidate` is present in your context, an atom has already been
-  matched to this task. Read its code. If it does what the task needs, execute
-  it and skip `write_code` entirely — rewriting it produces a second, unproven
-  version of something already verified.
-- A match is a match on meaning, not a promise. If the code plainly does not fit
-  the task, say why in your THOUGHT and write what is needed instead.
+Call one when it does what the task needs. Writing code to make a request that
+is already sitting in your tools is slower, unproven, and leaves a second
+version of something that already works.
+
+The registry also holds atoms that are not yet callable, and `check_registry`
+finds them. A `candidate` has been dry-run but never confirmed against a live
+API, so it is readable code rather than a tool — read it, start from it, and
+prove it in the sandbox. That run is what makes it callable for everyone after.
 
 Writing to it, after you succeed:
 
@@ -148,6 +144,9 @@ Writing to it, after you succeed:
   enters as a candidate, becomes verified on its first success and golden after
   five, and from then on it is what the next agent finds instead of starting
   from a blank file.
+- Take `auth_info` as the first parameter and authenticate with it, the way the
+  catalogue does, so what you wrote can become a callable capability rather than
+  a snippet.
 - Name it for what it does to what: `hubspot_list_contacts`, not `run_task` or
   `main`. The name is how it will be found.
 - Code that only reshapes local data is not worth keeping. An atom earns its
@@ -304,8 +303,10 @@ Writing to it, after you succeed:
     def _build_user_prompt(self, state: KernelState, context_block: str) -> str:
         """Add a coder-specific proof-of-work contract to the generic OODA prompt."""
         prompt = super()._build_user_prompt(state, context_block)
+        offered = set(getattr(self, "_atom_tools", ()))
         has_execution = any(
-            tool_res.tool_name == "execute_code" and tool_res.succeeded
+            (tool_res.tool_name == "execute_code" or tool_res.tool_name in offered)
+            and tool_res.succeeded
             for tool_res in state.tool_history
         )
         if has_execution:
@@ -325,6 +326,16 @@ Writing to it, after you succeed:
             next_action = (
                 f"You already have validated candidate_id={validated_candidates[-1]}. "
                 "Your next response MUST call execute_code with that candidate_id."
+            )
+        elif offered:
+            # Mandating write_code here is what sent an agent to reimplement a
+            # capability it had already been given.
+            next_action = (
+                f"This system's proven capabilities are available to you: "
+                f"{', '.join(sorted(offered))}. Call one if it does what the task "
+                "needs. Otherwise your next response MUST call write_code with "
+                "executable Python code, then execute_code with the returned "
+                "candidate_id."
             )
         else:
             next_action = (
@@ -372,11 +383,21 @@ Writing to it, after you succeed:
         last_success_output = None
         execute_calls = 0
         write_calls = 0
+        atom_calls = 0
         for tool_res in state.tool_history:
             if tool_res.tool_name == "execute_code":
                 execute_calls += 1
             elif tool_res.tool_name == "write_code":
                 write_calls += 1
+            elif tool_res.tool_name in getattr(self, "_atom_tools", ()):
+                # A capability call is a run against a live provider, which is
+                # the thing this gate exists to require. Demanding write_code as
+                # well would mean an agent that used the catalogue correctly gets
+                # told to go and reimplement it.
+                atom_calls += 1
+                if tool_res.succeeded:
+                    has_executed = True
+                    last_success_output = tool_res.tool_output
             if tool_res.tool_name == "execute_code" and tool_res.succeeded:
                 has_executed = True
                 last_success_output = tool_res.tool_output
@@ -396,13 +417,15 @@ Writing to it, after you succeed:
                 GateEvidence(
                     check="proof_of_work",
                     requirement=(
-                        "one execute_code call that succeeded, or one write_code call "
-                        "whose execution_result reports success"
+                        "one execute_code call that succeeded, one write_code call "
+                        "whose execution_result reports success, or one successful "
+                        "capability call against the declared system"
                     ),
                     observed={
                         "tool_calls": len(state.tool_history),
                         "execute_code_calls": execute_calls,
                         "write_code_calls": write_calls,
+                        "capability_calls": atom_calls,
                         "successful_executions": 0,
                     },
                 ),
@@ -937,6 +960,7 @@ Writing to it, after you succeed:
             function=final_code,
             metadata=metadata,
         )
+        self._registered_this_run = bool(success)
 
         if success:
             # Registry identity for the result envelope (issue #88): the
@@ -1200,10 +1224,74 @@ Writing to it, after you succeed:
         self._candidates = []
         self._has_written_code = False
         self._read_urls = set()
+        self._registered_this_run = False
         self._current_task = str(task)
         self._run_context = context or {}
+        self._offer_system_capabilities(self._run_context.get("system"))
         try:
             return await super().run(task, context, max_turns, model, **kwargs)
         finally:
             self._current_task = ""
             self._run_context = {}
+
+    def _offer_system_capabilities(self, system: Optional[str]) -> None:
+        """Register the connected system's atoms as tools for this dispatch.
+
+        A capability the agent has to remember to go looking for is one it will
+        sometimes skip, and it did. These arrive the way every other tool does,
+        so using them is the default path rather than a decision.
+        """
+        for name in getattr(self, "_atom_tools", ()):
+            self._tools.pop(name, None)
+        self._atom_tools = []
+        self._atoms = {}
+        if not system or not self.code_registry:
+            return
+
+        from jarviscore.execution.atom_contract import read_contract
+
+        for entry in self.code_registry.get_functions_by_system(system):
+            name = entry.get("function_name")
+            code = self.code_registry.get_function_code(name) if name else None
+            if not code:
+                continue
+            contract = read_contract(code, system=system, expected_name=name)
+            # Only the current shape is offered; a legacy atom cannot be called.
+            if not contract.ok or contract.atom.legacy:
+                continue
+            self._atoms[name] = contract.atom
+            self.register_tool(
+                name,
+                self._atom_tool(name),
+                f"{contract.atom.describe()} Runs against {system} with "
+                "credentials resolved outside the sandbox; you never handle them.",
+                phase="action",
+            )
+            self._atom_tools.append(name)
+
+        if self._atom_tools:
+            self._log.info(
+                "Offering %d %s capability(ies): %s",
+                len(self._atom_tools), system, ", ".join(self._atom_tools),
+            )
+
+    def _atom_tool(self, name: str):
+        async def call(**params):
+            from jarviscore.execution.atom_contract import invocation
+
+            atom = self._atoms.get(name)
+            code = self.code_registry.get_function_code(name)
+            if atom is None or not code:
+                return {
+                    "status": "error",
+                    "error": f"`{name}` is no longer in the registry.",
+                    "semantic_error": "ATOM_UNAVAILABLE",
+                }
+            # Runs where any other sandbox code runs: nexus_call attaches the
+            # credential there, so proving an atom is just running it.
+            return await self._tool_execute_code(
+                code=f"{code}\n\n{invocation(atom, params)}",
+                description=f"{name} via {atom.system}",
+            )
+        call.__name__ = name
+        return call

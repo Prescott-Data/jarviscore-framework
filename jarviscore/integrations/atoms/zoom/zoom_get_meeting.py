@@ -1,38 +1,39 @@
-def zoom_get_meeting(auth_info: dict, meeting_id: str) -> dict:
-    import requests
-    _base = "https://api.zoom.us/v2"
-    _h = {"Authorization": f"Bearer {auth_info.get('access_token', '')}", "Content-Type": "application/json"}
-    def _get(p, params=None, headers=None):
-        _r = requests.get(f"{_base}{p}", headers={**_h, **(headers or {})}, params=params or {}, timeout=30)
-        _r.raise_for_status()
-        return _r.json()
-    def _post(p, data=None, headers=None):
-        _r = requests.post(f"{_base}{p}", headers={**_h, **(headers or {})}, json=data, timeout=30)
-        _r.raise_for_status()
-        return _r.json()
-    def _put(p, data=None, headers=None):
-        _r = requests.put(f"{_base}{p}", headers={**_h, **(headers or {})}, json=data, timeout=30)
-        _r.raise_for_status()
-        return _r.json()
-    def _patch(p, data=None, headers=None):
-        _r = requests.patch(f"{_base}{p}", headers={**_h, **(headers or {})}, json=data, timeout=30)
-        _r.raise_for_status()
-        return _r.json() if _r.content else {}
-    def _delete(p, headers=None):
-        _r = requests.delete(f"{_base}{p}", headers={**_h, **(headers or {})}, timeout=30)
-        _r.raise_for_status()
-        return _r.json() if _r.content else {}
-    """
-    Get details of a specific Zoom meeting.
+async def zoom_get_meeting(meeting_id: str) -> dict:
+    """Get meeting via the zoom API."""
+    _base = 'https://api.zoom.us/v2'
+    _h = {'Content-Type': 'application/json'}
 
-    Args:
-        auth_info: Dict with access_token for the tool OAuth
-        meeting_id: The meeting ID
+    async def _get(p, params=None, headers=None):
+        _r = await nexus_call('GET', f'{_base}{p}', headers={**_h, **(headers or {})}, params=params or {})
+        if not _r['ok']:
+            return {'success': False, 'error': _r['body']}
+        return _r['json']
 
-    Returns:
-        dict with meeting details (id, topic, start_time, duration, join_url, agenda, settings, etc.)
-    """
+    async def _post(p, data=None, headers=None):
+        _r = await nexus_call('POST', f'{_base}{p}', headers={**_h, **(headers or {})}, json=data)
+        if not _r['ok']:
+            return {'success': False, 'error': _r['body']}
+        return _r['json']
+
+    async def _put(p, data=None, headers=None):
+        _r = await nexus_call('PUT', f'{_base}{p}', headers={**_h, **(headers or {})}, json=data)
+        if not _r['ok']:
+            return {'success': False, 'error': _r['body']}
+        return _r['json']
+
+    async def _patch(p, data=None, headers=None):
+        _r = await nexus_call('PATCH', f'{_base}{p}', headers={**_h, **(headers or {})}, json=data)
+        if not _r['ok']:
+            return {'success': False, 'error': _r['body']}
+        return _r['json'] if _r['content'] else {}
+
+    async def _delete(p, headers=None):
+        _r = await nexus_call('DELETE', f'{_base}{p}', headers={**_h, **(headers or {})})
+        if not _r['ok']:
+            return {'success': False, 'error': _r['body']}
+        return _r['json'] if _r['content'] else {}
+    '\n    Get details of a specific Zoom meeting.\n\n    Args:\n        auth_info: Dict with access_token for the tool OAuth\n        meeting_id: The meeting ID\n\n    Returns:\n        dict with meeting details (id, topic, start_time, duration, join_url, agenda, settings, etc.)\n    '
+
     class ZoomCapabilities(NexusCapabilities):
         pass
-
-    return _get(f"/meetings/{meeting_id}")
+    return await _get(f'/meetings/{meeting_id}')
