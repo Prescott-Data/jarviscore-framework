@@ -58,24 +58,6 @@ def _compose_file() -> Path:
     return candidates[0]
 
 
-def _schema_file() -> Path:
-    """Find 001_initial_schema.sql — bundled inside the installed package."""
-    import importlib.resources as ir
-    try:
-        with ir.path("jarviscore.nexus._data", "001_initial_schema.sql") as p:
-            if p.exists():
-                return Path(p)
-    except Exception:
-        pass
-    candidates = [
-        Path(__file__).parent.parent.parent / "nexus" / "migrations" / "001_initial_schema.sql",
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    return candidates[0]
-
-
 # ── Nexus Gateway URL ─────────────────────────────────────────────────────────
 
 def _gateway_url() -> Optional[str]:
@@ -198,11 +180,12 @@ def cmd_init(args):
         sys.exit(1)
 
     # Wait for broker to be healthy (up to 30s)
+    broker_port = os.environ.get("NEXUS_BROKER_PORT", "8080")
     print()
     print(_info("Waiting for broker to be ready..."))
     for _ in range(30):
         try:
-            urllib.request.urlopen("http://localhost:8080/health", timeout=2)
+            urllib.request.urlopen(f"http://localhost:{broker_port}/health", timeout=2)
             break
         except Exception:
             time.sleep(1)
@@ -261,22 +244,43 @@ def cmd_up(args):
         sys.exit(1)
 
 
+def _placement_from_args(args) -> dict:
+    """Credential placement supplied on the command line."""
+    flags = {
+        "header_name":      getattr(args, "header_name", None),
+        "value_prefix":     getattr(args, "value_prefix", None),
+        "param_name":       getattr(args, "param_name", None),
+        "credential_field": getattr(args, "credential_field", None),
+    }
+    return {key: value for key, value in flags.items() if value}
+
+
 def cmd_register(args):
     """Register a provider's credentials — local store or gateway."""
-    from jarviscore.nexus.providers import get_provider, get_auth_type, PROVIDER_CATALOG
+    from jarviscore.nexus.providers import (
+        PROVIDER_CATALOG,
+        broker_name,
+        get_auth_config,
+        get_auth_type,
+        get_provider,
+    )
     from jarviscore.nexus.store import get_store
 
     provider = args.provider.lower()
-    catalog_entry = get_provider(provider)
+    catalog_entry = get_provider(provider) or {}
 
-    if not catalog_entry:
-        known = ", ".join(sorted(PROVIDER_CATALOG.keys()))
-        print(_err(f"Unknown provider: {provider!r}"))
-        print(_info(f"Known providers: {known}"))
+    auth_type = (getattr(args, "auth_type", None) or catalog_entry.get("auth_type") or "").lower()
+    if not auth_type:
+        print(_err(f"{provider!r} is not preconfigured, so its auth type must be given"))
+        print(_info("  --auth-type=oauth2 | api_key | basic_auth"))
+        print(_info("  api_key also needs where the key goes: --header-name=X-API-KEY"))
+        print(_info("  (optionally --value-prefix='Bearer ') or --param-name=api_key"))
         sys.exit(1)
-
-    auth_type = get_auth_type(provider)
     label = catalog_entry.get("label", provider)
+
+    # Flags win over catalog defaults — the person connecting the app is reading
+    # that provider's API docs right now.
+    auth_config = {**get_auth_config(provider), **_placement_from_args(args)}
 
     # Build credentials dict based on auth type
     if auth_type == "oauth2":
@@ -296,7 +300,19 @@ def cmd_register(args):
             print(_err(f"{label} requires --api-key"))
             _print_console_url(provider)
             sys.exit(1)
-        credentials = {"auth_type": "api_key", "api_key": api_key}
+        if not auth_config:
+            print(_err(f"{label} needs to know where its API key goes"))
+            print(_info(
+                "An API key has no standard location — X-API-KEY, api-key, "
+                "Authorization: Bearer and ?api_key= are all in use. State it:"
+            ))
+            print(_info("  --header-name=X-API-KEY  [--value-prefix='Bearer ']"))
+            print(_info("  --param-name=api_key     (for keys sent as a query parameter)"))
+            sys.exit(1)
+        credentials = {
+            "auth_type": "api_key",
+            "api_key": api_key,
+        }
     elif auth_type == "basic_auth":
         if not args.client_id or not args.client_secret:
             print(_err(f"{label} requires --client-id (username) and --client-secret (token)"))
@@ -310,6 +326,9 @@ def cmd_register(args):
         print(_err(f"Unsupported auth_type: {auth_type}"))
         sys.exit(1)
 
+    if auth_config:
+        credentials["auth_config"] = auth_config
+
     gateway_url = _gateway_url()
 
     if gateway_url:
@@ -320,7 +339,7 @@ def cmd_register(args):
             # Nexus Gateway API: POST /v1/providers
             # Payload must be wrapped in a `profile` object with `name` (not `provider`).
             # Reference: nexus-framework/docs/PROVIDER_REGISTRATION_GUIDE.md
-            profile: dict = {"name": provider, "auth_type": auth_type}
+            profile: dict = {"name": broker_name(provider), "auth_type": auth_type}
             if auth_type == "oauth2":
                 profile["client_id"]     = credentials["client_id"]
                 profile["client_secret"] = credentials["client_secret"]
@@ -453,7 +472,20 @@ def _register_local(store, provider, label, auth_type, credentials):
             print(_info("  Local broker DB not reachable — run 'jarviscore nexus init' to start the stack"))
 
     print()
-    print(f"  Agents can now call {label} APIs via nexus_call() — no further setup needed.")
+    if auth_type == "oauth2" and not credentials.get("access_token"):
+        # Registering the app is not the same as connecting an account. Saying
+        # "ready" here is how a missing consent step turns into an unexplained
+        # 401 much later, inside an agent run.
+        print(_warn(f"  {label}'s app is registered. No account is connected yet."))
+        print(_info( "  OAuth2 needs a user to consent before a token exists. Run:"))
+        print(_info( "    jarviscore nexus init      # start the Nexus stack, once"))
+        print(_info(f"    jarviscore nexus test {provider}"))
+        print(_info( "  If the provider issues a static token instead, such as a personal"))
+        print(_info( "  or private app token, register it as the header strategy it is:"))
+        print(_info(f"    jarviscore nexus register {provider} --api-key=TOKEN --auth-type=api_key \\"))
+        print(_info( "        --header-name=Authorization --value-prefix='Bearer '"))
+    else:
+        print(f"  Agents can now call {label} APIs via nexus_call().")
     print()
 
 
@@ -585,6 +617,17 @@ def build_parser() -> argparse.ArgumentParser:
     reg.add_argument("--client-id",     default=None, help="OAuth client ID (or username for basic_auth)")
     reg.add_argument("--client-secret", default=None, help="OAuth client secret (or password for basic_auth)")
     reg.add_argument("--api-key",       default=None, help="API key (for api_key providers)")
+    reg.add_argument("--auth-type",     default=None,
+                     choices=["oauth2", "api_key", "basic_auth"],
+                     help="Auth type — required for providers not preconfigured in the catalog")
+    reg.add_argument("--header-name",   default=None,
+                     help="Header carrying the credential, e.g. X-API-KEY or PRIVATE-TOKEN")
+    reg.add_argument("--value-prefix",  default=None,
+                     help="Scheme word before the credential, e.g. 'Bearer ' or 'SSWS '")
+    reg.add_argument("--param-name",    default=None,
+                     help="Query parameter carrying the credential, e.g. token_auth")
+    reg.add_argument("--credential-field", default=None,
+                     help="Credential field to send when it is not the default for the auth type")
 
     # list
     sub.add_parser("list", help="List registered providers")

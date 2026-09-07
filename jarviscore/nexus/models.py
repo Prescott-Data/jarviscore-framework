@@ -40,13 +40,21 @@ class DynamicStrategy(BaseModel):
     """
     Credentials + application strategy resolved from the Nexus Gateway.
 
-    Strategy types map to how auth headers are injected:
-    - oauth2:     Authorization: Bearer <access_token>
-    - api_key:    X-Api-Key: <api_key>
-    - basic_auth: Authorization: Basic <base64(username:password)>
+    Where a credential belongs on the request is provider data, not a property
+    of the auth type: Okta wants `Authorization: SSWS <key>`, Zoho wants
+    `Authorization: Zoho-oauthtoken <token>`, GitLab wants `PRIVATE-TOKEN`.
+    `config` carries that placement, mirroring the Nexus broker's strategy
+    config (header_name / value_prefix / credential_field / param_name).
+
+    - oauth2:      Authorization: Bearer <access_token>  (RFC 6750)
+    - basic_auth:  Authorization: Basic <base64(username:password)>
+    - header:      <header_name>: <value_prefix><credential>
+    - query_param: ?<param_name>=<credential>
+    - api_key:     placement MUST come from config — there is no standard
     """
-    type: Literal["oauth2", "basic_auth", "api_key"]
+    type: Literal["oauth2", "basic_auth", "api_key", "header", "query_param"]
     credentials: Dict[str, str]  # access_token, api_key, username/password, etc.
+    config: Dict[str, str] = {}
     expires_at: Optional[str] = None  # ISO 8601
 
     def is_expired(self) -> bool:

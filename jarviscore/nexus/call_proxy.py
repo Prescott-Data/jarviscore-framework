@@ -26,6 +26,8 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+from .strategy import apply_strategy
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,6 +80,7 @@ class NexusCallProxy:
                 "ok":          bool,         # True if status < 400
                 "status_code": int,
                 "body":        str,          # raw response text
+                "content":     bytes,        # raw response body, for downloads
                 "json":        Any,          # parsed JSON or None
                 "headers":     dict,
             }
@@ -109,33 +112,14 @@ class NexusCallProxy:
             store = get_store()
             # connection_id is treated as provider name in local mode
             provider = connection_id.split(":")[0].lower()   # e.g. "github:user123" → "github"
-            auth_info = store.build_auth_info(provider)
-            if not auth_info:
+            strategy = store.build_strategy(provider)
+            if strategy is None:
                 raise RuntimeError(
                     f"NexusCallProxy: no credentials found for {connection_id!r}. "
                     f"Run: python -m jarviscore.cli nexus register {provider} --client-id=... --client-secret=..."
                 )
-            # Build the httpx request with auth injected directly from auth_info
-            merged_headers = dict(headers or {})
-            auth_type = store.get(provider).get("auth_type", "")
-            if auth_type == "oauth2":
-                token = auth_info.get("access_token", "")
-                merged_headers["Authorization"] = f"Bearer {token}"
-            elif auth_type == "api_key":
-                # For Stripe-style Bearer, X-Api-Key, or Authorization: Bearer
-                api_key = auth_info.get("api_key", "")
-                merged_headers["Authorization"] = f"Bearer {api_key}"
-            elif auth_type == "basic_auth":
-                import base64 as _b64
-                cred = f"{auth_info.get('username','')}:{auth_info.get('password','')}"
-                encoded = _b64.b64encode(cred.encode()).decode()
-                merged_headers["Authorization"] = f"Basic {encoded}"
-            request_kwargs = {
-                "method":  method.upper(),
-                "url":     url,
-                "headers": merged_headers,
-                **kwargs,
-            }
+            request_kwargs = apply_strategy(strategy, method, url, headers=headers, **kwargs)
+            url = request_kwargs["url"]
         request_kwargs.setdefault("timeout", timeout)
 
         async with httpx.AsyncClient() as client:
@@ -180,6 +164,7 @@ class NexusCallProxy:
                 "ok": response.status_code < 400,
                 "status_code": response.status_code,
                 "body": response.text,
+                "content": response.content,
                 "json": json_body,
                 "headers": dict(response.headers),
             }
@@ -215,7 +200,8 @@ class NexusCallProxy:
                 **kwargs: httpx kwargs (json=, params=, data=, headers=, etc.)
 
             Returns:
-                {"ok": bool, "status_code": int, "body": str, "json": Any, "headers": dict}
+                {"ok": bool, "status_code": int, "body": str, "content": bytes,
+                 "json": Any, "headers": dict}
 
             Raises:
                 RuntimeError if Nexus connection is unavailable.
