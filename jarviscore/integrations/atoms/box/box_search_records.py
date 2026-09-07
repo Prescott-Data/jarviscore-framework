@@ -5,11 +5,11 @@ async def box_search_records(query: str, timeout: int=30, verify_ssl: bool=True,
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        headers, auth_err = _box_auth()
+        (headers, auth_err) = _box_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         api = _box_api_root(base_url)
-        records, status, message = await _box_paginate_items(f'{api}/search', headers, limit, timeout, verify_ssl, {'query': query})
+        (records, status, message) = await _box_paginate_items(f'{api}/search', headers, limit, timeout, verify_ssl, {'query': query})
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

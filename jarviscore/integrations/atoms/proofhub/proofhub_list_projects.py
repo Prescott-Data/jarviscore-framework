@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def proofhub_list_projects(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List all projects. Official: https://github.com/ProofHub/api_v3/blob/master/README.md"""
     try:
-        root, err = _ph_root(base_url)
+        (root, err) = _ph_root(base_url)
         if err:
             return _ph_dataset([], 400, err)
-        resp, body, status, msg = await _ph_request('get', root + '/projects', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ph_request('get', root + '/projects', timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _ph_dataset([], status, msg)
         return _ph_dataset(_ph_rows(body)[:_ph_cap(limit)], status, msg)
@@ -61,7 +61,7 @@ def _ph_rows(body):
     return []
 
 async def _ph_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ph_auth(json_body=json_body is not None)
+    (headers, err) = _ph_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

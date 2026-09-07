@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def mattermost_list_conversations(team_id: str='', user_id: str='', limit: int=25, page: int=0, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List channels for a user via GET /users/me/channels or GET /users/me/teams/{team_id}/channels. Official: https://api.mattermost.com/#tag/channels"""
     try:
-        root, err = _mm_api_root(base_url)
+        (root, err) = _mm_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _mm_headers()
+        (headers, aerr) = _mm_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         team = _mm_team_id(team_id)

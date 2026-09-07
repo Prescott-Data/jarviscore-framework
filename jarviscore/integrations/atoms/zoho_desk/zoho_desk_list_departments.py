@@ -4,13 +4,13 @@ ZD_API = 'https://desk.zoho.com/api/v1'
 async def zoho_desk_list_departments(org_id: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """zoho_desk API: list departments. Official: https://desk.zoho.com/DeskAPIDocument"""
     try:
-        root, err = _zd_root(base_url)
+        (root, err) = _zd_root(base_url)
         if err:
             return _zd_dataset([], 400, err)
-        headers, aerr = _zd_headers(org_id)
+        (headers, aerr) = _zd_headers(org_id)
         if aerr:
             return _zd_dataset([], 401, aerr)
-        records, status, msg = await _zd_paginate(f'{root}/departments', headers, limit, timeout, verify_ssl)
+        (records, status, msg) = await _zd_paginate(f'{root}/departments', headers, limit, timeout, verify_ssl)
         return _zd_dataset(records, status, msg)
     except Exception as e:
         return _zd_dataset([], 500, str(e))
@@ -32,7 +32,7 @@ def _zd_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _zd_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 async def _zd_paginate(url, headers, limit, timeout, verify_ssl, extra=None):
     records: List[Dict[str, Any]] = []

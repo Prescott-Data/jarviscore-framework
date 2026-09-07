@@ -7,7 +7,7 @@ async def amplitude_create_user(payload: Dict[str, Any], timeout: int=30, verify
             return _amp_provision([], 400, 'base_url is required')
         if not isinstance(payload, dict) or not payload:
             return _amp_provision([], 400, 'payload must be a non-empty dict')
-        _, dash_host, root_err = _amp_dashboard_root(base_url)
+        (_, dash_host, root_err) = _amp_dashboard_root(base_url)
         if root_err:
             return _amp_provision([], 400, root_err)
         api_key = _amp_api_key()
@@ -48,7 +48,7 @@ def _json_dumps(value):
     if isinstance(value, str):
         return f'"{_json_escape(value)}"'
     if isinstance(value, dict):
-        parts = [f'"{_json_escape(k)}": {_json_dumps(v)}' for k, v in value.items()]
+        parts = [f'"{_json_escape(k)}": {_json_dumps(v)}' for (k, v) in value.items()]
         return '{' + ', '.join(parts) + '}'
     if isinstance(value, list):
         return '[' + ', '.join((_json_dumps(v) for v in value)) + ']'

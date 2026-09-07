@@ -6,10 +6,10 @@ async def mattermost_get_conversation(conversation_id: str, timeout: int=30, ver
         channel_id = _mm_channel_id(conversation_id)
         if not channel_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required'}
-        root, err = _mm_api_root(base_url)
+        (root, err) = _mm_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _mm_headers()
+        (headers, aerr) = _mm_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         resp = await nexus_call('GET', f'{root}/channels/{channel_id}', headers=headers)

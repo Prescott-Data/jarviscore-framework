@@ -6,10 +6,10 @@ async def etsy_get_customer(customer_id: str, timeout: int=30, verify_ssl: bool=
     try:
         if not customer_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'customer_id (user_id) is required'}
-        api, err = _etsy_api_root(base_url)
+        (api, err) = _etsy_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _etsy_auth()
+        (headers, auth_err) = _etsy_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         user_id = str(customer_id).strip()

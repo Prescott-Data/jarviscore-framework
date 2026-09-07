@@ -4,24 +4,24 @@ _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 async def google_ads_remove_ad(customer_id: str, ad_id: str, resource_name: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Remove a ad in google ads. Official: https://developers.google.com/google-ads/api/rest/reference/rest/v24/customers.adGroupAds/mutate"""
     try:
-        api, err = _gads_api_root(base_url)
+        (api, err) = _gads_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        cid, err = _gads_customer_id(customer_id)
+        (cid, err) = _gads_customer_id(customer_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        headers, auth_err = _gads_auth(json_body=True)
+        (headers, auth_err) = _gads_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         rn = resource_name
         if not rn and ad_id:
-            rn, status, msg = await _gads_resolve_ad(api, cid, headers, ad_id, timeout, verify_ssl)
+            (rn, status, msg) = await _gads_resolve_ad(api, cid, headers, ad_id, timeout, verify_ssl)
             if not rn:
                 return {'records': [], 'data_count': 0, 'status': status or 404, 'message': msg or 'ad not found', 'provision_ids': []}
         if not rn:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'resource_name or ad_id is required', 'provision_ids': []}
         body = {'operations': [{'remove': rn}]}
-        data, status, msg = await _gads_mutate(api, cid, 'adGroupAds', headers, body, timeout, verify_ssl)
+        (data, status, msg) = await _gads_mutate(api, cid, 'adGroupAds', headers, body, timeout, verify_ssl)
         if status >= 400 or msg != 'ok':
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg, 'provision_ids': []}
         return _gads_provision_response(data, status)
@@ -109,7 +109,7 @@ def _gads_provision_response(data: Any, status: int) -> Dict[str, Any]:
 
 async def _gads_resolve_ad(api, cid, headers, ad_id, timeout, verify_ssl):
     query = f'SELECT ad_group_ad.resource_name FROM ad_group_ad WHERE ad_group_ad.ad.id = {ad_id} LIMIT 1'
-    rows, status, msg = await _gads_search(api, cid, headers, query, 1, timeout, verify_ssl)
+    (rows, status, msg) = await _gads_search(api, cid, headers, query, 1, timeout, verify_ssl)
     if status >= 400 or not rows:
         return (None, status, msg)
     aga = rows[0].get('adGroupAd') or rows[0].get('ad_group_ad') or {}

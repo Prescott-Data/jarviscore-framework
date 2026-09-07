@@ -8,10 +8,10 @@ async def insightly_update_contact(contact_id: str, payload: Dict[str, Any], tim
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'contact_id is required'}
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _in_api_root(base_url)
+        (api, err) = _in_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _in_auth()
+        (headers, basic, auth_err) = _in_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         body = dict(payload)

@@ -5,10 +5,10 @@ async def zoho_crm_create_contact(payload: Dict[str, Any], timeout: int=30, veri
     try:
         if not isinstance(payload, dict) or not payload:
             return _provision({}, 400, 'payload is required (Last_Name is mandatory for Zoho CRM Contacts)')
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _provision({}, 400, err)
-        headers, aerr = _auth(json_body=True)
+        (headers, aerr) = _auth(json_body=True)
         if aerr:
             return _provision({}, 401, aerr)
         resp = await nexus_call('POST', root + '/Contacts', headers=headers, json={'data': [payload]})

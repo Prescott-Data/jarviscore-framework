@@ -5,7 +5,7 @@ async def sage_business_cloud_accounting_get_payment(payment_id: str, timeout: i
     try:
         if not payment_id:
             return _sage_dataset([], 400, 'payment_id is required')
-        resp, body, status, msg = await _sage_get(f'/contact_payments/{payment_id}', base_url, None, timeout, verify_ssl)
+        (resp, body, status, msg) = await _sage_get(f'/contact_payments/{payment_id}', base_url, None, timeout, verify_ssl)
         if status >= 400:
             return _sage_dataset([], status, msg)
         rec = _sage_entity_obj(body, 'contact_payment') or (body if isinstance(body, dict) else {})
@@ -59,10 +59,10 @@ def _sage_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _sage_get(path, base_url, params, timeout, verify_ssl):
-    headers, err = _sage_auth()
+    (headers, err) = _sage_auth()
     if err:
         return (None, None, 401, err)
-    root, _ = _sage_root(base_url)
+    (root, _) = _sage_root(base_url)
     resp = await nexus_call('GET', root + path, headers=headers, params=params)
     try:
         body = resp['json'] if resp['content'] else {}

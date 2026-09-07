@@ -7,16 +7,16 @@ async def gcs_search_records(bucket_name: str, query: str, limit: int=25, timeou
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required (object name prefix)'}
-        api, _, err = _gcs_api_root(base_url)
+        (api, _, err) = _gcs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        bucket, err = _gcs_bucket(bucket_name)
+        (bucket, err) = _gcs_bucket(bucket_name)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _gcs_auth()
+        (headers, auth_err) = _gcs_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message, _ = await _gcs_list_objects(api, bucket, headers, limit, timeout, verify_ssl, prefix=str(query).lstrip('/'))
+        (records, status, message, _) = await _gcs_list_objects(api, bucket, headers, limit, timeout, verify_ssl, prefix=str(query).lstrip('/'))
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

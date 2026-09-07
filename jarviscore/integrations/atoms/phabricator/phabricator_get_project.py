@@ -6,7 +6,7 @@ async def phabricator_get_project(project_id: str, timeout: int=30, verify_ssl: 
         if not project_id:
             return _ph_dataset([], 400, 'project_id is required')
         params = {'constraints': _ph_id_constraints(project_id), 'limit': 1}
-        resp, result, status, msg = await _ph_conduit('project.search', params, base_url, timeout, verify_ssl)
+        (resp, result, status, msg) = await _ph_conduit('project.search', params, base_url, timeout, verify_ssl)
         if status >= 400:
             return _ph_dataset([], status, msg)
         records = _ph_rows(result)
@@ -50,14 +50,14 @@ def _ph_err(body, resp):
 
 async def _ph_conduit(method, params, base_url, timeout=30, verify_ssl=True):
     import json
-    root, err = _ph_root(base_url)
+    (root, err) = _ph_root(base_url)
     if err:
         return (None, None, 400, err)
     tok = _ph_token()
     if not tok:
         return (None, None, 401, 'auth_info.api_key is required')
     form = {'api.token': str(tok).strip()}
-    for key, val in (params or {}).items():
+    for (key, val) in (params or {}).items():
         if val is None:
             continue
         if isinstance(val, (dict, list)):

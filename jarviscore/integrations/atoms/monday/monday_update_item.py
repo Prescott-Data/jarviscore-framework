@@ -6,14 +6,14 @@ async def monday_update_item(item_id: str, payload: Dict[str, Any], timeout: int
     try:
         if not item_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'item_id is required', 'provision_ids': []}
-        base, err = _md_root(base_url)
+        (base, err) = _md_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        headers, aerr = _md_auth()
+        (headers, aerr) = _md_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr, 'provision_ids': []}
         body = payload if isinstance(payload, dict) else {}
-        board_id, berr = _md_board_id(body)
+        (board_id, berr) = _md_board_id(body)
         if berr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': berr, 'provision_ids': []}
         import json
@@ -26,7 +26,7 @@ async def monday_update_item(item_id: str, payload: Dict[str, Any], timeout: int
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload.column_values or updatable fields are required', 'provision_ids': []}
         q = 'mutation($board_id: ID!, $item_id: ID!, $column_values: JSON!) { change_multiple_column_values(board_id: $board_id, item_id: $item_id, column_values: $column_values) { id name } }'
         resp = await _md_gql(base, headers, q, {'board_id': str(board_id), 'item_id': str(item_id), 'column_values': json.dumps(col_vals)}, timeout, verify_ssl)
-        data, status, msg = _md_parse(resp)
+        (data, status, msg) = _md_parse(resp)
         if status >= 400:
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg, 'provision_ids': []}
         out = _md_provision(data, 'change_multiple_column_values', fallback_id=item_id)
@@ -62,7 +62,7 @@ def _md_parse(resp):
     except Exception:
         body = {}
     if resp['status_code'] >= 400:
-        return (None, resp['status_code'], (resp['body'] or f'HTTP {resp['status_code']}')[:1000])
+        return (None, resp['status_code'], (resp['body'] or f"HTTP {resp['status_code']}")[:1000])
     errors = body.get('errors')
     if errors:
         msg = errors[0].get('message') if isinstance(errors[0], dict) else str(errors[0])

@@ -6,13 +6,13 @@ async def liquidplanner_get_task(workspace_id: str, task_id: str, timeout: int=3
     try:
         if not task_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'task_id is required'}
-        base, err = _lp_root(base_url)
+        (base, err) = _lp_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        ws, werr = _lp_workspace(workspace_id)
+        (ws, werr) = _lp_workspace(workspace_id)
         if werr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': werr}
-        headers, aerr = _lp_headers()
+        (headers, aerr) = _lp_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         resp = await nexus_call('GET', f'{base}/workspaces/{ws}/tasks/{task_id}', headers=headers)
@@ -44,7 +44,7 @@ def _lp_auth_header():
     return (None, None)
 
 def _lp_headers(json_body=False):
-    auth, err = _lp_auth_header()
+    (auth, err) = _lp_auth_header()
     if err:
         return (None, err)
     headers = {'Accept': 'application/json', 'Authorization': auth}

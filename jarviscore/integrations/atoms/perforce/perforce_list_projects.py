@@ -3,11 +3,11 @@ from typing import Any, Dict, List, Optional
 async def perforce_list_projects(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Swarm projects (no pagination; limit applied client-side). Official: https://help.perforce.com/helix-core/helix-swarm/swarm/current/Content/Swarm/swarm-apidoc_endpoint_projects.html"""
     try:
-        root, err = _pf_root(base_url)
+        (root, err) = _pf_root(base_url)
         if err:
             return _pf_dataset([], 400, err)
         params = {}
-        resp, data, status, err = await _pf_request('get', root + '/projects', params=params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, data, status, err) = await _pf_request('get', root + '/projects', params=params, timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return _pf_dataset([], 401, err)
         if status >= 400:
@@ -46,7 +46,7 @@ def _pf_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _pf_dataset(records, status, msg):
     recs = records if isinstance(records, list) else []
@@ -65,7 +65,7 @@ def _pf_projects(data):
     return []
 
 async def _pf_request(method, url, params=None, json_body=None, data=None, timeout=30, verify_ssl=True):
-    headers, basic, err = _pf_auth(json_body=json_body is not None)
+    (headers, basic, err) = _pf_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def shift4shop_list_products(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shift4Shop REST: list product. Official: https://developers.3dcart.com/rest-api/products"""
     try:
-        root, err = _s4_root(base_url)
+        (root, err) = _s4_root(base_url)
         if err:
             return _s4_dataset([], 400, err)
-        headers, aerr = _s4_auth()
+        (headers, aerr) = _s4_auth()
         if aerr:
             return _s4_dataset([], 401, aerr)
         resp = await nexus_call('GET', root + '/Products', headers=headers, params={'limit': _s4_cap(limit)})
@@ -45,4 +45,4 @@ def _s4_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _s4_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

@@ -7,10 +7,10 @@ async def freshchat_update_conversation(conversation_id: str, fields: Dict[str, 
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required'}
         if not fields or not isinstance(fields, dict):
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'fields is required'}
-        api, err = _fc_api_root(base_url)
+        (api, err) = _fc_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _fc_auth(json_body=True)
+        (headers, auth_err) = _fc_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/conversations/{str(conversation_id).strip()}'

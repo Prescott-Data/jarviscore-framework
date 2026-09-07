@@ -4,14 +4,14 @@ _PLACES_API_ROOT = 'https://places.googleapis.com/v1'
 async def google_maps_get_record(place_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """GET places/{placeId} with FieldMask header. Official: https://developers.google.com/maps/documentation/places/web-service/reference/rest/v1/places/get"""
     try:
-        api, err = _places_api_root(base_url)
+        (api, err) = _places_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         if not place_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'place_id is required'}
         pid = place_id if place_id.startswith('places/') else f'places/{place_id}'
         field_mask = 'id,displayName,formattedAddress,location,internationalPhoneNumber,websiteUri'
-        headers, auth_err = _places_auth(None, field_mask)
+        (headers, auth_err) = _places_auth(None, field_mask)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/{pid}'

@@ -5,12 +5,12 @@ async def proofhub_search_records(query: str, limit: int=25, timeout: int=30, ve
     try:
         if not query:
             return _ph_dataset([], 400, 'query is required')
-        root, err = _ph_root(base_url)
+        (root, err) = _ph_root(base_url)
         if err:
             return _ph_dataset([], 400, err)
         cap = _ph_cap(limit)
         out = []
-        resp, body, status, msg = await _ph_request('get', root + '/projects', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ph_request('get', root + '/projects', timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _ph_dataset([], status, msg)
         for row in _ph_rows(body):
@@ -21,7 +21,7 @@ async def proofhub_search_records(query: str, limit: int=25, timeout: int=30, ve
             if len(out) >= cap:
                 break
         if len(out) < cap:
-            tasks, tstatus, tmsg = await _ph_collect_tasks(root, cap * 3, timeout, verify_ssl)
+            (tasks, tstatus, tmsg) = await _ph_collect_tasks(root, cap * 3, timeout, verify_ssl)
             if tstatus >= 400 and (not out):
                 return _ph_dataset([], tstatus, tmsg)
             for row in tasks:
@@ -83,7 +83,7 @@ def _ph_rows(body):
     return []
 
 async def _ph_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ph_auth(json_body=json_body is not None)
+    (headers, err) = _ph_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -113,7 +113,7 @@ def _ph_match(record, query):
 
 async def _ph_fetch_list_tasks(root, project_id, todolist_id, cap, timeout, verify_ssl):
     url = root + f'/projects/{project_id}/todolists/{todolist_id}/tasks'
-    resp, body, status, msg = await _ph_request('get', url, timeout=timeout, verify_ssl=verify_ssl)
+    (resp, body, status, msg) = await _ph_request('get', url, timeout=timeout, verify_ssl=verify_ssl)
     if status >= 400:
         return ([], status, msg)
     rows = _ph_rows(body)
@@ -127,7 +127,7 @@ async def _ph_collect_tasks(root, cap, timeout, verify_ssl, project_id=None):
     status = 200
     msg = 'ok'
     if project_id:
-        resp, body, status, msg = await _ph_request('get', root + f'/projects/{project_id}/todolists', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ph_request('get', root + f'/projects/{project_id}/todolists', timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return ([], status, msg)
         lists = _ph_rows(body)
@@ -136,7 +136,7 @@ async def _ph_collect_tasks(root, cap, timeout, verify_ssl, project_id=None):
         lists = []
         while len(lists) < cap:
             page = min(100, cap)
-            resp, body, status, msg = await _ph_request('get', root + '/alltodo', params={'start': start, 'limit': page}, timeout=timeout, verify_ssl=verify_ssl)
+            (resp, body, status, msg) = await _ph_request('get', root + '/alltodo', params={'start': start, 'limit': page}, timeout=timeout, verify_ssl=verify_ssl)
             if status >= 400:
                 return ([], status, msg)
             batch = _ph_rows(body)
@@ -153,7 +153,7 @@ async def _ph_collect_tasks(root, cap, timeout, verify_ssl, project_id=None):
         pid = project_id or (lst.get('project') or {}).get('id')
         if not pid or not lid:
             continue
-        batch, status, msg = await _ph_fetch_list_tasks(root, pid, lid, cap - len(records), timeout, verify_ssl)
+        (batch, status, msg) = await _ph_fetch_list_tasks(root, pid, lid, cap - len(records), timeout, verify_ssl)
         if status >= 400 and (not records):
             return ([], status, msg)
         records.extend(batch)

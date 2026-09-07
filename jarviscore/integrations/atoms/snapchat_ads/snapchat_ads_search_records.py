@@ -6,13 +6,13 @@ async def snapchat_ads_search_records(ad_account_id: str, query: str, limit: int
     try:
         if not query:
             return _sc_dataset([], 400, 'query is required')
-        root, err = _sc_root(base_url)
+        (root, err) = _sc_root(base_url)
         if err:
             return _sc_dataset([], 400, err)
-        aid, err = _sc_ad_account(ad_account_id)
+        (aid, err) = _sc_ad_account(ad_account_id)
         if err:
             return _sc_dataset([], 400, err)
-        headers, aerr = _sc_auth()
+        (headers, aerr) = _sc_auth()
         if aerr:
             return _sc_dataset([], 401, aerr)
         cap = _sc_cap(limit)
@@ -66,7 +66,7 @@ def _sc_err(resp):
             return str(data.get('debug_message') or data.get('display_message') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sc_extract_list(data, resource_key):
     records = []

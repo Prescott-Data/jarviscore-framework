@@ -36,6 +36,6 @@ async def github_get_file(owner: str, repo: str, path: str, ref: str=None) -> di
     params = {}
     if ref:
         params['ref'] = ref
-    f = await _get(f'/repos/{owner}/{repo}/contents/{path.lstrip('/')}', params=params, headers={'Accept': 'application/vnd.github+json'})
+    f = await _get(f"/repos/{owner}/{repo}/contents/{path.lstrip('/')}", params=params, headers={'Accept': 'application/vnd.github+json'})
     content = base64.b64decode(f['content']).decode('utf-8') if f.get('encoding') == 'base64' else f.get('content', '')
     return {'name': f['name'], 'path': f['path'], 'sha': f['sha'], 'size': f['size'], 'url': f['html_url'], 'content': content}

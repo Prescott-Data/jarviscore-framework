@@ -22,7 +22,7 @@ async def freshbooks_create_invoice(client_id: str, lines: list, create_date: st
             invoice['notes'] = notes
         resp = await nexus_call('POST', f'https://api.freshbooks.com/accounting/account/{account_id}/invoices/invoices', json={'invoice': invoice}, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
         if resp['status_code'] not in (200, 201):
-            return {'success': False, 'data': None, 'error': f'Create invoice failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Create invoice failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'data': resp['json'].get('response', {}).get('result', {}).get('invoice'), 'error': None}
     except Exception as e:
         return {'success': False, 'data': None, 'error': str(e)}

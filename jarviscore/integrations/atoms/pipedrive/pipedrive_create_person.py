@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 async def pipedrive_create_person(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create person. Official: https://developers.pipedrive.com/docs/api/v1/Persons"""
     try:
-        data, status, msg = await _pi_write('post', '/persons', base_url, payload, timeout=timeout, verify_ssl=verify_ssl)
+        (data, status, msg) = await _pi_write('post', '/persons', base_url, payload, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _pi_provision(data, status, msg)
         return _pi_provision(data, status, 'ok')
@@ -52,7 +52,7 @@ def _pi_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _pi_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pi_auth(json_body=json_body is not None)
+    (headers, err) = _pi_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -75,13 +75,13 @@ async def _pi_request(method, url, params=None, json_body=None, timeout=30, veri
     return (resp, body, resp['status_code'], 'ok')
 
 async def _pi_write(method, path, base_url, payload, obj_id=None, timeout=30, verify_ssl=True):
-    root, err = _pi_root(base_url)
+    (root, err) = _pi_root(base_url)
     if err:
         return ({}, 400, err)
     if not isinstance(payload, dict) or not payload:
         return ({}, 400, 'payload is required')
     url = root + path + ('/' + str(obj_id).strip() if obj_id else '')
-    resp, body, status, msg = await _pi_request(method, url, json_body=payload, timeout=timeout, verify_ssl=verify_ssl)
+    (resp, body, status, msg) = await _pi_request(method, url, json_body=payload, timeout=timeout, verify_ssl=verify_ssl)
     if status >= 400:
         return (body if isinstance(body, dict) else {}, status, msg)
     data = body.get('data') if isinstance(body, dict) else {}

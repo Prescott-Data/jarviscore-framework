@@ -5,7 +5,7 @@ async def salesflare_create_deal(payload: Dict[str, Any], timeout: int=30, verif
     try:
         if not isinstance(payload, dict) or not payload:
             return _sf_provision({}, 400, 'payload is required')
-        resp, body, status, msg = await _sf_request('POST', '/opportunities', base_url, None, payload, timeout, verify_ssl)
+        (resp, body, status, msg) = await _sf_request('POST', '/opportunities', base_url, None, payload, timeout, verify_ssl)
         if status >= 400:
             return _sf_provision(body if isinstance(body, dict) else {}, status, msg)
         return _sf_provision(body if isinstance(body, dict) else {}, status, 'ok')
@@ -37,10 +37,10 @@ def _sf_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _sf_request(method, path, base_url, params, json_body, timeout, verify_ssl):
-    headers, err = _sf_auth(json_body=json_body is not None)
+    (headers, err) = _sf_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
-    root, _ = _sf_root(base_url)
+    (root, _) = _sf_root(base_url)
     resp = await nexus_call(method, root + path, headers=headers, params=params, json=json_body)
     try:
         body = resp['json'] if resp['content'] else {}

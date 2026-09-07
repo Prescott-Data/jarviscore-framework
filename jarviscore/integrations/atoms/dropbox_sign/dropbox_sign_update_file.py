@@ -6,10 +6,10 @@ async def dropbox_sign_update_file(file_id: str, payload: Dict[str, Any], timeou
     try:
         if not file_id or not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'file_id and payload are required'}
-        api, err = _sign_api_root(base_url)
+        (api, err) = _sign_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _sign_auth(json_body=True)
+        (headers, basic, auth_err) = _sign_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await nexus_call('POST', f'{api}/signature_request/update/{file_id}', headers=headers, json=payload)

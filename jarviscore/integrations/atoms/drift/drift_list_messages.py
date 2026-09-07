@@ -6,7 +6,7 @@ async def drift_list_messages(conversation_id: str, timeout: int=30, verify_ssl:
     try:
         if not conversation_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required'}
-        headers, err = _drift_auth()
+        (headers, err) = _drift_auth()
         if err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': err}
         root = _drift_conv_root(base_url)

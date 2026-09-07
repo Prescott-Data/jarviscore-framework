@@ -4,13 +4,13 @@ LIVECHAT_AGENT_API = 'https://api.livechatinc.com/v3.6/agent'
 async def livechat_create_conversation(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Start a chat via start_chat action. Official: https://platform.text.com/docs/messaging/agent-chat-api#start-chat"""
     try:
-        base, err = _lc_root(base_url)
+        (base, err) = _lc_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
         body = payload if isinstance(payload, dict) else {}
         if body and 'chat' not in body and ('active' not in body) and ('continuous' not in body):
             body = {'chat': body}
-        resp, aerr = await _lc_post(base, 'start_chat', body, timeout, verify_ssl)
+        (resp, aerr) = await _lc_post(base, 'start_chat', body, timeout, verify_ssl)
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr, 'provision_ids': []}
         data = _lc_json(resp)
@@ -36,7 +36,7 @@ def _lc_auth_header():
     return (None, None)
 
 def _lc_headers():
-    auth, err = _lc_auth_header()
+    (auth, err) = _lc_auth_header()
     if err:
         return (None, err)
     return ({'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': auth}, None)
@@ -47,7 +47,7 @@ def _lc_action_url(base, action):
     return f'{base}/action/{action}'
 
 async def _lc_post(base, action, body, timeout, verify_ssl):
-    headers, err = _lc_headers()
+    (headers, err) = _lc_headers()
     if err:
         return (None, err)
     resp = await nexus_call('POST', _lc_action_url(base, action), headers=headers, json=body or {})

@@ -5,10 +5,10 @@ async def matomo_get_event(id_site: str, event_id: str, period: str='day', date:
     try:
         if not event_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'event_id is required (idSubtable from list_events)'}
-        site, serr = _mt_id_site(id_site)
+        (site, serr) = _mt_id_site(id_site)
         if serr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': serr}
-        resp, data, err = await _mt_api_call(base_url, 'Events.getActionFromCategoryId', {'idSite': site, 'period': period or 'day', 'date': date or 'today', 'idSubtable': str(event_id)}, timeout, verify_ssl)
+        (resp, data, err) = await _mt_api_call(base_url, 'Events.getActionFromCategoryId', {'idSite': site, 'period': period or 'day', 'date': date or 'today', 'idSubtable': str(event_id)}, timeout, verify_ssl)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         status = resp['status_code']
@@ -35,14 +35,14 @@ def _mt_id_site(id_site):
     return (str(site), None)
 
 async def _mt_api_call(base, method, params, timeout, verify_ssl):
-    root, err = _mt_root(base)
+    (root, err) = _mt_root(base)
     if err:
         return (None, None, err)
-    tok, terr = _mt_token()
+    (tok, terr) = _mt_token()
     if terr:
         return (None, None, terr)
     q = {'module': 'API', 'method': method, 'format': 'JSON', 'token_auth': tok}
-    q.update({k: v for k, v in (params or {}).items() if v not in (None, '')})
+    q.update({k: v for (k, v) in (params or {}).items() if v not in (None, '')})
     resp = await nexus_call('GET', f'{root}/index.php', params=q)
     try:
         data = resp['json'] if resp['body'] else {}

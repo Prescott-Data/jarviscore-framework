@@ -6,7 +6,7 @@ async def fullstory_create_event(name: str, properties: Optional[Dict[str, Any]]
     try:
         if not name:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'name is required'}
-        api, err = _fs_api_root(base_url)
+        (api, err) = _fs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         body: Dict[str, Any] = {'name': name}
@@ -20,7 +20,7 @@ async def fullstory_create_event(name: str, properties: Optional[Dict[str, Any]]
             body['session'] = session
         if context:
             body['context'] = context
-        headers, auth_err = _fs_fullstory_auth(json_body=True)
+        (headers, auth_err) = _fs_fullstory_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await nexus_call('POST', f'{api}/v2/events', headers=headers, json=body)

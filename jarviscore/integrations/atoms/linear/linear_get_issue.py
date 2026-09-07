@@ -8,7 +8,7 @@ async def linear_get_issue(issue_id: str) -> dict:
     try:
         resp = await nexus_call('POST', 'https://api.linear.app/graphql', json={'query': query, 'variables': {'id': issue_id}}, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Get issue failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Get issue failed: {resp['status_code']} {resp['body']}"}
         data = resp['json']
         if 'errors' in data:
             return {'success': False, 'data': None, 'error': str(data['errors'])}

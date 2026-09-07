@@ -6,10 +6,10 @@ async def xero_update_contact(contact_id: str, tenant_id: str='', name: str='', 
     try:
         if not contact_id:
             return _x_provision({}, 'Contacts', 'ContactID', 400, 'contact_id is required')
-        root, err = _x_root(base_url)
+        (root, err) = _x_root(base_url)
         if err:
             return _x_provision({}, 'Contacts', 'ContactID', 400, err)
-        headers, aerr = _x_headers(tenant_id, json_body=True)
+        (headers, aerr) = _x_headers(tenant_id, json_body=True)
         if aerr:
             return _x_provision({}, 'Contacts', 'ContactID', 401, aerr)
         contact: Dict[str, Any] = {'ContactID': str(contact_id)}
@@ -70,4 +70,4 @@ def _x_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

@@ -3,11 +3,11 @@ from typing import Any, Dict, List, Optional
 async def tawkto_list_conversations(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Tawk.to REST: list chats. Official: https://developer.tawk.to/rest-api/"""
     try:
-        root, _ = _tk_root(base_url)
-        pid, err = _tk_property()
+        (root, _) = _tk_root(base_url)
+        (pid, err) = _tk_property()
         if err:
             return _tk_dataset([], 400, err)
-        headers, aerr = _tk_auth()
+        (headers, aerr) = _tk_auth()
         if aerr:
             return _tk_dataset([], 401, aerr)
         key = str((None or {}).get('api_key') or '').strip()
@@ -34,7 +34,7 @@ def _tk_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _tk_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _tk_property():
     pid = None or None

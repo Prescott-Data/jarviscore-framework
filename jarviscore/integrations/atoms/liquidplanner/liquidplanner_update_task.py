@@ -6,13 +6,13 @@ async def liquidplanner_update_task(workspace_id: str, task_id: str, payload: Di
     try:
         if not task_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'task_id is required', 'provision_ids': []}
-        base, err = _lp_root(base_url)
+        (base, err) = _lp_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        ws, werr = _lp_workspace(workspace_id)
+        (ws, werr) = _lp_workspace(workspace_id)
         if werr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': werr, 'provision_ids': []}
-        headers, aerr = _lp_headers(json_body=True)
+        (headers, aerr) = _lp_headers(json_body=True)
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr, 'provision_ids': []}
         body = _lp_write_body('task', payload or {})
@@ -49,7 +49,7 @@ def _lp_auth_header():
     return (None, None)
 
 def _lp_headers(json_body=False):
-    auth, err = _lp_auth_header()
+    (auth, err) = _lp_auth_header()
     if err:
         return (None, err)
     headers = {'Accept': 'application/json', 'Authorization': auth}

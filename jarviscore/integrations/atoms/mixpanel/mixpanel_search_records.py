@@ -8,11 +8,11 @@ async def mixpanel_search_records(query: str, limit: int=25, timeout: int=30, ve
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        root, _ = _mp_export_root(base_url)
-        pid, perr = _mp_project_id()
+        (root, _) = _mp_export_root(base_url)
+        (pid, perr) = _mp_project_id()
         if perr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': perr}
-        headers, aerr = _mp_basic_headers()
+        (headers, aerr) = _mp_basic_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         params = {'project_id': pid, 'where': str(query), 'limit': _mp_cap(limit)}
@@ -69,7 +69,7 @@ def _mp_error_text(resp):
                 return str(data.get('error') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _host_is(url, *domains):
     """True only if url's hostname equals or is a subdomain of one of domains."""

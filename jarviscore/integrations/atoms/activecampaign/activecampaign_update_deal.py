@@ -7,10 +7,10 @@ async def activecampaign_update_deal(deal_id: str, payload: Dict[str, Any], acco
             return _ac_v3_provision([], 400, 'deal_id is required')
         if not isinstance(payload, dict) or not payload:
             return _ac_v3_provision([], 400, 'payload must be a non-empty dict')
-        api_root, err = _ac_v3_resolve_base(base_url, account)
+        (api_root, err) = _ac_v3_resolve_base(base_url, account)
         if err:
             return _ac_v3_provision([], 400, err)
-        headers, err = _ac_v3_headers(json_body=True)
+        (headers, err) = _ac_v3_headers(json_body=True)
         if err:
             return _ac_v3_provision([], 401, err)
         body = _ac_v3_wrap_resource('deal', payload)

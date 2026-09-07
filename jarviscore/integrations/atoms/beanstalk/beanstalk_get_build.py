@@ -7,10 +7,10 @@ async def beanstalk_get_build(build_id: str, account: Optional[str]=None, timeou
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'build_id is required'}
         if not repository_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'repository_id is required for Beanstalk releases'}
-        api_root, err = _beanstalk_api_root(base_url, account)
+        (api_root, err) = _beanstalk_api_root(base_url, account)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _beanstalk_auth()
+        (headers, basic, auth_err) = _beanstalk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _beanstalk_get(api_root, f'/{repository_id}/releases/{build_id}.json', headers, basic, None, timeout, verify_ssl)

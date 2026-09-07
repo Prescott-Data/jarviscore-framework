@@ -7,10 +7,10 @@ async def sage_pastel_search_records(query: str, limit: int=25, timeout: int=30,
             return _pt_dataset([], 400, 'query is required')
         cap = _pt_cap(limit)
         records = []
-        for service, rtype in (('Customer', 'customer'), ('TaxInvoice', 'tax_invoice'), ('CustomerReceipt', 'customer_receipt')):
+        for (service, rtype) in (('Customer', 'customer'), ('TaxInvoice', 'tax_invoice'), ('CustomerReceipt', 'customer_receipt')):
             if len(records) >= cap:
                 break
-            chunk, status, msg = await _pt_list(service, base_url, min(100, cap * 3), timeout, verify_ssl)
+            (chunk, status, msg) = await _pt_list(service, base_url, min(100, cap * 3), timeout, verify_ssl)
             if status >= 400 and (not records):
                 return _pt_dataset([], status, msg)
             for item in chunk:
@@ -73,13 +73,13 @@ def _pt_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _pt_get(service, base_url, path_suffix, extra_params, timeout, verify_ssl):
-    headers, err = _pt_auth()
+    (headers, err) = _pt_auth()
     if err:
         return (None, None, 401, err)
-    params, err = _pt_query(extra_params)
+    (params, err) = _pt_query(extra_params)
     if err:
         return (None, None, 401, err)
-    root, _ = _pt_root(base_url)
+    (root, _) = _pt_root(base_url)
     path = f'/{service}/Get'
     if path_suffix:
         path += f'/{path_suffix}'
@@ -103,7 +103,7 @@ async def _pt_list(service, base_url, limit, timeout, verify_ssl, extra_params=N
         params = {'$skip': skip, '$top': min(page_size, cap - len(records)), '$orderby': 'ID'}
         if extra_params:
             params.update(extra_params)
-        resp, body, status, msg = await _pt_get(service, base_url, None, params, timeout, verify_ssl)
+        (resp, body, status, msg) = await _pt_get(service, base_url, None, params, timeout, verify_ssl)
         if status >= 400:
             return (records, status, msg)
         chunk = _pt_items(body)

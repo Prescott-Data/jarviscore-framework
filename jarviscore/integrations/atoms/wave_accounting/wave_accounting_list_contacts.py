@@ -8,7 +8,7 @@ async def wave_accounting_list_contacts(business_id: str='', customer_id: str=''
         if not bid:
             return _wv_dataset([], 400, 'business_id is required')
         gql = 'query ListCustomers($id: ID!, $page: Int!, $pageSize: Int!) { business(id: $id) { customers(page: $page, pageSize: $pageSize, sort: [NAME_ASC]) { edges { node { id name email } } } } }'
-        data, status, err = await _wv_post(gql, base_url, {'id': str(bid), 'page': 1, 'pageSize': int(limit)}, timeout, verify_ssl)
+        (data, status, err) = await _wv_post(gql, base_url, {'id': str(bid), 'page': 1, 'pageSize': int(limit)}, timeout, verify_ssl)
         if err:
             return _wv_dataset([], 401, err)
         if status >= 400 or (isinstance(data, dict) and data.get('errors')):
@@ -27,7 +27,7 @@ def _wv_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 async def _wv_post(query, base_url=None, variables=None, timeout=30, verify_ssl=True):
-    headers, err = _wv_auth()
+    (headers, err) = _wv_auth()
     if err:
         return (None, 401, err)
     resp = await nexus_call('POST', base_url or _GQL, headers=headers, json={'query': query, 'variables': variables or {}})

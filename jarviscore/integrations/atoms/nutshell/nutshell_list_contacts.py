@@ -4,14 +4,14 @@ NUTSHELL_RPC = 'https://app.nutshell.com/api/v1/json'
 async def nutshell_list_contacts(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Contacts via Nutshell JSON-RPC. Official: https://developers-rpc.nutshell.com/detail/class_core.html#findContacts"""
     try:
-        base, err = _ns_root(base_url)
+        (base, err) = _ns_root(base_url)
         if err:
             return _ns_dataset([], 400, err)
-        headers, aerr = _ns_auth()
+        (headers, aerr) = _ns_auth()
         if aerr:
             return _ns_dataset([], 401, aerr)
         params = {'orderBy': 'id', 'orderDirection': 'ASC', 'stubResponses': False}
-        records, status, msg = await _ns_paginate(base, headers, 'findContacts', params, limit, timeout, verify_ssl)
+        (records, status, msg) = await _ns_paginate(base, headers, 'findContacts', params, limit, timeout, verify_ssl)
         return _ns_dataset(records, status, msg)
     except Exception as e:
         return _ns_dataset([], 500, str(e))
@@ -81,7 +81,7 @@ async def _ns_paginate(base, headers, method, params, limit, timeout, verify_ssl
         p['limit'] = min(cap - len(records), 100)
         p['page'] = page
         p.setdefault('stubResponses', False)
-        result, status, msg = await _ns_rpc(base, headers, method, p, timeout, verify_ssl, req_id=page)
+        (result, status, msg) = await _ns_rpc(base, headers, method, p, timeout, verify_ssl, req_id=page)
         if msg != 'ok':
             return (records, status, msg)
         batch = _ns_records(result)

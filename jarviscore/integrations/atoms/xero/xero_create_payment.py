@@ -10,10 +10,10 @@ async def xero_create_payment(invoice_id: str, account_id: str, amount: float, t
             return _x_provision({}, 'Payments', 'PaymentID', 400, 'account_id is required')
         if amount is None:
             return _x_provision({}, 'Payments', 'PaymentID', 400, 'amount is required')
-        root, err = _x_root(base_url)
+        (root, err) = _x_root(base_url)
         if err:
             return _x_provision({}, 'Payments', 'PaymentID', 400, err)
-        headers, aerr = _x_headers(tenant_id, json_body=True)
+        (headers, aerr) = _x_headers(tenant_id, json_body=True)
         if aerr:
             return _x_provision({}, 'Payments', 'PaymentID', 401, aerr)
         payment: Dict[str, Any] = {'Invoice': {'InvoiceID': str(invoice_id)}, 'Account': {'AccountID': str(account_id)}, 'Amount': amount}
@@ -72,4 +72,4 @@ def _x_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

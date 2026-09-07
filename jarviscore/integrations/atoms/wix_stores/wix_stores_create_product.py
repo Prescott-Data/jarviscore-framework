@@ -8,10 +8,10 @@ async def wix_stores_create_product(name: str, price: float, site_id: str='', pr
             return _wx_provision({}, 400, 'name is required')
         if price is None:
             return _wx_provision({}, 400, 'price is required')
-        root, err = _wx_root(base_url)
+        (root, err) = _wx_root(base_url)
         if err:
             return _wx_provision({}, 400, err)
-        headers, aerr = _wx_headers(site_id)
+        (headers, aerr) = _wx_headers(site_id)
         if aerr:
             return _wx_provision({}, 401, aerr)
         product: Dict[str, Any] = {'name': name, 'productType': product_type, 'priceData': {'price': price}}
@@ -45,4 +45,4 @@ def _wx_provision(data, status, msg, key=None, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _wx_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

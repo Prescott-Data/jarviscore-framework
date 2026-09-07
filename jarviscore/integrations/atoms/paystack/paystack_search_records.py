@@ -3,27 +3,27 @@ from typing import Any, Dict, List, Optional
 async def paystack_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search customers: exact fetch by email/code, else list+filter; auth_info.resource=transaction searches transactions by reference/id. Official: https://paystack.com/docs/api/customer/"""
     try:
-        root, err = _ps_root(base_url)
+        (root, err) = _ps_root(base_url)
         if err:
             return _ps_dataset([], 400, err)
         resource = str(None or 'customer').lower()
         cap = _ps_cap(limit)
         if resource == 'transaction':
             params = {}
-            for key, param in (('customer', 'customer'), ('status', 'status'), ('from', 'from'), ('to', 'to'), ('amount', 'amount')):
+            for (key, param) in (('customer', 'customer'), ('status', 'status'), ('from', 'from'), ('to', 'to'), ('amount', 'amount')):
                 pass
-            records, status, msg = await _ps_paginate(root + '/transaction', params, limit, timeout, verify_ssl)
+            (records, status, msg) = await _ps_paginate(root + '/transaction', params, limit, timeout, verify_ssl)
             if query:
                 q = query.lower()
                 records = [r for r in records if q in str(r.get('reference', '')).lower() or q == str(r.get('id', ''))]
             return _ps_dataset(records[:cap], status, msg)
         if query:
-            resp, data, status, err = await _ps_request('get', root + f'/customer/{query}', timeout=timeout, verify_ssl=verify_ssl)
+            (resp, data, status, err) = await _ps_request('get', root + f'/customer/{query}', timeout=timeout, verify_ssl=verify_ssl)
             if err:
                 return _ps_dataset([], 401, err)
             if _ps_ok(resp, data):
                 return _ps_dataset(_ps_items(data), status, 'ok')
-        records, status, msg = await _ps_paginate(root + '/customer', {}, limit, timeout, verify_ssl)
+        (records, status, msg) = await _ps_paginate(root + '/customer', {}, limit, timeout, verify_ssl)
         if query:
             records = [r for r in records if _ps_match(r, query)]
         return _ps_dataset(records[:cap], status, msg)
@@ -54,7 +54,7 @@ def _ps_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _ps_ok(resp, data):
     if resp['status_code'] >= 400:
@@ -76,7 +76,7 @@ def _ps_items(data):
     return []
 
 async def _ps_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ps_auth(json_body=json_body is not None)
+    (headers, err) = _ps_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -110,7 +110,7 @@ async def _ps_paginate(url, params, limit, timeout, verify_ssl):
             req_params['use_cursor'] = 'true'
         else:
             req_params['page'] = page
-        resp, data, status, err = await _ps_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, data, status, err) = await _ps_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return (records, 401, err)
         if not _ps_ok(resp, data):

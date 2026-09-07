@@ -6,10 +6,10 @@ async def folk_get_account(account_id: str, timeout: int=30, verify_ssl: bool=Tr
     try:
         if not account_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'account_id (companyId) is required'}
-        api, err = _folk_api_root(base_url)
+        (api, err) = _folk_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _folk_auth()
+        (headers, auth_err) = _folk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         company_id = str(account_id).strip()

@@ -4,16 +4,16 @@ _FOLK_API_HOST = 'https://api.folk.app'
 async def folk_list_deals(group_id: str, object_type: str='Deals', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List deals in group (GET /v1/groups/{groupId}/Deals). Requires group_id. Bearer API key in Authorization header per Folk External API. Official: https://developer.folk.app/"""
     try:
-        api, err = _folk_api_root(base_url)
+        (api, err) = _folk_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        gid, otype, err = _folk_deal_scope(group_id, object_type)
+        (gid, otype, err) = _folk_deal_scope(group_id, object_type)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _folk_auth()
+        (headers, auth_err) = _folk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _folk_paginate(f'{api}/groups/{gid}/{otype}', headers, {}, limit, timeout, verify_ssl)
+        (records, status, message) = await _folk_paginate(f'{api}/groups/{gid}/{otype}', headers, {}, limit, timeout, verify_ssl)
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}
@@ -72,7 +72,7 @@ async def _folk_paginate(url, headers, params, limit, timeout, verify_ssl):
         if status >= 400:
             return (records, status, resp['body'][:1000])
         data = resp['json'] if resp['body'] else {}
-        batch, next_url = _folk_list_items(data)
+        (batch, next_url) = _folk_list_items(data)
         for item in batch:
             if isinstance(item, dict):
                 records.append(item)

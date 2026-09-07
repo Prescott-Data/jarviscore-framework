@@ -7,7 +7,7 @@ async def close_get_account(account_id: str, timeout: int=30, verify_ssl: bool=T
         if not account_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'account_id is required'}
         api = _close_api_root(base_url)
-        headers, basic, auth_err = _close_auth()
+        (headers, basic, auth_err) = _close_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _close_get(f'{api}/lead/{account_id}/', headers, basic, None, timeout, verify_ssl)

@@ -4,13 +4,13 @@ HEIGHT_API = 'https://api.height.app'
 async def height_list_projects(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Height lists (catalog project maps to Height list). Official: https://height.app/api-docs"""
     try:
-        api, err = _height_api_root(base_url)
+        (api, err) = _height_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _height_auth()
+        (headers, auth_err) = _height_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _height_paginate(f'{api}/lists', headers, limit, timeout, verify_ssl)
+        (records, status, message) = await _height_paginate(f'{api}/lists', headers, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

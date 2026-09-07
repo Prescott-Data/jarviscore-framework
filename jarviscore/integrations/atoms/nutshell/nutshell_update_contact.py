@@ -8,10 +8,10 @@ async def nutshell_update_contact(contact_id: str, payload: Dict[str, Any], time
             return _ns_provision({}, 400, 'contact_id is required')
         if not isinstance(payload, dict):
             return _ns_provision({}, 400, 'payload is required')
-        base, err = _ns_root(base_url)
+        (base, err) = _ns_root(base_url)
         if err:
             return _ns_provision({}, 400, err)
-        headers, aerr = _ns_auth()
+        (headers, aerr) = _ns_auth()
         if aerr:
             return _ns_provision({}, 401, aerr)
         cid = int(contact_id) if str(contact_id).isdigit() else contact_id
@@ -19,12 +19,12 @@ async def nutshell_update_contact(contact_id: str, payload: Dict[str, Any], time
         contact = dict(payload)
         contact.pop('rev', None)
         if rev is None:
-            existing, est, _ = await _ns_rpc(base, headers, 'getContact', {'contactId': cid}, timeout, verify_ssl)
+            (existing, est, _) = await _ns_rpc(base, headers, 'getContact', {'contactId': cid}, timeout, verify_ssl)
             if est >= 400 or not isinstance(existing, dict):
                 return _ns_provision({}, est if est >= 400 else 400, 'contact not found or rev missing')
             rev = existing.get('rev')
         params = {'contactId': cid, 'rev': rev, 'contact': contact}
-        result, status, msg = await _ns_rpc(base, headers, 'editContact', params, timeout, verify_ssl)
+        (result, status, msg) = await _ns_rpc(base, headers, 'editContact', params, timeout, verify_ssl)
         if msg != 'ok':
             return _ns_provision({}, status, msg, fallback_id=contact_id)
         return _ns_provision(result, status, msg, fallback_id=contact_id)

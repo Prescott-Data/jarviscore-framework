@@ -6,10 +6,10 @@ async def mattermost_list_messages(channel_id: str, limit: int=25, page: int=0, 
         cid = _mm_channel_id(channel_id)
         if not cid:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'channel_id is required'}
-        root, err = _mm_api_root(base_url)
+        (root, err) = _mm_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _mm_headers()
+        (headers, aerr) = _mm_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         per_page = min(max(int(limit or 25), 1), 200)

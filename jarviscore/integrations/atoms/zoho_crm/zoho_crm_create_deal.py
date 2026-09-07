@@ -5,10 +5,10 @@ async def zoho_crm_create_deal(payload: Dict[str, Any], timeout: int=30, verify_
     try:
         if not isinstance(payload, dict) or not payload:
             return _provision({}, 400, 'payload is required (Deal_Name and Stage are mandatory for Zoho CRM Deals)')
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _provision({}, 400, err)
-        headers, aerr = _auth(json_body=True)
+        (headers, aerr) = _auth(json_body=True)
         if aerr:
             return _provision({}, 401, aerr)
         resp = await nexus_call('POST', root + '/Deals', headers=headers, json={'data': [payload]})

@@ -8,7 +8,7 @@ async def fullstory_create_report(segment_id: str, export_type: str, format: str
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'segment_id is required'}
         if not export_type:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'export_type is required (TYPE_EVENT, TYPE_INDIVIDUAL, etc.)'}
-        api, err = _fs_api_root(base_url)
+        (api, err) = _fs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         body: Dict[str, Any] = {'segmentId': segment_id, 'type': export_type, 'format': format or 'FORMAT_CSV'}
@@ -16,7 +16,7 @@ async def fullstory_create_report(segment_id: str, export_type: str, format: str
             body['timeRange'] = time_range
         if segment_time_range:
             body['segmentTimeRange'] = segment_time_range
-        headers, auth_err = _fs_fullstory_auth(json_body=True)
+        (headers, auth_err) = _fs_fullstory_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await nexus_call('POST', f'{api}/segments/v1/exports', headers=headers, json=body)

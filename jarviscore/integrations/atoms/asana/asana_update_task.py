@@ -5,10 +5,10 @@ async def asana_update_task(task_id: str, payload: Dict[str, Any], timeout: int=
     try:
         if not task_id:
             return _asana_provision([], 400, 'task_id is required')
-        api_root, err = _asana_api_root(base_url)
+        (api_root, err) = _asana_api_root(base_url)
         if err:
             return _asana_provision([], 400, err)
-        headers, err = _asana_headers(json_body=True)
+        (headers, err) = _asana_headers(json_body=True)
         if err:
             return _asana_provision([], 401, err)
         resp = await nexus_call('PUT', f'{api_root}/tasks/{task_id}', headers=headers, json=_asana_wrap_data(payload))

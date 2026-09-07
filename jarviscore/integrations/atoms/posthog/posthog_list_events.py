@@ -5,7 +5,7 @@ async def posthog_list_events(limit: int=25, timeout: int=30, verify_ssl: bool=T
     try:
         cap = _pg_cap(limit)
         hogql = None or f'SELECT uuid, event, timestamp, distinct_id, properties FROM events ORDER BY timestamp DESC LIMIT {cap}'
-        resp, data, status, msg = await _pg_query(base_url, hogql, timeout, verify_ssl)
+        (resp, data, status, msg) = await _pg_query(base_url, hogql, timeout, verify_ssl)
         if status >= 400:
             return _pg_dataset([], status, msg)
         records = _pg_query_rows(data)[:cap]
@@ -71,7 +71,7 @@ def _pg_query_rows(data):
         for row in rows:
             vals = row.get('values') or []
             obj = {}
-            for i, col in enumerate(columns):
+            for (i, col) in enumerate(columns):
                 if i < len(vals):
                     obj[str(col)] = vals[i]
             fixed.append(obj)
@@ -80,7 +80,7 @@ def _pg_query_rows(data):
 
 async def _pg_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, private=True):
     if private:
-        headers, err = _pg_private_auth(json_body=json_body is not None)
+        (headers, err) = _pg_private_auth(json_body=json_body is not None)
     else:
         headers = {'Accept': 'application/json'}
         if json_body is not None:

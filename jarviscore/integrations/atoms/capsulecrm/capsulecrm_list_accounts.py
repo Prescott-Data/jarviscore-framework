@@ -5,10 +5,10 @@ async def capsulecrm_list_accounts(limit: int=25, timeout: int=30, verify_ssl: b
     """List Accounts via Capsule CRM API. Official: https://developer.capsulecrm.com/v2/operations/Party"""
     try:
         api = _capsule_api_root(base_url)
-        headers, auth_err = _capsule_auth()
+        (headers, auth_err) = _capsule_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _capsule_paginate(f'{api}/parties', headers, limit, timeout, verify_ssl, party_type='organisation')
+        (records, status, message) = await _capsule_paginate(f'{api}/parties', headers, limit, timeout, verify_ssl, party_type='organisation')
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

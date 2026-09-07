@@ -4,10 +4,10 @@ _TR_ROOT = 'https://api.travis-ci.com'
 async def travis_ci_list_projects(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Travis CI API v3: list projects. Official: https://developer.travis-ci.com/resource"""
     try:
-        root, err = _tr_root(base_url)
+        (root, err) = _tr_root(base_url)
         if err:
             return _tr_dataset([], 400, err)
-        headers, aerr = _tr_auth()
+        (headers, aerr) = _tr_auth()
         if aerr:
             return _tr_dataset([], 401, aerr)
         resp = await nexus_call('GET', f'{root}/repos', headers=headers, params={'limit': limit})
@@ -31,4 +31,4 @@ def _tr_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _tr_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

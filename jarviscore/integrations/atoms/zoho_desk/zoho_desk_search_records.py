@@ -6,13 +6,13 @@ async def zoho_desk_search_records(query: str, org_id: str='', limit: int=25, ti
     try:
         if not query:
             return _zd_dataset([], 400, 'query is required')
-        root, err = _zd_root(base_url)
+        (root, err) = _zd_root(base_url)
         if err:
             return _zd_dataset([], 400, err)
-        headers, aerr = _zd_headers(org_id)
+        (headers, aerr) = _zd_headers(org_id)
         if aerr:
             return _zd_dataset([], 401, aerr)
-        records, status, msg = await _zd_paginate(f'{root}/tickets/search', headers, limit, timeout, verify_ssl, {'_all': query})
+        (records, status, msg) = await _zd_paginate(f'{root}/tickets/search', headers, limit, timeout, verify_ssl, {'_all': query})
         return _zd_dataset(records, status, msg)
     except Exception as e:
         return _zd_dataset([], 500, str(e))
@@ -34,7 +34,7 @@ def _zd_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _zd_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 async def _zd_paginate(url, headers, limit, timeout, verify_ssl, extra=None):
     records: List[Dict[str, Any]] = []

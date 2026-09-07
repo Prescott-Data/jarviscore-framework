@@ -6,7 +6,7 @@ async def pivotal_tracker_list_projects(limit: int=25, timeout: int=30, verify_s
         extra = None or None
         if not isinstance(extra, dict):
             extra = {}
-        records, status, msg = await _pt_paginate('/projects', base_url, limit, timeout, verify_ssl, extra_params=extra)
+        (records, status, msg) = await _pt_paginate('/projects', base_url, limit, timeout, verify_ssl, extra_params=extra)
         return _pt_dataset(records, status, msg)
     except Exception as e:
         return _pt_dataset([], 500, str(e))
@@ -50,7 +50,7 @@ def _pt_items(data):
     return []
 
 async def _pt_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pt_auth(json_body=json_body is not None)
+    (headers, err) = _pt_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -71,7 +71,7 @@ async def _pt_request(method, url, params=None, json_body=None, timeout=30, veri
     return (resp, body, resp['status_code'], 'ok')
 
 async def _pt_paginate(path, base_url, limit, timeout, verify_ssl, extra_params=None):
-    root, err = _pt_root(base_url)
+    (root, err) = _pt_root(base_url)
     if err:
         return ([], 400, err)
     cap = _pt_cap(limit)
@@ -83,7 +83,7 @@ async def _pt_paginate(path, base_url, limit, timeout, verify_ssl, extra_params=
         params = dict(extra_params or {})
         params['limit'] = min(200, cap - len(records))
         params['offset'] = offset
-        resp, body, status, msg = await _pt_request('get', root + path, params=params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _pt_request('get', root + path, params=params, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return (records[:cap], status, msg)
         batch = _pt_items(body)

@@ -7,10 +7,10 @@ async def okta_update_group(domain: str, group_id: str, payload: Dict[str, Any],
             return _ok_provision({}, 400, 'group_id is required')
         if not isinstance(payload, dict) or not payload:
             return _ok_provision({}, 400, 'payload is required')
-        root, err = _ok_root(base_url, domain)
+        (root, err) = _ok_root(base_url, domain)
         if err:
             return _ok_provision({}, 400, err)
-        headers, aerr = _ok_auth(json_body=True)
+        (headers, aerr) = _ok_auth(json_body=True)
         if aerr:
             return _ok_provision({}, 400, aerr)
         resp = await nexus_call('PUT', f'{root}/groups/{group_id}', headers=headers, json=payload)
@@ -54,7 +54,7 @@ def _ok_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _ok_provision(data, status, msg, fallback_id=None):
     obj = data if isinstance(data, dict) else {}

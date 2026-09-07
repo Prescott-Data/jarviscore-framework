@@ -7,17 +7,17 @@ async def proofhub_update_task(task_id: str, payload: Dict[str, Any], timeout: i
             return _ph_provision({}, 400, 'task_id is required')
         if not isinstance(payload, dict) or not payload:
             return _ph_provision({}, 400, 'payload is required')
-        project_id, todolist_id, _ = _ph_ids(payload)
+        (project_id, todolist_id, _) = _ph_ids(payload)
         if not project_id or not todolist_id:
             return _ph_provision({}, 400, 'auth_info.project_id and auth_info.todolist_id are required')
-        root, err = _ph_root(base_url)
+        (root, err) = _ph_root(base_url)
         if err:
             return _ph_provision({}, 400, err)
         body_payload = dict(payload)
         for key in ('project_id', 'todolist_id', 'list_id', 'task_id'):
             body_payload.pop(key, None)
         url = root + f'/projects/{project_id}/todolists/{todolist_id}/tasks/{task_id}'
-        resp, body, status, msg = await _ph_request('put', url, json_body=body_payload, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ph_request('put', url, json_body=body_payload, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _ph_provision(body if isinstance(body, dict) else {}, status, msg, fallback_id=task_id)
         return _ph_provision(body if isinstance(body, dict) else {}, status, 'ok', fallback_id=task_id)
@@ -61,7 +61,7 @@ def _ph_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _ph_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ph_auth(json_body=json_body is not None)
+    (headers, err) = _ph_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

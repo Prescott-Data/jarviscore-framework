@@ -8,13 +8,13 @@ async def jenkins_create_pipeline(payload: Dict[str, Any], timeout: int=30, veri
         name = payload.get('name') or payload.get('job_name')
         if not name:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload.name is required'}
-        base, err = _jk_root(base_url)
+        (base, err) = _jk_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        basic, auth_err = _jk_auth()
+        (basic, auth_err) = _jk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
-        headers, _ = await _jk_crumb(base, basic, timeout, verify_ssl)
+        (headers, _) = await _jk_crumb(base, basic, timeout, verify_ssl)
         headers['Content-Type'] = 'application/xml'
         config = payload.get('config_xml') or payload.get('config')
         if not config:

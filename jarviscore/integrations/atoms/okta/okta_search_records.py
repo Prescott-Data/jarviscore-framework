@@ -5,10 +5,10 @@ async def okta_search_records(domain: str, query: str, limit: int=25, timeout: i
     try:
         if not query:
             return _ok_dataset([], 400, 'query is required')
-        root, err = _ok_root(base_url, domain)
+        (root, err) = _ok_root(base_url, domain)
         if err:
             return _ok_dataset([], 400, err)
-        headers, aerr = _ok_auth()
+        (headers, aerr) = _ok_auth()
         if aerr:
             return _ok_dataset([], 401, aerr)
         resource = str(None or None or 'users').lower()
@@ -25,7 +25,7 @@ async def okta_search_records(domain: str, query: str, limit: int=25, timeout: i
             params['filter'] = str(None)
         else:
             params['q'] = str(query)
-        records, status, msg = await _ok_paginate(f'{root}/{path}', headers, params, limit, timeout, verify_ssl)
+        (records, status, msg) = await _ok_paginate(f'{root}/{path}', headers, params, limit, timeout, verify_ssl)
         return _ok_dataset(records, status, msg)
     except Exception as e:
         return _ok_dataset([], 500, str(e))
@@ -62,7 +62,7 @@ def _ok_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _ok_dataset(records, status, msg):
     recs = records if isinstance(records, list) else []

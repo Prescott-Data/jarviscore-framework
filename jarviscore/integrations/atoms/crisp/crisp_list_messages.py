@@ -4,14 +4,14 @@ CRISP_API = 'https://api.crisp.chat/v1'
 async def crisp_list_messages(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List messages from crisp. HTTP Basic site_id:api_key. Official: https://docs.crisp.chat/references/rest-api/v1/"""
     try:
-        headers, basic, site_id = _crisp_auth()
+        (headers, basic, site_id) = _crisp_auth()
         if not site_id or not basic:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': 'auth_info requires site_id and api_key for Basic auth'}
-        session_id, err = _crisp_session_id()
+        (session_id, err) = _crisp_session_id()
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         api = _crisp_api_root(base_url)
-        records, status, message = await _crisp_list_messages(api, site_id, session_id, headers, basic, limit, timeout, verify_ssl)
+        (records, status, message) = await _crisp_list_messages(api, site_id, session_id, headers, basic, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}
@@ -78,7 +78,7 @@ async def _crisp_list_messages(api, site_id, session_id, headers, basic, limit, 
         status = resp['status_code']
         if status >= 400:
             return (records, status, resp['body'][:1000])
-        data, _ = _crisp_parse(resp)
+        (data, _) = _crisp_parse(resp)
         batch = _crisp_records(data)
         if not batch:
             break

@@ -7,10 +7,10 @@ async def zoho_crm_update_contact(contact_id: str, payload: Dict[str, Any], time
             return _provision({}, 400, 'contact_id is required')
         if not isinstance(payload, dict) or not payload:
             return _provision({}, 400, 'payload is required')
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _provision({}, 400, err)
-        headers, aerr = _auth(json_body=True)
+        (headers, aerr) = _auth(json_body=True)
         if aerr:
             return _provision({}, 401, aerr)
         resp = await nexus_call('PUT', root + '/Contacts/' + str(contact_id), headers=headers, json={'data': [payload]})

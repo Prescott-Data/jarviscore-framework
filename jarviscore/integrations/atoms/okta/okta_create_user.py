@@ -5,10 +5,10 @@ async def okta_create_user(domain: str, payload: Dict[str, Any], timeout: int=30
     try:
         if not isinstance(payload, dict) or not payload:
             return _ok_provision({}, 400, 'payload is required')
-        root, err = _ok_root(base_url, domain)
+        (root, err) = _ok_root(base_url, domain)
         if err:
             return _ok_provision({}, 400, err)
-        headers, aerr = _ok_auth(json_body=True)
+        (headers, aerr) = _ok_auth(json_body=True)
         if aerr:
             return _ok_provision({}, 400, aerr)
         params = {}
@@ -55,7 +55,7 @@ def _ok_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _ok_provision(data, status, msg, fallback_id=None):
     obj = data if isinstance(data, dict) else {}

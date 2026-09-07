@@ -5,10 +5,10 @@ async def square_search_records(query: str, limit: int=25, timeout: int=30, veri
     try:
         if not query:
             return _sq_dataset([], 400, 'query is required')
-        root, _ = _sq_root(base_url)
+        (root, _) = _sq_root(base_url)
         cap = _sq_cap(limit)
         body = {'limit': cap, 'query': {'filter': {'email_address': {'fuzzy': str(query)}}}}
-        _, data, status, msg = await _sq_request('post', root + '/customers/search', json_body=body, timeout=timeout, verify_ssl=verify_ssl)
+        (_, data, status, msg) = await _sq_request('post', root + '/customers/search', json_body=body, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _sq_dataset([], status, msg)
         records = [x for x in data.get('customers') or [] if isinstance(x, dict)][:cap]
@@ -41,7 +41,7 @@ def _sq_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _sq_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _sq_auth(json_body=json_body is not None)
+    (headers, err) = _sq_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

@@ -5,10 +5,10 @@ async def shopify_search_records(query: str, shop: str='', limit: int=25, timeou
     try:
         if not query:
             return _sh_dataset([], 400, 'query is required')
-        root, err = _sh_root(base_url, shop)
+        (root, err) = _sh_root(base_url, shop)
         if err:
             return _sh_dataset([], 400, err)
-        headers, aerr = _sh_auth()
+        (headers, aerr) = _sh_auth()
         if aerr:
             return _sh_dataset([], 401, aerr)
         cap = _sh_cap(limit)
@@ -56,7 +56,7 @@ def _sh_err(resp):
                 return str(errs)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sh_rows(data, resource):
     if isinstance(data, dict):

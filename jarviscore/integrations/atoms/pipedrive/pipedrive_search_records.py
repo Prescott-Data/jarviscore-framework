@@ -5,7 +5,7 @@ async def pipedrive_search_records(query: str, limit: int=25, timeout: int=30, v
     try:
         if not query:
             return _pi_dataset([], 400, 'query is required')
-        root, err = _pi_root(base_url)
+        (root, err) = _pi_root(base_url)
         if err:
             return _pi_dataset([], 400, err)
         cap = _pi_cap(limit)
@@ -17,7 +17,7 @@ async def pipedrive_search_records(query: str, limit: int=25, timeout: int=30, v
             params = {'term': str(query), 'limit': min(100, cap - len(records))}
             if cursor:
                 params['cursor'] = cursor
-            resp, body, status, msg = await _pi_request('get', root + '/itemSearch', params=params, timeout=timeout, verify_ssl=verify_ssl)
+            (resp, body, status, msg) = await _pi_request('get', root + '/itemSearch', params=params, timeout=timeout, verify_ssl=verify_ssl)
             if status >= 400:
                 return _pi_dataset(records[:cap], status, msg)
             batch = _pi_search_items(body.get('data') if isinstance(body, dict) else None)
@@ -93,7 +93,7 @@ def _pi_search_items(data):
     return []
 
 async def _pi_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pi_auth(json_body=json_body is not None)
+    (headers, err) = _pi_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

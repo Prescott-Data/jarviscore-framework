@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def activecampaign_list_lists(account: Optional[str]=None, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List lists via GET /lists (limit/offset). Official: https://developers.activecampaign.com/reference/retrieve-all-lists"""
     try:
-        api_root, err = _ac_v3_resolve_base(base_url, account)
+        (api_root, err) = _ac_v3_resolve_base(base_url, account)
         if err:
             return _ac_v3_dataset([], 400, err)
-        headers, err = _ac_v3_headers()
+        (headers, err) = _ac_v3_headers()
         if err:
             return _ac_v3_dataset([], 401, err)
         cap = _ac_v3_cap(limit)

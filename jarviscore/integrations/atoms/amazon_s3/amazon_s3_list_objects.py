@@ -7,10 +7,10 @@ async def amazon_s3_list_objects(bucket: str, prefix: Optional[str]=None, limit:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
         if not bucket:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'bucket is required'}
-        _, region, root_err = _s3_parse_base_url(base_url, bucket)
+        (_, region, root_err) = _s3_parse_base_url(base_url, bucket)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
-        access_key, secret_key, session_token, auth_region, auth_err = _s3_credentials()
+        (access_key, secret_key, session_token, auth_region, auth_err) = _s3_credentials()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         region = auth_region or region
@@ -31,7 +31,7 @@ async def amazon_s3_list_objects(bucket: str, prefix: Optional[str]=None, limit:
             status = resp['status_code']
             if status >= 400:
                 return {'records': records, 'data_count': len(records), 'status': status, 'message': resp['body'][:1000]}
-            batch, truncated, token = _s3_parse_list_xml(resp['body'])
+            (batch, truncated, token) = _s3_parse_list_xml(resp['body'])
             for item in batch:
                 records.append(item)
                 if len(records) >= cap:
@@ -54,24 +54,24 @@ def _pct_enc(text, safe=''):
     return ''.join(out)
 
 def _parse_url(url):
-    scheme, rest = ('', url)
+    (scheme, rest) = ('', url)
     if '://' in url:
-        scheme, rest = url.split('://', 1)
+        (scheme, rest) = url.split('://', 1)
     fragment = ''
     if '#' in rest:
-        rest, fragment = rest.split('#', 1)
+        (rest, fragment) = rest.split('#', 1)
     query = ''
     if '?' in rest:
-        rest, query = rest.split('?', 1)
+        (rest, query) = rest.split('?', 1)
     if '/' in rest:
-        netloc, path = rest.split('/', 1)
+        (netloc, path) = rest.split('/', 1)
         path = '/' + path
     else:
-        netloc, path = (rest, '/')
+        (netloc, path) = (rest, '/')
     return (scheme, netloc, path, query, fragment)
 
 def _build_url(scheme, netloc, path, query='', fragment=''):
-    url = f'{scheme}://{netloc}{path or '/'}'
+    url = f"{scheme}://{netloc}{path or '/'}"
     if query:
         url += '?' + query
     if fragment:
@@ -84,17 +84,17 @@ def _query_pairs(query):
         if not part:
             continue
         if '=' in part:
-            k, v = part.split('=', 1)
+            (k, v) = part.split('=', 1)
         else:
-            k, v = (part, '')
+            (k, v) = (part, '')
         pairs.append((k, v))
     return pairs
 
 def _urlencode(params):
-    return '&'.join((f'{_pct_enc(str(k))}={_pct_enc(str(v))}' for k, v in params.items()))
+    return '&'.join((f'{_pct_enc(str(k))}={_pct_enc(str(v))}' for (k, v) in params.items()))
 
 def _s3_parse_base_url(base_url: str, bucket: str):
-    scheme, netloc, path, query, fragment = _parse_url(base_url.rstrip('/'))
+    (scheme, netloc, path, query, fragment) = _parse_url(base_url.rstrip('/'))
     if scheme != 'https' or not netloc:
         return (None, None, 'base_url must be https://{bucket}.s3.{region}.amazonaws.com')
     host = netloc
@@ -104,10 +104,10 @@ def _s3_parse_base_url(base_url: str, bucket: str):
     region = 'us-east-1'
     host_bucket = None
     if '.s3.' in body:
-        host_bucket, region_part = body.split('.s3.', 1)
+        (host_bucket, region_part) = body.split('.s3.', 1)
         region = region_part.split('.')[0] or 'us-east-1'
     elif '.s3-' in body:
-        host_bucket, region = body.split('.s3-', 1)
+        (host_bucket, region) = body.split('.s3-', 1)
     else:
         return (None, None, 'base_url must match https://{bucket}.s3.{region}.amazonaws.com')
     if bucket and bucket != host_bucket:
@@ -123,15 +123,15 @@ def _s3_sign(method: str, url: str, region: str, access_key: str, secret_key: st
     from datetime import datetime as _dt
     from datetime import timezone as _tz
     headers = dict(headers or {})
-    _, host, canonical_uri, query, _ = _parse_url(url)
+    (_, host, canonical_uri, query, _) = _parse_url(url)
     if not canonical_uri.startswith('/'):
         canonical_uri = '/' + canonical_uri
     canonical_uri = _pct_enc(canonical_uri, safe='/-_.~')
-    canonical_query = '&'.join(sorted((f'{_pct_enc(k, safe='-_.~')}={_pct_enc(v, safe='-_.~')}' if v != '' else _pct_enc(k, safe='-_.~') for k, v in _query_pairs(query))))
+    canonical_query = '&'.join(sorted((f"{_pct_enc(k, safe='-_.~')}={_pct_enc(v, safe='-_.~')}" if v != '' else _pct_enc(k, safe='-_.~') for (k, v) in _query_pairs(query))))
     amz_date = _dt.now(_tz.utc).strftime('%Y%m%dT%H%M%SZ')
     date_stamp = amz_date[:8]
     payload_hash = _hashlib.sha256(payload if isinstance(payload, (bytes, bytearray)) else str(payload or '').encode('utf-8')).hexdigest()
-    headers = {k.lower(): v.strip() for k, v in headers.items()}
+    headers = {k.lower(): v.strip() for (k, v) in headers.items()}
     headers['host'] = host
     headers['x-amz-content-sha256'] = payload_hash
     headers['x-amz-date'] = amz_date
@@ -153,7 +153,7 @@ def _s3_sign(method: str, url: str, region: str, access_key: str, secret_key: st
     k_signing = _sign(k_service, 'aws4_request')
     signature = _hmac.new(k_signing, string_to_sign.encode('utf-8'), _hashlib.sha256).hexdigest()
     authorization = f'{algorithm} Credential={access_key}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}'
-    out = {k if k.startswith('x-amz-') or k == 'host' else k.title(): v for k, v in headers.items() if k not in ('host',)}
+    out = {k if k.startswith('x-amz-') or k == 'host' else k.title(): v for (k, v) in headers.items() if k not in ('host',)}
     out['Authorization'] = authorization
     out['X-Amz-Date'] = amz_date
     out['X-Amz-Content-Sha256'] = payload_hash
@@ -162,7 +162,7 @@ def _s3_sign(method: str, url: str, region: str, access_key: str, secret_key: st
     return out
 
 async def _s3_request(method, url, region, access_key, secret_key, session_token=None, headers=None, params=None, data=None, timeout=30, verify_ssl=True):
-    scheme, netloc, path, query, fragment = _parse_url(url)
+    (scheme, netloc, path, query, fragment) = _parse_url(url)
     if params:
         query = _urlencode(params)
     url = _build_url(scheme, netloc, path, query, fragment)

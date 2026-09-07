@@ -4,10 +4,10 @@ WIX_API = 'https://www.wixapis.com'
 async def wix_stores_list_products(site_id: str='', limit: int=100, offset: int=0, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """wix_stores API: list products. Official: https://dev.wix.com/docs/rest/business-solutions/stores"""
     try:
-        root, err = _wx_root(base_url)
+        (root, err) = _wx_root(base_url)
         if err:
             return _wx_dataset([], 400, err)
-        headers, aerr = _wx_headers(site_id)
+        (headers, aerr) = _wx_headers(site_id)
         if aerr:
             return _wx_dataset([], 401, aerr)
         body = {'query': {'paging': {'limit': limit, 'offset': offset}}}
@@ -35,7 +35,7 @@ def _wx_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _wx_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _wx_list(data):
     if isinstance(data, dict):

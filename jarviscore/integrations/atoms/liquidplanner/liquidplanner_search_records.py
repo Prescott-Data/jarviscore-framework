@@ -6,13 +6,13 @@ async def liquidplanner_search_records(workspace_id: str, query: str, limit: int
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        base, err = _lp_root(base_url)
+        (base, err) = _lp_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        ws, werr = _lp_workspace(workspace_id)
+        (ws, werr) = _lp_workspace(workspace_id)
         if werr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': werr}
-        headers, aerr = _lp_headers()
+        (headers, aerr) = _lp_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         filt = 'name contains ' + _lp_filter_quote(query)
@@ -46,7 +46,7 @@ def _lp_auth_header():
     return (None, None)
 
 def _lp_headers(json_body=False):
-    auth, err = _lp_auth_header()
+    (auth, err) = _lp_auth_header()
     if err:
         return (None, err)
     headers = {'Accept': 'application/json', 'Authorization': auth}

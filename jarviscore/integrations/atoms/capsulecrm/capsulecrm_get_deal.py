@@ -7,7 +7,7 @@ async def capsulecrm_get_deal(deal_id: str, timeout: int=30, verify_ssl: bool=Tr
         if not deal_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'deal_id is required'}
         api = _capsule_api_root(base_url)
-        headers, auth_err = _capsule_auth()
+        (headers, auth_err) = _capsule_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _capsule_get(f'{api}/opportunities/{deal_id}', headers, None, timeout, verify_ssl)

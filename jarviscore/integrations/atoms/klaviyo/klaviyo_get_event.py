@@ -7,10 +7,10 @@ async def klaviyo_get_event(event_id: str, timeout: int=30, verify_ssl: bool=Tru
     try:
         if not event_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'event_id is required'}
-        api, err = _kv_api_root(base_url)
+        (api, err) = _kv_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _kv_auth()
+        (headers, auth_err) = _kv_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _kv_get(f'{api}/api/events/{event_id}/', headers, None, timeout, verify_ssl)

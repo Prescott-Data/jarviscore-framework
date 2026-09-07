@@ -5,14 +5,14 @@ async def proofhub_get_task(task_id: str, timeout: int=30, verify_ssl: bool=True
     try:
         if not task_id:
             return _ph_dataset([], 400, 'task_id is required')
-        project_id, todolist_id, _ = _ph_ids()
+        (project_id, todolist_id, _) = _ph_ids()
         if not project_id or not todolist_id:
             return _ph_dataset([], 400, 'auth_info.project_id and auth_info.todolist_id are required')
-        root, err = _ph_root(base_url)
+        (root, err) = _ph_root(base_url)
         if err:
             return _ph_dataset([], 400, err)
         url = root + f'/projects/{project_id}/todolists/{todolist_id}/tasks/{task_id}'
-        resp, body, status, msg = await _ph_request('get', url, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ph_request('get', url, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _ph_dataset([], status, msg)
         rows = _ph_rows(body)
@@ -65,7 +65,7 @@ def _ph_rows(body):
     return []
 
 async def _ph_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ph_auth(json_body=json_body is not None)
+    (headers, err) = _ph_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

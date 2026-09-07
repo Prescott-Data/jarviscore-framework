@@ -8,7 +8,7 @@ async def dropbox_download_file(dropbox_path: str, destination_path: str) -> dic
     try:
         resp = await nexus_call('POST', 'https://content.dropboxapi.com/2/files/download', headers={'Authorization': f'Bearer {access_token}', 'Dropbox-API-Arg': f'{{"path": "{dropbox_path}"}}'})
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Download failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Download failed: {resp['status_code']} {resp['body']}"}
         os.makedirs(os.path.dirname(os.path.abspath(destination_path)), exist_ok=True)
         with open(destination_path, 'wb') as f:
             f.write(resp['content'])

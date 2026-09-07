@@ -8,10 +8,10 @@ async def freshsales_get_account(account_id: str, timeout: int=30, verify_ssl: b
     try:
         if not account_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'account_id is required'}
-        api, err = _fs_api_root(base_url)
+        (api, err) = _fs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _fs_sales_auth()
+        (headers, auth_err) = _fs_sales_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/sales_accounts/{str(account_id).strip()}'

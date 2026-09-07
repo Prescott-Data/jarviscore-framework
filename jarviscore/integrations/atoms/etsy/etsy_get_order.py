@@ -6,13 +6,13 @@ async def etsy_get_order(shop_id: str, order_id: str, timeout: int=30, verify_ss
     try:
         if not order_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'order_id (receipt_id) is required'}
-        api, err = _etsy_api_root(base_url)
+        (api, err) = _etsy_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        sid, err = _etsy_shop_id(shop_id)
+        (sid, err) = _etsy_shop_id(shop_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _etsy_auth()
+        (headers, auth_err) = _etsy_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         receipt_id = str(order_id).strip()

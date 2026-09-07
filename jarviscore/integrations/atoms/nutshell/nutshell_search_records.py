@@ -6,14 +6,14 @@ async def nutshell_search_records(query: str, limit: int=25, timeout: int=30, ve
     try:
         if not query:
             return _ns_dataset([], 400, 'query is required')
-        base, err = _ns_root(base_url)
+        (base, err) = _ns_root(base_url)
         if err:
             return _ns_dataset([], 400, err)
-        headers, aerr = _ns_auth()
+        (headers, aerr) = _ns_auth()
         if aerr:
             return _ns_dataset([], 401, aerr)
         cap = _ns_cap(limit)
-        result, status, msg = await _ns_rpc(base, headers, 'searchUniversal', {'string': str(query), 'limit': cap}, timeout, verify_ssl)
+        (result, status, msg) = await _ns_rpc(base, headers, 'searchUniversal', {'string': str(query), 'limit': cap}, timeout, verify_ssl)
         if msg != 'ok':
             return _ns_dataset([], status, msg)
         records = _ns_records(result)[:cap]

@@ -4,16 +4,16 @@ MONDAY_API = 'https://api.monday.com/v2'
 async def monday_list_items(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List board items via GraphQL items_page with next_items_page pagination. Official: https://developer.monday.com/api-reference/reference/items-page"""
     try:
-        base, err = _md_root(base_url)
+        (base, err) = _md_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _md_auth()
+        (headers, aerr) = _md_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
-        board_id, berr = _md_board_id()
+        (board_id, berr) = _md_board_id()
         if berr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': berr}
-        records, status, msg = await _md_items_page(base, headers, board_id, limit, None, timeout, verify_ssl)
+        (records, status, msg) = await _md_items_page(base, headers, board_id, limit, None, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}
@@ -45,7 +45,7 @@ def _md_parse(resp):
     except Exception:
         body = {}
     if resp['status_code'] >= 400:
-        return (None, resp['status_code'], (resp['body'] or f'HTTP {resp['status_code']}')[:1000])
+        return (None, resp['status_code'], (resp['body'] or f"HTTP {resp['status_code']}")[:1000])
     errors = body.get('errors')
     if errors:
         msg = errors[0].get('message') if isinstance(errors[0], dict) else str(errors[0])
@@ -78,7 +78,7 @@ async def _md_items_page(base, headers, board_id, limit, query_params, timeout, 
             q = 'query($board_id: [ID!], $limit: Int!, $query_params: ItemsQuery) { boards(ids: $board_id) { items_page(limit: $limit, query_params: $query_params) { cursor items { id name state created_at updated_at url } } } }'
             vars_ = {'board_id': [str(board_id)], 'limit': batch_size, 'query_params': query_params}
         resp = await _md_gql(base, headers, q, vars_, timeout, verify_ssl)
-        data, status, msg = _md_parse(resp)
+        (data, status, msg) = _md_parse(resp)
         if status >= 400 and (not data):
             return (records, status, msg)
         if cursor:

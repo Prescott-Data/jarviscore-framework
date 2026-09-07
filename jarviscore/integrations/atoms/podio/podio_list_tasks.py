@@ -6,7 +6,7 @@ async def podio_list_tasks(limit: int=25, timeout: int=30, verify_ssl: bool=True
         params = _po_scope_params()
         if not any((k in params for k in ('org', 'space', 'app', 'responsible', 'reference', 'created_by', 'completed_by'))):
             return _po_dataset([], 400, 'auth_info requires org, space, app, responsible, reference, created_by, or completed_by filter')
-        records, status, msg = await _po_paginate_get('/task/', base_url, limit, timeout, verify_ssl, base_params=params)
+        (records, status, msg) = await _po_paginate_get('/task/', base_url, limit, timeout, verify_ssl, base_params=params)
         return _po_dataset(records, status, msg)
     except Exception as e:
         return _po_dataset([], 500, str(e))
@@ -47,7 +47,7 @@ def _po_items(data):
     return []
 
 async def _po_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _po_auth(json_body=json_body is not None)
+    (headers, err) = _po_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -77,7 +77,7 @@ def _po_scope_params():
     return params
 
 async def _po_paginate_get(path, base_url, limit, timeout, verify_ssl, base_params=None):
-    root, err = _po_root(base_url)
+    (root, err) = _po_root(base_url)
     if err:
         return ([], 400, err)
     cap = _po_cap(limit)
@@ -89,7 +89,7 @@ async def _po_paginate_get(path, base_url, limit, timeout, verify_ssl, base_para
         params = dict(base_params or {})
         params['limit'] = min(100, cap - len(records))
         params['offset'] = offset
-        resp, body, status, msg = await _po_request('get', root + path, params=params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _po_request('get', root + path, params=params, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return (records[:cap], status, msg)
         batch = _po_items(body)

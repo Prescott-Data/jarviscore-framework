@@ -7,10 +7,10 @@ async def logrocket_create_event(org_id: str, app_id: str, user_id: str, payload
         uid = user_id or (payload or {}).get('user_id') or (payload or {}).get('userID')
         if not uid:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'user_id is required', 'provision_ids': []}
-        app_base, err = _lr_app_base(base_url, org_id, app_id)
+        (app_base, err) = _lr_app_base(base_url, org_id, app_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        headers, aerr = _lr_headers(json_body=True)
+        (headers, aerr) = _lr_headers(json_body=True)
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr, 'provision_ids': []}
         body = payload if isinstance(payload, dict) else {}
@@ -36,7 +36,7 @@ def _lr_org_app(org_id, app_id):
     return (str(org), str(app), None)
 
 def _lr_app_base(base_url, org_id, app_id):
-    org, app, err = _lr_org_app(org_id, app_id)
+    (org, app, err) = _lr_org_app(org_id, app_id)
     if err:
         return (None, err)
     root = (base_url or LOGROCKET_API).rstrip('/')

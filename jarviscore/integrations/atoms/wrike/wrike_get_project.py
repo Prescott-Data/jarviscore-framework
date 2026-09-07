@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def wrike_get_project(project_id: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """wrike REST: get project. Official: https://developers.wrike.com/api/v4/"""
     try:
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _dataset([], 400, err)
         if not project_id:
             return _dataset([], 400, 'project_id is required')
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if aerr:
             return _dataset([], 401, aerr)
         resp = await nexus_call('GET', root + '/folders/' + str(project_id), headers=headers)
@@ -39,4 +39,4 @@ def _dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

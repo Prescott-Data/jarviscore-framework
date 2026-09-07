@@ -6,14 +6,14 @@ async def coda_update_task(task_id: str, payload: Dict[str, Any], timeout: int=3
     try:
         if not task_id or not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'task_id and payload are required'}
-        doc_id, table_id, err = _coda_row_context(payload)
+        (doc_id, table_id, err) = _coda_row_context(payload)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         body = _coda_row_put_body(payload)
         if not body:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload must include row cells'}
         api = _coda_api_root(base_url)
-        headers, auth_err = _coda_auth(json_body=True)
+        (headers, auth_err) = _coda_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _coda_put(f'{api}/docs/{doc_id}/tables/{table_id}/rows/{task_id}', headers, body, timeout, verify_ssl)

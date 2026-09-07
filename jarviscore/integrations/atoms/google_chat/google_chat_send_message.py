@@ -4,12 +4,12 @@ _CHAT_API_ROOT = 'https://chat.googleapis.com/v1'
 async def google_chat_send_message(space_name: str, text: str, thread_key: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Send a message to a Google Chat space. Official: https://developers.google.com/workspace/chat/api/reference/rest/v1/spaces.messages/create"""
     try:
-        api, err = _chat_api_root(base_url)
+        (api, err) = _chat_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
         if not space_name or not text:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'space_name and text are required', 'provision_ids': []}
-        headers, auth_err = _chat_auth(json_body=True)
+        (headers, auth_err) = _chat_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         space = space_name if space_name.startswith('spaces/') else f'spaces/{space_name}'

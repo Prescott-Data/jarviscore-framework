@@ -12,10 +12,10 @@ async def jumia_seller_center_update_product(product_id: str, payload: Dict[str,
         body = _jsc_product_xml(payload)
         if not body:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload must include product fields or xml'}
-        base, err = _jsc_root(base_url)
+        (base, err) = _jsc_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        user_id, api_key, cerr = _jsc_creds()
+        (user_id, api_key, cerr) = _jsc_creds()
         if cerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': cerr}
         resp = await _jsc_call(base, 'ProductUpdate', user_id, api_key, body=body, timeout=timeout, verify_ssl=verify_ssl)
@@ -51,7 +51,7 @@ def _jsc_encode(params):
         val = params[key]
         if val is None:
             continue
-        parts.append(f'{quote(str(key), safe='')}={quote(str(val), safe='')}')
+        parts.append(f"{quote(str(key), safe='')}={quote(str(val), safe='')}")
     return '&'.join(parts)
 
 def _jsc_sign(params, api_key):
@@ -63,7 +63,7 @@ def _jsc_sign(params, api_key):
 async def _jsc_call(base, action, user_id, api_key, extra=None, body=None, timeout=30, verify_ssl=True):
     params = {'Action': action, 'Format': 'JSON', 'Timestamp': _jsc_timestamp(), 'UserID': user_id, 'Version': SC_VERSION}
     if extra:
-        params.update({k: v for k, v in extra.items() if v is not None})
+        params.update({k: v for (k, v) in extra.items() if v is not None})
     params['Signature'] = _jsc_sign(params, api_key)
     if body is not None:
         return await nexus_call('POST', f'{base}/', params=params, data=body, headers={'Content-Type': 'application/xml'})
@@ -113,20 +113,20 @@ def _jsc_product_xml(payload):
         if not isinstance(item, dict):
             continue
         prod_el = ET.SubElement(root, 'Product')
-        for key, val in item.items():
+        for (key, val) in item.items():
             if key in ('xml', 'products', 'Products', 'product_data', 'ProductData'):
                 continue
             tag = field_map.get(key, key)
             if isinstance(val, dict):
                 nested = ET.SubElement(prod_el, tag)
-                for nk, nv in val.items():
+                for (nk, nv) in val.items():
                     ET.SubElement(nested, str(nk)).text = str(nv)
             elif val is not None:
                 ET.SubElement(prod_el, tag).text = str(val)
         pd = item.get('product_data') or item.get('ProductData')
         if isinstance(pd, dict):
             pd_el = ET.SubElement(prod_el, 'ProductData')
-            for nk, nv in pd.items():
+            for (nk, nv) in pd.items():
                 ET.SubElement(pd_el, str(nk)).text = str(nv)
     if not list(root):
         return None

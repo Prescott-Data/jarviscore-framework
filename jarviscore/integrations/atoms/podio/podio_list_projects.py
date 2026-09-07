@@ -6,12 +6,12 @@ async def podio_list_projects(limit: int=25, timeout: int=30, verify_ssl: bool=T
         space_id = None or None
         if space_id:
             path = '/app/space/' + str(space_id).strip() + '/'
-            records, status, msg = await _po_paginate_get(path, base_url, limit, timeout, verify_ssl)
+            (records, status, msg) = await _po_paginate_get(path, base_url, limit, timeout, verify_ssl)
         else:
-            root, err = _po_root(base_url)
+            (root, err) = _po_root(base_url)
             if err:
                 return _po_dataset([], 400, err)
-            resp, body, status, msg = await _po_request('get', root + '/app/v2/', timeout=timeout, verify_ssl=verify_ssl)
+            (resp, body, status, msg) = await _po_request('get', root + '/app/v2/', timeout=timeout, verify_ssl=verify_ssl)
             if status >= 400:
                 return _po_dataset([], status, msg)
             records = _po_items(body)[:_po_cap(limit)]
@@ -55,7 +55,7 @@ def _po_items(data):
     return []
 
 async def _po_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _po_auth(json_body=json_body is not None)
+    (headers, err) = _po_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -76,7 +76,7 @@ async def _po_request(method, url, params=None, json_body=None, timeout=30, veri
     return (resp, body, resp['status_code'], 'ok')
 
 async def _po_paginate_get(path, base_url, limit, timeout, verify_ssl, base_params=None):
-    root, err = _po_root(base_url)
+    (root, err) = _po_root(base_url)
     if err:
         return ([], 400, err)
     cap = _po_cap(limit)
@@ -88,7 +88,7 @@ async def _po_paginate_get(path, base_url, limit, timeout, verify_ssl, base_para
         params = dict(base_params or {})
         params['limit'] = min(100, cap - len(records))
         params['offset'] = offset
-        resp, body, status, msg = await _po_request('get', root + path, params=params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _po_request('get', root + path, params=params, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return (records[:cap], status, msg)
         batch = _po_items(body)

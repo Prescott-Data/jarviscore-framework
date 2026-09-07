@@ -6,10 +6,10 @@ async def less_annoying_crm_create_account(payload: Dict[str, Any], timeout: int
     try:
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        base, err = _lacrm_root(base_url)
+        (base, err) = _lacrm_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _lacrm_auth()
+        (headers, aerr) = _lacrm_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         params = dict(payload)

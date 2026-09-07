@@ -4,18 +4,18 @@ _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 async def google_ads_list_keywords(customer_id: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List a keyword in google ads. Official: https://developers.google.com/google-ads/api/docs/rest/common/search"""
     try:
-        api, err = _gads_api_root(base_url)
+        (api, err) = _gads_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        cid, err = _gads_customer_id(customer_id)
+        (cid, err) = _gads_customer_id(customer_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _gads_auth(json_body=True)
+        (headers, auth_err) = _gads_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         cap = min(max(int(limit or 25), 1), 10000)
         query = f"SELECT ad_group_criterion.criterion_id, ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, ad_group_criterion.status, ad_group_criterion.ad_group, ad_group_criterion.resource_name FROM ad_group_criterion WHERE ad_group_criterion.type = 'KEYWORD' ORDER BY ad_group_criterion.criterion_id LIMIT {cap}"
-        records, status, msg = await _gads_search(api, cid, headers, query, cap, timeout, verify_ssl)
+        (records, status, msg) = await _gads_search(api, cid, headers, query, cap, timeout, verify_ssl)
         if status >= 400 or msg != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

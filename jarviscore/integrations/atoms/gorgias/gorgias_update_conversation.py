@@ -8,10 +8,10 @@ async def gorgias_update_conversation(conversation_id: str, payload: Dict[str, A
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required'}
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _gorgias_api_root(base_url)
+        (api, err) = _gorgias_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _gorgias_require_auth(json_body=True)
+        (headers, basic, auth_err) = _gorgias_require_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _gorgias_put(f'{api}/tickets/{conversation_id}', headers, basic, payload, timeout, verify_ssl)

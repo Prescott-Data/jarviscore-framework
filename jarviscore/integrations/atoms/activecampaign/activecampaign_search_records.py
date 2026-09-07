@@ -5,10 +5,10 @@ async def activecampaign_search_records(query: str, account: Optional[str]=None,
     try:
         if not query:
             return _ac_v3_dataset([], 400, 'query is required')
-        api_root, err = _ac_v3_resolve_base(base_url, account)
+        (api_root, err) = _ac_v3_resolve_base(base_url, account)
         if err:
             return _ac_v3_dataset([], 400, err)
-        headers, err = _ac_v3_headers()
+        (headers, err) = _ac_v3_headers()
         if err:
             return _ac_v3_dataset([], 401, err)
         cap = _ac_v3_cap(limit)

@@ -4,10 +4,10 @@ _FC_API_ROOT = 'https://freedcamp.com/api/v1'
 async def freedcamp_list_tasks(project_id: Optional[str]=None, limit: int=200, offset: int=0, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List tasks (optional project_id, limit/offset max 200). Official: https://freedcamp.com/help_/tutorials/wiki/wiki_public/view/DFaab#/tasks"""
     try:
-        api, err = _fc_api_root(base_url)
+        (api, err) = _fc_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth, auth_err = _fc_auth_params()
+        (headers, auth, auth_err) = _fc_auth_params()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         params = dict(auth)
@@ -29,7 +29,7 @@ def _fc_api_root(base_url: str):
     root = (base_url or _FC_API_ROOT).rstrip('/')
     if not root.endswith('/api/v1'):
         if _host_is(root, 'freedcamp.com'):
-            root = root if root.endswith('/api/v1') else f'{root.rstrip('/')}/api/v1'
+            root = root if root.endswith('/api/v1') else f"{root.rstrip('/')}/api/v1"
         else:
             return (None, 'base_url must be Freedcamp API root (https://freedcamp.com/api/v1)')
     return (root, None)

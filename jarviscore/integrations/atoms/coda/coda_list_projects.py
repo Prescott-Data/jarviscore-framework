@@ -5,10 +5,10 @@ async def coda_list_projects(limit: int=25, timeout: int=30, verify_ssl: bool=Tr
     """List Coda docs (catalog projects) via GET /docs with pageToken pagination. Bearer API token in Authorization header. Official: https://coda.io/apis/v1"""
     try:
         api = _coda_api_root(base_url)
-        headers, auth_err = _coda_auth()
+        (headers, auth_err) = _coda_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, msg = await _coda_paginate(f'{api}/docs', headers, limit, timeout, verify_ssl)
+        (records, status, msg) = await _coda_paginate(f'{api}/docs', headers, limit, timeout, verify_ssl)
         if status >= 400:
             return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}

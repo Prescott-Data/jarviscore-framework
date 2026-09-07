@@ -6,10 +6,10 @@ async def wix_stores_create_customer(email: str, site_id: str='', first_name: st
     try:
         if not email:
             return _wx_provision({}, 400, 'email is required')
-        root, err = _wx_root(base_url)
+        (root, err) = _wx_root(base_url)
         if err:
             return _wx_provision({}, 400, err)
-        headers, aerr = _wx_headers(site_id)
+        (headers, aerr) = _wx_headers(site_id)
         if aerr:
             return _wx_provision({}, 401, aerr)
         info: Dict[str, Any] = {'emails': {'items': [{'email': email, 'primary': True}]}}
@@ -45,4 +45,4 @@ def _wx_provision(data, status, msg, key=None, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _wx_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

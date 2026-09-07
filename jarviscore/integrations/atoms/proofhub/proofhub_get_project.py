@@ -5,10 +5,10 @@ async def proofhub_get_project(project_id: str, timeout: int=30, verify_ssl: boo
     try:
         if not project_id:
             return _ph_dataset([], 400, 'project_id is required')
-        root, err = _ph_root(base_url)
+        (root, err) = _ph_root(base_url)
         if err:
             return _ph_dataset([], 400, err)
-        resp, body, status, msg = await _ph_request('get', root + '/projects/' + str(project_id), timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ph_request('get', root + '/projects/' + str(project_id), timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _ph_dataset([], status, msg)
         rows = _ph_rows(body)
@@ -61,7 +61,7 @@ def _ph_rows(body):
     return []
 
 async def _ph_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ph_auth(json_body=json_body is not None)
+    (headers, err) = _ph_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

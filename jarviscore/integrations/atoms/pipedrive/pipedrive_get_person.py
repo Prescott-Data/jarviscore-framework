@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 async def pipedrive_get_person(person_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get person by ID. Official: https://developers.pipedrive.com/docs/api/v1/Persons"""
     try:
-        records, status, msg = await _pi_get('/persons', base_url, person_id, timeout, verify_ssl)
+        (records, status, msg) = await _pi_get('/persons', base_url, person_id, timeout, verify_ssl)
         return _pi_dataset(records, status, msg)
     except Exception as e:
         return _pi_dataset([], 500, str(e))
@@ -54,7 +54,7 @@ def _pi_items(data):
     return []
 
 async def _pi_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pi_auth(json_body=json_body is not None)
+    (headers, err) = _pi_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -79,10 +79,10 @@ async def _pi_request(method, url, params=None, json_body=None, timeout=30, veri
 async def _pi_get(path, base_url, obj_id, timeout, verify_ssl):
     if not obj_id:
         return ([], 400, 'id is required')
-    root, err = _pi_root(base_url)
+    (root, err) = _pi_root(base_url)
     if err:
         return ([], 400, err)
-    resp, body, status, msg = await _pi_request('get', root + path + '/' + str(obj_id).strip(), timeout=timeout, verify_ssl=verify_ssl)
+    (resp, body, status, msg) = await _pi_request('get', root + path + '/' + str(obj_id).strip(), timeout=timeout, verify_ssl=verify_ssl)
     if status >= 400:
         return ([], status, msg)
     return (_pi_items(body.get('data') if isinstance(body, dict) else None), status, msg)

@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 async def telegram_create_message(chat_id: str, text: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Telegram Bot API: sendMessage. Official: https://core.telegram.org/bots/api"""
     try:
-        root, _, err = _tg_root(base_url)
+        (root, _, err) = _tg_root(base_url)
         if err:
             return _tg_provision({}, 401, err)
         if not chat_id or not text:
@@ -30,4 +30,4 @@ def _tg_provision(data, status, msg, fallback_id=None):
 def _tg_err(resp, data=None):
     if isinstance(data, dict) and data.get('description'):
         return str(data['description'])[:1000]
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

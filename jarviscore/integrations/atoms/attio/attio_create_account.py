@@ -7,7 +7,7 @@ async def attio_create_account(payload: Dict[str, Any], timeout: int=30, verify_
     try:
         if not base_url:
             return _attio_provision([], 400, 'base_url is required')
-        api_root, root_err = _attio_api_root(base_url)
+        (api_root, root_err) = _attio_api_root(base_url)
         if root_err:
             return _attio_provision([], 400, root_err)
         auth_err = _attio_auth_err()

@@ -5,10 +5,10 @@ async def reddit_ads_get_ad(ad_id: str, timeout: int=30, verify_ssl: bool=True, 
     try:
         if not ad_id:
             return _ra_dataset([], 400, 'ad_id is required')
-        url, err = _ra_account_path(base_url, '/ads/' + str(ad_id))
+        (url, err) = _ra_account_path(base_url, '/ads/' + str(ad_id))
         if err:
             return _ra_dataset([], 400, err)
-        resp, body, status, msg = await _ra_request('get', url, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ra_request('get', url, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _ra_dataset([], status, msg)
         obj = _ra_entity(body)
@@ -70,7 +70,7 @@ def _ra_entity(body):
     return None
 
 async def _ra_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ra_auth(json_body=json_body is not None)
+    (headers, err) = _ra_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -91,10 +91,10 @@ async def _ra_request(method, url, params=None, json_body=None, timeout=30, veri
     return (resp, body, resp['status_code'], 'ok')
 
 def _ra_account_path(base_url, suffix):
-    root, err = _ra_root(base_url)
+    (root, err) = _ra_root(base_url)
     if err:
         return (None, err)
-    account_id, err = _ra_account()
+    (account_id, err) = _ra_account()
     if err:
         return (None, err)
     suffix = suffix if suffix.startswith('/') else '/' + suffix

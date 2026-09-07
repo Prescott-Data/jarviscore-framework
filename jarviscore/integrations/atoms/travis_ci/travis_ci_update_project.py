@@ -4,12 +4,12 @@ _TR_ROOT = 'https://api.travis-ci.com'
 async def travis_ci_update_project(project_id: str, active: str='true', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Travis CI API v3: update project. Official: https://developer.travis-ci.com/resource"""
     try:
-        root, err = _tr_root(base_url)
+        (root, err) = _tr_root(base_url)
         if err:
             return _tr_provision({}, 400, err)
         if not project_id:
             return _tr_provision({}, 400, 'project_id is required')
-        headers, aerr = _tr_auth()
+        (headers, aerr) = _tr_auth()
         if aerr:
             return _tr_provision({}, 401, aerr)
         slug = project_id.replace('/', '%2F')
@@ -37,4 +37,4 @@ def _tr_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _tr_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

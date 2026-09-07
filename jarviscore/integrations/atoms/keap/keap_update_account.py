@@ -8,10 +8,10 @@ async def keap_update_account(record_id: str, payload: Dict[str, Any], timeout: 
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'record_id is required'}
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _kp_api_root(base_url)
+        (api, err) = _kp_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _kp_auth()
+        (headers, auth_err) = _kp_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _kp_patch(f'{api}/companies/{record_id}', headers, payload, timeout, verify_ssl)

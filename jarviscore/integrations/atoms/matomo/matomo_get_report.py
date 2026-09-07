@@ -5,10 +5,10 @@ async def matomo_get_report(id_site: str, report_id: str, timeout: int=30, verif
     try:
         if not report_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'report_id is required'}
-        site, serr = _mt_id_site(id_site)
+        (site, serr) = _mt_id_site(id_site)
         if serr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': serr}
-        resp, data, err = await _mt_api_call(base_url, 'ScheduledReports.getReports', {'idSite': site, 'idReport': str(report_id)}, timeout, verify_ssl)
+        (resp, data, err) = await _mt_api_call(base_url, 'ScheduledReports.getReports', {'idSite': site, 'idReport': str(report_id)}, timeout, verify_ssl)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         status = resp['status_code']
@@ -35,14 +35,14 @@ def _mt_id_site(id_site):
     return (str(site), None)
 
 async def _mt_api_call(base, method, params, timeout, verify_ssl):
-    root, err = _mt_root(base)
+    (root, err) = _mt_root(base)
     if err:
         return (None, None, err)
-    tok, terr = _mt_token()
+    (tok, terr) = _mt_token()
     if terr:
         return (None, None, terr)
     q = {'module': 'API', 'method': method, 'format': 'JSON', 'token_auth': tok}
-    q.update({k: v for k, v in (params or {}).items() if v not in (None, '')})
+    q.update({k: v for (k, v) in (params or {}).items() if v not in (None, '')})
     resp = await nexus_call('GET', f'{root}/index.php', params=q)
     try:
         data = resp['json'] if resp['body'] else {}

@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def box_list_folders(timeout: int=30, verify_ssl: bool=True, folder_id: str='0', limit: int=25, base_url: str=None) -> dict:
     """List subfolders in a folder (GET /folders/{folder_id}/items, type=folder). Official: https://developer.box.com/reference/get-folders-id-items/"""
     try:
-        headers, auth_err = _box_auth()
+        (headers, auth_err) = _box_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         api = _box_api_root(base_url)
         url = f'{api}/folders/{folder_id}/items'
-        records, status, message = await _box_paginate_typed_items(url, headers, limit, timeout, verify_ssl, 'folder')
+        (records, status, message) = await _box_paginate_typed_items(url, headers, limit, timeout, verify_ssl, 'folder')
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

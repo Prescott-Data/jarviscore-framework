@@ -7,14 +7,14 @@ async def attio_list_deals(limit: int=25, timeout: int=30, verify_ssl: bool=True
     try:
         if not base_url:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
-        api_root, root_err = _attio_api_root(base_url)
+        (api_root, root_err) = _attio_api_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
         auth_err = _attio_auth_err()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         headers = _attio_headers(json_body=True)
-        records, status, message = await _attio_query_records(api_root, 'deals', headers, limit, timeout, verify_ssl)
+        (records, status, message) = await _attio_query_records(api_root, 'deals', headers, limit, timeout, verify_ssl)
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

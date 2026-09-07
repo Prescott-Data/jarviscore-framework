@@ -4,15 +4,15 @@ _TT_ROOT = 'https://business-api.tiktok.com/open_api/v1.3'
 async def tiktok_ads_search_records(query: str, advertiser_id: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """TikTok Marketing API: Search campaigns. Official: https://business-api.tiktok.com/portal/docs"""
     try:
-        root, err = _tt_root(base_url)
+        (root, err) = _tt_root(base_url)
         if err:
             return _tt_dataset([], 400, err)
         if not query:
             return _tt_dataset([], 400, 'query is required')
-        aid, err = _tt_advertiser(advertiser_id)
+        (aid, err) = _tt_advertiser(advertiser_id)
         if err:
             return _tt_dataset([], 400, err)
-        headers, aerr = _tt_auth()
+        (headers, aerr) = _tt_auth()
         if aerr:
             return _tt_dataset([], 401, aerr)
         resp = await nexus_call('GET', root + '/campaign/get/', headers=headers, params={'advertiser_id': aid, 'page_size': 100})
@@ -46,7 +46,7 @@ def _tt_dataset(records, status, msg):
 def _tt_err(resp, data=None):
     if isinstance(data, dict):
         return str(data.get('message') or data)[:1000]
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _tt_list(data, key):
     if not isinstance(data, dict):

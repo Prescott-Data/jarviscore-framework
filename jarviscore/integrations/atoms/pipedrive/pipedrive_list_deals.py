@@ -6,7 +6,7 @@ async def pipedrive_list_deals(limit: int=25, timeout: int=30, verify_ssl: bool=
         extra = None or None
         if not isinstance(extra, dict):
             extra = {}
-        records, status, msg = await _pi_list('/deals', base_url, limit, timeout, verify_ssl, extra_params=extra)
+        (records, status, msg) = await _pi_list('/deals', base_url, limit, timeout, verify_ssl, extra_params=extra)
         return _pi_dataset(records, status, msg)
     except Exception as e:
         return _pi_dataset([], 500, str(e))
@@ -60,7 +60,7 @@ def _pi_items(data):
     return []
 
 async def _pi_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pi_auth(json_body=json_body is not None)
+    (headers, err) = _pi_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -83,7 +83,7 @@ async def _pi_request(method, url, params=None, json_body=None, timeout=30, veri
     return (resp, body, resp['status_code'], 'ok')
 
 async def _pi_list(path, base_url, limit, timeout, verify_ssl, extra_params=None):
-    root, err = _pi_root(base_url)
+    (root, err) = _pi_root(base_url)
     if err:
         return ([], 400, err)
     cap = _pi_cap(limit)
@@ -96,7 +96,7 @@ async def _pi_list(path, base_url, limit, timeout, verify_ssl, extra_params=None
         params['limit'] = min(500, cap - len(records))
         if cursor:
             params['cursor'] = cursor
-        resp, body, status, msg = await _pi_request('get', root + path, params=params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _pi_request('get', root + path, params=params, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return (records[:cap], status, msg)
         batch = _pi_items(body.get('data') if isinstance(body, dict) else None)

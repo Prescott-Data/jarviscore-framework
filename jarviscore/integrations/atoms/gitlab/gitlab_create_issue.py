@@ -4,14 +4,14 @@ _GL_API_ROOT = 'https://gitlab.com/api/v4'
 async def gitlab_create_issue(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a project issue. Official: https://docs.gitlab.com/api/issues/#create-a-new-issue"""
     try:
-        api, err = _gl_api_root(base_url)
+        (api, err) = _gl_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
         if not project_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'project_id is required', 'provision_ids': []}
         if not isinstance(payload, dict) or not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required', 'provision_ids': []}
-        headers, auth_err = _gl_auth(json_body=True)
+        (headers, auth_err) = _gl_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         pid = _gl_path_enc(project_id)

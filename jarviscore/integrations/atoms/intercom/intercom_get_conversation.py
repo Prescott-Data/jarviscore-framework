@@ -6,10 +6,10 @@ async def intercom_get_conversation(conversation_id: str, timeout: int=30, verif
     try:
         if not conversation_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required'}
-        api, err = _ic_api_root(base_url)
+        (api, err) = _ic_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _ic_auth()
+        (headers, auth_err) = _ic_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _ic_get(f'{api}/conversations/{conversation_id}', headers, None, timeout, verify_ssl)

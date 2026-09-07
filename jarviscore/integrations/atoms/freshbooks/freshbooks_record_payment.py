@@ -22,7 +22,7 @@ async def freshbooks_record_payment(invoice_id: str, amount: str, date: str, pay
             payment['notes'] = notes
         resp = await nexus_call('POST', f'https://api.freshbooks.com/accounting/account/{account_id}/payments/payments', json={'payment': payment}, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
         if resp['status_code'] not in (200, 201):
-            return {'success': False, 'data': None, 'error': f'Record payment failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Record payment failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'data': resp['json'].get('response', {}).get('result', {}).get('payment'), 'error': None}
     except Exception as e:
         return {'success': False, 'data': None, 'error': str(e)}

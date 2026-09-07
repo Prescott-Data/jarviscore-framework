@@ -8,10 +8,10 @@ async def backblaze_b2_list_folders(bucket_id: Optional[str]=None, bucket_name: 
         fail = _b2_auth_fail()
         if fail:
             return fail
-        session, err = await _b2_authorize(base_url, timeout, verify_ssl)
+        (session, err) = await _b2_authorize(base_url, timeout, verify_ssl)
         if err != 'ok':
             return {'records': [], 'data_count': 0, 'status': 401, 'message': err}
-        bid, bid_err = await _b2_resolve_bucket_id(session['api_url'], session['auth_token'], session['account_id'], bucket_id, bucket_name, timeout, verify_ssl, session.get('allowed_buckets'))
+        (bid, bid_err) = await _b2_resolve_bucket_id(session['api_url'], session['auth_token'], session['account_id'], bucket_id, bucket_name, timeout, verify_ssl, session.get('allowed_buckets'))
         if bid_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': bid_err}
         records = []
@@ -54,7 +54,7 @@ def _b2_authorize_host(base_url):
 
 async def _b2_authorize(base_url, timeout, verify_ssl):
     host = _b2_authorize_host(base_url)
-    key_id, app_key, err = _b2_credentials()
+    (key_id, app_key, err) = _b2_credentials()
     if err:
         return (None, err)
     resp = await nexus_call('GET', f'{host}/b2api/v4/b2_authorize_account', headers={'Accept': 'application/json'})
@@ -93,7 +93,7 @@ async def _b2_resolve_bucket_id(api_url, token, account_id, bucket_id, bucket_na
     return (None, f'bucket not found: {bucket_name}')
 
 def _b2_auth_fail():
-    _, _, err = _b2_credentials()
+    (_, _, err) = _b2_credentials()
     if not err:
         return None
     return {'records': [], 'data_count': 0, 'status': 401, 'message': err}

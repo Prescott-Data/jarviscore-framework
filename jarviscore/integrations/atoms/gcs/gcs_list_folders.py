@@ -5,13 +5,13 @@ _GCS_UPLOAD_ROOT = 'https://storage.googleapis.com/upload/storage/v1'
 async def gcs_list_folders(bucket_name: str, prefix: Optional[str]=None, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List folder prefixes (GET .../o?delimiter=/). response.prefixes[]. OAuth Bearer token (cloud-platform or devstorage scope). JSON API root required. Official: https://cloud.google.com/storage/docs/json_api/v1"""
     try:
-        api, _, err = _gcs_api_root(base_url)
+        (api, _, err) = _gcs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        bucket, err = _gcs_bucket(bucket_name)
+        (bucket, err) = _gcs_bucket(bucket_name)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _gcs_auth()
+        (headers, auth_err) = _gcs_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         cap = min(max(int(limit or 25), 1), 1000)

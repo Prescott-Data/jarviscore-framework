@@ -6,11 +6,11 @@ async def coda_get_task(task_id: str, timeout: int=30, verify_ssl: bool=True, ba
     try:
         if not task_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'task_id is required'}
-        doc_id, table_id, err = _coda_row_context()
+        (doc_id, table_id, err) = _coda_row_context()
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         api = _coda_api_root(base_url)
-        headers, auth_err = _coda_auth()
+        (headers, auth_err) = _coda_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _coda_get(f'{api}/docs/{doc_id}/tables/{table_id}/rows/{task_id}', headers, None, timeout, verify_ssl)

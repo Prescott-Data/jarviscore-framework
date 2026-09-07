@@ -4,8 +4,8 @@ _W3W_ROOT = 'https://api.what3words.com/v3'
 async def what3words_search_records(query: str, limit: int=5, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """what3words Public API: Search via autosuggest. Official: https://developer.what3words.com/public-api/docs"""
     try:
-        root, _ = _w3w_root(base_url)
-        key, err = _w3w_key()
+        (root, _) = _w3w_root(base_url)
+        (key, err) = _w3w_key()
         if err:
             return _w3w_dataset([], 401, err)
         if not query:
@@ -31,4 +31,4 @@ def _w3w_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _w3w_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

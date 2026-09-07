@@ -28,7 +28,7 @@ async def freshbooks_create_client(email: str, organization: str=None, first_nam
             client['mob_phone'] = phone
         resp = await nexus_call('POST', f'https://api.freshbooks.com/accounting/account/{account_id}/users/clients', json={'client': client}, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
         if resp['status_code'] not in (200, 201):
-            return {'success': False, 'data': None, 'error': f'Create client failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Create client failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'data': resp['json'].get('response', {}).get('result', {}).get('client'), 'error': None}
     except Exception as e:
         return {'success': False, 'data': None, 'error': str(e)}

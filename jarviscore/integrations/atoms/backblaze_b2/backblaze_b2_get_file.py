@@ -10,7 +10,7 @@ async def backblaze_b2_get_file(file_id: str, timeout: int=30, verify_ssl: bool=
         fail = _b2_auth_fail()
         if fail:
             return fail
-        session, err = await _b2_authorize(base_url, timeout, verify_ssl)
+        (session, err) = await _b2_authorize(base_url, timeout, verify_ssl)
         if err != 'ok':
             return {'records': [], 'data_count': 0, 'status': 401, 'message': err}
         resp = await _b2_post(session['api_url'], '/b2api/v4/b2_get_file_info', session['auth_token'], {'fileId': file_id}, timeout, verify_ssl)
@@ -35,7 +35,7 @@ def _b2_authorize_host(base_url):
 
 async def _b2_authorize(base_url, timeout, verify_ssl):
     host = _b2_authorize_host(base_url)
-    key_id, app_key, err = _b2_credentials()
+    (key_id, app_key, err) = _b2_credentials()
     if err:
         return (None, err)
     resp = await nexus_call('GET', f'{host}/b2api/v4/b2_authorize_account', headers={'Accept': 'application/json'})
@@ -57,7 +57,7 @@ async def _b2_post(api_url, path, token, body, timeout, verify_ssl):
     return await nexus_call('POST', f'{api_url}{path}', headers={'Authorization': token, 'Content-Type': 'application/json', 'Accept': 'application/json'}, json=body)
 
 def _b2_auth_fail():
-    _, _, err = _b2_credentials()
+    (_, _, err) = _b2_credentials()
     if not err:
         return None
     return {'records': [], 'data_count': 0, 'status': 401, 'message': err}

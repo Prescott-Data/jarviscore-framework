@@ -6,10 +6,10 @@ async def infobip_search_records(query: str, limit: int=25, timeout: int=30, ver
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api, err = _ib_api_root(base_url)
+        (api, err) = _ib_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _ib_auth()
+        (headers, auth_err) = _ib_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _ib_get(f'{api}/ccaas/1/conversations', headers, {'limit': 100}, timeout, verify_ssl)

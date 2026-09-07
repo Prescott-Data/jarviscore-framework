@@ -5,13 +5,13 @@ async def beanstalk_search_records(query: str, account: Optional[str]=None, time
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api_root, err = _beanstalk_api_root(base_url, account)
+        (api_root, err) = _beanstalk_api_root(base_url, account)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _beanstalk_auth()
+        (headers, basic, auth_err) = _beanstalk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        all_records, status, message = await _beanstalk_paginate(api_root, '/repositories.json', headers, basic, max(limit * 3, 50), timeout, verify_ssl)
+        (all_records, status, message) = await _beanstalk_paginate(api_root, '/repositories.json', headers, basic, max(limit * 3, 50), timeout, verify_ssl)
         if message != 'ok':
             return {'records': [], 'data_count': 0, 'status': status, 'message': message}
         q = query.lower()

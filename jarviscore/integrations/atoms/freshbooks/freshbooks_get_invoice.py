@@ -19,7 +19,7 @@ async def freshbooks_get_invoice(invoice_id: str) -> dict:
     try:
         resp = await nexus_call('GET', f'https://api.freshbooks.com/accounting/account/{account_id}/invoices/invoices/{invoice_id}', headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
         if resp['status_code'] != 200:
-            return {'success': False, 'invoice_id': invoice_id, 'data': None, 'error': f'Get invoice failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'invoice_id': invoice_id, 'data': None, 'error': f"Get invoice failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'invoice_id': invoice_id, 'data': resp['json'].get('response', {}).get('result', {}).get('invoice'), 'error': None}
     except Exception as e:
         return {'success': False, 'invoice_id': invoice_id, 'data': None, 'error': str(e)}

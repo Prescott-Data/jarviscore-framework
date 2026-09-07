@@ -6,10 +6,10 @@ async def intercom_delete_contact(contact_id: str, timeout: int=30, verify_ssl: 
     try:
         if not contact_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'contact_id is required', 'provision_ids': []}
-        api, err = _ic_api_root(base_url)
+        (api, err) = _ic_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        headers, auth_err = _ic_auth()
+        (headers, auth_err) = _ic_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         resp = await _ic_delete(f'{api}/contacts/{contact_id}', headers, timeout, verify_ssl)

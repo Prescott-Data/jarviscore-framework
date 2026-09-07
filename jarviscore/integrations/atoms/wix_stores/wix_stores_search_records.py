@@ -7,10 +7,10 @@ async def wix_stores_search_records(query: str, site_id: str='', limit: int=100,
         if not query:
             return _wx_dataset([], 400, 'query is required')
         import json
-        root, err = _wx_root(base_url)
+        (root, err) = _wx_root(base_url)
         if err:
             return _wx_dataset([], 400, err)
-        headers, aerr = _wx_headers(site_id)
+        (headers, aerr) = _wx_headers(site_id)
         if aerr:
             return _wx_dataset([], 401, aerr)
         body = {'query': {'filter': json.dumps({'name': {'$contains': query}}), 'paging': {'limit': limit}}}
@@ -38,7 +38,7 @@ def _wx_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _wx_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _wx_list(data):
     if isinstance(data, dict):

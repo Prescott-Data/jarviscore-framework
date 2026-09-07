@@ -3,15 +3,15 @@ from typing import Any, Dict, List, Optional
 async def jenkins_get_build(job_name: str, build_number: int, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get Jenkins build details. Official: https://www.jenkins.io/doc/book/using/remote-access-api/"""
     try:
-        base, err = _jk_root(base_url)
+        (base, err) = _jk_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        path, perr = _jk_job_path(job_name)
+        (path, perr) = _jk_job_path(job_name)
         if perr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': perr}
         if build_number in (None, ''):
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'build_number is required'}
-        basic, auth_err = _jk_auth()
+        (basic, auth_err) = _jk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _jk_get(f'{base}{path}/{build_number}/api/json', basic, None, timeout, verify_ssl)

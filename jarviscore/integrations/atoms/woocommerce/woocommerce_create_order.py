@@ -5,10 +5,10 @@ async def woocommerce_create_order(payload: Dict[str, Any], timeout: int=30, ver
     try:
         if not isinstance(payload, dict) or not payload:
             return _provision({}, 400, 'payload is required (e.g. line_items, billing, payment_method)')
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _provision({}, 400, err)
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if isinstance(headers, str) or aerr:
             return _provision({}, 401, aerr or headers)
         auth = headers if isinstance(headers, tuple) else None

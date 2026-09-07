@@ -4,7 +4,7 @@ async def phabricator_list_projects(limit: int=25, timeout: int=30, verify_ssl: 
     """List projects via Conduit project.search (cursor pagination). Official: https://secure.phabricator.com/conduit/"""
     try:
         params = {}
-        records, status, msg = await _ph_search('project.search', base_url, params, limit, timeout, verify_ssl)
+        (records, status, msg) = await _ph_search('project.search', base_url, params, limit, timeout, verify_ssl)
         return _ph_dataset(records, status, msg)
     except Exception as e:
         return _ph_dataset([], 500, str(e))
@@ -48,14 +48,14 @@ def _ph_err(body, resp):
 
 async def _ph_conduit(method, params, base_url, timeout=30, verify_ssl=True):
     import json
-    root, err = _ph_root(base_url)
+    (root, err) = _ph_root(base_url)
     if err:
         return (None, None, 400, err)
     tok = _ph_token()
     if not tok:
         return (None, None, 401, 'auth_info.api_key is required')
     form = {'api.token': str(tok).strip()}
-    for key, val in (params or {}).items():
+    for (key, val) in (params or {}).items():
         if val is None:
             continue
         if isinstance(val, (dict, list)):
@@ -86,7 +86,7 @@ async def _ph_search(method, base_url, base_params, limit, timeout, verify_ssl):
         params['limit'] = min(100, cap - len(records))
         if after:
             params['after'] = after
-        resp, result, status, msg = await _ph_conduit(method, params, base_url, timeout, verify_ssl)
+        (resp, result, status, msg) = await _ph_conduit(method, params, base_url, timeout, verify_ssl)
         if status >= 400:
             return (records[:cap], status, msg)
         batch = _ph_rows(result)

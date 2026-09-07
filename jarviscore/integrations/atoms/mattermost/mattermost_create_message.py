@@ -3,13 +3,13 @@ from typing import Any, Dict, List, Optional
 async def mattermost_create_message(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a post via POST /posts. Official: https://api.mattermost.com/#tag/posts"""
     try:
-        root, err = _mm_api_root(base_url)
+        (root, err) = _mm_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        headers, aerr = _mm_headers(json_body=True)
+        (headers, aerr) = _mm_headers(json_body=True)
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr, 'provision_ids': []}
-        body, berr = _mm_post_body(payload)
+        (body, berr) = _mm_post_body(payload)
         if berr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': berr, 'provision_ids': []}
         resp = await nexus_call('POST', f'{root}/posts', headers=headers, json=body)

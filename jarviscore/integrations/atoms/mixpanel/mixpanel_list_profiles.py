@@ -18,7 +18,7 @@ async def mixpanel_list_profiles(limit: int=25, timeout: int=30, verify_ssl: boo
             else:
                 form['session_id'] = session_id
                 form['page'] = str(page)
-            data, status, msg = await _mp_engage_query(base_url, '', form, timeout, verify_ssl)
+            (data, status, msg) = await _mp_engage_query(base_url, '', form, timeout, verify_ssl)
             if status >= 400 or not isinstance(data, dict):
                 if records:
                     break
@@ -65,14 +65,14 @@ def _mp_error_text(resp):
                 return str(data.get('error') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 async def _mp_engage_query(base_url, project_id, form_data, timeout, verify_ssl):
-    root, _ = _mp_query_root(base_url)
-    pid, perr = _mp_project_id(project_id)
+    (root, _) = _mp_query_root(base_url)
+    (pid, perr) = _mp_project_id(project_id)
     if perr:
         return (None, 400, perr)
-    headers, aerr = _mp_basic_headers()
+    (headers, aerr) = _mp_basic_headers()
     if aerr:
         return (None, 400, aerr)
     headers['Content-Type'] = 'application/x-www-form-urlencoded'

@@ -4,7 +4,7 @@ DRIFT_LIST_HOST = 'https://api.drift.com'
 async def drift_list_conversations(timeout: int=30, verify_ssl: bool=True, limit: int=25, base_url: str=None) -> dict:
     """List conversations (GET https://api.drift.com/conversations/list). Bearer token via auth_info. Official: https://devdocs.drift.com/docs/list-conversations"""
     try:
-        headers, err = _drift_auth()
+        (headers, err) = _drift_auth()
         if err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': err}
         root = _drift_list_root(base_url)

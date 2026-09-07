@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def rocket_chat_list_conversations(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List joined rooms (conversations). Official: https://developer.rocket.chat/apidocs/authentication-api"""
     try:
-        root, err = _rc_root(base_url)
+        (root, err) = _rc_root(base_url)
         if err:
             return _rc_dataset([], 400, err)
-        resp, body, status, msg = await _rc_request('get', root + '/rooms.get', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _rc_request('get', root + '/rooms.get', timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _rc_dataset([], status, msg)
         rows = body.get('update') if isinstance(body.get('update'), list) else []
@@ -50,7 +50,7 @@ def _rc_ok(body):
     return True
 
 async def _rc_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _rc_auth()
+    (headers, err) = _rc_auth()
     if err:
         return (None, None, 401, err)
     if json_body is not None:

@@ -4,19 +4,19 @@ _GL_API_ROOT = 'https://gitlab.com/api/v4'
 async def gitlab_get_merge_request(project_id: str, merge_request_iid: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get a single merge request. Official: https://docs.gitlab.com/api/merge_requests/#get-single-mr"""
     try:
-        api, err = _gl_api_root(base_url)
+        (api, err) = _gl_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         if not project_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'project_id is required'}
         if not merge_request_iid:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'merge_request_iid is required'}
-        headers, auth_err = _gl_auth()
+        (headers, auth_err) = _gl_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         pid = _gl_path_enc(project_id)
         iid = _gl_path_enc(merge_request_iid)
-        records, status, msg = await _gl_get_entity(f'{api}/projects/{pid}/merge_requests/{iid}', headers, timeout, verify_ssl)
+        (records, status, msg) = await _gl_get_entity(f'{api}/projects/{pid}/merge_requests/{iid}', headers, timeout, verify_ssl)
         if status >= 400 or msg != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

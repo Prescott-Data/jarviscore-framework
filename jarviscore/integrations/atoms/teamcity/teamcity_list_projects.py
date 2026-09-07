@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def teamcity_list_projects(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """TeamCity REST: list projects. Official: https://www.jetbrains.com/help/teamcity/rest/teamcity-rest.html"""
     try:
-        root, err = _tc_root(base_url)
+        (root, err) = _tc_root(base_url)
         if err:
             return _tc_dataset([], 400, err)
-        headers, aerr = _tc_auth()
+        (headers, aerr) = _tc_auth()
         if aerr:
             return _tc_dataset([], 401, aerr)
         resp = await nexus_call('GET', f'{root}/projects', headers=headers, params={'locator': f'count:{limit}'})
@@ -33,7 +33,7 @@ def _tc_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _tc_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _tc_items(data, key):
     if isinstance(data, dict):

@@ -9,7 +9,7 @@ async def posthog_get_report(report_id: str, timeout: int=30, verify_ssl: bool=T
         if not project_id:
             return _pg_dataset([], 400, 'auth_info.project_id is required')
         host = _pg_app_host(base_url)
-        resp, body, status, msg = await _pg_request('get', host + f'/api/projects/{project_id}/insights/{str(report_id).strip()}/', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _pg_request('get', host + f'/api/projects/{project_id}/insights/{str(report_id).strip()}/', timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _pg_dataset([], status, msg)
         return _pg_dataset(_pg_items(body), status, msg)
@@ -60,7 +60,7 @@ def _pg_items(data):
 
 async def _pg_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, private=True):
     if private:
-        headers, err = _pg_private_auth(json_body=json_body is not None)
+        (headers, err) = _pg_private_auth(json_body=json_body is not None)
     else:
         headers = {'Accept': 'application/json'}
         if json_body is not None:

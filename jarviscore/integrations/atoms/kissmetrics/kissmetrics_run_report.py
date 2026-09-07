@@ -6,10 +6,10 @@ async def kissmetrics_run_report(report_id: str, payload: Dict[str, Any], timeou
     try:
         if not report_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'report_id is required'}
-        api, err = _km_api_root(base_url)
+        (api, err) = _km_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _km_auth()
+        (headers, basic, auth_err) = _km_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         body = dict(payload or {})

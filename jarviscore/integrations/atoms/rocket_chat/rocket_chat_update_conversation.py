@@ -7,11 +7,11 @@ async def rocket_chat_update_conversation(conversation_id: str, payload: Dict[st
             return _rc_provision({}, 400, 'conversation_id is required')
         if not isinstance(payload, dict) or not payload.get('name'):
             return _rc_provision({}, 400, 'payload.name is required')
-        root, err = _rc_root(base_url)
+        (root, err) = _rc_root(base_url)
         if err:
             return _rc_provision({}, 400, err)
         body_payload = {'roomId': conversation_id, 'name': payload.get('name')}
-        resp, body, status, msg = await _rc_request('post', root + '/channels.rename', json_body=body_payload, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _rc_request('post', root + '/channels.rename', json_body=body_payload, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _rc_provision(body if isinstance(body, dict) else {}, status, msg, fallback_id=conversation_id)
         channel = body.get('channel') if isinstance(body.get('channel'), dict) else body
@@ -55,7 +55,7 @@ def _rc_ok(body):
     return True
 
 async def _rc_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _rc_auth()
+    (headers, err) = _rc_auth()
     if err:
         return (None, None, 401, err)
     if json_body is not None:

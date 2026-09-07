@@ -5,8 +5,8 @@ async def shortcut_get_task(task_id: str, timeout: int=30, verify_ssl: bool=True
     try:
         if not task_id:
             return _sc_dataset([], 400, 'task_id is required')
-        root, _ = _sc_root(base_url)
-        headers, err = _sc_auth()
+        (root, _) = _sc_root(base_url)
+        (headers, err) = _sc_auth()
         if err:
             return _sc_dataset([], 401, err)
         resp = await nexus_call('GET', root + '/stories/' + str(task_id), headers=headers)
@@ -46,7 +46,7 @@ def _sc_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _host_is(url, *domains):
     """True only if url's hostname equals or is a subdomain of one of domains."""

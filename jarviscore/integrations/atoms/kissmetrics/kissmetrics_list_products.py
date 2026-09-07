@@ -4,10 +4,10 @@ KM_API = 'https://query.kissmetrics.io/v3'
 async def kissmetrics_list_products(limit: int=25, offset: int=0, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List product in kissmetrics. Official: https://www.kissmetrics.io/product/workflows/api"""
     try:
-        api, err = _km_api_root(base_url)
+        (api, err) = _km_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _km_auth()
+        (headers, basic, auth_err) = _km_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         params = {'limit': min(max(int(limit or 25), 1), 50), 'offset': int(offset or 0)}

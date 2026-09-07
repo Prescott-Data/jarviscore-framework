@@ -4,16 +4,16 @@ _PEOPLE_API_ROOT = 'https://people.googleapis.com/v1'
 async def google_people_search_directory_people(query: str, read_mask: str='names,emailAddresses,phoneNumbers,organizations', max_results: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search people in the organization's directory. Official: https://developers.google.com/people/api/rest/v1/people/searchDirectoryPeople"""
     try:
-        api, err = _people_api_root(base_url)
+        (api, err) = _people_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        headers, auth_err = _people_auth()
+        (headers, auth_err) = _people_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/people:searchDirectoryPeople'
-        records, status, msg = await _people_page(url, headers, {'query': query, 'readMask': read_mask, 'sources': ['DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE']}, 'people', max_results, timeout, verify_ssl)
+        (records, status, msg) = await _people_page(url, headers, {'query': query, 'readMask': read_mask, 'sources': ['DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE']}, 'people', max_results, timeout, verify_ssl)
         if status >= 400 or msg != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

@@ -4,12 +4,12 @@ _SC_API_ROOT = 'https://adsapi.snapchat.com/v1'
 async def snapchat_ads_get_campaign(campaign_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Snapchat Marketing API: get campaign. Official: https://marketingapi.snapchat.com/docs/"""
     try:
-        root, err = _sc_root(base_url)
+        (root, err) = _sc_root(base_url)
         if err:
             return _sc_dataset([], 400, err)
         if not campaign_id:
             return _sc_dataset([], 400, 'campaign_id is required')
-        headers, aerr = _sc_auth()
+        (headers, aerr) = _sc_auth()
         if aerr:
             return _sc_dataset([], 401, aerr)
         resp = await nexus_call('GET', f'{root}/campaigns/{campaign_id}', headers=headers)
@@ -46,7 +46,7 @@ def _sc_err(resp):
             return str(data.get('debug_message') or data.get('display_message') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sc_extract_list(data, resource_key):
     records = []

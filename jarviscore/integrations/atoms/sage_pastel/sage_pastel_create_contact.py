@@ -5,7 +5,7 @@ async def sage_pastel_create_contact(payload: Dict[str, Any], timeout: int=30, v
     try:
         if not isinstance(payload, dict) or not payload:
             return _pt_provision({}, 400, 'payload is required')
-        resp, body, status, msg = await _pt_save('Customer', base_url, payload, timeout, verify_ssl)
+        (resp, body, status, msg) = await _pt_save('Customer', base_url, payload, timeout, verify_ssl)
         if status >= 400:
             return _pt_provision(body if isinstance(body, dict) else {}, status, msg)
         obj = body if isinstance(body, dict) else {}
@@ -50,13 +50,13 @@ def _pt_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _pt_save(service, base_url, payload, timeout, verify_ssl, extra_params=None):
-    headers, err = _pt_auth(json_body=True)
+    (headers, err) = _pt_auth(json_body=True)
     if err:
         return (None, None, 401, err)
-    params, err = _pt_query(extra_params)
+    (params, err) = _pt_query(extra_params)
     if err:
         return (None, None, 401, err)
-    root, _ = _pt_root(base_url)
+    (root, _) = _pt_root(base_url)
     resp = await nexus_call('POST', root + f'/{service}/Save', headers=headers, params=params, json=payload)
     try:
         body = resp['json'] if resp['content'] else {}

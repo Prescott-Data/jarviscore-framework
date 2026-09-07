@@ -6,13 +6,13 @@ async def height_search_records(query: str, limit: int=25, timeout: int=30, veri
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api, err = _height_api_root(base_url)
+        (api, err) = _height_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _height_auth()
+        (headers, auth_err) = _height_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _height_paginate(f'{api}/tasks', headers, min(limit * 5, 100), timeout, verify_ssl, {'query': query})
+        (records, status, message) = await _height_paginate(f'{api}/tasks', headers, min(limit * 5, 100), timeout, verify_ssl, {'query': query})
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         needle = query.lower()

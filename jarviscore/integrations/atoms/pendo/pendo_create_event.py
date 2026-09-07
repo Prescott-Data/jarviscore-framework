@@ -15,7 +15,7 @@ async def pendo_create_event(payload: Dict[str, Any], timeout: int=30, verify_ss
         if 'timestamp' not in body:
             body['timestamp'] = int(time.time() * 1000)
         host = _pn_host(base_url)
-        resp, data, status, err = await _pn_request('post', host + '/data/track', json_body=body, timeout=timeout, verify_ssl=verify_ssl, track=True)
+        (resp, data, status, err) = await _pn_request('post', host + '/data/track', json_body=body, timeout=timeout, verify_ssl=verify_ssl, track=True)
         if err:
             return _pn_provision({}, 401, err)
         if status >= 400:
@@ -56,7 +56,7 @@ def _pn_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _pn_provision(data, status, msg, fallback_id=None):
     obj = data if isinstance(data, dict) else {}
@@ -66,7 +66,7 @@ def _pn_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 async def _pn_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, track=False):
-    headers, err = _pn_auth(track=track, json_body=json_body is not None or method in ('post', 'put'))
+    (headers, err) = _pn_auth(track=track, json_body=json_body is not None or method in ('post', 'put'))
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

@@ -4,13 +4,13 @@ LP_CLASSIC_API = 'https://app.liquidplanner.com/api/v1'
 async def liquidplanner_list_projects(workspace_id: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List projects in a Classic workspace. Official: https://developer.liquidplanner.com/docs/treeitem-data-model"""
     try:
-        base, err = _lp_root(base_url)
+        (base, err) = _lp_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        ws, werr = _lp_workspace(workspace_id)
+        (ws, werr) = _lp_workspace(workspace_id)
         if werr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': werr}
-        headers, aerr = _lp_headers()
+        (headers, aerr) = _lp_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         resp = await nexus_call('GET', f'{base}/workspaces/{ws}/projects', headers=headers)
@@ -42,7 +42,7 @@ def _lp_auth_header():
     return (None, None)
 
 def _lp_headers(json_body=False):
-    auth, err = _lp_auth_header()
+    (auth, err) = _lp_auth_header()
     if err:
         return (None, err)
     headers = {'Accept': 'application/json', 'Authorization': auth}

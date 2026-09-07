@@ -9,7 +9,7 @@ async def attio_update_contact(contact_id: str, payload: Dict[str, Any], timeout
             return _attio_provision([], 400, 'base_url is required')
         if not contact_id:
             return _attio_provision([], 400, 'contact_id is required')
-        api_root, root_err = _attio_api_root(base_url)
+        (api_root, root_err) = _attio_api_root(base_url)
         if root_err:
             return _attio_provision([], 400, root_err)
         auth_err = _attio_auth_err()

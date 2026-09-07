@@ -8,10 +8,10 @@ async def folk_update_contact(contact_id: str, payload: Dict[str, Any], timeout:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'contact_id (personId) is required'}
         if not payload or not isinstance(payload, dict):
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _folk_api_root(base_url)
+        (api, err) = _folk_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _folk_auth(json_body=True)
+        (headers, auth_err) = _folk_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         person_id = str(contact_id).strip()

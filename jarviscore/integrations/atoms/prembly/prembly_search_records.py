@@ -5,17 +5,17 @@ async def prembly_search_records(query: str, limit: int=25, timeout: int=30, ver
     try:
         if not query:
             return _pm_dataset([], 400, 'query is required')
-        root, err = _pm_root(base_url)
+        (root, err) = _pm_root(base_url)
         if err:
             return _pm_dataset([], 400, err)
         cap = _pm_cap(limit)
         records = []
         country = None or None
         if country:
-            resp, body, status, msg = await _pm_request('get', root + '/api/v1/api/bgc/country/check-types/', params={'country_code': country}, timeout=timeout, verify_ssl=verify_ssl)
+            (resp, body, status, msg) = await _pm_request('get', root + '/api/v1/api/bgc/country/check-types/', params={'country_code': country}, timeout=timeout, verify_ssl=verify_ssl)
             if status < 400:
                 records.extend(_pm_rows(body))
-        resp, body, status, msg = await _pm_request('get', root + '/api/v1/api/bgc/check-types/', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _pm_request('get', root + '/api/v1/api/bgc/check-types/', timeout=timeout, verify_ssl=verify_ssl)
         if status < 400:
             records.extend(_pm_rows(body))
         filtered = [r for r in records if _pm_match(r, query)]
@@ -63,7 +63,7 @@ def _pm_rows(body):
     return []
 
 async def _pm_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pm_auth(json_body=json_body is not None)
+    (headers, err) = _pm_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

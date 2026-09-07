@@ -4,10 +4,10 @@ LOGROCKET_API = 'https://api.logrocket.com/v1'
 async def logrocket_list_events(org_id: str, app_id: str, limit: int=25, cursor: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List audit log entries. Official: https://docs.logrocket.com/docs/audit-log-api"""
     try:
-        app_base, err = _lr_app_base(base_url, org_id, app_id)
+        (app_base, err) = _lr_app_base(base_url, org_id, app_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _lr_headers()
+        (headers, aerr) = _lr_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         params = {'limit': min(max(int(limit or 25), 1), 100)}
@@ -33,7 +33,7 @@ def _lr_org_app(org_id, app_id):
     return (str(org), str(app), None)
 
 def _lr_app_base(base_url, org_id, app_id):
-    org, app, err = _lr_org_app(org_id, app_id)
+    (org, app, err) = _lr_org_app(org_id, app_id)
     if err:
         return (None, err)
     root = (base_url or LOGROCKET_API).rstrip('/')

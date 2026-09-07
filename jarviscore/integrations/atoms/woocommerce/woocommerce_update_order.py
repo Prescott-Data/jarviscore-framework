@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def woocommerce_update_order(order_id: str, name: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """woocommerce REST: update order. Official: https://woocommerce.github.io/woocommerce-rest-api-docs/"""
     try:
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _provision({}, 400, err)
         if not order_id:
             return _provision({}, 400, 'order_id is required')
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if isinstance(headers, str) or aerr:
             return _provision({}, 401, aerr or headers)
         auth = headers if isinstance(headers, tuple) else None

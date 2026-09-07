@@ -7,11 +7,11 @@ async def prestashop_update_order(order_id: str, payload: Dict[str, Any], timeou
             return _ps_provision({}, 400, 'order_id is required', 'orders')
         if not isinstance(payload, dict) or not payload:
             return _ps_provision({}, 400, 'payload is required', 'orders')
-        root, err = _ps_root(base_url)
+        (root, err) = _ps_root(base_url)
         if err:
             return _ps_provision({}, 400, err, 'orders')
         xml_body = _ps_build_xml('orders', payload, resource_id=order_id)
-        resp, body, status, msg = await _ps_request('patch', root + '/orders/' + str(order_id), xml_body=xml_body, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ps_request('patch', root + '/orders/' + str(order_id), xml_body=xml_body, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _ps_provision(body if isinstance(body, dict) else {}, status, msg, 'orders', fallback_id=order_id)
         return _ps_provision(body if isinstance(body, dict) else {}, status, 'ok', 'orders', fallback_id=order_id)
@@ -101,7 +101,7 @@ def _ps_build_xml(resource, payload, resource_id=None):
     rid = resource_id if resource_id not in (None, '') else payload.get('id')
     if rid not in (None, ''):
         lines.append(f'    <id><![CDATA[{rid}]]></id>')
-    for key, val in payload.items():
+    for (key, val) in payload.items():
         if key == 'id' or val is None:
             continue
         if isinstance(val, (dict, list)):
@@ -112,7 +112,7 @@ def _ps_build_xml(resource, payload, resource_id=None):
     return '\n'.join(lines)
 
 async def _ps_request(method, url, params=None, xml_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ps_auth(xml_body=xml_body is not None)
+    (headers, err) = _ps_auth(xml_body=xml_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

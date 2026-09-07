@@ -14,7 +14,7 @@ async def pendo_search_records(query: str, limit: int=25, timeout: int=30, verif
                 pipeline = [{'source': source}, {'limit': cap}]
         else:
             pipeline = [{}, {'limit': 100000}]
-        records, status, msg = await _pn_aggregate(pipeline, request_id='search-records', timeout=timeout, verify_ssl=verify_ssl)
+        (records, status, msg) = await _pn_aggregate(pipeline, request_id='search-records', timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _pn_dataset([], status, msg)
         if query and True .get('resource') != 'trackEvents':
@@ -62,7 +62,7 @@ def _pn_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _pn_dataset(records, status, msg):
     recs = records if isinstance(records, list) else []
@@ -81,7 +81,7 @@ def _pn_results(data):
     return []
 
 async def _pn_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, track=False):
-    headers, err = _pn_auth(track=track, json_body=json_body is not None or method in ('post', 'put'))
+    (headers, err) = _pn_auth(track=track, json_body=json_body is not None or method in ('post', 'put'))
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -98,11 +98,11 @@ async def _pn_request(method, url, params=None, json_body=None, timeout=30, veri
     return (resp, data, resp['status_code'], None)
 
 async def _pn_aggregate(pipeline, request_id='pendo-query', timeout=30, verify_ssl=True):
-    root, err = _pn_root(None)
+    (root, err) = _pn_root(None)
     if err:
         return ([], 400, err)
     body = {'response': {'mimeType': 'application/json'}, 'request': {'requestId': request_id, 'name': request_id, 'pipeline': pipeline}}
-    resp, data, status, err = await _pn_request('post', root + '/aggregation', json_body=body, timeout=timeout, verify_ssl=verify_ssl)
+    (resp, data, status, err) = await _pn_request('post', root + '/aggregation', json_body=body, timeout=timeout, verify_ssl=verify_ssl)
     if err:
         return ([], 401, err)
     if status >= 400:

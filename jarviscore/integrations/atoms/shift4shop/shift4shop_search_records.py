@@ -5,10 +5,10 @@ async def shift4shop_search_records(query: str, limit: int=25, timeout: int=30, 
     try:
         if not query:
             return _s4_dataset([], 400, 'query is required')
-        root, err = _s4_root(base_url)
+        (root, err) = _s4_root(base_url)
         if err:
             return _s4_dataset([], 400, err)
-        headers, aerr = _s4_auth()
+        (headers, aerr) = _s4_auth()
         if aerr:
             return _s4_dataset([], 401, aerr)
         cap = _s4_cap(limit)
@@ -56,7 +56,7 @@ def _s4_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _s4_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _s4_match(record, query):
     q = str(query).lower()

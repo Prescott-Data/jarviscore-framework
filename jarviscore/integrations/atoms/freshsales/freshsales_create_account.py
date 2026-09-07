@@ -8,10 +8,10 @@ async def freshsales_create_account(fields: Dict[str, Any], timeout: int=30, ver
     try:
         if not fields or not isinstance(fields, dict):
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'fields is required'}
-        api, err = _fs_api_root(base_url)
+        (api, err) = _fs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _fs_sales_auth(json_body=True)
+        (headers, auth_err) = _fs_sales_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/sales_accounts'

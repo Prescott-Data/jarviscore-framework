@@ -6,10 +6,10 @@ async def monday_update_board(board_id: str, payload: Dict[str, Any], timeout: i
     try:
         if not board_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'board_id is required', 'provision_ids': []}
-        base, err = _md_root(base_url)
+        (base, err) = _md_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        headers, aerr = _md_auth()
+        (headers, aerr) = _md_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr, 'provision_ids': []}
         body = payload if isinstance(payload, dict) else {}
@@ -25,7 +25,7 @@ async def monday_update_board(board_id: str, payload: Dict[str, Any], timeout: i
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload.board_attribute and new_value are required', 'provision_ids': []}
         q = 'mutation($board_id: ID!, $board_attribute: BoardAttributes!, $new_value: String!) { update_board(board_id: $board_id, board_attribute: $board_attribute, new_value: $new_value) }'
         resp = await _md_gql(base, headers, q, {'board_id': str(board_id), 'board_attribute': str(attr), 'new_value': str(val)}, timeout, verify_ssl)
-        data, status, msg = _md_parse(resp)
+        (data, status, msg) = _md_parse(resp)
         if status >= 400:
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg, 'provision_ids': []}
         out = _md_provision(data, 'update_board', fallback_id=board_id)
@@ -54,7 +54,7 @@ def _md_parse(resp):
     except Exception:
         body = {}
     if resp['status_code'] >= 400:
-        return (None, resp['status_code'], (resp['body'] or f'HTTP {resp['status_code']}')[:1000])
+        return (None, resp['status_code'], (resp['body'] or f"HTTP {resp['status_code']}")[:1000])
     errors = body.get('errors')
     if errors:
         msg = errors[0].get('message') if isinstance(errors[0], dict) else str(errors[0])

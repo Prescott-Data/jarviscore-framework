@@ -5,10 +5,10 @@ async def prestashop_get_customer(customer_id: str, timeout: int=30, verify_ssl:
     try:
         if not customer_id:
             return _ps_dataset([], 400, 'customer_id is required')
-        root, err = _ps_root(base_url)
+        (root, err) = _ps_root(base_url)
         if err:
             return _ps_dataset([], 400, err)
-        resp, body, status, msg = await _ps_request('get', root + '/customers/' + str(customer_id), params={'display': 'full'}, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ps_request('get', root + '/customers/' + str(customer_id), params={'display': 'full'}, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _ps_dataset([], status, msg)
         return _ps_dataset(_ps_rows(body, 'customers'), status, msg)
@@ -79,7 +79,7 @@ def _ps_rows(body, resource):
     return []
 
 async def _ps_request(method, url, params=None, xml_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ps_auth(xml_body=xml_body is not None)
+    (headers, err) = _ps_auth(xml_body=xml_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

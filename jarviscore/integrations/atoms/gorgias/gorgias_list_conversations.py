@@ -4,13 +4,13 @@ GORGIAS_API = 'https://your-domain.gorgias.com/api'
 async def gorgias_list_conversations(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Gorgias tickets (conversations) with cursor pagination. Official: https://developers.gorgias.com/reference/list-tickets"""
     try:
-        api, err = _gorgias_api_root(base_url)
+        (api, err) = _gorgias_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _gorgias_require_auth()
+        (headers, basic, auth_err) = _gorgias_require_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _gorgias_cursor_paginate(f'{api}/tickets', headers, basic, limit, timeout, verify_ssl)
+        (records, status, message) = await _gorgias_cursor_paginate(f'{api}/tickets', headers, basic, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

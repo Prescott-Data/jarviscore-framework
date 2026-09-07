@@ -8,13 +8,13 @@ async def snapchat_ads_update_campaign(ad_account_id: str, campaign_id: str, pay
             return _sc_provision({}, 400, 'campaign_id is required')
         if not isinstance(payload, dict) or not payload:
             return _sc_provision({}, 400, 'payload is required')
-        root, err = _sc_root(base_url)
+        (root, err) = _sc_root(base_url)
         if err:
             return _sc_provision({}, 400, err)
-        aid, err = _sc_ad_account(ad_account_id)
+        (aid, err) = _sc_ad_account(ad_account_id)
         if err:
             return _sc_provision({}, 400, err)
-        headers, aerr = _sc_auth(json_body=True)
+        (headers, aerr) = _sc_auth(json_body=True)
         if aerr:
             return _sc_provision({}, 401, aerr)
         camp = dict(payload)
@@ -67,7 +67,7 @@ def _sc_err(resp):
             return str(data.get('debug_message') or data.get('display_message') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sc_extract_list(data, resource_key):
     records = []

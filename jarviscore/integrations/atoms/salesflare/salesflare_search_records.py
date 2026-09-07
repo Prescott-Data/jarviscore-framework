@@ -7,10 +7,10 @@ async def salesflare_search_records(query: str, limit: int=25, timeout: int=30, 
             return _sf_dataset([], 400, 'query is required')
         cap = _sf_cap(limit)
         records = []
-        for path, key, rtype in (('/contacts', 'contacts', 'contact'), ('/accounts', 'accounts', 'account'), ('/opportunities', 'opportunities', 'opportunity')):
+        for (path, key, rtype) in (('/contacts', 'contacts', 'contact'), ('/accounts', 'accounts', 'account'), ('/opportunities', 'opportunities', 'opportunity')):
             if len(records) >= cap:
                 break
-            chunk, status, msg = await _sf_list(path, key, base_url, cap - len(records), timeout, verify_ssl, {'search': query})
+            (chunk, status, msg) = await _sf_list(path, key, base_url, cap - len(records), timeout, verify_ssl, {'search': query})
             if status >= 400 and (not records):
                 return _sf_dataset([], status, msg)
             for item in chunk:
@@ -57,10 +57,10 @@ def _sf_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _sf_request(method, path, base_url, params, json_body, timeout, verify_ssl):
-    headers, err = _sf_auth(json_body=json_body is not None)
+    (headers, err) = _sf_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
-    root, _ = _sf_root(base_url)
+    (root, _) = _sf_root(base_url)
     resp = await nexus_call(method, root + path, headers=headers, params=params, json=json_body)
     try:
         body = resp['json'] if resp['content'] else {}
@@ -81,7 +81,7 @@ async def _sf_list(path, collection_key, base_url, limit, timeout, verify_ssl, e
         params = {'limit': min(page_size, cap - len(records)), 'offset': offset}
         if extra_params:
             params.update(extra_params)
-        resp, body, status, msg = await _sf_request('GET', path, base_url, params, None, timeout, verify_ssl)
+        (resp, body, status, msg) = await _sf_request('GET', path, base_url, params, None, timeout, verify_ssl)
         if status >= 400:
             return (records, status, msg)
         chunk = _sf_items(body, collection_key)

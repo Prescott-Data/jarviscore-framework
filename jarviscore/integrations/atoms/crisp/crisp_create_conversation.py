@@ -6,7 +6,7 @@ async def crisp_create_conversation(payload: Dict[str, Any], timeout: int=30, ve
     try:
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        headers, basic, site_id = _crisp_auth(json_body=True)
+        (headers, basic, site_id) = _crisp_auth(json_body=True)
         if not site_id or not basic:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': 'auth_info requires site_id and api_key for Basic auth'}
         api = _crisp_api_root(base_url)
@@ -14,7 +14,7 @@ async def crisp_create_conversation(payload: Dict[str, Any], timeout: int=30, ve
         resp = await _crisp_post(url, headers, basic, payload, timeout, verify_ssl)
         if resp['status_code'] >= 400:
             return {'records': [], 'data_count': 0, 'status': resp['status_code'], 'message': resp['body'][:1000]}
-        data, message = _crisp_parse(resp)
+        (data, message) = _crisp_parse(resp)
         records = _crisp_records(data, single=True)
         prov = _crisp_provision_ids(records[0]) if records else []
         return {'records': records, 'data_count': len(records), 'status': resp['status_code'], 'message': message, 'provision_ids': prov}

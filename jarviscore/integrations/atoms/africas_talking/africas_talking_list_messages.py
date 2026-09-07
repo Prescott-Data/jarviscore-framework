@@ -6,13 +6,13 @@ _AT_MESSAGING_PATH = '/version1/messaging'
 async def africas_talking_list_messages(limit: int=25, last_received_id: int=0, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Fetch inbox SMS via GET /version1/messaging?username=&lastReceivedId=. Official: https://developers.africastalking.com/docs/sms/fetch_messages"""
     try:
-        api_root, err = _at_api_root(base_url)
+        (api_root, err) = _at_api_root(base_url)
         if err:
             return _at_dataset([], 400, err)
         username = _at_username()
         if not username:
             return _at_dataset([], 400, 'auth_info.username is required')
-        headers, err = _at_headers()
+        (headers, err) = _at_headers()
         if err:
             return _at_dataset([], 401, err)
         cap = min(max(int(limit or 25), 1), 1000)

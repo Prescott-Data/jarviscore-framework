@@ -4,13 +4,13 @@ INTERCOM_API = 'https://api.intercom.io'
 async def intercom_list_companies(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Intercom companies. Official: https://developers.intercom.com/docs/references/rest-api/api.intercom.io/companies"""
     try:
-        api, err = _ic_api_root(base_url)
+        (api, err) = _ic_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _ic_auth()
+        (headers, auth_err) = _ic_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _ic_paginate(f'{api}/companies', headers, limit, timeout, verify_ssl)
+        (records, status, message) = await _ic_paginate(f'{api}/companies', headers, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

@@ -6,10 +6,10 @@ async def xero_update_payment(payment_id: str, tenant_id: str='', status: str='D
     try:
         if not payment_id:
             return _x_provision({}, 'Payments', 'PaymentID', 400, 'payment_id is required')
-        root, err = _x_root(base_url)
+        (root, err) = _x_root(base_url)
         if err:
             return _x_provision({}, 'Payments', 'PaymentID', 400, err)
-        headers, aerr = _x_headers(tenant_id, json_body=True)
+        (headers, aerr) = _x_headers(tenant_id, json_body=True)
         if aerr:
             return _x_provision({}, 'Payments', 'PaymentID', 401, aerr)
         payment = {'PaymentID': str(payment_id), 'Status': status}
@@ -66,4 +66,4 @@ def _x_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

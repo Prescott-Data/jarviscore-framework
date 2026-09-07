@@ -4,13 +4,13 @@ LACRM_API = 'https://api.lessannoyingcrm.com/v2'
 async def less_annoying_crm_list_accounts(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List companies via GetContacts RecordTypeFilter=Companies. Official: https://account.lessannoyingcrm.com/api_docs/v2/Core_Functions/Contacts"""
     try:
-        base, err = _lacrm_root(base_url)
+        (base, err) = _lacrm_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _lacrm_auth()
+        (headers, aerr) = _lacrm_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
-        records, status, msg = await _lacrm_paginate(base, headers, 'GetContacts', {'RecordTypeFilter': 'Companies'}, limit, timeout, verify_ssl)
+        (records, status, msg) = await _lacrm_paginate(base, headers, 'GetContacts', {'RecordTypeFilter': 'Companies'}, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

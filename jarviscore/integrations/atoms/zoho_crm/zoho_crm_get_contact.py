@@ -5,10 +5,10 @@ async def zoho_crm_get_contact(contact_id: str, timeout: int=30, verify_ssl: boo
     try:
         if not contact_id:
             return _dataset([], 400, 'contact_id is required')
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _dataset([], 400, err)
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if aerr:
             return _dataset([], 401, aerr)
         resp = await nexus_call('GET', root + '/Contacts/' + str(contact_id), headers=headers)

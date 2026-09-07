@@ -6,13 +6,13 @@ async def nutshell_get_contact(contact_id: str, timeout: int=30, verify_ssl: boo
     try:
         if not contact_id:
             return _ns_dataset([], 400, 'contact_id is required')
-        base, err = _ns_root(base_url)
+        (base, err) = _ns_root(base_url)
         if err:
             return _ns_dataset([], 400, err)
-        headers, aerr = _ns_auth()
+        (headers, aerr) = _ns_auth()
         if aerr:
             return _ns_dataset([], 401, aerr)
-        result, status, msg = await _ns_rpc(base, headers, 'getContact', {'contactId': int(contact_id) if str(contact_id).isdigit() else contact_id}, timeout, verify_ssl)
+        (result, status, msg) = await _ns_rpc(base, headers, 'getContact', {'contactId': int(contact_id) if str(contact_id).isdigit() else contact_id}, timeout, verify_ssl)
         if msg != 'ok':
             return _ns_dataset([], status, msg)
         return _ns_dataset(_ns_records(result), status, msg)

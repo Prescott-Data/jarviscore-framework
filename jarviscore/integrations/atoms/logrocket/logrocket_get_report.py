@@ -6,10 +6,10 @@ async def logrocket_get_report(org_id: str, app_id: str, report_id: str, timeout
     try:
         if not report_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'report_id is required'}
-        app_base, err = _lr_app_base(base_url, org_id, app_id)
+        (app_base, err) = _lr_app_base(base_url, org_id, app_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _lr_headers()
+        (headers, aerr) = _lr_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         resp = await nexus_call('GET', f'{app_base}/highlights', headers=headers, params={'id': report_id})
@@ -32,7 +32,7 @@ def _lr_org_app(org_id, app_id):
     return (str(org), str(app), None)
 
 def _lr_app_base(base_url, org_id, app_id):
-    org, app, err = _lr_org_app(org_id, app_id)
+    (org, app, err) = _lr_org_app(org_id, app_id)
     if err:
         return (None, err)
     root = (base_url or LOGROCKET_API).rstrip('/')

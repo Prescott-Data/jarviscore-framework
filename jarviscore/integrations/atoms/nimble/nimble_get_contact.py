@@ -7,13 +7,13 @@ async def nimble_get_contact(contact_id: str, timeout: int=30, verify_ssl: bool=
     try:
         if not contact_id:
             return _nb_dataset([], 400, 'contact_id is required')
-        root, err = _nb_v1_root(base_url)
+        (root, err) = _nb_v1_root(base_url)
         if err:
             return _nb_dataset([], 400, err)
-        headers, aerr = _nb_auth()
+        (headers, aerr) = _nb_auth()
         if aerr:
             return _nb_dataset([], 401, aerr)
-        records, status, msg = await _nb_get_one(f'{root}/contact/{contact_id}', headers, timeout, verify_ssl)
+        (records, status, msg) = await _nb_get_one(f'{root}/contact/{contact_id}', headers, timeout, verify_ssl)
         return _nb_dataset(records, status, msg)
     except Exception as e:
         return _nb_dataset([], 500, str(e))
@@ -46,7 +46,7 @@ def _nb_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _nb_dataset(records, status, msg):
     return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}

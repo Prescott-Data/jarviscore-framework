@@ -5,8 +5,8 @@ async def what3words_get_record(lat: str, lng: str, timeout: int=30, verify_ssl:
     """what3words Public API: Convert coordinates to 3wa. Official: https://developer.what3words.com/public-api/docs"""
     'Convert coordinates to 3 word address.'
     try:
-        root, _ = _w3w_root(base_url)
-        key, err = _w3w_key()
+        (root, _) = _w3w_root(base_url)
+        (key, err) = _w3w_key()
         if err:
             return _w3w_dataset([], 401, err)
         if not lat or not lng:
@@ -31,4 +31,4 @@ def _w3w_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _w3w_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

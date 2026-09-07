@@ -8,10 +8,10 @@ async def infobip_update_conversation(conversation_id: str, payload: Dict[str, A
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required'}
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _ib_api_root(base_url)
+        (api, err) = _ib_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _ib_auth(json_body=True)
+        (headers, auth_err) = _ib_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _ib_put(f'{api}/ccaas/1/conversations/{conversation_id}', headers, payload, timeout, verify_ssl)

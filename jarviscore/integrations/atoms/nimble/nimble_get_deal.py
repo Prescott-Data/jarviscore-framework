@@ -7,13 +7,13 @@ async def nimble_get_deal(deal_id: str, timeout: int=30, verify_ssl: bool=True, 
     try:
         if not deal_id:
             return _nb_dataset([], 400, 'deal_id is required')
-        root, err = _nb_v2_root(base_url)
+        (root, err) = _nb_v2_root(base_url)
         if err:
             return _nb_dataset([], 400, err)
-        headers, aerr = _nb_auth()
+        (headers, aerr) = _nb_auth()
         if aerr:
             return _nb_dataset([], 401, aerr)
-        records, status, msg = await _nb_get_one(f'{root}/deals/{deal_id}', headers, timeout, verify_ssl)
+        (records, status, msg) = await _nb_get_one(f'{root}/deals/{deal_id}', headers, timeout, verify_ssl)
         return _nb_dataset(records, status, msg)
     except Exception as e:
         return _nb_dataset([], 500, str(e))
@@ -32,7 +32,7 @@ def _nb_v1_root(base_url):
     return (root, None)
 
 def _nb_v2_root(base_url):
-    v1, err = _nb_v1_root(base_url)
+    (v1, err) = _nb_v1_root(base_url)
     if err:
         return (None, err)
     return (v1.replace('/api/v1', '/api/v2'), None)
@@ -52,7 +52,7 @@ def _nb_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _nb_dataset(records, status, msg):
     return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}

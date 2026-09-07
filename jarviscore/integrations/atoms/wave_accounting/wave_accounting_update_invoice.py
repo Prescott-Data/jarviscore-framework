@@ -13,7 +13,7 @@ async def wave_accounting_update_invoice(business_id: str='', customer_id: str='
         st = (None or {}).get('status')
         if st:
             inp['status'] = st
-        data, status, err = await _wv_post(gql, base_url, {'input': inp}, timeout, verify_ssl)
+        (data, status, err) = await _wv_post(gql, base_url, {'input': inp}, timeout, verify_ssl)
         if err:
             return _wv_provision({}, 401, err)
         if status >= 400 or (isinstance(data, dict) and data.get('errors')):
@@ -36,7 +36,7 @@ def _wv_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 async def _wv_post(query, base_url=None, variables=None, timeout=30, verify_ssl=True):
-    headers, err = _wv_auth()
+    (headers, err) = _wv_auth()
     if err:
         return (None, 401, err)
     resp = await nexus_call('POST', base_url or _GQL, headers=headers, json={'query': query, 'variables': variables or {}})

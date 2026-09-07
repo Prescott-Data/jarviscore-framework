@@ -4,8 +4,8 @@ _WA_ROOT = 'https://graph.facebook.com/v19.0'
 async def whatsapp_business_get_message(message_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """WhatsApp Cloud API: Get message by id. Official: https://developers.facebook.com/docs/whatsapp/cloud-api"""
     try:
-        root, _ = _wa_root(base_url)
-        headers, aerr = _wa_auth()
+        (root, _) = _wa_root(base_url)
+        (headers, aerr) = _wa_auth()
         if aerr:
             return _wa_dataset([], 401, aerr)
         if not message_id:
@@ -30,4 +30,4 @@ def _wa_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _wa_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

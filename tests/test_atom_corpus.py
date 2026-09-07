@@ -10,6 +10,7 @@ these tests compile the corpus and run every atom, rather than reading it.
 import ast
 import asyncio
 import pathlib
+import re
 
 import pytest
 
@@ -59,6 +60,27 @@ class TestTheCorpusCompiles:
             except SyntaxError as exc:
                 broken.append(f"{path.name}: {exc.msg}")
         assert not broken, broken[:10]
+
+    def test_no_atom_uses_a_python_312_only_fstring(self):
+        """PEP 701 lets an f-string reuse its own delimiter, and 3.10 cannot parse it.
+
+        `ast.unparse` on 3.12 emits `f'{a}{b or '/'}'`, which every supported
+        interpreter below 3.12 rejects. Compiling here would not catch it,
+        because the test itself may be running on 3.12, so the corpus is
+        regenerated with the oldest supported interpreter and checked by shape.
+        """
+        offenders = []
+        for path in atom_paths():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                for quote in ("'", '"'):
+                    marker = f"f{quote}"
+                    if marker not in line:
+                        continue
+                    body = line.split(marker, 1)[1]
+                    inside = re.findall(r"\{[^{}]*\}", body.split(quote)[0] + quote)
+                    if any(quote in expression for expression in inside):
+                        offenders.append(f"{path.name}: {line.strip()[:70]}")
+        assert not offenders, offenders[:5]
 
     def test_no_atom_awaits_inside_a_sync_function(self):
         """This compiles under ast.parse and fails only when Python runs it."""

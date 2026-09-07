@@ -4,10 +4,10 @@ _PEOPLE_API_ROOT = 'https://people.googleapis.com/v1'
 async def google_people_get_user_profile(person_fields: str='names,emailAddresses,phoneNumbers,organizations', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get the authenticated user's People profile. Official: https://developers.google.com/people/api/rest/v1/people/get"""
     try:
-        api, err = _people_api_root(base_url)
+        (api, err) = _people_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _people_auth()
+        (headers, auth_err) = _people_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/people/me'

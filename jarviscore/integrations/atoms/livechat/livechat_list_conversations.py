@@ -4,7 +4,7 @@ LIVECHAT_AGENT_API = 'https://api.livechatinc.com/v3.6/agent'
 async def livechat_list_conversations(limit: int=25, page_id: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List agent chats via list_chats action. Official: https://platform.text.com/docs/messaging/agent-chat-api#list-chats"""
     try:
-        base, err = _lc_root(base_url)
+        (base, err) = _lc_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         body = {'limit': min(max(int(limit or 25), 1), 100)}
@@ -19,7 +19,7 @@ async def livechat_list_conversations(limit: int=25, page_id: str='', timeout: i
             req = dict(body)
             if next_page:
                 req['page_id'] = next_page
-            resp, aerr = await _lc_post(base, 'list_chats', req, timeout, verify_ssl)
+            (resp, aerr) = await _lc_post(base, 'list_chats', req, timeout, verify_ssl)
             if aerr:
                 return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
             status = resp['status_code']
@@ -47,7 +47,7 @@ def _lc_auth_header():
     return (None, None)
 
 def _lc_headers():
-    auth, err = _lc_auth_header()
+    (auth, err) = _lc_auth_header()
     if err:
         return (None, err)
     return ({'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': auth}, None)
@@ -58,7 +58,7 @@ def _lc_action_url(base, action):
     return f'{base}/action/{action}'
 
 async def _lc_post(base, action, body, timeout, verify_ssl):
-    headers, err = _lc_headers()
+    (headers, err) = _lc_headers()
     if err:
         return (None, err)
     resp = await nexus_call('POST', _lc_action_url(base, action), headers=headers, json=body or {})

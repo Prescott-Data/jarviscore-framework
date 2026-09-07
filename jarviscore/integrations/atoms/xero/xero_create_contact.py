@@ -6,10 +6,10 @@ async def xero_create_contact(name: str, tenant_id: str='', email: str='', timeo
     try:
         if not name:
             return _x_provision({}, 'Contacts', 'ContactID', 400, 'name is required')
-        root, err = _x_root(base_url)
+        (root, err) = _x_root(base_url)
         if err:
             return _x_provision({}, 'Contacts', 'ContactID', 400, err)
-        headers, aerr = _x_headers(tenant_id, json_body=True)
+        (headers, aerr) = _x_headers(tenant_id, json_body=True)
         if aerr:
             return _x_provision({}, 'Contacts', 'ContactID', 401, aerr)
         contact: Dict[str, Any] = {'Name': name}
@@ -68,4 +68,4 @@ def _x_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

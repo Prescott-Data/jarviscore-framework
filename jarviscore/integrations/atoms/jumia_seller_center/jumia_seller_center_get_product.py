@@ -7,10 +7,10 @@ async def jumia_seller_center_get_product(product_id: str, timeout: int=30, veri
     try:
         if not product_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'product_id (SellerSku) is required'}
-        base, err = _jsc_root(base_url)
+        (base, err) = _jsc_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        user_id, api_key, cerr = _jsc_creds()
+        (user_id, api_key, cerr) = _jsc_creds()
         if cerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': cerr}
         extra = {'SkuSellerList': str(product_id)}
@@ -46,7 +46,7 @@ def _jsc_encode(params):
         val = params[key]
         if val is None:
             continue
-        parts.append(f'{quote(str(key), safe='')}={quote(str(val), safe='')}')
+        parts.append(f"{quote(str(key), safe='')}={quote(str(val), safe='')}")
     return '&'.join(parts)
 
 def _jsc_sign(params, api_key):
@@ -58,7 +58,7 @@ def _jsc_sign(params, api_key):
 async def _jsc_call(base, action, user_id, api_key, extra=None, body=None, timeout=30, verify_ssl=True):
     params = {'Action': action, 'Format': 'JSON', 'Timestamp': _jsc_timestamp(), 'UserID': user_id, 'Version': SC_VERSION}
     if extra:
-        params.update({k: v for k, v in extra.items() if v is not None})
+        params.update({k: v for (k, v) in extra.items() if v is not None})
     params['Signature'] = _jsc_sign(params, api_key)
     if body is not None:
         return await nexus_call('POST', f'{base}/', params=params, data=body, headers={'Content-Type': 'application/xml'})

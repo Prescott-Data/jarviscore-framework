@@ -9,7 +9,7 @@ async def attio_get_account(account_id: str, timeout: int=30, verify_ssl: bool=T
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
         if not account_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'account_id is required'}
-        api_root, root_err = _attio_api_root(base_url)
+        (api_root, root_err) = _attio_api_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
         auth_err = _attio_auth_err()

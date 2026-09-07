@@ -7,8 +7,8 @@ async def sourceforge_search_records(query: str, username: str, limit: int=25, t
             return _sf_dataset([], 400, 'query is required')
         if not username:
             return _sf_dataset([], 400, 'username is required')
-        root, _ = _sf_root(base_url)
-        headers, err = _sf_auth()
+        (root, _) = _sf_root(base_url)
+        (headers, err) = _sf_auth()
         if err:
             return _sf_dataset([], 401, err)
         resp = await nexus_call('GET', f'{root}/rest/u/{username}/profile/', headers=headers)
@@ -39,7 +39,7 @@ def _sf_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _sf_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sf_match(record, query):
     q = str(query).lower()

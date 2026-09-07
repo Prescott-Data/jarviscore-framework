@@ -4,10 +4,10 @@ INFOBIP_API = 'https://api.infobip.com'
 async def infobip_list_conversations(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Infobip conversations. Official: https://www.infobip.com/docs/conversations/conversations-over-api/manage-conversations-over-api"""
     try:
-        api, err = _ib_api_root(base_url)
+        (api, err) = _ib_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _ib_auth()
+        (headers, auth_err) = _ib_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _ib_get(f'{api}/ccaas/1/conversations', headers, {'limit': min(max(limit, 1), 100)}, timeout, verify_ssl)

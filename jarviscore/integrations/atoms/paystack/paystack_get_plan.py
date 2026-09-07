@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def paystack_get_plan(plan_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Fetch plan by id or plan code. Official: https://paystack.com/docs/api/plan/#fetch-plan"""
     try:
-        root, err = _ps_root(base_url)
+        (root, err) = _ps_root(base_url)
         if err:
             return _ps_dataset([], 400, err)
         if not plan_id:
             return _ps_dataset([], 400, 'plan_id is required')
-        resp, data, status, err = await _ps_request('get', root + f'/plan/{plan_id}', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, data, status, err) = await _ps_request('get', root + f'/plan/{plan_id}', timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return _ps_dataset([], 401, err)
         if not _ps_ok(resp, data):
@@ -38,7 +38,7 @@ def _ps_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _ps_ok(resp, data):
     if resp['status_code'] >= 400:
@@ -60,7 +60,7 @@ def _ps_items(data):
     return []
 
 async def _ps_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ps_auth(json_body=json_body is not None)
+    (headers, err) = _ps_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

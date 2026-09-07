@@ -6,12 +6,12 @@ async def square_create_payment(payload: Dict[str, Any], timeout: int=30, verify
     try:
         if not isinstance(payload, dict) or not payload:
             return _sq_provision({}, 400, 'payload is required')
-        root, _ = _sq_root(base_url)
+        (root, _) = _sq_root(base_url)
         path = '/customers' if 'payment' == 'customer' else '/orders' if 'payment' == 'order' else '/payments'
         body = payload if 'payment' in payload or 'order' in payload or 'amount_money' in payload else {'payment': payload, 'idempotency_key': str(uuid.uuid4())}
         if 'idempotency_key' not in body:
             body['idempotency_key'] = str(uuid.uuid4())
-        _, data, status, msg = await _sq_request('post', root + path, json_body=body, timeout=timeout, verify_ssl=verify_ssl)
+        (_, data, status, msg) = await _sq_request('post', root + path, json_body=body, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _sq_provision(data if isinstance(data, dict) else {}, status, msg)
         return _sq_provision(data if isinstance(data, dict) else {}, status, 'ok')
@@ -47,7 +47,7 @@ def _sq_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _sq_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _sq_auth(json_body=json_body is not None)
+    (headers, err) = _sq_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

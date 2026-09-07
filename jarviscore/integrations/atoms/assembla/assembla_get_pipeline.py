@@ -8,14 +8,14 @@ async def assembla_get_pipeline(pipeline_id: str, space_id: Optional[str]=None, 
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
         if not pipeline_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'pipeline_id is required'}
-        api_root, root_err = _assembla_api_root(base_url)
+        (api_root, root_err) = _assembla_api_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
         sid = _assembla_space_id(space_id)
         tool_id = _assembla_space_tool_id(space_tool_id)
         if not sid or not tool_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'space_id and space_tool_id are required'}
-        headers, auth_err = _assembla_headers()
+        (headers, auth_err) = _assembla_headers()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = _assembla_json_path(f'{api_root}/spaces/{sid}/space_tools/{tool_id}/merge_requests/{pipeline_id}')

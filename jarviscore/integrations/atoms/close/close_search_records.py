@@ -7,7 +7,7 @@ async def close_search_records(query: str, limit: int=25, timeout: int=30, verif
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
         api = _close_api_root(base_url)
-        headers, basic, auth_err = _close_auth(json_body=True)
+        (headers, basic, auth_err) = _close_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         body = _close_search_query(query, limit)

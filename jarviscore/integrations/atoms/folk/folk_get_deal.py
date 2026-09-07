@@ -6,13 +6,13 @@ async def folk_get_deal(group_id: str, deal_id: str, object_type: str='Deals', t
     try:
         if not deal_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'deal_id (objectId) is required'}
-        api, err = _folk_api_root(base_url)
+        (api, err) = _folk_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        gid, otype, err = _folk_deal_scope(group_id, object_type)
+        (gid, otype, err) = _folk_deal_scope(group_id, object_type)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _folk_auth()
+        (headers, auth_err) = _folk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         object_id = str(deal_id).strip()

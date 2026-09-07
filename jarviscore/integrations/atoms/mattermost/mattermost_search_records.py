@@ -5,10 +5,10 @@ async def mattermost_search_records(query: str, team_id: str='', limit: int=25, 
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        root, err = _mm_api_root(base_url)
+        (root, err) = _mm_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _mm_headers(json_body=True)
+        (headers, aerr) = _mm_headers(json_body=True)
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         per_page = min(max(int(limit or 25), 1), 200)

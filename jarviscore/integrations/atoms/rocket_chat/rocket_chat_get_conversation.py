@@ -5,10 +5,10 @@ async def rocket_chat_get_conversation(conversation_id: str, timeout: int=30, ve
     try:
         if not conversation_id:
             return _rc_dataset([], 400, 'conversation_id is required')
-        root, err = _rc_root(base_url)
+        (root, err) = _rc_root(base_url)
         if err:
             return _rc_dataset([], 400, err)
-        resp, body, status, msg = await _rc_request('get', root + '/channels.info', params={'roomId': conversation_id}, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _rc_request('get', root + '/channels.info', params={'roomId': conversation_id}, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _rc_dataset([], status, msg)
         channel = body.get('channel') if isinstance(body.get('channel'), dict) else None
@@ -49,7 +49,7 @@ def _rc_ok(body):
     return True
 
 async def _rc_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _rc_auth()
+    (headers, err) = _rc_auth()
     if err:
         return (None, None, 401, err)
     if json_body is not None:

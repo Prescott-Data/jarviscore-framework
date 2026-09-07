@@ -7,10 +7,10 @@ async def nimble_search_records(query: str, limit: int=25, timeout: int=30, veri
     try:
         if not query:
             return _nb_dataset([], 400, 'query is required')
-        root, err = _nb_v1_root(base_url)
+        (root, err) = _nb_v1_root(base_url)
         if err:
             return _nb_dataset([], 400, err)
-        headers, aerr = _nb_auth()
+        (headers, aerr) = _nb_auth()
         if aerr:
             return _nb_dataset([], 401, aerr)
         params = {}
@@ -24,7 +24,7 @@ async def nimble_search_records(query: str, limit: int=25, timeout: int=30, veri
             params['keyword'] = str(query)
         if True .get('record_type'):
             params['record_type'] = str(None)
-        records, status, msg = await _nb_paginate(f'{root}/contacts', headers, params, limit, timeout, verify_ssl)
+        (records, status, msg) = await _nb_paginate(f'{root}/contacts', headers, params, limit, timeout, verify_ssl)
         return _nb_dataset(records, status, msg)
     except Exception as e:
         return _nb_dataset([], 500, str(e))
@@ -60,7 +60,7 @@ def _nb_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _nb_dataset(records, status, msg):
     return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}

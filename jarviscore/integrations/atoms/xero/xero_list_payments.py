@@ -4,13 +4,13 @@ XERO_API = 'https://api.xero.com/api.xro/2.0'
 async def xero_list_payments(tenant_id: str='', limit: int=100, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """xero REST: list payments. Official: https://developer.xero.com/documentation/api/accounting/overview"""
     try:
-        root, err = _x_root(base_url)
+        (root, err) = _x_root(base_url)
         if err:
             return _x_dataset([], 400, err)
-        headers, aerr = _x_headers(tenant_id)
+        (headers, aerr) = _x_headers(tenant_id)
         if aerr:
             return _x_dataset([], 401, aerr)
-        records, status, msg = await _x_paginate(root, 'Payments', 'Payments', headers, limit, None, timeout, verify_ssl)
+        (records, status, msg) = await _x_paginate(root, 'Payments', 'Payments', headers, limit, None, timeout, verify_ssl)
         return _x_dataset(records, status, msg)
     except Exception as e:
         return _x_dataset([], 500, str(e))
@@ -57,7 +57,7 @@ def _x_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 async def _x_paginate(root, resource, key, headers, limit, extra_params, timeout, verify_ssl):
     cap = min(max(int(limit or 25), 1), 1000)

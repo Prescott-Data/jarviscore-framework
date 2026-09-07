@@ -6,14 +6,14 @@ async def nutshell_get_account(account_id: str, timeout: int=30, verify_ssl: boo
     try:
         if not account_id:
             return _ns_dataset([], 400, 'account_id is required')
-        base, err = _ns_root(base_url)
+        (base, err) = _ns_root(base_url)
         if err:
             return _ns_dataset([], 400, err)
-        headers, aerr = _ns_auth()
+        (headers, aerr) = _ns_auth()
         if aerr:
             return _ns_dataset([], 401, aerr)
         aid = int(account_id) if str(account_id).isdigit() else account_id
-        result, status, msg = await _ns_rpc(base, headers, 'getAccount', {'accountId': aid}, timeout, verify_ssl)
+        (result, status, msg) = await _ns_rpc(base, headers, 'getAccount', {'accountId': aid}, timeout, verify_ssl)
         if msg != 'ok':
             return _ns_dataset([], status, msg)
         return _ns_dataset(_ns_records(result), status, msg)

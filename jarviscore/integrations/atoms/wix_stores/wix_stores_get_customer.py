@@ -6,10 +6,10 @@ async def wix_stores_get_customer(contact_id: str, site_id: str='', timeout: int
     try:
         if not contact_id:
             return _wx_dataset([], 400, 'contact_id is required')
-        root, err = _wx_root(base_url)
+        (root, err) = _wx_root(base_url)
         if err:
             return _wx_dataset([], 400, err)
-        headers, aerr = _wx_headers(site_id)
+        (headers, aerr) = _wx_headers(site_id)
         if aerr:
             return _wx_dataset([], 401, aerr)
         resp = await nexus_call('GET', f'{root}/contacts/v4/contacts/{contact_id}', headers=headers)
@@ -36,7 +36,7 @@ def _wx_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _wx_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _wx_obj(data, key):
     if isinstance(data, dict):

@@ -4,10 +4,10 @@ SIGN_API = 'https://api.hellosign.com/v3'
 async def dropbox_sign_list_files(limit: int=20, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List signature requests. Basic API key or Bearer OAuth. Official: https://developers.hellosign.com/api/signature-request/list"""
     try:
-        api, err = _sign_api_root(base_url)
+        (api, err) = _sign_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _sign_auth()
+        (headers, basic, auth_err) = _sign_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         cap = min(max(int(limit or 20), 1), 100)

@@ -7,10 +7,10 @@ async def infobip_list_messages(conversation_id: Optional[str]=None, limit: int=
         cid = _ib_conv_id(None, conversation_id)
         if not cid:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required'}
-        api, err = _ib_api_root(base_url)
+        (api, err) = _ib_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _ib_auth()
+        (headers, auth_err) = _ib_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         params = {'limit': min(max(limit, 1), 100)}

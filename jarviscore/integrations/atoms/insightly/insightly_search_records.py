@@ -6,10 +6,10 @@ async def insightly_search_records(query: str, field_name: str='EMAIL_ADDRESS', 
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api, err = _in_api_root(base_url)
+        (api, err) = _in_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _in_auth()
+        (headers, basic, auth_err) = _in_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         params = {'field_name': field_name, 'field_value': query, 'top': min(max(limit, 1), 500)}

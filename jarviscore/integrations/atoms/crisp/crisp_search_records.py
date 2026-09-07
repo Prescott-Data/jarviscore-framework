@@ -6,11 +6,11 @@ async def crisp_search_records(query: str, limit: int=25, timeout: int=30, verif
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        headers, basic, site_id = _crisp_auth()
+        (headers, basic, site_id) = _crisp_auth()
         if not site_id or not basic:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': 'auth_info requires site_id and api_key for Basic auth'}
         api = _crisp_api_root(base_url)
-        records, status, message = await _crisp_list_conversations(api, site_id, headers, basic, limit, timeout, verify_ssl, search_query=query)
+        (records, status, message) = await _crisp_list_conversations(api, site_id, headers, basic, limit, timeout, verify_ssl, search_query=query)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}
@@ -71,7 +71,7 @@ async def _crisp_list_conversations(api, site_id, headers, basic, limit, timeout
         status = resp['status_code']
         if status >= 400:
             return (records, status, resp['body'][:1000])
-        data, _ = _crisp_parse(resp)
+        (data, _) = _crisp_parse(resp)
         batch = _crisp_records(data)
         if not batch:
             break

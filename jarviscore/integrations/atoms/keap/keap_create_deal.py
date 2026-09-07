@@ -6,10 +6,10 @@ async def keap_create_deal(payload: Dict[str, Any], timeout: int=30, verify_ssl:
     try:
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _kp_api_root(base_url)
+        (api, err) = _kp_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _kp_auth()
+        (headers, auth_err) = _kp_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         resp = await _kp_post(f'{api}/opportunities', headers, payload, timeout, verify_ssl)

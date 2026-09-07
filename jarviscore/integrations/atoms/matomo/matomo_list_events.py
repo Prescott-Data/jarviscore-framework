@@ -3,11 +3,11 @@ from typing import Any, Dict, List, Optional
 async def matomo_list_events(id_site: str, period: str='day', date: str='today', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List custom event categories via Events.getCategory. Official: https://developer.matomo.org/api-reference/reporting-api#module_events"""
     try:
-        site, serr = _mt_id_site(id_site)
+        (site, serr) = _mt_id_site(id_site)
         if serr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': serr}
         cap = min(max(int(limit or 25), 1), 100)
-        resp, data, err = await _mt_api_call(base_url, 'Events.getCategory', {'idSite': site, 'period': period or 'day', 'date': date or 'today', 'filter_limit': cap}, timeout, verify_ssl)
+        (resp, data, err) = await _mt_api_call(base_url, 'Events.getCategory', {'idSite': site, 'period': period or 'day', 'date': date or 'today', 'filter_limit': cap}, timeout, verify_ssl)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         status = resp['status_code']
@@ -34,14 +34,14 @@ def _mt_id_site(id_site):
     return (str(site), None)
 
 async def _mt_api_call(base, method, params, timeout, verify_ssl):
-    root, err = _mt_root(base)
+    (root, err) = _mt_root(base)
     if err:
         return (None, None, err)
-    tok, terr = _mt_token()
+    (tok, terr) = _mt_token()
     if terr:
         return (None, None, terr)
     q = {'module': 'API', 'method': method, 'format': 'JSON', 'token_auth': tok}
-    q.update({k: v for k, v in (params or {}).items() if v not in (None, '')})
+    q.update({k: v for (k, v) in (params or {}).items() if v not in (None, '')})
     resp = await nexus_call('GET', f'{root}/index.php', params=q)
     try:
         data = resp['json'] if resp['body'] else {}

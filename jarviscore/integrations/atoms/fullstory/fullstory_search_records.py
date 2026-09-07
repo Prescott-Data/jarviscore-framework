@@ -6,10 +6,10 @@ async def fullstory_search_records(uid: Optional[str]=None, email: Optional[str]
     try:
         if not any([uid, email, display_name]):
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'At least one of uid, email, or display_name is required'}
-        api, err = _fs_api_root(base_url)
+        (api, err) = _fs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _fs_fullstory_auth()
+        (headers, auth_err) = _fs_fullstory_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         params: Dict[str, Any] = {}
@@ -19,7 +19,7 @@ async def fullstory_search_records(uid: Optional[str]=None, email: Optional[str]
             params['email'] = email
         if display_name:
             params['display_name'] = display_name
-        records, status, message = await _fs_paginate_users(f'{api}/v2/users', headers, limit, timeout, verify_ssl, params)
+        (records, status, message) = await _fs_paginate_users(f'{api}/v2/users', headers, limit, timeout, verify_ssl, params)
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

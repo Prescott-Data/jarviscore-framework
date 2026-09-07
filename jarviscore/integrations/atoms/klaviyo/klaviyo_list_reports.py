@@ -5,13 +5,13 @@ KL_REVISION = '2024-10-15'
 async def klaviyo_list_reports(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Klaviyo metrics (catalog report maps to metric). Official: https://developers.klaviyo.com/en/reference/get_metrics"""
     try:
-        api, err = _kv_api_root(base_url)
+        (api, err) = _kv_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _kv_auth()
+        (headers, auth_err) = _kv_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _kv_paginate(f'{api}/api/metrics/', headers, limit, timeout, verify_ssl)
+        (records, status, message) = await _kv_paginate(f'{api}/api/metrics/', headers, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

@@ -8,7 +8,7 @@ async def linear_get_teams() -> dict:
     try:
         resp = await nexus_call('POST', 'https://api.linear.app/graphql', json={'query': query}, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Get teams failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Get teams failed: {resp['status_code']} {resp['body']}"}
         data = resp['json']
         if 'errors' in data:
             return {'success': False, 'data': None, 'error': str(data['errors'])}

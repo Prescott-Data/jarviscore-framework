@@ -26,6 +26,10 @@ import sys
 
 ROOT = pathlib.Path("jarviscore/integrations/atoms")
 
+#: Generate with the oldest supported interpreter. Newer ones unparse to PEP 701
+#: f-strings that reuse the delimiter quote, which older ones cannot parse.
+MINIMUM_PYTHON = (3, 10)
+
 #: `requests` response attributes and the response-dict keys that replace them.
 RESPONSE_KEYS = {"text": "body", "content": "content", "status_code": "status_code",
                  "headers": "headers", "ok": "ok", "json": "json"}
@@ -621,6 +625,24 @@ def migrate(source: str, expected_name: str, provider: str) -> str:
     return result
 
 
+def read_contract_module():
+    """Load the contract reader without importing the whole package.
+
+    `jarviscore/__init__` pulls in the framework's dependencies, and this script
+    has to run under the oldest supported interpreter in a bare container. The
+    contract reader is stdlib only, so load it from its file.
+    """
+    import importlib.util
+
+    path = pathlib.Path("jarviscore/execution/atom_contract.py")
+    spec = importlib.util.spec_from_file_location("atom_contract", path)
+    module = importlib.util.module_from_spec(spec)
+    # dataclasses resolves field types through sys.modules, so register first.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.read_contract
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true")
@@ -628,8 +650,18 @@ def main() -> int:
     parser.add_argument("--show", type=int, default=0, help="print N migrated samples")
     args = parser.parse_args()
 
-    sys.path.insert(0, ".")
-    from jarviscore.execution.atom_contract import read_contract
+    if sys.version_info[:2] != MINIMUM_PYTHON:
+        print(
+            f"Run this under Python {MINIMUM_PYTHON[0]}.{MINIMUM_PYTHON[1]}, the oldest\n"
+            f"version JarvisCore supports. `ast.unparse` on 3.12 emits PEP 701 f-strings\n"
+            f"such as f'{{a}}{{b or '/'}}', which are a SyntaxError on 3.10 and 3.11:\n"
+            f"    docker run --rm -v \"$PWD\":/repo -w /repo \\\n"
+            f"        python:{MINIMUM_PYTHON[0]}.{MINIMUM_PYTHON[1]}-slim python scripts/migrate_atoms.py --write",
+            file=sys.stderr,
+        )
+        return 2
+
+    read_contract = read_contract_module()
 
     migrated, skipped, invalid = 0, collections.Counter(), []
     samples = []

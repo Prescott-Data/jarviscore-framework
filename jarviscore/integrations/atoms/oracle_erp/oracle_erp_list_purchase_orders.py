@@ -1,6 +1,6 @@
 async def oracle_erp_list_purchase_orders(instance_url: str, limit: int=25, offset: int=0) -> list:
     """Erp list purchase orders via the oracle_erp API."""
-    _base = f'{instance_url.rstrip('/')}/fscmRestApi/resources/latest'
+    _base = f"{instance_url.rstrip('/')}/fscmRestApi/resources/latest"
     _h = {'Content-Type': 'application/json'}
 
     async def _get(p, params=None, headers=None):

@@ -5,10 +5,10 @@ async def pivotal_tracker_get_project(project_id: str, timeout: int=30, verify_s
     try:
         if not project_id:
             return _pt_dataset([], 400, 'project_id is required')
-        root, err = _pt_root(base_url)
+        (root, err) = _pt_root(base_url)
         if err:
             return _pt_dataset([], 400, err)
-        resp, body, status, msg = await _pt_request('get', root + '/projects/' + str(project_id).strip(), timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _pt_request('get', root + '/projects/' + str(project_id).strip(), timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _pt_dataset([], status, msg)
         return _pt_dataset(_pt_items(body), status, msg)
@@ -51,7 +51,7 @@ def _pt_items(data):
     return []
 
 async def _pt_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pt_auth(json_body=json_body is not None)
+    (headers, err) = _pt_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

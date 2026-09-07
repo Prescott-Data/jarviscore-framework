@@ -6,15 +6,15 @@ async def dropbox_sign_create_file(payload: Dict[str, Any], timeout: int=30, ver
     try:
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required (HelloSign /signature_request/send form fields)'}
-        api, err = _sign_api_root(base_url)
+        (api, err) = _sign_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _sign_auth()
+        (headers, basic, auth_err) = _sign_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         form_data: List[Any] = []
         files: List[Any] = []
-        for key, value in payload.items():
+        for (key, value) in payload.items():
             if key == 'file_paths' and isinstance(value, list):
                 for path in value:
                     files.append(('file', open(str(path), 'rb')))
@@ -25,7 +25,7 @@ async def dropbox_sign_create_file(payload: Dict[str, Any], timeout: int=30, ver
             elif value is not None:
                 form_data.append((key, str(value)))
         resp = await nexus_call('POST', f'{api}/signature_request/send', headers=headers, data=form_data, files=files or None)
-        for _, handle in files:
+        for (_, handle) in files:
             handle.close()
         if resp['status_code'] >= 400:
             return {'records': [], 'data_count': 0, 'status': resp['status_code'], 'message': resp['body'][:1000]}

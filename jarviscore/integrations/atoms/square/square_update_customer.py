@@ -7,10 +7,10 @@ async def square_update_customer(customer_id: str, payload: Dict[str, Any], time
             return _sq_provision({}, 400, 'customer_id is required')
         if not isinstance(payload, dict) or not payload:
             return _sq_provision({}, 400, 'payload is required')
-        root, _ = _sq_root(base_url)
+        (root, _) = _sq_root(base_url)
         path = '/customers' if 'customer' == 'customer' else '/orders' if 'customer' == 'order' else '/payments'
         body = payload if 'customer' in payload else {'customer': payload}
-        _, data, status, msg = await _sq_request('put', root + path + '/{customer_id}'.format(**locals()), json_body=body, timeout=timeout, verify_ssl=verify_ssl)
+        (_, data, status, msg) = await _sq_request('put', root + path + '/{customer_id}'.format(**locals()), json_body=body, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _sq_provision(data if isinstance(data, dict) else {}, status, msg)
         return _sq_provision(data if isinstance(data, dict) else {}, status, 'ok', fallback_id=customer_id)
@@ -46,7 +46,7 @@ def _sq_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _sq_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _sq_auth(json_body=json_body is not None)
+    (headers, err) = _sq_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

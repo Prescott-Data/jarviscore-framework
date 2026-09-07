@@ -6,13 +6,13 @@ async def nutshell_create_contact(payload: Dict[str, Any], timeout: int=30, veri
     try:
         if not isinstance(payload, dict) or not payload:
             return _ns_provision({}, 400, 'payload is required')
-        base, err = _ns_root(base_url)
+        (base, err) = _ns_root(base_url)
         if err:
             return _ns_provision({}, 400, err)
-        headers, aerr = _ns_auth()
+        (headers, aerr) = _ns_auth()
         if aerr:
             return _ns_provision({}, 401, aerr)
-        result, status, msg = await _ns_rpc(base, headers, 'newContact', {'contact': payload}, timeout, verify_ssl)
+        (result, status, msg) = await _ns_rpc(base, headers, 'newContact', {'contact': payload}, timeout, verify_ssl)
         if msg != 'ok':
             return _ns_provision({}, status, msg)
         return _ns_provision(result, status, msg)

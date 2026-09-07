@@ -7,7 +7,7 @@ async def capsulecrm_update_account(account_id: str, payload: Dict[str, Any], ti
         if not account_id or not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'account_id and payload are required'}
         api = _capsule_api_root(base_url)
-        headers, auth_err = _capsule_auth(json_body=True)
+        (headers, auth_err) = _capsule_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         body = _capsule_party_body(payload, default_type='organisation')

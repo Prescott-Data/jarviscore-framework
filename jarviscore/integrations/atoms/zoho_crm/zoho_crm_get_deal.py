@@ -5,10 +5,10 @@ async def zoho_crm_get_deal(deal_id: str, timeout: int=30, verify_ssl: bool=True
     try:
         if not deal_id:
             return _dataset([], 400, 'deal_id is required')
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _dataset([], 400, err)
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if aerr:
             return _dataset([], 401, aerr)
         resp = await nexus_call('GET', root + '/Deals/' + str(deal_id), headers=headers)

@@ -25,7 +25,7 @@ async def freshbooks_create_expense(amount: str, currency_code: str, date: str, 
         expense['categoryid'] = category_id
         resp = await nexus_call('POST', f'https://api.freshbooks.com/accounting/account/{account_id}/expenses/expenses', json={'expense': expense}, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
         if resp['status_code'] not in (200, 201):
-            return {'success': False, 'data': None, 'error': f'Create expense failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Create expense failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'data': resp['json'].get('response', {}).get('result', {}).get('expense'), 'error': None}
     except Exception as e:
         return {'success': False, 'data': None, 'error': str(e)}

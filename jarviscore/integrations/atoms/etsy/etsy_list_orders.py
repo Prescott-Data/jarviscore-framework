@@ -4,17 +4,17 @@ _ETSY_API_SUFFIX = '/v3/application'
 async def etsy_list_orders(shop_id: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List shop receipts/orders (GET /v3/application/shops/{shop_id}/receipts). Requires x-api-key (keystring:shared_secret) and OAuth Bearer token per Etsy Open API v3. Official: https://developers.etsy.com/documentation/reference#operation/getShopReceipts"""
     try:
-        api, err = _etsy_api_root(base_url)
+        (api, err) = _etsy_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        sid, err = _etsy_shop_id(shop_id)
+        (sid, err) = _etsy_shop_id(shop_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _etsy_auth()
+        (headers, auth_err) = _etsy_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/shops/{sid}/receipts'
-        records, status, message = await _etsy_paginate(url, headers, {}, limit, timeout, verify_ssl)
+        (records, status, message) = await _etsy_paginate(url, headers, {}, limit, timeout, verify_ssl)
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

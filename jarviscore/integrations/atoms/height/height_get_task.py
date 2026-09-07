@@ -6,10 +6,10 @@ async def height_get_task(task_id: str, timeout: int=30, verify_ssl: bool=True, 
     try:
         if not task_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'task_id is required'}
-        api, err = _height_api_root(base_url)
+        (api, err) = _height_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _height_auth()
+        (headers, auth_err) = _height_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _height_get(f'{api}/tasks/{task_id}', headers, None, timeout, verify_ssl)

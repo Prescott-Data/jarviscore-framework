@@ -4,10 +4,10 @@ MONDAY_API = 'https://api.monday.com/v2'
 async def monday_create_board(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create board via GraphQL create_board mutation. Official: https://developer.monday.com/api-reference/reference/boards"""
     try:
-        base, err = _md_root(base_url)
+        (base, err) = _md_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        headers, aerr = _md_auth()
+        (headers, aerr) = _md_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr, 'provision_ids': []}
         body = payload if isinstance(payload, dict) else {}
@@ -22,7 +22,7 @@ async def monday_create_board(payload: Dict[str, Any], timeout: int=30, verify_s
             vars_['description'] = str(body.get('description'))
         q = 'mutation($board_name: String!, $board_kind: BoardKind!, $workspace_id: ID, $description: String) { create_board(board_name: $board_name, board_kind: $board_kind, workspace_id: $workspace_id, description: $description) { id name url state board_kind } }'
         resp = await _md_gql(base, headers, q, vars_, timeout, verify_ssl)
-        data, status, msg = _md_parse(resp)
+        (data, status, msg) = _md_parse(resp)
         if status >= 400:
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg, 'provision_ids': []}
         out = _md_provision(data, 'create_board')
@@ -51,7 +51,7 @@ def _md_parse(resp):
     except Exception:
         body = {}
     if resp['status_code'] >= 400:
-        return (None, resp['status_code'], (resp['body'] or f'HTTP {resp['status_code']}')[:1000])
+        return (None, resp['status_code'], (resp['body'] or f"HTTP {resp['status_code']}")[:1000])
     errors = body.get('errors')
     if errors:
         msg = errors[0].get('message') if isinstance(errors[0], dict) else str(errors[0])

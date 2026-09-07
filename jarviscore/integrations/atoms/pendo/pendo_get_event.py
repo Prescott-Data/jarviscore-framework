@@ -6,7 +6,7 @@ async def pendo_get_event(event_id: str, timeout: int=30, verify_ssl: bool=True,
         if not event_id:
             return _pn_dataset([], 400, 'event_id is required')
         pipeline = [{}, {'limit': 100000}]
-        records, status, msg = await _pn_aggregate(pipeline, request_id='get-track-type', timeout=timeout, verify_ssl=verify_ssl)
+        (records, status, msg) = await _pn_aggregate(pipeline, request_id='get-track-type', timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _pn_dataset([], status, msg)
         matches = [r for r in records if str(r.get('id', '')) == str(event_id) or str(r.get('trackTypeId', '')) == str(event_id) or str(r.get('name', '')).lower() == str(event_id).lower()]
@@ -52,7 +52,7 @@ def _pn_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _pn_dataset(records, status, msg):
     recs = records if isinstance(records, list) else []
@@ -71,7 +71,7 @@ def _pn_results(data):
     return []
 
 async def _pn_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, track=False):
-    headers, err = _pn_auth(track=track, json_body=json_body is not None or method in ('post', 'put'))
+    (headers, err) = _pn_auth(track=track, json_body=json_body is not None or method in ('post', 'put'))
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -88,11 +88,11 @@ async def _pn_request(method, url, params=None, json_body=None, timeout=30, veri
     return (resp, data, resp['status_code'], None)
 
 async def _pn_aggregate(pipeline, request_id='pendo-query', timeout=30, verify_ssl=True):
-    root, err = _pn_root(None)
+    (root, err) = _pn_root(None)
     if err:
         return ([], 400, err)
     body = {'response': {'mimeType': 'application/json'}, 'request': {'requestId': request_id, 'name': request_id, 'pipeline': pipeline}}
-    resp, data, status, err = await _pn_request('post', root + '/aggregation', json_body=body, timeout=timeout, verify_ssl=verify_ssl)
+    (resp, data, status, err) = await _pn_request('post', root + '/aggregation', json_body=body, timeout=timeout, verify_ssl=verify_ssl)
     if err:
         return ([], 401, err)
     if status >= 400:

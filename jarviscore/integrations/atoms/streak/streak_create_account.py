@@ -5,8 +5,8 @@ async def streak_create_account(payload: Dict[str, Any], timeout: int=30, verify
     try:
         if not isinstance(payload, dict) or not payload:
             return _st_provision({}, 400, 'payload is required')
-        root, _ = _st_root(base_url)
-        headers, err = _st_auth()
+        (root, _) = _st_root(base_url)
+        (headers, err) = _st_auth()
         if err:
             return _st_provision({}, 401, err)
         resp = await nexus_call('PUT', root + '/pipelines', headers=headers, data=payload)
@@ -39,7 +39,7 @@ def _st_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _st_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _host_is(url, *domains):
     """True only if url's hostname equals or is a subdomain of one of domains."""

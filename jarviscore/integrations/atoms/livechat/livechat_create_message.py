@@ -11,14 +11,14 @@ async def livechat_create_message(payload: Dict[str, Any], timeout: int=30, veri
         if not chat_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload.chat_id is required', 'provision_ids': []}
         if not event:
-            event = {k: v for k, v in payload.items() if k not in ('chat_id', 'conversation_id')}
+            event = {k: v for (k, v) in payload.items() if k not in ('chat_id', 'conversation_id')}
         if not event.get('type'):
             event['type'] = 'message'
-        base, err = _lc_root(base_url)
+        (base, err) = _lc_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
         body = {'chat_id': str(chat_id), 'event': event}
-        resp, aerr = await _lc_post(base, 'send_event', body, timeout, verify_ssl)
+        (resp, aerr) = await _lc_post(base, 'send_event', body, timeout, verify_ssl)
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr, 'provision_ids': []}
         data = _lc_json(resp)
@@ -44,7 +44,7 @@ def _lc_auth_header():
     return (None, None)
 
 def _lc_headers():
-    auth, err = _lc_auth_header()
+    (auth, err) = _lc_auth_header()
     if err:
         return (None, err)
     return ({'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': auth}, None)
@@ -55,7 +55,7 @@ def _lc_action_url(base, action):
     return f'{base}/action/{action}'
 
 async def _lc_post(base, action, body, timeout, verify_ssl):
-    headers, err = _lc_headers()
+    (headers, err) = _lc_headers()
     if err:
         return (None, err)
     resp = await nexus_call('POST', _lc_action_url(base, action), headers=headers, json=body or {})

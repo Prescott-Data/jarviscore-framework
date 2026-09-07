@@ -4,10 +4,10 @@ _TR_ROOT = 'https://api.trello.com/1'
 async def trello_list_cards(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Trello REST: list cards. Official: https://developer.atlassian.com/cloud/trello/rest/"""
     try:
-        root, err = _tr_root(base_url)
+        (root, err) = _tr_root(base_url)
         if err:
             return _tr_dataset([], 400, err)
-        params, aerr = _tr_auth_params()
+        (params, aerr) = _tr_auth_params()
         if aerr:
             return _tr_dataset([], 401, aerr)
         plural = 'cards'
@@ -46,4 +46,4 @@ def _tr_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _tr_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

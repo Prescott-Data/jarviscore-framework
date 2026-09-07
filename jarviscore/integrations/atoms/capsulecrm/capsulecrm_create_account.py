@@ -7,7 +7,7 @@ async def capsulecrm_create_account(payload: Dict[str, Any], timeout: int=30, ve
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
         api = _capsule_api_root(base_url)
-        headers, auth_err = _capsule_auth(json_body=True)
+        (headers, auth_err) = _capsule_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         body = _capsule_party_body(payload, default_type='organisation')

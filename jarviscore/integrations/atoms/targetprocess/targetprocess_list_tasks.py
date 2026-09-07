@@ -4,13 +4,13 @@ _TP_ROOT = 'https://example.tpondemand.com/api/v1'
 async def targetprocess_list_tasks(project_id: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Targetprocess REST: list user stories (tasks). Official: https://dev.targetprocess.com/docs/REST%20API"""
     try:
-        root, err = _tp_root(base_url)
+        (root, err) = _tp_root(base_url)
         if err:
             return _tp_dataset([], 400, err)
         params = {}
         if project_id:
             params['where'] = f'Project.Id eq {project_id}'
-        records, status, msg = await _tp_paginate(f'{root}/UserStories', params, limit, timeout, verify_ssl)
+        (records, status, msg) = await _tp_paginate(f'{root}/UserStories', params, limit, timeout, verify_ssl)
         return _tp_dataset(records, status, msg)
     except Exception as e:
         return _tp_dataset([], 500, str(e))
@@ -43,7 +43,7 @@ def _tp_err(resp):
             return str(data.get('ErrorMessage') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _tp_items(data):
     if isinstance(data, dict):
@@ -57,7 +57,7 @@ def _tp_items(data):
     return []
 
 async def _tp_paginate(url, params, limit, timeout, verify_ssl):
-    headers, err = _tp_auth()
+    (headers, err) = _tp_auth()
     if err:
         return ([], 401, err)
     cap = _tp_cap(limit)

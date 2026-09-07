@@ -6,17 +6,17 @@ async def monday_search_records(query: str, limit: int=25, timeout: int=30, veri
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        base, err = _md_root(base_url)
+        (base, err) = _md_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _md_auth()
+        (headers, aerr) = _md_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
-        board_id, berr = _md_board_id()
+        (board_id, berr) = _md_board_id()
         if berr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': berr}
         query_params = {'rules': [{'column_id': 'name', 'compare_value': [str(query)], 'operator': 'contains_text'}]}
-        records, status, msg = await _md_items_page(base, headers, board_id, limit, query_params, timeout, verify_ssl)
+        (records, status, msg) = await _md_items_page(base, headers, board_id, limit, query_params, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}
@@ -48,7 +48,7 @@ def _md_parse(resp):
     except Exception:
         body = {}
     if resp['status_code'] >= 400:
-        return (None, resp['status_code'], (resp['body'] or f'HTTP {resp['status_code']}')[:1000])
+        return (None, resp['status_code'], (resp['body'] or f"HTTP {resp['status_code']}")[:1000])
     errors = body.get('errors')
     if errors:
         msg = errors[0].get('message') if isinstance(errors[0], dict) else str(errors[0])
@@ -81,7 +81,7 @@ async def _md_items_page(base, headers, board_id, limit, query_params, timeout, 
             q = 'query($board_id: [ID!], $limit: Int!, $query_params: ItemsQuery) { boards(ids: $board_id) { items_page(limit: $limit, query_params: $query_params) { cursor items { id name state created_at updated_at url } } } }'
             vars_ = {'board_id': [str(board_id)], 'limit': batch_size, 'query_params': query_params}
         resp = await _md_gql(base, headers, q, vars_, timeout, verify_ssl)
-        data, status, msg = _md_parse(resp)
+        (data, status, msg) = _md_parse(resp)
         if status >= 400 and (not data):
             return (records, status, msg)
         if cursor:

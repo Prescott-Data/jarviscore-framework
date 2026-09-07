@@ -7,10 +7,10 @@ async def podio_update_task(task_id: str, payload: Dict[str, Any], timeout: int=
             return _po_provision({}, 400, 'task_id is required')
         if not isinstance(payload, dict) or not payload:
             return _po_provision({}, 400, 'payload is required')
-        root, err = _po_root(base_url)
+        (root, err) = _po_root(base_url)
         if err:
             return _po_provision({}, 400, err)
-        resp, body, status, msg = await _po_request('put', root + '/task/' + str(task_id).strip(), json_body=payload, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _po_request('put', root + '/task/' + str(task_id).strip(), json_body=payload, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _po_provision(body if isinstance(body, dict) else {}, status, msg)
         data = body if isinstance(body, dict) else {}
@@ -43,7 +43,7 @@ def _po_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _po_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _po_auth(json_body=json_body is not None)
+    (headers, err) = _po_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

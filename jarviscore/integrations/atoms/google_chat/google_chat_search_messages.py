@@ -4,17 +4,17 @@ _CHAT_API_ROOT = 'https://chat.googleapis.com/v1'
 async def google_chat_search_messages(space_name: str, filter_expr: str, max_results: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List messages with filter (createTime, thread.name). Official: https://developers.google.com/workspace/chat/api/reference/rest/v1/spaces.messages/list"""
     try:
-        api, err = _chat_api_root(base_url)
+        (api, err) = _chat_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         if not space_name or not filter_expr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'space_name and filter_expr are required (createTime/thread.name filter syntax)'}
-        headers, auth_err = _chat_auth()
+        (headers, auth_err) = _chat_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         space = space_name if space_name.startswith('spaces/') else f'spaces/{space_name}'
         url = f'{api}/{space}/messages'
-        records, status, msg = await _chat_page(url, headers, {'filter': filter_expr}, 'messages', max_results, timeout, verify_ssl)
+        (records, status, msg) = await _chat_page(url, headers, {'filter': filter_expr}, 'messages', max_results, timeout, verify_ssl)
         if status >= 400 or msg != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

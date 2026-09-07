@@ -6,13 +6,13 @@ async def xero_search_records(query: str, tenant_id: str='', limit: int=100, tim
     try:
         if not query:
             return _x_dataset([], 400, 'query is required')
-        root, err = _x_root(base_url)
+        (root, err) = _x_root(base_url)
         if err:
             return _x_dataset([], 400, err)
-        headers, aerr = _x_headers(tenant_id)
+        (headers, aerr) = _x_headers(tenant_id)
         if aerr:
             return _x_dataset([], 401, aerr)
-        records, status, msg = await _x_paginate(root, 'Contacts', 'Contacts', headers, limit, {'searchTerm': query}, timeout, verify_ssl)
+        (records, status, msg) = await _x_paginate(root, 'Contacts', 'Contacts', headers, limit, {'searchTerm': query}, timeout, verify_ssl)
         return _x_dataset(records, status, msg)
     except Exception as e:
         return _x_dataset([], 500, str(e))
@@ -59,7 +59,7 @@ def _x_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 async def _x_paginate(root, resource, key, headers, limit, extra_params, timeout, verify_ssl):
     cap = min(max(int(limit or 25), 1), 1000)

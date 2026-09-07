@@ -14,7 +14,7 @@ async def msgraph_create_event(subject: str, start_datetime: str, end_datetime: 
             payload['location'] = {'displayName': location}
         resp = await nexus_call('POST', 'https://graph.microsoft.com/v1.0/me/events', headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}, json=payload)
         if resp['status_code'] != 201:
-            return {'success': False, 'data': None, 'error': f'Create event failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Create event failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'data': resp['json'], 'error': None}
     except Exception as e:
         return {'success': False, 'data': None, 'error': str(e)}

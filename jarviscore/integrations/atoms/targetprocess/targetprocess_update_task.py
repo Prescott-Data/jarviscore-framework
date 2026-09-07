@@ -4,12 +4,12 @@ _TP_ROOT = 'https://example.tpondemand.com/api/v1'
 async def targetprocess_update_task(task_id: str, name: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Targetprocess REST: update user story. Official: https://dev.targetprocess.com/docs/REST%20API"""
     try:
-        root, err = _tp_root(base_url)
+        (root, err) = _tp_root(base_url)
         if err:
             return _tp_provision({}, 400, err)
         if not task_id:
             return _tp_provision({}, 400, 'task_id is required')
-        headers, aerr = _tp_auth(json_body=True)
+        (headers, aerr) = _tp_auth(json_body=True)
         if aerr:
             return _tp_provision({}, 401, aerr)
         body = {'Name': name} if name else {}
@@ -49,4 +49,4 @@ def _tp_err(resp):
             return str(data.get('ErrorMessage') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

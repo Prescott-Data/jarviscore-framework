@@ -9,10 +9,10 @@ async def circleci_get_build(project_slug: str, build_id: str, timeout: int=30, 
         if not build_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'build_id (job number) is required'}
         api = _circleci_api_root(base_url)
-        headers, auth_err = _circleci_auth()
+        (headers, auth_err) = _circleci_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        base, err = _circleci_project_path(api, project_slug)
+        (base, err) = _circleci_project_path(api, project_slug)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         resp = await _circleci_get(f'{base}/job/{build_id}', headers, None, timeout, verify_ssl)

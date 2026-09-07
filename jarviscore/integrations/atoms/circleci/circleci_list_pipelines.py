@@ -7,14 +7,14 @@ async def circleci_list_pipelines(project_slug: str, timeout: int=30, verify_ssl
         if not project_slug:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'project_slug is required (e.g. gh/org/repo)'}
         api = _circleci_api_root(base_url)
-        headers, auth_err = _circleci_auth()
+        (headers, auth_err) = _circleci_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        url, err = _circleci_project_path(api, project_slug)
+        (url, err) = _circleci_project_path(api, project_slug)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         url = url + '/pipeline'
-        records, status, message = await _circleci_paginate_items(url, headers, limit, timeout, verify_ssl)
+        (records, status, message) = await _circleci_paginate_items(url, headers, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

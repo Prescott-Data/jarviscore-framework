@@ -5,11 +5,11 @@ async def segment_search_records(query: str, limit: int=25, timeout: int=30, ver
     try:
         if not query:
             return _sg_dataset([], 400, 'query is required')
-        root, _ = _sg_root(base_url)
+        (root, _) = _sg_root(base_url)
         cap = _sg_cap(limit)
         records = []
-        for path, key in (('/sources', 'sources'), ('/destinations', 'destinations')):
-            batch, status, msg = await _sg_fetch_all(root + path, key, cap, timeout, verify_ssl)
+        for (path, key) in (('/sources', 'sources'), ('/destinations', 'destinations')):
+            (batch, status, msg) = await _sg_fetch_all(root + path, key, cap, timeout, verify_ssl)
             if status == 401:
                 return _sg_dataset([], 401, msg)
             for item in batch:
@@ -48,7 +48,7 @@ def _sg_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sg_items(data, key):
     if isinstance(data, dict):
@@ -67,7 +67,7 @@ async def _sg_fetch_all(url, collection_key, limit, timeout, verify_ssl):
     pages = 0
     while len(records) < cap and pages < 50:
         pages += 1
-        headers, err = _sg_auth()
+        (headers, err) = _sg_auth()
         if err:
             return (records, 401, err)
         resp = await nexus_call('GET', next_url, headers=headers, params=params if pages == 1 else None)

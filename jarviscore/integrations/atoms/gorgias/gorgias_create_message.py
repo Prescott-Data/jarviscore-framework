@@ -9,10 +9,10 @@ async def gorgias_create_message(payload: Dict[str, Any], conversation_id: Optio
         tid = _gorgias_ticket_id(payload, conversation_id)
         if not tid:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id (ticket_id) is required'}
-        api, err = _gorgias_api_root(base_url)
+        (api, err) = _gorgias_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _gorgias_require_auth(json_body=True)
+        (headers, basic, auth_err) = _gorgias_require_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _gorgias_post(f'{api}/tickets/{tid}/messages', headers, basic, payload, timeout, verify_ssl)

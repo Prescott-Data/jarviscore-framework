@@ -6,15 +6,15 @@ async def keap_search_records(query: str, resource: str='contacts', limit: int=2
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api, err = _kp_api_root(base_url)
+        (api, err) = _kp_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _kp_auth()
+        (headers, auth_err) = _kp_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         path = {'contacts': 'contacts', 'companies': 'companies', 'accounts': 'companies', 'deals': 'opportunities', 'opportunities': 'opportunities'}.get(str(resource).lower(), 'contacts')
         filt = f'email=={query}' if '@' in query else f'given_name=={query}*'
-        records, status, message = await _kp_paginate(f'{api}/{path}', headers, limit, timeout, verify_ssl, {'filter': filt})
+        (records, status, message) = await _kp_paginate(f'{api}/{path}', headers, limit, timeout, verify_ssl, {'filter': filt})
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

@@ -5,8 +5,8 @@ async def streak_search_records(query: str, pipeline_key: str='', limit: int=25,
     try:
         if not query:
             return _st_dataset([], 400, 'query is required')
-        root, _ = _st_root(base_url)
-        headers, err = _st_auth()
+        (root, _) = _st_root(base_url)
+        (headers, err) = _st_auth()
         if err:
             return _st_dataset([], 401, err)
         params = {'query': str(query)}
@@ -44,7 +44,7 @@ def _st_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _st_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _st_search_results(data):
     out = []

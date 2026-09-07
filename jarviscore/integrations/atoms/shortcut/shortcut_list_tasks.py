@@ -3,8 +3,8 @@ from typing import Any, Dict, List, Optional
 async def shortcut_list_tasks(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shortcut API v3: list tasks. Official: https://developer.shortcut.com/api/rest/v3#Stories/searchStories"""
     try:
-        root, _ = _sc_root(base_url)
-        headers, err = _sc_auth(json_body=True)
+        (root, _) = _sc_root(base_url)
+        (headers, err) = _sc_auth(json_body=True)
         if err:
             return _sc_dataset([], 401, err)
         resp = await nexus_call('POST', root + '/stories/search', headers=headers, json={'archived': False})
@@ -49,7 +49,7 @@ def _sc_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _host_is(url, *domains):
     """True only if url's hostname equals or is a subdomain of one of domains."""

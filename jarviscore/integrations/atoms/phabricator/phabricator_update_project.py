@@ -5,11 +5,11 @@ async def phabricator_update_project(project_id: str, payload: Dict[str, Any], t
     try:
         if not project_id:
             return _ph_provision({}, 400, 'project_id is required')
-        tx, err = _ph_payload_transactions(payload, _PROJECT_TX)
+        (tx, err) = _ph_payload_transactions(payload, _PROJECT_TX)
         if err:
             return _ph_provision({}, 400, err)
         params = {'objectIdentifier': str(project_id).strip(), 'transactions': tx}
-        resp, result, status, msg = await _ph_conduit('project.edit', params, base_url, timeout, verify_ssl)
+        (resp, result, status, msg) = await _ph_conduit('project.edit', params, base_url, timeout, verify_ssl)
         if status >= 400:
             return _ph_provision(result or {}, status, msg)
         return _ph_provision(result or {}, status, 'ok', fallback_id=project_id)
@@ -46,14 +46,14 @@ def _ph_err(body, resp):
 
 async def _ph_conduit(method, params, base_url, timeout=30, verify_ssl=True):
     import json
-    root, err = _ph_root(base_url)
+    (root, err) = _ph_root(base_url)
     if err:
         return (None, None, 400, err)
     tok = _ph_token()
     if not tok:
         return (None, None, 401, 'auth_info.api_key is required')
     form = {'api.token': str(tok).strip()}
-    for key, val in (params or {}).items():
+    for (key, val) in (params or {}).items():
         if val is None:
             continue
         if isinstance(val, (dict, list)):
@@ -79,7 +79,7 @@ def _ph_payload_transactions(payload, mapping):
     if isinstance(payload.get('transactions'), list):
         return (payload['transactions'], None)
     tx = []
-    for key, ttype in mapping.items():
+    for (key, ttype) in mapping.items():
         if key in payload and payload[key] is not None:
             tx.append({'type': ttype, 'value': payload[key]})
     if not tx:

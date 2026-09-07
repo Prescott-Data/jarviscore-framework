@@ -5,8 +5,8 @@ async def what3words_list_items(input_text: str, limit: int=5, timeout: int=30, 
     """what3words Public API: Autosuggest 3wa. Official: https://developer.what3words.com/public-api/docs"""
     'Autosuggest 3 word addresses.'
     try:
-        root, _ = _w3w_root(base_url)
-        key, err = _w3w_key()
+        (root, _) = _w3w_root(base_url)
+        (key, err) = _w3w_key()
         if err:
             return _w3w_dataset([], 401, err)
         if not input_text:
@@ -32,4 +32,4 @@ def _w3w_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _w3w_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

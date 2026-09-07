@@ -7,10 +7,10 @@ async def reddit_ads_search_records(query: str, limit: int=25, timeout: int=30, 
             return _ra_dataset([], 400, 'query is required')
         cap = _ra_cap(limit)
         out = []
-        for suffix, rtype in (('/campaigns', 'campaign'), ('/ads', 'ad')):
+        for (suffix, rtype) in (('/campaigns', 'campaign'), ('/ads', 'ad')):
             if len(out) >= cap:
                 break
-            rows, status, msg = await _ra_list(base_url, suffix, cap * 2, timeout, verify_ssl)
+            (rows, status, msg) = await _ra_list(base_url, suffix, cap * 2, timeout, verify_ssl)
             if status >= 400 and (not out):
                 return _ra_dataset([], status, msg)
             for row in rows:
@@ -73,7 +73,7 @@ def _ra_rows(body):
     return []
 
 async def _ra_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ra_auth(json_body=json_body is not None)
+    (headers, err) = _ra_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -94,10 +94,10 @@ async def _ra_request(method, url, params=None, json_body=None, timeout=30, veri
     return (resp, body, resp['status_code'], 'ok')
 
 def _ra_account_path(base_url, suffix):
-    root, err = _ra_root(base_url)
+    (root, err) = _ra_root(base_url)
     if err:
         return (None, err)
-    account_id, err = _ra_account()
+    (account_id, err) = _ra_account()
     if err:
         return (None, err)
     suffix = suffix if suffix.startswith('/') else '/' + suffix
@@ -105,7 +105,7 @@ def _ra_account_path(base_url, suffix):
 
 async def _ra_list(base_url, suffix, limit, timeout, verify_ssl, params=None):
     cap = _ra_cap(limit)
-    url, err = _ra_account_path(base_url, suffix)
+    (url, err) = _ra_account_path(base_url, suffix)
     if err:
         return ([], 400, err)
     records = []
@@ -114,11 +114,11 @@ async def _ra_list(base_url, suffix, limit, timeout, verify_ssl, params=None):
     msg = 'ok'
     while len(records) < cap:
         if next_url:
-            resp, body, status, msg = await _ra_request('get', next_url, timeout=timeout, verify_ssl=verify_ssl)
+            (resp, body, status, msg) = await _ra_request('get', next_url, timeout=timeout, verify_ssl=verify_ssl)
         else:
             req_params = dict(params or {})
             req_params.setdefault('page.size', min(100, cap))
-            resp, body, status, msg = await _ra_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
+            (resp, body, status, msg) = await _ra_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return (records, status, msg)
         batch = _ra_rows(body)

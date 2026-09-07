@@ -9,7 +9,7 @@ async def asana_search_records(query: str, workspace: Optional[str]=None, resour
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api_root, root_err = _asana_api_root(base_url)
+        (api_root, root_err) = _asana_api_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
         workspace_gid = _asana_workspace(workspace)
@@ -18,7 +18,7 @@ async def asana_search_records(query: str, workspace: Optional[str]=None, resour
         resource = str(resource_type or 'task').lower()
         if resource not in _TYPEAHEAD_RESOURCES:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': f'resource_type must be one of: {sorted(_TYPEAHEAD_RESOURCES)}'}
-        headers, auth_err = _asana_headers()
+        (headers, auth_err) = _asana_headers()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         params = {'resource_type': resource, 'query': query, 'count': min(max(limit, 1), 100)}

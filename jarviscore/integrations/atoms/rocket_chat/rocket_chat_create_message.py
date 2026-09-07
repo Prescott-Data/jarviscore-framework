@@ -13,10 +13,10 @@ async def rocket_chat_create_message(payload: Dict[str, Any], timeout: int=30, v
             return _rc_provision({}, 400, 'payload.roomId/channel or auth_info.room_id is required')
         if 'text' not in body_payload and 'msg' in body_payload:
             body_payload['text'] = body_payload.pop('msg')
-        root, err = _rc_root(base_url)
+        (root, err) = _rc_root(base_url)
         if err:
             return _rc_provision({}, 400, err)
-        resp, body, status, msg = await _rc_request('post', root + '/chat.postMessage', json_body=body_payload, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _rc_request('post', root + '/chat.postMessage', json_body=body_payload, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _rc_provision(body if isinstance(body, dict) else {}, status, msg)
         message = body.get('message') if isinstance(body.get('message'), dict) else body
@@ -64,7 +64,7 @@ def _rc_room_id(payload=None):
     return payload.get('roomId') or payload.get('room_id') or payload.get('conversation_id') or None or None or None
 
 async def _rc_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _rc_auth()
+    (headers, err) = _rc_auth()
     if err:
         return (None, None, 401, err)
     if json_body is not None:

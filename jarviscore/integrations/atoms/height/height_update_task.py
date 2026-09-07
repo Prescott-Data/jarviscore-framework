@@ -8,10 +8,10 @@ async def height_update_task(task_id: str, payload: Dict[str, Any], timeout: int
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'task_id is required'}
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _height_api_root(base_url)
+        (api, err) = _height_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _height_auth(json_body=True)
+        (headers, auth_err) = _height_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _height_patch(f'{api}/tasks/{task_id}', headers, payload, timeout, verify_ssl)

@@ -6,13 +6,13 @@ async def etsy_create_product(shop_id: str, payload: Dict[str, Any], timeout: in
     try:
         if not payload or not isinstance(payload, dict):
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _etsy_api_root(base_url)
+        (api, err) = _etsy_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        sid, err = _etsy_shop_id(shop_id)
+        (sid, err) = _etsy_shop_id(shop_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _etsy_auth(form=True)
+        (headers, auth_err) = _etsy_auth(form=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await nexus_call('POST', f'{api}/shops/{sid}/listings', headers=headers, data=_etsy_form_body(payload))
@@ -99,7 +99,7 @@ def _etsy_form_value(val):
 
 def _etsy_form_body(fields):
     pairs = []
-    for key, val in (fields or {}).items():
+    for (key, val) in (fields or {}).items():
         if val is None:
             continue
         pairs.append(f'{_etsy_pct_enc(str(key))}={_etsy_pct_enc(_etsy_form_value(val))}')

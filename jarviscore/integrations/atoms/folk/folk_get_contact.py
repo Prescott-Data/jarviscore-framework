@@ -6,10 +6,10 @@ async def folk_get_contact(contact_id: str, timeout: int=30, verify_ssl: bool=Tr
     try:
         if not contact_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'contact_id (personId) is required'}
-        api, err = _folk_api_root(base_url)
+        (api, err) = _folk_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _folk_auth()
+        (headers, auth_err) = _folk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         person_id = str(contact_id).strip()

@@ -5,10 +5,10 @@ async def mattermost_get_message(message_id: str, timeout: int=30, verify_ssl: b
     try:
         if not message_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'message_id is required (post id)'}
-        root, err = _mm_api_root(base_url)
+        (root, err) = _mm_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _mm_headers()
+        (headers, aerr) = _mm_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         resp = await nexus_call('GET', f'{root}/posts/{message_id}', headers=headers)

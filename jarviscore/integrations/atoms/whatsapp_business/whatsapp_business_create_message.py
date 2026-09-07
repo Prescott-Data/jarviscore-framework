@@ -4,11 +4,11 @@ _WA_ROOT = 'https://graph.facebook.com/v19.0'
 async def whatsapp_business_create_message(to: str, text: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """WhatsApp Cloud API: Send text message. Official: https://developers.facebook.com/docs/whatsapp/cloud-api"""
     try:
-        root, _ = _wa_root(base_url)
-        headers, aerr = _wa_auth()
+        (root, _) = _wa_root(base_url)
+        (headers, aerr) = _wa_auth()
         if aerr:
             return _wa_provision({}, 401, aerr)
-        pid, err = _wa_phone()
+        (pid, err) = _wa_phone()
         if err:
             return _wa_provision({}, 400, err)
         if not to or not text:
@@ -45,4 +45,4 @@ def _wa_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _wa_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

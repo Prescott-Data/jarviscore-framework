@@ -11,7 +11,7 @@ async def safaricom_mpesa_search_records(query: str, limit: int=25, timeout: int
             return _mp_dataset([], 400, 'auth_info.business_short_code and passkey are required')
         ts = _mp_timestamp()
         body_payload = {'BusinessShortCode': str(shortcode), 'Password': _mp_password(shortcode, passkey, ts), 'Timestamp': ts, 'CheckoutRequestID': str(query)}
-        resp, body, status, msg = await _mp_post('/mpesa/stkpushquery/v1/query', base_url, body_payload, timeout, verify_ssl)
+        (resp, body, status, msg) = await _mp_post('/mpesa/stkpushquery/v1/query', base_url, body_payload, timeout, verify_ssl)
         if status >= 400:
             return _mp_dataset([], status, msg)
         rec = dict(body) if isinstance(body, dict) else {}
@@ -38,7 +38,7 @@ def _mp_password(shortcode, passkey, timestamp):
 
 async def _mp_oauth(base_url, timeout, verify_ssl):
     import base64
-    root, _ = _mp_root(base_url)
+    (root, _) = _mp_root(base_url)
     resp = await nexus_call('GET', root + '/oauth/v1/generate', params={'grant_type': 'client_credentials'}, headers={'Accept': 'application/json'})
     try:
         body = resp['json'] if resp['content'] else {}
@@ -62,10 +62,10 @@ def _mp_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _mp_post(path, base_url, json_body, timeout, verify_ssl):
-    token, err = await _mp_oauth(base_url, timeout, verify_ssl)
+    (token, err) = await _mp_oauth(base_url, timeout, verify_ssl)
     if err:
         return (None, None, 401, err)
-    root, _ = _mp_root(base_url)
+    (root, _) = _mp_root(base_url)
     resp = await nexus_call('POST', root + path, headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json', 'Accept': 'application/json'}, json=json_body)
     try:
         body = resp['json'] if resp['content'] else {}

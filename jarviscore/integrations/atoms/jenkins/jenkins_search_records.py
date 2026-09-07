@@ -5,10 +5,10 @@ async def jenkins_search_records(query: str, limit: int=25, timeout: int=30, ver
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        base, err = _jk_root(base_url)
+        (base, err) = _jk_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        basic, auth_err = _jk_auth()
+        (basic, auth_err) = _jk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _jk_get(f'{base}/api/json', basic, {'tree': 'jobs[name,url,color,_class]'}, timeout, verify_ssl)

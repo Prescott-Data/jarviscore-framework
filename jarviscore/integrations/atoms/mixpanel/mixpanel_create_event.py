@@ -6,8 +6,8 @@ MP_EXPORT = 'https://data.mixpanel.com/api/2.0'
 async def mixpanel_create_event(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Track an event via Ingestion API /track. Official: https://developer.mixpanel.com/reference/track-event"""
     try:
-        root, _ = _mp_ingest_root(base_url)
-        tok, terr = _mp_project_token(payload)
+        (root, _) = _mp_ingest_root(base_url)
+        (tok, terr) = _mp_project_token(payload)
         if terr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': terr, 'provision_ids': []}
         body = payload if isinstance(payload, dict) else {}
@@ -23,7 +23,7 @@ async def mixpanel_create_event(payload: Dict[str, Any], timeout: int=30, verify
         track = [{'event': str(event_name), 'properties': props}]
         resp = await nexus_call('POST', f'{root}/track', params={'verbose': '1'}, json=track)
         insert_id = props.get('$insert_id') or props.get('insert_id')
-        fallback = insert_id or f'{event_name}|{props.get('distinct_id', '')}'
+        fallback = insert_id or f"{event_name}|{props.get('distinct_id', '')}"
         return _mp_provision(resp, fallback_id=fallback)
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e), 'provision_ids': []}
@@ -48,7 +48,7 @@ def _mp_error_text(resp):
                 return str(data.get('error') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _mp_provision_ids_from_body(body, fallback=None):
     if isinstance(body, dict):

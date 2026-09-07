@@ -7,10 +7,10 @@ async def capsulecrm_search_records(query: str, limit: int=25, timeout: int=30, 
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
         api = _capsule_api_root(base_url)
-        headers, auth_err = _capsule_auth()
+        (headers, auth_err) = _capsule_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _capsule_search(f'{api}/parties/search', headers, query, limit, timeout, verify_ssl)
+        (records, status, message) = await _capsule_search(f'{api}/parties/search', headers, query, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

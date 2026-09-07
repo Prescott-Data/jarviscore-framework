@@ -8,11 +8,11 @@ async def mixpanel_get_event(event_id: str, timeout: int=30, verify_ssl: bool=Tr
     try:
         if not event_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'event_id is required ($insert_id)'}
-        root, _ = _mp_export_root(base_url)
-        pid, perr = _mp_project_id()
+        (root, _) = _mp_export_root(base_url)
+        (pid, perr) = _mp_project_id()
         if perr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': perr}
-        headers, aerr = _mp_basic_headers()
+        (headers, aerr) = _mp_basic_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         where = f'properties["$insert_id"] == "{event_id}"'
@@ -67,7 +67,7 @@ def _mp_error_text(resp):
                 return str(data.get('error') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _host_is(url, *domains):
     """True only if url's hostname equals or is a subdomain of one of domains."""

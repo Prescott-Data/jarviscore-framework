@@ -4,19 +4,19 @@ _GL_API_ROOT = 'https://gitlab.com/api/v4'
 async def gitlab_get_issue(project_id: str, issue_iid: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get a single project issue. Official: https://docs.gitlab.com/api/issues/#get-a-single-project-issue"""
     try:
-        api, err = _gl_api_root(base_url)
+        (api, err) = _gl_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         if not project_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'project_id is required'}
         if not issue_iid:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'issue_iid is required'}
-        headers, auth_err = _gl_auth()
+        (headers, auth_err) = _gl_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         pid = _gl_path_enc(project_id)
         iid = _gl_path_enc(issue_iid)
-        records, status, msg = await _gl_get_entity(f'{api}/projects/{pid}/issues/{iid}', headers, timeout, verify_ssl)
+        (records, status, msg) = await _gl_get_entity(f'{api}/projects/{pid}/issues/{iid}', headers, timeout, verify_ssl)
         if status >= 400 or msg != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

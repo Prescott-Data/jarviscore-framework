@@ -4,13 +4,13 @@ INSIGHTLY_API = 'https://api.na1.insightly.com/v3.1'
 async def insightly_list_contacts(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Insightly contacts (API resource Contacts). Official: https://api.na1.insightly.com/v3.1/Help"""
     try:
-        api, err = _in_api_root(base_url)
+        (api, err) = _in_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _in_auth()
+        (headers, basic, auth_err) = _in_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _in_paginate(f'{api}/Contacts', headers, basic, limit, timeout, verify_ssl)
+        (records, status, message) = await _in_paginate(f'{api}/Contacts', headers, basic, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

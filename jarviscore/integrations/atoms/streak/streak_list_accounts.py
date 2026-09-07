@@ -3,8 +3,8 @@ from typing import Any, Dict, List, Optional
 async def streak_list_accounts(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Streak API: list accounts. Official: https://streak.com/api#list_all_pipelines"""
     try:
-        root, _ = _st_root(base_url)
-        headers, err = _st_auth()
+        (root, _) = _st_root(base_url)
+        (headers, err) = _st_auth()
         if err:
             return _st_dataset([], 401, err)
         resp = await nexus_call('GET', root + '/pipelines', headers=headers)
@@ -38,7 +38,7 @@ def _st_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _st_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _host_is(url, *domains):
     """True only if url's hostname equals or is a subdomain of one of domains."""

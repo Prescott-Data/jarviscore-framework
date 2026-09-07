@@ -5,13 +5,13 @@ async def beanstalk_list_pipelines(repository_id: str, account: Optional[str]=No
     try:
         if not repository_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'repository_id is required'}
-        api_root, err = _beanstalk_api_root(base_url, account)
+        (api_root, err) = _beanstalk_api_root(base_url, account)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _beanstalk_auth()
+        (headers, basic, auth_err) = _beanstalk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _beanstalk_paginate(api_root, f'/{repository_id}/server_environments.json', headers, basic, limit, timeout, verify_ssl)
+        (records, status, message) = await _beanstalk_paginate(api_root, f'/{repository_id}/server_environments.json', headers, basic, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

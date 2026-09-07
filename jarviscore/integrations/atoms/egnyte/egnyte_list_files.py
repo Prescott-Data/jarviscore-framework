@@ -4,13 +4,13 @@ _EGNYTE_PUBAPI_SUFFIX = '/pubapi/v1'
 async def egnyte_list_files(folder_path: str='/Shared', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List files in folder (GET /pubapi/v1/fs/{folder_path}?list_content=true). Bearer OAuth per Egnyte Public API. Official: https://developers.egnyte.com/docs/read/File_System_Management_API_Documentation"""
     try:
-        api, err = _egnyte_api_root(base_url)
+        (api, err) = _egnyte_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _egnyte_auth()
+        (headers, auth_err) = _egnyte_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _egnyte_list_entries(api, headers, folder_path, limit, 'files', timeout, verify_ssl)
+        (records, status, message) = await _egnyte_list_entries(api, headers, folder_path, limit, 'files', timeout, verify_ssl)
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

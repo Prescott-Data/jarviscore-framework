@@ -6,10 +6,10 @@ async def fullstory_list_events(session_id: str, limit: int=25, timeout: int=30,
     try:
         if not session_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'session_id is required'}
-        api, err = _fs_api_root(base_url)
+        (api, err) = _fs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _fs_fullstory_auth()
+        (headers, auth_err) = _fs_fullstory_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         sid = _fs_pct_enc(str(session_id).strip())

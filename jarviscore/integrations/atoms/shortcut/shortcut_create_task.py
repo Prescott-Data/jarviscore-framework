@@ -5,8 +5,8 @@ async def shortcut_create_task(payload: Dict[str, Any], timeout: int=30, verify_
     try:
         if not isinstance(payload, dict) or not payload:
             return _sc_provision({}, 400, 'payload is required')
-        root, _ = _sc_root(base_url)
-        headers, err = _sc_auth(json_body=True)
+        (root, _) = _sc_root(base_url)
+        (headers, err) = _sc_auth(json_body=True)
         if err:
             return _sc_provision({}, 401, err)
         resp = await nexus_call('POST', root + '/stories', headers=headers, json=payload)
@@ -49,7 +49,7 @@ def _sc_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _host_is(url, *domains):
     """True only if url's hostname equals or is a subdomain of one of domains."""

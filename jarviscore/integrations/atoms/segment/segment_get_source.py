@@ -5,8 +5,8 @@ async def segment_get_source(source_id: str, timeout: int=30, verify_ssl: bool=T
     try:
         if not source_id:
             return _sg_dataset([], 400, 'source_id is required')
-        root, _ = _sg_root(base_url)
-        headers, err = _sg_auth()
+        (root, _) = _sg_root(base_url)
+        (headers, err) = _sg_auth()
         if err:
             return _sg_dataset([], 401, err)
         resp = await nexus_call('GET', f'{root}/sources/{source_id}', headers=headers)
@@ -45,7 +45,7 @@ def _sg_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sg_single(data, key):
     if isinstance(data, dict):

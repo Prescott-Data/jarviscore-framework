@@ -7,7 +7,7 @@ async def close_create_contact(payload: Dict[str, Any], timeout: int=30, verify_
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
         api = _close_api_root(base_url)
-        headers, basic, auth_err = _close_auth(json_body=True)
+        (headers, basic, auth_err) = _close_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _close_post_json(f'{api}/contact/', headers, basic, payload, timeout, verify_ssl)

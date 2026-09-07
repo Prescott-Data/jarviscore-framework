@@ -4,17 +4,17 @@ _CHAT_API_ROOT = 'https://chat.googleapis.com/v1'
 async def google_chat_search_conversations(query: str, use_admin_access: bool=False, max_results: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search Chat spaces via spaces:search. query required. Official: https://developers.google.com/workspace/chat/api/reference/rest/v1/spaces/search"""
     try:
-        api, err = _chat_api_root(base_url)
+        (api, err) = _chat_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required (spaces:search query string)'}
-        headers, auth_err = _chat_auth()
+        (headers, auth_err) = _chat_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/spaces:search'
         params: Dict[str, Any] = {'query': query, 'useAdminAccess': use_admin_access}
-        records, status, msg = await _chat_page(url, headers, params, 'spaces', max_results, timeout, verify_ssl)
+        (records, status, msg) = await _chat_page(url, headers, params, 'spaces', max_results, timeout, verify_ssl)
         if status >= 400 or msg != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

@@ -7,10 +7,10 @@ async def amplitude_get_user(user_id: str, timeout: int=30, verify_ssl: bool=Tru
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
         if not user_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'user_id is required'}
-        api_root, _, root_err = _amp_dashboard_root(base_url)
+        (api_root, _, root_err) = _amp_dashboard_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
-        data, status, msg = await _amp_get_json(f'{api_root}/usersearch', params={'user': user_id}, timeout=timeout, verify_ssl=verify_ssl)
+        (data, status, msg) = await _amp_get_json(f'{api_root}/usersearch', params={'user': user_id}, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg}
         if isinstance(data, dict):
@@ -38,7 +38,7 @@ def _amp_basic_auth():
     return (None, None)
 
 async def _amp_get_json(url, params=None, timeout=30, verify_ssl=True):
-    auth, auth_err = _amp_basic_auth()
+    (auth, auth_err) = _amp_basic_auth()
     if auth_err:
         return (None, 401, auth_err)
     resp = await nexus_call('GET', url, params=params)

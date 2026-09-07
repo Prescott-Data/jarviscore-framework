@@ -6,10 +6,10 @@ async def nifty_update_task(task_id: str, payload: Dict[str, Any], timeout: int=
     try:
         if not task_id:
             return _nf_provision([], 400, 'task_id is required', [])
-        root, err = _nf_root(base_url)
+        (root, err) = _nf_root(base_url)
         if err:
             return _nf_provision([], 400, err, [])
-        headers, aerr = _nf_auth(json_body=True)
+        (headers, aerr) = _nf_auth(json_body=True)
         if aerr:
             return _nf_provision([], 400, aerr, [])
         body = payload if isinstance(payload, dict) else {}
@@ -50,7 +50,7 @@ def _nf_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _nf_provision_id(data, fallback=None):
     if isinstance(data, dict):

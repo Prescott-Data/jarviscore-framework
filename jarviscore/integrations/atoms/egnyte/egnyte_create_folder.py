@@ -9,10 +9,10 @@ async def egnyte_create_folder(payload: Dict[str, Any], timeout: int=30, verify_
         folder_path = payload.get('folder_path') or payload.get('path')
         if not folder_path:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload.folder_path (or path) is required'}
-        api, err = _egnyte_api_root(base_url)
+        (api, err) = _egnyte_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _egnyte_auth(json_body=True)
+        (headers, auth_err) = _egnyte_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         body = {'action': 'add_folder'}

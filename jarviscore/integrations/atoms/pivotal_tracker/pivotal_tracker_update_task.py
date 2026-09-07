@@ -10,14 +10,14 @@ async def pivotal_tracker_update_task(task_id: str, payload: Dict[str, Any], tim
         project_id = _pt_project_id(payload)
         if not project_id:
             return _pt_provision({}, 400, 'auth_info.project_id is required for story update')
-        root, err = _pt_root(base_url)
+        (root, err) = _pt_root(base_url)
         if err:
             return _pt_provision({}, 400, err)
         body_payload = dict(payload)
         body_payload.pop('project_id', None)
         body_payload.pop('projectId', None)
         path = '/projects/' + str(project_id).strip() + '/stories/' + str(task_id).strip()
-        resp, body, status, msg = await _pt_request('put', root + path, json_body=body_payload, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _pt_request('put', root + path, json_body=body_payload, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _pt_provision(body if isinstance(body, dict) else {}, status, msg)
         data = body if isinstance(body, dict) else {}
@@ -58,7 +58,7 @@ def _pt_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _pt_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pt_auth(json_body=json_body is not None)
+    (headers, err) = _pt_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

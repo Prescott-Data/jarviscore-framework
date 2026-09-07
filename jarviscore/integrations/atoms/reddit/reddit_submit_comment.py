@@ -7,7 +7,7 @@ async def reddit_submit_comment(parent_id: str, text: str) -> dict:
     try:
         resp = await nexus_call('POST', 'https://oauth.reddit.com/api/comment', data={'parent': parent_id, 'text': text}, headers={'Authorization': f'Bearer {access_token}', 'User-Agent': 'jarviscore/1.0'})
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Submit comment failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Submit comment failed: {resp['status_code']} {resp['body']}"}
         data = resp['json']
         comments = data.get('jquery', [])
         comment_data = None

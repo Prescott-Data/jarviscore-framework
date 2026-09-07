@@ -7,7 +7,7 @@ async def amplitude_create_event(payload: Dict[str, Any], timeout: int=30, verif
             return _amp_provision([], 400, 'base_url is required')
         if not isinstance(payload, dict) or not payload:
             return _amp_provision([], 400, 'payload must be a non-empty dict')
-        _, dash_host, root_err = _amp_dashboard_root(base_url)
+        (_, dash_host, root_err) = _amp_dashboard_root(base_url)
         if root_err:
             return _amp_provision([], 400, root_err)
         api_key = _amp_api_key()

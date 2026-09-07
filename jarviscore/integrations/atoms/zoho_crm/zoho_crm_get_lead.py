@@ -5,10 +5,10 @@ async def zoho_crm_get_lead(lead_id: str, timeout: int=30, verify_ssl: bool=True
     try:
         if not lead_id:
             return _dataset([], 400, 'lead_id is required')
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _dataset([], 400, err)
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if aerr:
             return _dataset([], 401, aerr)
         resp = await nexus_call('GET', root + '/Leads/' + str(lead_id), headers=headers)

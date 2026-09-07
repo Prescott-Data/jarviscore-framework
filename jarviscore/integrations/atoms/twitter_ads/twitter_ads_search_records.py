@@ -4,15 +4,15 @@ _XA_ROOT = 'https://ads-api.x.com/12'
 async def twitter_ads_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """X Ads API: search records. Official: https://developer.x.com/en/docs/twitter-ads-api"""
     try:
-        root, err = _xa_root(base_url)
+        (root, err) = _xa_root(base_url)
         if err:
             return _xa_dataset([], 400, err)
         if not query:
             return _xa_dataset([], 400, 'query is required')
-        headers, aerr = _xa_auth()
+        (headers, aerr) = _xa_auth()
         if aerr:
             return _xa_dataset([], 401, aerr)
-        aid, err = _xa_account()
+        (aid, err) = _xa_account()
         if err:
             return _xa_dataset([], 400, err)
         resp = await nexus_call('GET', f'{root}/accounts/{aid}/campaigns', headers=headers, params={'count': 100})
@@ -43,7 +43,7 @@ def _xa_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _xa_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _xa_rows(data):
     if isinstance(data, list):

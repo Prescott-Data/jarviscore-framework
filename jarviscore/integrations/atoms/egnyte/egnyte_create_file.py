@@ -9,7 +9,7 @@ async def egnyte_create_file(payload: Dict[str, Any], timeout: int=30, verify_ss
         file_path = payload.get('file_path') or payload.get('path')
         if not file_path:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload.file_path (or path) is required'}
-        api, err = _egnyte_api_root(base_url)
+        (api, err) = _egnyte_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         content = payload.get('content')
@@ -24,7 +24,7 @@ async def egnyte_create_file(payload: Dict[str, Any], timeout: int=30, verify_ss
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload.content or payload.local_path is required'}
         if isinstance(content, str):
             content = content.encode('utf-8')
-        headers, auth_err = _egnyte_auth(content=True)
+        (headers, auth_err) = _egnyte_auth(content=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await nexus_call('POST', _egnyte_fs_content_url(api, str(file_path)), headers=headers, data=content)

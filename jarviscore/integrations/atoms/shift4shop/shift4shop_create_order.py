@@ -5,10 +5,10 @@ async def shift4shop_create_order(payload: Dict[str, Any], timeout: int=30, veri
     try:
         if not isinstance(payload, dict) or not payload:
             return _s4_provision({}, 400, 'payload is required')
-        root, err = _s4_root(base_url)
+        (root, err) = _s4_root(base_url)
         if err:
             return _s4_provision({}, 400, err)
-        headers, aerr = _s4_auth()
+        (headers, aerr) = _s4_auth()
         if aerr:
             return _s4_provision({}, 401, aerr)
         headers['Content-Type'] = 'application/json'
@@ -47,4 +47,4 @@ def _s4_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _s4_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

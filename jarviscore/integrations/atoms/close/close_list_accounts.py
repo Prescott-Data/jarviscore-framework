@@ -5,10 +5,10 @@ async def close_list_accounts(limit: int=25, timeout: int=30, verify_ssl: bool=T
     """List leads (accounts) from Close CRM. HTTP Basic API key (username, empty password). Official: https://developer.close.com/"""
     try:
         api = _close_api_root(base_url)
-        headers, basic, auth_err = _close_auth()
+        (headers, basic, auth_err) = _close_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _close_paginate(f'{api}/lead/', headers, basic, limit, timeout, verify_ssl)
+        (records, status, message) = await _close_paginate(f'{api}/lead/', headers, basic, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

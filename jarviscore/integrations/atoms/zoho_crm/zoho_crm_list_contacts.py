@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def zoho_crm_list_contacts(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """zoho_crm REST: list contacts. Official: https://www.zoho.com/crm/developer/docs/api/v2/"""
     try:
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _dataset([], 400, err)
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if aerr:
             return _dataset([], 401, aerr)
         resp = await nexus_call('GET', root + '/Contacts', headers=headers, params={'per_page': _cap(limit)})

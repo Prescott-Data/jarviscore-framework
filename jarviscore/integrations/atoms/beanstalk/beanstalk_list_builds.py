@@ -3,13 +3,13 @@ from typing import Any, Dict, List, Optional
 async def beanstalk_list_builds(account: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, limit: int=25, base_url: str=None) -> dict:
     """List releases (deployments) for account. GET /api/releases.json. Official: https://api.beanstalkapp.com/release"""
     try:
-        api_root, err = _beanstalk_api_root(base_url, account)
+        (api_root, err) = _beanstalk_api_root(base_url, account)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _beanstalk_auth()
+        (headers, basic, auth_err) = _beanstalk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _beanstalk_paginate(api_root, '/releases.json', headers, basic, limit, timeout, verify_ssl)
+        (records, status, message) = await _beanstalk_paginate(api_root, '/releases.json', headers, basic, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

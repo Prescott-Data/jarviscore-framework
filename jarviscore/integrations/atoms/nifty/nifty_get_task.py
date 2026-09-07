@@ -6,10 +6,10 @@ async def nifty_get_task(task_id: str, timeout: int=30, verify_ssl: bool=True, b
     try:
         if not task_id:
             return _nf_dataset([], 400, 'task_id is required')
-        root, err = _nf_root(base_url)
+        (root, err) = _nf_root(base_url)
         if err:
             return _nf_dataset([], 400, err)
-        headers, aerr = _nf_auth()
+        (headers, aerr) = _nf_auth()
         if aerr:
             return _nf_dataset([], 401, aerr)
         resp = await nexus_call('GET', f'{root}/tasks/{task_id}', headers=headers)
@@ -48,7 +48,7 @@ def _nf_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _nf_dataset(records, status, msg):
     return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}

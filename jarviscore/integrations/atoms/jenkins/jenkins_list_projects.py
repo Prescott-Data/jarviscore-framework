@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def jenkins_list_projects(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Jenkins jobs (catalog project maps to Jenkins job). Official: https://www.jenkins.io/doc/book/using/remote-access-api/"""
     try:
-        base, err = _jk_root(base_url)
+        (base, err) = _jk_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        basic, auth_err = _jk_auth()
+        (basic, auth_err) = _jk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _jk_get(f'{base}/api/json', basic, {'tree': 'jobs[name,url,color,_class]'}, timeout, verify_ssl)

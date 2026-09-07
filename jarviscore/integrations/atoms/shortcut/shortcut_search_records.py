@@ -5,8 +5,8 @@ async def shortcut_search_records(query: str, limit: int=25, timeout: int=30, ve
     try:
         if not query:
             return _sc_dataset([], 400, 'query is required')
-        root, _ = _sc_root(base_url)
-        headers, err = _sc_auth()
+        (root, _) = _sc_root(base_url)
+        (headers, err) = _sc_auth()
         if err:
             return _sc_dataset([], 401, err)
         cap = _sc_cap(limit)
@@ -53,7 +53,7 @@ def _sc_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sc_match(record, query):
     q = str(query).lower()

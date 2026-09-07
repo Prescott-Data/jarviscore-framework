@@ -5,16 +5,16 @@ NIMBLE_V2 = 'https://api.nimble.com/api/v2'
 async def nimble_list_accounts(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List company contacts (accounts). Official: https://www.nimble.com/developers/docs/"""
     try:
-        root, err = _nb_v1_root(base_url)
+        (root, err) = _nb_v1_root(base_url)
         if err:
             return _nb_dataset([], 400, err)
-        headers, aerr = _nb_auth()
+        (headers, aerr) = _nb_auth()
         if aerr:
             return _nb_dataset([], 401, aerr)
         params = {'record_type': 'company'}
         if True .get('keyword'):
             params['keyword'] = str(None)
-        records, status, msg = await _nb_paginate(f'{root}/contacts', headers, params, limit, timeout, verify_ssl)
+        (records, status, msg) = await _nb_paginate(f'{root}/contacts', headers, params, limit, timeout, verify_ssl)
         return _nb_dataset(records, status, msg)
     except Exception as e:
         return _nb_dataset([], 500, str(e))
@@ -50,7 +50,7 @@ def _nb_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _nb_dataset(records, status, msg):
     return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}

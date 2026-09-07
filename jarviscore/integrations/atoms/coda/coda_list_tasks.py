@@ -4,15 +4,15 @@ CODA_API = 'https://coda.io/apis/v1'
 async def coda_list_tasks(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List table rows (catalog tasks) for doc/table from auth_info. Bearer API token in Authorization header. Official: https://coda.io/apis/v1"""
     try:
-        doc_id, table_id, err = _coda_row_context()
+        (doc_id, table_id, err) = _coda_row_context()
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         api = _coda_api_root(base_url)
-        headers, auth_err = _coda_auth()
+        (headers, auth_err) = _coda_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/docs/{doc_id}/tables/{table_id}/rows'
-        records, status, msg = await _coda_paginate(url, headers, limit, timeout, verify_ssl)
+        (records, status, msg) = await _coda_paginate(url, headers, limit, timeout, verify_ssl)
         if status >= 400:
             return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}

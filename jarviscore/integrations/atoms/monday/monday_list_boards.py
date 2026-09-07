@@ -4,10 +4,10 @@ MONDAY_API = 'https://api.monday.com/v2'
 async def monday_list_boards(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List boards via GraphQL boards query with page/limit. Official: https://developer.monday.com/api-reference/reference/boards"""
     try:
-        base, err = _md_root(base_url)
+        (base, err) = _md_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _md_auth()
+        (headers, aerr) = _md_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         cap = _md_cap(limit)
@@ -17,7 +17,7 @@ async def monday_list_boards(limit: int=25, timeout: int=30, verify_ssl: bool=Tr
         while len(records) < cap and page <= 50:
             q = 'query($limit: Int!, $page: Int!) { boards(limit: $limit, page: $page) { id name state board_kind description url workspace_id } }'
             resp = await _md_gql(base, headers, q, {'limit': min(cap - len(records), 100), 'page': page}, timeout, verify_ssl)
-            data, status, msg = _md_parse(resp)
+            (data, status, msg) = _md_parse(resp)
             if status >= 400 and (not data):
                 return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
             batch = _md_records((data or {}).get('boards'))
@@ -52,7 +52,7 @@ def _md_parse(resp):
     except Exception:
         body = {}
     if resp['status_code'] >= 400:
-        return (None, resp['status_code'], (resp['body'] or f'HTTP {resp['status_code']}')[:1000])
+        return (None, resp['status_code'], (resp['body'] or f"HTTP {resp['status_code']}")[:1000])
     errors = body.get('errors')
     if errors:
         msg = errors[0].get('message') if isinstance(errors[0], dict) else str(errors[0])

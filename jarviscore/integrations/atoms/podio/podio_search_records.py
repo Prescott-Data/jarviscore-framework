@@ -5,7 +5,7 @@ async def podio_search_records(query: str, limit: int=25, timeout: int=30, verif
     try:
         if not query:
             return _po_dataset([], 400, 'query is required')
-        root, err = _po_root(base_url)
+        (root, err) = _po_root(base_url)
         if err:
             return _po_dataset([], 400, err)
         app_id = None or None
@@ -23,7 +23,7 @@ async def podio_search_records(query: str, limit: int=25, timeout: int=30, verif
             path = '/search/v2/'
         while len(records) < cap:
             body = {'query': str(query), 'limit': min(20, cap - len(records)), 'offset': offset}
-            resp, data, status, msg = await _po_request('post', root + path, json_body=body, timeout=timeout, verify_ssl=verify_ssl)
+            (resp, data, status, msg) = await _po_request('post', root + path, json_body=body, timeout=timeout, verify_ssl=verify_ssl)
             if status >= 400:
                 return _po_dataset(records[:cap], status, msg)
             batch = _po_items(data)
@@ -71,7 +71,7 @@ def _po_items(data):
     return []
 
 async def _po_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _po_auth(json_body=json_body is not None)
+    (headers, err) = _po_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

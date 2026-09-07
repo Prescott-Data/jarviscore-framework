@@ -8,10 +8,10 @@ async def freshsales_search_records(query: str, include: str='contact,sales_acco
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api, err = _fs_api_root(base_url)
+        (api, err) = _fs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _fs_sales_auth()
+        (headers, auth_err) = _fs_sales_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         per_page = min(max(int(limit or 25), 1), 100)

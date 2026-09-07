@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def teamcity_update_project(project_id: str, name: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """TeamCity REST: update project. Official: https://www.jetbrains.com/help/teamcity/rest/teamcity-rest.html"""
     try:
-        root, err = _tc_root(base_url)
+        (root, err) = _tc_root(base_url)
         if err:
             return _tc_provision({}, 400, err)
         if not project_id:
             return _tc_provision({}, 400, 'project_id is required')
-        headers, aerr = _tc_auth()
+        (headers, aerr) = _tc_auth()
         if aerr:
             return _tc_provision({}, 401, aerr)
         headers['Content-Type'] = 'text/plain'
@@ -38,4 +38,4 @@ def _tc_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _tc_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

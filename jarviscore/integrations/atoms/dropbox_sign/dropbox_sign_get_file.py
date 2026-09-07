@@ -6,10 +6,10 @@ async def dropbox_sign_get_file(file_id: str, timeout: int=30, verify_ssl: bool=
     try:
         if not file_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'file_id is required (signature_request_id)'}
-        api, err = _sign_api_root(base_url)
+        (api, err) = _sign_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _sign_auth()
+        (headers, basic, auth_err) = _sign_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await nexus_call('GET', f'{api}/signature_request/{file_id}', headers=headers)

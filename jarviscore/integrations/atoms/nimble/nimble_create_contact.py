@@ -5,10 +5,10 @@ NIMBLE_V2 = 'https://api.nimble.com/api/v2'
 async def nimble_create_contact(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create contact (JSON body). Official: https://www.nimble.com/developers/docs/"""
     try:
-        root, err = _nb_v1_root(base_url)
+        (root, err) = _nb_v1_root(base_url)
         if err:
             return _nb_provision({}, 400, err)
-        headers, aerr = _nb_auth(json_body=True)
+        (headers, aerr) = _nb_auth(json_body=True)
         if aerr:
             return _nb_provision({}, 400, aerr)
         body = payload if isinstance(payload, dict) else {}
@@ -52,7 +52,7 @@ def _nb_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _nb_provision(data, status, msg, fallback_id=None):
     obj = data if isinstance(data, dict) else {}

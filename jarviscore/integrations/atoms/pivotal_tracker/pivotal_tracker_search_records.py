@@ -8,11 +8,11 @@ async def pivotal_tracker_search_records(query: str, limit: int=25, timeout: int
         project_id = _pt_project_id()
         if not project_id:
             return _pt_dataset([], 400, 'auth_info.project_id is required for search')
-        root, err = _pt_root(base_url)
+        (root, err) = _pt_root(base_url)
         if err:
             return _pt_dataset([], 400, err)
         params = {'query': str(query)}
-        resp, body, status, msg = await _pt_request('get', root + '/projects/' + str(project_id).strip() + '/search', params=params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _pt_request('get', root + '/projects/' + str(project_id).strip() + '/search', params=params, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _pt_dataset([], status, msg)
         records = _pt_search_items(body)[:_pt_cap(limit)]
@@ -73,7 +73,7 @@ def _pt_search_items(data):
     return out
 
 async def _pt_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pt_auth(json_body=json_body is not None)
+    (headers, err) = _pt_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

@@ -7,10 +7,10 @@ async def sage_business_cloud_accounting_search_records(query: str, limit: int=2
             return _sage_dataset([], 400, 'query is required')
         cap = _sage_cap(limit)
         records = []
-        for path, rtype in (('/contacts', 'contact'), ('/sales_invoices', 'sales_invoice')):
+        for (path, rtype) in (('/contacts', 'contact'), ('/sales_invoices', 'sales_invoice')):
             if len(records) >= cap:
                 break
-            chunk, status, msg = await _sage_list_collection(path, base_url, cap - len(records), timeout, verify_ssl, {'search': query})
+            (chunk, status, msg) = await _sage_list_collection(path, base_url, cap - len(records), timeout, verify_ssl, {'search': query})
             if status >= 400 and (not records):
                 return _sage_dataset([], status, msg)
             for item in chunk:
@@ -91,10 +91,10 @@ def _sage_next_url(root, body):
     return root + '/' + nxt
 
 async def _sage_get(path, base_url, params, timeout, verify_ssl):
-    headers, err = _sage_auth()
+    (headers, err) = _sage_auth()
     if err:
         return (None, None, 401, err)
-    root, _ = _sage_root(base_url)
+    (root, _) = _sage_root(base_url)
     resp = await nexus_call('GET', root + path, headers=headers, params=params)
     try:
         body = resp['json'] if resp['content'] else {}
@@ -110,7 +110,7 @@ async def _sage_list_collection(path, base_url, limit, timeout, verify_ssl, extr
     params = {'items_per_page': min(cap, 200), 'page': 1}
     if extra_params:
         params.update(extra_params)
-    root, _ = _sage_root(base_url)
+    (root, _) = _sage_root(base_url)
     status = 200
     msg = 'ok'
     pages = 0
@@ -118,7 +118,7 @@ async def _sage_list_collection(path, base_url, limit, timeout, verify_ssl, extr
     while pages < 50 and len(records) < cap:
         pages += 1
         if next_url:
-            headers, err = _sage_auth()
+            (headers, err) = _sage_auth()
             if err:
                 return (records, 401, err)
             resp = await nexus_call('GET', next_url, headers=headers)
@@ -130,7 +130,7 @@ async def _sage_list_collection(path, base_url, limit, timeout, verify_ssl, extr
             if status >= 400:
                 return (records, status, _sage_err(resp, body))
         else:
-            resp, body, status, msg = await _sage_get(path, base_url, params, timeout, verify_ssl)
+            (resp, body, status, msg) = await _sage_get(path, base_url, params, timeout, verify_ssl)
             if status >= 400:
                 return (records, status, msg)
         for item in _sage_items(body):

@@ -5,16 +5,16 @@ async def jenkins_stop_build(job_name: str, build_number: str, timeout: int=30, 
     try:
         if not build_number:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'build_number is required', 'provision_ids': []}
-        base, err = _jk_root(base_url)
+        (base, err) = _jk_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        path, perr = _jk_job_path(job_name)
+        (path, perr) = _jk_job_path(job_name)
         if perr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': perr, 'provision_ids': []}
-        basic, auth_err = _jk_auth()
+        (basic, auth_err) = _jk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
-        headers, _ = await _jk_crumb(base, basic, timeout, verify_ssl)
+        (headers, _) = await _jk_crumb(base, basic, timeout, verify_ssl)
         resp = await _jk_post(f'{base}{path}/{build_number}/stop', basic, headers, None, timeout, verify_ssl)
         if resp['status_code'] >= 400:
             return {'records': [], 'data_count': 0, 'status': resp['status_code'], 'message': resp['body'][:1000], 'provision_ids': []}

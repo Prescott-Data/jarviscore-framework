@@ -5,10 +5,10 @@ async def beanstalk_create_build(repository_id: str, environment_id: str, accoun
     try:
         if not repository_id or not environment_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'repository_id and environment_id are required'}
-        api_root, err = _beanstalk_api_root(base_url, account)
+        (api_root, err) = _beanstalk_api_root(base_url, account)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _beanstalk_auth(json_body=True)
+        (headers, basic, auth_err) = _beanstalk_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         body = payload or {'release': {}}

@@ -7,7 +7,7 @@ async def coda_update_project(project_id: str, payload: Dict[str, Any], timeout:
         if not project_id or not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'project_id and payload are required'}
         api = _coda_api_root(base_url)
-        headers, auth_err = _coda_auth(json_body=True)
+        (headers, auth_err) = _coda_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _coda_patch(f'{api}/docs/{project_id}', headers, payload, timeout, verify_ssl)

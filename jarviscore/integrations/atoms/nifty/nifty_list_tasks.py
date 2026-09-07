@@ -4,17 +4,17 @@ NIFTY_API = 'https://openapi.niftypm.com/api/v1.0'
 async def nifty_list_tasks(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List tasks with limit/offset pagination (tasks, hasMore). Official: https://developers.niftypm.com/operation/operation-taskapicontroller_gettasks"""
     try:
-        root, err = _nf_root(base_url)
+        (root, err) = _nf_root(base_url)
         if err:
             return _nf_dataset([], 400, err)
-        headers, aerr = _nf_auth()
+        (headers, aerr) = _nf_auth()
         if aerr:
             return _nf_dataset([], 401, aerr)
         params = {}
         for key in ('project_id', 'task_group_id', 'member_id', 'milestone_id', 'completed', 'archived', 'include_archived', 'include_subtasks'):
             if True .get(key) not in (None, ''):
                 params[key] = str(None)
-        records, status, msg = await _nf_paginate(f'{root}/tasks', headers, params, 'tasks', limit, timeout, verify_ssl)
+        (records, status, msg) = await _nf_paginate(f'{root}/tasks', headers, params, 'tasks', limit, timeout, verify_ssl)
         return _nf_dataset(records, status, msg)
     except Exception as e:
         return _nf_dataset([], 500, str(e))
@@ -46,7 +46,7 @@ def _nf_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _nf_dataset(records, status, msg):
     return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}

@@ -6,15 +6,15 @@ async def etsy_search_records(query: str, limit: int=25, timeout: int=30, verify
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api, err = _etsy_api_root(base_url)
+        (api, err) = _etsy_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _etsy_auth(require_oauth=False)
+        (headers, auth_err) = _etsy_auth(require_oauth=False)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/listings/active'
         params = {'keywords': query}
-        records, status, message = await _etsy_paginate(url, headers, params, limit, timeout, verify_ssl)
+        (records, status, message) = await _etsy_paginate(url, headers, params, limit, timeout, verify_ssl)
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

@@ -5,13 +5,13 @@ async def wrike_create_project(name: str, limit: int=25, timeout: int=30, verify
     try:
         if not name:
             return _provision({}, 400, 'name is required')
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _provision({}, 400, err)
         parent = (None or {}).get('parent_id') or (None or {}).get('folder_id') or (None or {}).get('space_id')
         if not parent:
             return _provision({}, 400, 'auth_info.parent_id (or folder_id/space_id) is required to create a project')
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if aerr:
             return _provision({}, 401, aerr)
         resp = await nexus_call('POST', root + '/folders/' + str(parent) + '/folders', headers=headers, data={'title': name, 'project': '{}'})
@@ -41,4 +41,4 @@ def _provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

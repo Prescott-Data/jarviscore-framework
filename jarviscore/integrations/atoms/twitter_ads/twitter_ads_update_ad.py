@@ -4,15 +4,15 @@ _XA_ROOT = 'https://ads-api.x.com/12'
 async def twitter_ads_update_ad(promoted_tweet_id: str, entity_status: str='PAUSED', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """X Ads API: update ad. Official: https://developer.x.com/en/docs/twitter-ads-api"""
     try:
-        root, err = _xa_root(base_url)
+        (root, err) = _xa_root(base_url)
         if err:
             return _xa_provision({}, 400, err)
         if not promoted_tweet_id:
             return _xa_provision({}, 400, 'promoted_tweet_id is required')
-        headers, aerr = _xa_auth()
+        (headers, aerr) = _xa_auth()
         if aerr:
             return _xa_provision({}, 401, aerr)
-        aid, err = _xa_account()
+        (aid, err) = _xa_account()
         if err:
             return _xa_provision({}, 400, err)
         resp = await nexus_call('DELETE', f'{root}/accounts/{aid}/promoted_tweets/{promoted_tweet_id}', headers=headers)
@@ -49,4 +49,4 @@ def _xa_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _xa_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

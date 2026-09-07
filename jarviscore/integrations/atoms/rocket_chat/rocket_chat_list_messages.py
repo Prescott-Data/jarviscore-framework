@@ -6,12 +6,12 @@ async def rocket_chat_list_messages(limit: int=25, timeout: int=30, verify_ssl: 
         room_id = _rc_room_id()
         if not room_id:
             return _rc_dataset([], 400, 'auth_info.room_id or conversation_id is required')
-        root, err = _rc_root(base_url)
+        (root, err) = _rc_root(base_url)
         if err:
             return _rc_dataset([], 400, err)
         cap = _rc_cap(limit)
         params = {'roomId': room_id, 'count': cap, 'offset': 0}
-        resp, body, status, msg = await _rc_request('get', root + '/channels.messages', params=params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _rc_request('get', root + '/channels.messages', params=params, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _rc_dataset([], status, msg)
         rows = body.get('messages') if isinstance(body.get('messages'), list) else []
@@ -59,7 +59,7 @@ def _rc_room_id(payload=None):
     return payload.get('roomId') or payload.get('room_id') or payload.get('conversation_id') or None or None or None
 
 async def _rc_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _rc_auth()
+    (headers, err) = _rc_auth()
     if err:
         return (None, None, 401, err)
     if json_body is not None:

@@ -5,10 +5,10 @@ async def beanstalk_update_build(build_id: str, repository_id: str, account: Opt
     try:
         if not build_id or not repository_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'build_id and repository_id are required'}
-        api_root, err = _beanstalk_api_root(base_url, account)
+        (api_root, err) = _beanstalk_api_root(base_url, account)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _beanstalk_auth(json_body=True)
+        (headers, basic, auth_err) = _beanstalk_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         resp = await _beanstalk_put(api_root, f'/{repository_id}/releases/{build_id}/retry.json', headers, basic, {}, None, timeout, verify_ssl)

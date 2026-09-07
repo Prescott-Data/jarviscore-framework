@@ -8,10 +8,10 @@ async def nutshell_update_deal(deal_id: str, payload: Dict[str, Any], timeout: i
             return _ns_provision({}, 400, 'deal_id is required')
         if not isinstance(payload, dict):
             return _ns_provision({}, 400, 'payload is required')
-        base, err = _ns_root(base_url)
+        (base, err) = _ns_root(base_url)
         if err:
             return _ns_provision({}, 400, err)
-        headers, aerr = _ns_auth()
+        (headers, aerr) = _ns_auth()
         if aerr:
             return _ns_provision({}, 401, aerr)
         lid = int(deal_id) if str(deal_id).isdigit() else deal_id
@@ -19,11 +19,11 @@ async def nutshell_update_deal(deal_id: str, payload: Dict[str, Any], timeout: i
         lead = dict(payload)
         lead.pop('rev', None)
         if rev is None:
-            existing, est, _ = await _ns_rpc(base, headers, 'getLead', {'leadId': lid}, timeout, verify_ssl)
+            (existing, est, _) = await _ns_rpc(base, headers, 'getLead', {'leadId': lid}, timeout, verify_ssl)
             if est >= 400 or not isinstance(existing, dict):
                 return _ns_provision({}, est if est >= 400 else 400, 'lead not found or rev missing')
             rev = existing.get('rev')
-        result, status, msg = await _ns_rpc(base, headers, 'editLead', {'leadId': lid, 'rev': rev, 'lead': lead}, timeout, verify_ssl)
+        (result, status, msg) = await _ns_rpc(base, headers, 'editLead', {'leadId': lid, 'rev': rev, 'lead': lead}, timeout, verify_ssl)
         if msg != 'ok':
             return _ns_provision({}, status, msg, fallback_id=deal_id)
         return _ns_provision(result, status, msg, fallback_id=deal_id)

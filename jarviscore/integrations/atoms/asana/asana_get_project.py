@@ -8,10 +8,10 @@ async def asana_get_project(project_id: str, timeout: int=30, verify_ssl: bool=T
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
         if not project_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'project_id is required'}
-        api_root, root_err = _asana_api_root(base_url)
+        (api_root, root_err) = _asana_api_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
-        headers, auth_err = _asana_headers()
+        (headers, auth_err) = _asana_headers()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await nexus_call('GET', f'{api_root}/projects/{project_id}', headers=headers)

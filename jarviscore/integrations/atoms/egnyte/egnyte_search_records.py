@@ -6,13 +6,13 @@ async def egnyte_search_records(query: str, limit: int=25, timeout: int=30, veri
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api, err = _egnyte_api_root(base_url)
+        (api, err) = _egnyte_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _egnyte_auth(json_body=True)
+        (headers, auth_err) = _egnyte_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        search_url = f'{api.replace(_EGNYTE_PUBAPI_SUFFIX, '/pubapi/v2')}/search'
+        search_url = f"{api.replace(_EGNYTE_PUBAPI_SUFFIX, '/pubapi/v2')}/search"
         cap = min(max(int(limit or 25), 1), 1000)
         records: List[Dict[str, Any]] = []
         offset = 0

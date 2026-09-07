@@ -1,6 +1,6 @@
 async def oracle_cx_get_opportunity(instance_url: str, opportunity_id: str) -> dict:
     """Cx get opportunity via the oracle_cx API."""
-    _base = f'{instance_url.rstrip('/')}/crmRestApi/resources/latest'
+    _base = f"{instance_url.rstrip('/')}/crmRestApi/resources/latest"
     _h = {'Content-Type': 'application/json'}
 
     async def _get(p, params=None, headers=None):

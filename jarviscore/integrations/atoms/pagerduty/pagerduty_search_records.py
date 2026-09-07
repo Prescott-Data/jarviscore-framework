@@ -3,15 +3,15 @@ from typing import Any, Dict, List, Optional
 async def pagerduty_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Filter incidents (query maps to incident_key; optional auth_info filters: statuses, service_ids, user_ids, since, until). Official: https://developer.pagerduty.com/api-reference/operations/listIncidents"""
     try:
-        root, err = _pd_root(base_url)
+        (root, err) = _pd_root(base_url)
         if err:
             return _pd_dataset([], 400, err)
         params = {}
         if query:
             params['incident_key'] = query
-        for key, param in (('statuses', 'statuses[]'), ('service_ids', 'service_ids[]'), ('user_ids', 'user_ids[]'), ('team_ids', 'team_ids[]'), ('since', 'since'), ('until', 'until')):
+        for (key, param) in (('statuses', 'statuses[]'), ('service_ids', 'service_ids[]'), ('user_ids', 'user_ids[]'), ('team_ids', 'team_ids[]'), ('since', 'since'), ('until', 'until')):
             pass
-        records, status, msg = await _pd_paginate(root + '/incidents', params, limit, timeout, verify_ssl, 'incidents')
+        (records, status, msg) = await _pd_paginate(root + '/incidents', params, limit, timeout, verify_ssl, 'incidents')
         return _pd_dataset(records, status, msg)
     except Exception as e:
         return _pd_dataset([], 500, str(e))
@@ -55,7 +55,7 @@ def _pd_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _pd_dataset(records, status, msg):
     recs = records if isinstance(records, list) else []
@@ -71,7 +71,7 @@ def _pd_collection(data, key):
     return []
 
 async def _pd_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, from_header=False):
-    headers, err = _pd_auth(json_body=json_body is not None, from_header=from_header)
+    (headers, err) = _pd_auth(json_body=json_body is not None, from_header=from_header)
     if err:
         return (None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -97,7 +97,7 @@ async def _pd_paginate(url, params, limit, timeout, verify_ssl, collection_key):
         req_params = dict(base_params)
         req_params['limit'] = min(cap - len(records), 100)
         req_params['offset'] = offset
-        resp, status, err = await _pd_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, status, err) = await _pd_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return (records, 401, err)
         if status >= 400:

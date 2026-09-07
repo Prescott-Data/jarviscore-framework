@@ -7,7 +7,7 @@ async def freshchat_create_conversation(channel_id: str, messages: List[Any], us
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'channel_id is required'}
         if not messages:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'messages is required'}
-        api, err = _fc_api_root(base_url)
+        (api, err) = _fc_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         body: Dict[str, Any] = {'status': status or 'new', 'channel_id': channel_id, 'messages': messages}
@@ -19,7 +19,7 @@ async def freshchat_create_conversation(channel_id: str, messages: List[Any], us
             body['assigned_group_id'] = assigned_group_id
         if properties:
             body['properties'] = properties
-        headers, auth_err = _fc_auth(json_body=True)
+        (headers, auth_err) = _fc_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await nexus_call('POST', f'{api}/conversations', headers=headers, json=body)

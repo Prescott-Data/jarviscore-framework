@@ -14,7 +14,7 @@ async def todoist_update_task(task_id: str, content: str=None, due_string: str=N
             payload['priority'] = priority
         resp = await nexus_call('POST', f'https://api.todoist.com/api/v1/tasks/{task_id}', json=payload, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Update task failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Update task failed: {resp['status_code']} {resp['body']}"}
         data = resp['json']
         return {'success': True, 'data': data.get('results', data), 'error': None}
     except Exception as e:

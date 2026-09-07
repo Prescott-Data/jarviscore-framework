@@ -5,10 +5,10 @@ async def okta_get_app(domain: str, app_id: str, timeout: int=30, verify_ssl: bo
     try:
         if not app_id:
             return _ok_dataset([], 400, 'app_id is required')
-        root, err = _ok_root(base_url, domain)
+        (root, err) = _ok_root(base_url, domain)
         if err:
             return _ok_dataset([], 400, err)
-        headers, aerr = _ok_auth()
+        (headers, aerr) = _ok_auth()
         if aerr:
             return _ok_dataset([], 401, aerr)
         resp = await nexus_call('GET', f'{root}/apps/{app_id}', headers=headers)
@@ -52,7 +52,7 @@ def _ok_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _ok_dataset(records, status, msg):
     recs = records if isinstance(records, list) else []

@@ -4,12 +4,12 @@ _TR_ROOT = 'https://api.trello.com/1'
 async def trello_create_board(name: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Trello REST: create board. Official: https://developer.atlassian.com/cloud/trello/rest/"""
     try:
-        root, err = _tr_root(base_url)
+        (root, err) = _tr_root(base_url)
         if err:
             return _tr_provision({}, 400, err)
         if not name:
             return _tr_provision({}, 400, 'name is required')
-        params, aerr = _tr_auth_params()
+        (params, aerr) = _tr_auth_params()
         if aerr:
             return _tr_provision({}, 401, aerr)
         params['name'] = name
@@ -36,4 +36,4 @@ def _tr_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _tr_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

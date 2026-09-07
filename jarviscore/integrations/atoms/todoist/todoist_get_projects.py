@@ -7,7 +7,7 @@ async def todoist_get_projects() -> dict:
     try:
         resp = await nexus_call('GET', 'https://api.todoist.com/api/v1/projects', headers={'Authorization': f'Bearer {access_token}'})
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Get projects failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Get projects failed: {resp['status_code']} {resp['body']}"}
         projects = resp['json'].get('results', [])
         return {'success': True, 'data': {'projects': projects, 'count': len(projects)}, 'error': None}
     except Exception as e:

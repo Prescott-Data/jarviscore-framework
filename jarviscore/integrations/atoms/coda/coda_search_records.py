@@ -7,11 +7,11 @@ async def coda_search_records(query: str, limit: int=25, timeout: int=30, verify
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
         api = _coda_api_root(base_url)
-        headers, auth_err = _coda_auth()
+        (headers, auth_err) = _coda_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         fetch_limit = max(limit * 4, limit, 25)
-        records, status, msg = await _coda_paginate(f'{api}/docs', headers, fetch_limit, timeout, verify_ssl)
+        (records, status, msg) = await _coda_paginate(f'{api}/docs', headers, fetch_limit, timeout, verify_ssl)
         if status >= 400:
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg}
         filtered = _coda_filter_docs(records, query)[:limit]

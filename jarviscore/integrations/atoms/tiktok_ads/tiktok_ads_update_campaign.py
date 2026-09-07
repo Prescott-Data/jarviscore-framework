@@ -4,15 +4,15 @@ _TT_ROOT = 'https://business-api.tiktok.com/open_api/v1.3'
 async def tiktok_ads_update_campaign(campaign_id: str, campaign_name: str='', advertiser_id: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """TikTok Marketing API: Update campaign. Official: https://business-api.tiktok.com/portal/docs"""
     try:
-        root, err = _tt_root(base_url)
+        (root, err) = _tt_root(base_url)
         if err:
             return _tt_provision({}, 400, err)
         if not campaign_id:
             return _tt_provision({}, 400, 'campaign_id is required')
-        aid, err = _tt_advertiser(advertiser_id)
+        (aid, err) = _tt_advertiser(advertiser_id)
         if err:
             return _tt_provision({}, 400, err)
-        headers, aerr = _tt_auth()
+        (headers, aerr) = _tt_auth()
         if aerr:
             return _tt_provision({}, 401, aerr)
         headers['Content-Type'] = 'application/json'
@@ -51,4 +51,4 @@ def _tt_provision(data, status, msg, fallback_id=None):
 def _tt_err(resp, data=None):
     if isinstance(data, dict):
         return str(data.get('message') or data)[:1000]
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

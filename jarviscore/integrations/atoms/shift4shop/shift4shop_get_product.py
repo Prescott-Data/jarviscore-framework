@@ -5,10 +5,10 @@ async def shift4shop_get_product(product_id: str, timeout: int=30, verify_ssl: b
     try:
         if not product_id:
             return _s4_dataset([], 400, 'product_id is required')
-        root, err = _s4_root(base_url)
+        (root, err) = _s4_root(base_url)
         if err:
             return _s4_dataset([], 400, err)
-        headers, aerr = _s4_auth()
+        (headers, aerr) = _s4_auth()
         if aerr:
             return _s4_dataset([], 401, aerr)
         resp = await nexus_call('GET', root + '/Products/' + str(product_id), headers=headers)
@@ -43,4 +43,4 @@ def _s4_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _s4_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

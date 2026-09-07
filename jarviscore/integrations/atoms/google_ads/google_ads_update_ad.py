@@ -4,15 +4,15 @@ _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 async def google_ads_update_ad(customer_id: str, ad_id: str, payload: Dict[str, Any], resource_name: Optional[str]=None, update_mask: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a ad in google ads. Official: https://developers.google.com/google-ads/api/docs/rest/common/search"""
     try:
-        api, err = _gads_api_root(base_url)
+        (api, err) = _gads_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        cid, err = _gads_customer_id(customer_id)
+        (cid, err) = _gads_customer_id(customer_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
         if not isinstance(payload, dict) or not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required', 'provision_ids': []}
-        headers, auth_err = _gads_auth(json_body=True)
+        (headers, auth_err) = _gads_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         if isinstance(payload.get('operations'), list):
@@ -21,7 +21,7 @@ async def google_ads_update_ad(customer_id: str, ad_id: str, payload: Dict[str, 
             rn = resource_name or payload.get('resourceName') or payload.get('resource_name')
             if not rn and ad_id:
                 query = f'SELECT ad_group_ad.resource_name FROM ad_group_ad WHERE ad_group_ad.ad.id = {ad_id} LIMIT 1'
-                rows, status, msg = await _gads_search(api, cid, headers, query, 1, timeout, verify_ssl)
+                (rows, status, msg) = await _gads_search(api, cid, headers, query, 1, timeout, verify_ssl)
                 if status >= 400 or not rows:
                     return {'records': [], 'data_count': 0, 'status': status or 404, 'message': msg or 'ad not found', 'provision_ids': []}
                 row = rows[0]
@@ -29,7 +29,7 @@ async def google_ads_update_ad(customer_id: str, ad_id: str, payload: Dict[str, 
                 rn = aga.get('resourceName') or aga.get('resource_name')
             if not rn:
                 return {'records': [], 'data_count': 0, 'status': 400, 'message': 'resource_name or ad_id is required', 'provision_ids': []}
-            update_fields = {k: v for k, v in payload.items() if k not in ('resourceName', 'resource_name', 'updateMask', 'update_mask')}
+            update_fields = {k: v for (k, v) in payload.items() if k not in ('resourceName', 'resource_name', 'updateMask', 'update_mask')}
             op: Dict[str, Any] = {'update': {'resourceName': rn, **update_fields}}
             mask = update_mask or payload.get('updateMask') or payload.get('update_mask')
             if mask:
@@ -37,7 +37,7 @@ async def google_ads_update_ad(customer_id: str, ad_id: str, payload: Dict[str, 
             elif update_fields:
                 op['updateMask'] = ','.join(sorted(update_fields.keys()))
             body = {'operations': [op]}
-        data, status, msg = await _gads_mutate(api, cid, 'adGroupAds', headers, body, timeout, verify_ssl)
+        (data, status, msg) = await _gads_mutate(api, cid, 'adGroupAds', headers, body, timeout, verify_ssl)
         if status >= 400 or msg != 'ok':
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg, 'provision_ids': []}
         return _gads_provision_response(data, status)

@@ -5,15 +5,15 @@ async def rocket_chat_search_records(query: str, limit: int=25, timeout: int=30,
     try:
         if not query:
             return _rc_dataset([], 400, 'query is required')
-        root, err = _rc_root(base_url)
+        (root, err) = _rc_root(base_url)
         if err:
             return _rc_dataset([], 400, err)
         cap = _rc_cap(limit)
         out = []
-        resp, body, status, msg = await _rc_request('get', root + '/spotlight', params={'query': query}, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _rc_request('get', root + '/spotlight', params={'query': query}, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _rc_dataset([], status, msg)
-        for key, rtype in (('rooms', 'room'), ('users', 'user')):
+        for (key, rtype) in (('rooms', 'room'), ('users', 'user')):
             rows = body.get(key) if isinstance(body.get(key), list) else []
             for row in rows:
                 if isinstance(row, dict):
@@ -25,7 +25,7 @@ async def rocket_chat_search_records(query: str, limit: int=25, timeout: int=30,
             if len(out) >= cap:
                 break
         if len(out) < cap:
-            resp2, body2, status2, msg2 = await _rc_request('get', root + '/rooms.get', timeout=timeout, verify_ssl=verify_ssl)
+            (resp2, body2, status2, msg2) = await _rc_request('get', root + '/rooms.get', timeout=timeout, verify_ssl=verify_ssl)
             if status2 < 400:
                 for row in body2.get('update') or []:
                     if isinstance(row, dict) and _rc_match(row, query):
@@ -74,7 +74,7 @@ def _rc_ok(body):
     return True
 
 async def _rc_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _rc_auth()
+    (headers, err) = _rc_auth()
     if err:
         return (None, None, 401, err)
     if json_body is not None:

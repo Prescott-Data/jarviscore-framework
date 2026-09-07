@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def twilio_update_call(call_sid: str, status: str='completed', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Twilio REST: update call. Official: https://www.twilio.com/docs/usage/api"""
     try:
-        root, err = _tw_root(base_url)
+        (root, err) = _tw_root(base_url)
         if err:
             return _tw_provision({}, 400, err)
         if not call_sid:
             return _tw_provision({}, 400, 'call_sid is required')
-        sid, token, aerr = _tw_account()
+        (sid, token, aerr) = _tw_account()
         if aerr:
             return _tw_provision({}, 401, aerr)
         resp = await nexus_call('POST', f'{root}/Calls/{call_sid}.json', data={'Status': status})
@@ -23,7 +23,7 @@ def _tw_account():
     return (None, None, None)
 
 def _tw_root(base_url):
-    sid, _, err = _tw_account()
+    (sid, _, err) = _tw_account()
     if err:
         return (None, err)
     root = (base_url or None or f'https://api.twilio.com/2010-04-01/Accounts/{sid}').strip().rstrip('/')
@@ -37,4 +37,4 @@ def _tw_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _tw_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

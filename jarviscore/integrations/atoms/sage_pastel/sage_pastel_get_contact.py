@@ -5,7 +5,7 @@ async def sage_pastel_get_contact(contact_id: str, timeout: int=30, verify_ssl: 
     try:
         if not contact_id:
             return _pt_dataset([], 400, 'contact_id is required')
-        resp, body, status, msg = await _pt_get('Customer', base_url, str(contact_id), None, timeout, verify_ssl)
+        (resp, body, status, msg) = await _pt_get('Customer', base_url, str(contact_id), None, timeout, verify_ssl)
         if status >= 400:
             return _pt_dataset([], status, msg)
         rec = body if isinstance(body, dict) else {}
@@ -47,13 +47,13 @@ def _pt_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _pt_get(service, base_url, path_suffix, extra_params, timeout, verify_ssl):
-    headers, err = _pt_auth()
+    (headers, err) = _pt_auth()
     if err:
         return (None, None, 401, err)
-    params, err = _pt_query(extra_params)
+    (params, err) = _pt_query(extra_params)
     if err:
         return (None, None, 401, err)
-    root, _ = _pt_root(base_url)
+    (root, _) = _pt_root(base_url)
     path = f'/{service}/Get'
     if path_suffix:
         path += f'/{path_suffix}'

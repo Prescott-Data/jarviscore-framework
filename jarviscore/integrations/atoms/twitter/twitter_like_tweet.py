@@ -14,7 +14,7 @@ async def twitter_like_tweet(tweet_id: str) -> dict:
     try:
         resp = await nexus_call('POST', f'https://api.twitter.com/2/users/{twitter_user_id}/likes', json={'tweet_id': tweet_id}, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
         if resp['status_code'] not in (200, 201):
-            return {'success': False, 'data': None, 'error': f'Like tweet failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Like tweet failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'data': resp['json'].get('data'), 'error': None}
     except Exception as e:
         return {'success': False, 'data': None, 'error': str(e)}

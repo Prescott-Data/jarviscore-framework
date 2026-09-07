@@ -6,7 +6,7 @@ async def crisp_get_conversation(conversation_id: str, timeout: int=30, verify_s
     try:
         if not conversation_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required'}
-        headers, basic, site_id = _crisp_auth()
+        (headers, basic, site_id) = _crisp_auth()
         if not site_id or not basic:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': 'auth_info requires site_id and api_key for Basic auth'}
         api = _crisp_api_root(base_url)
@@ -14,7 +14,7 @@ async def crisp_get_conversation(conversation_id: str, timeout: int=30, verify_s
         resp = await _crisp_get(url, headers, basic, None, timeout, verify_ssl)
         if resp['status_code'] >= 400:
             return {'records': [], 'data_count': 0, 'status': resp['status_code'], 'message': resp['body'][:1000]}
-        data, message = _crisp_parse(resp)
+        (data, message) = _crisp_parse(resp)
         records = _crisp_records(data, single=True)
         return {'records': records, 'data_count': len(records), 'status': resp['status_code'], 'message': message}
     except Exception as e:

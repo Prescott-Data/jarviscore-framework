@@ -13,10 +13,10 @@ async def backblaze_b2_create_file(file_name: str, bucket_id: Optional[str]=None
             return fail
         raw = content.encode('utf-8') if isinstance(content, str) else b''
         sha1 = hashlib.sha1(raw).hexdigest()
-        session, err = await _b2_authorize(base_url, timeout, verify_ssl)
+        (session, err) = await _b2_authorize(base_url, timeout, verify_ssl)
         if err != 'ok':
             return {'records': [], 'data_count': 0, 'status': 401, 'message': err, 'provision_ids': []}
-        bid, bid_err = await _b2_resolve_bucket_id(session['api_url'], session['auth_token'], session['account_id'], bucket_id, bucket_name, timeout, verify_ssl, session.get('allowed_buckets'))
+        (bid, bid_err) = await _b2_resolve_bucket_id(session['api_url'], session['auth_token'], session['account_id'], bucket_id, bucket_name, timeout, verify_ssl, session.get('allowed_buckets'))
         if bid_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': bid_err, 'provision_ids': []}
         up_resp = await _b2_post(session['api_url'], '/b2api/v4/b2_get_upload_url', session['auth_token'], {'bucketId': bid}, timeout, verify_ssl)
@@ -62,7 +62,7 @@ def _b2_authorize_host(base_url):
 
 async def _b2_authorize(base_url, timeout, verify_ssl):
     host = _b2_authorize_host(base_url)
-    key_id, app_key, err = _b2_credentials()
+    (key_id, app_key, err) = _b2_credentials()
     if err:
         return (None, err)
     resp = await nexus_call('GET', f'{host}/b2api/v4/b2_authorize_account', headers={'Accept': 'application/json'})
@@ -101,7 +101,7 @@ async def _b2_resolve_bucket_id(api_url, token, account_id, bucket_id, bucket_na
     return (None, f'bucket not found: {bucket_name}')
 
 def _b2_auth_fail():
-    _, _, err = _b2_credentials()
+    (_, _, err) = _b2_credentials()
     if not err:
         return None
     return {'records': [], 'data_count': 0, 'status': 401, 'message': err, 'provision_ids': []}

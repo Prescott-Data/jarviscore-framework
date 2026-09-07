@@ -5,8 +5,8 @@ async def segment_create_destination(payload: Dict[str, Any], timeout: int=30, v
     try:
         if not isinstance(payload, dict) or not payload:
             return _sg_provision({}, 400, 'payload is required', 'destination')
-        root, _ = _sg_root(base_url)
-        headers, err = _sg_auth(json_body=True)
+        (root, _) = _sg_root(base_url)
+        (headers, err) = _sg_auth(json_body=True)
         if err:
             return _sg_provision({}, 401, err, 'destination')
         body = payload if 'destination' in payload else {'destination': payload}
@@ -52,4 +52,4 @@ def _sg_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

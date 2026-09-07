@@ -7,10 +7,10 @@ async def shopify_update_order(order_id: str, payload: Dict[str, Any], shop: str
             return _sh_provision({}, 400, 'order_id is required', 'order')
         if not isinstance(payload, dict) or not payload:
             return _sh_provision({}, 400, 'payload is required', 'order')
-        root, err = _sh_root(base_url, shop)
+        (root, err) = _sh_root(base_url, shop)
         if err:
             return _sh_provision({}, 400, err, 'order')
-        headers, aerr = _sh_auth()
+        (headers, aerr) = _sh_auth()
         if aerr:
             return _sh_provision({}, 401, aerr, 'order')
         headers['Content-Type'] = 'application/json'
@@ -59,4 +59,4 @@ def _sh_err(resp):
                 return str(errs)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

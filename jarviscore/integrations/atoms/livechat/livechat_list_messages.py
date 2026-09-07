@@ -7,13 +7,13 @@ async def livechat_list_messages(conversation_id: str, limit: int=25, page_id: s
         cid = _lc_chat_id(conversation_id)
         if not cid:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required'}
-        base, err = _lc_root(base_url)
+        (base, err) = _lc_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         body = {'chat_id': cid, 'limit': min(max(int(limit or 25), 1), 100)}
         if page_id:
             body['page_id'] = page_id
-        resp, aerr = await _lc_post(base, 'list_threads', body, timeout, verify_ssl)
+        (resp, aerr) = await _lc_post(base, 'list_threads', body, timeout, verify_ssl)
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         data = _lc_json(resp)
@@ -35,7 +35,7 @@ def _lc_auth_header():
     return (None, None)
 
 def _lc_headers():
-    auth, err = _lc_auth_header()
+    (auth, err) = _lc_auth_header()
     if err:
         return (None, err)
     return ({'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': auth}, None)
@@ -46,7 +46,7 @@ def _lc_action_url(base, action):
     return f'{base}/action/{action}'
 
 async def _lc_post(base, action, body, timeout, verify_ssl):
-    headers, err = _lc_headers()
+    (headers, err) = _lc_headers()
     if err:
         return (None, err)
     resp = await nexus_call('POST', _lc_action_url(base, action), headers=headers, json=body or {})

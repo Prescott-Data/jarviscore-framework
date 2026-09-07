@@ -16,7 +16,7 @@ async def reddit_submit_post(subreddit: str, title: str, text: str=None, url: st
             payload['url'] = url
         resp = await nexus_call('POST', 'https://oauth.reddit.com/api/submit', data=payload, headers={'Authorization': f'Bearer {access_token}', 'User-Agent': 'jarviscore/1.0'})
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Submit post failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Submit post failed: {resp['status_code']} {resp['body']}"}
         data = resp['json']
         jquery = data.get('jquery', [])
         post_url = None

@@ -6,14 +6,14 @@ async def nutshell_get_deal(deal_id: str, timeout: int=30, verify_ssl: bool=True
     try:
         if not deal_id:
             return _ns_dataset([], 400, 'deal_id is required')
-        base, err = _ns_root(base_url)
+        (base, err) = _ns_root(base_url)
         if err:
             return _ns_dataset([], 400, err)
-        headers, aerr = _ns_auth()
+        (headers, aerr) = _ns_auth()
         if aerr:
             return _ns_dataset([], 401, aerr)
         lid = int(deal_id) if str(deal_id).isdigit() else deal_id
-        result, status, msg = await _ns_rpc(base, headers, 'getLead', {'leadId': lid}, timeout, verify_ssl)
+        (result, status, msg) = await _ns_rpc(base, headers, 'getLead', {'leadId': lid}, timeout, verify_ssl)
         if msg != 'ok':
             return _ns_dataset([], status, msg)
         return _ns_dataset(_ns_records(result), status, msg)

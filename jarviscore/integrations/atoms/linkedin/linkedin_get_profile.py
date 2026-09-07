@@ -37,4 +37,4 @@ async def linkedin_get_profile() -> dict:
     last = p.get('lastName', {}).get('localized', {})
     first_name = next(iter(first.values()), None) if first else None
     last_name = next(iter(last.values()), None) if last else None
-    return {'id': p.get('id'), 'first_name': first_name, 'last_name': last_name, 'headline': next(iter(p.get('headline', {}).get('localized', {}).values()), None), 'vanity_name': p.get('vanityName'), 'profile_url': f'https://www.linkedin.com/in/{p.get('vanityName')}' if p.get('vanityName') else None}
+    return {'id': p.get('id'), 'first_name': first_name, 'last_name': last_name, 'headline': next(iter(p.get('headline', {}).get('localized', {}).values()), None), 'vanity_name': p.get('vanityName'), 'profile_url': f"https://www.linkedin.com/in/{p.get('vanityName')}" if p.get('vanityName') else None}

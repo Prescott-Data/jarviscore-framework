@@ -8,13 +8,13 @@ async def etsy_update_order(shop_id: str, order_id: str, payload: Dict[str, Any]
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'order_id (receipt_id) is required'}
         if not payload or not isinstance(payload, dict):
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _etsy_api_root(base_url)
+        (api, err) = _etsy_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        sid, err = _etsy_shop_id(shop_id)
+        (sid, err) = _etsy_shop_id(shop_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _etsy_auth(form=True)
+        (headers, auth_err) = _etsy_auth(form=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         receipt_id = str(order_id).strip()
@@ -102,7 +102,7 @@ def _etsy_form_value(val):
 
 def _etsy_form_body(fields):
     pairs = []
-    for key, val in (fields or {}).items():
+    for (key, val) in (fields or {}).items():
         if val is None:
             continue
         pairs.append(f'{_etsy_pct_enc(str(key))}={_etsy_pct_enc(_etsy_form_value(val))}')

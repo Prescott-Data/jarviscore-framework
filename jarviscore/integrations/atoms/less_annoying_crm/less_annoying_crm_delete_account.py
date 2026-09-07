@@ -6,10 +6,10 @@ async def less_annoying_crm_delete_account(account_id: str, timeout: int=30, ver
     try:
         if not account_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'account_id is required', 'provision_ids': []}
-        base, err = _lacrm_root(base_url)
+        (base, err) = _lacrm_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        headers, auth_err = _lacrm_auth()
+        (headers, auth_err) = _lacrm_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         resp = await _lacrm_call(base, headers, 'DeleteContact', {'ContactId': str(account_id)}, timeout, verify_ssl)

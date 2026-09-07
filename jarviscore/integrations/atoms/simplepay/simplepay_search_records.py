@@ -6,13 +6,13 @@ async def simplepay_search_records(client_id: str, query: str, limit: int=25, ti
     try:
         if not query:
             return _sp_dataset([], 400, 'query is required')
-        root, err = _sp_root(base_url)
+        (root, err) = _sp_root(base_url)
         if err:
             return _sp_dataset([], 400, err)
-        cid, err = _sp_client_id(client_id)
+        (cid, err) = _sp_client_id(client_id)
         if err:
             return _sp_dataset([], 400, err)
-        headers, aerr = _sp_auth()
+        (headers, aerr) = _sp_auth()
         if aerr:
             return _sp_dataset([], 401, aerr)
         cap = _sp_cap(limit)
@@ -69,7 +69,7 @@ def _sp_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _sp_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sp_unwrap_items(data, key):
     items = []

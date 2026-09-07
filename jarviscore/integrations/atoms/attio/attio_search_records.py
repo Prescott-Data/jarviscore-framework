@@ -9,7 +9,7 @@ async def attio_search_records(query: str, object_type: str='people', limit: int
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api_root, root_err = _attio_api_root(base_url)
+        (api_root, root_err) = _attio_api_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
         try:
@@ -20,7 +20,7 @@ async def attio_search_records(query: str, object_type: str='people', limit: int
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         headers = _attio_headers(json_body=True)
-        records, status, message = await _attio_query_records(api_root, object_slug, headers, limit, timeout, verify_ssl, {'filter': _attio_search_filter(query)})
+        (records, status, message) = await _attio_query_records(api_root, object_slug, headers, limit, timeout, verify_ssl, {'filter': _attio_search_filter(query)})
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

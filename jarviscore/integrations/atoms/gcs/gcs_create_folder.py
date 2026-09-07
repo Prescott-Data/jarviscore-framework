@@ -10,13 +10,13 @@ async def gcs_create_folder(bucket_name: str, folder_path: str, timeout: int=30,
         folder = _gcs_norm_prefix(folder_path)
         if not folder:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'folder_path is required'}
-        api, upload_api, err = _gcs_api_root(base_url)
+        (api, upload_api, err) = _gcs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        bucket, err = _gcs_bucket(bucket_name)
+        (bucket, err) = _gcs_bucket(bucket_name)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _gcs_auth(content_type='application/x-www-form-urlencoded;charset=UTF-8')
+        (headers, auth_err) = _gcs_auth(content_type='application/x-www-form-urlencoded;charset=UTF-8')
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         params = {'uploadType': 'media', 'name': folder}

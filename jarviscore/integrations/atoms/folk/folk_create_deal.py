@@ -6,13 +6,13 @@ async def folk_create_deal(group_id: str, payload: Dict[str, Any], object_type: 
     try:
         if not payload or not isinstance(payload, dict):
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _folk_api_root(base_url)
+        (api, err) = _folk_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        gid, otype, err = _folk_deal_scope(group_id, object_type)
+        (gid, otype, err) = _folk_deal_scope(group_id, object_type)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _folk_auth(json_body=True)
+        (headers, auth_err) = _folk_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await nexus_call('POST', f'{api}/groups/{gid}/{otype}', headers=headers, json=payload)

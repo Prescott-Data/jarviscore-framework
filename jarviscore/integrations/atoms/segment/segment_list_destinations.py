@@ -3,8 +3,8 @@ from typing import Any, Dict, List, Optional
 async def segment_list_destinations(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Segment Public API: list destinations. Official: https://segment.com/docs/api/public-api/#tag/Destinations/operation/listDestinations"""
     try:
-        root, _ = _sg_root(base_url)
-        records, status, msg = await _sg_paginate(root + '/destinations', 'destinations', limit, timeout, verify_ssl)
+        (root, _) = _sg_root(base_url)
+        (records, status, msg) = await _sg_paginate(root + '/destinations', 'destinations', limit, timeout, verify_ssl)
         return _sg_dataset(records, status, msg)
     except Exception as e:
         return _sg_dataset([], 500, str(e))
@@ -37,7 +37,7 @@ def _sg_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sg_items(data, key):
     if isinstance(data, dict):
@@ -60,7 +60,7 @@ async def _sg_paginate(url, collection_key, limit, timeout, verify_ssl):
     params = {'pagination[count]': min(cap, 200)}
     while len(records) < cap and pages < 50:
         pages += 1
-        headers, err = _sg_auth()
+        (headers, err) = _sg_auth()
         if err:
             return (records, 401, err)
         resp = await nexus_call('GET', next_url, headers=headers, params=params if pages == 1 else None)

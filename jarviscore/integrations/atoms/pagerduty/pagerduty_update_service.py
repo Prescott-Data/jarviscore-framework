@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 async def pagerduty_update_service(service_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update service via PUT. Official: https://developer.pagerduty.com/api-reference/operations/updateService"""
     try:
-        root, err = _pd_root(base_url)
+        (root, err) = _pd_root(base_url)
         if err:
             return _pd_provision({}, 'service', 400, err)
         if not service_id:
@@ -11,7 +11,7 @@ async def pagerduty_update_service(service_id: str, payload: Dict[str, Any], tim
         if not isinstance(payload, dict) or not payload:
             return _pd_provision({}, 'service', 400, 'payload is required')
         body = _pd_wrap('service', payload)
-        resp, status, err = await _pd_request('put', root + f'/services/{service_id}', json_body=body, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, status, err) = await _pd_request('put', root + f'/services/{service_id}', json_body=body, timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return _pd_provision({}, 'service', 401, err)
         try:
@@ -60,7 +60,7 @@ def _pd_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _pd_provision(data, wrap_key, status, msg, fallback_id=None):
     obj = data if isinstance(data, dict) else {}
@@ -80,7 +80,7 @@ def _pd_wrap(key, payload):
     return {key: payload}
 
 async def _pd_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, from_header=False):
-    headers, err = _pd_auth(json_body=json_body is not None, from_header=from_header)
+    (headers, err) = _pd_auth(json_body=json_body is not None, from_header=from_header)
     if err:
         return (None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

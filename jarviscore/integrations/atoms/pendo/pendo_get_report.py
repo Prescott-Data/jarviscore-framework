@@ -3,14 +3,14 @@ from typing import Any, Dict, List, Optional
 async def pendo_get_report(report_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Run saved report and return results (auth_info.format=json|csv). Official: https://support.pendo.io/hc/en-us/articles/17925657119131-Export-and-automate-visitor-and-account-reports-in-Google-Sheets"""
     try:
-        root, err = _pn_root(base_url)
+        (root, err) = _pn_root(base_url)
         if err:
             return _pn_dataset([], 400, err)
         if not report_id:
             return _pn_dataset([], 400, 'report_id is required')
         fmt = None or 'json'
-        url = root + f'/report/{report_id}/results.{fmt.lstrip('.')}'
-        resp, data, status, err = await _pn_request('get', url, timeout=timeout, verify_ssl=verify_ssl)
+        url = root + f"/report/{report_id}/results.{fmt.lstrip('.')}"
+        (resp, data, status, err) = await _pn_request('get', url, timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return _pn_dataset([], 401, err)
         if status >= 400:
@@ -58,7 +58,7 @@ def _pn_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _pn_dataset(records, status, msg):
     recs = records if isinstance(records, list) else []
@@ -77,7 +77,7 @@ def _pn_results(data):
     return []
 
 async def _pn_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, track=False):
-    headers, err = _pn_auth(track=track, json_body=json_body is not None or method in ('post', 'put'))
+    (headers, err) = _pn_auth(track=track, json_body=json_body is not None or method in ('post', 'put'))
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

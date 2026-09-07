@@ -4,10 +4,10 @@ async def plausible_list_reports(limit: int=25, timeout: int=30, verify_ssl: boo
     """Aggregate site metrics report via Stats v2 query. Official: https://plausible.io/docs/stats-api"""
     try:
         extra = {}
-        body, err = _pl_query(extra=extra)
+        (body, err) = _pl_query(extra=extra)
         if err:
             return _pl_dataset([], 400, err)
-        resp, data, status, msg = await _pl_stats_query(base_url, body, timeout, verify_ssl)
+        (resp, data, status, msg) = await _pl_stats_query(base_url, body, timeout, verify_ssl)
         if status >= 400:
             return _pl_dataset([], status, msg)
         records = _pl_rows(data)[:_pl_cap(limit)]
@@ -79,12 +79,12 @@ def _pl_rows(data, metric_names=None):
         row = {}
         dvals = item.get('dimensions') or []
         if isinstance(dvals, list):
-            for i, val in enumerate(dvals):
+            for (i, val) in enumerate(dvals):
                 key = dims[i] if isinstance(dims, list) and i < len(dims) else f'dimension_{i}'
                 row[key] = val
         mvals = item.get('metrics') or []
         if isinstance(mvals, list):
-            for i, val in enumerate(mvals):
+            for (i, val) in enumerate(mvals):
                 key = metrics[i] if isinstance(metrics, list) and i < len(metrics) else f'metric_{i}'
                 row[key] = val
         rows.append(row)
@@ -92,7 +92,7 @@ def _pl_rows(data, metric_names=None):
 
 async def _pl_stats_query(base_url, query_body, timeout=30, verify_ssl=True):
     host = _pl_host(base_url)
-    headers, err = _pl_stats_auth()
+    (headers, err) = _pl_stats_auth()
     if err:
         return (None, None, 401, err)
     resp = await nexus_call('POST', host + '/api/v2/query', headers=headers, json=query_body)

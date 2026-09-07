@@ -16,7 +16,7 @@ async def prestashop_search_records(query: str, limit: int=25, timeout: int=30, 
             extra['filter[email]'] = f'[{query}]%'
         else:
             extra['filter[reference]'] = f'[{query}]%'
-        records, status, msg = await _ps_list(resource, base_url, cap, timeout, verify_ssl, extra_params=extra)
+        (records, status, msg) = await _ps_list(resource, base_url, cap, timeout, verify_ssl, extra_params=extra)
         if status >= 400:
             return _ps_dataset([], status, msg)
         filtered = [row for row in records if _ps_match(row, query)]
@@ -92,7 +92,7 @@ def _ps_rows(body, resource):
     return []
 
 async def _ps_request(method, url, params=None, xml_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ps_auth(xml_body=xml_body is not None)
+    (headers, err) = _ps_auth(xml_body=xml_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -115,7 +115,7 @@ async def _ps_request(method, url, params=None, xml_body=None, timeout=30, verif
     return (resp, body, resp['status_code'], 'ok')
 
 async def _ps_list(resource, base_url, limit, timeout, verify_ssl, extra_params=None):
-    root, err = _ps_root(base_url)
+    (root, err) = _ps_root(base_url)
     if err:
         return ([], 400, err)
     cap = _ps_cap(limit)
@@ -128,7 +128,7 @@ async def _ps_list(resource, base_url, limit, timeout, verify_ssl, extra_params=
         params = {'display': 'full', 'limit': f'{offset},{page_size}'}
         if extra_params:
             params.update(extra_params)
-        resp, body, status, msg = await _ps_request('get', root + '/' + resource, params=params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ps_request('get', root + '/' + resource, params=params, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return (records, status, msg)
         batch = _ps_rows(body, resource)

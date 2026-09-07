@@ -8,10 +8,10 @@ async def wix_stores_update_customer(contact_id: str, revision: int, site_id: st
             return _wx_provision({}, 400, 'contact_id is required')
         if revision is None:
             return _wx_provision({}, 400, 'revision is required (optimistic concurrency)')
-        root, err = _wx_root(base_url)
+        (root, err) = _wx_root(base_url)
         if err:
             return _wx_provision({}, 400, err)
-        headers, aerr = _wx_headers(site_id)
+        (headers, aerr) = _wx_headers(site_id)
         if aerr:
             return _wx_provision({}, 401, aerr)
         info: Dict[str, Any] = {}
@@ -47,4 +47,4 @@ def _wx_provision(data, status, msg, key=None, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _wx_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

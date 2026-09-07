@@ -5,10 +5,10 @@ async def freshchat_list_conversations(user_id: str, limit: int=25, timeout: int
     try:
         if not user_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'user_id is required'}
-        api, err = _fc_api_root(base_url)
+        (api, err) = _fc_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _fc_auth()
+        (headers, auth_err) = _fc_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/users/{str(user_id).strip()}/conversations'

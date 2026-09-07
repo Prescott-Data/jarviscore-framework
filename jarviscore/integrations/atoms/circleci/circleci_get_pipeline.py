@@ -7,7 +7,7 @@ async def circleci_get_pipeline(pipeline_id: str, timeout: int=30, verify_ssl: b
         if not pipeline_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'pipeline_id is required'}
         api = _circleci_api_root(base_url)
-        headers, auth_err = _circleci_auth()
+        (headers, auth_err) = _circleci_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _circleci_get(f'{api}/pipeline/{pipeline_id}', headers, None, timeout, verify_ssl)

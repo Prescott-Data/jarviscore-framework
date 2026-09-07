@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 async def prestashop_list_orders(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List orders via PrestaShop webservice. Official: https://devdocs.prestashop-project.org/9/webservice/getting-started/"""
     try:
-        records, status, msg = await _ps_list('orders', base_url, limit, timeout, verify_ssl)
+        (records, status, msg) = await _ps_list('orders', base_url, limit, timeout, verify_ssl)
         return _ps_dataset(records, status, msg)
     except Exception as e:
         return _ps_dataset([], 500, str(e))
@@ -75,7 +75,7 @@ def _ps_rows(body, resource):
     return []
 
 async def _ps_request(method, url, params=None, xml_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ps_auth(xml_body=xml_body is not None)
+    (headers, err) = _ps_auth(xml_body=xml_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -98,7 +98,7 @@ async def _ps_request(method, url, params=None, xml_body=None, timeout=30, verif
     return (resp, body, resp['status_code'], 'ok')
 
 async def _ps_list(resource, base_url, limit, timeout, verify_ssl, extra_params=None):
-    root, err = _ps_root(base_url)
+    (root, err) = _ps_root(base_url)
     if err:
         return ([], 400, err)
     cap = _ps_cap(limit)
@@ -111,7 +111,7 @@ async def _ps_list(resource, base_url, limit, timeout, verify_ssl, extra_params=
         params = {'display': 'full', 'limit': f'{offset},{page_size}'}
         if extra_params:
             params.update(extra_params)
-        resp, body, status, msg = await _ps_request('get', root + '/' + resource, params=params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ps_request('get', root + '/' + resource, params=params, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return (records, status, msg)
         batch = _ps_rows(body, resource)

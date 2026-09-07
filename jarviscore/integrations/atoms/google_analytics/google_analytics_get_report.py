@@ -5,15 +5,15 @@ _GA_ADMIN_ROOT = 'https://analyticsadmin.googleapis.com/v1beta'
 async def google_analytics_get_report(property_id: str, report_body: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get a report by ID from google analytics. Official: https://developers.google.com/analytics/devguides/reporting/data/v1/rest/v1beta/properties/runReport"""
     try:
-        api, err = _ga_data_root(base_url)
+        (api, err) = _ga_data_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        pid, err = _ga_property_id(property_id)
+        (pid, err) = _ga_property_id(property_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         if not isinstance(report_body, dict) or not report_body:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'report_body is required'}
-        headers, auth_err = _ga_auth(json_body=True)
+        (headers, auth_err) = _ga_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/{pid}:runReport'

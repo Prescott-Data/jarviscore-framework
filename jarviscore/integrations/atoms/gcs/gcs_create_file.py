@@ -9,13 +9,13 @@ async def gcs_create_file(bucket_name: str, object_name: str, content: str, cont
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'object_name is required'}
         if content is None:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'content is required'}
-        api, upload_api, err = _gcs_api_root(base_url)
+        (api, upload_api, err) = _gcs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        bucket, err = _gcs_bucket(bucket_name)
+        (bucket, err) = _gcs_bucket(bucket_name)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _gcs_auth(content_type=content_type or 'application/octet-stream')
+        (headers, auth_err) = _gcs_auth(content_type=content_type or 'application/octet-stream')
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         params = {'uploadType': 'media', 'name': str(object_name).lstrip('/')}

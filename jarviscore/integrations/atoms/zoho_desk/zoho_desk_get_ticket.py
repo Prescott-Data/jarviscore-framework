@@ -6,10 +6,10 @@ async def zoho_desk_get_ticket(ticket_id: str, org_id: str='', timeout: int=30, 
     try:
         if not ticket_id:
             return _zd_dataset([], 400, 'ticket_id is required')
-        root, err = _zd_root(base_url)
+        (root, err) = _zd_root(base_url)
         if err:
             return _zd_dataset([], 400, err)
-        headers, aerr = _zd_headers(org_id)
+        (headers, aerr) = _zd_headers(org_id)
         if aerr:
             return _zd_dataset([], 401, aerr)
         resp = await nexus_call('GET', f'{root}/tickets/{ticket_id}', headers=headers)
@@ -37,4 +37,4 @@ def _zd_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _zd_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

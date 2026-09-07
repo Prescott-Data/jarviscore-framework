@@ -3,11 +3,11 @@ from typing import Any, Dict, List, Optional
 async def phabricator_create_pipeline(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a build plan via harbormaster.buildplan.edit. Official: https://secure.phabricator.com/conduit/"""
     try:
-        tx, err = _ph_payload_transactions(payload, _PLAN_TX)
+        (tx, err) = _ph_payload_transactions(payload, _PLAN_TX)
         if err:
             return _ph_provision({}, 400, err)
         params = {'transactions': tx}
-        resp, result, status, msg = await _ph_conduit('harbormaster.buildplan.edit', params, base_url, timeout, verify_ssl)
+        (resp, result, status, msg) = await _ph_conduit('harbormaster.buildplan.edit', params, base_url, timeout, verify_ssl)
         if status >= 400:
             return _ph_provision(result or {}, status, msg)
         return _ph_provision(result or {}, status, 'ok')
@@ -44,14 +44,14 @@ def _ph_err(body, resp):
 
 async def _ph_conduit(method, params, base_url, timeout=30, verify_ssl=True):
     import json
-    root, err = _ph_root(base_url)
+    (root, err) = _ph_root(base_url)
     if err:
         return (None, None, 400, err)
     tok = _ph_token()
     if not tok:
         return (None, None, 401, 'auth_info.api_key is required')
     form = {'api.token': str(tok).strip()}
-    for key, val in (params or {}).items():
+    for (key, val) in (params or {}).items():
         if val is None:
             continue
         if isinstance(val, (dict, list)):
@@ -77,7 +77,7 @@ def _ph_payload_transactions(payload, mapping):
     if isinstance(payload.get('transactions'), list):
         return (payload['transactions'], None)
     tx = []
-    for key, ttype in mapping.items():
+    for (key, ttype) in mapping.items():
         if key in payload and payload[key] is not None:
             tx.append({'type': ttype, 'value': payload[key]})
     if not tx:

@@ -5,16 +5,16 @@ _GCS_UPLOAD_ROOT = 'https://storage.googleapis.com/upload/storage/v1'
 async def gcs_list_files(bucket_name: str, prefix: Optional[str]=None, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List objects in a bucket (GET .../b/{bucket}/o). items[], nextPageToken pagination. OAuth Bearer token (cloud-platform or devstorage scope). JSON API root required. Official: https://cloud.google.com/storage/docs/json_api/v1"""
     try:
-        api, _, err = _gcs_api_root(base_url)
+        (api, _, err) = _gcs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        bucket, err = _gcs_bucket(bucket_name)
+        (bucket, err) = _gcs_bucket(bucket_name)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _gcs_auth()
+        (headers, auth_err) = _gcs_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message, _ = await _gcs_list_objects(api, bucket, headers, limit, timeout, verify_ssl, prefix=_gcs_norm_prefix(prefix) or None)
+        (records, status, message, _) = await _gcs_list_objects(api, bucket, headers, limit, timeout, verify_ssl, prefix=_gcs_norm_prefix(prefix) or None)
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

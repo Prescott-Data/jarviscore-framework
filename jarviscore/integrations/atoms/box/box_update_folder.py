@@ -5,7 +5,7 @@ async def box_update_folder(folder_id: str, payload: Dict[str, Any], timeout: in
     try:
         if not folder_id or not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'folder_id and payload are required', 'provision_ids': []}
-        headers, auth_err = _box_auth(json_body=True)
+        (headers, auth_err) = _box_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         api = _box_api_root(base_url)

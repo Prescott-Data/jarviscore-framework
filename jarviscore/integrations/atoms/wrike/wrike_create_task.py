@@ -7,10 +7,10 @@ async def wrike_create_task(project_id: str, title: str, timeout: int=30, verify
             return _provision({}, 400, 'project_id is required')
         if not title:
             return _provision({}, 400, 'title is required')
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _provision({}, 400, err)
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if aerr:
             return _provision({}, 401, aerr)
         resp = await nexus_call('POST', root + '/folders/' + str(project_id) + '/tasks', headers=headers, data={'title': title})
@@ -40,4 +40,4 @@ def _provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

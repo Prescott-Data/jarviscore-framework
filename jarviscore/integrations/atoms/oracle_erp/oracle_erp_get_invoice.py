@@ -1,6 +1,6 @@
 async def oracle_erp_get_invoice(instance_url: str, invoice_id: str) -> dict:
     """Erp get invoice via the oracle_erp API."""
-    _base = f'{instance_url.rstrip('/')}/fscmRestApi/resources/latest'
+    _base = f"{instance_url.rstrip('/')}/fscmRestApi/resources/latest"
     _h = {'Content-Type': 'application/json'}
 
     async def _get(p, params=None, headers=None):

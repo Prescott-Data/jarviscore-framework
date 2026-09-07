@@ -19,7 +19,7 @@ async def clickup_get_spaces() -> dict:
     try:
         resp = await nexus_call('GET', f'https://api.clickup.com/api/v2/team/{workspace_id}/space', headers={'Authorization': access_token})
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Get spaces failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Get spaces failed: {resp['status_code']} {resp['body']}"}
         spaces = resp['json'].get('spaces', [])
         return {'success': True, 'data': {'spaces': spaces, 'count': len(spaces)}, 'error': None}
     except Exception as e:

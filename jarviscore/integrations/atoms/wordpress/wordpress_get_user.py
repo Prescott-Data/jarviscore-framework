@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def wordpress_get_user(user_id: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """wordpress REST: get user. Official: https://developer.wordpress.org/rest-api/"""
     try:
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _dataset([], 400, err)
         if not user_id:
             return _dataset([], 400, 'user_id is required')
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if isinstance(headers, str) or aerr:
             return _dataset([], 401, aerr or headers)
         auth = headers if isinstance(headers, tuple) else None

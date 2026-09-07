@@ -5,10 +5,10 @@ async def activecampaign_get_contact(contact_id: str, account: Optional[str]=Non
     try:
         if not contact_id:
             return _ac_v3_dataset([], 400, 'contact_id is required')
-        api_root, err = _ac_v3_resolve_base(base_url, account)
+        (api_root, err) = _ac_v3_resolve_base(base_url, account)
         if err:
             return _ac_v3_dataset([], 400, err)
-        headers, err = _ac_v3_headers()
+        (headers, err) = _ac_v3_headers()
         if err:
             return _ac_v3_dataset([], 401, err)
         resp = await nexus_call('GET', f'{api_root}/contacts/{contact_id}', headers=headers)

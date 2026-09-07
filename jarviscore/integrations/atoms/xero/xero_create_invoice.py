@@ -8,10 +8,10 @@ async def xero_create_invoice(contact_id: str, line_items: List[Dict[str, Any]],
             return _x_provision({}, 'Invoices', 'InvoiceID', 400, 'contact_id is required')
         if not line_items:
             return _x_provision({}, 'Invoices', 'InvoiceID', 400, 'line_items is required')
-        root, err = _x_root(base_url)
+        (root, err) = _x_root(base_url)
         if err:
             return _x_provision({}, 'Invoices', 'InvoiceID', 400, err)
-        headers, aerr = _x_headers(tenant_id, json_body=True)
+        (headers, aerr) = _x_headers(tenant_id, json_body=True)
         if aerr:
             return _x_provision({}, 'Invoices', 'InvoiceID', 401, aerr)
         invoice = {'Type': type, 'Contact': {'ContactID': str(contact_id)}, 'LineItems': line_items}
@@ -68,4 +68,4 @@ def _x_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

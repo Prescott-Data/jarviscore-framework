@@ -6,10 +6,10 @@ async def intercom_search_records(query: str, limit: int=25, timeout: int=30, ve
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api, err = _ic_api_root(base_url)
+        (api, err) = _ic_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _ic_auth(json_body=True)
+        (headers, auth_err) = _ic_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         body = {'query': {'operator': 'OR', 'value': [{'field': 'email', 'operator': '~', 'value': query}, {'field': 'name', 'operator': '~', 'value': query}]}, 'pagination': {'per_page': min(max(int(limit or 25), 1), 150)}}

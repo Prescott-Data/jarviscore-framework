@@ -6,13 +6,13 @@ async def less_annoying_crm_search_records(query: str, limit: int=25, timeout: i
     try:
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        base, err = _lacrm_root(base_url)
+        (base, err) = _lacrm_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _lacrm_auth()
+        (headers, aerr) = _lacrm_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
-        records, status, msg = await _lacrm_paginate(base, headers, 'GetContacts', {'SearchTerms': str(query)}, limit, timeout, verify_ssl)
+        (records, status, msg) = await _lacrm_paginate(base, headers, 'GetContacts', {'SearchTerms': str(query)}, limit, timeout, verify_ssl)
         return {'records': records, 'data_count': len(records), 'status': status, 'message': msg}
     except Exception as e:
         return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}

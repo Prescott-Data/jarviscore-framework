@@ -9,13 +9,13 @@ async def gcs_update_file(bucket_name: str, object_name: str, fields: Dict[str, 
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'object_name is required'}
         if not fields or not isinstance(fields, dict):
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'fields is required'}
-        api, _, err = _gcs_api_root(base_url)
+        (api, _, err) = _gcs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        bucket, err = _gcs_bucket(bucket_name)
+        (bucket, err) = _gcs_bucket(bucket_name)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _gcs_auth(json_body=True)
+        (headers, auth_err) = _gcs_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = _gcs_object_url(api, bucket, object_name)

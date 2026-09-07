@@ -6,16 +6,16 @@ async def asana_list_tasks(project_id: Optional[str]=None, limit: int=25, timeou
     try:
         if not base_url:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
-        api_root, root_err = _asana_api_root(base_url)
+        (api_root, root_err) = _asana_api_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
         project_gid = project_id or None or None or None
         if not project_gid:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'project_id (or project_gid in auth_info) is required'}
-        headers, auth_err = _asana_headers()
+        (headers, auth_err) = _asana_headers()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
-        records, status, message = await _asana_paginate(f'{api_root}/tasks', headers, limit, timeout, verify_ssl, {'project': str(project_gid)})
+        (records, status, message) = await _asana_paginate(f'{api_root}/tasks', headers, limit, timeout, verify_ssl, {'project': str(project_gid)})
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

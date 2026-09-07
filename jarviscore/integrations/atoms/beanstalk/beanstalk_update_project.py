@@ -5,10 +5,10 @@ async def beanstalk_update_project(project_id: str, payload: Dict[str, Any], acc
     try:
         if not project_id or not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'project_id and payload are required'}
-        api_root, err = _beanstalk_api_root(base_url, account)
+        (api_root, err) = _beanstalk_api_root(base_url, account)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _beanstalk_auth(json_body=True)
+        (headers, basic, auth_err) = _beanstalk_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         body = payload if 'repository' in payload else {'repository': payload}

@@ -5,10 +5,10 @@ async def shopify_get_order(order_id: str, shop: str='', timeout: int=30, verify
     try:
         if not order_id:
             return _sh_dataset([], 400, 'order_id is required')
-        root, err = _sh_root(base_url, shop)
+        (root, err) = _sh_root(base_url, shop)
         if err:
             return _sh_dataset([], 400, err)
-        headers, aerr = _sh_auth()
+        (headers, aerr) = _sh_auth()
         if aerr:
             return _sh_dataset([], 401, aerr)
         resp = await nexus_call('GET', root + '/orders/{order_id}.json'.format(**locals()), headers=headers)
@@ -51,7 +51,7 @@ def _sh_err(resp):
                 return str(errs)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sh_rows(data, resource):
     if isinstance(data, dict):

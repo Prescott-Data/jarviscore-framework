@@ -3,8 +3,8 @@ from typing import Any, Dict, List, Optional
 async def square_list_customers(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Square API v2: list customers. Official: https://developer.squareup.com/reference/square/customers-api/list-customers"""
     try:
-        root, _ = _sq_root(base_url)
-        _, data, status, msg = await _sq_request('get', root + '/customers', {'limit': _sq_cap(limit)}, timeout=timeout, verify_ssl=verify_ssl)
+        (root, _) = _sq_root(base_url)
+        (_, data, status, msg) = await _sq_request('get', root + '/customers', {'limit': _sq_cap(limit)}, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _sq_dataset([], status, msg)
         recs = [x for x in data.get('customers') or [] if isinstance(x, dict)]
@@ -37,7 +37,7 @@ def _sq_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _sq_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _sq_auth(json_body=json_body is not None)
+    (headers, err) = _sq_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

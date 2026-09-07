@@ -10,7 +10,7 @@ async def wave_accounting_list_payments(business_id: str='', customer_id: str=''
         if not invoice_id:
             return _wv_dataset([], 400, 'invoice_id is required')
         gql = 'query ListPayments($id: ID!, $invoiceId: ID!) { business(id: $id) { invoice(id: $invoiceId) { payments { id amount { value currency { code } } paymentDate memo } } } }'
-        data, status, err = await _wv_post(gql, base_url, {'id': str(bid), 'invoiceId': str(invoice_id)}, timeout, verify_ssl)
+        (data, status, err) = await _wv_post(gql, base_url, {'id': str(bid), 'invoiceId': str(invoice_id)}, timeout, verify_ssl)
         if err:
             return _wv_dataset([], 401, err)
         if status >= 400 or (isinstance(data, dict) and data.get('errors')):
@@ -30,7 +30,7 @@ def _wv_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 async def _wv_post(query, base_url=None, variables=None, timeout=30, verify_ssl=True):
-    headers, err = _wv_auth()
+    (headers, err) = _wv_auth()
     if err:
         return (None, 401, err)
     resp = await nexus_call('POST', base_url or _GQL, headers=headers, json={'query': query, 'variables': variables or {}})

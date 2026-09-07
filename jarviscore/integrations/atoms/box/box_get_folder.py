@@ -5,7 +5,7 @@ async def box_get_folder(folder_id: str, timeout: int=30, verify_ssl: bool=True,
     try:
         if not folder_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'folder_id is required'}
-        headers, auth_err = _box_auth()
+        (headers, auth_err) = _box_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         api = _box_api_root(base_url)

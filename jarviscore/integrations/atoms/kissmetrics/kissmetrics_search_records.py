@@ -9,10 +9,10 @@ async def kissmetrics_search_records(query: str, product_id: str, limit: int=25,
         pid = _km_product_id(product_id)
         if not pid:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'product_id is required'}
-        api, err = _km_api_root(base_url)
+        (api, err) = _km_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _km_auth()
+        (headers, basic, auth_err) = _km_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _km_get(f'{api}/products/{pid}/events', headers, basic, {'limit': min(max(int(limit or 25), 1), 50)}, timeout, verify_ssl)

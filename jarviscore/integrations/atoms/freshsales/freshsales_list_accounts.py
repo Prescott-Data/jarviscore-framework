@@ -8,14 +8,14 @@ async def freshsales_list_accounts(view_id: str, limit: int=25, timeout: int=30,
     try:
         if view_id in (None, ''):
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'view_id is required (from GET /sales_accounts/filters)'}
-        api, err = _fs_api_root(base_url)
+        (api, err) = _fs_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _fs_sales_auth()
+        (headers, auth_err) = _fs_sales_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/sales_accounts/view/{str(view_id).strip()}'
-        records, status, message = await _fs_paginate_view(url, headers, 'sales_accounts', limit, timeout, verify_ssl)
+        (records, status, message) = await _fs_paginate_view(url, headers, 'sales_accounts', limit, timeout, verify_ssl)
         if message != 'ok':
             return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

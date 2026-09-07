@@ -6,10 +6,10 @@ async def egnyte_get_file(file_id: str, timeout: int=30, verify_ssl: bool=True, 
     try:
         if not file_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'file_id is required (Egnyte file path, e.g. /Shared/docs/report.pdf)'}
-        api, err = _egnyte_api_root(base_url)
+        (api, err) = _egnyte_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _egnyte_auth()
+        (headers, auth_err) = _egnyte_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await nexus_call('GET', _egnyte_fs_url(api, file_id), headers=headers)

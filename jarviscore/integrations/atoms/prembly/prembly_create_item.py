@@ -5,10 +5,10 @@ async def prembly_create_item(payload: Dict[str, Any], timeout: int=30, verify_s
     try:
         if not isinstance(payload, dict) or not payload:
             return _pm_provision({}, 400, 'payload is required')
-        root, err = _pm_root(base_url)
+        (root, err) = _pm_root(base_url)
         if err:
             return _pm_provision({}, 400, err)
-        resp, body, status, msg = await _pm_request('post', root + '/api/v1/api/bgc/packages/', json_body=payload, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _pm_request('post', root + '/api/v1/api/bgc/packages/', json_body=payload, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _pm_provision(body if isinstance(body, dict) else {}, status, msg)
         data = body if isinstance(body, dict) else {}
@@ -45,7 +45,7 @@ def _pm_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _pm_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pm_auth(json_body=json_body is not None)
+    (headers, err) = _pm_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

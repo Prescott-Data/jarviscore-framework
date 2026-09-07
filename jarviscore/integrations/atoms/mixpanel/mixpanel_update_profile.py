@@ -6,15 +6,15 @@ MP_EXPORT = 'https://data.mixpanel.com/api/2.0'
 async def mixpanel_update_profile(profile_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update user profile properties via Ingestion API profile-set. Official: https://developer.mixpanel.com/reference/profile-set"""
     try:
-        root, _ = _mp_ingest_root(base_url)
-        tok, terr = _mp_project_token(payload)
+        (root, _) = _mp_ingest_root(base_url)
+        (tok, terr) = _mp_project_token(payload)
         if terr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': terr, 'provision_ids': []}
         body = payload if isinstance(payload, dict) else {}
         distinct_id = profile_id or body.get('distinct_id') or body.get('$distinct_id')
         if not distinct_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'profile_id is required', 'provision_ids': []}
-        props = body.get('$set') if isinstance(body.get('$set'), dict) else {k: v for k, v in body.items() if k not in ('distinct_id', '$distinct_id', 'token', '$token', '$set')}
+        props = body.get('$set') if isinstance(body.get('$set'), dict) else {k: v for (k, v) in body.items() if k not in ('distinct_id', '$distinct_id', 'token', '$token', '$set')}
         update = [{'$token': tok, '$distinct_id': str(distinct_id), '$set': props}]
         resp = await nexus_call('POST', f'{root}/engage', params={'verbose': '1', 'ip': '0'}, json=update)
         return _mp_provision(resp, fallback_id=distinct_id)
@@ -41,7 +41,7 @@ def _mp_error_text(resp):
                 return str(data.get('error') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _mp_provision_ids_from_body(body, fallback=None):
     if isinstance(body, dict):

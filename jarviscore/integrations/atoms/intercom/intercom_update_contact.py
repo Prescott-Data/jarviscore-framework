@@ -8,10 +8,10 @@ async def intercom_update_contact(record_id: str, payload: Dict[str, Any], timeo
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'record_id is required'}
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _ic_api_root(base_url)
+        (api, err) = _ic_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _ic_auth(json_body=True)
+        (headers, auth_err) = _ic_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _ic_put(f'{api}/contacts/{record_id}', headers, payload, timeout, verify_ssl)

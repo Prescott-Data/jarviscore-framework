@@ -6,11 +6,11 @@ MP_EXPORT = 'https://data.mixpanel.com/api/2.0'
 async def mixpanel_list_events(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List top event names via Query API /events/names. Official: https://developer.mixpanel.com/reference/query-months-top-event-names"""
     try:
-        root, _ = _mp_query_root(base_url)
-        pid, perr = _mp_project_id()
+        (root, _) = _mp_query_root(base_url)
+        (pid, perr) = _mp_project_id()
         if perr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': perr}
-        headers, aerr = _mp_basic_headers()
+        (headers, aerr) = _mp_basic_headers()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         params = {'project_id': pid, 'type': 'general', 'limit': _mp_cap(limit)}
@@ -56,7 +56,7 @@ def _mp_error_text(resp):
                 return str(data.get('error') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _host_is(url, *domains):
     """True only if url's hostname equals or is a subdomain of one of domains."""

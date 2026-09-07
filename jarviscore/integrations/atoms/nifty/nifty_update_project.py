@@ -6,10 +6,10 @@ async def nifty_update_project(project_id: str, payload: Dict[str, Any], timeout
     try:
         if not project_id:
             return _nf_provision([], 400, 'project_id is required', [])
-        root, err = _nf_root(base_url)
+        (root, err) = _nf_root(base_url)
         if err:
             return _nf_provision([], 400, err, [])
-        headers, aerr = _nf_auth()
+        (headers, aerr) = _nf_auth()
         if aerr:
             return _nf_provision([], 400, aerr, [])
         form = _nf_form_payload(payload if isinstance(payload, dict) else {})
@@ -50,12 +50,12 @@ def _nf_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _nf_form_payload(payload):
     body = payload if isinstance(payload, dict) else {}
     form = {}
-    for key, val in body.items():
+    for (key, val) in body.items():
         if val in (None, ''):
             continue
         if isinstance(val, bool):

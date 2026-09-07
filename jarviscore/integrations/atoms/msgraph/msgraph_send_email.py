@@ -11,7 +11,7 @@ async def msgraph_send_email(to: list, subject: str, body: str, body_type: str='
             payload['message']['ccRecipients'] = [{'emailAddress': {'address': addr}} for addr in cc]
         resp = await nexus_call('POST', 'https://graph.microsoft.com/v1.0/me/sendMail', headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}, json=payload)
         if resp['status_code'] != 202:
-            return {'success': False, 'data': None, 'error': f'Send email failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Send email failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'data': {'sent': True, 'to': to, 'subject': subject}, 'error': None}
     except Exception as e:
         return {'success': False, 'data': None, 'error': str(e)}

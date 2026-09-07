@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def prembly_list_items(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List available background check types. Official: https://docs.prembly.com/docs/get-all-available-checks-1"""
     try:
-        root, err = _pm_root(base_url)
+        (root, err) = _pm_root(base_url)
         if err:
             return _pm_dataset([], 400, err)
-        resp, body, status, msg = await _pm_request('get', root + '/api/v1/api/bgc/check-types/', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _pm_request('get', root + '/api/v1/api/bgc/check-types/', timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _pm_dataset([], status, msg)
         return _pm_dataset(_pm_rows(body)[:_pm_cap(limit)], status, msg)
@@ -53,7 +53,7 @@ def _pm_rows(body):
     return []
 
 async def _pm_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pm_auth(json_body=json_body is not None)
+    (headers, err) = _pm_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

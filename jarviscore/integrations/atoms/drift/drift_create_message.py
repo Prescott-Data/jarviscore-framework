@@ -6,7 +6,7 @@ async def drift_create_message(conversation_id: str, payload: Dict[str, Any], ti
     try:
         if not conversation_id or not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id and payload are required'}
-        headers, err = _drift_auth(json_body=True)
+        (headers, err) = _drift_auth(json_body=True)
         if err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': err}
         root = _drift_conv_root(base_url)

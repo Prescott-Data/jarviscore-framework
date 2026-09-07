@@ -5,10 +5,10 @@ async def sourcegraph_search_records(query: str, limit: int=25, timeout: int=30,
     try:
         if not query:
             return _sgg_dataset([], 400, 'query is required')
-        root, err = _sgg_root(base_url)
+        (root, err) = _sgg_root(base_url)
         if err:
             return _sgg_dataset([], 400, err)
-        headers, aerr = _sgg_auth()
+        (headers, aerr) = _sgg_auth()
         if aerr:
             return _sgg_dataset([], 401, aerr)
         cap = min(max(int(limit or 25), 1), 500)

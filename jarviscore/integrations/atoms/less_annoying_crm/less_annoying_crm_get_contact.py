@@ -6,10 +6,10 @@ async def less_annoying_crm_get_contact(contact_id: str, timeout: int=30, verify
     try:
         if not contact_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'contact_id is required'}
-        base, err = _lacrm_root(base_url)
+        (base, err) = _lacrm_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _lacrm_auth()
+        (headers, aerr) = _lacrm_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         resp = await _lacrm_call(base, headers, 'GetContact', {'ContactId': str(contact_id)}, timeout, verify_ssl)

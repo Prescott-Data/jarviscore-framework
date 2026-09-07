@@ -5,7 +5,7 @@ async def safaricom_mpesa_create_order(payload: Dict[str, Any], timeout: int=30,
     try:
         if not isinstance(payload, dict) or not payload:
             return _mp_provision({}, 400, 'payload is required')
-        body_payload, err = _mp_stk_fields(payload)
+        (body_payload, err) = _mp_stk_fields(payload)
         if err:
             return _mp_provision({}, 400, err)
         if not body_payload.get('CallBackURL'):
@@ -14,7 +14,7 @@ async def safaricom_mpesa_create_order(payload: Dict[str, Any], timeout: int=30,
             return _mp_provision({}, 400, 'Amount is required')
         if not body_payload.get('PhoneNumber'):
             return _mp_provision({}, 400, 'PhoneNumber is required')
-        resp, body, status, msg = await _mp_post('/mpesa/stkpush/v1/processrequest', base_url, body_payload, timeout, verify_ssl)
+        (resp, body, status, msg) = await _mp_post('/mpesa/stkpush/v1/processrequest', base_url, body_payload, timeout, verify_ssl)
         if status >= 400:
             return _mp_provision(body if isinstance(body, dict) else {}, status, msg)
         return _mp_provision(body if isinstance(body, dict) else {}, status, 'ok')
@@ -49,7 +49,7 @@ def _mp_phone(value):
 
 async def _mp_oauth(base_url, timeout, verify_ssl):
     import base64
-    root, _ = _mp_root(base_url)
+    (root, _) = _mp_root(base_url)
     resp = await nexus_call('GET', root + '/oauth/v1/generate', params={'grant_type': 'client_credentials'}, headers={'Accept': 'application/json'})
     try:
         body = resp['json'] if resp['content'] else {}
@@ -76,10 +76,10 @@ def _mp_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _mp_post(path, base_url, json_body, timeout, verify_ssl):
-    token, err = await _mp_oauth(base_url, timeout, verify_ssl)
+    (token, err) = await _mp_oauth(base_url, timeout, verify_ssl)
     if err:
         return (None, None, 401, err)
-    root, _ = _mp_root(base_url)
+    (root, _) = _mp_root(base_url)
     resp = await nexus_call('POST', root + path, headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json', 'Accept': 'application/json'}, json=json_body)
     try:
         body = resp['json'] if resp['content'] else {}

@@ -7,7 +7,7 @@ async def zoho_books_get_contact(org_id: str, contact_id: str) -> dict:
     try:
         resp = await nexus_call('GET', f'https://www.zohoapis.com/books/v3/contacts/{contact_id}', headers={'Authorization': f'Zoho-oauthtoken {access_token}'}, params={'organization_id': org_id})
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Get contact failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Get contact failed: {resp['status_code']} {resp['body']}"}
         data = resp['json']
         if data.get('code') != 0:
             return {'success': False, 'data': None, 'error': data.get('message')}

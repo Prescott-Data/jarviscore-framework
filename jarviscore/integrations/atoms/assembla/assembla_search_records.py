@@ -8,10 +8,10 @@ async def assembla_search_records(query: str, space_id: Optional[str]=None, reso
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
         if not query:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'query is required'}
-        api_root, root_err = _assembla_api_root(base_url)
+        (api_root, root_err) = _assembla_api_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
-        headers, auth_err = _assembla_headers()
+        (headers, auth_err) = _assembla_headers()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resource = str(resource or 'ticket').lower()

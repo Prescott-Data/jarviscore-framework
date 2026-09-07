@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def shopify_list_products(shop: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shopify Admin REST: list products. Official: https://shopify.dev/docs/api/admin-rest/latest/resources/product#get-products"""
     try:
-        root, err = _sh_root(base_url, shop)
+        (root, err) = _sh_root(base_url, shop)
         if err:
             return _sh_dataset([], 400, err)
-        records, status, msg = await _sh_paginate(root, '/products.json', 'products', limit, timeout, verify_ssl)
+        (records, status, msg) = await _sh_paginate(root, '/products.json', 'products', limit, timeout, verify_ssl)
         return _sh_dataset(records, status, msg)
     except Exception as e:
         return _sh_dataset([], 500, str(e))
@@ -43,7 +43,7 @@ def _sh_err(resp):
                 return str(errs)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _sh_rows(data, resource):
     if isinstance(data, dict):
@@ -56,7 +56,7 @@ def _sh_rows(data, resource):
     return []
 
 async def _sh_paginate(root, path, resource, limit, timeout, verify_ssl):
-    headers, err = _sh_auth()
+    (headers, err) = _sh_auth()
     if err:
         return ([], 401, err)
     cap = _sh_cap(limit)

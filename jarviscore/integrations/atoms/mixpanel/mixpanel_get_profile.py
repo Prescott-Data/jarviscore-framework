@@ -8,7 +8,7 @@ async def mixpanel_get_profile(profile_id: str, timeout: int=30, verify_ssl: boo
     try:
         if not profile_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'profile_id is required'}
-        data, status, msg = await _mp_engage_query(base_url, '', {'distinct_id': str(profile_id)}, timeout, verify_ssl)
+        (data, status, msg) = await _mp_engage_query(base_url, '', {'distinct_id': str(profile_id)}, timeout, verify_ssl)
         if status >= 400 or not isinstance(data, dict):
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg}
         records = [row for row in data.get('results') or [] if isinstance(row, dict)]
@@ -43,14 +43,14 @@ def _mp_error_text(resp):
                 return str(data.get('error') or data)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 async def _mp_engage_query(base_url, project_id, form_data, timeout, verify_ssl):
-    root, _ = _mp_query_root(base_url)
-    pid, perr = _mp_project_id(project_id)
+    (root, _) = _mp_query_root(base_url)
+    (pid, perr) = _mp_project_id(project_id)
     if perr:
         return (None, 400, perr)
-    headers, aerr = _mp_basic_headers()
+    (headers, aerr) = _mp_basic_headers()
     if aerr:
         return (None, 400, aerr)
     headers['Content-Type'] = 'application/x-www-form-urlencoded'

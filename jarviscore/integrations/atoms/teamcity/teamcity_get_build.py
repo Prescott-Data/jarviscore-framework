@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def teamcity_get_build(build_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """TeamCity REST: get build. Official: https://www.jetbrains.com/help/teamcity/rest/teamcity-rest.html"""
     try:
-        root, err = _tc_root(base_url)
+        (root, err) = _tc_root(base_url)
         if err:
             return _tc_dataset([], 400, err)
         if not build_id:
             return _tc_dataset([], 400, 'build_id is required')
-        headers, aerr = _tc_auth()
+        (headers, aerr) = _tc_auth()
         if aerr:
             return _tc_dataset([], 401, aerr)
         resp = await nexus_call('GET', f'{root}/builds/id:{build_id}', headers=headers)
@@ -35,4 +35,4 @@ def _tc_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _tc_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

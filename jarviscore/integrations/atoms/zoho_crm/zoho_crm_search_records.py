@@ -5,10 +5,10 @@ async def zoho_crm_search_records(query: str, limit: int=25, timeout: int=30, ve
     try:
         if not query:
             return _dataset([], 400, 'query is required')
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _dataset([], 400, err)
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if aerr:
             return _dataset([], 401, aerr)
         module = str((None or {}).get('module') or 'Deals').strip()

@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def pagerduty_get_service(service_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get service by id. Official: https://developer.pagerduty.com/api-reference/operations/getService"""
     try:
-        root, err = _pd_root(base_url)
+        (root, err) = _pd_root(base_url)
         if err:
             return _pd_dataset([], 400, err)
         if not service_id:
             return _pd_dataset([], 400, 'service_id is required')
-        resp, status, err = await _pd_request('get', root + f'/services/{service_id}', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, status, err) = await _pd_request('get', root + f'/services/{service_id}', timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return _pd_dataset([], 401, err)
         if status >= 400:
@@ -57,7 +57,7 @@ def _pd_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _pd_dataset(records, status, msg):
     recs = records if isinstance(records, list) else []
@@ -73,7 +73,7 @@ def _pd_single(data, key):
     return []
 
 async def _pd_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, from_header=False):
-    headers, err = _pd_auth(json_body=json_body is not None, from_header=from_header)
+    (headers, err) = _pd_auth(json_body=json_body is not None, from_header=from_header)
     if err:
         return (None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

@@ -5,10 +5,10 @@ async def amplitude_list_events(limit: int=25, timeout: int=30, verify_ssl: bool
     try:
         if not base_url:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
-        api_root, _, root_err = _amp_dashboard_root(base_url)
+        (api_root, _, root_err) = _amp_dashboard_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
-        data, status, msg = await _amp_get_json(f'{api_root}/events/list', timeout=timeout, verify_ssl=verify_ssl)
+        (data, status, msg) = await _amp_get_json(f'{api_root}/events/list', timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg}
         rows = _amp_event_rows(data)
@@ -34,7 +34,7 @@ def _amp_basic_auth():
     return (None, None)
 
 async def _amp_get_json(url, params=None, timeout=30, verify_ssl=True):
-    auth, auth_err = _amp_basic_auth()
+    (auth, auth_err) = _amp_basic_auth()
     if auth_err:
         return (None, 401, auth_err)
     resp = await nexus_call('GET', url, params=params)

@@ -5,7 +5,7 @@ async def circleci_list_projects(timeout: int=30, verify_ssl: bool=True, limit: 
     """List Projects via CircleCI API v2. Circle-Token auth. Official: https://circleci.com/docs/api/v2/operations/getCollaborations.md"""
     try:
         api = _circleci_api_root(base_url)
-        headers, auth_err = _circleci_auth()
+        (headers, auth_err) = _circleci_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _circleci_get(f'{api}/me/collaborations', headers, None, timeout, verify_ssl)

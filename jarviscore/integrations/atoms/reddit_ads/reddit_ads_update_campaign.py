@@ -7,10 +7,10 @@ async def reddit_ads_update_campaign(campaign_id: str, payload: Dict[str, Any], 
             return _ra_provision({}, 400, 'campaign_id is required')
         if not isinstance(payload, dict) or not payload:
             return _ra_provision({}, 400, 'payload is required')
-        url, err = _ra_account_path(base_url, '/campaigns/' + str(campaign_id))
+        (url, err) = _ra_account_path(base_url, '/campaigns/' + str(campaign_id))
         if err:
             return _ra_provision({}, 400, err)
-        resp, body, status, msg = await _ra_request('patch', url, json_body=_ra_body(payload), timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _ra_request('patch', url, json_body=_ra_body(payload), timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _ra_provision(body if isinstance(body, dict) else {}, status, msg, fallback_id=campaign_id)
         return _ra_provision(body if isinstance(body, dict) else {}, status, 'ok', fallback_id=campaign_id)
@@ -79,7 +79,7 @@ def _ra_body(payload):
     return {'data': payload if isinstance(payload, dict) else {}}
 
 async def _ra_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ra_auth(json_body=json_body is not None)
+    (headers, err) = _ra_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -100,10 +100,10 @@ async def _ra_request(method, url, params=None, json_body=None, timeout=30, veri
     return (resp, body, resp['status_code'], 'ok')
 
 def _ra_account_path(base_url, suffix):
-    root, err = _ra_root(base_url)
+    (root, err) = _ra_root(base_url)
     if err:
         return (None, err)
-    account_id, err = _ra_account()
+    (account_id, err) = _ra_account()
     if err:
         return (None, err)
     suffix = suffix if suffix.startswith('/') else '/' + suffix

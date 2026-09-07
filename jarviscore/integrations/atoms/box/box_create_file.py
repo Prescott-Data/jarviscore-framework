@@ -5,7 +5,7 @@ async def box_create_file(file_name: str, timeout: int=30, verify_ssl: bool=True
     try:
         if not file_name:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'file_name is required', 'provision_ids': []}
-        headers, auth_err = _box_auth()
+        (headers, auth_err) = _box_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         headers.pop('Content-Type', None)
@@ -35,7 +35,7 @@ def _json_dumps(value):
     if isinstance(value, str):
         return f'"{_json_escape(value)}"'
     if isinstance(value, dict):
-        parts = [f'"{_json_escape(k)}": {_json_dumps(v)}' for k, v in value.items()]
+        parts = [f'"{_json_escape(k)}": {_json_dumps(v)}' for (k, v) in value.items()]
         return '{' + ', '.join(parts) + '}'
     if isinstance(value, list):
         return '[' + ', '.join((_json_dumps(v) for v in value)) + ']'

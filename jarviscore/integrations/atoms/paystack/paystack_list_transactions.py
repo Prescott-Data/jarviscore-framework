@@ -3,13 +3,13 @@ from typing import Any, Dict, List, Optional
 async def paystack_list_transactions(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List transactions with page/perPage; optional auth_info filters: customer, status, from, to, amount. Official: https://paystack.com/docs/api/transaction/#list-transactions"""
     try:
-        root, err = _ps_root(base_url)
+        (root, err) = _ps_root(base_url)
         if err:
             return _ps_dataset([], 400, err)
         params = {}
-        for key, param in (('customer', 'customer'), ('status', 'status'), ('from', 'from'), ('to', 'to'), ('amount', 'amount'), ('terminalid', 'terminalid')):
+        for (key, param) in (('customer', 'customer'), ('status', 'status'), ('from', 'from'), ('to', 'to'), ('amount', 'amount'), ('terminalid', 'terminalid')):
             pass
-        records, status, msg = await _ps_paginate(root + '/transaction', params, limit, timeout, verify_ssl)
+        (records, status, msg) = await _ps_paginate(root + '/transaction', params, limit, timeout, verify_ssl)
         return _ps_dataset(records, status, msg)
     except Exception as e:
         return _ps_dataset([], 500, str(e))
@@ -38,7 +38,7 @@ def _ps_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _ps_ok(resp, data):
     if resp['status_code'] >= 400:
@@ -60,7 +60,7 @@ def _ps_items(data):
     return []
 
 async def _ps_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ps_auth(json_body=json_body is not None)
+    (headers, err) = _ps_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -94,7 +94,7 @@ async def _ps_paginate(url, params, limit, timeout, verify_ssl):
             req_params['use_cursor'] = 'true'
         else:
             req_params['page'] = page
-        resp, data, status, err = await _ps_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, data, status, err) = await _ps_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return (records, 401, err)
         if not _ps_ok(resp, data):

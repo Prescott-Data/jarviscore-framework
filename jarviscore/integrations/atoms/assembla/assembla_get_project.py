@@ -8,10 +8,10 @@ async def assembla_get_project(project_id: str, timeout: int=30, verify_ssl: boo
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'base_url is required'}
         if not project_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'project_id is required'}
-        api_root, root_err = _assembla_api_root(base_url)
+        (api_root, root_err) = _assembla_api_root(base_url)
         if root_err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': root_err}
-        headers, auth_err = _assembla_headers()
+        (headers, auth_err) = _assembla_headers()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = _assembla_json_path(f'{api_root}/spaces/{project_id}')

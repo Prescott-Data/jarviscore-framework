@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 async def matomo_create_report(id_site: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a scheduled report via ScheduledReports.addReport. Official: https://developer.matomo.org/api-reference/reporting-api#module_scheduledreports"""
     try:
-        site, serr = _mt_id_site(id_site)
+        (site, serr) = _mt_id_site(id_site)
         if serr:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': serr, 'provision_ids': []}
         body = payload if isinstance(payload, dict) else {}
@@ -13,7 +13,7 @@ async def matomo_create_report(id_site: str, payload: Dict[str, Any], timeout: i
         params = {'idSite': site, 'description': description, 'period': body.get('period') or 'week', 'hour': body.get('hour', 0), 'reportType': body.get('reportType') or body.get('report_type') or 'email', 'reportFormat': body.get('reportFormat') or body.get('report_format') or 'html', 'reports': _mt_json_field(body.get('reports'), []), 'parameters': _mt_json_field(body.get('parameters'), {})}
         if body.get('idSegment') not in (None, ''):
             params['idSegment'] = body.get('idSegment')
-        resp, data, err = await _mt_api_call(base_url, 'ScheduledReports.addReport', params, timeout, verify_ssl)
+        (resp, data, err) = await _mt_api_call(base_url, 'ScheduledReports.addReport', params, timeout, verify_ssl)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
         status = resp['status_code']
@@ -39,14 +39,14 @@ def _mt_id_site(id_site):
     return (str(site), None)
 
 async def _mt_api_call(base, method, params, timeout, verify_ssl):
-    root, err = _mt_root(base)
+    (root, err) = _mt_root(base)
     if err:
         return (None, None, err)
-    tok, terr = _mt_token()
+    (tok, terr) = _mt_token()
     if terr:
         return (None, None, terr)
     q = {'module': 'API', 'method': method, 'format': 'JSON', 'token_auth': tok}
-    q.update({k: v for k, v in (params or {}).items() if v not in (None, '')})
+    q.update({k: v for (k, v) in (params or {}).items() if v not in (None, '')})
     resp = await nexus_call('GET', f'{root}/index.php', params=q)
     try:
         data = resp['json'] if resp['body'] else {}

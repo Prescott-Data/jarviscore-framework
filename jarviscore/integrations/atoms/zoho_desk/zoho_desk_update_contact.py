@@ -6,10 +6,10 @@ async def zoho_desk_update_contact(contact_id: str, first_name: str='', last_nam
     try:
         if not contact_id:
             return _zd_provision({}, 400, 'contact_id is required')
-        root, err = _zd_root(base_url)
+        (root, err) = _zd_root(base_url)
         if err:
             return _zd_provision({}, 400, err)
-        headers, aerr = _zd_headers(org_id)
+        (headers, aerr) = _zd_headers(org_id)
         if aerr:
             return _zd_provision({}, 401, aerr)
         body: Dict[str, Any] = {}
@@ -47,4 +47,4 @@ def _zd_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _zd_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def square_list_orders(location_id: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Square API v2: list orders. Official: https://developer.squareup.com/reference/square/orders-api/search-orders"""
     try:
-        root, _ = _sq_root(base_url)
+        (root, _) = _sq_root(base_url)
         loc = location_id or None
         if not loc:
             return _sq_dataset([], 400, 'location_id is required')
         body = {'location_ids': [loc], 'limit': _sq_cap(limit)}
-        _, data, status, msg = await _sq_request('post', root + '/orders/search', json_body=body, timeout=timeout, verify_ssl=verify_ssl)
+        (_, data, status, msg) = await _sq_request('post', root + '/orders/search', json_body=body, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _sq_dataset([], status, msg)
         recs = [x for x in data.get('orders') or [] if isinstance(x, dict)]
@@ -41,7 +41,7 @@ def _sq_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _sq_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _sq_auth(json_body=json_body is not None)
+    (headers, err) = _sq_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

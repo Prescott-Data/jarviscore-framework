@@ -11,12 +11,12 @@ async def wave_accounting_create_payment(business_id: str='', customer_id: str='
         amount = ai.get('amount')
         pdate = ai.get('payment_date')
         pmethod = ai.get('payment_method')
-        missing = [k for k, v in (('payment_account_id', acct), ('amount', amount), ('payment_date', pdate), ('payment_method', pmethod)) if not v]
+        missing = [k for (k, v) in (('payment_account_id', acct), ('amount', amount), ('payment_date', pdate), ('payment_method', pmethod)) if not v]
         if missing:
             return _wv_provision({}, 400, 'auth_info missing required payment field(s): ' + ', '.join(missing))
         gql = 'mutation CreatePayment($input: InvoicePaymentCreateManualInput!) { invoicePaymentCreateManual(input: $input) { didSucceed inputErrors { message code path } invoicePayment { id amount } } }'
         inp = {'invoiceId': str(invoice_id), 'paymentAccountId': str(acct), 'amount': str(amount), 'paymentDate': str(pdate), 'paymentMethod': str(pmethod), 'exchangeRate': str(ai.get('exchange_rate') or '1')}
-        data, status, err = await _wv_post(gql, base_url, {'input': inp}, timeout, verify_ssl)
+        (data, status, err) = await _wv_post(gql, base_url, {'input': inp}, timeout, verify_ssl)
         if err:
             return _wv_provision({}, 401, err)
         if status >= 400 or (isinstance(data, dict) and data.get('errors')):
@@ -39,7 +39,7 @@ def _wv_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 async def _wv_post(query, base_url=None, variables=None, timeout=30, verify_ssl=True):
-    headers, err = _wv_auth()
+    (headers, err) = _wv_auth()
     if err:
         return (None, 401, err)
     resp = await nexus_call('POST', base_url or _GQL, headers=headers, json={'query': query, 'variables': variables or {}})

@@ -6,10 +6,10 @@ async def mattermost_update_conversation(conversation_id: str, payload: Dict[str
         channel_id = str(conversation_id or None or None or '')
         if not channel_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required', 'provision_ids': []}
-        root, err = _mm_api_root(base_url)
+        (root, err) = _mm_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        headers, aerr = _mm_headers(json_body=True)
+        (headers, aerr) = _mm_headers(json_body=True)
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr, 'provision_ids': []}
         body = dict(payload) if isinstance(payload, dict) else {}

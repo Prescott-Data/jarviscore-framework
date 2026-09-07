@@ -5,14 +5,14 @@ async def circleci_create_pipeline(timeout: int=30, verify_ssl: bool=True, paylo
     """Create Pipeline via CircleCI API v2. Circle-Token auth. Official: https://circleci.com/docs/api/v2/operations/triggerPipeline.md"""
     try:
         api = _circleci_api_root(base_url)
-        headers, auth_err = _circleci_auth(json_body=True)
+        (headers, auth_err) = _circleci_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         payload = payload or {}
         slug = payload.get('project_slug') or payload.get('project_id')
         if not slug:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload.project_slug or payload.project_id is required'}
-        url, err = _circleci_project_path(api, slug)
+        (url, err) = _circleci_project_path(api, slug)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         body = _circleci_pipeline_body(payload)

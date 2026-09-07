@@ -5,10 +5,10 @@ async def beanstalk_get_pipeline(pipeline_id: str, repository_id: str, account: 
     try:
         if not pipeline_id or not repository_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'pipeline_id and repository_id are required'}
-        api_root, err = _beanstalk_api_root(base_url, account)
+        (api_root, err) = _beanstalk_api_root(base_url, account)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _beanstalk_auth()
+        (headers, basic, auth_err) = _beanstalk_auth()
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _beanstalk_get(api_root, f'/{repository_id}/server_environments/{pipeline_id}.json', headers, basic, None, timeout, verify_ssl)

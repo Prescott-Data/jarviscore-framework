@@ -5,7 +5,7 @@ async def square_get_order(order_id: str, timeout: int=30, verify_ssl: bool=True
     try:
         if not order_id:
             return _sq_dataset([], 400, 'order_id is required')
-        root, _ = _sq_root(base_url)
+        (root, _) = _sq_root(base_url)
         path = '/orders' if resource != 'payment' else '/payments'
         if resource == 'customer':
             path = '/customers'
@@ -13,7 +13,7 @@ async def square_get_order(order_id: str, timeout: int=30, verify_ssl: bool=True
             path = '/orders'
         elif resource == 'payment':
             path = '/payments'
-        _, data, status, msg = await _sq_request('get', root + path + '/{order_id}'.format(**locals()), timeout=timeout, verify_ssl=verify_ssl)
+        (_, data, status, msg) = await _sq_request('get', root + path + '/{order_id}'.format(**locals()), timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _sq_dataset([], status, msg)
         obj = data.get('order') if isinstance(data, dict) else {}
@@ -43,7 +43,7 @@ def _sq_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _sq_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _sq_auth(json_body=json_body is not None)
+    (headers, err) = _sq_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

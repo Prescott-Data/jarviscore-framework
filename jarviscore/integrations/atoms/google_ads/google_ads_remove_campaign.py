@@ -4,20 +4,20 @@ _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 async def google_ads_remove_campaign(customer_id: str, campaign_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Remove a campaign in google ads. Official: https://developers.google.com/google-ads/api/rest/reference/rest/v24/customers.campaigns/mutate"""
     try:
-        api, err = _gads_api_root(base_url)
+        (api, err) = _gads_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
-        cid, err = _gads_customer_id(customer_id)
+        (cid, err) = _gads_customer_id(customer_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err, 'provision_ids': []}
         if not campaign_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'campaign_id is required', 'provision_ids': []}
-        headers, auth_err = _gads_auth(json_body=True)
+        (headers, auth_err) = _gads_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resource_name = f'customers/{cid}/campaigns/{campaign_id}'
         body = {'operations': [{'remove': resource_name}]}
-        data, status, msg = await _gads_mutate(api, cid, 'campaigns', headers, body, timeout, verify_ssl)
+        (data, status, msg) = await _gads_mutate(api, cid, 'campaigns', headers, body, timeout, verify_ssl)
         if status >= 400 or msg != 'ok':
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg, 'provision_ids': []}
         return _gads_provision_response(data, status)

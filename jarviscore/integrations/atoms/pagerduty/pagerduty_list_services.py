@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def pagerduty_list_services(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List services with limit/offset pagination (more). Official: https://developer.pagerduty.com/api-reference/operations/listServices"""
     try:
-        root, err = _pd_root(base_url)
+        (root, err) = _pd_root(base_url)
         if err:
             return _pd_dataset([], 400, err)
-        records, status, msg = await _pd_paginate(root + '/services', {}, limit, timeout, verify_ssl, 'services')
+        (records, status, msg) = await _pd_paginate(root + '/services', {}, limit, timeout, verify_ssl, 'services')
         return _pd_dataset(records, status, msg)
     except Exception as e:
         return _pd_dataset([], 500, str(e))
@@ -50,7 +50,7 @@ def _pd_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _pd_dataset(records, status, msg):
     recs = records if isinstance(records, list) else []
@@ -66,7 +66,7 @@ def _pd_collection(data, key):
     return []
 
 async def _pd_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, from_header=False):
-    headers, err = _pd_auth(json_body=json_body is not None, from_header=from_header)
+    (headers, err) = _pd_auth(json_body=json_body is not None, from_header=from_header)
     if err:
         return (None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -92,7 +92,7 @@ async def _pd_paginate(url, params, limit, timeout, verify_ssl, collection_key):
         req_params = dict(base_params)
         req_params['limit'] = min(cap - len(records), 100)
         req_params['offset'] = offset
-        resp, status, err = await _pd_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, status, err) = await _pd_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return (records, 401, err)
         if status >= 400:

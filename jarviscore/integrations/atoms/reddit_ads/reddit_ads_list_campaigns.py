@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 async def reddit_ads_list_campaigns(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List campaigns for an ad account. Official: https://ads-api.reddit.com/docs/v3/"""
     try:
-        records, status, msg = await _ra_list(base_url, '/campaigns', limit, timeout, verify_ssl)
+        (records, status, msg) = await _ra_list(base_url, '/campaigns', limit, timeout, verify_ssl)
         return _ra_dataset(records, status, msg)
     except Exception as e:
         return _ra_dataset([], 500, str(e))
@@ -57,7 +57,7 @@ def _ra_rows(body):
     return []
 
 async def _ra_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ra_auth(json_body=json_body is not None)
+    (headers, err) = _ra_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}
@@ -78,10 +78,10 @@ async def _ra_request(method, url, params=None, json_body=None, timeout=30, veri
     return (resp, body, resp['status_code'], 'ok')
 
 def _ra_account_path(base_url, suffix):
-    root, err = _ra_root(base_url)
+    (root, err) = _ra_root(base_url)
     if err:
         return (None, err)
-    account_id, err = _ra_account()
+    (account_id, err) = _ra_account()
     if err:
         return (None, err)
     suffix = suffix if suffix.startswith('/') else '/' + suffix
@@ -89,7 +89,7 @@ def _ra_account_path(base_url, suffix):
 
 async def _ra_list(base_url, suffix, limit, timeout, verify_ssl, params=None):
     cap = _ra_cap(limit)
-    url, err = _ra_account_path(base_url, suffix)
+    (url, err) = _ra_account_path(base_url, suffix)
     if err:
         return ([], 400, err)
     records = []
@@ -98,11 +98,11 @@ async def _ra_list(base_url, suffix, limit, timeout, verify_ssl, params=None):
     msg = 'ok'
     while len(records) < cap:
         if next_url:
-            resp, body, status, msg = await _ra_request('get', next_url, timeout=timeout, verify_ssl=verify_ssl)
+            (resp, body, status, msg) = await _ra_request('get', next_url, timeout=timeout, verify_ssl=verify_ssl)
         else:
             req_params = dict(params or {})
             req_params.setdefault('page.size', min(100, cap))
-            resp, body, status, msg = await _ra_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
+            (resp, body, status, msg) = await _ra_request('get', url, params=req_params, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return (records, status, msg)
         batch = _ra_rows(body)

@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def zendesk_chat_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """zendesk_chat REST: search. Official: https://developer.zendesk.com/api-reference/live-chat/introduction/"""
     try:
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _dataset([], 400, err)
         if not query:
             return _dataset([], 400, 'query is required')
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if aerr:
             return _dataset([], 401, aerr)
         resp = await nexus_call('GET', root + '/chats/search', headers=headers, params={'q': query})
@@ -40,4 +40,4 @@ def _dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

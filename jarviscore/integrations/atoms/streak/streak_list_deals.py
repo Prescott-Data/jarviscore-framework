@@ -5,8 +5,8 @@ async def streak_list_deals(pipeline_key: str, limit: int=25, timeout: int=30, v
     try:
         if not pipeline_key:
             return _st_dataset([], 400, 'pipeline_key is required')
-        root, _ = _st_root(base_url)
-        headers, err = _st_auth()
+        (root, _) = _st_root(base_url)
+        (headers, err) = _st_auth()
         if err:
             return _st_dataset([], 401, err)
         resp = await nexus_call('GET', root + f'/pipelines/{pipeline_key}/boxes', headers=headers)
@@ -40,7 +40,7 @@ def _st_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _st_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _host_is(url, *domains):
     """True only if url's hostname equals or is a subdomain of one of domains."""

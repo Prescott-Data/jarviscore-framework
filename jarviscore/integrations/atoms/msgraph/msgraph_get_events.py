@@ -10,7 +10,7 @@ async def msgraph_get_events(max_results: int=20, start_datetime: str=None, end_
             params['$filter'] = f"start/dateTime ge '{start_datetime}' and end/dateTime le '{end_datetime}'"
         resp = await nexus_call('GET', 'https://graph.microsoft.com/v1.0/me/events', headers={'Authorization': f'Bearer {access_token}', 'Prefer': 'outlook.timezone="UTC"'}, params=params)
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Get events failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Get events failed: {resp['status_code']} {resp['body']}"}
         events = resp['json'].get('value', [])
         return {'success': True, 'data': {'events': events, 'count': len(events)}, 'error': None}
     except Exception as e:

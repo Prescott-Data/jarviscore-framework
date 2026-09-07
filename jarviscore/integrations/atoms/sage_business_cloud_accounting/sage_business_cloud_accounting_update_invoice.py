@@ -8,7 +8,7 @@ async def sage_business_cloud_accounting_update_invoice(invoice_id: str, payload
         if not isinstance(payload, dict) or not payload:
             return _sage_provision({}, 400, 'payload is required', 'sales_invoice', invoice_id)
         body_payload = _sage_wrap(payload, 'sales_invoice')
-        resp, body, status, msg = await _sage_write('PUT', f'/sales_invoices/{invoice_id}', base_url, body_payload, timeout, verify_ssl)
+        (resp, body, status, msg) = await _sage_write('PUT', f'/sales_invoices/{invoice_id}', base_url, body_payload, timeout, verify_ssl)
         if status >= 400:
             return _sage_provision(body if isinstance(body, dict) else {}, status, msg, 'sales_invoice', invoice_id)
         return _sage_provision(body if isinstance(body, dict) else {}, status, 'ok', 'sales_invoice', invoice_id)
@@ -64,10 +64,10 @@ def _sage_err(resp, body=None):
     return (resp['body'] if resp is not None else 'request failed')[:1000]
 
 async def _sage_write(method, path, base_url, json_body, timeout, verify_ssl):
-    headers, err = _sage_auth(json_body=True)
+    (headers, err) = _sage_auth(json_body=True)
     if err:
         return (None, None, 401, err)
-    root, _ = _sage_root(base_url)
+    (root, _) = _sage_root(base_url)
     resp = await nexus_call(method, root + path, headers=headers, json=json_body)
     try:
         body = resp['json'] if resp['content'] else {}

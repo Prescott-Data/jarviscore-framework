@@ -7,10 +7,10 @@ async def nimble_update_account(account_id: str, payload: Dict[str, Any], timeou
     try:
         if not account_id:
             return _nb_provision({}, 400, 'account_id is required')
-        root, err = _nb_v1_root(base_url)
+        (root, err) = _nb_v1_root(base_url)
         if err:
             return _nb_provision({}, 400, err)
-        headers, aerr = _nb_auth(json_body=True)
+        (headers, aerr) = _nb_auth(json_body=True)
         if aerr:
             return _nb_provision({}, 400, aerr)
         body = payload if isinstance(payload, dict) else {}
@@ -54,7 +54,7 @@ def _nb_error(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _nb_provision(data, status, msg, fallback_id=None):
     obj = data if isinstance(data, dict) else {}

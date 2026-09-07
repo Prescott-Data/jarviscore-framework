@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 async def telegram_list_updates(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Telegram Bot API: getUpdates. Official: https://core.telegram.org/bots/api"""
     try:
-        root, _, err = _tg_root(base_url)
+        (root, _, err) = _tg_root(base_url)
         if err:
             return _tg_dataset([], 401, err)
         resp = await nexus_call('GET', f'{root}/getUpdates', params={'limit': min(max(int(limit or 25), 1), 100)})
@@ -25,4 +25,4 @@ def _tg_dataset(records, status, msg):
 def _tg_err(resp, data=None):
     if isinstance(data, dict) and data.get('description'):
         return str(data['description'])[:1000]
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

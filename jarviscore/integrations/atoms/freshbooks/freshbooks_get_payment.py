@@ -19,7 +19,7 @@ async def freshbooks_get_payment(payment_id: str) -> dict:
     try:
         resp = await nexus_call('GET', f'https://api.freshbooks.com/accounting/account/{account_id}/payments/payments/{payment_id}', headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
         if resp['status_code'] != 200:
-            return {'success': False, 'payment_id': payment_id, 'data': None, 'error': f'Get payment failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'payment_id': payment_id, 'data': None, 'error': f"Get payment failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'payment_id': payment_id, 'data': resp['json'].get('response', {}).get('result', {}).get('payment'), 'error': None}
     except Exception as e:
         return {'success': False, 'payment_id': payment_id, 'data': None, 'error': str(e)}

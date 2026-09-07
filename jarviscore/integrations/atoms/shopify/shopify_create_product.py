@@ -5,10 +5,10 @@ async def shopify_create_product(payload: Dict[str, Any], shop: str='', timeout:
     try:
         if not isinstance(payload, dict) or not payload:
             return _sh_provision({}, 400, 'payload is required', 'product')
-        root, err = _sh_root(base_url, shop)
+        (root, err) = _sh_root(base_url, shop)
         if err:
             return _sh_provision({}, 400, err, 'product')
-        headers, aerr = _sh_auth()
+        (headers, aerr) = _sh_auth()
         if aerr:
             return _sh_provision({}, 401, aerr, 'product')
         headers['Content-Type'] = 'application/json'
@@ -57,4 +57,4 @@ def _sh_err(resp):
                 return str(errs)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

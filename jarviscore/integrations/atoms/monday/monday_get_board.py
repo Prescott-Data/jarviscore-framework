@@ -6,15 +6,15 @@ async def monday_get_board(board_id: str, timeout: int=30, verify_ssl: bool=True
     try:
         if not board_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'board_id is required'}
-        base, err = _md_root(base_url)
+        (base, err) = _md_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, aerr = _md_auth()
+        (headers, aerr) = _md_auth()
         if aerr:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': aerr}
         q = 'query($ids: [ID!]) { boards(ids: $ids) { id name state board_kind description url workspace_id columns { id title type } groups { id title } } }'
         resp = await _md_gql(base, headers, q, {'ids': [str(board_id)]}, timeout, verify_ssl)
-        data, status, msg = _md_parse(resp)
+        (data, status, msg) = _md_parse(resp)
         if status >= 400 and (not data):
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg}
         records = _md_records((data or {}).get('boards'))
@@ -42,7 +42,7 @@ def _md_parse(resp):
     except Exception:
         body = {}
     if resp['status_code'] >= 400:
-        return (None, resp['status_code'], (resp['body'] or f'HTTP {resp['status_code']}')[:1000])
+        return (None, resp['status_code'], (resp['body'] or f"HTTP {resp['status_code']}")[:1000])
     errors = body.get('errors')
     if errors:
         msg = errors[0].get('message') if isinstance(errors[0], dict) else str(errors[0])

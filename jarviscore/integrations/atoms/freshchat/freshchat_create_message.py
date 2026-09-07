@@ -7,7 +7,7 @@ async def freshchat_create_message(conversation_id: str, message_parts: List[Any
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'conversation_id is required'}
         if not message_parts:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'message_parts is required'}
-        api, err = _fc_api_root(base_url)
+        (api, err) = _fc_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         body: Dict[str, Any] = {'message_parts': message_parts, 'message_type': message_type or 'normal'}
@@ -19,7 +19,7 @@ async def freshchat_create_message(conversation_id: str, message_parts: List[Any
             body['user_id'] = user_id
         if reply_parts:
             body['reply_parts'] = reply_parts
-        headers, auth_err = _fc_auth(json_body=True)
+        (headers, auth_err) = _fc_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         url = f'{api}/conversations/{str(conversation_id).strip()}/messages'

@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 async def paystack_create_plan(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create plan. Official: https://paystack.com/docs/api/plan/#create-plan"""
     try:
-        root, err = _ps_root(base_url)
+        (root, err) = _ps_root(base_url)
         if err:
             return _ps_provision({}, 400, err)
         if not isinstance(payload, dict) or not payload:
             return _ps_provision({}, 400, 'payload is required')
-        resp, data, status, err = await _ps_request('post', root + '/plan', json_body=payload, timeout=timeout, verify_ssl=verify_ssl)
+        (resp, data, status, err) = await _ps_request('post', root + '/plan', json_body=payload, timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return _ps_provision({}, 401, err)
         if not _ps_ok(resp, data):
@@ -38,7 +38,7 @@ def _ps_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _ps_ok(resp, data):
     if resp['status_code'] >= 400:
@@ -56,7 +56,7 @@ def _ps_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 async def _ps_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _ps_auth(json_body=json_body is not None)
+    (headers, err) = _ps_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

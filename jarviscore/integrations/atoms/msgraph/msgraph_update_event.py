@@ -18,7 +18,7 @@ async def msgraph_update_event(event_id: str, subject: str=None, start_datetime:
             payload['location'] = {'displayName': location}
         resp = await nexus_call('PATCH', f'https://graph.microsoft.com/v1.0/me/events/{event_id}', headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}, json=payload)
         if resp['status_code'] != 200:
-            return {'success': False, 'data': None, 'error': f'Update event failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Update event failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'data': resp['json'], 'error': None}
     except Exception as e:
         return {'success': False, 'data': None, 'error': str(e)}

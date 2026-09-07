@@ -7,7 +7,7 @@ async def close_update_account(account_id: str, payload: Dict[str, Any], timeout
         if not account_id or not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'account_id and payload are required'}
         api = _close_api_root(base_url)
-        headers, basic, auth_err = _close_auth(json_body=True)
+        (headers, basic, auth_err) = _close_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         resp = await _close_put_json(f'{api}/lead/{account_id}/', headers, basic, payload, timeout, verify_ssl)

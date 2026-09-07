@@ -5,8 +5,8 @@ async def sourceforge_get_project(project: str, timeout: int=30, verify_ssl: boo
     try:
         if not project:
             return _sf_dataset([], 400, 'project is required')
-        root, _ = _sf_root(base_url)
-        headers, err = _sf_auth()
+        (root, _) = _sf_root(base_url)
+        (headers, err) = _sf_auth()
         if err:
             return _sf_dataset([], 401, err)
         slug = str(project).strip().strip('/')
@@ -33,4 +33,4 @@ def _sf_dataset(records, status, msg):
     return {'records': recs, 'data_count': len(recs), 'status': status, 'message': msg}
 
 def _sf_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

@@ -5,10 +5,10 @@ async def prembly_get_record(record_id: str, timeout: int=30, verify_ssl: bool=T
     try:
         if not record_id:
             return _pm_dataset([], 400, 'record_id is required')
-        root, err = _pm_root(base_url)
+        (root, err) = _pm_root(base_url)
         if err:
             return _pm_dataset([], 400, err)
-        resp, body, status, msg = await _pm_request('get', root + '/verification/' + str(record_id).strip() + '/status', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, body, status, msg) = await _pm_request('get', root + '/verification/' + str(record_id).strip() + '/status', timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _pm_dataset([], status, msg)
         rows = _pm_rows(body)
@@ -55,7 +55,7 @@ def _pm_rows(body):
     return []
 
 async def _pm_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True):
-    headers, err = _pm_auth(json_body=json_body is not None)
+    (headers, err) = _pm_auth(json_body=json_body is not None)
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

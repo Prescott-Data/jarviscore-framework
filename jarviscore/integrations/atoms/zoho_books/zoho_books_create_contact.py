@@ -12,7 +12,7 @@ async def zoho_books_create_contact(org_id: str, contact_name: str, contact_type
             payload['phone'] = phone
         resp = await nexus_call('POST', 'https://www.zohoapis.com/books/v3/contacts', headers={'Authorization': f'Zoho-oauthtoken {access_token}', 'Content-Type': 'application/json'}, params={'organization_id': org_id}, json=payload)
         if resp['status_code'] not in (200, 201):
-            return {'success': False, 'data': None, 'error': f'Create contact failed: {resp['status_code']} {resp['body']}'}
+            return {'success': False, 'data': None, 'error': f"Create contact failed: {resp['status_code']} {resp['body']}"}
         data = resp['json']
         if data.get('code') != 0:
             return {'success': False, 'data': None, 'error': data.get('message')}

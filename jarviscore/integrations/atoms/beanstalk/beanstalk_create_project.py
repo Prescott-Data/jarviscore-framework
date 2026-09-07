@@ -5,10 +5,10 @@ async def beanstalk_create_project(payload: Dict[str, Any], account: Optional[st
     try:
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api_root, err = _beanstalk_api_root(base_url, account)
+        (api_root, err) = _beanstalk_api_root(base_url, account)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, basic, auth_err = _beanstalk_auth(json_body=True)
+        (headers, basic, auth_err) = _beanstalk_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         body = payload if 'repository' in payload else {'repository': payload}

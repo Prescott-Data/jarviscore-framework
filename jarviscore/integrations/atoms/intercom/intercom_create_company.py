@@ -6,10 +6,10 @@ async def intercom_create_company(payload: Dict[str, Any], timeout: int=30, veri
     try:
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required'}
-        api, err = _ic_api_root(base_url)
+        (api, err) = _ic_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        headers, auth_err = _ic_auth(json_body=True)
+        (headers, auth_err) = _ic_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         resp = await _ic_post(f'{api}/companies', headers, payload, timeout, verify_ssl)

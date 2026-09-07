@@ -4,19 +4,19 @@ _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 async def google_ads_get_ad(customer_id: str, ad_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get a ad by ID from google ads. Official: https://developers.google.com/google-ads/api/docs/rest/common/search"""
     try:
-        api, err = _gads_api_root(base_url)
+        (api, err) = _gads_api_root(base_url)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
-        cid, err = _gads_customer_id(customer_id)
+        (cid, err) = _gads_customer_id(customer_id)
         if err:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
         if not ad_id:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'ad_id is required'}
-        headers, auth_err = _gads_auth(json_body=True)
+        (headers, auth_err) = _gads_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
         query = f'SELECT ad_group_ad.ad.id, ad_group_ad.ad.name, ad_group_ad.status, ad_group_ad.resource_name, ad_group.id, campaign.id FROM ad_group_ad WHERE ad_group_ad.ad.id = {ad_id}'
-        records, status, msg = await _gads_search(api, cid, headers, query, 1, timeout, verify_ssl)
+        (records, status, msg) = await _gads_search(api, cid, headers, query, 1, timeout, verify_ssl)
         if status >= 400 or msg != 'ok':
             return {'records': [], 'data_count': 0, 'status': status, 'message': msg}
         return {'records': records, 'data_count': len(records), 'status': status, 'message': 'ok'}

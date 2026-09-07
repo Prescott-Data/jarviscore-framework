@@ -5,7 +5,7 @@ async def box_create_folder(payload: Dict[str, Any], timeout: int=30, verify_ssl
     try:
         if not payload:
             return {'records': [], 'data_count': 0, 'status': 400, 'message': 'payload is required', 'provision_ids': []}
-        headers, auth_err = _box_auth(json_body=True)
+        (headers, auth_err) = _box_auth(json_body=True)
         if auth_err:
             return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err, 'provision_ids': []}
         api = _box_api_root(base_url)

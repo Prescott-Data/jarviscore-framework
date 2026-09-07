@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def pendo_list_reports(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List saved reports. Official: https://engageapi.pendo.io/ (see singer-io/tap-pendo Reports stream)"""
     try:
-        root, err = _pn_root(base_url)
+        (root, err) = _pn_root(base_url)
         if err:
             return _pn_dataset([], 400, err)
-        resp, data, status, err = await _pn_request('get', root + '/report', timeout=timeout, verify_ssl=verify_ssl)
+        (resp, data, status, err) = await _pn_request('get', root + '/report', timeout=timeout, verify_ssl=verify_ssl)
         if err:
             return _pn_dataset([], 401, err)
         if status >= 400:
@@ -56,7 +56,7 @@ def _pn_err(resp):
                 return str(msg)[:1000]
     except Exception:
         pass
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
 
 def _pn_dataset(records, status, msg):
     recs = records if isinstance(records, list) else []
@@ -75,7 +75,7 @@ def _pn_results(data):
     return []
 
 async def _pn_request(method, url, params=None, json_body=None, timeout=30, verify_ssl=True, track=False):
-    headers, err = _pn_auth(track=track, json_body=json_body is not None or method in ('post', 'put'))
+    (headers, err) = _pn_auth(track=track, json_body=json_body is not None or method in ('post', 'put'))
     if err:
         return (None, None, 401, err)
     kwargs = {'headers': headers, 'timeout': timeout, 'verify': verify_ssl}

@@ -8,10 +8,10 @@ async def simplepay_update_customer(customer_id: str, payload: Dict[str, Any], t
             return _sp_provision({}, 400, 'customer_id is required')
         if not isinstance(payload, dict) or not payload:
             return _sp_provision({}, 400, 'payload is required')
-        root, err = _sp_root(base_url)
+        (root, err) = _sp_root(base_url)
         if err:
             return _sp_provision({}, 400, err)
-        headers, aerr = _sp_auth(json_body=True)
+        (headers, aerr) = _sp_auth(json_body=True)
         if aerr:
             return _sp_provision({}, 401, aerr)
         body = payload if 'employee' in payload else {'employee': payload}
@@ -48,4 +48,4 @@ def _sp_provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _sp_err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]

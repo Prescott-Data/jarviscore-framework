@@ -8,13 +8,13 @@ async def africas_talking_create_message(payload: Dict[str, Any], timeout: int=3
     try:
         if not isinstance(payload, dict) or not payload:
             return _at_provision([], 400, 'payload must be a non-empty dict')
-        api_root, err = _at_api_root(base_url)
+        (api_root, err) = _at_api_root(base_url)
         if err:
             return _at_provision([], 400, err)
         username = _at_username()
         if not username:
             return _at_provision([], 400, 'auth_info.username is required')
-        headers, err = _at_headers()
+        (headers, err) = _at_headers()
         if err:
             return _at_provision([], 401, err)
         to_value = payload.get('to')

@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 async def workfront_create_project(name: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """workfront REST: create project. Official: https://developer.adobe.com/workfront/api-explorer/"""
     try:
-        root, err = _root(base_url)
+        (root, err) = _root(base_url)
         if err:
             return _provision({}, 400, err)
-        headers, aerr = _auth()
+        (headers, aerr) = _auth()
         if aerr:
             return _provision({}, 401, aerr)
         headers['Content-Type'] = 'application/json'
@@ -36,4 +36,4 @@ def _provision(data, status, msg, fallback_id=None):
     return {'records': [rec] if rec else [], 'data_count': 1 if rec else 0, 'status': status, 'message': msg, 'provision_ids': ids}
 
 def _err(resp):
-    return (resp['body'] or f'HTTP {resp['status_code']}')[:1000]
+    return (resp['body'] or f"HTTP {resp['status_code']}")[:1000]
