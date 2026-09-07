@@ -208,7 +208,12 @@ class AutoAgent(Profile):
             nexus_proxy = NexusCallProxy(auth_mgr)
         except Exception as _nexus_exc:
             self._logger.debug("Nexus call proxy unavailable: %s", _nexus_exc)
-        self.sandbox = create_coder_sandbox(timeout=timeout, nexus_call_proxy=nexus_proxy)
+        self.sandbox = create_coder_sandbox(
+            timeout=timeout,
+            nexus_call_proxy=nexus_proxy,
+            blob_storage=getattr(self, '_blob_storage', None),
+            artifact_prefix=f"artifacts/{self.role}",
+        )
 
         # 5. Initialize autonomous repair
         max_repairs = config.get('max_repair_attempts', 3)

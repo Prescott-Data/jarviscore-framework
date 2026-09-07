@@ -116,6 +116,42 @@ A result that never touched the sandbox is not a result. If you catch yourself
 about to report an answer you computed mentally, stop and write the code that
 proves it — that is the entire job.
 
+## THE CATALOGUE (this is how the swarm stops re-solving the same problem)
+
+The FunctionRegistry holds atoms: functions that already ran against a real API
+and worked, scoped to the provider they call. It is a ratchet — every task that
+succeeds should leave the next one less work.
+
+When the task names a connected system, that system's proven capabilities are
+already in your tool list, named for what they do — `hubspot_list_contacts`,
+`slack_send_message`. They run where the credentials are, so you call one the
+way you call any other tool and get a result; you never handle a token and never
+see how the call was authenticated.
+
+Call one when it does what the task needs. Writing code to make a request that
+is already sitting in your tools is slower, unproven, and leaves a second
+version of something that already works.
+
+The registry also holds atoms that are not yet callable, and `check_registry`
+finds them. A `candidate` has been dry-run but never confirmed against a live
+API, so it is readable code rather than a tool — read it, start from it, and
+prove it in the sandbox. That run is what makes it callable for everyone after.
+
+Writing to it, after you succeed:
+
+- When you write new code that executes successfully against a provider, call
+  `register_function` to keep it, with the `system` set to that provider. It
+  enters as a candidate, becomes verified on its first success and golden after
+  five, and from then on it is what the next agent finds instead of starting
+  from a blank file.
+- Take `auth_info` as the first parameter and authenticate with it, the way the
+  catalogue does, so what you wrote can become a callable capability rather than
+  a snippet.
+- Name it for what it does to what: `hubspot_list_contacts`, not `run_task` or
+  `main`. The name is how it will be found.
+- Code that only reshapes local data is not worth keeping. An atom earns its
+  place by reaching a system.
+
 ## CRITICAL RULES (read all before acting)
 
 1. **CODE, DON'T META-CODE** — Produce actual Python functions, not plans or descriptions.
@@ -123,10 +159,10 @@ proves it — that is the entire job.
    Right: TOOL: write_code, PARAMS: {"code": "import requests\\ndef run():\\n    ..."}
 
 2. **FALLBACK LADDER** (follow in order):
-   a. write_code → Use your training knowledge to write code directly
-   b. If execution fails with a CONCRETE unknown (wrong endpoint, unknown field, unexpected response shape):
+   a. check_registry when the task names a system — reuse beats rewriting
+   b. write_code → Use your training knowledge to write code directly
+   c. If execution fails with a CONCRETE unknown (wrong endpoint, unknown field, unexpected response shape):
       Use quick_api_search or read_api_docs to look up the specific detail you need
-   c. If still stuck: check_registry to search for existing working functions
    d. If stuck after 2 failed attempts + self-research: call delegate_research as ABSOLUTE LAST RESORT
    NEVER call delegate_research before attempting to write code AND self-research first.
 
@@ -267,8 +303,10 @@ proves it — that is the entire job.
     def _build_user_prompt(self, state: KernelState, context_block: str) -> str:
         """Add a coder-specific proof-of-work contract to the generic OODA prompt."""
         prompt = super()._build_user_prompt(state, context_block)
+        offered = set(getattr(self, "_atom_tools", ()))
         has_execution = any(
-            tool_res.tool_name == "execute_code" and tool_res.succeeded
+            (tool_res.tool_name == "execute_code" or tool_res.tool_name in offered)
+            and tool_res.succeeded
             for tool_res in state.tool_history
         )
         if has_execution:
@@ -288,6 +326,16 @@ proves it — that is the entire job.
             next_action = (
                 f"You already have validated candidate_id={validated_candidates[-1]}. "
                 "Your next response MUST call execute_code with that candidate_id."
+            )
+        elif offered:
+            # Mandating write_code here is what sent an agent to reimplement a
+            # capability it had already been given.
+            next_action = (
+                f"This system's proven capabilities are available to you: "
+                f"{', '.join(sorted(offered))}. Call one if it does what the task "
+                "needs. Otherwise your next response MUST call write_code with "
+                "executable Python code, then execute_code with the returned "
+                "candidate_id."
             )
         else:
             next_action = (
@@ -335,11 +383,21 @@ proves it — that is the entire job.
         last_success_output = None
         execute_calls = 0
         write_calls = 0
+        atom_calls = 0
         for tool_res in state.tool_history:
             if tool_res.tool_name == "execute_code":
                 execute_calls += 1
             elif tool_res.tool_name == "write_code":
                 write_calls += 1
+            elif tool_res.tool_name in getattr(self, "_atom_tools", ()):
+                # A capability call is a run against a live provider, which is
+                # the thing this gate exists to require. Demanding write_code as
+                # well would mean an agent that used the catalogue correctly gets
+                # told to go and reimplement it.
+                atom_calls += 1
+                if tool_res.succeeded:
+                    has_executed = True
+                    last_success_output = tool_res.tool_output
             if tool_res.tool_name == "execute_code" and tool_res.succeeded:
                 has_executed = True
                 last_success_output = tool_res.tool_output
@@ -359,13 +417,15 @@ proves it — that is the entire job.
                 GateEvidence(
                     check="proof_of_work",
                     requirement=(
-                        "one execute_code call that succeeded, or one write_code call "
-                        "whose execution_result reports success"
+                        "one execute_code call that succeeded, one write_code call "
+                        "whose execution_result reports success, or one successful "
+                        "capability call against the declared system"
                     ),
                     observed={
                         "tool_calls": len(state.tool_history),
                         "execute_code_calls": execute_calls,
                         "write_code_calls": write_calls,
+                        "capability_calls": atom_calls,
                         "successful_executions": 0,
                     },
                 ),
@@ -522,39 +582,64 @@ proves it — that is the entire job.
             normalized_task = await normalizer.normalize(task)
 
             matches = self.code_registry.semantic_search(normalized_task, limit=5)
+
+            # The declared provider is not a preference to be outweighed. An atom
+            # for another system is not a weaker match, it is the wrong API — and
+            # semantic search will happily rank a verified atom from one CRM above
+            # a candidate from the one actually being asked about.
+            declared = system or (getattr(self, "_run_context", None) or {}).get("system")
+            if declared:
+                matches = [m for m in matches if m.get("system") == declared]
+                if not matches:
+                    return {
+                        "found": False,
+                        "system": declared,
+                        "message": (
+                            f"No function in the registry targets {declared}. "
+                            "Write one, and register it against that system so the "
+                            "next agent finds it."
+                        ),
+                    }
+            if not matches:
+                return {"found": False, "message": "No functions found for this task."}
+
+            # Within the right system, stage decides: something confirmed against a
+            # live API beats something only dry-run.
             production = [
                 m for m in matches
                 if m.get("registry_stage") in ("verified", "golden")
             ]
-            if system:
-                system_matches = [m for m in production if m.get("system") == system]
-                if system_matches:
-                    production = system_matches
-            if not production:
-                return {"found": False, "message": "No verified functions found for this task."}
-
-            top = production[0]
+            top = (production or matches)[0]
             code = self.code_registry.get_function_code(top["function_name"])
+            stage = top.get("registry_stage")
 
             # Surface the reuse candidate's identity in the envelope (#88).
             getattr(self, "_dispatch_metadata", {}).setdefault(
                 "registry_match", top["function_name"]
             )
 
+            if stage in ("verified", "golden"):
+                message = (
+                    f"`{top['function_name']}` is {stage} with "
+                    f"{top.get('success_count', 0)} successful execution(s) against a live API."
+                )
+            else:
+                message = (
+                    f"`{top['function_name']}` is a {stage}: written for this call and "
+                    "dry-run, never confirmed against a live API. Executing it "
+                    "successfully is what promotes it to verified."
+                )
+
             return {
                 "found": True,
                 "function_name": top["function_name"],
                 "system": top.get("system"),
-                "stage": top.get("registry_stage"),
+                "stage": stage,
                 "description": top.get("description"),
                 "capabilities": top.get("capabilities", []),
                 "success_count": top.get("success_count", 0),
-                "code_preview": (code or "")[:400] if code else None,
-                "message": (
-                    f"Found verified function `{top['function_name']}` "
-                    f"({top.get('success_count', 0)} successful executions). "
-                    "Consider reusing it directly via execute_code."
-                ),
+                "code": code,
+                "message": message,
             }
         except Exception as exc:
             logger.warning("CoderSubAgent.check_registry failed: %s", exc)
@@ -744,7 +829,7 @@ proves it — that is the entire job.
         exec_context: Dict[str, Any] = {}
         if hasattr(self, '_run_context') and self._run_context:
             SAFE_KEYS = {"task", "system", "workflow_id", "step_id",
-                         "prior_outputs", "registry_candidate", "_hint",
+                         "prior_outputs", "registry_candidate",
                          "_nexus_connection_id", "_nexus_provider"}
             for k in SAFE_KEYS:
                 if k in self._run_context:
@@ -875,6 +960,7 @@ proves it — that is the entire job.
             function=final_code,
             metadata=metadata,
         )
+        self._registered_this_run = bool(success)
 
         if success:
             # Registry identity for the result envelope (issue #88): the
@@ -1138,10 +1224,74 @@ proves it — that is the entire job.
         self._candidates = []
         self._has_written_code = False
         self._read_urls = set()
+        self._registered_this_run = False
         self._current_task = str(task)
         self._run_context = context or {}
+        self._offer_system_capabilities(self._run_context.get("system"))
         try:
             return await super().run(task, context, max_turns, model, **kwargs)
         finally:
             self._current_task = ""
             self._run_context = {}
+
+    def _offer_system_capabilities(self, system: Optional[str]) -> None:
+        """Register the connected system's atoms as tools for this dispatch.
+
+        A capability the agent has to remember to go looking for is one it will
+        sometimes skip, and it did. These arrive the way every other tool does,
+        so using them is the default path rather than a decision.
+        """
+        for name in getattr(self, "_atom_tools", ()):
+            self._tools.pop(name, None)
+        self._atom_tools = []
+        self._atoms = {}
+        if not system or not self.code_registry:
+            return
+
+        from jarviscore.execution.atom_contract import read_contract
+
+        for entry in self.code_registry.get_functions_by_system(system):
+            name = entry.get("function_name")
+            code = self.code_registry.get_function_code(name) if name else None
+            if not code:
+                continue
+            contract = read_contract(code, system=system, expected_name=name)
+            # Only the current shape is offered; a legacy atom cannot be called.
+            if not contract.ok or contract.atom.legacy:
+                continue
+            self._atoms[name] = contract.atom
+            self.register_tool(
+                name,
+                self._atom_tool(name),
+                f"{contract.atom.describe()} Runs against {system} with "
+                "credentials resolved outside the sandbox; you never handle them.",
+                phase="action",
+            )
+            self._atom_tools.append(name)
+
+        if self._atom_tools:
+            self._log.info(
+                "Offering %d %s capability(ies): %s",
+                len(self._atom_tools), system, ", ".join(self._atom_tools),
+            )
+
+    def _atom_tool(self, name: str):
+        async def call(**params):
+            from jarviscore.execution.atom_contract import invocation
+
+            atom = self._atoms.get(name)
+            code = self.code_registry.get_function_code(name)
+            if atom is None or not code:
+                return {
+                    "status": "error",
+                    "error": f"`{name}` is no longer in the registry.",
+                    "semantic_error": "ATOM_UNAVAILABLE",
+                }
+            # Runs where any other sandbox code runs: nexus_call attaches the
+            # credential there, so proving an atom is just running it.
+            return await self._tool_execute_code(
+                code=f"{code}\n\n{invocation(atom, params)}",
+                description=f"{name} via {atom.system}",
+            )
+        call.__name__ = name
+        return call

@@ -34,6 +34,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from .models import ConnectionRequest, DynamicStrategy
+from .providers import broker_name
+from .strategy import apply_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +121,7 @@ class NexusClient:
 
         payload = ConnectionRequest(
             user_id=self._ensure_uuid(user_id),
-            provider_name=provider,
+            provider_name=broker_name(provider),
             scopes=scopes,
             return_url=return_url,
         ).model_dump()
@@ -206,9 +208,13 @@ class NexusClient:
         Use apply_strategy_to_request() to inject auth headers.
         """
         token_data = await self.get_token(connection_id)
+        strategy = token_data.get("strategy")
+        if not isinstance(strategy, dict):
+            strategy = {}
         return DynamicStrategy(
-            type=token_data.get("type", "oauth2"),
+            type=strategy.get("type") or token_data.get("type") or "oauth2",
             credentials=token_data.get("credentials", {}),
+            config=strategy.get("config") or {},
             expires_at=token_data.get("expires_at"),
         )
 
@@ -223,7 +229,7 @@ class NexusClient:
         **kwargs,
     ) -> Dict[str, Any]:
         """
-        Apply auth headers to an HTTP request based on strategy type.
+        Apply auth credentials to an HTTP request using the strategy's placement.
 
         Returns a dict with method, url, headers, and any extra kwargs
         suitable for httpx/requests:
@@ -231,21 +237,7 @@ class NexusClient:
             async with httpx.AsyncClient() as c:
                 resp = await c.request(**request_kwargs)
         """
-        headers = dict(headers) if headers else {}
-
-        if strategy.type == "oauth2":
-            token = strategy.credentials.get("access_token", "")
-            headers["Authorization"] = f"Bearer {token}"
-        elif strategy.type == "api_key":
-            key = strategy.credentials.get("api_key", "")
-            headers["X-Api-Key"] = key
-        elif strategy.type == "basic_auth":
-            username = strategy.credentials.get("username", "")
-            password = strategy.credentials.get("password", "")
-            encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
-            headers["Authorization"] = f"Basic {encoded}"
-
-        return {"method": method, "url": url, "headers": headers, **kwargs}
+        return apply_strategy(strategy, method, url, headers=headers, **kwargs)
 
     # ── Lifecycle ─────────────────────────────────────────────────
 

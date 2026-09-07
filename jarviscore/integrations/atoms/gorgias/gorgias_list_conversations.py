@@ -1,61 +1,39 @@
-import requests
 from typing import Any, Dict, List, Optional
+GORGIAS_API = 'https://your-domain.gorgias.com/api'
 
-# Gorgias REST API — https://developers.gorgias.com/reference/list-tickets
-GORGIAS_API = "https://your-domain.gorgias.com/api"
-
-
-def gorgias_list_conversations(auth_info: dict, limit: int = 25, timeout: int = 30, verify_ssl: bool = True, base_url: str = None) -> dict:
+async def gorgias_list_conversations(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Gorgias tickets (conversations) with cursor pagination. Official: https://developers.gorgias.com/reference/list-tickets"""
     try:
-        api, err = _gorgias_api_root(base_url)
+        (api, err) = _gorgias_api_root(base_url)
         if err:
-            return {"records": [], "data_count": 0, "status": 400, "message": err}
-        headers, basic, auth_err = _gorgias_require_auth(auth_info)
+            return {'records': [], 'data_count': 0, 'status': 400, 'message': err}
+        (headers, basic, auth_err) = _gorgias_require_auth()
         if auth_err:
-            return {"records": [], "data_count": 0, "status": 401, "message": auth_err}
-        records, status, message = _gorgias_cursor_paginate(f"{api}/tickets", headers, basic, limit, timeout, verify_ssl)
-        return {"records": records, "data_count": len(records), "status": status, "message": message}
+            return {'records': [], 'data_count': 0, 'status': 401, 'message': auth_err}
+        (records, status, message) = await _gorgias_cursor_paginate(f'{api}/tickets', headers, basic, limit, timeout, verify_ssl)
+        return {'records': records, 'data_count': len(records), 'status': status, 'message': message}
     except Exception as e:
-        return {"records": [], "data_count": 0, "status": 500, "message": str(e)}
-
-
+        return {'records': [], 'data_count': 0, 'status': 500, 'message': str(e)}
 
 def _gorgias_api_root(base_url):
-    root = (base_url or GORGIAS_API).rstrip("/")
-    if not root.endswith("/api"):
-        if _host_is(root, "gorgias.com"):
-            root = root + "/api"
+    root = (base_url or GORGIAS_API).rstrip('/')
+    if not root.endswith('/api'):
+        if _host_is(root, 'gorgias.com'):
+            root = root + '/api'
         else:
-            return None, "base_url must be https://{domain}.gorgias.com/api"
-    return root, None
+            return (None, 'base_url must be https://{domain}.gorgias.com/api')
+    return (root, None)
 
-
-def _gorgias_require_auth(auth_info, json_body=False):
-    auth_info = auth_info or {}
-    headers = {"Accept": "application/json"}
+def _gorgias_require_auth(json_body=False):
+    headers = {'Accept': 'application/json'}
     if json_body:
-        headers["Content-Type"] = "application/json"
-    username = auth_info.get("username")
-    password = auth_info.get("password")
-    if username and password:
-        return headers, (str(username), str(password)), None
-    return None, None, "auth_info requires username and password"
+        headers['Content-Type'] = 'application/json'
+    return (None, None, 'auth_info requires username and password')
 
+async def _gorgias_get(url, headers, basic, params, timeout, verify_ssl):
+    return await nexus_call('GET', url, headers=headers, params=params)
 
-def _gorgias_get(url, headers, basic, params, timeout, verify_ssl):
-    return requests.get(url, headers=headers, auth=basic, params=params, timeout=timeout, verify=verify_ssl)
-
-
-def _gorgias_post(url, headers, basic, body, timeout, verify_ssl):
-    return requests.post(url, headers=headers, auth=basic, json=body, timeout=timeout, verify=verify_ssl)
-
-
-def _gorgias_put(url, headers, basic, body, timeout, verify_ssl):
-    return requests.put(url, headers=headers, auth=basic, json=body, timeout=timeout, verify=verify_ssl)
-
-
-def _gorgias_cursor_paginate(url, headers, basic, limit, timeout, verify_ssl, extra_params=None):
+async def _gorgias_cursor_paginate(url, headers, basic, limit, timeout, verify_ssl, extra_params=None):
     records = []
     cursor = None
     status = 0
@@ -64,16 +42,16 @@ def _gorgias_cursor_paginate(url, headers, basic, limit, timeout, verify_ssl, ex
     pages = 0
     while len(records) < cap and pages < 100:
         pages += 1
-        params = {"limit": min(cap - len(records), 100)}
+        params = {'limit': min(cap - len(records), 100)}
         params.update(extra_params)
         if cursor:
-            params["cursor"] = cursor
-        resp = _gorgias_get(url, headers, basic, params, timeout, verify_ssl)
-        status = resp.status_code
+            params['cursor'] = cursor
+        resp = await _gorgias_get(url, headers, basic, params, timeout, verify_ssl)
+        status = resp['status_code']
         if status >= 400:
-            return records, status, resp.text[:1000]
-        data = resp.json() if resp.text else {}
-        batch = data.get("data") if isinstance(data, dict) else []
+            return (records, status, resp['body'][:1000])
+        data = resp['json'] if resp['body'] else {}
+        batch = data.get('data') if isinstance(data, dict) else []
         if not isinstance(batch, list):
             batch = [batch] if isinstance(batch, dict) else []
         for item in batch:
@@ -81,50 +59,20 @@ def _gorgias_cursor_paginate(url, headers, basic, limit, timeout, verify_ssl, ex
                 records.append(item)
                 if len(records) >= cap:
                     break
-        meta = data.get("meta") if isinstance(data, dict) else {}
-        cursor = meta.get("next_cursor") if isinstance(meta, dict) else None
+        meta = data.get('meta') if isinstance(data, dict) else {}
+        cursor = meta.get('next_cursor') if isinstance(meta, dict) else None
         if not cursor or not batch:
             break
-    return records[:cap], status, "ok"
-
-
-def _gorgias_single_record(data):
-    if isinstance(data, dict):
-        if isinstance(data.get("data"), dict):
-            return [data["data"]]
-        if data.get("id") is not None:
-            return [data]
-    return []
-
-
-def _gorgias_provision_id(data):
-    recs = _gorgias_single_record(data)
-    if recs and recs[0].get("id") not in (None, ""):
-        return [recs[0]["id"]]
-    return []
-
-
-def _gorgias_ticket_id(auth_info, payload, conversation_id=None):
-    auth_info = auth_info or {}
-    payload = payload if isinstance(payload, dict) else {}
-    tid = (
-        conversation_id
-        or payload.get("conversation_id")
-        or payload.get("ticket_id")
-        or auth_info.get("conversation_id")
-        or auth_info.get("ticket_id")
-    )
-    return str(tid).strip() if tid not in (None, "") else None
-
+    return (records[:cap], status, 'ok')
 
 def _host_is(url, *domains):
     """True only if url's hostname equals or is a subdomain of one of domains."""
     from urllib.parse import urlparse
-    u = str(url or "").strip()
-    if "://" not in u:
-        u = "https://" + u
+    u = str(url or '').strip()
+    if '://' not in u:
+        u = 'https://' + u
     try:
-        host = (urlparse(u).hostname or "").lower()
+        host = (urlparse(u).hostname or '').lower()
     except Exception:
         return False
-    return any(host == d or host.endswith("." + d) for d in domains)
+    return any((host == d or host.endswith('.' + d) for d in domains))

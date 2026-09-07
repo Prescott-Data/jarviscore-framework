@@ -120,6 +120,7 @@ class TestStrategyApplication:
         strategy = DynamicStrategy(
             type="api_key",
             credentials={"api_key": "key_abc"},
+            config={"header_name": "X-Api-Key"},
         )
         result = NexusClient.apply_strategy_to_request(
             strategy, "POST", "https://api.example.com/data"
@@ -141,6 +142,7 @@ class TestStrategyApplication:
         strategy = DynamicStrategy(
             type="api_key",
             credentials={"api_key": "k"},
+            config={"header_name": "X-Api-Key"},
         )
         result = NexusClient.apply_strategy_to_request(
             strategy, "GET", "https://x.com",
@@ -150,7 +152,11 @@ class TestStrategyApplication:
         assert result["headers"]["X-Api-Key"] == "k"
 
     def test_passes_extra_kwargs(self):
-        strategy = DynamicStrategy(type="api_key", credentials={"api_key": "k"})
+        strategy = DynamicStrategy(
+            type="api_key",
+            credentials={"api_key": "k"},
+            config={"header_name": "X-Api-Key"},
+        )
         result = NexusClient.apply_strategy_to_request(
             strategy, "POST", "https://x.com",
             json={"data": 1},

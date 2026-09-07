@@ -229,10 +229,10 @@ File storage, sharing, and folder management.
 
 | Atom | Description |
 |---|---|
-| `gdrive_upload_file` | Upload a file to a specific folder |
-| `gdrive_download_file` | Download a file by ID |
-| `gdrive_create_folder` | Create a new folder |
-| `gdrive_share_file` | Set sharing permissions on a file or folder |
+| `google_drive_upload_file` | Upload a file to a specific folder |
+| `google_drive_download_file` | Download a file by ID |
+| `google_drive_create_folder` | Create a new folder |
+| `google_drive_share_file` | Set sharing permissions on a file or folder |
 
 **Required env:** `GOOGLE_DRIVE_CREDENTIALS_JSON`
 
@@ -755,8 +755,6 @@ Tax compliance, PIN verification, and obligation checks.
 |---|---|
 | `kra_check_pin` | Verify a KRA PIN is valid and active |
 | `kra_check_obligations` | Check outstanding tax obligations for a PIN |
-| `krapinchecker` | Batch PIN validity check |
-| `krataxobligations` | Bulk tax obligations lookup |
 
 **Required env:** `KRA_API_KEY`, `KRA_BASE_URL`
 
@@ -835,38 +833,48 @@ See the [Nexus Credentials guide](nexus.md) for the full setup flow.
 
 ## Building Custom Atoms
 
-An atom is a plain Python function that follows a strict contract. The function name must match the filename, the first parameter must be `auth_info: dict` because Nexus injects credentials via this parameter, and the function must return a `dict`.
+An atom is one provider call that the whole swarm can reuse. The convention is small on purpose, because it has to hold for code a person contributes and code an agent writes mid-task, and those only stay interchangeable if they are the same thing.
 
 ```python
-def linear_close_issue(auth_info: dict, issue_id: str, comment: str = "") -> dict:
-    """
-    Close an issue in Linear with an optional comment.
-
-    Args:
-        auth_info: Injected by Nexus. Contains the Linear API token.
-        issue_id:  Linear issue ID (e.g. 'ENG-123').
-        comment:   Optional comment to post before closing.
-
-    Returns:
-        {"success": bool, "issue_id": str}
-    """
-    import httpx
-    headers = {"Authorization": auth_info["token"]}
-    r = httpx.patch(
-        "https://api.linear.app/graphql",
-        headers=headers,
+async def linear_close_issue(issue_id: str, comment: str = "") -> dict:
+    """Close a Linear issue. https://developers.linear.app/docs/graphql/working-with-the-graphql-api"""
+    response = await nexus_call(
+        "POST", "https://api.linear.app/graphql",
         json={"query": "mutation { issueUpdate(id: $id, input: {stateId: $stateId}) { success } }"},
     )
-    return {"success": r.status_code == 200, "issue_id": issue_id}
+    if not response["ok"]:
+        return {"success": False, "error": response["body"]}
+    return {"success": True, "issue_id": issue_id, "data": response["json"]}
 ```
 
 **The atom contract:**
 
-1. The filename stem must equal the function name. The file `linear_close_issue.py` must contain `def linear_close_issue(...)`.
-2. The first parameter must be `auth_info: dict`. Do not rename it and do not move it to a different position.
-3. The return annotation must be `-> dict`. If your payload is list-shaped, wrap it: `{"items": [...]}`.
-4. The function must have a docstring that describes its parameters and the structure of the return dict.
-5. The following imports and builtins are forbidden because atoms run inside the agent sandbox: `subprocess`, `pickle`, `eval`, and `exec`.
+1. The filename stem must equal the function name. The file `linear_close_issue.py` must contain `linear_close_issue`.
+2. The name reads as `system_verb_object`, and it starts with the provider name.
+3. The function is `async def`, because `nexus_call` is awaited.
+4. It authenticates with `nexus_call` and nothing else. There is no `auth_info` parameter, no token argument, and no header you build yourself.
+5. It has a docstring saying what it does, with a link to the provider's API reference.
+6. It returns a `dict`. If your payload is list shaped, wrap it: `{"items": [...]}`.
+7. It returns provider errors rather than raising them, so a failed call is an answer the agent can reason about.
+
+### Why authentication is `nexus_call`
+
+`nexus_call` is a function injected into the sandbox with the connection already bound inside it. The atom names a method and a URL, and the credential is attached outside anything the atom or the agent can read.
+
+That choice is what makes an atom safe to prove. Because authentication arrives through the proxy, an atom runs correctly inside the sandbox, so a new one is verified where it cannot leak anything, by executing it. Nothing has to run in the framework's own process with a token in scope to find out whether it works.
+
+The parameters are the contract. They are read from the signature, so a caller gets names, types and defaults rather than a paragraph of source to interpret.
+
+### Checking your atom
+
+`read_contract` is the same check the framework runs before offering an atom as a capability. It names every problem at once rather than failing on the first:
+
+```python
+from jarviscore.execution.atom_contract import read_contract
+
+result = read_contract(source, system="linear", expected_name="linear_close_issue")
+print(result.ok, result.report())
+```
 
 **To register the atom:**
 
