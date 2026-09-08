@@ -383,16 +383,12 @@ class Kernel:
         if not system_name:
             return None
         if self.auth_manager:
-            try:
-                conn_id = await self.auth_manager.get_connection_id(system_name)
-                if conn_id is not None:
-                    return conn_id
-            except Exception as auth_exc:
-                logger.debug(
-                    "[Kernel] Nexus gateway unavailable for system=%s — "
-                    "trying local vault: %s",
-                    system_name, auth_exc,
-                )
+            # A read, never a handshake. get_connection_id() falls through to
+            # authenticate(), which would start a consent flow and block routing
+            # for its full timeout. Asking for consent is the agent's move, made
+            # in the loop through request_access where a person can see it.
+            if getattr(self.auth_manager, "is_connected", lambda _p: False)(system_name):
+                return self.auth_manager._connections.get(system_name)
         # Local-vault mode: connection_id IS the provider name — NexusCallProxy
         # resolves it from NexusLocalStore at call time.
         try:

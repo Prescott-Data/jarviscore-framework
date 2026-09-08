@@ -84,7 +84,13 @@ class AuthenticationManager:
         self.lifecycle_monitor: Optional[LifecycleMonitor] = None
         if gateway_url:
             self.nexus_client = NexusClient(gateway_url)
-            self.lifecycle_monitor = LifecycleMonitor(self.nexus_client)
+            # The monitor noticed revoked tokens and told nobody: it took an
+            # on_attention callback and was built without one, so the next
+            # agent run failed at the provider one full run after the system
+            # already knew.
+            self.lifecycle_monitor = LifecycleMonitor(
+                self.nexus_client, on_attention=self._connection_needs_attention
+            )
         else:
             logger.debug(
                 "AuthenticationManager: NEXUS_GATEWAY_URL not set. "
@@ -101,8 +107,33 @@ class AuthenticationManager:
         # Opaque connection handles — keyed by provider name
         self._connections: Dict[str, str] = {}
 
+        # Providers whose connection the broker says can no longer sign a call.
+        self._needs_attention: set = set()
+
         # _strategy_cache is package-private — only NexusCallProxy reads it
         self._strategy_cache: Dict[str, Tuple[DynamicStrategy, float]] = {}
+
+    # ── Lifecycle ────────────────────────────────────────────────────────────────
+
+    def _connection_needs_attention(self, connection_id: str) -> None:
+        """The broker says this connection can no longer sign. Stop handing it out."""
+        for provider, held in list(self._connections.items()):
+            if held == connection_id:
+                del self._connections[provider]
+                self._needs_attention.add(provider)
+                logger.warning(
+                    "Connection for %s needs re-consent; its handle is withdrawn "
+                    "until a person approves access again.", provider,
+                )
+        self._strategy_cache.pop(connection_id, None)
+
+    def providers_needing_attention(self) -> List[str]:
+        """Providers that were connected and now need a person to re-consent."""
+        return sorted(self._needs_attention)
+
+    def is_connected(self, provider: str) -> bool:
+        """Whether a usable handle is held for this provider right now."""
+        return provider in self._connections
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -185,6 +216,7 @@ class AuthenticationManager:
             )
 
         self._connections[provider] = connection_id
+        self._needs_attention.discard(provider)
 
         # Start background lifecycle monitoring
         await self.lifecycle_monitor.monitor_connection(connection_id)

@@ -928,17 +928,21 @@ Writing to it, after you succeed:
         result["execution_time"] = exec_time
         result["candidate_id"] = candidate_id
 
+        # Both outcomes are evidence about the atom. A refusal at the credential
+        # boundary is not: the atom never ran, so it says nothing about it.
         if (
             self.code_registry
-            and result.get("status") == "success"
             and candidate
             and candidate.get("function_name")
+            and result.get("status") in ("success", "failure")
+            and not result.get("access_failure")
         ):
             try:
                 self.code_registry.update_execution_stats(
                     candidate["function_name"],
-                    success=True,
+                    success=result["status"] == "success",
                     execution_time=exec_time,
+                    error_type=result.get("error_type"),
                 )
             except Exception as exc:
                 logger.warning(
@@ -1400,18 +1404,26 @@ Writing to it, after you succeed:
         return None
 
     def _providers_awaiting_consent(self) -> List[Tuple[str, int]]:
-        """Registered apps with no consented account, and what each would unlock."""
+        """Registered apps with no consented account, and what each would unlock.
+
+        Two sources, because consent is lost two ways: an app registered and
+        never connected (the vault knows), or a connection the broker has since
+        marked as needing re-consent (the auth manager knows).
+        """
+        pending: Dict[str, int] = {}
         try:
             from jarviscore.nexus.store import get_store
             store = get_store()
-            return [
-                (provider, len(self._valid_atoms(provider)))
-                for provider in store.list()
-                if store.needs_consent(provider)
-            ]
+            for provider in store.list():
+                if store.needs_consent(provider):
+                    pending[provider] = len(self._valid_atoms(provider))
         except Exception as exc:
             self._log.debug("Consent states unavailable: %s", exc)
-            return []
+        needing = getattr(self.auth_manager, "providers_needing_attention", None)
+        if callable(needing):
+            for provider in needing():
+                pending.setdefault(provider, len(self._valid_atoms(provider)))
+        return sorted(pending.items())
 
     def _offer_access_request(self, system: Optional[str] = None) -> None:
         """Offer a way to get connected, for anything that is one consent away.
@@ -1506,9 +1518,31 @@ Writing to it, after you succeed:
                 }
             # Runs where any other sandbox code runs: nexus_call attaches the
             # credential there, so proving an atom is just running it.
-            return await self._tool_execute_code(
+            result = await self._tool_execute_code(
                 code=f"{code}\n\n{invocation(atom, params)}",
                 description=f"{name} via {atom.system}",
             )
+            self._record_atom_outcome(name, result)
+            return result
         call.__name__ = name
         return call
+
+    def _record_atom_outcome(self, name: str, result: Dict[str, Any]) -> None:
+        """An atom called as a tool is the evidence its stage is built on.
+
+        This is the path agents use once a provider is connected, so leaving it
+        unrecorded meant the registry never learned from the calls that matter.
+        A refusal at the credential boundary is not recorded: the atom never ran.
+        """
+        status = result.get("status")
+        if status not in ("success", "failure") or result.get("access_failure"):
+            return
+        try:
+            self.code_registry.update_execution_stats(
+                name,
+                success=status == "success",
+                execution_time=float(result.get("execution_time") or 0.0),
+                error_type=result.get("error_type"),
+            )
+        except Exception as exc:
+            logger.warning("Failed to record outcome for atom %s: %s", name, exc)

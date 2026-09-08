@@ -106,6 +106,13 @@ class FunctionRegistry:
     VERIFIED_SUCCESS_THRESHOLD = 1
     GOLDEN_SUCCESS_THRESHOLD = 5
 
+    @staticmethod
+    def _demoted(stage: str) -> str:
+        """One stage down. A single failure is real evidence, not a verdict."""
+        if stage == FunctionStatus.GOLDEN.value:
+            return FunctionStatus.VERIFIED.value
+        return FunctionStatus.CANDIDATE.value
+
     def __init__(
         self,
         storage_path: Optional[str] = None,
@@ -555,18 +562,26 @@ class FunctionRegistry:
         function_name: str,
         success: bool,
         execution_time: float,
+        error_type: Optional[str] = None,
     ) -> bool:
         """
-        Update execution statistics and auto-promote based on success count.
+        Update execution statistics and move the graduation stage with the evidence.
 
-        Graduation thresholds:
-        - 1+ successes → VERIFIED
-        - 5+ successes → GOLDEN
+        Stage answers "does this work now", so it is driven by the current run of
+        consecutive successes rather than the lifetime total:
+        - 1+ consecutive successes → VERIFIED
+        - 5+ consecutive successes → GOLDEN
+        - a failure resets the run and drops one stage
+
+        Before this, only successes were ever recorded. An atom reached GOLDEN
+        after five successes and kept it through any number of breakages after,
+        so "verified" meant "worked five times once", not "works".
 
         Args:
             function_name: Function that was executed
             success: Whether execution succeeded
             execution_time: Execution duration in seconds
+            error_type: The exception type on failure, kept so a reader can see why
 
         Returns:
             True if stats updated successfully
@@ -580,8 +595,14 @@ class FunctionRegistry:
         metadata["execution_count"] = metadata.get("execution_count", 0) + 1
         if success:
             metadata["success_count"] = metadata.get("success_count", 0) + 1
+            metadata["consecutive_successes"] = metadata.get("consecutive_successes", 0) + 1
         else:
             metadata["failure_count"] = metadata.get("failure_count", 0) + 1
+            metadata["consecutive_successes"] = 0
+            metadata["last_failure"] = {
+                "at": datetime.now().isoformat(),
+                "error_type": error_type,
+            }
 
         # Update average execution time
         old_avg = metadata.get("average_execution_time", 0.0)
@@ -593,13 +614,15 @@ class FunctionRegistry:
         else:
             metadata["average_execution_time"] = execution_time
 
-        # Auto-promote based on success count
         stage = metadata.get("registry_stage", FunctionStatus.CANDIDATE.value)
         if success:
-            if metadata["success_count"] >= self.GOLDEN_SUCCESS_THRESHOLD:
+            streak = metadata["consecutive_successes"]
+            if streak >= self.GOLDEN_SUCCESS_THRESHOLD:
                 stage = FunctionStatus.GOLDEN.value
-            elif metadata["success_count"] >= self.VERIFIED_SUCCESS_THRESHOLD:
+            elif streak >= self.VERIFIED_SUCCESS_THRESHOLD and stage == FunctionStatus.CANDIDATE.value:
                 stage = FunctionStatus.VERIFIED.value
+        else:
+            stage = self._demoted(stage)
         metadata["registry_stage"] = stage
         metadata["updated_at"] = datetime.now().isoformat()
 
