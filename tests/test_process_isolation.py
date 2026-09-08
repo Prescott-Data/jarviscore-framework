@@ -37,6 +37,22 @@ async def test_generated_code_runs_in_a_different_process(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_allowlisted_commands_remain_available_in_the_scrubbed_child():
+    sandbox = create_coder_sandbox(timeout=10)
+
+    result = await sandbox.execute(
+        "result = {\n"
+        "    'git': bash('git --version'),\n"
+        "    'ls': bash('ls'),\n"
+        "    'python': bash('python --version'),\n"
+        "}\n"
+    )
+
+    assert result["status"] == "success"
+    assert all(command["success"] for command in result["data"].values())
+
+
+@pytest.mark.asyncio
 async def test_provider_access_crosses_the_parent_rpc_only():
     proxy = RecordingProxy()
     sandbox = create_coder_sandbox(timeout=10, nexus_call_proxy=proxy)

@@ -32,6 +32,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -412,8 +413,14 @@ class CoderSandbox:
             "workspace": str(self.workspace), "output_dir": str(self.output_dir),
             "bash_timeout": self._bash.timeout, "rpc_fd": child_socket.fileno(),
         }
+        command_dirs = {
+            str(Path(found).parent)
+            for command in _BASH_ALLOW_LIST
+            if (found := shutil.which(command)) is not None
+        }
+        command_dirs.add(str(Path(sys.executable).parent))
         safe_env = {
-            "PATH": os.path.dirname(sys.executable),
+            "PATH": os.pathsep.join(sorted(command_dirs)),
             "HOME": str(self.workspace),
             "TMPDIR": str(self.workspace / ".tmp"),
             "LANG": "C.UTF-8",
