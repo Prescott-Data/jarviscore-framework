@@ -32,6 +32,68 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.10.0 <span class="changelog-date">2026-09-08</span>
+
+Long-running agents can now cross authentication and human-approval boundaries
+without losing their run, use several connected systems in one isolated
+execution, and return the artifact they actually produced.
+
+### Added
+
+- A process-separated Coder runtime with a scrubbed environment. Generated code
+  sends HTTP intent to the trusted parent over RPC; credentials remain in the
+  parent and are host-bound before placement. This is a credential and process
+  boundary, not OS/container isolation from the host filesystem.
+- Durable consent, credential-input and destructive-action approval states. A
+  run checkpoints before yielding and resumes the same workflow and step after
+  the human decision.
+- Provider discovery and self-seeding through the Nexus Gateway. A fresh process
+  can discover active connections created elsewhere instead of asking for
+  consent again.
+- Per-call multi-provider routing with
+  `nexus_call(method, url, provider="...")`. Connected provider names reach the
+  model as non-secret context; opaque handles and credentials do not.
+- Explicit destructive atom policy: consequence, required approval and
+  parameter-backed idempotency identity. The shipped delete/remove corpus is
+  classified, and reachable undeclared HTTP DELETE calls fail registration.
+- Deliberate cross-session memory tools. Agents choose what to remember and
+  recall by relevance; intermediate turns remain in recovery tiers rather than
+  poisoning future tasks.
+- A sanitized trace event sink for public activity views without raw thoughts,
+  arguments, outputs or credentials.
+
+### Fixed
+
+- Registered OAuth applications are no longer treated as connected accounts.
+- Credentials can no longer be sent to a host owned by another provider.
+- Auth and provider decisions no longer depend on matching status-code,
+  provider-name or error-message substrings.
+- OAuth waits no longer block inside a tool call or time out the run.
+- Planned AutoAgent execution preserves the final structured step payload in
+  `output`; the evaluator's prose remains separately available as
+  `result_summary`.
+- Coder no longer auto-completes from a tool success, overwrites proof/result
+  state, or exposes raw execution envelopes as the user answer.
+- The process-separated runtime keeps advertised allow-listed commands such as
+  `git`, `ls` and Python available without inheriting the rest of the parent
+  environment.
+- HTTP 401/403 remains credential-boundary evidence, not an automatic semantic
+  verdict; typed connection state and lifecycle evidence drive recovery.
+
+### Validation
+
+- Full local suite: 1,968 passed, 42 skipped, 1 expected failure on Python 3.12.
+- Live Nexus calls verified against HubSpot, Google Drive, Gmail and Google
+  Calendar, including a natural-language agent task spanning three providers.
+- Built wheel includes the child runtime, provider host policy and destructive
+  atom policy data.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
 ## 1.9.0 <span class="changelog-date">2026-09-07</span>
 
 The shipped atom catalogue is callable. It was loaded but unusable: the atoms

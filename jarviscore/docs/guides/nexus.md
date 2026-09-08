@@ -13,10 +13,14 @@ Nexus is JarvisCore's credential management system and an [open-source framework
 
 ## How It Works
 
-1. You register a provider's credentials once using `jarviscore nexus register`.
+1. You register a provider application or credential once using `jarviscore nexus register`.
 2. Credentials are written to `~/.jarviscore/nexus.enc`: an AES-256-GCM encrypted file keyed to your machine.
-3. When an agent calls a registered provider, the `NexusLocalStore` retrieves and decrypts the credentials at call time and passes them to the provider's atom function.
-4. Agent code never sees the raw credentials.
+3. OAuth application registration and account consent remain separate states.
+  A registered app cannot sign calls until an account is connected.
+4. Generated code sends method, URL, provider and request data to the trusted
+  parent through `nexus_call`. The parent resolves and places the credential
+  only after checking that the destination host belongs to that provider.
+5. Agent code and the child execution process never receive raw credentials.
 
 ---
 
@@ -30,7 +34,8 @@ jarviscore nexus register github \
     --client-secret=YOUR_GITHUB_CLIENT_SECRET
 ```
 
-Supported OAuth2 providers: `github`, `slack`, `notion`, `hubspot`, `linear`, `google-sheets`, `google-drive`.
+Built-in OAuth2 profiles include `github`, `slack`, `notion`, `hubspot`,
+`linear`, `google-sheets`, `google-drive`, `gmail`, and `google-calendar`.
 
 ### API-key providers
 
@@ -80,36 +85,40 @@ Without `NEXUS_SECRET`, the key is derived from the machine's hardware UUID. Cre
 
 ## Using Nexus in Agent Code
 
-The `NexusLocalStore` is accessed via `jarviscore.nexus.store.get_store()`. In normal usage you do not call it directly: provider atom functions receive `auth_info` automatically. For custom integrations, you can retrieve credentials as follows:
+Use provider atoms where one exists. Custom generated code uses the injected
+asynchronous `nexus_call`; it never reads the local store or builds an auth
+header:
 
 ```python
-from jarviscore.nexus.store import get_store
-
-store = get_store()
-
-# Check if a provider is registered
-creds = store.get("github")
-if not creds:
-    item_id = self.hitl.request(
-        title="GitHub credentials not registered",
-        content="Register GitHub OAuth credentials with: jarviscore nexus register github",
-        urgency="high",
-        category="auth_required",
-    )
-    return {"status": "waiting_for_auth", "hitl_id": item_id}
-
-# Get auth_info for calling the provider
-auth_info = store.build_auth_info("github")
-# auth_info = {"access_token": "...", "client_id": "...", "client_secret": "..."}
+async def main():
+  response = await nexus_call(
+    "GET",
+    "https://api.github.com/repos/Prescott-Data/jarviscore-framework",
+    provider="github",
+  )
+  if not response["ok"]:
+    return {"success": False, "error": response["body"]}
+  return {"success": True, "repository": response["json"]}
 ```
 
-`build_auth_info` shapes the credential dict based on `auth_type`:
+One isolated execution may use several connected systems by naming the provider
+on each call:
 
-| `auth_type` | `auth_info` keys |
-|---|---|
-| `oauth2` | `access_token`, `client_id`, `client_secret` |
-| `api_key` | `api_key` |
-| `basic_auth` | `username`, `password` |
+```python
+gmail = await nexus_call("GET", gmail_url, provider="gmail")
+calendar = await nexus_call("GET", calendar_url, provider="google_calendar")
+crm = await nexus_call("GET", hubspot_url, provider="hubspot")
+```
+
+The model receives connected provider names as non-secret context. The trusted
+parent resolves each name to an opaque connection handle and enforces provider
+host ownership. A missing connection yields for consent; it never causes another
+provider's credential to be tried.
+
+> [!WARNING]
+> `get_store().get()` is framework-internal credential access. Do not place its
+> result, `auth_info`, tokens, API keys, or authorization headers in agent code,
+> prompts, context, logs, or output.
 
 ---
 
@@ -204,70 +213,38 @@ The payload must wrap all fields in a `profile` object and use `name` (not `prov
 
 ## Handling Auth Failures in Agents
 
-When a credential is missing or expired, the correct pattern is to escalate via HITL rather than failing silently:
+Do not inspect the credential store or convert a provider response into an auth
+decision yourself. Name the provider in task context; JarvisCore distinguishes
+registered, connected and attention-required states, then yields the same run for
+consent when needed:
 
 ```python
-from jarviscore import CustomAgent
-from jarviscore.nexus.store import get_store
-
-class GitHubAgent(CustomAgent):
-    role = "github-integration"
-
-    async def on_peer_request(self, msg) -> dict:
-        store = get_store()
-        context = msg.data.get("context", {})
-
-        if not store.get("github"):
-            item_id = self.hitl.request(
-                title="GitHub credentials missing",
-                content=(
-                    "The GitHub integration requires OAuth credentials.\n\n"
-                    "Run: `jarviscore nexus register github --client-id=X --client-secret=Y`"
-                ),
-                urgency="high",
-                category="auth_required",
-                context={"workflow_id": context.get("workflow_id")},
-            )
-            resolution = await self.hitl.wait(item_id, timeout=3600)
-            if not resolution.is_approved:
-                return {"status": "cancelled"}
-
-        auth_info = store.build_auth_info("github")
-        # proceed with GitHub API calls using auth_info
-        ...
+result = await agent.execute_task({
+  "task": "Summarize the open issues in our GitHub repository.",
+  "context": {"system": "github"},
+})
 ```
+
+The Desk or another hosted flow receives a typed consent event. After approval,
+the checkpointed workflow and step resume; generated code still receives no
+token. HTTP 401/403 is retained as boundary evidence, not treated by itself as a
+deterministic auth category.
 
 ---
 
-## NexusLocalStore API
+## NexusLocalStore Administration
 
-For advanced use cases, the full `NexusLocalStore` API:
+Application code should use the CLI and `nexus_call`. Trusted administration and
+diagnostics may inspect non-secret state:
 
 ```python
 from jarviscore.nexus.store import get_store
 
 store = get_store()
-
-# Register or update credentials
-store.register("github", {
-    "auth_type": "oauth2",
-    "client_id": "Iv1.abc123",
-    "client_secret": "secret",
-})
-
-# Retrieve raw credential dict (includes all stored fields)
-creds = store.get("github")
-
-# List registered providers
 providers = store.list()   # ["github", "stripe"]
-
-# Delete credentials
-store.delete("stripe")
-
-# Safe summary (no secrets) for display
+state = store.connection_state("github")  # absent, registered, or connected
 summary = store.get_summary()
-# [{"provider": "github", "auth_type": "oauth2", "client_id": "Iv1.****", "registered_at": "..."}]
-
-# Get auth_info dict for passing to provider functions
-auth_info = store.build_auth_info("github")
 ```
+
+Methods that return stored entries are framework-internal because those entries
+may contain credentials. Never expose them to an agent, prompt, trace or API.
