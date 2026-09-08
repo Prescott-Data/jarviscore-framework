@@ -1,3 +1,5 @@
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["org_id", "shift_id"], "consequence": "Deletes the scheduled shift."}
+
 async def zoho_shifts_delete_shift(org_id: str, shift_id: str) -> dict:
     """Shifts delete shift via the zoho_shifts API."""
     try:

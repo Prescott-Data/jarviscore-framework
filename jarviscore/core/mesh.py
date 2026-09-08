@@ -393,14 +393,19 @@ class Mesh:
             ", ".join(c for c in self._capabilities if c.startswith("peer")),
         )
 
-        # ── 6. Authentication (optional, declared via config) ─────────────────
-        if self.config.get("auth_mode"):
+        # ── 6. Authentication ─────────────────────────────────────────────────
+        # A vault without a manager can spend credentials but never obtain them:
+        # the agent finds a provider one consent away and has nothing to run the
+        # consent with. So the gateway being configured is enough to build it.
+        gateway_url = getattr(self._settings, "nexus_gateway_url", None)
+        if self.config.get("auth_mode") or (self._nexus_store is not None and gateway_url):
             try:
                 from jarviscore.auth.manager import AuthenticationManager
                 self._auth_manager = AuthenticationManager(self.config)
                 self._capabilities.add("auth")
                 self._logger.info(
-                    "✓ AuthenticationManager started (mode=%s)", self.config["auth_mode"]
+                    "✓ AuthenticationManager started (mode=%s)",
+                    self.config.get("auth_mode") or "gateway",
                 )
             except Exception as exc:
                 self._logger.warning("Auth manager init failed (continuing without): %s", exc)

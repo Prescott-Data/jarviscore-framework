@@ -1,3 +1,5 @@
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["event_id"], "consequence": "Deletes the Microsoft calendar event."}
+
 async def msgraph_delete_event(event_id: str) -> dict:
     """Delete event via the msgraph API."""
     try:

@@ -51,7 +51,9 @@ class AuthAgent(Agent):
 
 class TestNoAuthConfig:
     @pytest.mark.asyncio
-    async def test_no_auth_manager_by_default(self):
+    async def test_no_auth_manager_by_default(self, monkeypatch):
+        """No gateway and no auth_mode means nothing to authenticate with."""
+        monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
         mesh = Mesh(mode="autonomous")
         mesh.add(PlainAgent)
         await mesh.start()

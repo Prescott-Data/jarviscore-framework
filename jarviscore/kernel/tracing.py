@@ -100,11 +100,13 @@ class TraceManager:
         step_id: str,
         trace_dir: str = "traces",
         redis_client=None,
+        event_sink=None,
     ):
         self.workflow_id = workflow_id
         self.step_id = step_id
         self.mission_id = f"{workflow_id}:{step_id}"
         self.trace_dir = trace_dir
+        self.event_sink = event_sink
         self.trace_file = os.path.join(
             trace_dir, f"{self.mission_id.replace(':', '_')}.jsonl"
         )
@@ -164,6 +166,12 @@ class TraceManager:
             "data": self._scrub(data),
         }
         event_json = json.dumps(event, default=str)
+
+        if self.event_sink is not None:
+            try:
+                self.event_sink(event)
+            except Exception as exc:
+                logger.debug("TraceManager event sink failed: %s", exc)
 
         # 1. Redis dual write: List + PubSub
         if self.redis_client:

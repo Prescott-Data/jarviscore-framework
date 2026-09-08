@@ -405,6 +405,7 @@ def _seed_broker_db(provider: str, credentials: dict, workspace_id: str) -> bool
 
     from jarviscore.nexus.store import NexusLocalStore
     from jarviscore.nexus._data import PROVIDER_URLS
+    from jarviscore.nexus.providers import broker_name
 
     db_url = os.environ.get(
         "NEXUS_DB_URL",
@@ -425,20 +426,25 @@ def _seed_broker_db(provider: str, credentials: dict, workspace_id: str) -> bool
             """
             INSERT INTO provider_profiles
                 (workspace_id, name, auth_type, client_id, client_secret,
-                 auth_url, token_url, user_info_endpoint, scopes, pkce_enabled)
-            VALUES (%s, %s, 'oauth2', %s, %s, %s, %s, %s, %s, true)
+                 auth_url, token_url, user_info_endpoint, scopes, pkce_enabled, params)
+            VALUES (%s, %s, 'oauth2', %s, %s, %s, %s, %s, %s, true, %s)
             ON CONFLICT (workspace_id, name) DO UPDATE SET
                 client_id          = EXCLUDED.client_id,
                 client_secret      = EXCLUDED.client_secret,
+                params             = EXCLUDED.params,
                 updated_at         = NOW();
             """,
             (
-                workspace_id, provider,
+                # The name request_connection will ask the broker for.
+                workspace_id, broker_name(provider),
                 credentials.get("client_id", ""),
                 credentials.get("client_secret", ""),
                 urls.get("auth_url", ""), urls.get("token_url", ""),
                 urls.get("user_info_endpoint", ""),
                 credentials.get("scopes", []),
+                # The broker appends these to the authorization URL. For Google
+                # this is how a refresh token is asked for at all.
+                json.dumps(urls.get("params")) if urls.get("params") else None,
             ),
         )
         conn.commit()
@@ -460,7 +466,11 @@ def _register_local(store, provider, label, auth_type, credentials):
 
     # Auto-seed the broker DB if the local stack is running (OAuth2 only)
     if auth_type == "oauth2":
-        user_env = os.environ.get("NEXUS_USER_ID", "jarviscore-default")
+        # The same identity the runtime authenticates as. A different one here
+        # put seeded apps in a workspace the agents never looked in, so consent
+        # 404ed for every provider registered from the CLI.
+        from jarviscore.config import Settings
+        user_env = os.environ.get("NEXUS_USER_ID") or Settings().nexus_default_user_id
         try:
             workspace_id = str(_uuid.UUID(user_env))
         except ValueError:

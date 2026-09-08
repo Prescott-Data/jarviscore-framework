@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["promoted_tweet_id"], "consequence": "Removes the promoted tweet from the X Ads account."}
 _XA_ROOT = 'https://ads-api.x.com/12'
 
 async def twitter_ads_update_ad(promoted_tweet_id: str, entity_status: str='PAUSED', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:

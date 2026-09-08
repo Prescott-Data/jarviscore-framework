@@ -69,6 +69,21 @@ class RedisContextStore:
             logger.warning(f"Redis connection failed: {e}")
             self.enabled = False
 
+    def get_atom_execution(self, action_id: str) -> Optional[Dict[str, Any]]:
+        """Return the first successful result for a destructive action identity."""
+        if not self.enabled:
+            return None
+        raw = self._redis.get(f"atom_execution:{action_id}")
+        return json.loads(raw) if raw else None
+
+    def save_atom_execution(self, action_id: str, result: Dict[str, Any]) -> None:
+        """Persist success so retries cannot repeat an irreversible action."""
+        if self.enabled:
+            self._redis.set(
+                f"atom_execution:{action_id}", json.dumps(result, default=str),
+                ex=self._ttl_seconds,
+            )
+
     # ------------------------------------------------------------------
     # Step Outputs
     # ------------------------------------------------------------------

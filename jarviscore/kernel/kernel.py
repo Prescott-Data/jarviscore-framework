@@ -92,6 +92,14 @@ task as API work and route it to coder, unless it genuinely requires interactive
 that no API exposes. When it is false, the credential is missing rather than unused,
 and the choice of role does not change that.
 
+context_summary may also carry providers_reachable_by_api, naming every provider
+this deployment can reach through Nexus and its state. "connected" means coder can
+act on it now. "one_consent_away" means the app is set up and coder can ask the
+person to approve access, after which it acts. A task about one of these providers
+is API work even when it never says so: sending it to browser lands on that
+provider's sign-in page and asks a human to log in by hand to something they
+already granted, or could grant with one click.
+
 Use the task, context summary, agent default role, and available registry/handoff context.
 For custom roles, use role_catalog from the payload as the authoritative contract.
 Do not use keyword matching. If the task asks for missing access/data/founder input, route to
@@ -183,6 +191,7 @@ processing is actually required.
             "complexity",
             "system",
             "system_credentials_available",
+            "providers_reachable_by_api",
             "previous_step_results",
             "registry_candidate",
             "meeting_step_id",
@@ -374,25 +383,33 @@ class Kernel:
         if not system_name:
             return None
         if self.auth_manager:
-            try:
-                conn_id = await self.auth_manager.get_connection_id(system_name)
-                if conn_id is not None:
-                    return conn_id
-            except Exception as auth_exc:
-                logger.debug(
-                    "[Kernel] Nexus gateway unavailable for system=%s — "
-                    "trying local vault: %s",
-                    system_name, auth_exc,
-                )
+            # A read, never a handshake. get_connection_id() falls through to
+            # authenticate(), which would start a consent flow and block routing
+            # for its full timeout. Asking for consent is the agent's move, made
+            # in the loop through request_access where a person can see it.
+            discover = getattr(self.auth_manager, "discover", None)
+            if callable(discover):
+                handle = await discover(system_name)
+                if handle is not None:
+                    return handle
         # Local-vault mode: connection_id IS the provider name — NexusCallProxy
         # resolves it from NexusLocalStore at call time.
         try:
-            from jarviscore.nexus.store import get_store
-            if get_store().get(system_name):
+            from jarviscore.nexus.store import ConnectionState, get_store
+            if get_store().connection_state(system_name) is ConnectionState.CONNECTED:
                 return system_name
         except Exception as store_exc:
             logger.debug("[Kernel] Nexus local vault unavailable: %s", store_exc)
         return None
+
+    def _awaiting_consent(self, system_name: str) -> bool:
+        """Registered app, no consented account — a different ask than 'register it'."""
+        try:
+            from jarviscore.nexus.store import get_store
+            return get_store().needs_consent(system_name)
+        except Exception as store_exc:
+            logger.debug("[Kernel] Consent state unavailable: %s", store_exc)
+            return False
 
     async def _route_task(
         self,
@@ -433,6 +450,12 @@ class Kernel:
         if system_name:
             credentialed = await self._resolve_connection(str(system_name)) is not None
             routing_context["system_credentials_available"] = credentialed
+        # A task rarely names its provider, and without this the router only ever
+        # saw the words. "List our Google Drive files" reads as browser work until
+        # you know a Drive connection is one consent away.
+        reachable = await self._provider_inventory()
+        if reachable:
+            routing_context["providers_reachable_by_api"] = reachable
 
         decision = await self._task_router.route(
             task=task,
@@ -451,6 +474,36 @@ class Kernel:
                 system_name, decision.role, decision.reason,
             )
         return decision
+
+    async def _provider_inventory(self) -> Dict[str, str]:
+        """Providers this deployment can reach through Nexus, and their state.
+
+        The vault knows what was registered here; the gateway knows what has
+        been connected. A consent completed in another process is only visible
+        through the second, so both are asked.
+        """
+        try:
+            from jarviscore.nexus.store import ConnectionState, get_store
+            store = get_store()
+            providers = store.list()
+            discover_all = getattr(self.auth_manager, "discover_all", None)
+            if callable(discover_all):
+                await discover_all(providers)
+            connected_at_gateway = getattr(self.auth_manager, "is_connected", lambda _p: False)
+            inventory = {}
+            for provider in providers:
+                if connected_at_gateway(provider):
+                    inventory[provider] = "connected"
+                elif store.connection_state(provider) is ConnectionState.CONNECTED:
+                    inventory[provider] = "connected"
+                elif store.needs_consent(provider):
+                    inventory[provider] = "one_consent_away"
+                else:
+                    inventory[provider] = "registered_but_unusable"
+            return inventory
+        except Exception as exc:
+            logger.debug("[Kernel] Provider inventory unavailable: %s", exc)
+            return {}
 
     def _lease_for_role(self, role: str) -> ExecutionLease:
         """Create a lease from built-in or application-registered role profile."""
@@ -620,15 +673,17 @@ class Kernel:
 
         Returns a registry candidate dict if a verified/golden function matches.
         Returns None if no match found — caller should proceed to coder.
+
+        Only ever searches within an already-known provider. Ranking atoms across
+        all providers let lexical scoring pick one, and it scored the letter "a"
+        inside a function name as strongly as the subject of the task, so a task
+        naming one system could surface an atom that calls a different API.
         """
-        if not self.code_registry:
+        if not self.code_registry or not system:
             return None
         try:
             matches = self.code_registry.semantic_search(task, limit=5)
-            # A declared provider is a constraint, not a preference: injecting an
-            # atom that calls a different API is worse than injecting nothing.
-            if system:
-                matches = [m for m in matches if m.get("system") == system]
+            matches = [m for m in matches if m.get("system") == system]
             production = [
                 m for m in matches
                 if m.get("registry_stage") in ("verified", "golden")
@@ -666,15 +721,9 @@ class Kernel:
         meta = getattr(output, "metadata", {}) or {}
         if meta.get("signal_researcher"):
             return True
-        # Failed with a real error on first attempt → researcher can fetch live docs
-        if output.status == "failure" and dispatch_num == 0:
-            summary = (output.summary or "").lower()
-            research_signals = [
-                "404", "not found", "api error", "invalid endpoint",
-                "schema mismatch", "unexpected field", "rate limit",
-            ]
-            if any(sig in summary for sig in research_signals):
-                return True
+        # The coder says whether it is missing knowledge; reading that back out of
+        # its summary matched "404" inside amounts and ids, and "rate limit" in
+        # text that was describing a limit rather than hitting one.
         return False
 
     async def execute(
@@ -708,8 +757,11 @@ class Kernel:
         total_tokens = {"input": 0, "output": 0, "total": 0}
         total_cost = 0.0
 
-        workflow_id = context.get("workflow_id", "unknown") if context else "unknown"
-        step_id = context.get("step_id", f"step_{int(time.time())}") if context else f"step_{int(time.time())}"
+        context = dict(context or {})
+        trace_sink = context.pop("_trace_sink", None)
+
+        workflow_id = context.get("workflow_id", "unknown")
+        step_id = context.get("step_id", f"step_{int(time.time())}")
 
         # Create TraceManager for real-time streaming to UI
         from jarviscore.kernel.tracing import TraceManager, create_noop_trace
@@ -717,6 +769,7 @@ class Kernel:
             _kernel_trace = TraceManager(
                 workflow_id=workflow_id,
                 step_id=step_id,
+                event_sink=trace_sink,
             )
         except Exception as _te:
             logger.debug("[Kernel] TraceManager init failed (non-fatal): %s", _te)
@@ -811,18 +864,17 @@ class Kernel:
             # Create memory (graceful degradation if no Redis/blob)
             memory = self._create_memory(workflow_id, step_id, agent_id)
 
-            # ── Inject Athena memory context into enriched_context ──────────────
-            # Agents see their cross-session STM + MTM chains before deciding.
-            # This is what gives them continuity across shifts and sessions.
+            # ── Recall what earlier sessions hold about this task ─────────────
+            # A question scored by relevance, not the last fifteen things the
+            # agent thought about anything. What comes back is evidence from the
+            # past and is rendered as that, apart from the task, never beside it.
             if memory is not None:
                 try:
-                    bundle = await memory.rehydrate_bundle(ledger_tail=5)
-                    if bundle.get("athena_context"):
-                        enriched_context["_athena_memory"] = bundle["athena_context"]
-                    if bundle.get("ltm_summary"):
-                        enriched_context["_ltm_summary"] = bundle["ltm_summary"]
+                    recalled = await memory.recall(task, limit=8)
+                    if recalled:
+                        enriched_context["_recalled"] = recalled
                 except Exception as _me:
-                    logger.debug("[Kernel] Memory rehydration failed (non-fatal): %s", _me)
+                    logger.debug("[Kernel] Memory recall failed (non-fatal): %s", _me)
 
             ctx_manager = self._create_context_manager(role)
 
@@ -846,6 +898,23 @@ class Kernel:
                     enriched_context.get("system")
                     or (context.get("system") if context else None)
                 )
+                if not system_name:
+                    # The registry resolved the provider even though the task did
+                    # not name it. Safe to arm because the call proxy binds the
+                    # credential to that provider's own hosts; the yield below is
+                    # still left to declared systems, since an inferred provider
+                    # must not harden into an access demand.
+                    candidate = enriched_context.get("registry_candidate") or {}
+                    inferred = candidate.get("system")
+                    if inferred:
+                        conn_id = await self._resolve_connection(str(inferred))
+                        if conn_id is not None:
+                            enriched_context["_nexus_connection_id"] = conn_id
+                            enriched_context["_nexus_provider"] = inferred
+                            logger.info(
+                                "[Kernel] Nexus connection_id tagged for "
+                                "registry-resolved system=%s", inferred,
+                            )
                 if system_name:
                     conn_id = await self._resolve_connection(str(system_name))
                     if conn_id is not None:
@@ -860,32 +929,42 @@ class Kernel:
                         # Deterministic: the task named a provider and neither the
                         # gateway nor the vault has it. Ask for access instead of
                         # spending a dispatch on code that cannot authenticate.
+                        pending_consent = self._awaiting_consent(str(system_name))
+                        if pending_consent:
+                            summary = (
+                                f"{system_name} is set up, but no account has been "
+                                "connected to it yet, so nothing can be signed. "
+                                "Approving access once unblocks this task."
+                            )
+                            reason = "consent_required"
+                            outcome = "YIELD_CONSENT_REQUIRED"
+                        else:
+                            summary = (
+                                f"This task needs {system_name}, which is not "
+                                "connected here. Someone has to grant access to it "
+                                "before the task can run."
+                            )
+                            reason = "auth_required"
+                            outcome = "YIELD_AUTH_REQUIRED"
                         logger.warning(
-                            "[Kernel] No Nexus credentials for system=%s — "
-                            "yielding for human access grant. Register with: "
-                            "jarviscore nexus register %s (local vault) "
-                            "or set NEXUS_GATEWAY_URL (gateway)",
-                            system_name, system_name,
+                            "[Kernel] %s (system=%s) — register with "
+                            "'jarviscore nexus register %s' or set NEXUS_GATEWAY_URL",
+                            summary, system_name, system_name,
                         )
                         await self._cleanup_step(step_id)
                         return AgentOutput(
                             status="yield",
-                            summary=(
-                                f"No credentials for system={system_name}. A human must "
-                                f"grant access before this task can run: "
-                                f"jarviscore nexus register {system_name} (local vault) "
-                                f"or set NEXUS_GATEWAY_URL (gateway)."
-                            ),
+                            summary=summary,
                             trajectory=[],
                             metadata={
                                 "tokens": total_tokens,
                                 "cost_usd": total_cost,
                                 "dispatches": dispatches,
                                 "yield_pending": True,
-                                "escalation_reason": "auth_required",
+                                "escalation_reason": reason,
                                 "system": system_name,
                                 "hitl_type": "auth",
-                                "typed_outcome": "YIELD_AUTH_REQUIRED",
+                                "typed_outcome": outcome,
                             },
                         )
 
@@ -958,6 +1037,14 @@ class Kernel:
 
             if output.status == "yield":
                 # HITL needed or budget exhausted — pass through
+                pass_through = {
+                    key: meta.get(key)
+                    for key in (
+                        "typed_outcome", "hitl_type", "system", "connection_id",
+                        "workflow_id", "step_id", "action_id", "action", "consequence",
+                    )
+                    if meta.get(key) is not None
+                }
                 return AgentOutput(
                     status="yield",
                     payload=output.payload,
@@ -968,8 +1055,8 @@ class Kernel:
                         "cost_usd": total_cost,
                         "dispatches": dispatches,
                         "yield_pending": True,
-                        "typed_outcome": meta.get("typed_outcome"),
                         "elapsed_ms": (time.time() - start_time) * 1000,
+                        **pass_through,
                     },
                 )
 
@@ -1027,8 +1114,8 @@ class Kernel:
                 return AgentOutput(
                     status="yield",
                     summary=(
-                        f"Auth failure — {auth_error_type} for system={system_name}. "
-                        "Human must provide or refresh credentials via Nexus."
+                        f"Access to {system_name} failed while running this task. "
+                        "The connection has to be renewed before it can continue."
                     ),
                     trajectory=output.trajectory,
                     metadata={

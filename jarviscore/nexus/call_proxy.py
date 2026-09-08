@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from .strategy import apply_strategy
+from .hosts import ensure_host_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +52,33 @@ class NexusCallProxy:
     def __init__(self, auth_manager):
         """
         Args:
-            auth_manager: jarviscore.auth.manager.AuthenticationManager instance.
+            auth_manager: an AuthenticationManager, or a zero-argument callable
+                returning the one to use right now. The callable form exists
+                because the mesh injects the shared manager after agent setup,
+                and a proxy that captured a fallback at setup signed from a
+                connection table the consent flow never wrote to.
         """
-        self._auth = auth_manager
+        self._auth_source = auth_manager
+
+    @property
+    def _auth(self):
+        source = self._auth_source
+        return source() if callable(source) else source
+
+    def _provider_for(self, connection_id: str) -> str:
+        """The provider behind an opaque handle, so its hosts can be checked."""
+        connections = getattr(self._auth, "_connections", None) or {}
+        for provider, cid in connections.items():
+            if cid == connection_id:
+                return str(provider).lower()
+        # Local-vault mode: the handle is the provider name ("github:user123").
+        return connection_id.split(":")[0].lower()
+
+    def connection_handle(self, provider: str) -> str:
+        """Resolve a provider name to its opaque active handle when available."""
+        lookup = getattr(self._auth, "connection_handle", None)
+        handle = lookup(provider) if callable(lookup) else None
+        return handle if isinstance(handle, str) and handle else provider
 
     async def call(
         self,
@@ -91,6 +116,12 @@ class NexusCallProxy:
         from jarviscore.nexus.client import NexusClient
         from jarviscore.nexus.store import get_store
 
+        store = get_store()
+        provider = self._provider_for(connection_id)
+        # Before a credential is placed, not after: the destination is chosen by
+        # generated code, so it is the least trustworthy part of the request.
+        ensure_host_allowed(provider, url, store.get(provider))
+
         strategy = None
         request_kwargs = None
 
@@ -109,9 +140,6 @@ class NexusCallProxy:
 
         # ── Local store fallback (zero-dep mode) ──────────────────────────────
         if request_kwargs is None:
-            store = get_store()
-            # connection_id is treated as provider name in local mode
-            provider = connection_id.split(":")[0].lower()   # e.g. "github:user123" → "github"
             strategy = store.build_strategy(provider)
             if strategy is None:
                 raise RuntimeError(
@@ -187,7 +215,9 @@ class NexusCallProxy:
         Returns:
             Async callable suitable for injection into a sandbox namespace.
         """
-        async def nexus_call(method: str, url: str, **kwargs) -> Dict[str, Any]:
+        async def nexus_call(
+            method: str, url: str, provider: Optional[str] = None, **kwargs
+        ) -> Dict[str, Any]:
             """
             Call a provider API endpoint through Nexus.
 
@@ -206,6 +236,7 @@ class NexusCallProxy:
             Raises:
                 RuntimeError if Nexus connection is unavailable.
             """
-            return await proxy.call(connection_id, method, url, **kwargs)
+            target = proxy.connection_handle(provider) if provider else connection_id
+            return await proxy.call(target, method, url, **kwargs)
 
         return nexus_call

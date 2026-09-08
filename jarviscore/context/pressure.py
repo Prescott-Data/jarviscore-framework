@@ -71,6 +71,7 @@ BLOCK_PRIORITY: Dict[str, int] = {
 INPUT_CONTEXT_ALWAYS_KEYS = frozenset({
     "task", "description", "objective", "human_response",
     "action_type", "step_id", "workflow_id", "system", "provider",
+    "connected_providers",
 })
 
 # Bulk carried for convenience; the canonical copy lives in the workflow store.

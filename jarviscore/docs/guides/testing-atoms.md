@@ -25,9 +25,10 @@ What it checks:
 | File exists | `integrations/atoms/<bundle>/<atom>.py` is present |
 | Valid Python | File parses without a `SyntaxError` |
 | Function name | Top-level function name matches the filename stem |
-| Signature | First parameter is `auth_info: dict` |
-| Return type | Return annotation is `-> dict` |
-| Docstring | Function has a docstring |
+| Contract | Async function uses `nexus_call` and has no credential parameter |
+| Naming | Function follows `system_verb_object` and starts with the bundle name |
+| Docstring | Function documents its action and API reference |
+| Policy | Destructive calls declare approval, consequence and idempotency identity |
 | Return statement | At least one `return` statement with a value |
 | Forbidden imports | No `subprocess`, `pickle`, `ctypes`, `eval`, `exec`, or `__import__` |
 
@@ -96,42 +97,32 @@ jarviscore atom list --bundle github
 The harness enforces the JarvisCore atom contract. A conforming atom looks like this:
 
 ```python
-def github_list_repos(auth_info: dict, username: str, per_page: int = 30) -> dict:
-    """
-    List public repositories for a GitHub user.
-
-    Args:
-        auth_info: Injected by Nexus. Contains access_token and client_id.
-        username:  GitHub username to list repos for.
-        per_page:  Number of results per page (max 100).
-
-    Returns:
-        {"repos": [...], "total": int}
-    """
-    import requests
-
-    headers = {
-        "Authorization": f"Bearer {auth_info.get('access_token', '')}",
-        "Accept": "application/vnd.github+json",
-    }
-    resp = requests.get(
+async def github_list_repos(username: str, per_page: int = 30) -> dict:
+    """List repositories. https://docs.github.com/rest/repos/repos#list-repositories-for-a-user"""
+    response = await nexus_call(
+        "GET",
         f"https://api.github.com/users/{username}/repos",
-        headers=headers,
         params={"per_page": per_page, "sort": "updated"},
-        timeout=30,
     )
-    resp.raise_for_status()
-    data = resp.json()
-    return {"repos": data, "total": len(data)}
+    if not response["ok"]:
+        return {"success": False, "error": response["body"]}
+    return {"success": True, "repos": response["json"]}
 ```
 
 **The atom contract:**
 
 1. **Filename equals function name.** The file `github_list_repos.py` must contain `def github_list_repos(...)`. They must match exactly.
-2. **First parameter is `auth_info: dict`.** Nexus injects credentials via this parameter. Do not rename it and do not move it to a different position.
-3. **Return annotation is `-> dict`.** If your payload is list-shaped, wrap it: `{"items": [...]}`.
-4. **Write a docstring.** Describe what the atom does, what `auth_info` provides, and what the return dict contains.
-5. **No shell or unsafe imports.** The following are blocked: `subprocess`, `pickle`, `ctypes`, `eval`, and `exec`.
+2. **Use `async def` and `await nexus_call`.** No `auth_info`, token parameter,
+    authorization header, `requests`, or `httpx` provider call belongs in an atom.
+3. **Return a structured dict.** Return provider failures as data rather than
+    raising away the response evidence.
+4. **Write an API-referenced docstring.** State what the atom does and link the
+    provider contract it implements.
+5. **Declare destructive effects.** HTTP DELETE or equivalent removal requires
+    `ATOM_POLICY` with human approval, consequence and parameter-backed
+    `idempotency_fields`.
+6. **No shell or unsafe imports.** The following are blocked: `subprocess`,
+    `pickle`, `ctypes`, `eval`, and `exec`.
 
 ---
 
@@ -174,10 +165,7 @@ Atoms root: jarviscore/integrations/atoms
   ✓  Atom file exists: integrations/atoms/slack/slack_send_message.py
   ✓  File parses as valid Python
   ✓  Function name matches filename: slack_send_message()
-  ✓  First parameter: auth_info: dict  ✓
-  ✓  Return annotation: -> dict  ✓
-  ✓  Function has a docstring
-  ✓  Function has return statement(s)
+    ✓  Atom satisfies the async nexus_call credential boundary
   ✓  No forbidden imports or builtins
   ────────────────────────────────────────────────
   PASSED  (8 passed, 0 warnings)

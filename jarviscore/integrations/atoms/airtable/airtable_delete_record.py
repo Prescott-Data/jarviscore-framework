@@ -1,3 +1,5 @@
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["base_id", "table_name", "record_id"], "consequence": "Deletes the Airtable record."}
+
 async def airtable_delete_record(base_id: str, table_name: str, record_id: str) -> dict:
     """Delete record via the airtable API."""
     _base = 'https://api.airtable.com/v0'

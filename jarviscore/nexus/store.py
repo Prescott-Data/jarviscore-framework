@@ -48,10 +48,22 @@ import secrets
 import struct
 import time
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .strategy import unmet_requirement
+
 logger = logging.getLogger(__name__)
+
+
+class ConnectionState(str, Enum):
+    """What the vault holds for a provider, in terms of what it can do."""
+
+    ABSENT = "absent"          # nothing registered
+    REGISTERED = "registered"  # app known, but no credential that can sign a call
+    CONNECTED = "connected"    # a call can be authenticated now
+
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -269,6 +281,31 @@ class NexusLocalStore:
     def list(self) -> List[str]:
         """Return a list of registered provider names."""
         return sorted(self._read_all().keys())
+
+    def connection_state(self, provider: str) -> "ConnectionState":
+        """Whether this provider can actually authenticate a call right now.
+
+        Registering an app and connecting an account are different events, and
+        collapsing them is how a missing consent step surfaces as an opaque 401
+        deep inside an agent run instead of a consent request before it.
+        """
+        entry = self.get(provider)
+        if not entry:
+            return ConnectionState.ABSENT
+        try:
+            strategy = self.build_strategy(provider)
+        except ValueError:
+            return ConnectionState.REGISTERED
+        if unmet_requirement(strategy) is None:
+            return ConnectionState.CONNECTED
+        return ConnectionState.REGISTERED
+
+    def needs_consent(self, provider: str) -> bool:
+        """A registered OAuth2 app with no consented account behind it."""
+        if self.connection_state(provider) is not ConnectionState.REGISTERED:
+            return False
+        entry = self.get(provider) or {}
+        return (entry.get("auth_type") or "").strip().lower() == "oauth2"
 
     def delete(self, provider: str) -> bool:
         """Remove a provider's credentials. Returns True if it existed."""

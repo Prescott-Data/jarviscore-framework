@@ -354,7 +354,7 @@ Dry-run validates:
 | File exists | `integrations/atoms/<bundle>/<atom>.py` is present |
 | Valid Python | File parses without a `SyntaxError` |
 | Function name | Top-level function name matches filename stem |
-| Signature | First parameter is `auth_info: dict` |
+| Contract | Async function, authenticates only through `nexus_call` |
 | Return type | Return annotation is `-> dict` |
 | Docstring | Function has a docstring |
 | Return statement | At least one `return` with a value |

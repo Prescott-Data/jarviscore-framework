@@ -42,6 +42,16 @@ from typing import Any, Callable, Dict, List, Optional, Set, Union
 
 logger = logging.getLogger(__name__)
 
+#: Words that appear in almost any task and so separate nothing. Scored equally
+#: with real terms before, which is how "a" and "is" outranked "slack".
+_NON_DISCRIMINATING = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "get", "has",
+    "have", "how", "in", "into", "is", "it", "its", "me", "my", "of", "on", "or",
+    "our", "out", "please", "so", "that", "the", "their", "them", "then", "there",
+    "these", "they", "this", "to", "up", "us", "was", "we", "were", "what", "when",
+    "which", "who", "why", "with", "you", "your",
+})
+
 
 # ─────────────────────────────────────────────────────────────────
 # Function Status Enum
@@ -95,6 +105,13 @@ class FunctionRegistry:
     # Graduation thresholds (matching earlier agent implementations)
     VERIFIED_SUCCESS_THRESHOLD = 1
     GOLDEN_SUCCESS_THRESHOLD = 5
+
+    @staticmethod
+    def _demoted(stage: str) -> str:
+        """One stage down. A single failure is real evidence, not a verdict."""
+        if stage == FunctionStatus.GOLDEN.value:
+            return FunctionStatus.VERIFIED.value
+        return FunctionStatus.CANDIDATE.value
 
     def __init__(
         self,
@@ -545,18 +562,26 @@ class FunctionRegistry:
         function_name: str,
         success: bool,
         execution_time: float,
+        error_type: Optional[str] = None,
     ) -> bool:
         """
-        Update execution statistics and auto-promote based on success count.
+        Update execution statistics and move the graduation stage with the evidence.
 
-        Graduation thresholds:
-        - 1+ successes → VERIFIED
-        - 5+ successes → GOLDEN
+        Stage answers "does this work now", so it is driven by the current run of
+        consecutive successes rather than the lifetime total:
+        - 1+ consecutive successes → VERIFIED
+        - 5+ consecutive successes → GOLDEN
+        - a failure resets the run and drops one stage
+
+        Before this, only successes were ever recorded. An atom reached GOLDEN
+        after five successes and kept it through any number of breakages after,
+        so "verified" meant "worked five times once", not "works".
 
         Args:
             function_name: Function that was executed
             success: Whether execution succeeded
             execution_time: Execution duration in seconds
+            error_type: The exception type on failure, kept so a reader can see why
 
         Returns:
             True if stats updated successfully
@@ -570,8 +595,14 @@ class FunctionRegistry:
         metadata["execution_count"] = metadata.get("execution_count", 0) + 1
         if success:
             metadata["success_count"] = metadata.get("success_count", 0) + 1
+            metadata["consecutive_successes"] = metadata.get("consecutive_successes", 0) + 1
         else:
             metadata["failure_count"] = metadata.get("failure_count", 0) + 1
+            metadata["consecutive_successes"] = 0
+            metadata["last_failure"] = {
+                "at": datetime.now().isoformat(),
+                "error_type": error_type,
+            }
 
         # Update average execution time
         old_avg = metadata.get("average_execution_time", 0.0)
@@ -583,13 +614,15 @@ class FunctionRegistry:
         else:
             metadata["average_execution_time"] = execution_time
 
-        # Auto-promote based on success count
         stage = metadata.get("registry_stage", FunctionStatus.CANDIDATE.value)
         if success:
-            if metadata["success_count"] >= self.GOLDEN_SUCCESS_THRESHOLD:
+            streak = metadata["consecutive_successes"]
+            if streak >= self.GOLDEN_SUCCESS_THRESHOLD:
                 stage = FunctionStatus.GOLDEN.value
-            elif metadata["success_count"] >= self.VERIFIED_SUCCESS_THRESHOLD:
+            elif streak >= self.VERIFIED_SUCCESS_THRESHOLD and stage == FunctionStatus.CANDIDATE.value:
                 stage = FunctionStatus.VERIFIED.value
+        else:
+            stage = self._demoted(stage)
         metadata["registry_stage"] = stage
         metadata["updated_at"] = datetime.now().isoformat()
 
@@ -699,7 +732,13 @@ class FunctionRegistry:
 
     def semantic_search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
-        Full-text search across function metadata fields.
+        Rank functions by word overlap with the query.
+
+        Lexical, despite the name: it counts query words appearing in the stored
+        metadata. That is serviceable for ordering atoms *within* a provider, and
+        must not be used to choose the provider itself — the terms are matched as
+        substrings, so a single letter scores as highly as the subject of the
+        task, and "crm" scores inside the vendor name "agilecrm".
 
         Searches: name, description, system, capabilities, tags.
 
@@ -710,7 +749,7 @@ class FunctionRegistry:
         Returns:
             List of matching metadata dicts, sorted by relevance
         """
-        terms = query.lower().split()
+        terms = [t for t in query.lower().split() if t not in _NON_DISCRIMINATING]
         matches = []
 
         for name, metadata in self.function_metadata.items():
@@ -723,11 +762,12 @@ class FunctionRegistry:
                 " ".join(metadata.get("tags", [])).lower(),
             ]
             searchable = " ".join(searchable_parts)
+            name_words = set(re.split(r"[^a-z0-9]+", name.lower()))
 
             score = 0
             for term in terms:
-                if term in name.lower():
-                    score += 3  # Name match is highest
+                if term in name_words:
+                    score += 3  # Whole-word name match is highest
                 elif term in (metadata.get("system") or "").lower():
                     score += 2  # System match
                 elif term in searchable:

@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["job_name"], "consequence": "Deletes the Jenkins pipeline."}
 
 async def jenkins_delete_pipeline(job_name: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Delete a pipeline in jenkins. Official: https://www.jenkins.io/doc/book/using/remote-access-api/"""

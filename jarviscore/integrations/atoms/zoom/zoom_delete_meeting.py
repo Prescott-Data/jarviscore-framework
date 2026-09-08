@@ -1,3 +1,5 @@
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["meeting_id"], "consequence": "Deletes the Zoom meeting."}
+
 async def zoom_delete_meeting(meeting_id: str) -> dict:
     """Delete meeting via the zoom API."""
     _base = 'https://api.zoom.us/v2'

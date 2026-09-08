@@ -195,6 +195,36 @@ class ContextManager:
     # Honest rendering helpers (issues #55, #56)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _build_recalled_block(recalled: Any) -> str:
+        """Earlier sessions, presented as earlier sessions.
+
+        Memory arrived under INPUT CONTEXT before, indistinguishable from the
+        task, and the decision contract's first question ("what have I
+        established?") read a stale diagnosis as established. Here it is named
+        for what it is, and what it is not.
+        """
+        lines = [
+            "## FROM EARLIER SESSIONS",
+            "What this agent recorded before, retrieved by relevance to this task. "
+            "It describes the past: things may have changed since, and anything "
+            "that reads as a diagnosis of a failure is a hypothesis to re-test, "
+            "not a fact to build on.",
+        ]
+        items = recalled if isinstance(recalled, list) else [recalled]
+        for item in items:
+            if isinstance(item, dict):
+                text = item.get("content") or item.get("text") or item.get("summary") or ""
+                when = item.get("timestamp") or item.get("created_at") or ""
+                score = item.get("similarity_score")
+                tag = f" ({when})" if when else ""
+                rel = f" [relevance {score:.2f}]" if isinstance(score, (int, float)) else ""
+                if str(text).strip():
+                    lines.append(f"- {str(text).strip()}{tag}{rel}")
+            elif str(item).strip():
+                lines.append(f"- {str(item).strip()}")
+        return "\n".join(lines) if len(lines) > 2 else ""
+
     def _build_goal_state_block(self, context: Dict[str, Any]) -> str:
         """Render a goal execution's accumulated state — structured (issue #72).
 
@@ -347,6 +377,10 @@ class ContextManager:
 
         add("input_context", self._compose_input_context(state, PressureTier.NORMAL))
 
+        recalled = (state.context or {}).get("_recalled")
+        if recalled:
+            add("recalled", self._build_recalled_block(recalled))
+
         if state.belief_state:
             belief_block = "## BELIEF STATE\n"
             for key, value in state.belief_state.items():
@@ -411,7 +445,10 @@ class ContextManager:
                      "_agent_default_kernel_role",
                      "_goal", "_goal_id", "_goal_facts",
                      "_goal_facts_high_confidence", "_completed_steps",
-                     "_plan_revision"}
+                     "_plan_revision",
+                     # Memory is rendered as what it is, in its own block. Under
+                     # INPUT CONTEXT it read as part of the task.
+                     "_recalled", "_athena_memory", "_ltm_summary"}
         other = {key: value for key, value in state.context.items() if key not in skip_keys}
         allowed = set(filter_input_context_keys(other.keys(), tier))
         cleaned = self._scrub_dict({k: v for k, v in other.items() if k in allowed})

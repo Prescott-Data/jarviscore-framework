@@ -436,13 +436,15 @@ class TestCoderGate:
         assert evidence.observed["tool_calls"] == 2
 
     def test_a_successful_execution_satisfies_the_gate(self):
+        """The gate checks proof exists; it does not swap the answer for it."""
         state = _state(tool_history=[
             ToolResult(tool_name="execute_code", status="success", tool_output={"output": 42}),
         ])
-        parsed: Dict[str, Any] = {"result": None}
+        parsed: Dict[str, Any] = {"result": {"answer": "forty-two"}}
 
         ok, reason = self._coder()._can_complete(state, parsed)
 
         assert ok is True
         assert reason == ""
-        assert parsed["result"] == 42
+        assert parsed["result"] == {"answer": "forty-two"}
+        assert parsed["evidence"] == 42

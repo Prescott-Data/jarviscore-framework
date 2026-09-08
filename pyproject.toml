@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "1.9.0"
+version = "1.10.0"
 description = "Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -135,6 +135,9 @@ jarviscore = [
     "skills/jarviscore/SKILL.md",
     # Nexus local-stack data — bundled so pip install users don't need the repo
     "nexus/_data/docker-compose.nexus.yml",
+    # Which hosts each provider is called on — without it no credential can be
+    # sent anywhere, so the wheel must carry it
+    "nexus/_data/provider_hosts.json",
     # Athena MemOS local-stack compose — bundled for same reason
     "memory/_data/docker-compose.athena.yml",
     "memory/_data/init-mongo.js",

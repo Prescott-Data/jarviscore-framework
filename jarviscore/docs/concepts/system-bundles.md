@@ -20,38 +20,32 @@ A **system bundle** is a generated Python class that groups all atoms for a give
 Every atom is a standalone Python function that follows a strict contract:
 
 ```python title="jarviscore/integrations/atoms/slack/slack_send_message.py"
-def slack_send_message(auth_info: dict, channel: str, text: str, thread_ts: str = None) -> dict:
-    import requests
-    _base = "https://slack.com/api"
-    _h = {"Authorization": f"Bearer {auth_info.get('access_token', '')}", "Content-Type": "application/json"}
-
-    def _post(p, data=None):
-        r = requests.post(f"{_base}{p}", headers=_h, json=data, timeout=30)
-        r.raise_for_status()
-        return r.json()
-
+async def slack_send_message(channel: str, text: str, thread_ts: str = None) -> dict:
+    """Post a Slack message. https://api.slack.com/methods/chat.postMessage"""
     payload = {"channel": channel, "text": text}
     if thread_ts:
         payload["thread_ts"] = thread_ts
-
-    resp = _post("/chat.postMessage", data=payload)
-    if not resp.get("ok"):
-        raise RuntimeError(resp.get("error", "Slack API error"))
-
-    return {"ts": resp["ts"], "channel": resp["channel"], "text": text}
+    response = await nexus_call(
+        "POST", "https://slack.com/api/chat.postMessage", json=payload,
+    )
+    if not response["ok"]:
+        return {"success": False, "error": response["body"]}
+    return {"success": True, "data": response["json"]}
 ```
 
 **The atom contract:**
 
 | Property | Rule |
 |---|---|
-| First parameter | Always `auth_info: dict`: populated by Nexus at call time |
+| Authentication | `nexus_call` only; no credential parameter or auth header |
 | Return type | Always `dict`: structured, never raw HTTP response |
-| Transport | Self-contained: imports requests internally |
+| Transport | Async provider HTTP intent sent through the parent Nexus boundary |
 | State | Stateless: no class, no instance, no side effects beyond the API call |
-| Error handling | Raises on failure: the sandbox catches and reports |
+| Error handling | Returns a structured provider failure |
 
-Atoms intentionally embed their own `import requests` rather than relying on a shared HTTP client. This makes them independently executable in the code sandbox and portable across contexts.
+Atoms never import an HTTP client for provider calls. This keeps credentials and
+request signing outside generated code while preserving independent execution in
+the process-separated Coder runtime.
 
 ---
 
@@ -65,20 +59,21 @@ class SlackCapabilities:
     """Capabilities for the Slack system.
 
     Available functions:
-      - slack_send_message(auth_info, channel, text, thread_ts)
-      - slack_list_channels(auth_info)
-      - slack_get_channel_history(auth_info, channel_id, limit)
-      - slack_create_channel(auth_info, name, is_private)
-      - slack_invite_user(auth_info, channel_id, user_id)
-      - slack_add_reaction(auth_info, channel, timestamp, name)
+    - slack_send_message(channel, text, thread_ts)
+    - slack_list_channels()
+    - slack_get_channel_history(channel_id, limit)
     """
 
     @staticmethod
-    def slack_send_message(auth_info, channel, text, thread_ts=None):
-        # ... atom code injected here
+    def slack_send_message(self, **kwargs):
+        # Registry metadata; Coder offers the validated atom as a tool.
+        raise NotImplementedError("Inject via prepare_code_with_bundle()")
 ```
 
-The bundle class is then prepended to any code the `CoderSubAgent` executes in the sandbox. This means agent-generated code can reference `SlackCapabilities.slack_send_message(...)` directly, with the atom implementation guaranteed to be available.
+The generated bundle is registry and code-preparation metadata. In normal agent
+execution, `CoderSubAgent` validates qualifying atom source and offers each atom
+as a native tool. Generated code calls `nexus_call` for custom provider work; it
+does not receive a credential-bearing bundle instance.
 
 ---
 
@@ -249,5 +244,5 @@ This pattern lets teams adopt JarvisCore's orchestration, memory, and P2P mesh w
 ## Further Reading
 
 - [System Bundles & Integrations Guide](../guides/integrations.md): how to use pre-built atoms in agent code
-- [Nexus: Credential Federation](nexus.md): how `auth_info` is populated at call time
+- [Nexus: Credential Federation](nexus.md): how credentials stay outside agent code
 - [AutoAgent Guide](../guides/autoagent.md): how `CoderSubAgent` selects and executes atoms

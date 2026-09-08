@@ -185,7 +185,8 @@ class TestKernelExecuteSuccess:
         mock_sandbox.responses = [{"status": "success", "output": {"factorial": 3628800}}]
         mock_llm.responses = [
             _router_response("coder"),
-            _coder_write_response('import math\nresult = {"factorial": math.factorial(10)}')
+            _coder_write_response('import math\nresult = {"factorial": math.factorial(10)}'),
+            _llm_response('THOUGHT: Read it\nDONE: 10! is 3628800\nRESULT: {"factorial": 3628800}'),
         ]
         output = await kernel.execute(task="Calculate factorial of 10")
         assert output.status == "success"
@@ -372,6 +373,29 @@ class TestKernelHITL:
 
 # ── Dispatch Records ──────────────────────────────────────────────────
 
+def _patch_vault(monkeypatch, *, connected=(), unconsented=()):
+    """A vault double that separates holding an app from holding a credential."""
+    from jarviscore.nexus.store import ConnectionState
+
+    class Vault:
+        def get(self, name):
+            if name in connected or name in unconsented:
+                return {"auth_type": "oauth2"}
+            return None
+
+        def connection_state(self, name):
+            if name in connected:
+                return ConnectionState.CONNECTED
+            if name in unconsented:
+                return ConnectionState.REGISTERED
+            return ConnectionState.ABSENT
+
+        def needs_consent(self, name):
+            return name in unconsented
+
+    monkeypatch.setattr("jarviscore.nexus.store.get_store", lambda: Vault())
+
+
 class TestDeclaredSystemCredentials:
     """issue #151 — a declared provider with no credentials is a human decision."""
 
@@ -379,10 +403,7 @@ class TestDeclaredSystemCredentials:
     async def test_missing_credentials_yield_before_spending_a_dispatch(
         self, kernel, mock_llm, monkeypatch
     ):
-        monkeypatch.setattr(
-            "jarviscore.nexus.store.get_store",
-            lambda: type("EmptyVault", (), {"get": staticmethod(lambda name: None)})(),
-        )
+        _patch_vault(monkeypatch)
         mock_llm.responses = [_router_response("coder"), _coder_write_response()]
         output = await kernel.execute(task="Read our CRM contacts", context={"system": "hubspot"})
 
@@ -391,7 +412,7 @@ class TestDeclaredSystemCredentials:
         assert output.metadata["escalation_reason"] == "auth_required"
         assert output.metadata["system"] == "hubspot"
         assert output.metadata["yield_pending"] is True
-        assert "jarviscore nexus register hubspot" in output.summary
+        assert "not connected here" in output.summary
         # Routing costs one call; the dispatch that could not authenticate never ran.
         assert len(mock_llm.calls) == 1
         assert output.metadata["dispatches"] == []
@@ -400,18 +421,33 @@ class TestDeclaredSystemCredentials:
     async def test_registered_provider_still_dispatches(
         self, kernel, mock_llm, mock_sandbox, monkeypatch
     ):
-        monkeypatch.setattr(
-            "jarviscore.nexus.store.get_store",
-            lambda: type("Vault", (), {"get": staticmethod(lambda name: {"auth_type": "oauth2"})})(),
-        )
+        _patch_vault(monkeypatch, connected={"hubspot"})
         mock_sandbox.responses = [{"status": "success", "output": {"contacts": 2}}]
         mock_llm.responses = [
             _router_response("coder"),
             _coder_write_response('result = {"contacts": 2}'),
+            _llm_response('THOUGHT: Read it\nDONE: Two contacts\nRESULT: {"contacts": 2}'),
         ]
         output = await kernel.execute(task="Read our CRM contacts", context={"system": "hubspot"})
         assert output.status == "success"
         assert output.payload == {"contacts": 2}
+
+    @pytest.mark.asyncio
+    async def test_an_unconsented_app_asks_for_consent_not_registration(
+        self, kernel, mock_llm, monkeypatch
+    ):
+        """Telling someone to register what they already registered is a dead end."""
+        _patch_vault(monkeypatch, unconsented={"slack"})
+        mock_llm.responses = [_router_response("coder"), _coder_write_response()]
+        output = await kernel.execute(
+            task="Post the update to Slack", context={"system": "slack"}
+        )
+
+        assert output.status == "yield"
+        assert output.metadata["typed_outcome"] == "YIELD_CONSENT_REQUIRED"
+        assert output.metadata["escalation_reason"] == "consent_required"
+        assert "no account has been connected" in output.summary
+        assert output.metadata["dispatches"] == []
 
     @pytest.mark.asyncio
     async def test_a_task_naming_no_system_is_unaffected(self, kernel, mock_llm, mock_sandbox):

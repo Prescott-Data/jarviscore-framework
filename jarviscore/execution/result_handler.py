@@ -81,7 +81,8 @@ class ResultHandler:
         tokens: Optional[Dict] = None,
         cost_usd: Optional[float] = None,
         repairs: int = 0,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        error_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Process and store execution result.
@@ -108,7 +109,7 @@ class ResultHandler:
         # Classify error if present
         error_category = None
         if error:
-            error_category = self._classify_error(error)
+            error_category = self._classify_error(error_type)
 
         # Determine detailed status
         result_status = self._determine_status(status, error, error_category)
@@ -255,37 +256,37 @@ class ResultHandler:
             return ResultStatus.SYNTAX_ERROR
         elif error_category == ErrorCategory.TIMEOUT:
             return ResultStatus.TIMEOUT
-        elif error and "error" in error.lower():
+        elif error:
             return ResultStatus.RUNTIME_ERROR
 
         return ResultStatus.FAILURE
 
-    def _classify_error(self, error: str) -> ErrorCategory:
-        """Classify error into category."""
-        error_lower = error.lower()
+    #: Exception types are what the interpreter already decided. Matching words
+    #: in the rendered message instead read "Network Rail" as a network fault and
+    #: "Timeout Solutions Ltd" as a timeout.
+    _CATEGORY_BY_EXCEPTION = {
+        "SyntaxError": ErrorCategory.SYNTAX,
+        "IndentationError": ErrorCategory.SYNTAX,
+        "TabError": ErrorCategory.SYNTAX,
+        "TimeoutError": ErrorCategory.TIMEOUT,
+        "AsyncioTimeoutError": ErrorCategory.TIMEOUT,
+        "ConnectionError": ErrorCategory.NETWORK,
+        "ConnectionResetError": ErrorCategory.NETWORK,
+        "ConnectionRefusedError": ErrorCategory.NETWORK,
+        "ConnectTimeout": ErrorCategory.NETWORK,
+        "ReadTimeout": ErrorCategory.TIMEOUT,
+        "ConnectError": ErrorCategory.NETWORK,
+        "HTTPError": ErrorCategory.NETWORK,
+        "socket.timeout": ErrorCategory.TIMEOUT,
+        "MemoryError": ErrorCategory.RESOURCE,
+        "ResourceWarning": ErrorCategory.RESOURCE,
+    }
 
-        # Syntax errors
-        syntax_keywords = ['syntaxerror', 'indentationerror', 'taberror', 'invalid syntax']
-        if any(kw in error_lower for kw in syntax_keywords):
-            return ErrorCategory.SYNTAX
-
-        # Timeout errors
-        timeout_keywords = ['timeout', 'timed out', 'time limit exceeded']
-        if any(kw in error_lower for kw in timeout_keywords):
-            return ErrorCategory.TIMEOUT
-
-        # Network errors
-        network_keywords = ['connection', 'network', 'httpx', 'aiohttp', 'socket']
-        if any(kw in error_lower for kw in network_keywords):
-            return ErrorCategory.NETWORK
-
-        # Resource errors
-        resource_keywords = ['memory', 'resource', 'quota', 'limit exceeded']
-        if any(kw in error_lower for kw in resource_keywords):
-            return ErrorCategory.RESOURCE
-
-        # Runtime errors (default for unknown errors)
-        return ErrorCategory.RUNTIME
+    def _classify_error(self, error_type: Optional[str]) -> ErrorCategory:
+        """Category of a failure, from the exception the interpreter raised."""
+        if not error_type:
+            return ErrorCategory.RUNTIME
+        return self._CATEGORY_BY_EXCEPTION.get(error_type, ErrorCategory.RUNTIME)
 
     def _save_to_file(self, agent_id: str, result_id: str, result_data: Dict):
         """Save result to file system."""

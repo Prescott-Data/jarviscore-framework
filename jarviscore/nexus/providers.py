@@ -51,6 +51,7 @@ PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
         "scopes": [
             "https://www.googleapis.com/auth/gmail.send",
             "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.modify",
             "https://www.googleapis.com/auth/gmail.labels",
         ],
     },
@@ -234,6 +235,18 @@ PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
 def get_provider(name: str) -> Optional[Dict[str, Any]]:
     """Return catalog entry for a provider name, or None if unknown."""
     return PROVIDER_CATALOG.get(name.lower().strip())
+
+
+def display_name(provider_name: str) -> str:
+    """The name a person knows the provider by.
+
+    The catalogue carries one for the providers it describes. For the rest the
+    key is the only name there is, so it is made readable rather than shown raw.
+    """
+    entry = get_provider(provider_name)
+    if entry and entry.get("label"):
+        return str(entry["label"])
+    return provider_name.replace("_", " ").strip().title()
 
 
 def broker_name(provider_name: str) -> str:
