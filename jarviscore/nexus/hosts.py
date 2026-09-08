@@ -34,6 +34,19 @@ _TENANT_URL_FIELDS = (
 class HostNotAllowed(RuntimeError):
     """A credential was about to be sent somewhere the provider does not own."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str = "",
+        requested_host: str = "",
+        allowed: Tuple[str, ...] = (),
+    ):
+        super().__init__(message)
+        self.provider = provider
+        self.requested_host = requested_host
+        self.allowed = allowed
+
 
 @lru_cache(maxsize=1)
 def _catalogue() -> Dict[str, Tuple[str, ...]]:
@@ -86,7 +99,9 @@ def ensure_host_allowed(
     """
     host = (urlparse(url).hostname or "").lower()
     if not host:
-        raise HostNotAllowed(f"{url!r} has no host to check against {provider!r}")
+        raise HostNotAllowed(
+            f"{url!r} has no host to check against {provider!r}", provider=provider,
+        )
 
     patterns = allowed_hosts(provider, entry)
     if not patterns:
@@ -94,7 +109,8 @@ def ensure_host_allowed(
             f"No API hosts are known for provider {provider!r}, so its credential "
             f"cannot be sent anywhere safely. If this provider is hosted on your "
             f"own domain, record it on the connection (for example instance_url) "
-            f"so calls to it can be recognised."
+            f"so calls to it can be recognised.",
+            provider=provider, requested_host=host,
         )
     if any(_matches(host, pattern) for pattern in patterns):
         return
@@ -103,5 +119,6 @@ def ensure_host_allowed(
         f"{provider!r} credentials may not be sent to {host!r}. "
         f"{provider!r} is called on: {', '.join(patterns)}. "
         f"Use the host that belongs to the provider whose credential this is, or "
-        f"run this call against the provider that actually owns {host!r}."
+        f"run this call against the provider that actually owns {host!r}.",
+        provider=provider, requested_host=host, allowed=patterns,
     )

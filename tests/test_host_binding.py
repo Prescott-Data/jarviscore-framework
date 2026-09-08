@@ -22,7 +22,9 @@ from jarviscore.nexus.hosts import (
 def test_a_credential_may_not_cross_to_another_provider():
     with pytest.raises(HostNotAllowed) as exc:
         ensure_host_allowed("hubspot", "https://slack.com/api/api.test")
-    assert "may not be sent to 'slack.com'" in str(exc.value)
+    assert exc.value.provider == "hubspot"
+    assert exc.value.requested_host == "slack.com"
+    assert exc.value.allowed == ("api.hubapi.com",)
 
 
 def test_a_credential_may_not_go_to_an_unrelated_domain():
@@ -38,7 +40,8 @@ def test_the_refusal_names_where_the_provider_is_called():
     """A refusal that does not say what would work is a dead end for the agent."""
     with pytest.raises(HostNotAllowed) as exc:
         ensure_host_allowed("slack", "https://api.hubapi.com/crm/v3/objects")
-    assert "slack.com" in str(exc.value)
+    assert exc.value.provider == "slack"
+    assert exc.value.allowed == allowed_hosts("slack")
 
 
 def test_a_url_with_no_host_is_refused():
@@ -122,5 +125,5 @@ def test_the_shipped_data_matches_the_corpus():
         pytest.skip("host data not present in this checkout")
     shipped = json.loads(data.read_text())
     assert shipped["hubspot"] == ["api.hubapi.com"]
-    assert "slack.com" in shipped["slack"]
+    assert tuple(shipped["slack"]) == allowed_hosts("slack")
     assert all(hosts for hosts in shipped.values()), "empty host list shipped"
