@@ -17,8 +17,8 @@ Dry-run checks (no network required):
   ✓ Atom file exists at integrations/atoms/<bundle>/<atom>.py
   ✓ File parses as valid Python (AST)
   ✓ Function name matches filename
-  ✓ First parameter is auth_info: dict
-  ✓ Return type annotation is dict
+    ✓ Function is async and authenticates only through nexus_call
+    ✓ Parameters contain no credentials
   ✓ No forbidden standard-library imports (subprocess, os.system, eval, exec)
   ✓ Function has a docstring
   ✓ Bundle directory has __init__.py
@@ -244,6 +244,26 @@ def _check_return_dict(fn: ast.FunctionDef, result: _Result):
         result.warn("Return statement returns None — atoms must return a dict")
 
 
+def _check_atom_contract(path: Path, bundle: str, atom: str, result: _Result) -> bool:
+    """Use the runtime's atom contract so developer tooling cannot drift from it."""
+    from jarviscore.execution.atom_contract import read_contract
+
+    contract = read_contract(
+        path.read_text(encoding="utf-8"), system=bundle, expected_name=atom
+    )
+    problems = list(contract.problems)
+    if contract.atom is not None and contract.atom.legacy:
+        problems.append(
+            "legacy auth_info atoms are reference-only; migrate authentication to nexus_call"
+        )
+    if problems:
+        for problem in problems:
+            result.fail(problem)
+        return False
+    result.ok("Atom satisfies the async nexus_call credential boundary")
+    return True
+
+
 # ── Dry-run orchestrator ──────────────────────────────────────────────────────
 
 def run_dry_run(bundle: str, atom: str) -> bool:
@@ -264,12 +284,7 @@ def run_dry_run(bundle: str, atom: str) -> bool:
         _print_summary(result)
         return False
 
-    fn = _check_function_name(path, tree, result)
-    if fn:
-        _check_signature(fn, result)
-        _check_docstring(fn, result)
-        _check_return_dict(fn, result)
-
+    _check_atom_contract(path, bundle, atom, result)
     _check_forbidden_imports(tree, result)
     _print_summary(result)
     return result.success
@@ -309,9 +324,7 @@ def run_integration(bundle: str, atom: str, connection_id: str, nexus_url: str) 
     if not tree:
         print(f"  {_err('Dry-run: syntax error — fix before integration test')}")
         return False
-    fn = _check_function_name(path, tree, dry_result)
-    if fn:
-        _check_signature(fn, dry_result)
+    _check_atom_contract(path, bundle, atom, dry_result)
     _check_forbidden_imports(tree, dry_result)
 
     if not dry_result.success:
