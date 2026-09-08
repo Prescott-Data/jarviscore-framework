@@ -471,15 +471,23 @@ class CoderSandbox:
                 request = json.loads(line)
                 try:
                     if request["operation"] == "nexus_call":
+                        payload = request["payload"]
+                        requested_provider = payload.get("provider")
+                        provider = str(
+                            requested_provider
+                            or context.get("_nexus_provider")
+                            or ""
+                        ).strip().lower()
                         connection_id = context.get("_nexus_connection_id")
+                        if requested_provider and self._nexus_call_proxy:
+                            connection_id = self._nexus_call_proxy.connection_handle(provider)
                         if not self._nexus_call_proxy or not connection_id:
                             raise RuntimeError("No provider account is connected for this task.")
-                        payload = request["payload"]
                         call = self._recording_nexus_call(
                             lambda method, url, **kwargs: self._nexus_call_proxy.call(
                                 connection_id, method, url, **kwargs
                             ),
-                            str(context.get("_nexus_provider") or connection_id),
+                            provider or str(connection_id),
                         )
                         result = await call(
                             payload["method"], payload["url"], **payload.get("kwargs", {})

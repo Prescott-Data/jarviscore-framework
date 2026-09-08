@@ -243,7 +243,11 @@ Writing to it, after you succeed:
    headers = {"Authorization": "Bearer ..."}  # VIOLATION — agent must never see credentials
    ```
 
-   - `nexus_call(method, url, **kwargs)` is always available in the sandbox
+     - `nexus_call(method, url, **kwargs)` is always available in the sandbox
+     - For work spanning connected systems, route each call explicitly:
+         `await nexus_call("GET", url, provider="gmail")`. The trusted parent
+         resolves that provider's opaque handle and host policy; no credential map
+         enters your code. Never send one provider's call under another provider.
    - It returns `{"ok": bool, "status_code": int, "body": str, "json": Any}`
    - If it raises RuntimeError, declare `auth_required=True` in your DONE summary
    - NEVER read `auth`, `token`, `api_key`, `access_token`, or any credential variable
@@ -1379,8 +1383,16 @@ Writing to it, after you succeed:
         if manager is None or not hasattr(manager, "discover_all"):
             return
         try:
-            from jarviscore.nexus.store import get_store
-            await manager.discover_all(get_store().list())
+            from jarviscore.nexus.store import ConnectionState, get_store
+
+            store = get_store()
+            providers = store.list()
+            await manager.discover_all(providers)
+            self._run_context["connected_providers"] = sorted(
+                provider for provider in providers
+                if manager.is_connected(provider)
+                or store.connection_state(provider) is ConnectionState.CONNECTED
+            )
         except Exception as exc:
             self._log.debug("Connection sync unavailable: %s", exc)
 

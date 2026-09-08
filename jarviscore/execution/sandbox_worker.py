@@ -67,9 +67,12 @@ async def execute(request: dict) -> dict:
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
-    async def nexus_call(method: str, url: str, **kwargs):
+    async def nexus_call(method: str, url: str, provider: str | None = None, **kwargs):
         return await asyncio.to_thread(
-            rpc.call, "nexus_call", {"method": method, "url": url, "kwargs": _jsonable(kwargs)}
+            rpc.call, "nexus_call", {
+                "method": method, "url": url, "provider": provider,
+                "kwargs": _jsonable(kwargs),
+            }
         )
 
     async def fetch_artifact(key: str) -> Path:

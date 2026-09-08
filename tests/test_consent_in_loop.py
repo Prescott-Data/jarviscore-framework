@@ -236,3 +236,33 @@ def test_declaring_the_same_system_twice_changes_nothing(coder, monkeypatch):
     _set_state(monkeypatch, ConnectionState.CONNECTED, needs_consent=False)
     coder._refresh_offerings_for("slack")
     assert coder._refresh_offerings_for("slack") is None
+
+
+async def test_connection_sync_exposes_provider_names_not_handles(coder, monkeypatch):
+    from jarviscore.nexus.store import ConnectionState
+
+    class Manager:
+        async def discover_all(self, providers):
+            self.discovered = list(providers)
+
+        def is_connected(self, provider):
+            return provider in {"gmail", "google_calendar"}
+
+    class Store:
+        def list(self):
+            return ["gmail", "google_calendar", "hubspot", "slack"]
+
+        def connection_state(self, provider):
+            return ConnectionState.CONNECTED if provider == "hubspot" else ConnectionState.REGISTERED
+
+    manager = Manager()
+    coder.auth_manager = manager
+    coder._run_context = {}
+    monkeypatch.setattr("jarviscore.nexus.store.get_store", lambda: Store())
+
+    await coder._sync_connections()
+
+    assert coder._run_context["connected_providers"] == [
+        "gmail", "google_calendar", "hubspot",
+    ]
+    assert "connection" not in str(coder._run_context).lower()

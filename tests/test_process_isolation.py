@@ -13,6 +13,9 @@ class RecordingProxy:
         self.calls.append((connection_id, method, url, kwargs))
         return {"ok": True, "status_code": 200, "body": "ok"}
 
+    def connection_handle(self, provider):
+        return f"connection:{provider}"
+
 
 @pytest.mark.asyncio
 async def test_generated_code_runs_in_a_different_process(monkeypatch):
@@ -48,4 +51,22 @@ async def test_provider_access_crosses_the_parent_rpc_only():
     assert result["data"]["status_code"] == 200
     assert proxy.calls == [
         ("demo", "POST", "https://example.invalid/items", {"json": {"x": 1}})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_one_child_routes_multiple_providers_through_parent_handles():
+    proxy = RecordingProxy()
+    sandbox = create_coder_sandbox(timeout=10, nexus_call_proxy=proxy)
+
+    result = await sandbox.execute(
+        "async def main():\n"
+        "    gmail = await nexus_call('GET', 'https://gmail.googleapis.com/gmail/v1/users/me/profile', provider='gmail')\n"
+        "    calendar = await nexus_call('GET', 'https://www.googleapis.com/calendar/v3/users/me/calendarList', provider='google_calendar')\n"
+        "    return {'gmail': gmail['status_code'], 'calendar': calendar['status_code']}\n"
+    )
+
+    assert result["data"] == {"gmail": 200, "calendar": 200}
+    assert [call[0] for call in proxy.calls] == [
+        "connection:gmail", "connection:google_calendar",
     ]

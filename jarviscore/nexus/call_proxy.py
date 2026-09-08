@@ -74,6 +74,12 @@ class NexusCallProxy:
         # Local-vault mode: the handle is the provider name ("github:user123").
         return connection_id.split(":")[0].lower()
 
+    def connection_handle(self, provider: str) -> str:
+        """Resolve a provider name to its opaque active handle when available."""
+        lookup = getattr(self._auth, "connection_handle", None)
+        handle = lookup(provider) if callable(lookup) else None
+        return handle if isinstance(handle, str) and handle else provider
+
     async def call(
         self,
         connection_id: str,
@@ -209,7 +215,9 @@ class NexusCallProxy:
         Returns:
             Async callable suitable for injection into a sandbox namespace.
         """
-        async def nexus_call(method: str, url: str, **kwargs) -> Dict[str, Any]:
+        async def nexus_call(
+            method: str, url: str, provider: Optional[str] = None, **kwargs
+        ) -> Dict[str, Any]:
             """
             Call a provider API endpoint through Nexus.
 
@@ -228,6 +236,7 @@ class NexusCallProxy:
             Raises:
                 RuntimeError if Nexus connection is unavailable.
             """
-            return await proxy.call(connection_id, method, url, **kwargs)
+            target = proxy.connection_handle(provider) if provider else connection_id
+            return await proxy.call(target, method, url, **kwargs)
 
         return nexus_call
