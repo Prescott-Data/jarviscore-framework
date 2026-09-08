@@ -452,9 +452,15 @@ class AutoAgent(Profile):
                     context=ctx,
                 )
                 goal_tokens, goal_cost = self._aggregate_goal_telemetry(execution)
+                completed = getattr(execution, "completed", None) or []
+                final_payload = (
+                    getattr(completed[-1].output, "payload", None)
+                    if completed else None
+                )
                 return {
                     "status": execution.status if execution.status != "complete" else "success",
-                    "output": execution.result,
+                    "output": final_payload if final_payload is not None else execution.result,
+                    "result_summary": execution.result,
                     "error": execution.error,
                     "agent_id": self.agent_id,
                     "role": self.role,
