@@ -26,7 +26,6 @@ from jarviscore.kernel.state import KernelState
 
 logger = logging.getLogger(__name__)
 
-
 # ─────────────────────────────────────────────────────────────────
 # Auth Outcome
 # ─────────────────────────────────────────────────────────────────
@@ -459,9 +458,13 @@ Writing to it, after you succeed:
                 ),
             )
 
-        # Force the payload to be the actual sandbox execution result.
+        # The gate checks that proof exists. It does not replace the answer with
+        # it: overwriting RESULT with the sandbox return value discarded the
+        # agent's conclusion at the one moment it had one, so a Drive listing
+        # reached the person as a dict of ids however well the agent had read it.
+        # The proof stays reachable as evidence for anyone who wants it.
         if last_success_output is not None:
-            parsed["result"] = last_success_output.get("output", last_success_output)
+            parsed["evidence"] = last_success_output.get("output", last_success_output)
 
         return (True, "")
 
@@ -574,11 +577,17 @@ Writing to it, after you succeed:
             merged["message"] = (
                 f"Code validated and executed successfully (candidate_id={result['candidate_id']})."
             )
+            # The result is the agent's to read, not the run's to return. Ending
+            # the loop here handed callers the sandbox's raw return value as the
+            # answer, with the agent never having looked at it: a Drive listing
+            # arrived as a dict of ids instead of "your three most recent files
+            # are". Proof is still required, by _can_complete, at DONE.
             if _produced_output(execution_result.get("output")):
-                merged["_auto_complete"] = True
+                merged["message"] += (
+                    " Read the result, then answer the task in your own words with "
+                    "DONE. If the task needs more, continue."
+                )
             else:
-                # Running is not answering: let the loop continue so the agent can
-                # return a value or say plainly that there was nothing to report.
                 merged["message"] += (
                     " The run returned no value and printed nothing, so there is no "
                     "result to report yet. Return your findings from main() (or print "
@@ -1267,6 +1276,12 @@ Writing to it, after you succeed:
         """All candidates generated during this run (audit trail)."""
         return list(self._candidates)
 
+    def _save_subagent_state(self, state: KernelState) -> None:
+        state.internal_variables["_coder_candidates"] = self._candidates
+
+    def _restore_subagent_state(self, state: KernelState) -> None:
+        self._candidates = list(state.internal_variables.get("_coder_candidates") or [])
+
     # ─────────────────────────────────────────────────────────────
     # Run Override
     # ─────────────────────────────────────────────────────────────
@@ -1279,6 +1294,7 @@ Writing to it, after you succeed:
         self._registered_this_run = False
         self._current_task = str(task)
         self._run_context = context or {}
+        await self._sync_connections()
         self._prepare_access(self._resolved_system())
         try:
             return await super().run(task, context, max_turns, model, **kwargs)
@@ -1315,10 +1331,11 @@ Writing to it, after you succeed:
             if not code:
                 continue
             contract = read_contract(code, system=system, expected_name=name)
+            atom = contract.atom
             # Only the current shape is offered; a legacy atom cannot be called.
-            if not contract.ok or contract.atom.legacy:
+            if not contract.ok or atom is None or atom.legacy:
                 continue
-            atoms[name] = contract.atom
+            atoms[name] = atom
         return atoms
 
     def _offer_system_capabilities(self, system: Optional[str]) -> None:
@@ -1351,16 +1368,44 @@ Writing to it, after you succeed:
                 len(self._atom_tools), system, ", ".join(self._atom_tools),
             )
 
+    async def _sync_connections(self) -> None:
+        """Learn what the gateway holds before deciding what to offer.
+
+        Offerings are decided synchronously during the run, so the gateway is
+        asked once here. Without it a consent completed in the previous run is
+        invisible and the agent asks for access it already has.
+        """
+        manager = self.auth_manager
+        if manager is None or not hasattr(manager, "discover_all"):
+            return
+        try:
+            from jarviscore.nexus.store import get_store
+            await manager.discover_all(get_store().list())
+        except Exception as exc:
+            self._log.debug("Connection sync unavailable: %s", exc)
+
     def _connection_state(self, system: Optional[str]):
         from jarviscore.nexus.store import ConnectionState, get_store
 
         if not system:
             return ConnectionState.ABSENT
+        # The gateway knows what has been connected; the vault knows what was
+        # registered here. A token that landed elsewhere lives only in the first.
+        connected_at_gateway = getattr(self.auth_manager, "is_connected", None)
+        if callable(connected_at_gateway) and connected_at_gateway(system):
+            return ConnectionState.CONNECTED
         try:
             return get_store().connection_state(system)
         except Exception as exc:
             self._log.debug("Connection state unavailable for %s: %s", system, exc)
             return ConnectionState.ABSENT
+
+    def _connection_handle(self, system: str) -> str:
+        """What the sandbox should call through for this system."""
+        manager = self.auth_manager
+        found = manager.connection_handle(system) if manager is not None and hasattr(manager, "connection_handle") else None
+        # Local-vault mode: the handle is the provider name.
+        return found if isinstance(found, str) and found else system
 
     def _prepare_access(self, system: Optional[str]) -> None:
         """Offer what this system can do right now, and nothing it cannot.
@@ -1376,11 +1421,9 @@ Writing to it, after you succeed:
         self._offer_system_capabilities(system if connected else None)
         self._offer_access_request(system)
         if connected and system:
-            # Local-vault handle is the provider name; keeps the credential and
-            # the capability pointing at the same provider.
-            self._run_context.setdefault("_nexus_connection_id", system)
+            # Keeps the credential and the capability pointing at the same provider.
             if self._run_context.get("_nexus_provider") != system:
-                self._run_context["_nexus_connection_id"] = system
+                self._run_context["_nexus_connection_id"] = self._connection_handle(system)
                 self._run_context["_nexus_provider"] = system
 
     def _refresh_offerings_for(self, system: Optional[str]) -> Optional[str]:
@@ -1404,24 +1447,35 @@ Writing to it, after you succeed:
         return None
 
     def _providers_awaiting_consent(self) -> List[Tuple[str, int]]:
-        """Registered apps with no consented account, and what each would unlock.
+        """Registered providers missing usable credentials, and what each unlocks.
 
         Two sources, because consent is lost two ways: an app registered and
         never connected (the vault knows), or a connection the broker has since
         marked as needing re-consent (the auth manager knows).
         """
         pending: Dict[str, int] = {}
+        connected_at_gateway = getattr(self.auth_manager, "is_connected", lambda _p: False)
         try:
             from jarviscore.nexus.store import get_store
             store = get_store()
             for provider in store.list():
-                if store.needs_consent(provider):
+                # The vault holds only the app; the token may have landed at the
+                # gateway. Asking again for access already granted is the exact
+                # thing this whole path exists to stop.
+                from jarviscore.nexus.store import ConnectionState
+                state_fn = getattr(store, "connection_state", None)
+                awaiting = (
+                    state_fn(provider) is ConnectionState.REGISTERED
+                    if state_fn is not None
+                    else store.needs_consent(provider)
+                )
+                if awaiting and not connected_at_gateway(provider):
                     pending[provider] = len(self._valid_atoms(provider))
         except Exception as exc:
             self._log.debug("Consent states unavailable: %s", exc)
-        needing = getattr(self.auth_manager, "providers_needing_attention", None)
-        if callable(needing):
-            for provider in needing():
+        manager = self.auth_manager
+        if manager is not None and hasattr(manager, "providers_needing_attention"):
+            for provider in manager.providers_needing_attention():
                 pending.setdefault(provider, len(self._valid_atoms(provider)))
         return sorted(pending.items())
 
@@ -1478,27 +1532,49 @@ Writing to it, after you succeed:
                     "semantic_error": "NO_CONSENT_CHANNEL",
                 }
             try:
-                connection_id = await self.auth_manager.authenticate(system)
+                return_url = self.auth_manager.return_url
+                run_id = self._run_context.get("run_id")
+                if run_id:
+                    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+                    parsed = urlparse(return_url)
+                    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+                    query["run_id"] = str(run_id)
+                    return_url = urlunparse(parsed._replace(query=urlencode(query)))
+                connection_id, auth_url = await self.auth_manager.begin_authentication(
+                    system, return_url=return_url
+                )
+                from jarviscore.nexus.store import get_store
+                store = get_store()
+                profile = store.get(system) if hasattr(store, "get") else None
+                auth_type = str((profile or {}).get("auth_type") or "oauth2")
+                if auth_type == "oauth2":
+                    await self.auth_manager.flow_handler.present_auth_url(
+                        auth_url, system, connection_id=connection_id,
+                        context=self._run_context,
+                    )
+                else:
+                    state, schema = await self.auth_manager.credential_capture(auth_url)
+                    await self.auth_manager.flow_handler.present_credential_input(
+                        schema, system, connection_id, state, self._run_context
+                    )
             except Exception as exc:
                 return {
                     "status": "error",
-                    "error": f"The {system} consent flow did not complete: {exc}",
-                    "semantic_error": "CONSENT_NOT_COMPLETED",
+                    "error": f"Access to {system} could not be requested: {exc}",
+                    "semantic_error": "CONSENT_NOT_STARTED",
                 }
-            # The token now lives at the gateway, so the sandbox must call through
-            # it rather than the local vault that still holds only the app.
-            self._run_context["_nexus_connection_id"] = connection_id
-            self._run_context["_nexus_provider"] = system
-            self._offered_system = system
-            self._offer_system_capabilities(system)
-            self._offer_access_request()
             return {
-                "status": "success",
+                "status": "waiting",
+                "hitl_required": True,
+                "hitl_type": "auth",
+                "typed_outcome": "WAITING_FOR_CONSENT",
                 "system": system,
-                "capabilities": list(self._atom_tools),
+                "connection_id": connection_id,
+                "workflow_id": self._run_context.get("workflow_id"),
+                "step_id": self._run_context.get("step_id"),
                 "detail": (
-                    f"A {system} account is connected. Its capabilities are now "
-                    "in your tools; continue the task with them."
+                    f"Waiting for a person to connect {system}. The task will "
+                    "resume from this turn after consent completes."
                 ),
             }
 
@@ -1509,13 +1585,34 @@ Writing to it, after you succeed:
             from jarviscore.execution.atom_contract import invocation
 
             atom = self._atoms.get(name)
-            code = self.code_registry.get_function_code(name)
+            registry = self.code_registry
+            code = registry.get_function_code(name) if registry is not None else None
             if atom is None or not code:
                 return {
                     "status": "error",
                     "error": f"`{name}` is no longer in the registry.",
                     "semantic_error": "ATOM_UNAVAILABLE",
                 }
+            action_id = self._atom_action_id(atom, params)
+            if atom.policy.requires_approval and action_id not in set(
+                self._run_context.get("_approved_actions") or ()
+            ):
+                return {
+                    "status": "waiting",
+                    "hitl_required": True,
+                    "hitl_type": "approval",
+                    "typed_outcome": "WAITING_FOR_APPROVAL",
+                    "system": atom.system,
+                    "action_id": action_id,
+                    "action": atom.describe(),
+                    "consequence": atom.policy.consequence,
+                    "workflow_id": self._run_context.get("workflow_id"),
+                    "step_id": self._run_context.get("step_id"),
+                    "detail": f"Waiting for approval before {atom.name} runs.",
+                }
+            prior = self._idempotent_result(action_id)
+            if prior is not None:
+                return prior
             # Runs where any other sandbox code runs: nexus_call attaches the
             # credential there, so proving an atom is just running it.
             result = await self._tool_execute_code(
@@ -1523,9 +1620,35 @@ Writing to it, after you succeed:
                 description=f"{name} via {atom.system}",
             )
             self._record_atom_outcome(name, result)
+            if atom.policy.effect == "destructive" and result.get("status") == "success":
+                self._save_idempotent_result(action_id, result)
             return result
         call.__name__ = name
         return call
+
+    @staticmethod
+    def _atom_action_id(atom, params: Dict[str, Any]) -> str:
+        import hashlib
+        import json
+
+        identity = {
+            field: params.get(field) for field in atom.policy.idempotency_fields
+        }
+        encoded = json.dumps(
+            {"atom": atom.name, "identity": identity}, sort_keys=True, default=str
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _idempotent_result(self, action_id: str):
+        store = self.redis_store
+        if store is None or not hasattr(store, "get_atom_execution"):
+            return None
+        return store.get_atom_execution(action_id)
+
+    def _save_idempotent_result(self, action_id: str, result: Dict[str, Any]) -> None:
+        store = self.redis_store
+        if store is not None and hasattr(store, "save_atom_execution"):
+            store.save_atom_execution(action_id, result)
 
     def _record_atom_outcome(self, name: str, result: Dict[str, Any]) -> None:
         """An atom called as a tool is the evidence its stage is built on.
@@ -1534,6 +1657,8 @@ Writing to it, after you succeed:
         unrecorded meant the registry never learned from the calls that matter.
         A refusal at the credential boundary is not recorded: the atom never ran.
         """
+        if self.code_registry is None:
+            return
         status = result.get("status")
         if status not in ("success", "failure") or result.get("access_failure"):
             return

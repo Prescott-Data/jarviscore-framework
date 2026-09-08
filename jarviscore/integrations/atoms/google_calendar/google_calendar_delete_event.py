@@ -1,3 +1,5 @@
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["calendar_id", "event_id"], "consequence": "Deletes the calendar event."}
+
 async def google_calendar_delete_event(event_id: str, calendar_id: str='primary') -> dict:
     """Calendar delete event via the google_calendar API."""
     _h = {}

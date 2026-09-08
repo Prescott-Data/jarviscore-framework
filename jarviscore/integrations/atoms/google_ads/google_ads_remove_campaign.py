@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["customer_id", "campaign_id"], "consequence": "Removes the Google Ads campaign."}
 _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 
 async def google_ads_remove_campaign(customer_id: str, campaign_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:

@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["company_id"], "consequence": "Deletes the Intercom company."}
 INTERCOM_API = 'https://api.intercom.io'
 
 async def intercom_delete_company(company_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:

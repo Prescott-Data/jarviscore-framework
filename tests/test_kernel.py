@@ -185,7 +185,8 @@ class TestKernelExecuteSuccess:
         mock_sandbox.responses = [{"status": "success", "output": {"factorial": 3628800}}]
         mock_llm.responses = [
             _router_response("coder"),
-            _coder_write_response('import math\nresult = {"factorial": math.factorial(10)}')
+            _coder_write_response('import math\nresult = {"factorial": math.factorial(10)}'),
+            _llm_response('THOUGHT: Read it\nDONE: 10! is 3628800\nRESULT: {"factorial": 3628800}'),
         ]
         output = await kernel.execute(task="Calculate factorial of 10")
         assert output.status == "success"
@@ -425,6 +426,7 @@ class TestDeclaredSystemCredentials:
         mock_llm.responses = [
             _router_response("coder"),
             _coder_write_response('result = {"contacts": 2}'),
+            _llm_response('THOUGHT: Read it\nDONE: Two contacts\nRESULT: {"contacts": 2}'),
         ]
         output = await kernel.execute(task="Read our CRM contacts", context={"system": "hubspot"})
         assert output.status == "success"

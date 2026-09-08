@@ -76,8 +76,14 @@ class TestTierAvailability:
 
 class TestLogTurn:
     @pytest.mark.asyncio
-    async def test_athena_receives_the_same_fidelity_as_the_other_tiers(self, store, blob):
-        """issue #153 — a clipped write destroys the original; only reads may abridge."""
+    async def test_the_ledger_keeps_turns_whole_and_athena_keeps_none(self, store, blob):
+        """issue #153 — a clipped write destroys the original; only reads may abridge.
+
+        The ledger is where turns live for recovery, so it stores them whole.
+        Athena is cross-session memory, and a turn is not a memory: writing every
+        thought there made a mid-run diagnosis of a bug outlive the bug and return
+        as a premise the next day. It receives outcomes and deliberate facts only.
+        """
         recorded = {}
 
         class RecordingAthena:
@@ -93,10 +99,8 @@ class TestLogTurn:
         result = "Found the renewal evidence. " * 40       # ~1120 chars
         await mem.log_turn("t1", thought, "search", result)
 
-        assert recorded["thought"] == thought
-        assert result in recorded["action"]
-        # The ledger already stored it whole; Athena must not be the lossy tier.
         assert (await mem.episodic.tail(1))[0]["thought"] == thought
+        assert recorded == {}
 
     @pytest.mark.asyncio
     async def test_log_turn_writes_to_scratchpad(self, mem, blob):

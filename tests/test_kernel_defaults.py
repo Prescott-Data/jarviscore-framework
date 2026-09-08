@@ -49,6 +49,20 @@ def _coder_write_response(code: str):
 # ══════════════════════════════════════════════════════════════════════
 
 class TestCoderSubAgent:
+    def test_multiline_done_is_the_complete_human_answer(self, mock_llm):
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
+        parsed = coder._parse_response(
+            "THOUGHT: Results verified\n"
+            "DONE: Your three most recent files are:\n"
+            "- Scoreboard\n- Provider Registry\n- Engineering Docs\n"
+            "RESULT: {\"files\": [\"Scoreboard\", \"Provider Registry\", \"Engineering Docs\"]}"
+        )
+        assert parsed["summary"] == (
+            "Your three most recent files are:\n"
+            "- Scoreboard\n- Provider Registry\n- Engineering Docs"
+        )
+        assert parsed["result"]["files"][0] == "Scoreboard"
+
     """Tests for CoderSubAgent."""
 
     def test_registers_expected_tools(self, mock_llm):
@@ -123,15 +137,23 @@ class TestCoderSubAgent:
         assert "returned no value and printed nothing" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_a_run_that_returns_a_value_still_completes_the_task(self, mock_llm, mock_sandbox):
+    async def test_a_run_that_returns_a_value_hands_it_to_the_agent_not_the_caller(self, mock_llm, mock_sandbox):
+        """A result the agent never read is not an answer.
+
+        Ending the loop on the first successful run shipped the sandbox's raw
+        return value as the task's conclusion; a Drive listing reached the
+        person as a dict of ids. The result goes back to the agent, which reads
+        it and answers with DONE, where proof is still required.
+        """
         mock_sandbox.responses = [{
             "status": "success", "error": None, "execution_time": 0.2,
             "output": {"success": True, "data": {"contacts": 1412}, "stdout": ""},
         }]
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, sandbox=mock_sandbox)
         result = await coder._execute_tool("write_code", {"code": "result = 1"})
-        assert result["_auto_complete"] is True
+        assert "_auto_complete" not in result
         assert result["output"]["data"] == {"contacts": 1412}
+        assert "answer the task in your own words" in result["message"]
 
     @pytest.mark.parametrize("output, produced", [
         ({"success": True, "data": None, "stdout": ""}, False),
@@ -198,19 +220,20 @@ class TestCoderSubAgent:
 
     @pytest.mark.asyncio
     async def test_full_run_tool_then_done(self, mock_llm, mock_sandbox):
-        """Coder uses write_code tool and completes from sandbox execution evidence."""
+        """The agent runs code, reads the result, and answers in its own words."""
         mock_sandbox.responses = [
             {"status": "success", "output": 2, "error": None, "execution_time": 0.1}
         ]
         mock_llm.responses = [
             _coder_write_response("result = 1+1"),
+            _llm_response('THOUGHT: Read it\nDONE: 1 + 1 is 2\nRESULT: {"sum": 2}'),
         ]
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, sandbox=mock_sandbox)
         output = await coder.run("write addition code", max_turns=3)
         assert output.status == "success"
-        assert output.payload == 2
+        assert output.payload == {"sum": 2}
         assert len(coder.candidates) == 1
-        assert len(output.trajectory) == 1
+        assert len(output.trajectory) == 2
 
     @pytest.mark.asyncio
     async def test_run_resets_candidates(self, mock_llm):

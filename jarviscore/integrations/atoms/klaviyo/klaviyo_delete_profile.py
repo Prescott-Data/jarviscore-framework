@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["profile_id"], "consequence": "Deletes the Klaviyo profile."}
 KLAVIYO_API = 'https://a.klaviyo.com'
 KL_REVISION = '2024-10-15'
 

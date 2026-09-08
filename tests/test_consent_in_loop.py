@@ -42,12 +42,21 @@ class FakeAuthManager:
     def __init__(self, outcome="conn-123"):
         self.outcome = outcome
         self.asked = []
+        self.presented = []
+        self.return_url = "http://127.0.0.1:8765/"
+        manager = self
 
-    async def authenticate(self, provider):
+        class Flow:
+            async def present_auth_url(self, url, provider, **kwargs):
+                manager.presented.append((url, provider, kwargs))
+
+        self.flow_handler = Flow()
+
+    async def begin_authentication(self, provider, **kwargs):
         self.asked.append(provider)
         if isinstance(self.outcome, Exception):
             raise self.outcome
-        return self.outcome
+        return self.outcome, "https://provider.test/consent"
 
 
 @pytest.fixture
@@ -114,32 +123,32 @@ def test_consent_is_offered_without_the_system_being_named_first(coder, monkeypa
     assert "request_access" in coder._tools
 
 
-async def test_consent_makes_capabilities_callable_in_the_same_run(
+async def test_consent_yields_without_waiting_or_offering_dead_capabilities(
     coder, monkeypatch
 ):
-    """The point of the whole mechanism: the run continues, it does not restart."""
+    """Consent is a durable pause; the callback resumes the same run."""
     _set_consent(monkeypatch, needs=True)
     coder._offer_access_request()
     assert "slack_send_message" not in coder._tools
 
     result = await coder._tools["request_access"][0](system="slack")
 
-    assert result["status"] == "success"
+    assert result["status"] == "waiting"
+    assert result["typed_outcome"] == "WAITING_FOR_CONSENT"
     assert coder.auth_manager.asked == ["slack"]
-    assert "slack_send_message" in coder._tools
-    assert result["capabilities"] == ["slack_send_message"]
+    assert "slack_send_message" not in coder._tools
+    assert coder.auth_manager.presented[0][1] == "slack"
 
 
-async def test_consent_routes_later_calls_through_the_gateway(coder, monkeypatch):
-    """The token lands at the gateway, not in the local vault that holds the app."""
+async def test_wait_result_carries_the_handle_needed_to_resume(coder, monkeypatch):
     _set_consent(monkeypatch, needs=True)
     coder._offer_access_request()
-    await coder._tools["request_access"][0](system="slack")
-    assert coder._run_context["_nexus_connection_id"] == "conn-123"
-    assert coder._run_context["_nexus_provider"] == "slack"
+    result = await coder._tools["request_access"][0](system="slack")
+    assert result["connection_id"] == "conn-123"
+    assert result["system"] == "slack"
 
 
-async def test_abandoned_consent_is_reported_not_raised(coder, monkeypatch):
+async def test_a_handshake_that_cannot_start_is_reported(coder, monkeypatch):
     _set_consent(monkeypatch, needs=True)
     coder.auth_manager = FakeAuthManager(outcome=RuntimeError("timed out"))
     coder._offer_access_request()
@@ -147,7 +156,7 @@ async def test_abandoned_consent_is_reported_not_raised(coder, monkeypatch):
     result = await coder._tools["request_access"][0](system="slack")
 
     assert result["status"] == "error"
-    assert result["semantic_error"] == "CONSENT_NOT_COMPLETED"
+    assert result["semantic_error"] == "CONSENT_NOT_STARTED"
     assert "slack_send_message" not in coder._tools
 
 

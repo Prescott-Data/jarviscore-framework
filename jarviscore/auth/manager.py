@@ -70,7 +70,9 @@ class AuthenticationManager:
             settings, "nexus_gateway_url", None
         )
 
-        self.user_id = config.get("nexus_default_user_id", "jarviscore-agent")
+        self.user_id = config.get("nexus_default_user_id") or getattr(
+            settings, "nexus_default_user_id", "jarviscore-agent"
+        )
         self.cache_ttl = config.get("auth_strategy_cache_ttl", 300)
         self.auth_timeout = config.get("auth_flow_timeout", 300)
         self.auth_poll_interval = config.get("auth_poll_interval", 2.0)
@@ -110,6 +112,9 @@ class AuthenticationManager:
         # Providers whose connection the broker says can no longer sign a call.
         self._needs_attention: set = set()
 
+        # Handles for connections found at the gateway rather than made here.
+        self._discovered: Dict[str, str] = {}
+
         # _strategy_cache is package-private — only NexusCallProxy reads it
         self._strategy_cache: Dict[str, Tuple[DynamicStrategy, float]] = {}
 
@@ -134,6 +139,44 @@ class AuthenticationManager:
     def is_connected(self, provider: str) -> bool:
         """Whether a usable handle is held for this provider right now."""
         return provider in self._connections
+
+    def connection_handle(self, provider: str) -> Optional[str]:
+        """The opaque handle for a connected provider, or None."""
+        return self._connections.get(provider)
+
+    # ── Discovery ───────────────────────────────────────────────────────────
+
+    async def discover(self, provider: str) -> Optional[str]:
+        """Learn whether the gateway already holds an active connection.
+
+        Every process starts knowing only the connections it made itself. A
+        consent completed in the previous run, or from the CLI, is invisible
+        until asked about. Returns the handle, or None when nothing is active.
+        """
+        if provider in self._connections:
+            return self._connections[provider]
+        if not self.nexus_client:
+            return None
+        try:
+            found = await self.nexus_client.resolve_active(provider, self.user_id)
+        except Exception as exc:
+            logger.debug("Discovery for %s failed: %s", provider, exc)
+            return None
+        if not found:
+            return None
+        # The gateway resolves by workspace and provider, not by connection id,
+        # so the handle names what it is and resolve_strategy knows to ask again.
+        handle = f"resolved:{provider}"
+        self._connections[provider] = handle
+        self._discovered[handle] = provider
+        self._needs_attention.discard(provider)
+        logger.info("Discovered active %s connection at the gateway", provider)
+        return handle
+
+    async def discover_all(self, providers: List[str]) -> None:
+        """Bring this process's view in line with the gateway for these providers."""
+        for provider in providers:
+            await self.discover(provider)
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -188,18 +231,14 @@ class AuthenticationManager:
         if provider in self._connections:
             return self._connections[provider]
 
-        uid = user_id or self.user_id
-        resolved_scopes = scopes or get_scopes(provider)
-
-        connection_id, auth_url = await self.nexus_client.request_connection(
-            provider=provider,
-            user_id=uid,
-            scopes=resolved_scopes,
-            return_url=self.return_url,
+        connection_id, auth_url = await self.begin_authentication(
+            provider, user_id=user_id, scopes=scopes
         )
 
         # Present auth URL to user (opens browser / posts to Slack / SSE)
-        await self.flow_handler.present_auth_url(auth_url, provider)
+        await self.flow_handler.present_auth_url(
+            auth_url, provider, connection_id=connection_id
+        )
 
         # Poll until ACTIVE
         status = await self.flow_handler.wait_for_completion(
@@ -227,6 +266,78 @@ class AuthenticationManager:
         )
         return connection_id
 
+    async def begin_authentication(
+        self,
+        provider: str,
+        user_id: Optional[str] = None,
+        scopes: Optional[List[str]] = None,
+        return_url: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        """Create an OAuth handshake without waiting for user consent."""
+        if not self.nexus_client:
+            raise RuntimeError(
+                f"No account can be connected to {provider!r} right now, because "
+                "this deployment has no way to run a consent flow."
+            )
+        await self._ensure_provider(provider)
+        return await self.nexus_client.request_connection(
+            provider=provider,
+            user_id=user_id or self.user_id,
+            scopes=scopes or get_scopes(provider),
+            return_url=return_url or self.return_url,
+        )
+
+    async def _ensure_provider(self, provider: str) -> None:
+        """Seed the Broker from the registered provider through its public API."""
+        from jarviscore.nexus._data import PROVIDER_URLS
+        from jarviscore.nexus.providers import broker_name, get_provider
+        from jarviscore.nexus.store import get_store
+
+        entry = get_store().get(provider) or {}
+        known = get_provider(provider) or {}
+        urls = PROVIDER_URLS.get(provider, {})
+        auth_type = str(entry.get("auth_type") or known.get("auth_type") or "oauth2")
+        params = dict(urls.get("params") or {})
+        if auth_type in {"api_key", "header", "query_param"}:
+            field = (entry.get("auth_config") or {}).get("credential_field", "api_key")
+            params["credential_schema"] = {
+                "type": "object",
+                "properties": {field: {"type": "string", "title": "API key", "format": "password"}},
+                "required": [field],
+            }
+        elif auth_type == "basic_auth":
+            params["credential_schema"] = {
+                "type": "object",
+                "properties": {
+                    "username": {"type": "string", "title": "Username"},
+                    "password": {"type": "string", "title": "Password", "format": "password"},
+                },
+                "required": ["username", "password"],
+            }
+        profile = {
+            "name": broker_name(provider),
+            "auth_type": auth_type,
+            "client_id": entry.get("client_id"),
+            "client_secret": entry.get("client_secret"),
+            "auth_url": urls.get("auth_url"),
+            "token_url": urls.get("token_url"),
+            "api_base_url": urls.get("api_base_url"),
+            "user_info_endpoint": urls.get("user_info_endpoint"),
+            "scopes": entry.get("scopes") or known.get("scopes") or [],
+            "params": params or None,
+            "description": known.get("label"),
+            "category": known.get("category"),
+        }
+        await self.nexus_client.ensure_provider({k: v for k, v in profile.items() if v is not None})
+
+    async def credential_capture(self, auth_url: str) -> Tuple[str, Dict[str, Any]]:
+        """Return signed capture state and form schema for a non-OAuth handshake."""
+        from urllib.parse import parse_qs, urlparse
+        state = (parse_qs(urlparse(auth_url).query).get("state") or [""])[0]
+        if not state:
+            raise RuntimeError("Nexus did not return a credential capture state.")
+        return state, await self.nexus_client.capture_schema(state)
+
     # ── Package-private — NexusCallProxy only ──────────────────────────────
 
     async def resolve_strategy(self, connection_id: str) -> DynamicStrategy:
@@ -243,9 +354,42 @@ class AuthenticationManager:
             if time.time() - cached_at < self.cache_ttl and not strategy.is_expired():
                 return strategy
 
-        strategy = await self.nexus_client.resolve_strategy(connection_id)
+        provider = self._discovered.get(connection_id)
+        if provider is not None:
+            payload = await self.nexus_client.resolve_active(provider, self.user_id)
+            if payload is None:
+                self._connection_needs_attention(connection_id)
+                raise RuntimeError(
+                    f"The {provider} connection is no longer active at the gateway."
+                )
+            strategy = self._strategy_from_resolve(payload)
+        else:
+            strategy = await self.nexus_client.resolve_strategy(connection_id)
         self._strategy_cache[connection_id] = (strategy, time.time())
         return strategy
+
+    @staticmethod
+    def _strategy_from_resolve(payload: Dict[str, Any]) -> DynamicStrategy:
+        """/v1/resolve returns the token at the top level; /v1/token nests it.
+
+        The gateway's credentials object also carries bookkeeping (expired,
+        expires_in, scope) alongside the credential. Only string-valued fields
+        are credentials; the expiry is lifted to where the strategy expects it.
+        """
+        strategy = payload.get("strategy") or {}
+        raw = payload.get("credentials") or {}
+        credentials = {
+            k: v for k, v in raw.items()
+            if isinstance(v, str) and k != "expires_at"
+        }
+        if payload.get("access_token") and "access_token" not in credentials:
+            credentials["access_token"] = payload["access_token"]
+        return DynamicStrategy(
+            type=strategy.get("type") or "oauth2",
+            credentials=credentials,
+            config=strategy.get("config") or {},
+            expires_at=payload.get("expires_at") or raw.get("expires_at"),
+        )
 
     # ── Cleanup ─────────────────────────────────────────────────────────────
 

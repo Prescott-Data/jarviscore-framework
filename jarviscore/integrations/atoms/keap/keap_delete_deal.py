@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["deal_id"], "consequence": "Deletes the Keap deal."}
 KEAP_API = 'https://api.infusionsoft.com/crm/rest/v2'
 
 async def keap_delete_deal(deal_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:

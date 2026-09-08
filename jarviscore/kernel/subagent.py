@@ -87,7 +87,7 @@ class SubagentLogAdapter(logging.LoggerAdapter):
 # Regex patterns for parsing LLM tool call responses
 _TOOL_PATTERN = re.compile(r"^TOOL:\s*(.+)$", re.MULTILINE)
 _PARAMS_PATTERN = re.compile(r"^PARAMS:\s*(.+)$", re.MULTILINE | re.DOTALL)
-_DONE_PATTERN = re.compile(r"^DONE:\s*(.*)$", re.MULTILINE)
+_DONE_PATTERN = re.compile(r"^DONE:\s*(.+?)(?=\nRESULT:|\Z)", re.MULTILINE | re.DOTALL)
 _RESULT_PATTERN = re.compile(r"^RESULT:\s*(.+)$", re.MULTILINE | re.DOTALL)
 _THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGHT):|\Z)", re.MULTILINE | re.DOTALL)
 
@@ -307,6 +307,7 @@ class BaseSubAgent(ABC):
         # Live KernelState for the current dispatch — set at the top of run()
         # so built-in tools (read_turn_result) can reach the retention ring.
         self._current_state: Optional[KernelState] = None
+        self._current_memory = None
 
         # Let subclass register its tools explicitly
         self.setup_tools()
@@ -319,6 +320,46 @@ class BaseSubAgent(ABC):
     ) -> None:
         """Register a tool available to this subagent."""
         self._tools[name] = ToolDefinition(name, func, description, phase)
+
+    async def _tool_remember(self, fact: str, kind: str = "fact") -> Dict[str, Any]:
+        """Keep something worth knowing in a later session (params: fact, optional kind).
+
+        You are the memory lifecycle: nothing persists across sessions unless
+        you decide it should. Record outcomes and durable facts, in the words a
+        future you would want to read: what was done, what was found, what a
+        person decided. Do not record diagnoses of failures or guesses about
+        why something did not work; those expire with the bug.
+        """
+        memory = self._current_memory
+        if memory is None or not hasattr(memory, "remember"):
+            return {
+                "status": "error",
+                "error": "No cross-session memory is attached to this run, so nothing can be kept.",
+                "semantic_error": "NO_MEMORY",
+            }
+        text = (fact or "").strip()
+        if not text:
+            return {"status": "error", "error": "Nothing to remember: fact was empty."}
+        kept = await memory.remember(text, kind=kind, role=self.role)
+        if not kept:
+            return {
+                "status": "error",
+                "error": "The memory tier did not accept this; it was not kept.",
+                "semantic_error": "NOT_KEPT",
+            }
+        return {"status": "success", "kept": text, "kind": kind}
+
+    async def _tool_recall(self, query: str, limit: int = 5) -> Dict[str, Any]:
+        """Ask what earlier sessions recorded about something (params: query, optional limit).
+
+        Results are the past, scored by relevance. They tell you what was true
+        then, not what is true now.
+        """
+        memory = self._current_memory
+        if memory is None or not hasattr(memory, "recall"):
+            return {"status": "success", "results": [], "note": "No cross-session memory is attached to this run."}
+        results = await memory.recall((query or "").strip(), limit=max(1, min(int(limit), 20)))
+        return {"status": "success", "results": results, "count": len(results)}
 
     def _tool_read_turn_result(self, turn: int, offset: int = 0, length: int = 0) -> Dict[str, Any]:
         """Read the FULL output of a previous tool call when the inline view was clipped (params: turn, optional offset/length).
@@ -462,9 +503,21 @@ class BaseSubAgent(ABC):
             "",
             "Protocol:",
             "  To use a tool: THOUGHT: <reasoning>\\nTOOL: <name>\\nPARAMS: <json>",
-            "  To finish:     THOUGHT: <reasoning>\\nDONE: <summary>\\nRESULT: <json>",
+            "  To finish:     THOUGHT: <reasoning>\\nDONE: <complete human answer>\\nRESULT: <json>",
             "  JSON alternative: {\"thought\": \"...\", \"tool\": \"...\", \"params\": {...}}",
             "  JSON finish:      {\"thought\": \"...\", \"done\": \"<summary>\", \"result\": {...}}",
+            "",
+            "Finishing:",
+            "  DONE is read by the person who asked. Put the complete answer there,",
+            "  including any lists or details they asked for. DONE may span lines.",
+            "  RESULT carries the data behind that answer, shaped for whoever will",
+            "  use it next: the list, the record, the figures. It is not a place",
+            "  for status flags, booleans about your own process, or a diagnosis",
+            "  of the runtime. If there is no data beyond the answer, RESULT may",
+            "  repeat the answer as a string. When the answer needs more than one",
+            "  line, put the complete prose in RESULT under an `answer` field; that",
+            "  prose becomes the human-facing result while the other fields remain",
+            "  available to downstream agents.",
         ]
         return "\n".join(parts)
 
@@ -495,7 +548,7 @@ class BaseSubAgent(ABC):
                 f"Your execution budget is exhausted ({exhausted}). Tools are no "
                 "longer available. Produce your final answer NOW from what you "
                 "have already gathered. Respond with exactly:\n"
-                "DONE: <one-line summary>\nRESULT: <json result>\n"
+                "DONE: <complete human answer; may span lines>\nRESULT: <json result>\n"
                 "If your findings are partial, say so inside the result."
             )})
             kwargs = {"model": model} if model else {}
@@ -597,7 +650,7 @@ class BaseSubAgent(ABC):
             from jarviscore.context.context_manager import ContextManager
             context_manager = ContextManager()
 
-        # ── Initialize state ──
+        # ── Initialize or resume state ──
         state = KernelState(
             workflow_id=context.get("workflow_id", "unknown") if context else "unknown",
             step_id=context.get("step_id", "unknown") if context else "unknown",
@@ -607,11 +660,26 @@ class BaseSubAgent(ABC):
             tokens_budget=self._cognition.lease.max_total_tokens,
         )
 
+        if context and context.get("_resume") and memory is not None:
+            raw_checkpoint = await memory.load_checkpoint()
+            if raw_checkpoint:
+                restored = KernelState.model_validate_json(raw_checkpoint)
+                if restored.agent_id == self.agent_id and restored.task == task:
+                    state = restored
+                    state.status = "active"
+                    state.context.update(context)
+                    self._cognition.lease.thinking_used = state.thinking_tokens_used
+                    self._cognition.lease.action_used = state.action_tokens_used
+                    self._cognition.lease.turns_used = state.turn
+                    self._restore_subagent_state(state)
+
         # Restore cross-task memory (no-op unless memory_enabled=True)
         await self._restore_memory(state)
 
         # Expose state to built-in tools (read_turn_result) for this dispatch.
         self._current_state = state
+        # And the memory handle, so remember/recall reach the same tiers.
+        self._current_memory = memory
 
         # Pre-run hook — subclasses can do deterministic pre-flight work
         await self._pre_run_hook(state)
@@ -619,8 +687,8 @@ class BaseSubAgent(ABC):
         # ── TraceManager: use injected trace or no-op ──
         from jarviscore.kernel.tracing import create_noop_trace
         _trace = trace if trace is not None else create_noop_trace()
-        total_tokens = {"input": 0, "output": 0, "total": 0}
-        total_cost = 0.0
+        total_tokens = {"input": 0, "output": 0, "total": state.tokens_used}
+        total_cost = state.total_cost_usd
         system_prompt = self._build_system_prompt()
 
         # Rolling conversation history for multi-turn LLM continuity
@@ -637,7 +705,7 @@ class BaseSubAgent(ABC):
         # dispatches.
         self._dispatch_metadata: Dict[str, Any] = {}
 
-        for turn in range(max_turns):
+        for turn in range(state.turn, max_turns):
             state.turn = turn
             self._log.set_turn(turn)
 
@@ -999,23 +1067,34 @@ class BaseSubAgent(ABC):
                     turn_log["status"] = "success"
                     _trace.log_tool_result(tool_name, tool_result)
 
-                if isinstance(tool_result, dict) and tool_result.get("_auto_complete"):
-                    payload = tool_result.get("output", tool_result)
-                    state.status = "completed"
-                    state.output = payload
+                if isinstance(tool_result, dict) and tool_result.get("status") == "waiting":
+                    state.status = "waiting"
+                    state.turn = turn + 1
+                    state.thinking_tokens_used = self._cognition.lease.thinking_used
+                    state.action_tokens_used = self._cognition.lease.action_used
+                    state.total_cost_usd = total_cost
+                    self._save_subagent_state(state)
                     trajectory.append(turn_log)
-                    summary = tool_result.get("message", f"Tool '{tool_name}' completed the task.")
-                    _trace.log_step_complete(True, summary)
-                    await self._persist_memory(state)
+                    if memory is not None:
+                        await memory.save_checkpoint(state.model_dump_json())
                     return AgentOutput(
-                        status="success",
-                        payload=payload,
-                        summary=summary,
+                        status="yield",
+                        payload=tool_result,
+                        summary=tool_result.get("detail", "Waiting for user action."),
                         trajectory=trajectory,
                         metadata={
                             "tokens": total_tokens,
                             "cost_usd": total_cost,
-                            "exit_type": "tool_auto_complete",
+                            "yield_pending": True,
+                            "typed_outcome": tool_result.get("typed_outcome"),
+                            "hitl_type": tool_result.get("hitl_type"),
+                            "system": tool_result.get("system"),
+                            "connection_id": tool_result.get("connection_id"),
+                            "workflow_id": state.workflow_id,
+                            "step_id": state.step_id,
+                            "action_id": tool_result.get("action_id"),
+                            "action": tool_result.get("action"),
+                            "consequence": tool_result.get("consequence"),
                         },
                     )
 
@@ -1225,6 +1304,12 @@ class BaseSubAgent(ABC):
         registry warm-up, context seeding). Default is a no-op.
         """
         pass
+
+    def _save_subagent_state(self, state: KernelState) -> None:
+        """Place subclass runtime state into the serializable checkpoint."""
+
+    def _restore_subagent_state(self, state: KernelState) -> None:
+        """Restore subclass runtime state from a checkpoint."""
 
     async def teardown(self) -> None:
         """Release resources owned by this subagent instance."""

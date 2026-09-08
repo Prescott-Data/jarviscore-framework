@@ -387,8 +387,11 @@ class Kernel:
             # authenticate(), which would start a consent flow and block routing
             # for its full timeout. Asking for consent is the agent's move, made
             # in the loop through request_access where a person can see it.
-            if getattr(self.auth_manager, "is_connected", lambda _p: False)(system_name):
-                return self.auth_manager._connections.get(system_name)
+            discover = getattr(self.auth_manager, "discover", None)
+            if callable(discover):
+                handle = await discover(system_name)
+                if handle is not None:
+                    return handle
         # Local-vault mode: connection_id IS the provider name — NexusCallProxy
         # resolves it from NexusLocalStore at call time.
         try:
@@ -450,7 +453,7 @@ class Kernel:
         # A task rarely names its provider, and without this the router only ever
         # saw the words. "List our Google Drive files" reads as browser work until
         # you know a Drive connection is one consent away.
-        reachable = self._provider_inventory()
+        reachable = await self._provider_inventory()
         if reachable:
             routing_context["providers_reachable_by_api"] = reachable
 
@@ -472,21 +475,32 @@ class Kernel:
             )
         return decision
 
-    def _provider_inventory(self) -> Dict[str, str]:
-        """Providers this deployment can reach through Nexus, and their state."""
+    async def _provider_inventory(self) -> Dict[str, str]:
+        """Providers this deployment can reach through Nexus, and their state.
+
+        The vault knows what was registered here; the gateway knows what has
+        been connected. A consent completed in another process is only visible
+        through the second, so both are asked.
+        """
         try:
             from jarviscore.nexus.store import ConnectionState, get_store
             store = get_store()
-            return {
-                provider: (
-                    "connected"
-                    if store.connection_state(provider) is ConnectionState.CONNECTED
-                    else "one_consent_away"
-                    if store.needs_consent(provider)
-                    else "registered_but_unusable"
-                )
-                for provider in store.list()
-            }
+            providers = store.list()
+            discover_all = getattr(self.auth_manager, "discover_all", None)
+            if callable(discover_all):
+                await discover_all(providers)
+            connected_at_gateway = getattr(self.auth_manager, "is_connected", lambda _p: False)
+            inventory = {}
+            for provider in providers:
+                if connected_at_gateway(provider):
+                    inventory[provider] = "connected"
+                elif store.connection_state(provider) is ConnectionState.CONNECTED:
+                    inventory[provider] = "connected"
+                elif store.needs_consent(provider):
+                    inventory[provider] = "one_consent_away"
+                else:
+                    inventory[provider] = "registered_but_unusable"
+            return inventory
         except Exception as exc:
             logger.debug("[Kernel] Provider inventory unavailable: %s", exc)
             return {}
@@ -743,8 +757,11 @@ class Kernel:
         total_tokens = {"input": 0, "output": 0, "total": 0}
         total_cost = 0.0
 
-        workflow_id = context.get("workflow_id", "unknown") if context else "unknown"
-        step_id = context.get("step_id", f"step_{int(time.time())}") if context else f"step_{int(time.time())}"
+        context = dict(context or {})
+        trace_sink = context.pop("_trace_sink", None)
+
+        workflow_id = context.get("workflow_id", "unknown")
+        step_id = context.get("step_id", f"step_{int(time.time())}")
 
         # Create TraceManager for real-time streaming to UI
         from jarviscore.kernel.tracing import TraceManager, create_noop_trace
@@ -752,6 +769,7 @@ class Kernel:
             _kernel_trace = TraceManager(
                 workflow_id=workflow_id,
                 step_id=step_id,
+                event_sink=trace_sink,
             )
         except Exception as _te:
             logger.debug("[Kernel] TraceManager init failed (non-fatal): %s", _te)
@@ -846,18 +864,17 @@ class Kernel:
             # Create memory (graceful degradation if no Redis/blob)
             memory = self._create_memory(workflow_id, step_id, agent_id)
 
-            # ── Inject Athena memory context into enriched_context ──────────────
-            # Agents see their cross-session STM + MTM chains before deciding.
-            # This is what gives them continuity across shifts and sessions.
+            # ── Recall what earlier sessions hold about this task ─────────────
+            # A question scored by relevance, not the last fifteen things the
+            # agent thought about anything. What comes back is evidence from the
+            # past and is rendered as that, apart from the task, never beside it.
             if memory is not None:
                 try:
-                    bundle = await memory.rehydrate_bundle(ledger_tail=5)
-                    if bundle.get("athena_context"):
-                        enriched_context["_athena_memory"] = bundle["athena_context"]
-                    if bundle.get("ltm_summary"):
-                        enriched_context["_ltm_summary"] = bundle["ltm_summary"]
+                    recalled = await memory.recall(task, limit=8)
+                    if recalled:
+                        enriched_context["_recalled"] = recalled
                 except Exception as _me:
-                    logger.debug("[Kernel] Memory rehydration failed (non-fatal): %s", _me)
+                    logger.debug("[Kernel] Memory recall failed (non-fatal): %s", _me)
 
             ctx_manager = self._create_context_manager(role)
 
@@ -1020,6 +1037,14 @@ class Kernel:
 
             if output.status == "yield":
                 # HITL needed or budget exhausted — pass through
+                pass_through = {
+                    key: meta.get(key)
+                    for key in (
+                        "typed_outcome", "hitl_type", "system", "connection_id",
+                        "workflow_id", "step_id", "action_id", "action", "consequence",
+                    )
+                    if meta.get(key) is not None
+                }
                 return AgentOutput(
                     status="yield",
                     payload=output.payload,
@@ -1030,8 +1055,8 @@ class Kernel:
                         "cost_usd": total_cost,
                         "dispatches": dispatches,
                         "yield_pending": True,
-                        "typed_outcome": meta.get("typed_outcome"),
                         "elapsed_ms": (time.time() - start_time) * 1000,
+                        **pass_through,
                     },
                 )
 

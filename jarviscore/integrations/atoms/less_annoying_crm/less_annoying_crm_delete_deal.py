@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["deal_id"], "consequence": "Deletes the Less Annoying CRM deal."}
 LACRM_API = 'https://api.lessannoyingcrm.com/v2'
 
 async def less_annoying_crm_delete_deal(deal_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:

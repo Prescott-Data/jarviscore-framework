@@ -27,10 +27,12 @@ Output contract (result variable in generated code):
 import ast
 import asyncio
 import io
+import json
 import logging
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import time
@@ -386,6 +388,137 @@ class CoderSandbox:
     # ─────────────────────────────────────────────────────────────
 
     async def execute(
+        self,
+        code: str,
+        context: Optional[Dict] = None,
+        timeout: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Execute generated code in a child process with no parent secrets."""
+        return await self._execute_subprocess(code, context, timeout or self.timeout)
+
+    async def _execute_subprocess(
+        self, code: str, context: Optional[Dict], timeout: int
+    ) -> Dict[str, Any]:
+        start = time.time()
+        self._access_failure = None
+        before = self._snapshot_output()
+        parent_socket, child_socket = socket.socketpair()
+        safe_context = {
+            key: value for key, value in (context or {}).items()
+            if key in {"task", "system", "workflow_id", "step_id", "prior_outputs"}
+        }
+        request = {
+            "code": code, "context": safe_context,
+            "workspace": str(self.workspace), "output_dir": str(self.output_dir),
+            "bash_timeout": self._bash.timeout, "rpc_fd": child_socket.fileno(),
+        }
+        safe_env = {
+            "PATH": os.path.dirname(sys.executable),
+            "HOME": str(self.workspace),
+            "TMPDIR": str(self.workspace / ".tmp"),
+            "LANG": "C.UTF-8",
+            "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+        }
+        Path(safe_env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "jarviscore.execution.sandbox_worker",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, env=safe_env,
+            pass_fds=(child_socket.fileno(),), start_new_session=True,
+        )
+        child_socket.close()
+        rpc_task = asyncio.create_task(self._serve_child_rpc(parent_socket, context or {}))
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(json.dumps(request).encode()), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return self._to_sandbox_dict(CoderResult(
+                success=False, error=f"Coder execution timed out after {timeout}s",
+                error_type="ExecutionTimeout", execution_time=time.time() - start,
+            ))
+        finally:
+            parent_socket.close()
+            await asyncio.gather(rpc_task, return_exceptions=True)
+
+        if process.returncode != 0:
+            return self._to_sandbox_dict(CoderResult(
+                success=False, error=stderr.decode(errors="replace")[-2000:] or "Sandbox child failed.",
+                error_type="SandboxProcessError", execution_time=time.time() - start,
+            ))
+        try:
+            response = json.loads(stdout)
+        except Exception:
+            response = {"error": "Sandbox child returned an invalid response.", "error_type": "SandboxProtocolError"}
+        if response.get("error"):
+            cr = CoderResult(
+                success=False, stdout=response.get("stdout", ""),
+                error=response["error"], error_type=response.get("error_type"),
+                execution_time=time.time() - start,
+            )
+        else:
+            cr = self._parse_result(response.get("result"), response.get("stdout", ""), time.time() - start)
+            await self._collect_artifacts(cr, before)
+        return self._to_sandbox_dict(cr)
+
+    async def _serve_child_rpc(self, sock: socket.socket, context: Dict[str, Any]) -> None:
+        sock.setblocking(False)
+        reader, writer = await asyncio.open_connection(sock=sock)
+        try:
+            while line := await reader.readline():
+                request = json.loads(line)
+                try:
+                    if request["operation"] == "nexus_call":
+                        connection_id = context.get("_nexus_connection_id")
+                        if not self._nexus_call_proxy or not connection_id:
+                            raise RuntimeError("No provider account is connected for this task.")
+                        payload = request["payload"]
+                        call = self._recording_nexus_call(
+                            lambda method, url, **kwargs: self._nexus_call_proxy.call(
+                                connection_id, method, url, **kwargs
+                            ),
+                            str(context.get("_nexus_provider") or connection_id),
+                        )
+                        result = await call(
+                            payload["method"], payload["url"], **payload.get("kwargs", {})
+                        )
+                    elif request["operation"] == "fetch_artifact":
+                        if self.blob_storage is None:
+                            raise RuntimeError("No blob storage is configured.")
+                        import base64
+                        content = await self.blob_storage.read(request["payload"]["key"])
+                        if content is None:
+                            raise FileNotFoundError(request["payload"]["key"])
+                        if isinstance(content, str):
+                            content = content.encode()
+                        result = {"content": base64.b64encode(content).decode("ascii")}
+                    else:
+                        raise RuntimeError("Unknown sandbox RPC operation.")
+                    response = {"id": request["id"], "result": self._rpc_jsonable(result)}
+                except Exception as exc:
+                    response = {"id": request.get("id"), "error": str(exc), "error_type": type(exc).__name__}
+                writer.write((json.dumps(response) + "\n").encode())
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    @staticmethod
+    def _rpc_jsonable(value: Any) -> Any:
+        import base64
+        if isinstance(value, bytes):
+            return {"__bytes__": base64.b64encode(value).decode("ascii")}
+        if isinstance(value, dict):
+            return {str(key): CoderSandbox._rpc_jsonable(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [CoderSandbox._rpc_jsonable(item) for item in value]
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        return str(value)
+
+    async def _execute_local(
         self,
         code: str,
         context: Optional[Dict] = None,

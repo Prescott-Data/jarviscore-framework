@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["product_id"], "consequence": "Deletes the Jumia Seller Center product."}
 JUMIA_SC_API = 'http://sellerapi.sellercenter.jumia.com'
 SC_VERSION = '1.0'
 

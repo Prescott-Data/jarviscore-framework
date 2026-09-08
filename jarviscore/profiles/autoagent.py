@@ -204,8 +204,13 @@ class AutoAgent(Profile):
         try:
             from jarviscore.auth.manager import AuthenticationManager
             from jarviscore.nexus.call_proxy import NexusCallProxy
-            auth_mgr = getattr(self, '_auth_manager', None) or AuthenticationManager(config)
-            nexus_proxy = NexusCallProxy(auth_mgr)
+            # Resolved at call time, not captured now: the mesh injects the shared
+            # manager after setup(), and a proxy holding a fallback built here had
+            # a connection table that consent never wrote to.
+            fallback = AuthenticationManager(config)
+            nexus_proxy = NexusCallProxy(
+                lambda: getattr(self, "_auth_manager", None) or fallback
+            )
         except Exception as _nexus_exc:
             self._logger.debug("Nexus call proxy unavailable: %s", _nexus_exc)
         self.sandbox = create_coder_sandbox(
@@ -481,8 +486,12 @@ class AutoAgent(Profile):
                 kernel_ctx = task.get('context') if isinstance(task, dict) else {}
                 if kernel_ctx is None:
                     kernel_ctx = {}
+                else:
+                    kernel_ctx = dict(kernel_ctx)
                 if getattr(self, "output_schema", None):
                     kernel_ctx["output_schema"] = self.output_schema
+                if getattr(self, "_trace_sink", None):
+                    kernel_ctx["_trace_sink"] = self._trace_sink
 
                 output = await self._kernel.execute(
                     task=task_desc,
@@ -511,6 +520,15 @@ class AutoAgent(Profile):
                     "role": self.role,
                     "function_id": meta.get("function_id"),
                     "dispatches": meta.get("dispatches", []),
+                    "yield_metadata": {
+                        key: meta.get(key)
+                        for key in (
+                            "yield_pending", "typed_outcome", "hitl_type", "system",
+                            "connection_id", "workflow_id", "step_id",
+                            "action_id", "action", "consequence",
+                        )
+                        if meta.get(key) is not None
+                    },
                 }
 
                 if getattr(self, '_direct_kernel_turn', False):

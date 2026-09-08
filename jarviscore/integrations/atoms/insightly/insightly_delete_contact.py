@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["contact_id"], "consequence": "Deletes the Insightly contact."}
 INSIGHTLY_API = 'https://api.na1.insightly.com/v3.1'
 
 async def insightly_delete_contact(contact_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:

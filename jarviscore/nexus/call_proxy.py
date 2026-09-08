@@ -52,9 +52,18 @@ class NexusCallProxy:
     def __init__(self, auth_manager):
         """
         Args:
-            auth_manager: jarviscore.auth.manager.AuthenticationManager instance.
+            auth_manager: an AuthenticationManager, or a zero-argument callable
+                returning the one to use right now. The callable form exists
+                because the mesh injects the shared manager after agent setup,
+                and a proxy that captured a fallback at setup signed from a
+                connection table the consent flow never wrote to.
         """
-        self._auth = auth_manager
+        self._auth_source = auth_manager
+
+    @property
+    def _auth(self):
+        source = self._auth_source
+        return source() if callable(source) else source
 
     def _provider_for(self, connection_id: str) -> str:
         """The provider behind an opaque handle, so its hosts can be checked."""

@@ -28,6 +28,7 @@ def _make_manager_with_mock_nexus(**extra_config):
     manager.nexus_client.request_connection = AsyncMock(
         return_value=("conn_abc", "https://provider.com/auth")
     )
+    manager.nexus_client.ensure_provider = AsyncMock()
     manager.nexus_client.check_connection_status = AsyncMock(return_value="ACTIVE")
     manager.lifecycle_monitor.monitor_connection = AsyncMock()
     manager.flow_handler.present_auth_url = AsyncMock()
@@ -110,6 +111,7 @@ class TestProdMode:
         manager.nexus_client.request_connection = AsyncMock(
             return_value=("conn_prod_1", "https://auth.test.com/oauth")
         )
+        manager.nexus_client.ensure_provider = AsyncMock()
         manager.lifecycle_monitor.monitor_connection = AsyncMock()
 
         # Mock the flow handler so it doesn't open a browser or poll
@@ -123,7 +125,7 @@ class TestProdMode:
 
         # Verify flow handler was invoked
         manager.flow_handler.present_auth_url.assert_called_once_with(
-            "https://auth.test.com/oauth", "shopify"
+            "https://auth.test.com/oauth", "shopify", connection_id="conn_prod_1"
         )
         manager.flow_handler.wait_for_completion.assert_called_once()
 
@@ -139,6 +141,7 @@ class TestProdMode:
         manager.nexus_client.request_connection = AsyncMock(
             return_value=("conn_fail_1", "https://auth.test.com/oauth")
         )
+        manager.nexus_client.ensure_provider = AsyncMock()
         manager.flow_handler.present_auth_url = AsyncMock()
         manager.flow_handler.wait_for_completion = AsyncMock(return_value="FAILED")
 
@@ -338,6 +341,7 @@ class TestCLIFlowHandler:
         manager.nexus_client.request_connection = AsyncMock(
             return_value=("conn_custom", "https://auth.test.com/custom")
         )
+        manager.nexus_client.ensure_provider = AsyncMock()
         manager.lifecycle_monitor.monitor_connection = AsyncMock()
 
         conn_id = await manager.authenticate("slack")

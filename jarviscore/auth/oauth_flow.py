@@ -37,7 +37,9 @@ class OAuthFlowHandler(ABC):
     """
 
     @abstractmethod
-    async def present_auth_url(self, auth_url: str, provider: str) -> None:
+    async def present_auth_url(
+        self, auth_url: str, provider: str, connection_id: str = "", context=None
+    ) -> None:
         """Present the OAuth URL to the user."""
         ...
 
@@ -63,6 +65,12 @@ class OAuthFlowHandler(ABC):
         """
         ...
 
+    async def present_credential_input(
+        self, schema: dict, provider: str, connection_id: str, state: str, context=None
+    ) -> None:
+        """Present non-OAuth credential capture. CLI handlers may open the broker form."""
+        raise NotImplementedError
+
 
 class HostedFlowHandler(OAuthFlowHandler):
     """OAuth flow for an agent running inside a UI rather than a terminal.
@@ -73,12 +81,29 @@ class HostedFlowHandler(OAuthFlowHandler):
     server is worse than useless when the server is not where the user is.
     """
 
-    def __init__(self, present, poll_handler: Optional[OAuthFlowHandler] = None):
+    def __init__(self, present, credential_present=None, poll_handler: Optional[OAuthFlowHandler] = None):
         self._present = present
+        self._credential_present = credential_present
         self._poll = poll_handler or CLIFlowHandler(open_browser=False)
 
-    async def present_auth_url(self, auth_url: str, provider: str) -> None:
-        await self._present(auth_url, provider)
+    async def present_auth_url(
+        self, auth_url: str, provider: str, connection_id: str = "", context=None
+    ) -> None:
+        from jarviscore.nexus.providers import display_name
+
+        await self._present(
+            auth_url, provider, display_name(provider), connection_id, context or {}
+        )
+
+    async def present_credential_input(
+        self, schema: dict, provider: str, connection_id: str, state: str, context=None
+    ) -> None:
+        if self._credential_present is None:
+            raise RuntimeError("The host has no credential input surface.")
+        from jarviscore.nexus.providers import display_name
+        await self._credential_present(
+            schema, provider, display_name(provider), connection_id, state, context or {}
+        )
 
     async def wait_for_completion(
         self,
@@ -105,7 +130,9 @@ class CLIFlowHandler(OAuthFlowHandler):
         self.open_browser = open_browser
         self._callback_server: Optional[LocalCallbackServer] = None
 
-    async def present_auth_url(self, auth_url: str, provider: str) -> None:
+    async def present_auth_url(
+        self, auth_url: str, provider: str, connection_id: str = "", context=None
+    ) -> None:
         """Open browser and print URL as fallback."""
         # Start local server to receive the Nexus Broker redirect.
         # Port 9090 is used to avoid conflicting with the Broker (8080)
