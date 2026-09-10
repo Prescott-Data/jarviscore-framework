@@ -1,7 +1,7 @@
-async def _get_account_id(access_token: str) -> str:
+async def _get_account_id() -> str:
     if True .get('account_id'):
         return None
-    resp = await nexus_call('GET', 'https://api.freshbooks.com/auth/api/v1/users/me', headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
+    resp = await nexus_call('GET', 'https://api.freshbooks.com/auth/api/v1/users/me', headers={'Content-Type': 'application/json'})
     if not resp['ok']:
         raise RuntimeError(resp['body'])
     memberships = resp['json'].get('response', {}).get('business_memberships', [])
@@ -12,8 +12,7 @@ async def _get_account_id(access_token: str) -> str:
 async def freshbooks_create_expense(amount: str, currency_code: str, date: str, staff_id: str, category_id: str, notes: str=None, client_id: str=None) -> dict:
     """Create expense via the freshbooks API."""
     try:
-        access_token = _get_nexus_token(None)
-        account_id = await _get_account_id(access_token)
+        account_id = await _get_account_id()
     except Exception as e:
         return {'success': False, 'data': None, 'error': f'Auth error: {str(e)}'}
     try:
@@ -23,7 +22,7 @@ async def freshbooks_create_expense(amount: str, currency_code: str, date: str, 
         if client_id:
             expense['clientid'] = client_id
         expense['categoryid'] = category_id
-        resp = await nexus_call('POST', f'https://api.freshbooks.com/accounting/account/{account_id}/expenses/expenses', json={'expense': expense}, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'})
+        resp = await nexus_call('POST', f'https://api.freshbooks.com/accounting/account/{account_id}/expenses/expenses', json={'expense': expense}, headers={'Content-Type': 'application/json'})
         if resp['status_code'] not in (200, 201):
             return {'success': False, 'data': None, 'error': f"Create expense failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'data': resp['json'].get('response', {}).get('result', {}).get('expense'), 'error': None}

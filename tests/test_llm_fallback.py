@@ -10,6 +10,70 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 import jarviscore.execution.llm as _llm_module
 from jarviscore.execution.llm import UnifiedLLMClient, LLMProvider
+from jarviscore.orchestration.budget import (
+    WorkflowBudgetExceeded,
+    workflow_budget_scope,
+)
+from jarviscore.testing import MockRedisContextStore
+
+
+def _budget_test_client(result):
+    llm = UnifiedLLMClient.__new__(UnifiedLLMClient)
+    llm.config = {"llm_default_max_tokens": 20}
+    llm._semaphore = None
+    llm._generate_inner = AsyncMock(return_value=result)
+    return llm
+
+
+@pytest.mark.asyncio
+async def test_generate_settles_exact_usage_into_the_workflow_budget():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-llm-budget",
+        "Bound every model call",
+        budget={"max_tokens": 1000},
+    )
+    llm = _budget_test_client({
+        "content": "done",
+        "tokens": {"input": 12, "output": 5, "total": 17},
+        "cost_usd": 0.004,
+    })
+
+    with workflow_budget_scope(store, "wf-llm-budget"):
+        result = await llm.generate(prompt="hello", max_tokens=20)
+
+    assert result["content"] == "done"
+    assert store.get_workflow_budget_usage("wf-llm-budget", "default") == {
+        "max_tokens_per_epoch": 1000,
+        "used_tokens": 17,
+        "cost_usd": 0.004,
+        "call_count": 1,
+        "epoch_count": 1,
+        "epoch_id": "default",
+        "epoch_used_tokens": 17,
+        "epoch_reserved_tokens": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_never_dispatches_without_global_capacity():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-llm-exhausted",
+        "Reject an unaffordable call",
+        budget={"max_tokens": 10},
+    )
+    llm = _budget_test_client({
+        "content": "must not run",
+        "tokens": {"input": 1, "output": 1, "total": 2},
+        "cost_usd": 0.001,
+    })
+
+    with workflow_budget_scope(store, "wf-llm-exhausted"):
+        with pytest.raises(WorkflowBudgetExceeded):
+            await llm.generate(prompt="this call cannot fit", max_tokens=20)
+
+    llm._generate_inner.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

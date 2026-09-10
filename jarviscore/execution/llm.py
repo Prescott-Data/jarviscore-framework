@@ -8,10 +8,12 @@ import logging
 import random
 import re
 import time
+import json
 from typing import Optional, Dict, List, Any
 from enum import Enum
 
 from jarviscore.promo import PROMO_MODEL
+from jarviscore.orchestration.budget import current_workflow_budget
 
 logger = logging.getLogger(__name__)
 
@@ -388,12 +390,40 @@ class UnifiedLLMClient:
         if not messages:
             messages = [{"role": "user", "content": prompt}]
 
-        # Acquire concurrency slot before dispatching to any provider.
-        # _semaphore is None when LLM_MAX_CONCURRENT=0 (unlimited).
-        if self._semaphore:
-            async with self._semaphore:
-                return await self._generate_inner(messages, temperature, max_tokens, **kwargs)
-        return await self._generate_inner(messages, temperature, max_tokens, **kwargs)
+        budget_account = current_workflow_budget()
+        reservation_id = None
+        if budget_account is not None:
+            input_reservation = len(
+                json.dumps(
+                    messages, ensure_ascii=False, default=str
+                ).encode("utf-8")
+            )
+            reservation_id = budget_account.reserve(input_reservation + max_tokens)
+
+        try:
+            # Acquire concurrency slot before dispatching to any provider.
+            # _semaphore is None when LLM_MAX_CONCURRENT=0 (unlimited).
+            if self._semaphore:
+                async with self._semaphore:
+                    result = await self._generate_inner(
+                        messages, temperature, max_tokens, **kwargs
+                    )
+            else:
+                result = await self._generate_inner(
+                    messages, temperature, max_tokens, **kwargs
+                )
+        except Exception:
+            if budget_account is not None and reservation_id is not None:
+                budget_account.release(reservation_id)
+            raise
+        if budget_account is not None and reservation_id is not None:
+            usage = result.get("tokens") or {}
+            budget_account.settle(
+                reservation_id,
+                int(usage.get("total") or 0),
+                float(result.get("cost_usd") or 0.0),
+            )
+        return result
 
 
 

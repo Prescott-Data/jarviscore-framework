@@ -36,7 +36,7 @@ from jarviscore.profiles import AutoAgent
 
 | Variable | Default | Description |
 |---|---|---|
-| `HITL_ENABLED` | `false` | Enable `AdaptiveHITLPolicy`. Escalates on low-confidence or high-risk Kernel actions. |
+| `HITL_ENABLED` | `false` | Enable typed human-only HITL. Routine failure, low confidence and token spend never escalate. |
 | `BROWSER_ENABLED` | `false` | Activate `BrowserSubAgent` for web automation tasks. |
 | `MAX_GOAL_STEPS` | `30` | Hard step ceiling for goal-oriented agents. |
 | `MAX_REPLAN_ATTEMPTS` | `8` | Maximum replanning cycles before the goal is marked failed. |
@@ -200,6 +200,9 @@ Mesh(config: Optional[Dict[str, Any]] = None)
 | `p2p_enabled` | `bool` | from `P2P_ENABLED` env | Enable SWIM/ZMQ peer transport |
 | `checkpoint_interval` | `int` | `1` | Save workflow checkpoints every N steps |
 | `max_parallel` | `int` | `5` | Maximum parallel step execution |
+| `distributed_poll_interval` | `float` | `2.0` | Redis DAG polling interval in seconds |
+| `distributed_claim_lease_seconds` | `int` | `60` | Renewable execution-claim lease duration |
+| `mesh_planning_lease_seconds` | `int` | `300` | Goal compilation or amendment lease duration |
 
 The Mesh auto-detects available infrastructure at `start()` time. Do not pass `mode=`: that argument is deprecated and has no effect.
 
@@ -244,6 +247,102 @@ Each step dict:
 | `complexity` | `str` | No | Model tier hint: `"nano"`, `"standard"`, or `"heavy"` |
 
 Raises `RuntimeError` if `start()` has not been called or if the workflow engine is unavailable.
+
+#### execute_goal
+
+```python
+async def execute_goal(
+    goal: str,
+    *,
+    workflow_id: Optional[str] = None,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: float = 900.0,
+) -> Dict[str, Any]
+```
+
+Register an immutable source goal, wait for any planning-capable node to publish
+a capability-addressed Redis DAG, and observe independent peer claims until the
+workflow reaches `completed`, `failed`, or `waiting`. Requires Redis.
+
+Set `config["execution_budget"]` on `Mesh` to bound the complete execution:
+
+```python
+mesh = Mesh(config={
+    "execution_budget": {
+        "max_seconds": 900,
+        "max_tokens": 240_000,
+        "max_steps": 30,
+        "max_replans": 8,
+        "max_peer_depth": 2,
+        "peer_timeout_seconds": 300,
+    }
+})
+```
+
+The framework stores this as `ExecutionBudget` in the durable
+`WorkflowEnvelope`. Caller context cannot override it. Token usage is enforced
+through one Redis-backed account per workflow: each model call reserves capacity
+before dispatch and settles exact provider-reported usage and cost afterward.
+Planning, evaluators, dependency/effect reviews, direct steps and nested peer
+mandates all debit that same account.
+
+### Atom repair lifecycle
+
+Coder exposes `inspect_atom_for_repair` and `repair_atom` only after an atom has
+failed during the current run. A repair candidate is bound to the atom's name,
+provider, version and failed invocation. `register_function` rejects candidates
+without successful execution evidence and rejects stale or renamed repairs. A
+successful repair becomes the next immutable FunctionRegistry version while the
+superseded source remains available for audit.
+
+### Distributed execution envelopes
+
+```python
+from jarviscore.orchestration import (
+    CapabilityMandate,
+    ExecutionBudget,
+    WorkflowEnvelope,
+    WorkflowEvidence,
+)
+```
+
+`WorkflowEnvelope` is the canonical source/context/DAG record.
+`CapabilityMandate` is the scoped peer-request lifecycle.
+`WorkflowEvidence` is the complete artifact/interpretation/state snapshot used
+for final synthesis. These types serialize compatibly with existing Redis records.
+
+#### resume_goal
+
+```python
+async def resume_goal(
+    workflow_id: str,
+    step_id: str,
+    *,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: float = 900.0,
+) -> Dict[str, Any]
+```
+
+Resume a waiting step with optional human or external context. The original
+executor affinity is retained and blocked descendants become claimable after
+the resumed step succeeds.
+
+#### replan_goal
+
+```python
+async def replan_goal(
+    workflow_id: str,
+    *,
+    reason: str,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: float = 900.0,
+) -> Dict[str, Any]
+```
+
+Compile a replacement for unfinished work under a short planning lease. The
+commit uses revision compare-and-swap and cannot remove or mutate completed
+steps or their outputs. The original source goal and obligation ledger remain
+authoritative; peers resume normal capability-based claiming after publication.
 
 #### stop
 

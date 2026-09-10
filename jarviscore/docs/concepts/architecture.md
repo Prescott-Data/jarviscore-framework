@@ -76,6 +76,87 @@ async def main():
 
 Every piece of infrastructure is opt-in. If none of the infrastructure environment variables are set, the Mesh runs in pure in-process mode using only in-memory state.
 
+### Decentralised goal execution
+
+With Redis enabled, `Mesh.execute_goal()` registers the exact source goal and
+public context before any planning begins. Any planning-capable node may acquire
+a short lease, compile a complete capability-addressed DAG, and publish it
+atomically. The lease grants permission to compile that revision only: it does
+not assign agents or retain authority after publication.
+
+Each peer independently scans the shared DAG and atomically claims ready work
+matching its capabilities. Claims have renewable leases and fenced completion
+tokens, so an expired executor cannot overwrite a newer attempt. Dependency
+outputs, failures, waiting states, resumptions and graph amendments remain in the
+shared ledger. Steps request capabilities, never named agent instances.
+
+The distributed runtime therefore has two distinct planes:
+
+| Plane | Responsibility |
+|---|---|
+| SWIM/ZMQ | Peer membership, capability announcements and direct messages |
+| Redis | Immutable source goals, versioned DAGs, claims, outputs, mailboxes and audit events |
+
+Neither plane is a master agent. A node may submit a goal without planning or
+executing it, and a planning node relinquishes authority after atomic publication.
+
+### One durable execution model
+
+Distributed execution is carried by a canonical `WorkflowEnvelope`: source goal,
+neutral source context, obligations, DAG steps, revision and `ExecutionBudget`.
+Caller context cannot supply provider authority; each peer reconstructs systems
+and effects from its own capability contract.
+
+When an agent needs specialist help it creates a scoped `CapabilityMandate`.
+`PeerClient.request_capability()` owns discovery, lineage-cycle prevention,
+durable publication, claiming, lease renewal, fencing, timeout, cancellation and
+direct-P2P fallback. The LLM-facing tool only states the capability and question.
+Incoming peer mandates run through one bounded Kernel OODA execution rather than
+starting another unrestricted planner.
+
+After each goal step, the existing evaluator also returns an agent-owned goal
+decision: `continue`, `complete` or `replan`. This lets evidence invalidate
+obsolete conditional work without provider-specific rules. Final-response peers
+receive one `WorkflowEvidence` snapshot containing every artifact, semantic
+interpretation and step state, not only direct dependency outputs.
+
+Before a provider mutation, the agent performs a focused effect-intent review
+against the source objective, source context and evidence gathered in its OODA
+loop. The review may allow the effect, redirect the agent to missing evidence,
+or return `already_satisfied` with evidence that the requested real-world
+outcome already exists. The latter completes as a successful no-op instead of
+repeating the mutation. Invalid reviews fail closed. This protects conditional
+effects without encoding provider sequences or domain decisions in atoms.
+
+The workflow budget caps the existing Kernel lease and goal loop. Every LLM call
+made during planning, evaluation, dependency review, effect review, direct step
+execution or peer fulfillment reserves capacity from one Redis-backed workflow
+account before dispatch and settles provider-reported tokens and cost afterward.
+Parallel peers therefore share one balance rather than receiving independent
+copies of the token allowance. Wall-clock time, steps, replans, peer depth and
+peer wait time also derive from the same durable envelope.
+
+Provider atoms remain typed API primitives. Provider-native reads preserve the
+identity and state needed for agent judgment, such as Calendar attendees and
+organizers, HubSpot object associations, and Google Workspace export content.
+They do not decide whether records are duplicates or which business action to
+take.
+
+When a registered atom fails, the registry records the execution failure and
+demotes its stage. Coder may open repair only from that observed failure, inspect
+the exact source/version, and submit corrected source under the same atom name.
+The replacement must pass the atom contract and execute successfully against the
+original invocation before registration. Registration writes immutable version
+`v+1`, retains the prior source, records `repair_of_version`, and promotes the
+new current version from its execution evidence. Authentication, invalid task
+input, permissions, rate limits and truthful provider refusals are not by
+themselves evidence that atom source should be rewritten.
+
+HITL is admissible only for account authorization, explicit approval of a
+consequential action, or data proven both human-exclusive and unreachable after
+autonomous paths are exhausted. Low confidence, token pressure and routine
+execution failure replan or terminate honestly; they never become human work.
+
 ---
 
 ## The OODA Loop

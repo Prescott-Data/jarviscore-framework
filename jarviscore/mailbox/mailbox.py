@@ -118,6 +118,29 @@ class MailboxManager:
             return True
         return self.redis.send_mailbox_message(target_agent_id, envelope)
 
+    def deliver(
+        self,
+        sender: str,
+        message: dict,
+        *,
+        workflow_id: str = None,
+        step_id: str = None,
+        context: dict = None,
+    ) -> bool:
+        """Persist an inbound peer envelope under this mailbox owner."""
+        envelope = {"sender": sender, "message": message}
+        if workflow_id is not None:
+            envelope["workflow_id"] = workflow_id
+        if step_id is not None:
+            envelope["step_id"] = step_id
+        if context is not None:
+            envelope["context"] = context
+        if self.redis is None:
+            envelope["timestamp"] = time.time()
+            _LOCAL_QUEUES.setdefault(self.agent_id, []).append(envelope)
+            return True
+        return self.redis.send_mailbox_message(self.agent_id, envelope)
+
     def send_by_capability(
         self,
         capability: str,

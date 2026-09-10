@@ -2,11 +2,7 @@ async def dropbox_download_file(dropbox_path: str, destination_path: str) -> dic
     """Download file. POST https://content.dropboxapi.com/2/files/download"""
     import os
     try:
-        access_token = _get_nexus_token(None)
-    except Exception as e:
-        return {'success': False, 'data': None, 'error': f'Auth error: {str(e)}'}
-    try:
-        resp = await nexus_call('POST', 'https://content.dropboxapi.com/2/files/download', headers={'Authorization': f'Bearer {access_token}', 'Dropbox-API-Arg': f'{{"path": "{dropbox_path}"}}'})
+        resp = await nexus_call('POST', 'https://content.dropboxapi.com/2/files/download', headers={'Dropbox-API-Arg': f'{{"path": "{dropbox_path}"}}'})
         if resp['status_code'] != 200:
             return {'success': False, 'data': None, 'error': f"Download failed: {resp['status_code']} {resp['body']}"}
         os.makedirs(os.path.dirname(os.path.abspath(destination_path)), exist_ok=True)

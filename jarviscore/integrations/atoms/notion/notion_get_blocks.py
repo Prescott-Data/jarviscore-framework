@@ -1,13 +1,9 @@
 async def notion_get_blocks(page_id: str) -> dict:
     """Get blocks via the notion API."""
     try:
-        access_token = _get_nexus_token(None)
-    except Exception as e:
-        return {'success': False, 'data': None, 'error': f'Auth error: {str(e)}'}
-    try:
         blocks = []
         url = f'https://api.notion.com/v1/blocks/{page_id}/children'
-        headers = {'Authorization': f'Bearer {access_token}', 'Notion-Version': '2022-06-28'}
+        headers = {'Notion-Version': '2022-06-28'}
         while url:
             resp = await nexus_call('GET', url, headers=headers)
             if resp['status_code'] != 200:

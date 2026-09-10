@@ -81,6 +81,90 @@ class TestStepOutputs:
         result = store.get_step_output("wf-1", "step-1")
         assert result["context_vars"]["endpoint"] == "https://api.example.com"
 
+
+class TestWorkflowTokenBudget:
+
+    def test_reservations_are_atomic_and_settle_exact_usage(self, store):
+        store.register_workflow_goal(
+            "wf-budget",
+            "Do bounded work",
+            budget={"max_tokens": 100},
+        )
+
+        assert store.reserve_workflow_tokens("wf-budget", "epoch-1", "call-1", 60)
+        assert not store.reserve_workflow_tokens("wf-budget", "epoch-1", "call-2", 50)
+        assert store.settle_workflow_tokens("wf-budget", "epoch-1", "call-1", 40, 0.25)
+        assert store.reserve_workflow_tokens("wf-budget", "epoch-1", "call-2", 50)
+
+        usage = store.get_workflow_budget_usage("wf-budget", "epoch-1")
+        assert usage == {
+            "max_tokens_per_epoch": 100,
+            "used_tokens": 40,
+            "cost_usd": 0.25,
+            "call_count": 1,
+            "epoch_count": 1,
+            "epoch_id": "epoch-1",
+            "epoch_used_tokens": 40,
+            "epoch_reserved_tokens": 50,
+        }
+
+    def test_failed_dispatch_releases_its_reservation(self, store):
+        store.register_workflow_goal(
+            "wf-release",
+            "Do bounded work",
+            budget={"max_tokens": 100},
+        )
+        assert store.reserve_workflow_tokens("wf-release", "epoch-1", "call-1", 80)
+        assert store.release_workflow_token_reservation("wf-release", "epoch-1", "call-1")
+        assert store.reserve_workflow_tokens("wf-release", "epoch-1", "call-2", 100)
+
+    def test_new_execution_epoch_renews_capacity_without_resetting_totals(self, store):
+        store.register_workflow_goal(
+            "wf-long",
+            "Continue across durable progress",
+            budget={"max_tokens": 100},
+        )
+        assert store.reserve_workflow_tokens("wf-long", "step:a", "call-1", 100)
+        assert store.settle_workflow_tokens("wf-long", "step:a", "call-1", 90, 0.2)
+        assert not store.reserve_workflow_tokens("wf-long", "step:a", "call-2", 20)
+        assert store.reserve_workflow_tokens("wf-long", "step:b", "call-3", 100)
+        assert store.settle_workflow_tokens("wf-long", "step:b", "call-3", 80, 0.3)
+
+        usage = store.get_workflow_budget_usage("wf-long")
+        assert usage["used_tokens"] == 170
+        assert usage["cost_usd"] == 0.5
+        assert usage["epoch_count"] == 2
+
+    def test_pre_upgrade_workflow_lazily_gets_a_budget_account(self, store):
+        store.register_workflow_goal(
+            "wf-upgrade",
+            "Resume old work",
+            budget={"max_tokens": 75},
+        )
+        store._redis.delete("workflow_budget:wf-upgrade")
+
+        assert store.reserve_workflow_tokens(
+            "wf-upgrade", "resume:1", "resume-call", 50
+        )
+        usage = store.get_workflow_budget_usage("wf-upgrade", "resume:1")
+        assert usage["max_tokens_per_epoch"] == 75
+        assert usage["epoch_reserved_tokens"] == 50
+
+    def test_legacy_lifetime_hash_migrates_to_epoch_limit(self, store):
+        store.register_workflow_goal(
+            "wf-legacy-hash",
+            "Resume legacy accounting",
+            budget={"max_tokens": 75},
+        )
+        key = "workflow_budget:wf-legacy-hash"
+        store._redis.hset(key, "max_tokens", 75)
+        store._redis.hdel(key, "max_tokens_per_epoch")
+
+        assert store.reserve_workflow_tokens(
+            "wf-legacy-hash", "resume:2", "call-1", 50
+        )
+        assert store._redis.hget(key, "max_tokens_per_epoch") == "75"
+
     def test_isolation_between_workflows(self, store):
         """Different workflows don't see each other's outputs."""
         store.save_step_output("wf-1", "step-1", output="workflow 1")
@@ -314,6 +398,154 @@ class TestWorkflowDAG:
         """Querying status of a non-existent step returns None."""
         assert dag.get_step_status("wf-dag", "ghost") is None
 
+    def test_publish_workflow_preserves_goal_obligations_and_complete_steps(self, store):
+        steps = [{
+            "id": "research",
+            "capability": "account_research",
+            "task": "Research Acme",
+            "success_criterion": "Evidence is cited",
+            "expected_findings": ["account_evidence"],
+            "covers": ["obligation-1"],
+            "depends_on": [],
+        }]
+        obligations = [{
+            "id": "obligation-1",
+            "description": "Research Acme without inventing evidence",
+            "source_quote": "Research Acme",
+        }]
+
+        store.publish_workflow(
+            "wf-lossless",
+            goal="Research Acme without inventing evidence",
+            obligations=obligations,
+            steps=steps,
+        )
+
+        workflow = store.get_workflow_definition("wf-lossless")
+        assert workflow["goal"] == "Research Acme without inventing evidence"
+        assert workflow["obligations"] == obligations
+        assert workflow["steps"][0] == {**steps[0], "status": "pending"}
+        assert "wf-lossless" in store.get_active_workflows()
+
+    def test_dependency_outputs_are_read_from_the_shared_ledger(self, store):
+        store.publish_workflow(
+            "wf-context",
+            goal="Research then analyse",
+            obligations=[],
+            steps=[
+                {"id": "research", "capability": "research", "task": "Research", "depends_on": []},
+                {"id": "analyse", "capability": "analysis", "task": "Analyse", "depends_on": ["research"]},
+            ],
+        )
+        store.save_step_output("wf-context", "research", output={"evidence": ["source-1"]})
+        store.update_step_status("wf-context", "research", "completed")
+
+        assert store.get_dependency_outputs("wf-context", "analyse") == {
+            "research": {"evidence": ["source-1"]},
+        }
+
+    def test_dependency_interpretations_are_preserved_separately_from_artifacts(self, store):
+        store.publish_workflow(
+            "wf-interpretation",
+            goal="Qualify an account",
+            obligations=[],
+            steps=[
+                {"id": "research", "capability": "research", "task": "Research", "depends_on": []},
+                {"id": "analyse", "capability": "analysis", "task": "Analyse", "depends_on": ["research"]},
+            ],
+        )
+        assert store.claim_step("wf-interpretation", "research", "peer:claim", 30)
+        assert store.finish_claimed_step(
+            "wf-interpretation",
+            "research",
+            "peer:claim",
+            {
+                "status": "success",
+                "output": {"status": "research_incomplete", "account": "Acme"},
+                "interpretation": {
+                    "verdict": "partial",
+                    "meaning": "Fit is plausible but the buyer is unresolved.",
+                    "decision": "hold",
+                    "unmet_requirements": ["Verified buyer"],
+                },
+            },
+        )
+
+        assert store.get_dependency_outputs("wf-interpretation", "analyse") == {
+            "research": {"status": "research_incomplete", "account": "Acme"},
+        }
+        assert store.get_dependency_interpretations("wf-interpretation", "analyse") == {
+            "research": {
+                "verdict": "partial",
+                "meaning": "Fit is plausible but the buyer is unresolved.",
+                "decision": "hold",
+                "unmet_requirements": ["Verified buyer"],
+            },
+        }
+
+    def test_dag_amendment_preserves_completed_steps_and_source_goal(self, store):
+        obligations = [
+            {"id": "o1", "description": "Research", "source_quote": "Research"},
+            {"id": "o2", "description": "Analyse", "source_quote": "analyse"},
+        ]
+        store.publish_workflow(
+            "wf-amend",
+            goal="Research and analyse",
+            obligations=obligations,
+            steps=[
+                {"id": "research", "capability": "research", "task": "Research", "depends_on": [], "covers": ["o1"]},
+                {"id": "analyse", "capability": "analysis", "task": "Analyse", "depends_on": ["research"], "covers": ["o2"]},
+            ],
+        )
+        assert store.claim_step("wf-amend", "research", "researcher:claim", 30)
+        assert store.finish_claimed_step(
+            "wf-amend", "research", "researcher:claim",
+            {"status": "success", "output": {"evidence": ["source-1"]}},
+        )
+
+        store.amend_workflow(
+            "wf-amend",
+            expected_revision=1,
+            obligations=obligations,
+            steps=[
+                {"id": "research", "capability": "research", "task": "Research", "depends_on": [], "covers": ["o1"]},
+                {"id": "analyse_v2", "capability": "analysis", "task": "Analyse using another method", "depends_on": ["research"], "covers": ["o2"]},
+            ],
+            reason="Original analysis path failed",
+        )
+
+        definition = store.get_workflow_definition("wf-amend")
+        assert definition["goal"] == "Research and analyse"
+        assert definition["revision"] == 2
+        assert store.get_step_status("wf-amend", "research") == "completed"
+        assert store.get_step_output("wf-amend", "research")["output"]["output"] == {"evidence": ["source-1"]}
+        assert store.get_step_status("wf-amend", "analyse") is None
+        assert store.get_step_status("wf-amend", "analyse_v2") == "pending"
+        assert store.get_ledger_tail("wf-amend")[-1]["event"] == "dag_amended"
+
+        with pytest.raises(ValueError, match="revision changed"):
+            store.amend_workflow(
+                "wf-amend",
+                expected_revision=1,
+                obligations=obligations,
+                steps=definition["steps"],
+                reason="Stale planner",
+            )
+
+        changed_completed_step = [
+            {**step, "task": "Rewrite completed research"}
+            if step["id"] == "research" else step
+            for step in definition["steps"]
+        ]
+        with pytest.raises(ValueError, match="cannot change completed step"):
+            store.amend_workflow(
+                "wf-amend",
+                expected_revision=2,
+                obligations=obligations,
+                steps=changed_completed_step,
+                reason="Invalid rewrite",
+            )
+
 
 class TestAtomicStepClaiming:
     """
@@ -338,6 +570,297 @@ class TestAtomicStepClaiming:
 
         assert store.claim_step("wf-race", "step-1", "agent-a") is True
         assert store.claim_step("wf-race", "step-1", "agent-b") is False
+
+    def test_only_current_claimant_can_renew_or_commit(self, store):
+        store.init_workflow_graph(
+            "wf-fenced",
+            [{"id": "step-1", "capability": "analysis", "task": "work", "depends_on": []}],
+        )
+        claim_id = "agent-a:claim-a"
+        assert store.claim_step("wf-fenced", "step-1", claim_id, lease_seconds=30)
+        assert store.get_step_definition("wf-fenced", "step-1")["claimed_by"] == "agent-a"
+
+        assert store.renew_step_claim("wf-fenced", "step-1", "agent-b:claim-b", 30) is False
+        assert store.finish_claimed_step(
+            "wf-fenced", "step-1", "agent-b:claim-b", {"status": "success", "output": "stale"}
+        ) is False
+        assert store.get_step_output("wf-fenced", "step-1") is None
+
+        assert store.renew_step_claim("wf-fenced", "step-1", claim_id, 30) is True
+        assert store.get_step_definition("wf-fenced", "step-1")["claimed_by"] == "agent-a"
+        assert store.finish_claimed_step(
+            "wf-fenced", "step-1", claim_id, {"status": "success", "output": "fresh"}
+        ) is True
+        assert store.get_step_status("wf-fenced", "step-1") == "completed"
+        assert store.get_step_output("wf-fenced", "step-1")["output"]["output"] == "fresh"
+
+    def test_expired_claim_is_recovered_for_another_peer(self, store):
+        store.init_workflow_graph(
+            "wf-recover-claim",
+            [{"id": "step-1", "capability": "analysis", "task": "work", "depends_on": []}],
+        )
+        assert store.claim_step("wf-recover-claim", "step-1", "claim-a", lease_seconds=30)
+        store._store._redis.delete("step_lock:wf-recover-claim:step-1")
+
+        assert store.recover_expired_step_claim("wf-recover-claim", "step-1") is True
+        assert store.get_step_status("wf-recover-claim", "step-1") == "pending"
+        assert store.claim_step("wf-recover-claim", "step-1", "claim-b", lease_seconds=30)
+
+    def test_epoch_exhaustion_requeues_same_peer_without_terminal_output(self, store):
+        store.init_workflow_graph(
+            "wf-epoch-rollover",
+            [{"id": "step-1", "capability": "analysis", "task": "work", "depends_on": []}],
+        )
+        claim_id = "agent-a:epoch-1"
+        assert store.claim_step(
+            "wf-epoch-rollover", "step-1", claim_id, lease_seconds=30
+        )
+
+        assert store.continue_claimed_step(
+            "wf-epoch-rollover",
+            "step-1",
+            claim_id,
+            resume_agent_id="agent-a",
+        )
+
+        step = store.get_step_definition("wf-epoch-rollover", "step-1")
+        assert step["status"] == "pending"
+        assert step["resume_agent_id"] == "agent-a"
+        assert step["resume_context"] == {
+            "_resume": True,
+            "_new_execution_epoch": True,
+        }
+        assert step["execution_epochs"] == 2
+        assert store.get_step_output("wf-epoch-rollover", "step-1") is None
+        assert not store.continue_claimed_step(
+            "wf-epoch-rollover",
+            "step-1",
+            claim_id,
+            resume_agent_id="agent-a",
+        )
+
+    def test_partial_semantics_are_preserved_for_recipient_authorization(self, store):
+        store.publish_workflow(
+            "wf-semantic-gate",
+            goal="Verify then act",
+            obligations=[],
+            steps=[
+                {
+                    "id": "verify", "capability": "verification", "effect": "read",
+                    "task": "Verify", "depends_on": [],
+                },
+                {
+                    "id": "write", "capability": "writer", "effect": "write",
+                    "task": "Write", "depends_on": ["verify"],
+                },
+                {
+                    "id": "respond", "capability": "response", "effect": "final_response",
+                    "task": "Respond", "depends_on": ["verify"],
+                },
+            ],
+        )
+        assert store.claim_step("wf-semantic-gate", "verify", "peer:verify", 30)
+        assert store.finish_claimed_step(
+            "wf-semantic-gate",
+            "verify",
+            "peer:verify",
+            {
+                "status": "success",
+                "output": {"verified": False},
+                "interpretation": {
+                    "verdict": "partial",
+                    "decision": "hold",
+                    "meaning": "Verification is incomplete.",
+                    "satisfied_requirements": [],
+                    "unmet_requirements": ["Verified identity"],
+                    "evidence_refs": [],
+                },
+            },
+        )
+
+        verify = store.get_step_definition("wf-semantic-gate", "verify")
+        assert verify["semantic_outcome"] == "partial"
+        assert verify["semantic_decision"] == "hold"
+        assert store.get_dependency_blockers("wf-semantic-gate", "write") == {}
+        assert store.claim_step("wf-semantic-gate", "write", "peer:write", 30) is True
+        assert store.get_dependency_blockers("wf-semantic-gate", "respond") == {}
+        assert store.claim_step("wf-semantic-gate", "respond", "peer:respond", 30) is True
+
+    def test_recipient_terminal_block_is_not_requeued(self, store):
+        store.publish_workflow(
+            "wf-recipient-block",
+            goal="Do safe work",
+            obligations=[],
+            steps=[{
+                "id": "write", "capability": "writer", "effect": "write",
+                "task": "Write safely", "depends_on": [],
+            }],
+        )
+        assert store.claim_step(
+            "wf-recipient-block", "write", "peer:write", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-recipient-block",
+            "write",
+            "peer:write",
+            {"status": "blocked", "error": "Relevant evidence is missing"},
+        )
+
+        assert store.requeue_blocked_step(
+            "wf-recipient-block", "write"
+        ) is False
+        assert store.get_step_status("wf-recipient-block", "write") == "blocked"
+
+    def test_cancelled_workflow_cannot_be_claimed_renewed_committed_or_recovered(self, store):
+        store.publish_workflow(
+            "wf-cancelled",
+            goal="Do work",
+            obligations=[],
+            steps=[
+                {"id": "active", "capability": "work", "effect": "write", "task": "Work", "depends_on": []},
+                {"id": "later", "capability": "work", "effect": "write", "task": "Later", "depends_on": ["active"]},
+            ],
+        )
+        assert store.claim_step("wf-cancelled", "active", "peer:claim", 30)
+
+        assert store.cancel_workflow("wf-cancelled", reason="User cancelled") is True
+        assert store.is_workflow_cancelled("wf-cancelled") is True
+        assert "wf-cancelled" not in store.get_active_workflows()
+        assert store.get_step_status("wf-cancelled", "active") == "cancelled"
+        assert store.get_step_status("wf-cancelled", "later") == "cancelled"
+        assert store.renew_step_claim("wf-cancelled", "active", "peer:claim", 30) is False
+        assert store.finish_claimed_step(
+            "wf-cancelled", "active", "peer:claim", {"status": "success"}
+        ) is False
+        assert store.recover_expired_step_claim("wf-cancelled", "active") is False
+        assert store.claim_step("wf-cancelled", "later", "peer:new", 30) is False
+        assert store.get_ledger_tail("wf-cancelled")[-1]["event"] == "workflow_cancelled"
+
+
+# ======================================================================
+# Capability Needs (Adaptive Peer Collaboration)
+# ======================================================================
+
+class TestCapabilityNeeds:
+
+    def test_need_is_claimed_once_by_matching_capability_and_fulfilled(self, store):
+        need_id = store.publish_capability_need(
+            "wf-needs",
+            requester_agent_id="calendar-1",
+            requester_step_id="schedule",
+            capability="contact_verification",
+            question="Resolve the lead contact path.",
+            context={"objective": "Prepare the meeting"},
+        )
+
+        assert store.claim_capability_need(
+            "wf-needs", need_id, "pipeline-1:claim", {"contact_verification"}, 30
+        )
+        assert not store.claim_capability_need(
+            "wf-needs", need_id, "other:claim", {"contact_verification"}, 30
+        )
+        assert store.fulfill_capability_need(
+            "wf-needs", need_id, "pipeline-1:claim",
+            {"status": "success", "output": {"email": "ephy@example.com"}},
+        )
+
+        need = store.get_capability_need("wf-needs", need_id)
+        assert need["status"] == "fulfilled"
+        assert need["fulfilled_by"] == "pipeline-1"
+        assert need["result"]["output"]["email"] == "ephy@example.com"
+
+    def test_expired_need_claim_can_be_recovered(self, store):
+        need_id = store.publish_capability_need(
+            "wf-needs-recover",
+            requester_agent_id="requester",
+            requester_step_id="step",
+            capability="research",
+            question="Find evidence.",
+        )
+        assert store.claim_capability_need(
+            "wf-needs-recover", need_id, "peer-a:claim", {"research"}, 30
+        )
+        store._store._redis.delete(
+            f"capability_need_lock:wf-needs-recover:{need_id}"
+        )
+
+        assert store.recover_expired_capability_need(
+            "wf-needs-recover", need_id
+        )
+        assert store.claim_capability_need(
+            "wf-needs-recover", need_id, "peer-b:claim", {"research"}, 30
+        )
+
+    def test_active_need_claim_can_be_renewed_with_fencing(self, store):
+        need_id = store.publish_capability_need(
+            "wf-needs-renew",
+            requester_agent_id="requester",
+            requester_step_id="step",
+            capability="research",
+            question="Find evidence.",
+        )
+        assert store.claim_capability_need(
+            "wf-needs-renew", need_id, "peer-a:claim", {"research"}, 30
+        )
+        before = store.get_capability_need("wf-needs-renew", need_id)
+
+        assert store.renew_capability_need_claim(
+            "wf-needs-renew", need_id, "peer-a:claim", 60
+        )
+        after = store.get_capability_need("wf-needs-renew", need_id)
+        assert after["claim_expires_at"] > before["claim_expires_at"]
+        assert not store.renew_capability_need_claim(
+            "wf-needs-renew", need_id, "peer-b:stale", 60
+        )
+
+        store.cancel_workflow("wf-needs-renew", reason="cancelled")
+        assert not store.renew_capability_need_claim(
+            "wf-needs-renew", need_id, "peer-a:claim", 60
+        )
+
+    def test_failed_peer_result_is_a_failed_mandate(self, store):
+        need_id = store.publish_capability_need(
+            "wf-needs-failed",
+            requester_agent_id="requester",
+            requester_step_id="step",
+            capability="research",
+            question="Find evidence.",
+        )
+        assert store.claim_capability_need(
+            "wf-needs-failed", need_id, "peer-a:claim", {"research"}, 30
+        )
+
+        assert store.fulfill_capability_need(
+            "wf-needs-failed",
+            need_id,
+            "peer-a:claim",
+            {"status": "failure", "error": "Provider unavailable"},
+        )
+        need = store.get_capability_need("wf-needs-failed", need_id)
+        assert need["status"] == "failed"
+        assert need["error"] == "Provider unavailable"
+
+    def test_requester_can_fail_and_unclaim_a_timed_out_mandate(self, store):
+        need_id = store.publish_capability_need(
+            "wf-needs-timeout",
+            requester_agent_id="requester",
+            requester_step_id="step",
+            capability="research",
+            question="Find evidence.",
+        )
+        assert store.claim_capability_need(
+            "wf-needs-timeout", need_id, "peer-a:claim", {"research"}, 30
+        )
+
+        assert store.fail_capability_need(
+            "wf-needs-timeout", need_id, "requester", "Timed out"
+        )
+        need = store.get_capability_need("wf-needs-timeout", need_id)
+        assert need["status"] == "failed"
+        assert need["error"] == "Timed out"
+        assert not store.fulfill_capability_need(
+            "wf-needs-timeout", need_id, "peer-a:claim", {"status": "success"}
+        )
 
 
 # ======================================================================

@@ -1,10 +1,6 @@
 async def zoho_shifts_create_shift(org_id: str, schedule_id: str, start_time: str, end_time: str, employee_id: str=None, position_id: str=None, notes: str=None) -> dict:
     """Shifts create shift via the zoho_shifts API."""
     try:
-        access_token = _get_nexus_token(None)
-    except Exception as e:
-        return {'success': False, 'data': None, 'error': f'Auth error: {str(e)}'}
-    try:
         payload = {'schedule_id': schedule_id, 'start_time': start_time, 'end_time': end_time}
         if employee_id:
             payload['employee_id'] = employee_id
@@ -12,7 +8,7 @@ async def zoho_shifts_create_shift(org_id: str, schedule_id: str, start_time: st
             payload['position_id'] = position_id
         if notes:
             payload['notes'] = notes
-        resp = await nexus_call('POST', f'https://shifts.zoho.com/api/v1/{org_id}/shifts', headers={'Authorization': f'Zoho-oauthtoken {access_token}', 'Content-Type': 'application/json'}, json=payload)
+        resp = await nexus_call('POST', f'https://shifts.zoho.com/api/v1/{org_id}/shifts', headers={'Content-Type': 'application/json'}, json=payload)
         if resp['status_code'] != 200:
             return {'success': False, 'data': None, 'error': f"Create shift failed: {resp['status_code']} {resp['body']}"}
         return {'success': True, 'data': resp['json'], 'error': None}

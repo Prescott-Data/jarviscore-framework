@@ -8,6 +8,7 @@ move rather than letting it burn the lease.
 """
 
 import asyncio
+import json
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -420,20 +421,149 @@ class TestCoderGate:
         from jarviscore.kernel.defaults.coder import CoderSubAgent
         return CoderSubAgent.__new__(CoderSubAgent)
 
-    def test_unproven_work_reports_the_calls_that_were_made(self):
+    def test_failed_action_can_finish_with_an_honest_blocked_result(self):
         state = _state(tool_history=[
             ToolResult(tool_name="write_code", status="failure", error="boom"),
             ToolResult(tool_name="check_registry", status="success", tool_output={}),
         ])
+        parsed = {"result": {"status": "blocked", "reason": "Provider call failed"}}
 
-        ok, evidence = self._coder()._can_complete(state, {"result": "42"})
+        ok, reason = self._coder()._can_complete(state, parsed)
+
+        assert ok is True
+        assert reason == ""
+        assert parsed["result"]["status"] == "blocked"
+
+    def test_blocked_result_requires_a_peer_resolution_attempt(self):
+        coder = self._coder()
+        coder._tools = {"ask_capability": object(), "ask_peer": object()}
+        state = _state(tool_history=[
+            ToolResult(tool_name="hubspot_list_contacts", status="success", tool_output=[]),
+        ])
+        parsed = {"result": {"status": "blocked", "reason": "Contact unresolved"}}
+
+        ok, evidence = coder._can_complete(state, parsed)
 
         assert ok is False
-        assert evidence.check == "proof_of_work"
-        assert evidence.observed["write_code_calls"] == 1
-        assert evidence.observed["execute_code_calls"] == 0
-        assert evidence.observed["successful_executions"] == 0
-        assert evidence.observed["tool_calls"] == 2
+        assert evidence.check == "peer_resolution_review"
+        assert evidence.observed["peer_tool_calls"] == 0
+
+        ok, repeated = coder._can_complete(state, parsed)
+        assert ok is False
+        assert repeated.check == "peer_resolution_review"
+
+    def test_unresolved_facts_require_peer_resolution_even_for_existing_record(self):
+        coder = self._coder()
+        coder._tools = {"ask_capability": object()}
+        state = _state(tool_history=[
+            ToolResult(
+                tool_name="hubspot_search_contacts",
+                status="success",
+                tool_output={"contacts": []},
+            ),
+        ])
+        parsed = {"result": {
+            "status": "existing",
+            "deal_id": "deal-1",
+            "unresolved": [{"fact": "Contact identity remains unresolved"}],
+        }}
+
+        ok, evidence = coder._can_complete(state, parsed)
+
+        assert ok is False
+        assert evidence.check == "peer_resolution_review"
+
+    def test_peer_responder_is_not_forced_to_delegate_its_response_again(self):
+        coder = self._coder()
+        coder._tools = {"ask_capability": object()}
+        state = _state(
+            context={"peer_requester_agent_id": "requester-1"},
+            tool_history=[
+                ToolResult(
+                    tool_name="hubspot_search_contacts",
+                    status="success",
+                    tool_output={"contacts": []},
+                ),
+            ],
+        )
+        parsed = {"result": {
+            "status": "research_incomplete",
+            "unresolved": [{"fact": "No additional CRM record was found"}],
+        }}
+
+        ok, reason = coder._can_complete(state, parsed)
+
+        assert ok is True
+        assert reason == ""
+
+    def test_peer_attempt_allows_honest_blocked_completion(self):
+        coder = self._coder()
+        coder._tools = {"ask_capability": object()}
+        state = _state(tool_history=[
+            ToolResult(
+                tool_name="ask_capability",
+                status="failure",
+                error="No peer fulfilled the need",
+                tool_output={"peer_request_attempted": True},
+            ),
+        ])
+
+        ok, reason = coder._can_complete(
+            state, {"result": {"status": "blocked", "reason": "Contact unresolved"}}
+        )
+
+        assert ok is True
+        assert reason == ""
+
+    def test_malformed_peer_call_does_not_satisfy_resolution_attempt(self):
+        coder = self._coder()
+        coder._tools = {"ask_peer": object()}
+        state = _state(tool_history=[
+            ToolResult(
+                tool_name="ask_peer",
+                status="failure",
+                error="Missing required peer arguments: role, question",
+                tool_output={
+                    "status": "error",
+                    "semantic_error": "INVALID_PEER_TOOL_ARGUMENTS",
+                    "peer_request_attempted": False,
+                },
+            ),
+        ])
+
+        ok, evidence = coder._can_complete(
+            state,
+            {"result": {"status": "blocked", "reason": "Deck unavailable"}},
+        )
+
+        assert ok is False
+        assert evidence.check == "peer_resolution_review"
+
+    def test_no_attempt_cannot_finish_with_an_unsupported_result(self):
+        state = _state(tool_history=[])
+
+        ok, evidence = self._coder()._can_complete(
+            state, {"result": {"status": "blocked", "reason": "Assumed failure"}}
+        )
+
+        assert ok is False
+        assert evidence.check == "meaningful_attempt"
+
+    def test_first_turn_prompt_requires_a_relevant_tool_not_success(self):
+        coder = self._coder()
+        coder.role = "coder"
+        coder._tools = {
+            "ask_capability": object(), "ask_peer": object(), "write_code": object()
+        }
+        coder._atom_tools = ["hubspot_list_deals"]
+
+        prompt = coder._build_user_prompt(_state(tool_history=[]), "## MISSION")
+
+        assert "MUST use one relevant tool" in prompt
+        assert "hubspot_list_deals" in prompt
+        assert "ask_peer" in prompt
+        assert "ask_capability" in prompt
+        assert "successful execution" not in prompt
 
     def test_a_successful_execution_satisfies_the_gate(self):
         """The gate checks proof exists; it does not swap the answer for it."""
@@ -447,4 +577,120 @@ class TestCoderGate:
         assert ok is True
         assert reason == ""
         assert parsed["result"] == {"answer": "forty-two"}
-        assert parsed["evidence"] == 42
+        assert "evidence" not in parsed
+
+    @pytest.mark.asyncio
+    async def test_effect_intent_review_redirects_unsupported_mutation(self):
+        from types import SimpleNamespace
+
+        class ReviewLLM:
+            async def generate(self, **kwargs):
+                return {"content": json.dumps({
+                    "decision": "redirect",
+                    "reason": "Deal absence has not been verified.",
+                    "missing_evidence": ["Inspect existing deals"],
+                })}
+
+        coder = self._coder()
+        coder.llm_client = ReviewLLM()
+        coder._atoms = {
+            "provider_create_record": SimpleNamespace(
+                policy=SimpleNamespace(effect="write")
+            )
+        }
+        state = _state(
+            task="Create the record only if absent",
+            context={"objective": "Create the record only if absent"},
+            tool_history=[
+                ToolResult(
+                    tool_name="provider_search_contacts",
+                    status="success",
+                    tool_output={"contacts": []},
+                ),
+            ],
+        )
+
+        result = await coder._pre_execute_hook(
+            "provider_create_record", {"name": "Acme"}, state
+        )
+
+        assert result["semantic_error"] == "EFFECT_INTENT_REDIRECT"
+        assert result["missing_evidence"] == ["Inspect existing deals"]
+
+    @pytest.mark.asyncio
+    async def test_effect_intent_review_allows_supported_mutation(self):
+        from types import SimpleNamespace
+
+        class ReviewLLM:
+            async def generate(self, **kwargs):
+                return {"content": json.dumps({
+                    "decision": "allow",
+                    "reason": "The requested target was inspected and is absent.",
+                    "missing_evidence": [],
+                })}
+
+        coder = self._coder()
+        coder.llm_client = ReviewLLM()
+        coder._atoms = {
+            "provider_create_record": SimpleNamespace(
+                policy=SimpleNamespace(effect="write")
+            )
+        }
+        state = _state(tool_history=[
+            ToolResult(
+                tool_name="provider_search_records",
+                status="success",
+                tool_output={"records": []},
+            ),
+        ])
+
+        result = await coder._pre_execute_hook(
+            "provider_create_record", {"name": "Acme"}, state
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_effect_intent_review_skips_an_already_satisfied_mutation(self):
+        from types import SimpleNamespace
+
+        class ReviewLLM:
+            async def generate(self, **kwargs):
+                return {"content": json.dumps({
+                    "decision": "already_satisfied",
+                    "reason": "The requested meeting already exists.",
+                    "missing_evidence": [],
+                    "supporting_evidence": [
+                        "event-1 has the requested attendee and schedule"
+                    ],
+                })}
+
+        coder = self._coder()
+        coder.llm_client = ReviewLLM()
+        coder._atoms = {
+            "provider_create_event": SimpleNamespace(
+                policy=SimpleNamespace(effect="write")
+            )
+        }
+        state = _state(tool_history=[
+            ToolResult(
+                tool_name="provider_list_events",
+                status="success",
+                tool_output={
+                    "events": [{
+                        "id": "event-1",
+                        "attendees": ["ephy@example.com"],
+                    }],
+                },
+            ),
+        ])
+
+        result = await coder._pre_execute_hook(
+            "provider_create_event",
+            {"attendees": ["ephy@example.com"]},
+            state,
+        )
+
+        assert result["status"] == "success"
+        assert result["skipped"] is True
+        assert result["semantic_outcome"] == "EFFECT_ALREADY_SATISFIED"

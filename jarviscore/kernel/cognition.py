@@ -46,6 +46,9 @@ THINKING_TOOLS = frozenset({
     "get_context",
     "inspect_error",
     "scan_peers",
+    "list_peers",
+    "inspect_workflow",
+    "read_workflow_step",
     "read_mailbox",
     # Re-reading a retained tool result is recall, not action (issue #57).
     "read_turn_result",
@@ -58,6 +61,8 @@ ACTION_TOOLS = frozenset({
     "execute_code",
     "send_message",
     "send_mailbox",
+    "ask_peer",
+    "broadcast_update",
     "broadcast",
     "done",
 })

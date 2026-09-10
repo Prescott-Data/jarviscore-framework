@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "never",
+    "idempotency_fields": ["channel", "text"],
+    "consequence": "Posts one message to the selected Slack channel.",
+}
+
+
 async def slack_send_message(channel: str, text: str, thread_ts: str=None) -> dict:
     """Send message via the slack API."""
     _base = 'https://slack.com/api'

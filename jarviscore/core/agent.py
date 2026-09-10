@@ -12,8 +12,11 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from uuid import uuid4
 import asyncio
+import json
 import logging
 import os
+
+from jarviscore.orchestration.envelopes import neutral_context
 
 if TYPE_CHECKING:
     from jarviscore.p2p import PeerClient
@@ -42,6 +45,7 @@ class Agent(ABC):
     # Class attributes - user must define these
     role: str = None
     capabilities: List[str] = []
+    capability_descriptions: Dict[str, str] = {}
 
     # Optional capability flags
     p2p_responder: bool = False  # Set to True for agents that run a continuous listener loop (e.g. CustomAgent)
@@ -124,6 +128,96 @@ class Agent(ABC):
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement execute_task()"
         )
+
+    async def execute_capability_request(
+        self,
+        capability: str,
+        question: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Execute a peer need using this agent's own declared authority."""
+        if capability not in self.capabilities:
+            return {
+                "status": "failure",
+                "error": f"{self.role} does not own capability {capability!r}.",
+            }
+        request_context = neutral_context(context)
+        if isinstance((context or {}).get("execution_budget"), dict):
+            request_context["execution_budget"] = dict(
+                (context or {})["execution_budget"]
+            )
+        request_context["capability"] = capability
+        contract = (
+            getattr(self, "capability_contracts", {}) or {}
+        ).get(capability) or {}
+        systems = [str(value) for value in contract.get("systems") or []]
+        effects = [str(value) for value in contract.get("effects") or []]
+        if systems:
+            request_context["systems"] = systems
+            if len(systems) == 1:
+                request_context["system"] = systems[0]
+        for effect in ("read", "propose", "write", "notify", "destructive"):
+            if effect in effects:
+                request_context["effect"] = effect
+                break
+        lock = getattr(self, "_peer_execution_lock", None)
+        if lock is None:
+            return await self.execute_task({"task": question, "context": request_context})
+        async with lock:
+            return await self.execute_task({"task": question, "context": request_context})
+
+    async def authorize_dependencies(
+        self,
+        task: str,
+        artifacts: Dict[str, Any],
+        interpretations: Dict[str, Any],
+    ):
+        """Decide whether upstream uncertainty materially prevents this task."""
+        from jarviscore.orchestration.envelopes import DependencyAuthorization
+
+        unresolved = {
+            step_id: interpretation
+            for step_id, interpretation in interpretations.items()
+            if isinstance(interpretation, dict)
+            and interpretation.get("verdict") != "satisfied"
+        }
+        if not unresolved:
+            return DependencyAuthorization("allow", "Dependencies are satisfied.")
+        llm = getattr(self, "llm", None)
+        if llm is None:
+            return DependencyAuthorization(
+                "block",
+                "Upstream uncertainty requires an explicit recipient decision.",
+            )
+        prompt = (
+            "You own the downstream task. Decide whether upstream uncertainty "
+            "materially prevents this task. Allow when the unresolved concern is "
+            "unrelated and the artifact contains every fact this task needs. Block "
+            "when a required fact or safety precondition is missing. Do not decide "
+            "the business outcome itself. Return only JSON: "
+            '{"decision":"allow|block","reason":"..."}.\n\n'
+            f"Downstream task: {task}\n"
+            f"Upstream artifacts: {json.dumps(artifacts, default=str)}\n"
+            f"Upstream interpretations: {json.dumps(unresolved, default=str)}"
+        )
+        try:
+            kwargs = {
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
+            }
+            if getattr(llm, "nano_model", None):
+                kwargs["model"] = llm.nano_model
+            try:
+                response = await llm.generate(**kwargs)
+            except TypeError:
+                kwargs.pop("response_format", None)
+                response = await llm.generate(**kwargs)
+            content = response.get("content", "") if isinstance(response, dict) else str(response)
+            return DependencyAuthorization.from_response(content)
+        except Exception as exc:
+            return DependencyAuthorization(
+                "block", f"Dependency authorization failed closed: {exc}"
+            )
 
     async def setup(self):
         """

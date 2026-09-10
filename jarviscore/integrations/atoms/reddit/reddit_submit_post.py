@@ -1,10 +1,6 @@
 async def reddit_submit_post(subreddit: str, title: str, text: str=None, url: str=None) -> dict:
     """Submit post. POST https://oauth.reddit.com/api/submit"""
     try:
-        access_token = _get_nexus_token(None)
-    except Exception as e:
-        return {'success': False, 'data': None, 'error': f'Auth error: {str(e)}'}
-    try:
         if url:
             kind = 'link'
         else:
@@ -14,7 +10,7 @@ async def reddit_submit_post(subreddit: str, title: str, text: str=None, url: st
             payload['text'] = text
         if url:
             payload['url'] = url
-        resp = await nexus_call('POST', 'https://oauth.reddit.com/api/submit', data=payload, headers={'Authorization': f'Bearer {access_token}', 'User-Agent': 'jarviscore/1.0'})
+        resp = await nexus_call('POST', 'https://oauth.reddit.com/api/submit', data=payload, headers={'User-Agent': 'jarviscore/1.0'})
         if resp['status_code'] != 200:
             return {'success': False, 'data': None, 'error': f"Submit post failed: {resp['status_code']} {resp['body']}"}
         data = resp['json']

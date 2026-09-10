@@ -203,7 +203,31 @@ class TestStepEvaluation:
         assert StepEvaluation(verdict="fail", confidence=0.2, evaluator_note="").needs_replan
 
     def test_needs_hitl(self):
-        assert StepEvaluation(verdict="hitl", confidence=0.5, evaluator_note="").needs_hitl
+        assert StepEvaluation(
+            verdict="hitl",
+            confidence=0.5,
+            evaluator_note="",
+            hitl_category="critical_action",
+        ).needs_hitl
+
+    def test_data_hitl_requires_exhausted_human_exclusive_evidence(self):
+        lazy = StepEvaluation(
+            verdict="hitl",
+            confidence=0.5,
+            evaluator_note="unsure",
+            hitl_category="data_required",
+        )
+        admissible = StepEvaluation(
+            verdict="hitl",
+            confidence=0.5,
+            evaluator_note="Only the human can choose a new time constraint.",
+            hitl_category="data_required",
+            autonomous_paths_exhausted=True,
+            human_exclusive=True,
+        )
+        assert lazy.needs_hitl is False
+        assert lazy.needs_replan is True
+        assert admissible.needs_hitl is True
 
     def test_not_needs_replan_for_pass(self):
         assert not StepEvaluation(verdict="pass", confidence=0.9, evaluator_note="").needs_replan
@@ -550,6 +574,64 @@ class TestStepEvaluator:
         result = ev._parse_evaluation(raw, _make_step())
         assert result.additional_findings == {}
 
+    def test_parse_evaluation_carries_goal_convergence_decision(self):
+        ev = self._evaluator()
+        raw = json.dumps({
+            "verdict": "pass",
+            "confidence": 0.95,
+            "evaluator_note": "The existing artifact satisfies the observation.",
+            "additional_findings": {"artifact_status": "existing"},
+            "goal_decision": "complete",
+            "goal_note": "The conditional creation branch is obsolete.",
+        })
+
+        result = ev._parse_evaluation(raw, _make_step())
+
+        assert result.goal_decision == "complete"
+        assert "conditional creation branch" in result.goal_note
+
+    def test_parse_evaluation_accepts_null_string_hitl_category(self):
+        ev = self._evaluator()
+        raw = json.dumps({
+            "verdict": "pass",
+            "confidence": 0.9,
+            "evaluator_note": "No human input is needed.",
+            "additional_findings": {},
+            "goal_decision": "continue",
+            "goal_note": "Continue autonomously.",
+            "hitl_category": "null",
+            "autonomous_paths_exhausted": False,
+            "human_exclusive": False,
+        })
+
+        result = ev._parse_evaluation(raw, _make_step())
+
+        assert result.hitl_category is None
+
+    def test_goal_replan_decision_uses_existing_replan_path(self):
+        evaluation = StepEvaluation(
+            verdict="pass",
+            confidence=0.9,
+            evaluator_note="Step passed.",
+            goal_decision="replan",
+            goal_note="New evidence invalidated the remaining plan.",
+        )
+
+        assert evaluation.needs_replan is True
+
+    def test_evaluator_prompt_exposes_remaining_steps_and_conditional_rule(self):
+        ev = self._evaluator()
+        prompt = ev._build_prompt(
+            _make_step(),
+            _make_output(),
+            GoalExecution(goal="Create only if absent", agent_id="a"),
+            remaining_steps=[_make_step("create", task="Create the artifact")],
+        )
+
+        assert "Remaining planned steps" in prompt
+        assert "create: Create the artifact" in prompt
+        assert "conditional branch is false" in prompt
+
 
 # ── Scratchpad scope changes ──────────────────────────────────────────────────
 
@@ -682,7 +764,14 @@ class TestGoalSnapshotRoundTrip:
         ge.record_completed(
             ge.plan[0],
             _make_output(summary="found the auth method"),
-            _make_evaluation(verdict="pass"),
+            StepEvaluation(
+                verdict="pass",
+                confidence=0.9,
+                evaluator_note="Looks good",
+                additional_findings={"discovered_key": "discovered_value"},
+                goal_decision="replan",
+                goal_note="New evidence changed the remaining work.",
+            ),
             elapsed_ms=120.0,
         )
         return ge
@@ -715,6 +804,8 @@ class TestGoalSnapshotRoundTrip:
         cs = restored.completed[0]
         assert cs.step.step_id == "step_01"
         assert cs.evaluation.verdict == "pass"
+        assert cs.evaluation.goal_decision == "replan"
+        assert "changed the remaining work" in cs.evaluation.goal_note
         assert cs.to_summary()["summary"] == "found the auth method"
 
     def test_resumed_context_chains_into_next_step(self):
@@ -926,6 +1017,54 @@ class TestReplanTailAndBudget:
 
 class TestDependencyParallelExecution:
     """Plans that declare depends_on opt into concurrent co-ready steps."""
+
+    @pytest.mark.asyncio
+    async def test_goal_convergence_stops_obsolete_remaining_steps(self):
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-convergence"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+        executed = []
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                executed.append(kwargs["context"]["step_id"])
+                return _make_output(payload={"status": "existing"})
+
+        agent._kernel = _Kernel()
+        plan = [
+            PlannedStep("inspect", "Inspect artifact", "Existence resolved"),
+            PlannedStep("create", "Create artifact if absent", "Artifact created"),
+        ]
+        converged = StepEvaluation(
+            verdict="pass",
+            confidence=0.98,
+            evaluator_note="The existing artifact satisfies the goal.",
+            goal_decision="complete",
+            goal_note="The conditional creation branch is obsolete.",
+        )
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=converged),
+        ):
+            execution = await agent.execute_goal("Create the artifact only if absent")
+
+        assert execution.status == "complete"
+        assert executed == ["inspect"]
+        assert [item.step.step_id for item in execution.completed] == ["inspect"]
 
     @pytest.mark.asyncio
     async def test_co_ready_steps_overlap_and_dependents_wait(self, monkeypatch):
@@ -1243,7 +1382,12 @@ class TestHITLConsentGate:
             new=AsyncMock(return_value=plan),
         ), patch(
             "jarviscore.planning.evaluator.StepEvaluator.evaluate",
-            new=AsyncMock(return_value=_make_evaluation(verdict="hitl")),
+            new=AsyncMock(return_value=StepEvaluation(
+                verdict="hitl",
+                confidence=0.9,
+                evaluator_note="The consequential action needs approval.",
+                hitl_category="critical_action",
+            )),
         ):
             execution = await agent.execute_goal("attended goal")
 

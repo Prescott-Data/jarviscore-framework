@@ -28,6 +28,7 @@ from jarviscore.context.truth import AgentOutput
 from jarviscore.context.context_manager import ContextManager, BudgetConfig
 from jarviscore.execution.llm import LLMProvider
 from jarviscore.kernel.lease import ExecutionLease, ROLE_LEASE_PROFILES
+from jarviscore.orchestration.envelopes import ExecutionBudget, neutral_context
 from jarviscore.kernel.cognition import AgentCognitionManager
 from jarviscore.context.fidelity import Record, select_whole
 from jarviscore.kernel.state import KernelState
@@ -276,6 +277,8 @@ class Kernel:
         self.blob_storage = blob_storage
         self.config = config or {}
         self.hitl_policy = hitl_policy
+        self.peer_tool: Any = None
+        self.peers: Any = None
 
         # Auth manager — Mesh-injected via requires_auth=True on agent class.
         # AutoAgent forwards it lazily at execute_task() time (because Mesh
@@ -313,6 +316,123 @@ class Kernel:
             min_confidence=float(self.config.get("kernel_router_min_confidence", 0.55)),
             valid_roles=sorted(self._role_lease_profiles),
             role_catalog=self._role_catalog,
+        )
+
+    def attach_mesh_capabilities(self, peers=None, mailbox=None) -> None:
+        """Attach capabilities injected by Mesh after Kernel construction."""
+        self.mailbox = mailbox
+        self.peers = peers
+        self.peer_tool = peers.as_tool() if peers is not None else None
+        for subagent in self._subagent_cache.values():
+            self._attach_mesh_tools(subagent)
+
+    def _attach_mesh_tools(self, subagent) -> None:
+        if hasattr(subagent, "mailbox"):
+            subagent.mailbox = self.mailbox
+        if hasattr(subagent, "peers"):
+            subagent.peers = self.peers
+        if self.mailbox is not None:
+            def read_mailbox(limit: int = 10) -> Dict[str, Any]:
+                bounded = max(1, min(int(limit), 50))
+                messages = self.mailbox.peek(limit=bounded)
+                return {
+                    "status": "success",
+                    "messages": messages,
+                    "count": len(messages),
+                }
+
+            subagent.register_tool(
+                "read_mailbox",
+                read_mailbox,
+                "Read durable unread peer notifications for this agent. Params: {\"limit\": 10}",
+                phase="thinking",
+            )
+        if self.peer_tool is not None:
+            definitions = {item["name"]: item for item in self.peer_tool.schema}
+            for name in self.peer_tool.tool_names:
+                definition = definitions[name]
+
+                async def execute_peer_tool(_name=name, **kwargs):
+                    state = getattr(subagent, "_current_state", None)
+                    source_context = dict(getattr(state, "context", {}) or {})
+                    peer_context = neutral_context(source_context)
+                    workflow_id = str(getattr(state, "workflow_id", "") or "")
+                    step_id = str(getattr(state, "step_id", "") or "")
+                    if workflow_id and workflow_id != "unknown":
+                        peer_context["workflow_id"] = workflow_id
+                    if step_id and step_id != "unknown":
+                        peer_context["peer_requester_step_id"] = step_id
+                    peer_context["peer_requester_role"] = subagent.role
+                    execution_budget = source_context.get("execution_budget")
+                    if hasattr(execution_budget, "to_record"):
+                        execution_budget = execution_budget.to_record()
+                    peer_timeout = (
+                        execution_budget.get("peer_timeout_seconds")
+                        if isinstance(execution_budget, dict)
+                        else None
+                    )
+                    execute_result = getattr(self.peer_tool, "execute_result", None)
+                    if callable(execute_result):
+                        return await execute_result(
+                            _name,
+                            kwargs,
+                            context=peer_context,
+                            timeout_seconds=peer_timeout,
+                        )
+                    legacy_output = await self.peer_tool.execute(
+                        _name, kwargs, context=peer_context
+                    )
+                    return {"status": "success", "output": legacy_output}
+
+                phase = "thinking" if name == "list_peers" else "action"
+                subagent.register_tool(
+                    name, execute_peer_tool, definition["description"], phase=phase
+                )
+        if self.redis_store is None:
+            return
+
+        def current_workflow_id() -> str:
+            state = getattr(subagent, "_current_state", None)
+            return str(getattr(state, "workflow_id", "") or "")
+
+        def inspect_workflow() -> Dict[str, Any]:
+            workflow_id = current_workflow_id()
+            if not workflow_id or workflow_id == "unknown":
+                return {"status": "error", "error": "This dispatch has no workflow identity."}
+            definition = self.redis_store.get_workflow_definition(workflow_id)
+            if definition is None:
+                return {"status": "error", "error": f"Workflow {workflow_id!r} was not found."}
+            live_steps = []
+            for planned in definition.get("steps", []):
+                step_id = str(planned.get("id") or planned.get("step_id") or "")
+                live_steps.append(self.redis_store.get_step_definition(workflow_id, step_id) or planned)
+            return {"status": "success", **definition, "steps": live_steps}
+
+        def read_workflow_step(step_id: str) -> Dict[str, Any]:
+            workflow_id = current_workflow_id()
+            if not workflow_id or workflow_id == "unknown":
+                return {"status": "error", "error": "This dispatch has no workflow identity."}
+            definition = self.redis_store.get_step_definition(workflow_id, step_id)
+            if definition is None:
+                return {"status": "error", "error": f"Step {step_id!r} was not found."}
+            saved = self.redis_store.get_step_output(workflow_id, step_id)
+            return {
+                "status": "success",
+                "step": definition,
+                "output": saved.get("output") if saved else None,
+            }
+
+        subagent.register_tool(
+            "inspect_workflow",
+            inspect_workflow,
+            "Inspect this workflow's source goal, obligations, steps, dependencies, owners, and live statuses. Params: {}",
+            phase="thinking",
+        )
+        subagent.register_tool(
+            "read_workflow_step",
+            read_workflow_step,
+            "Read one step definition and its durable output from this workflow. Params: {\"step_id\": \"<step id>\"}",
+            phase="thinking",
         )
 
     def _get_model_for_tier(self, tier: str, complexity: Optional[str] = None) -> Optional[str]:
@@ -434,6 +554,24 @@ class Kernel:
         if agent_default_role and not use_default_role_as_fallback:
             explicit_role = agent_default_role
 
+        system_name = (context or {}).get("system")
+        system_names = [
+            str(value) for value in (context or {}).get("systems", [])
+            if str(value)
+        ]
+        effect = str((context or {}).get("effect") or "").strip()
+        if system_name and effect in {"write", "notify", "destructive"}:
+            return RoutingDecision(
+                role="coder",
+                confidence=1.0,
+                reason="Provider mutation requires the credentialed Coder harness.",
+            )
+        if system_names and effect in {"read", "propose", "write", "notify", "destructive"}:
+            return RoutingDecision(
+                role="coder",
+                confidence=1.0,
+                reason="Connected-system work requires the credentialed Coder harness.",
+            )
         if explicit_role:
             normalized_role = str(explicit_role).lower().strip()
             if normalized_role not in self._role_lease_profiles:
@@ -443,8 +581,6 @@ class Kernel:
                 confidence=1.0,
                 reason="Explicit planner/profile role.",
             )
-
-        system_name = (context or {}).get("system")
         routing_context = dict(context or {})
         credentialed = False
         if system_name:
@@ -505,7 +641,9 @@ class Kernel:
             logger.debug("[Kernel] Provider inventory unavailable: %s", exc)
             return {}
 
-    def _lease_for_role(self, role: str) -> ExecutionLease:
+    def _lease_for_role(
+        self, role: str, execution_budget: Optional[Dict[str, Any]] = None
+    ) -> ExecutionLease:
         """Create a lease from built-in or application-registered role profile."""
         profile = self._role_lease_profiles.get(role)
         if profile is None:
@@ -513,7 +651,19 @@ class Kernel:
                 f"No lease profile registered for kernel role {role!r}. "
                 "Add config['kernel_role_profiles'][role] or use a built-in role."
             )
-        return ExecutionLease(**profile)
+        lease = ExecutionLease(**profile)
+        if execution_budget is not None:
+            budget = ExecutionBudget.from_record(execution_budget)
+            original_total = max(1, lease.max_total_tokens)
+            capped_total = min(original_total, budget.max_tokens)
+            ratio = capped_total / original_total
+            lease.max_total_tokens = capped_total
+            lease.thinking_budget = max(1, int(lease.thinking_budget * ratio))
+            lease.action_budget = max(1, int(lease.action_budget * ratio))
+            lease.wall_clock_ms = min(
+                lease.wall_clock_ms, int(budget.max_seconds * 1000)
+            )
+        return lease
 
     def _get_or_create_subagent(self, role: str, agent_id: str, step_id: str):
         """Get a cached subagent or create a new one.
@@ -568,7 +718,7 @@ class Kernel:
         )
 
         if role == "coder":
-            return CoderSubAgent(
+            subagent = CoderSubAgent(
                 agent_id=agent_id,
                 llm_client=self.llm_client,
                 sandbox=self.sandbox,
@@ -579,7 +729,7 @@ class Kernel:
                 blob_storage=self.blob_storage,
             )
         elif role == "researcher":
-            return ResearcherSubAgent(
+            subagent = ResearcherSubAgent(
                 agent_id=agent_id,
                 llm_client=self.llm_client,
                 search_client=self.search_client,
@@ -588,7 +738,7 @@ class Kernel:
                 blob_storage=self.blob_storage,
             )
         elif role == "communicator":
-            return CommunicatorSubAgent(
+            subagent = CommunicatorSubAgent(
                 agent_id=agent_id,
                 llm_client=self.llm_client,
                 mailbox=self.mailbox,
@@ -596,7 +746,7 @@ class Kernel:
                 blob_storage=self.blob_storage,
             )
         elif role == "browser":
-            return BrowserSubAgent(
+            subagent = BrowserSubAgent(
                 agent_id=agent_id,
                 llm_client=self.llm_client,
                 headless=self.config.get("browser_headless", True),
@@ -606,6 +756,8 @@ class Kernel:
             )
         else:
             raise ValueError(f"Unknown subagent role: {role}")
+        self._attach_mesh_tools(subagent)
+        return subagent
 
     def _create_memory(self, workflow_id: str, step_id: str, agent_id: str):
         """Create a UnifiedMemory instance for the current step.
@@ -836,7 +988,9 @@ class Kernel:
             )
 
             # 2. DECIDE: create lease, cognition, memory, context manager
-            lease = self._lease_for_role(role)
+            lease = self._lease_for_role(
+                role, enriched_context.get("execution_budget")
+            )
             cognition = AgentCognitionManager(
                 lease=lease,
                 agent_id=agent_id,
@@ -926,47 +1080,37 @@ class Kernel:
                             system_name,
                         )
                     else:
-                        # Deterministic: the task named a provider and neither the
-                        # gateway nor the vault has it. Ask for access instead of
-                        # spending a dispatch on code that cannot authenticate.
                         pending_consent = self._awaiting_consent(str(system_name))
-                        if pending_consent:
-                            summary = (
-                                f"{system_name} is set up, but no account has been "
-                                "connected to it yet, so nothing can be signed. "
-                                "Approving access once unblocks this task."
-                            )
-                            reason = "consent_required"
-                            outcome = "YIELD_CONSENT_REQUIRED"
+                        if pending_consent and self.auth_manager is not None:
+                            # Coder owns the real resumable consent path. It exposes
+                            # request_access with a provider URL and connection ID.
+                            enriched_context["_consent_required_system"] = system_name
                         else:
                             summary = (
                                 f"This task needs {system_name}, which is not "
                                 "connected here. Someone has to grant access to it "
                                 "before the task can run."
                             )
-                            reason = "auth_required"
-                            outcome = "YIELD_AUTH_REQUIRED"
-                        logger.warning(
-                            "[Kernel] %s (system=%s) — register with "
-                            "'jarviscore nexus register %s' or set NEXUS_GATEWAY_URL",
-                            summary, system_name, system_name,
-                        )
-                        await self._cleanup_step(step_id)
-                        return AgentOutput(
-                            status="yield",
-                            summary=summary,
-                            trajectory=[],
-                            metadata={
-                                "tokens": total_tokens,
-                                "cost_usd": total_cost,
-                                "dispatches": dispatches,
-                                "yield_pending": True,
-                                "escalation_reason": reason,
-                                "system": system_name,
-                                "hitl_type": "auth",
-                                "typed_outcome": outcome,
-                            },
-                        )
+                            logger.warning(
+                                "[Kernel] %s (system=%s) — no consent channel is available",
+                                summary, system_name,
+                            )
+                            await self._cleanup_step(step_id)
+                            return AgentOutput(
+                                status="yield",
+                                summary=summary,
+                                trajectory=[],
+                                metadata={
+                                    "tokens": total_tokens,
+                                    "cost_usd": total_cost,
+                                    "dispatches": dispatches,
+                                    "yield_pending": True,
+                                    "escalation_reason": "auth_required",
+                                    "system": system_name,
+                                    "hitl_type": "auth",
+                                    "typed_outcome": "YIELD_AUTH_REQUIRED",
+                                },
+                            )
 
 
             # ── Dispatch subagent with full infrastructure ──
@@ -1032,6 +1176,21 @@ class Kernel:
                         "dispatches": dispatches,
                         "elapsed_ms": (time.time() - start_time) * 1000,
                         "distilled_facts": output.metadata.get("distilled_facts", {}),
+                    },
+                )
+
+            if output.status == "epoch_exhausted":
+                return AgentOutput(
+                    status="epoch_exhausted",
+                    payload=output.payload,
+                    summary=output.summary,
+                    trajectory=output.trajectory,
+                    metadata={
+                        "tokens": total_tokens,
+                        "cost_usd": total_cost,
+                        "dispatches": dispatches,
+                        "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+                        "checkpointed": meta.get("checkpointed", False),
                     },
                 )
 
@@ -1129,42 +1288,6 @@ class Kernel:
                         "typed_outcome": "YIELD_AUTH_REQUIRED",
                     },
                 )
-
-            # Check HITL policy for escalation — only on the FINAL dispatch.
-            # Intermediate failures should be retried (possibly with research
-            # findings), not dumped to human review.  Goal-oriented agents get
-            # their recovery from the Planner's replan loop; premature HITL
-            # escalation short-circuits that and floods the review queue.
-            is_final_dispatch = (dispatch_num == max_dispatches - 1)
-            if self.hitl_policy and is_final_dispatch:
-                # Gentler confidence decay: 0.15 per dispatch instead of 0.25.
-                # dispatch 0 → 0.85, dispatch 1 → 0.70, dispatch 2 → 0.55.
-                # This gives the retry loop room to succeed before the
-                # confidence drops below the escalation threshold.
-                dispatch_confidence = max(0.1, 1.0 - (dispatch_num * 0.15))
-                tokens_spent = total_tokens.get("total", 0)
-                risk_from_spend = min(0.9, tokens_spent / 200_000)
-
-                should_escalate, reason = self.hitl_policy.should_escalate(
-                    reason_code="execution_failure",
-                    confidence=dispatch_confidence,
-                    risk_score=risk_from_spend,
-                )
-                if should_escalate:
-                    await self._cleanup_step(step_id)
-                    return AgentOutput(
-                        status="yield",
-                        summary=f"Escalated to human: {reason}",
-                        trajectory=output.trajectory,
-                        metadata={
-                            "tokens": total_tokens,
-                            "cost_usd": total_cost,
-                            "dispatches": dispatches,
-                            "yield_pending": True,
-                            "escalation_reason": reason,
-                            "typed_outcome": "YIELD_HITL_POLICY",
-                        },
-                    )
 
         # All dispatches exhausted
         elapsed = (time.time() - start_time) * 1000

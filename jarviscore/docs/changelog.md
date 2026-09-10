@@ -26,6 +26,53 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ## Unreleased
 
+### Added
+
+- Redis-backed `Mesh.execute_goal()` compiles a natural-language goal into a
+  source-grounded, capability-addressed DAG. Planning is a temporary leased
+  operation; peers claim ready steps independently without an executor router.
+- `Mesh.resume_goal()` resumes waiting work with executor affinity, and
+  `Mesh.replan_goal()` replaces only unfinished work through a revision-fenced
+  DAG amendment while preserving the original goal, completed steps and outputs.
+- AutoAgent kernels expose `list_peers`, `ask_peer`, `broadcast_update`,
+  `read_mailbox`, `inspect_workflow`, and `read_workflow_step`. Inbound peer
+  requests work without application listener wiring, and notifications enter
+  the durable mailbox before becoming reasoning context.
+- Generated-code sandboxes receive a restricted `mesh` facade for peer listing
+  and delegation. The child process cannot mutate Mesh lifecycle or registry state.
+- Redis workflow claims now use renewable leases, unique attempt tokens and
+  fenced terminal writes, with append-only audit events for planning, claims,
+  completion, failure, waiting, resume, recovery and DAG amendment.
+- Distributed context, peer mandates, evidence and runtime limits now share one
+  canonical envelope model. Capability requests have explicit terminal states,
+  lineage-cycle prevention, lease heartbeats and bounded direct-Kernel execution.
+- Step evaluation now includes an agent-owned goal convergence decision
+  (`continue`, `complete`, `replan`) so newly observed facts can retire obsolete
+  conditional work without domain-specific routing rules.
+- Final-response peers receive every workflow artifact, interpretation and step
+  state through one `WorkflowEvidence` snapshot.
+- Semantic dependency relevance is decided by the recipient peer from the
+  upstream artifact and interpretation; Redis enforces execution readiness but
+  does not turn a partial result into a global business decision.
+- HITL now requires a canonical human-only category. Data requests additionally
+  require proof that autonomous paths are exhausted and the missing decision or
+  fact is exclusive to the human; confidence and token spend cannot escalate.
+- Provider reads now preserve Calendar participant/state fields, export Google
+  Workspace document content, and inspect HubSpot contact-deal associations so
+  peers can decide from provider evidence rather than incomplete metadata.
+- Failed registered atoms can enter an evidence-bound Coder repair lifecycle.
+  Only a contract-valid replacement that succeeds against the original
+  invocation can become immutable registry version `v+1`; authentication and
+  provider refusals do not automatically imply source repair.
+- Pre-effect review can return `already_satisfied` with supporting evidence,
+  completing a redundant mutation as a successful no-op.
+- LLM calls across planning, evaluation, reviews, distributed steps and nested
+  peer mandates reserve and settle against one Redis-backed workflow token/cost
+  account. Parallel peers no longer each receive the full workflow allowance.
+- Peer tool schema and remote failures remain typed failures. Malformed calls do
+  not count as peer-resolution attempts, while failed requests that actually
+  reached a peer retain that attempt evidence.
+
 </div>
 
 ---

@@ -408,6 +408,14 @@ class FunctionRegistry:
             ),
             "strategy": metadata.get("strategy", "sandbox"),
             "agent_id": metadata.get("agent_id"),
+            "repair_of_version": metadata.get("repair_of_version"),
+            "repair_failure": metadata.get("repair_failure"),
+            "catalogue_managed": metadata.get(
+                "catalogue_managed", existing.get("catalogue_managed", False)
+            ),
+            "catalogue_source_hash": metadata.get(
+                "catalogue_source_hash", existing.get("catalogue_source_hash")
+            ),
             "load_status": "loaded" if function_name in self.functions else "source_only",
             "oauth_metadata": metadata.get("oauth_metadata"),
         }
@@ -1549,7 +1557,7 @@ def create_function_registry(
         FunctionRegistry instance
     """
     registry = FunctionRegistry(storage_path, blob_storage, redis_store)
-    if seed and not registry.function_metadata:
+    if seed:
         _seed_shipped_atoms(registry)
     return registry
 
@@ -1557,12 +1565,8 @@ def create_function_registry(
 def _seed_shipped_atoms(registry: FunctionRegistry) -> None:
     """Load the packaged atoms so a fresh registry is not an empty one.
 
-    The catalogue ships with the package and the docs describe it as available
-    from startup, but nothing loaded it, so every deployment began with an empty
-    registry and agents rewrote integrations that were already on disk. Seeding
-    happens only when the registry holds nothing: a registry with contents has a
-    history, and re-seeding over it would overwrite execution counts that were
-    earned by real runs.
+    Merge missing shipped atoms on every open so an existing workspace receives
+    framework additions without replacing atoms or execution history it already has.
     """
     try:
         from jarviscore.integrations.seed_registry import seed_registry
@@ -1574,7 +1578,7 @@ def _seed_shipped_atoms(registry: FunctionRegistry) -> None:
         return
 
     try:
-        report = seed_registry(registry)
+        report = seed_registry(registry, missing_only=True)
     except Exception as exc:  # noqa: BLE001 - a broken catalogue must not stop the agent
         logger.warning(
             "Atom catalogue failed to load, registry starts empty "

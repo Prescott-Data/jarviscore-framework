@@ -363,6 +363,7 @@ class CoderSandbox:
         bash_timeout: int = 120,
         output_subdir: str = "output",
         nexus_call_proxy=None,  # Optional[NexusCallProxy]
+        mesh_proxy=None,
         blob_storage=None,      # Optional[BlobStorage]
         artifact_prefix: str = "artifacts",
     ):
@@ -378,6 +379,7 @@ class CoderSandbox:
         self._bash = BashExecutor(self.workspace, timeout=bash_timeout)
         self._git = GitHelper(self._bash, self.workspace)
         self._nexus_call_proxy = nexus_call_proxy  # NexusCallProxy | None
+        self._mesh_proxy = mesh_proxy
 
         logger.info(
             "CoderSandbox initialized: workspace=%s timeout=%ds nexus=%s",
@@ -479,6 +481,17 @@ class CoderSandbox:
                 try:
                     if request["operation"] == "nexus_call":
                         payload = request["payload"]
+                        method = str(payload.get("method") or "GET").upper()
+                        mutation = context.get("_mutation_authority")
+                        if method not in {"GET", "HEAD", "OPTIONS"} and not (
+                            isinstance(mutation, dict)
+                            and mutation.get("atom")
+                            and mutation.get("action_id")
+                        ):
+                            raise RuntimeError(
+                                "Provider mutations must use a registered atom with "
+                                "declared policy and idempotency identity."
+                            )
                         requested_provider = payload.get("provider")
                         provider = str(
                             requested_provider
@@ -497,7 +510,7 @@ class CoderSandbox:
                             provider or str(connection_id),
                         )
                         result = await call(
-                            payload["method"], payload["url"], **payload.get("kwargs", {})
+                            method, payload["url"], **payload.get("kwargs", {})
                         )
                     elif request["operation"] == "fetch_artifact":
                         if self.blob_storage is None:
@@ -509,6 +522,23 @@ class CoderSandbox:
                         if isinstance(content, str):
                             content = content.encode()
                         result = {"content": base64.b64encode(content).decode("ascii")}
+                    elif request["operation"] == "mesh_list_peers":
+                        if self._mesh_proxy is None:
+                            raise RuntimeError("No mesh is attached to this agent.")
+                        result = self._mesh_proxy.list_peers()
+                        if hasattr(result, "__await__"):
+                            result = await result
+                    elif request["operation"] == "mesh_delegate":
+                        if self._mesh_proxy is None:
+                            raise RuntimeError("No mesh is attached to this agent.")
+                        payload = request["payload"]
+                        result = await self._mesh_proxy.delegate(
+                            to=str(payload.get("to") or ""),
+                            task=str(payload.get("task") or ""),
+                            context=payload.get("context"),
+                            capability=payload.get("capability"),
+                            timeout=payload.get("timeout"),
+                        )
                     else:
                         raise RuntimeError("Unknown sandbox RPC operation.")
                     response = {"id": request["id"], "result": self._rpc_jsonable(result)}
@@ -1081,6 +1111,7 @@ def create_coder_sandbox(
     timeout: int = 300,
     bash_timeout: int = 120,
     nexus_call_proxy=None,  # Optional[NexusCallProxy] — wires nexus_call() into sandbox
+    mesh_proxy=None,
     blob_storage=None,      # Optional[BlobStorage] — where a run's files end up
     artifact_prefix: str = "artifacts",
 ) -> CoderSandbox:
@@ -1104,6 +1135,7 @@ def create_coder_sandbox(
         timeout=timeout,
         bash_timeout=bash_timeout,
         nexus_call_proxy=nexus_call_proxy,
+        mesh_proxy=mesh_proxy,
         blob_storage=blob_storage,
         artifact_prefix=artifact_prefix,
     )
