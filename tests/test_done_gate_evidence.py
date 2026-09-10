@@ -622,7 +622,10 @@ class TestCoderGate:
         from types import SimpleNamespace
 
         class ReviewLLM:
+            prompt = ""
+
             async def generate(self, **kwargs):
+                self.prompt = kwargs["messages"][0]["content"]
                 return {"content": json.dumps({
                     "decision": "allow",
                     "reason": "The requested target was inspected and is absent.",
@@ -630,25 +633,43 @@ class TestCoderGate:
                 })}
 
         coder = self._coder()
-        coder.llm_client = ReviewLLM()
+        review = ReviewLLM()
+        coder.llm_client = review
         coder._atoms = {
             "provider_create_record": SimpleNamespace(
                 policy=SimpleNamespace(effect="write")
             )
         }
-        state = _state(tool_history=[
-            ToolResult(
-                tool_name="provider_search_records",
-                status="success",
-                tool_output={"records": []},
-            ),
-        ])
+        state = _state(
+            task="Create the invitation draft from completed prerequisites",
+            context={
+                "objective": "Complete the customer acceleration workflow",
+                "previous_step_results": {
+                    "crm": {"deal_id": "deal-1"},
+                    "calendar": {"event_id": "event-1"},
+                },
+                "previous_step_interpretations": {
+                    "calendar": {"verdict": "satisfied"},
+                },
+            },
+            tool_history=[
+                ToolResult(
+                    tool_name="provider_search_records",
+                    status="success",
+                    tool_output={"records": []},
+                ),
+            ],
+        )
 
         result = await coder._pre_execute_hook(
             "provider_create_record", {"name": "Acme"}, state
         )
 
         assert result is None
+        assert "Scoped step task: Create the invitation draft" in review.prompt
+        assert '"deal_id": "deal-1"' in review.prompt
+        assert '"event_id": "event-1"' in review.prompt
+        assert '"verdict": "satisfied"' in review.prompt
 
     @pytest.mark.asyncio
     async def test_effect_intent_review_skips_an_already_satisfied_mutation(self):

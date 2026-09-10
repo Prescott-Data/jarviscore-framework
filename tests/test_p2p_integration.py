@@ -5,9 +5,10 @@ Tests SWIM protocol, keepalive, broadcaster, and P2P coordinator.
 """
 import pytest
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from jarviscore import Mesh
+from jarviscore.p2p.peer_client import PeerClient
 from jarviscore.p2p.peer_tool import PeerTool
 from jarviscore.profiles import AutoAgent, CustomAgent
 
@@ -427,6 +428,28 @@ class TestP2PIntegrationWithAgents:
         assert result["semantic_error"] == "INVALID_PEER_TOOL_ARGUMENTS"
         assert result["peer_request_attempted"] is False
         peers.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_peer_request_timeout_is_distinct_from_missing_identity(self):
+        class SlowPeer:
+            agent_id = "slow-peer"
+            role = "slow_peer"
+
+        client = PeerClient.__new__(PeerClient)
+        client._agent_id = "requester"
+        client._agent_role = "requester"
+        client._node_id = "node-1"
+        client._pending_requests = {}
+        client._logger = MagicMock()
+        client._resolve_target = MagicMock(return_value=SlowPeer())
+        client._send_message = AsyncMock(return_value=True)
+
+        result = await client.request(
+            "slow_peer", {"query": "Review evidence"}, timeout=0.001
+        )
+
+        assert result["semantic_error"] == "PEER_RESPONSE_TIMEOUT"
+        assert result["peer_request_attempted"] is True
 
     @pytest.mark.asyncio
     async def test_capability_request_rejects_an_active_ancestor(self, monkeypatch):

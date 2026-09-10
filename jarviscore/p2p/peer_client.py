@@ -707,7 +707,11 @@ class PeerClient:
 
         except asyncio.TimeoutError:
             self._logger.debug(f"Request to '{target}' timed out after {timeout}s")
-            return None
+            return {
+                "error": f"Peer '{target}' did not respond within {timeout:g} seconds.",
+                "semantic_error": "PEER_RESPONSE_TIMEOUT",
+                "peer_request_attempted": True,
+            }
 
         finally:
             # Cleanup pending request

@@ -415,6 +415,10 @@ atom.
             }
             for item in state.tool_history
         ]
+        dependency_artifacts = state.context.get("previous_step_results") or {}
+        dependency_interpretations = (
+            state.context.get("previous_step_interpretations") or {}
+        )
         prompt = (
             "Review one proposed external effect against source intent and gathered "
             "evidence. This is an agent reasoning decision, not provider routing. "
@@ -427,7 +431,12 @@ atom.
             '{"decision":"allow|redirect|already_satisfied","reason":"...",'
             '"missing_evidence":["..."],"supporting_evidence":["..."]}.\n\n'
             f"Source objective: {state.context.get('objective') or state.task}\n"
+            f"Scoped step task: {state.task}\n"
             f"Source context: {json.dumps(state.context.get('source_context', {}), default=str)}\n"
+            "Authoritative dependency artifacts: "
+            f"{json.dumps(dependency_artifacts, default=str)}\n"
+            "Authoritative dependency interpretations: "
+            f"{json.dumps(dependency_interpretations, default=str)}\n"
             f"Proposed effect: {atom.policy.effect}\n"
             f"Tool: {tool_name}\n"
             f"Parameters: {json.dumps(params, default=str)}\n"
