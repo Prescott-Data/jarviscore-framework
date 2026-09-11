@@ -685,7 +685,11 @@ class RedisContextStore:
                 existing = pipe.get(key)
                 if existing is not None:
                     pipe.unwatch()
-                    if existing != encoded:
+                    try:
+                        same_binding = json.loads(existing) == json.loads(encoded)
+                    except (json.JSONDecodeError, TypeError):
+                        same_binding = existing == encoded
+                    if not same_binding:
                         raise ValueError(
                             f"Workflow {workflow_id!r} is already bound to another goal"
                         )
@@ -981,6 +985,75 @@ class RedisContextStore:
             except redis.WatchError:
                 continue
 
+    def claim_workflow_reconciliation(
+        self,
+        workflow_id: str,
+        revision: int,
+        claimant_id: str,
+        lease_seconds: int = 300,
+    ) -> bool:
+        return bool(self._redis.set(
+            f"workflow_reconciliation_lock:{workflow_id}:{revision}",
+            claimant_id,
+            nx=True,
+            ex=max(1, int(lease_seconds)),
+        ))
+
+    def release_workflow_reconciliation(
+        self, workflow_id: str, revision: int, claimant_id: str
+    ) -> bool:
+        key = f"workflow_reconciliation_lock:{workflow_id}:{revision}"
+        pipe = self._redis.pipeline()
+        while True:
+            try:
+                pipe.watch(key)
+                if pipe.get(key) != claimant_id:
+                    pipe.unwatch()
+                    return False
+                pipe.multi()
+                pipe.delete(key)
+                pipe.execute()
+                return True
+            except redis.WatchError:
+                continue
+
+    def save_workflow_reconciliation_settlement(
+        self, workflow_id: str, revision: int, settlement: Dict[str, Any]
+    ) -> bool:
+        key = f"workflow_reconciliation_settlement:{workflow_id}:{revision}"
+        payload = {**settlement, "revision": revision}
+        pipe = self._redis.pipeline()
+        while True:
+            try:
+                pipe.watch(key)
+                if pipe.exists(key):
+                    pipe.unwatch()
+                    return False
+                pipe.multi()
+                pipe.set(key, json.dumps(payload, default=str), ex=self._ttl_seconds)
+                pipe.xadd(f"ledgers:{workflow_id}", {
+                    field: json.dumps(value) if not isinstance(value, str) else value
+                    for field, value in payload.items()
+                })
+                pipe.expire(f"ledgers:{workflow_id}", self._ttl_seconds)
+                pipe.execute()
+                return True
+            except redis.WatchError:
+                continue
+
+    def get_workflow_reconciliation_settlement(
+        self, workflow_id: str, revision: int
+    ) -> Optional[Dict[str, Any]]:
+        raw = self._redis.get(
+            f"workflow_reconciliation_settlement:{workflow_id}:{revision}"
+        )
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
     def unregister_active_workflow(self, workflow_id: str) -> None:
         self._redis.srem("jarviscore:active_workflows", workflow_id)
 
@@ -1092,6 +1165,7 @@ class RedisContextStore:
             record = dict(step)
             record["id"] = step_id
             record["status"] = "pending"
+            record["plan_revision"] = revision
             normalized.append(record)
             graph[step_id] = json.dumps(record, default=str)
         definition = WorkflowEnvelope(
@@ -1104,11 +1178,16 @@ class RedisContextStore:
             revision=revision,
             published_at=time.time(),
         ).to_record()
+        projection = self._initial_obligation_projection(
+            obligations, normalized, revision
+        )
+        projection_key = f"workflow_obligations:{workflow_id}"
         pipe = self._redis.pipeline(transaction=True)
         pipe.delete(graph_key)
         if graph:
             pipe.hset(graph_key, mapping=graph)
         pipe.set(definition_key, json.dumps(definition, default=str))
+        pipe.set(projection_key, json.dumps(projection, default=str))
         pipe.sadd("jarviscore:active_workflows", workflow_id)
         pipe.srem("jarviscore:pending_goal_plans", workflow_id)
         pipe.xadd(f"ledgers:{workflow_id}", {
@@ -1129,10 +1208,57 @@ class RedisContextStore:
         )
         pipe.expire(graph_key, self._ttl_seconds)
         pipe.expire(definition_key, self._ttl_seconds)
+        pipe.expire(projection_key, self._ttl_seconds)
         pipe.expire("jarviscore:active_workflows", self._ttl_seconds)
         pipe.expire(f"ledgers:{workflow_id}", self._ttl_seconds)
         pipe.execute()
         return True
+
+    @staticmethod
+    def _initial_obligation_projection(
+        obligations: List[Dict], steps: List[Dict], revision: int
+    ) -> Dict[str, Dict[str, Any]]:
+        projection = {}
+        for obligation in obligations:
+            obligation_id = str(obligation.get("id") or "")
+            if not obligation_id:
+                continue
+            current_step_ids = [
+                str(step.get("id") or step.get("step_id"))
+                for step in steps
+                if obligation_id in map(str, step.get("covers", []))
+            ]
+            projection[obligation_id] = {
+                **obligation,
+                "state": "pending",
+                "revision": revision,
+                "current_step_ids": current_step_ids,
+                "superseded_step_ids": [],
+                "attempt_states": {
+                    step_id: "pending" for step_id in current_step_ids
+                },
+                "attempt_interpretations": {},
+            }
+        return projection
+
+    def get_obligation_projection(
+        self, workflow_id: str
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return the durable current truth for every source obligation."""
+        raw = self._redis.get(f"workflow_obligations:{workflow_id}")
+        if raw:
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        definition = self.get_workflow_definition(workflow_id)
+        if definition is None:
+            return {}
+        return self._initial_obligation_projection(
+            definition.get("obligations", []),
+            definition.get("steps", []),
+            int(definition.get("revision", 0)),
+        )
 
     def get_workflow_definition(self, workflow_id: str) -> Optional[Dict]:
         raw = self._redis.get(f"workflow_definition:{workflow_id}")
@@ -1164,13 +1290,18 @@ class RedisContextStore:
         steps: List[Dict],
         reason: str,
     ) -> bool:
-        """Atomically replace remaining work while retaining completed records."""
+        """Atomically append a revision delta while retaining immutable attempts."""
         definition_key = f"workflow_definition:{workflow_id}"
         graph_key = f"workflow_graph:{workflow_id}"
+        projection_key = f"workflow_obligations:{workflow_id}"
+        cancelled_key = f"workflow_cancelled:{workflow_id}"
         pipe = self._redis.pipeline()
         while True:
             try:
-                pipe.watch(definition_key, graph_key)
+                pipe.watch(definition_key, graph_key, projection_key, cancelled_key)
+                if pipe.exists(cancelled_key):
+                    pipe.unwatch()
+                    raise ValueError("A cancelled workflow cannot be amended")
                 raw_definition = pipe.get(definition_key)
                 if not raw_definition:
                     pipe.unwatch()
@@ -1179,18 +1310,17 @@ class RedisContextStore:
                 if int(current.get("revision", 0)) != expected_revision:
                     pipe.unwatch()
                     raise ValueError("Workflow revision changed before amendment")
-                current_steps = {
-                    str(step.get("id") or step.get("step_id")): step
-                    for step in current.get("steps", [])
-                }
                 live = {
                     step_id: json.loads(value)
                     for step_id, value in pipe.hgetall(graph_key).items()
                 }
-                completed_ids = {
-                    step_id for step_id, record in live.items()
-                    if record.get("status") == "completed"
-                }
+                current_ids = set(live)
+                if obligations != current.get("obligations", []):
+                    pipe.unwatch()
+                    raise ValueError("Amendment cannot change source obligations")
+                if not steps:
+                    pipe.unwatch()
+                    raise ValueError("Amendment requires at least one new step")
                 proposed = []
                 proposed_ids = set()
                 for step in steps:
@@ -1198,55 +1328,85 @@ class RedisContextStore:
                     if not step_id or step_id in proposed_ids:
                         pipe.unwatch()
                         raise ValueError("Amended steps require unique non-empty ids")
-                    proposed_ids.add(step_id)
-                    proposed.append({**step, "id": step_id})
-                if not completed_ids <= proposed_ids:
-                    pipe.unwatch()
-                    raise ValueError("Amendment cannot remove completed steps")
-                for step_id in completed_ids:
-                    before = {
-                        key: value for key, value in current_steps[step_id].items()
-                        if key != "status"
-                    }
-                    after = {
-                        key: value for key, value in next(
-                            step for step in proposed if step["id"] == step_id
-                        ).items()
-                        if key != "status"
-                    }
-                    if before != after:
+                    if step_id in current_ids:
                         pipe.unwatch()
-                        raise ValueError(f"Amendment cannot change completed step {step_id!r}")
-                all_ids = set(proposed_ids)
+                        raise ValueError(f"Amended step {step_id!r} already exists")
+                    proposed_ids.add(step_id)
+                    proposed.append({
+                        **step,
+                        "id": step_id,
+                        "status": "pending",
+                        "plan_revision": expected_revision + 1,
+                    })
+                all_ids = current_ids | proposed_ids
                 for step in proposed:
                     unknown = set(step.get("depends_on", [])) - all_ids
                     if unknown:
                         pipe.unwatch()
                         raise ValueError(f"Step {step['id']!r} has unknown dependencies: {sorted(unknown)}")
-                self._validate_acyclic_steps(proposed)
-                obligation_ids = {str(item.get("id")) for item in obligations}
-                covered = {
+                combined = [*live.values(), *proposed]
+                self._validate_acyclic_steps(combined)
+                covered_by_delta = {
                     str(obligation_id)
                     for step in proposed
                     for obligation_id in step.get("covers", [])
                 }
-                if obligation_ids - covered:
-                    pipe.unwatch()
-                    raise ValueError(
-                        f"Amendment leaves obligations uncovered: {sorted(obligation_ids - covered)}"
+                raw_projection = pipe.get(projection_key)
+                projection = (
+                    json.loads(raw_projection)
+                    if raw_projection
+                    else self._initial_obligation_projection(
+                        current.get("obligations", []),
+                        list(live.values()),
+                        expected_revision,
                     )
-                graph = {}
-                normalized = []
-                for step in proposed:
-                    if step["id"] in completed_ids:
-                        record = live[step["id"]]
-                    else:
-                        record = {**step, "status": "pending"}
-                    normalized.append(record)
-                    graph[step["id"]] = json.dumps(record, default=str)
+                )
+                for obligation_id in covered_by_delta:
+                    record = projection.get(obligation_id)
+                    if record is None:
+                        continue
+                    current_step_ids = [
+                        step["id"] for step in proposed
+                        if obligation_id in map(str, step.get("covers", []))
+                    ]
+                    superseded = list(record.get("superseded_step_ids", []))
+                    superseded.extend(
+                        step_id for step_id in record.get("current_step_ids", [])
+                        if step_id not in superseded
+                    )
+                    projection[obligation_id] = {
+                        **record,
+                        "state": "pending",
+                        "revision": expected_revision + 1,
+                        "current_step_ids": current_step_ids,
+                        "superseded_step_ids": superseded,
+                        "attempt_states": {
+                            step_id: "pending" for step_id in current_step_ids
+                        },
+                        "attempt_interpretations": {},
+                    }
+                superseded_ids = []
+                for step_id, record in live.items():
+                    if (
+                        record.get("status") in {"pending", "waiting", "blocked"}
+                        and covered_by_delta.intersection(map(str, record.get("covers", [])))
+                    ):
+                        record = {
+                            **record,
+                            "status": "superseded",
+                            "superseded_by_revision": expected_revision + 1,
+                        }
+                        live[step_id] = record
+                        superseded_ids.append(step_id)
+                graph = {
+                    step_id: json.dumps(record, default=str)
+                    for step_id, record in {**live, **{
+                        step["id"]: step for step in proposed
+                    }}.items()
+                }
+                normalized = [*live.values(), *proposed]
                 amended = {
                     **current,
-                    "obligations": obligations,
                     "steps": normalized,
                     "revision": expected_revision + 1,
                     "amended_at": time.time(),
@@ -1256,15 +1416,19 @@ class RedisContextStore:
                 pipe.delete(graph_key)
                 pipe.hset(graph_key, mapping=graph)
                 pipe.set(definition_key, json.dumps(amended, default=str))
+                pipe.set(projection_key, json.dumps(projection, default=str))
                 pipe.sadd("jarviscore:active_workflows", workflow_id)
                 pipe.xadd(f"ledgers:{workflow_id}", {
                     "event": "dag_amended",
                     "revision": str(expected_revision + 1),
                     "reason": reason,
+                    "added_step_ids": json.dumps(sorted(proposed_ids)),
+                    "superseded_step_ids": json.dumps(sorted(superseded_ids)),
                     "timestamp": str(time.time()),
                 })
                 pipe.expire(graph_key, self._ttl_seconds)
                 pipe.expire(definition_key, self._ttl_seconds)
+                pipe.expire(projection_key, self._ttl_seconds)
                 pipe.expire(f"ledgers:{workflow_id}", self._ttl_seconds)
                 pipe.execute()
                 return True
@@ -1367,6 +1531,7 @@ class RedisContextStore:
             artifacts=artifacts,
             interpretations=interpretations,
             states=self.get_workflow_step_states(workflow_id),
+            obligations=self.get_obligation_projection(workflow_id),
         )
 
     def get_dependency_interpretations(
@@ -1722,6 +1887,7 @@ class RedisContextStore:
         cancelled_key = f"workflow_cancelled:{workflow_id}"
         graph_key = f"workflow_graph:{workflow_id}"
         output_key = f"step_output:{workflow_id}:{step_id}"
+        projection_key = f"workflow_obligations:{workflow_id}"
         result_status = output.get("status") if isinstance(output, dict) else None
         terminal = status or terminal_step_status(result_status)
         if terminal not in {"completed", "failed", "waiting", "blocked"}:
@@ -1743,7 +1909,7 @@ class RedisContextStore:
         pipe = self._redis.pipeline()
         while True:
             try:
-                pipe.watch(lock_key, graph_key, cancelled_key)
+                pipe.watch(lock_key, graph_key, projection_key, cancelled_key)
                 if pipe.exists(cancelled_key) or pipe.get(lock_key) != agent_id:
                     pipe.unwatch()
                     return False
@@ -1765,6 +1931,52 @@ class RedisContextStore:
                 if isinstance(interpretation, dict):
                     data["semantic_outcome"] = interpretation.get("verdict")
                     data["semantic_decision"] = interpretation.get("decision")
+                raw_projection = pipe.get(projection_key)
+                projection = json.loads(raw_projection) if raw_projection else {}
+                for obligation_id in map(str, data.get("covers", [])):
+                    record = projection.get(obligation_id)
+                    if not record or step_id not in record.get("current_step_ids", []):
+                        continue
+                    satisfied = set(map(str, interpretation.get(
+                        "satisfied_requirements", []
+                    ))) if isinstance(interpretation, dict) else set()
+                    unmet = set(map(str, interpretation.get(
+                        "unmet_requirements", []
+                    ))) if isinstance(interpretation, dict) else set()
+                    verdict = str(interpretation.get("verdict") or "") if isinstance(
+                        interpretation, dict
+                    ) else ""
+                    if obligation_id in satisfied or verdict == "satisfied":
+                        attempt_state = "satisfied"
+                    elif terminal == "waiting":
+                        attempt_state = "pending"
+                    elif obligation_id in unmet or isinstance(interpretation, dict):
+                        attempt_state = "unresolved"
+                    else:
+                        attempt_state = (
+                            "satisfied" if terminal == "completed" else "unresolved"
+                        )
+                    attempt_states = {
+                        **record.get("attempt_states", {}),
+                        step_id: attempt_state,
+                    }
+                    attempt_interpretations = dict(
+                        record.get("attempt_interpretations", {})
+                    )
+                    if isinstance(interpretation, dict):
+                        attempt_interpretations[step_id] = interpretation
+                    states = list(attempt_states.values())
+                    state = (
+                        "satisfied" if "satisfied" in states
+                        else "pending" if "pending" in states
+                        else "unresolved"
+                    )
+                    projection[obligation_id] = {
+                        **record,
+                        "state": state,
+                        "attempt_states": attempt_states,
+                        "attempt_interpretations": attempt_interpretations,
+                    }
                 data.pop("claim_expires_at", None)
                 data.pop("resume_agent_id", None)
                 data.pop("resume_context", None)
@@ -1778,6 +1990,9 @@ class RedisContextStore:
                 pipe.hset(output_key, mapping={k: v for k, v in mapping.items() if v is not None})
                 pipe.expire(output_key, self._ttl_seconds)
                 pipe.hset(graph_key, mapping={step_id: json.dumps(data)})
+                if projection:
+                    pipe.set(projection_key, json.dumps(projection, default=str))
+                    pipe.expire(projection_key, self._ttl_seconds)
                 pipe.xadd(f"ledgers:{workflow_id}", {
                     "event": f"step_{terminal}",
                     "step_id": step_id,

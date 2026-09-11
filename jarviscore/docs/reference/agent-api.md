@@ -311,6 +311,18 @@ from jarviscore.orchestration import (
 `WorkflowEvidence` is the complete artifact/interpretation/state snapshot used
 for final synthesis. These types serialize compatibly with existing Redis records.
 
+`Mesh.execute_goal()` results distinguish process lifecycle from source-goal truth:
+
+- `status` reports whether the distributed execution completed, failed, waited or
+    was cancelled.
+- `obligation_status` reports `satisfied`, `blocked` or `incomplete`.
+
+A terminal step with an actionable semantic gap can trigger a bounded DAG
+revision. Reconciliation preserves completed steps and effects, adds new work
+against their durable artifacts, and emits a fresh final response. If no available
+capability can advance the gap, the current revision settles as `blocked` rather
+than looping or claiming that execution completion satisfied the goal.
+
 #### resume_goal
 
 ```python

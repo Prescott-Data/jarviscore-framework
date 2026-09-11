@@ -108,12 +108,14 @@ class WorkflowEvidence:
     artifacts: Dict[str, Any] = field(default_factory=dict)
     interpretations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     states: Dict[str, str] = field(default_factory=dict)
+    obligations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def to_record(self) -> Dict[str, Any]:
         return {
             "artifacts": deepcopy(self.artifacts),
             "interpretations": deepcopy(self.interpretations),
             "states": dict(self.states),
+            "obligations": deepcopy(self.obligations),
         }
 
 

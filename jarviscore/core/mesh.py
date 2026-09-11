@@ -748,9 +748,21 @@ class Mesh:
             records = [self._redis_store.get_step_definition(workflow_id, step_id) or {}
                        for step_id in step_ids]
             statuses = [record.get("status") for record in records]
-            if statuses and all(
-                status in {"completed", "failed", "waiting", "blocked", "cancelled"}
-                for status in statuses
+            revision = int(definition.get("revision", 1))
+            current_records = [
+                record for record in records
+                if int(record.get("plan_revision", 1)) == revision
+            ] or records
+            current_step_ids = {
+                str(record.get("id")) for record in current_records if record.get("id")
+            }
+            current_statuses = [record.get("status") for record in current_records]
+            if current_statuses and all(
+                status in {
+                    "completed", "failed", "waiting", "blocked", "cancelled",
+                    "superseded",
+                }
+                for status in current_statuses
             ):
                 steps = []
                 dependency_ids = {
@@ -764,24 +776,159 @@ class Mesh:
                     envelope = saved.get("output") if saved else None
                     steps.append({**record, "output": envelope})
                     if (
-                        step_id not in dependency_ids
+                        step_id in current_step_ids
+                        and step_id not in dependency_ids
                         and record.get("status") == "completed"
                         and isinstance(envelope, dict)
                         and isinstance(envelope.get("result_summary"), str)
                         and envelope["result_summary"].strip()
                     ):
                         terminal_summaries.append(envelope["result_summary"].strip())
+                obligation_projection = self._redis_store.get_obligation_projection(
+                    workflow_id
+                )
+                semantic_gaps = [
+                    obligation for obligation in obligation_projection.values()
+                    if obligation.get("state") == "unresolved"
+                    and obligation.get("attempt_interpretations")
+                ]
+                settlement = self._redis_store.get_workflow_reconciliation_settlement(
+                    workflow_id, revision
+                )
+                if not semantic_gaps and revision > 1 and settlement is None:
+                    settlement = {
+                        "event": "semantic_reconciliation_settled",
+                        "revision": revision,
+                        "obligation_status": "satisfied",
+                        "reason": "The amended workflow satisfied the outstanding obligations.",
+                    }
+                    self._redis_store.save_workflow_reconciliation_settlement(
+                        workflow_id, revision, settlement
+                    )
+                if semantic_gaps and settlement is None and self._has_planning_llm():
+                    max_revisions = max(
+                        1, int(self.config.get("mesh_max_reconciliation_revisions", 3))
+                    )
+                    if revision < max_revisions:
+                        from jarviscore.planning.mesh_planner import MeshPlanner
+
+                        lease_seconds = int(self.config.get(
+                            "mesh_planning_lease_seconds", 300
+                        ))
+                        if not self._redis_store.claim_workflow_reconciliation(
+                            workflow_id, revision, self._node_id, lease_seconds
+                        ):
+                            await asyncio.sleep(interval)
+                            continue
+                        try:
+                            settlement = (
+                                self._redis_store.get_workflow_reconciliation_settlement(
+                                    workflow_id, revision
+                                )
+                            )
+                            if settlement is not None:
+                                continue
+                            planner = MeshPlanner(
+                                self._planning_llm(),
+                                capabilities=self._mesh_capability_catalog(),
+                                response_capability=self.config.get(
+                                    "mesh_response_capability"
+                                ),
+                            )
+                            with workflow_budget_scope(
+                                self._redis_store,
+                                workflow_id,
+                                epoch_id=f"reconciliation:{revision}:{self._node_id}",
+                            ):
+                                decision = await planner.reconciliation_decision(
+                                    str(definition.get("goal") or ""),
+                                    obligations=semantic_gaps,
+                                    current_steps=steps,
+                                    revision=revision,
+                                )
+                            self._redis_store.append_ledger_entry(workflow_id, {
+                                "event": "semantic_reconciliation_requested",
+                                "revision": revision,
+                                "decision": decision["decision"],
+                                "reason": decision["reason"],
+                            })
+                            if decision["decision"] == "amend":
+                                remaining = (
+                                    None if deadline is None else max(
+                                        0.0, deadline - asyncio.get_running_loop().time()
+                                    )
+                                )
+                                return await self.replan_goal(
+                                    workflow_id,
+                                    reason=decision["reason"],
+                                    context={
+                                        "semantic_reconciliation": {
+                                            "revision": revision,
+                                            "obligations": semantic_gaps,
+                                        },
+                                    },
+                                    timeout=remaining,
+                                )
+                            settlement = {
+                                "event": "semantic_reconciliation_settled",
+                                "revision": revision,
+                                "obligation_status": "blocked",
+                                "reason": decision["reason"],
+                            }
+                            self._redis_store.save_workflow_reconciliation_settlement(
+                                workflow_id, revision, settlement
+                            )
+                        finally:
+                            self._redis_store.release_workflow_reconciliation(
+                                workflow_id, revision, self._node_id
+                            )
+                    else:
+                        settlement = {
+                            "event": "semantic_reconciliation_settled",
+                            "revision": revision,
+                            "obligation_status": "blocked",
+                            "reason": "The bounded reconciliation revision limit was reached.",
+                        }
+                        self._redis_store.save_workflow_reconciliation_settlement(
+                            workflow_id, revision, settlement
+                        )
                 overall = (
-                    "cancelled" if "cancelled" in statuses
-                    else "waiting" if "waiting" in statuses
-                    else "failed" if "failed" in statuses
+                    "cancelled" if "cancelled" in current_statuses
+                    else "waiting" if "waiting" in current_statuses
+                    else "failed" if "failed" in current_statuses
                     else "completed"
                 )
+                obligation_states = [
+                    item.get("state") for item in obligation_projection.values()
+                ]
+                obligation_status = (
+                    "satisfied"
+                    if obligation_states and all(
+                        state == "satisfied" for state in obligation_states
+                    )
+                    else "incomplete" if "pending" in obligation_states
+                    else "blocked" if obligation_states
+                    else "satisfied" if overall == "completed"
+                    else "incomplete"
+                )
+                response_records = [
+                    record for record in current_records
+                    if record.get("effect") == "final_response"
+                ]
+                response_status = "not_required"
+                if response_records:
+                    response_state = str(response_records[-1].get("status") or "")
+                    response_status = {
+                        "completed": "completed",
+                        "waiting": "waiting",
+                    }.get(response_state, "failed")
                 if overall != "waiting":
                     self._redis_store.unregister_active_workflow(workflow_id)
                 return {
                     "workflow_id": workflow_id,
                     "status": overall,
+                    "obligation_status": obligation_status,
+                    "response_status": response_status,
                     "goal": definition.get("goal", ""),
                     "obligations": definition.get("obligations", []),
                     "revision": definition.get("revision", 0),
@@ -862,9 +1009,16 @@ class Mesh:
                 workflow_id,
                 epoch_id=f"replan:{revision + 1}:{self._node_id}",
             ):
+                projection = self._redis_store.get_obligation_projection(workflow_id)
+                target_obligation_ids = {
+                    str(obligation_id)
+                    for obligation_id, obligation in projection.items()
+                    if obligation.get("state") != "satisfied"
+                }
                 plan = await planner.amend(
                     str(definition.get("goal") or ""),
                     obligations=definition.get("obligations", []),
+                    target_obligation_ids=target_obligation_ids,
                     current_steps=current_steps,
                     reason=reason,
                     revision=revision,

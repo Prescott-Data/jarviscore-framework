@@ -346,6 +346,20 @@ class TestMailbox:
 # ======================================================================
 
 class TestWorkflowDAG:
+
+    def test_existing_goal_binding_ignores_mapping_insertion_order(self, store):
+        first_context = {"workflow_id": "thread", "run_id": "run-1"}
+        reordered_context = {"run_id": "run-1", "workflow_id": "thread"}
+
+        assert store.register_workflow_goal(
+            "wf-existing", "Do the work", first_context,
+        )
+        assert not store.register_workflow_goal(
+            "wf-existing", "Do the work", reordered_context,
+        )
+        assert [
+            event["event"] for event in store.get_ledger_full("wf-existing")
+        ].count("goal_registered") == 1
     """
     In v0.3.2: workflow engine executes steps sequentially with
     in-memory dependency polling.
@@ -424,7 +438,9 @@ class TestWorkflowDAG:
         workflow = store.get_workflow_definition("wf-lossless")
         assert workflow["goal"] == "Research Acme without inventing evidence"
         assert workflow["obligations"] == obligations
-        assert workflow["steps"][0] == {**steps[0], "status": "pending"}
+        assert workflow["steps"][0] == {
+            **steps[0], "status": "pending", "plan_revision": 1,
+        }
         assert "wf-lossless" in store.get_active_workflows()
 
     def test_dependency_outputs_are_read_from_the_shared_ledger(self, store):
@@ -502,24 +518,31 @@ class TestWorkflowDAG:
             "wf-amend", "research", "researcher:claim",
             {"status": "success", "output": {"evidence": ["source-1"]}},
         )
+        completed = store.get_step_definition("wf-amend", "research")
+        assert completed["completed_by"] == "researcher"
 
         store.amend_workflow(
             "wf-amend",
             expected_revision=1,
             obligations=obligations,
-            steps=[
-                {"id": "research", "capability": "research", "task": "Research", "depends_on": [], "covers": ["o1"]},
-                {"id": "analyse_v2", "capability": "analysis", "task": "Analyse using another method", "depends_on": ["research"], "covers": ["o2"]},
-            ],
+            steps=[{
+                "id": "analyse_v2", "capability": "analysis",
+                "task": "Analyse using another method",
+                "depends_on": ["research"], "covers": ["o2"],
+            }],
             reason="Original analysis path failed",
         )
 
         definition = store.get_workflow_definition("wf-amend")
         assert definition["goal"] == "Research and analyse"
         assert definition["revision"] == 2
+        assert [step["id"] for step in definition["steps"]] == [
+            "research", "analyse", "analyse_v2",
+        ]
         assert store.get_step_status("wf-amend", "research") == "completed"
         assert store.get_step_output("wf-amend", "research")["output"]["output"] == {"evidence": ["source-1"]}
-        assert store.get_step_status("wf-amend", "analyse") is None
+        assert store.get_step_status("wf-amend", "analyse") == "superseded"
+        assert store.claim_step("wf-amend", "analyse", "stale:claim", 30) is False
         assert store.get_step_status("wf-amend", "analyse_v2") == "pending"
         assert store.get_ledger_tail("wf-amend")[-1]["event"] == "dag_amended"
 
@@ -528,22 +551,137 @@ class TestWorkflowDAG:
                 "wf-amend",
                 expected_revision=1,
                 obligations=obligations,
-                steps=definition["steps"],
+                steps=[{
+                    "id": "late", "capability": "analysis", "task": "Late",
+                    "depends_on": ["research"], "covers": ["o2"],
+                }],
                 reason="Stale planner",
             )
 
-        changed_completed_step = [
-            {**step, "task": "Rewrite completed research"}
-            if step["id"] == "research" else step
-            for step in definition["steps"]
-        ]
-        with pytest.raises(ValueError, match="cannot change completed step"):
+        with pytest.raises(ValueError, match="already exists"):
             store.amend_workflow(
                 "wf-amend",
                 expected_revision=2,
                 obligations=obligations,
-                steps=changed_completed_step,
+                steps=[{
+                    "id": "research", "capability": "research",
+                    "task": "Rewrite completed research", "depends_on": [],
+                    "covers": ["o1"],
+                }],
                 reason="Invalid rewrite",
+            )
+
+        assert store.claim_step("wf-amend", "analyse_v2", "analyst:claim", 30)
+        assert store.finish_claimed_step(
+            "wf-amend", "analyse_v2", "analyst:claim",
+            {"status": "success", "output": {"analysis": "complete"}},
+        )
+        terminal_definition = store.get_workflow_definition("wf-amend")
+        with pytest.raises(ValueError, match="at least one new step"):
+            store.amend_workflow(
+                "wf-amend",
+                expected_revision=2,
+                obligations=obligations,
+                steps=[],
+                reason="No new work",
+            )
+
+    def test_reconciliation_lease_and_settlement_are_revision_scoped(self, store):
+        assert store.claim_workflow_reconciliation("wf-r", 1, "node-a", 30)
+        assert not store.claim_workflow_reconciliation("wf-r", 1, "node-b", 30)
+        assert not store.release_workflow_reconciliation("wf-r", 1, "node-b")
+        assert store.release_workflow_reconciliation("wf-r", 1, "node-a")
+        assert store.claim_workflow_reconciliation("wf-r", 2, "node-b", 30)
+
+        settlement = {
+            "event": "semantic_reconciliation_settled",
+            "obligation_status": "blocked",
+            "reason": "No available capability can obtain the missing fact.",
+        }
+        assert store.save_workflow_reconciliation_settlement("wf-r", 1, settlement)
+        assert not store.save_workflow_reconciliation_settlement("wf-r", 1, settlement)
+        assert store.get_workflow_reconciliation_settlement("wf-r", 1) == {
+            **settlement, "revision": 1,
+        }
+        events = [
+            event for event in store.get_ledger_full("wf-r")
+            if event.get("event") == "semantic_reconciliation_settled"
+        ]
+        assert len(events) == 1
+
+    def test_obligation_projection_tracks_current_revision_and_supersession(self, store):
+        obligations = [{
+            "id": "o1", "description": "Verify stage", "source_quote": "Verify stage",
+        }]
+        first = {
+            "id": "verify_first", "capability": "verification", "effect": "read",
+            "task": "Verify stage", "depends_on": [], "covers": ["o1"],
+        }
+        store.publish_workflow(
+            "wf-projection", goal="Verify stage", obligations=obligations, steps=[first],
+        )
+        assert store.get_obligation_projection("wf-projection")["o1"]["state"] == "pending"
+        assert store.claim_step("wf-projection", "verify_first", "peer:first", 30)
+        assert store.finish_claimed_step(
+            "wf-projection", "verify_first", "peer:first", {
+                "status": "success", "output": {"stage": None},
+                "interpretation": {
+                    "verdict": "unsatisfied", "decision": "reject",
+                    "satisfied_requirements": [], "unmet_requirements": ["o1"],
+                },
+            },
+        )
+        assert store.get_obligation_projection("wf-projection")["o1"]["state"] == "unresolved"
+
+        store.amend_workflow(
+            "wf-projection", expected_revision=1, obligations=obligations,
+            steps=[{
+                "id": "verify_retry", "capability": "verification", "effect": "read",
+                "task": "Verify stage from fresh evidence", "depends_on": ["verify_first"],
+                "covers": ["o1"],
+            }],
+            reason="Fresh evidence is available",
+        )
+        pending = store.get_obligation_projection("wf-projection")["o1"]
+        assert pending["state"] == "pending"
+        assert pending["current_step_ids"] == ["verify_retry"]
+        assert pending["superseded_step_ids"] == ["verify_first"]
+
+        assert store.claim_step("wf-projection", "verify_retry", "peer:retry", 30)
+        assert store.finish_claimed_step(
+            "wf-projection", "verify_retry", "peer:retry", {
+                "status": "success", "output": {"stage": "appointmentscheduled"},
+                "interpretation": {
+                    "verdict": "satisfied", "decision": "proceed",
+                    "satisfied_requirements": ["o1"], "unmet_requirements": [],
+                },
+            },
+        )
+        current = store.get_obligation_projection("wf-projection")["o1"]
+        assert current["state"] == "satisfied"
+        assert current["revision"] == 2
+        assert current["attempt_states"] == {"verify_retry": "satisfied"}
+
+    def test_cancelled_workflow_rejects_an_inflight_amendment(self, store):
+        obligations = [{"id": "o1", "description": "Work", "source_quote": "Work"}]
+        steps = [{
+            "id": "work", "capability": "research", "task": "Work",
+            "depends_on": [], "covers": ["o1"],
+        }]
+        store.publish_workflow(
+            "wf-cancel-amend", goal="Work", obligations=obligations, steps=steps,
+        )
+        assert store.cancel_workflow("wf-cancel-amend", reason="User cancelled")
+
+        with pytest.raises(ValueError, match="cancelled workflow"):
+            store.amend_workflow(
+                "wf-cancel-amend", expected_revision=1,
+                obligations=obligations,
+                steps=[*steps, {
+                    "id": "retry", "capability": "research", "task": "Retry",
+                    "depends_on": [], "covers": ["o1"],
+                }],
+                reason="Late planner response",
             )
 
 

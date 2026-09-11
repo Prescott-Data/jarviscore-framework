@@ -23,6 +23,9 @@ CALENDAR_LIST_ATOM = (
 DRIVE_EXPORT_ATOM = (
     "jarviscore/integrations/atoms/google_drive/google_drive_export_file.py"
 )
+DRIVE_GET_DOCUMENT_ATOM = (
+    "jarviscore/integrations/atoms/google_drive/google_drive_get_document.py"
+)
 HUBSPOT_CONTACT_DEALS_ATOM = (
     "jarviscore/integrations/atoms/hubspot/hubspot_list_contact_deals.py"
 )
@@ -319,6 +322,57 @@ class TestProviderIdentityAndContentAtoms:
         assert result["content"] is None
         assert result["content_base64"] == "JVBERi3/"
         assert result["encoding"] == "base64"
+
+    async def test_drive_get_document_reads_structural_text(self):
+        with open(DRIVE_GET_DOCUMENT_ATOM, encoding="utf-8") as handle:
+            source = handle.read()
+        atom = read_contract(
+            source,
+            system="google_drive",
+            expected_name="google_drive_get_document",
+        ).atom
+        calls = []
+
+        async def nexus_call(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return {
+                "ok": True,
+                "json": {
+                    "title": "Acme Pitch",
+                    "body": {"content": [
+                        {"paragraph": {"elements": [
+                            {"textRun": {"content": "Introduction\n"}},
+                            {"textRun": {"content": "Problem\n"}},
+                        ]}},
+                        {"sectionBreak": {}},
+                        {"paragraph": {"elements": [
+                            {"textRun": {"content": "Solution\n"}},
+                        ]}},
+                    ]},
+                },
+                "body": "",
+            }
+
+        namespace = {"nexus_call": nexus_call}
+        exec(
+            f"{source}\n\n{invocation(atom, {'document_id': 'doc-1'})}",
+            namespace,
+        )
+        result = await namespace["main"]()
+
+        assert result == {
+            "success": True,
+            "document_id": "doc-1",
+            "title": "Acme Pitch",
+            "text": "Introduction\nProblem\nSolution\n",
+            "paragraph_count": 2,
+            "content_length": 29,
+            "error": None,
+        }
+        assert calls == [(
+            "GET", "https://docs.googleapis.com/v1/documents/doc-1",
+            {"provider": "google_drive"},
+        )]
 
     async def test_hubspot_contact_deals_reads_association_records(self):
         with open(HUBSPOT_CONTACT_DEALS_ATOM, encoding="utf-8") as handle:

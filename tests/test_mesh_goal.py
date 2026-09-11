@@ -44,7 +44,7 @@ class AnalysisPeer(Agent):
 
     async def execute_task(self, task):
         self.received.append(task)
-        evidence = task["context"]["previous_step_results"]["research"]
+        evidence = next(iter(task["context"]["previous_step_results"].values()))
         return {
             "status": "success",
             "output": {"used": evidence},
@@ -110,6 +110,32 @@ class HoldingPeer(Agent):
                 "satisfied_requirements": [],
                 "unmet_requirements": ["Verified identity"],
                 "evidence_refs": [],
+            },
+        }
+
+
+class RemediatingPeer(Agent):
+    role = "remediating_peer"
+    capabilities = ["verification"]
+
+    def __init__(self, llm, agent_id=None):
+        super().__init__(agent_id)
+        self.llm = llm
+        self.received = []
+
+    async def execute_task(self, task):
+        self.received.append(task)
+        remediating = task["id"] == "verify_content"
+        return {
+            "status": "success",
+            "output": {"content_verified": remediating},
+            "interpretation": {
+                "verdict": "satisfied" if remediating else "partial",
+                "decision": "proceed" if remediating else "hold",
+                "meaning": "Content is verified." if remediating else "Content is unverified.",
+                "satisfied_requirements": ["o1"] if remediating else ["o0"],
+                "unmet_requirements": [] if remediating else ["o1"],
+                "evidence_refs": ["document-readback"] if remediating else [],
             },
         }
 
@@ -181,6 +207,22 @@ class ResponsePeer(Agent):
             "status": "success",
             "output": {"decision": "hold"},
             "result_summary": "Identity was not verified, so no external write was performed.",
+        }
+
+
+class FailingResponsePeer(ResponsePeer):
+    async def execute_task(self, task):
+        self.received.append(task)
+        return {"status": "failure", "error": "response synthesis failed"}
+
+
+class RevisionResponsePeer(ResponsePeer):
+    async def execute_task(self, task):
+        self.received.append(task)
+        return {
+            "status": "success",
+            "output": {"decision": "proceed"},
+            "result_summary": f"Response for revision {len(self.received)}.",
         }
 
 
@@ -402,15 +444,16 @@ async def test_waiting_goal_resumes_same_peer_and_unblocks_downstream(monkeypatc
 async def test_failed_goal_can_be_replanned_under_a_revision_lease(monkeypatch):
     amended_steps = [
         {
-            "step_id": "research", "capability": "research", "effect": "read",
+            "step_id": "research_v2", "capability": "research", "effect": "read",
             "task": "Retry evidence collection", "success_criterion": "Evidence exists",
             "expected_findings": ["evidence"], "depends_on": [], "covers": ["o1"],
         },
         {
-            "step_id": "analyse", "capability": "analysis", "effect": "read",
+            "step_id": "analyse_v2", "capability": "analysis", "effect": "read",
             "task": "Analyse the replacement evidence",
             "success_criterion": "Analysis uses evidence",
-            "expected_findings": ["analysis"], "depends_on": ["research"], "covers": ["o2"],
+            "expected_findings": ["analysis"], "depends_on": ["research_v2"],
+            "covers": ["o2"],
         },
     ]
     llm = MockLLMClient(responses=[
@@ -448,11 +491,94 @@ async def test_failed_goal_can_be_replanned_under_a_revision_lease(monkeypatch):
     assert store.get_workflow_definition("wf-replan")["revision"] == 2
     assert researcher.received[1]["task"] == "Retry evidence collection"
     assert analyst.received[0]["context"]["previous_step_results"] == {
-        "research": {"evidence": ["source-2"]},
+        "research_v2": {"evidence": ["source-2"]},
     }
     assert "dag_amended" in [
         event["event"] for event in store.get_ledger_full("wf-replan")
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_goal_reconciles_actionable_semantic_hold(monkeypatch):
+    initial_steps = [{
+        "step_id": "locate", "capability": "verification", "effect": "read",
+        "task": "Locate and verify usable content", "success_criterion": "Content is verified",
+        "expected_findings": ["content verification"], "depends_on": [],
+        "covers": ["o0", "o1"],
+    }]
+    amended_steps = [{
+        "step_id": "verify_content", "capability": "verification", "effect": "read",
+        "task": "Inspect the located resource and verify its content",
+        "success_criterion": "Content is verified by readback",
+        "expected_findings": ["content verification"], "depends_on": ["locate"],
+        "covers": ["o1"],
+    }]
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"obligations": [{
+            "id": "o0", "description": "Locate the resource",
+            "source_quote": "Locate",
+        }, {
+            "id": "o1", "description": "Verify usable content",
+            "source_quote": "verify usable content",
+        }]})},
+        {"content": json.dumps({"steps": initial_steps})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+        {"content": json.dumps({
+            "decision": "amend", "reason": "The available verification capability can inspect content.",
+        })},
+        {"content": json.dumps({"steps": amended_steps})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+        {"content": json.dumps({
+            "decision": "settle_blocked", "reason": "The remaining fact needs human input.",
+        })},
+    ])
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={
+        "p2p_enabled": False,
+        "distributed_poll_interval": 0.01,
+        "mesh_response_capability": "final_response",
+    })
+    peer = mesh.add(RemediatingPeer(llm, agent_id="verifier"))
+    responder = mesh.add(RevisionResponsePeer(agent_id="responder"))
+
+    await mesh.start()
+    try:
+        result = await mesh.execute_goal(
+            "Locate and verify usable content", workflow_id="wf-auto-reconcile", timeout=2,
+        )
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "completed"
+    assert result["obligation_status"] == "satisfied"
+    assert result["response_status"] == "completed"
+    assert result["result_summary"] == "Response for revision 2."
+    assert len(responder.received) == 2
+    assert result["revision"] == 2, (
+        store.get_workflow_planning_status("wf-auto-reconcile"),
+        [{
+            key: event.get(key)
+            for key in ("event", "decision", "reason", "error", "revision")
+            if event.get(key) is not None
+        } for event in store.get_ledger_full("wf-auto-reconcile")
+         if "reconcil" in str(event.get("event")) or event.get("event") == "dag_amended"],
+    )
+    assert [task["id"] for task in peer.received] == ["locate", "verify_content"]
+    assert store.get_step_status("wf-auto-reconcile", "locate") == "completed"
+    assert store.get_step_status("wf-auto-reconcile", "verify_content") == "completed"
+    projection = store.get_obligation_projection("wf-auto-reconcile")
+    assert projection["o0"]["current_step_ids"] == ["locate"]
+    assert projection["o0"]["superseded_step_ids"] == []
+    assert projection["o1"]["current_step_ids"] == ["verify_content"]
+    assert projection["o1"]["superseded_step_ids"] == ["locate"]
+    events = [event["event"] for event in store.get_ledger_full("wf-auto-reconcile")]
+    assert "semantic_reconciliation_requested" in events
+    assert "dag_amended" in events
+    assert "semantic_reconciliation_settled" in events
 
 
 @pytest.mark.asyncio
@@ -641,6 +767,50 @@ async def test_hold_blocks_multi_system_effects_but_final_response_still_runs(mo
         ("final_response", "final_response", []),
     ]
     assert all("agent" not in step and "atom" not in step for step in persisted["steps"])
+
+
+@pytest.mark.asyncio
+async def test_failed_final_response_does_not_erase_satisfied_obligations(monkeypatch):
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    mesh.add(SubmitterPeer, agent_id="worker")
+    mesh.add(FailingResponsePeer, agent_id="responder")
+
+    await mesh.start()
+    store.publish_workflow(
+        "wf-response-failure",
+        goal="Submit work and report it",
+        obligations=[{
+            "id": "o1", "description": "Submit work", "source_quote": "Submit work",
+        }],
+        steps=[
+            {
+                "id": "submit", "capability": "submission", "effect": "write",
+                "systems": ["provider"], "task": "Submit work", "depends_on": [],
+                "covers": ["o1"],
+            },
+            {
+                "id": "respond", "capability": "final_response",
+                "effect": "final_response", "systems": [], "task": "Report outcome",
+                "depends_on": ["submit"], "covers": [],
+            },
+        ],
+    )
+    try:
+        result = await mesh.execute_goal(
+            "Submit work and report it", workflow_id="wf-response-failure", timeout=1,
+        )
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "failed"
+    assert result["obligation_status"] == "satisfied"
+    assert result["response_status"] == "failed"
+    assert result["result_summary"] == ""
 
 
 @pytest.mark.asyncio
