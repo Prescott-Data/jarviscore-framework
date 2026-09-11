@@ -245,6 +245,9 @@ class P2PCoordinator:
                 'agent_id': agent.agent_id,
                 'role': agent.role,
                 'capabilities': list(agent.capabilities),
+                'capability_descriptions': dict(
+                    getattr(agent, 'capability_descriptions', {}) or {}
+                ),
                 'description': getattr(agent, 'description', ''),
                 'node_id': self._get_node_id()
             }

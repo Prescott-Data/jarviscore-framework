@@ -118,6 +118,13 @@ class StepEvaluation:
     confidence: float
     evaluator_note: str
     additional_findings: Dict[str, Any] = field(default_factory=dict)
+    goal_decision: Literal["continue", "complete", "replan"] = "continue"
+    goal_note: str = ""
+    hitl_category: Optional[
+        Literal["auth_required", "data_required", "critical_action"]
+    ] = None
+    autonomous_paths_exhausted: bool = False
+    human_exclusive: bool = False
 
     @property
     def passed(self) -> bool:
@@ -125,11 +132,23 @@ class StepEvaluation:
 
     @property
     def needs_hitl(self) -> bool:
-        return self.verdict == "hitl"
+        if self.verdict != "hitl":
+            return False
+        if self.hitl_category in {"auth_required", "critical_action"}:
+            return True
+        return bool(
+            self.hitl_category == "data_required"
+            and self.autonomous_paths_exhausted
+            and self.human_exclusive
+        )
 
     @property
     def needs_replan(self) -> bool:
-        return self.verdict == "fail"
+        return (
+            self.verdict == "fail"
+            or self.goal_decision == "replan"
+            or (self.verdict == "hitl" and not self.needs_hitl)
+        )
 
 
 # ── Completed step record ─────────────────────────────────────────────────────
@@ -168,6 +187,11 @@ class _ResumedStep:
     step: PlannedStep
     verdict: str
     evaluator_note: str
+    goal_decision: str
+    goal_note: str
+    hitl_category: Optional[str]
+    autonomous_paths_exhausted: bool
+    human_exclusive: bool
     summary: str
     elapsed_ms: float = 0.0
 
@@ -178,6 +202,11 @@ class _ResumedStep:
             verdict=self.verdict,
             evaluator_note=self.evaluator_note,
             confidence=0.0,
+            goal_decision=self.goal_decision,
+            goal_note=self.goal_note,
+            hitl_category=self.hitl_category,
+            autonomous_paths_exhausted=self.autonomous_paths_exhausted,
+            human_exclusive=self.human_exclusive,
         )
 
     @property
@@ -203,6 +232,13 @@ class _ResumedStep:
             ),
             verdict=str(entry.get("verdict", "pass")),
             evaluator_note=str(entry.get("evaluator_note", "")),
+            goal_decision=str(entry.get("goal_decision", "continue")),
+            goal_note=str(entry.get("goal_note", "")),
+            hitl_category=entry.get("hitl_category"),
+            autonomous_paths_exhausted=bool(
+                entry.get("autonomous_paths_exhausted", False)
+            ),
+            human_exclusive=bool(entry.get("human_exclusive", False)),
             summary=str(entry.get("summary", "")),
             elapsed_ms=float(entry.get("elapsed_ms", 0.0) or 0.0),
         )
@@ -244,6 +280,7 @@ class GoalExecution:
 
     # Plan state
     plan: List[PlannedStep] = field(default_factory=list)
+    remaining_plan: List[PlannedStep] = field(default_factory=list)
     plan_revision: int = 0
     current_step_index: int = 0
 
@@ -418,6 +455,19 @@ class GoalExecution:
                     "task": cs.step.task,
                     "verdict": cs.evaluation.verdict,
                     "evaluator_note": cs.evaluation.evaluator_note,
+                    "goal_decision": getattr(
+                        cs.evaluation, "goal_decision", "continue"
+                    ),
+                    "goal_note": getattr(cs.evaluation, "goal_note", ""),
+                    "hitl_category": getattr(
+                        cs.evaluation, "hitl_category", None
+                    ),
+                    "autonomous_paths_exhausted": getattr(
+                        cs.evaluation, "autonomous_paths_exhausted", False
+                    ),
+                    "human_exclusive": getattr(
+                        cs.evaluation, "human_exclusive", False
+                    ),
                     "summary": str(getattr(cs.output, "summary", "") or "")[:300],
                     "elapsed_ms": round(cs.elapsed_ms, 1),
                 }

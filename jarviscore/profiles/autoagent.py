@@ -19,6 +19,62 @@ if TYPE_CHECKING:
     from jarviscore.planning.goal_context import GoalExecution
 
 
+class _AutoAgentMeshProxy:
+    """Parent-side delegation surface for this agent's isolated code process."""
+
+    def __init__(self, agent: "AutoAgent"):
+        self.agent = agent
+
+    def list_peers(self) -> List[Dict[str, Any]]:
+        peers = getattr(self.agent, "peers", None)
+        return peers.list_peers() if peers is not None else []
+
+    async def delegate(
+        self,
+        *,
+        to: str,
+        task: str,
+        context: Optional[Dict[str, Any]] = None,
+        capability: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        peers = getattr(self.agent, "peers", None)
+        if peers is None:
+            raise RuntimeError("This agent is not attached to a mesh.")
+        available = self.list_peers()
+        target = next(
+            (
+                peer for peer in available
+                if to and (peer.get("agent_id") == to or peer.get("role") == to)
+            ),
+            None,
+        )
+        if target is None and capability:
+            target = next(
+                (
+                    peer for peer in available
+                    if capability in (peer.get("capabilities") or [])
+                ),
+                None,
+            )
+        if target is None:
+            raise ValueError(
+                f"No peer matches role/id {to!r} or capability {capability!r}."
+            )
+        response = await peers.request(
+            str(target["agent_id"]),
+            {"task": task},
+            timeout=float(timeout or 7200.0),
+            context=dict(context or {}),
+        )
+        if response is None:
+            return {
+                "status": "failure",
+                "error": f"Peer {target['agent_id']!r} did not respond.",
+            }
+        return response
+
+
 
 
 class AutoAgent(Profile):
@@ -145,6 +201,67 @@ class AutoAgent(Profile):
         # ── Agent intelligence: profile block prepended to system prompt ──
         # Loaded lazily in setup() from jarviscore/profiles/agents/{role}.yaml
         self._profile_block: str = ""
+        self._peer_execution_lock = asyncio.Lock()
+
+    async def _handle_peer_request(self, message) -> Dict[str, Any]:
+        async with self._peer_execution_lock:
+            handler = getattr(self, "on_peer_request", None)
+            if callable(handler):
+                response = await handler(message)
+                if response is not None:
+                    return response
+            data = message.data if isinstance(message.data, dict) else {}
+            task_desc = data.get("query") or data.get("task")
+            if not isinstance(task_desc, str) or not task_desc.strip():
+                return {
+                    "status": "failure",
+                    "error": "Peer requests require a query or task.",
+                }
+            context = dict(message.context or {})
+            requested_capability = str(data.get("capability") or "").strip()
+            if requested_capability:
+                if requested_capability not in self.capabilities:
+                    return {
+                        "status": "failure",
+                        "error": (
+                            f"{self.role} does not own capability "
+                            f"{requested_capability!r}."
+                        ),
+                    }
+                context["capability"] = requested_capability
+                contract = (
+                    getattr(self, "capability_contracts", {}) or {}
+                ).get(requested_capability) or {}
+                systems = [str(value) for value in contract.get("systems") or []]
+                effects = [str(value) for value in contract.get("effects") or []]
+                if systems:
+                    context["systems"] = systems
+                    if len(systems) == 1:
+                        context["system"] = systems[0]
+                for effect in ("read", "propose", "write", "notify", "destructive"):
+                    if effect in effects:
+                        context["effect"] = effect
+                        break
+            context.update(
+                peer_sender=message.sender,
+                peer_correlation_id=message.correlation_id,
+            )
+            return await self.execute_task({"task": task_desc.strip(), "context": context})
+
+    async def _handle_peer_notify(self, message) -> None:
+        handler = getattr(self, "on_peer_notify", None)
+        if callable(handler):
+            await handler(message)
+        if self.mailbox is None:
+            return
+        context = dict(message.context or {})
+        self.mailbox.deliver(
+            message.sender,
+            message.data if isinstance(message.data, dict) else {"message": message.data},
+            workflow_id=context.get("workflow_id"),
+            step_id=context.get("step_id"),
+            context=context or None,
+        )
 
     async def setup(self):
         """
@@ -216,6 +333,7 @@ class AutoAgent(Profile):
         self.sandbox = create_coder_sandbox(
             timeout=timeout,
             nexus_call_proxy=nexus_proxy,
+            mesh_proxy=_AutoAgentMeshProxy(self),
             blob_storage=getattr(self, '_blob_storage', None),
             artifact_prefix=f"artifacts/{self.role}",
         )
@@ -262,16 +380,8 @@ class AutoAgent(Profile):
         if config.get("hitl_enabled", False):
             try:
                 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
-                self._kernel.hitl_policy = AdaptiveHITLPolicy(
-                    enabled=True,
-                    max_confidence=config.get("hitl_max_confidence", 0.8),
-                    min_risk_score=config.get("hitl_min_risk_score", 0.7),
-                )
-                self._logger.info(
-                    "AdaptiveHITLPolicy enabled (max_confidence=%.2f, min_risk=%.2f)",
-                    config.get("hitl_max_confidence", 0.8),
-                    config.get("hitl_min_risk_score", 0.7),
-                )
+                self._kernel.hitl_policy = AdaptiveHITLPolicy(enabled=True)
+                self._logger.info("Typed human-only HITL admissibility enabled")
             except ImportError:
                 self._logger.debug("AdaptiveHITLPolicy import failed — HITL adaptive escalation disabled")
 
@@ -337,7 +447,18 @@ class AutoAgent(Profile):
         """
         from jarviscore.core.envelope import attach_result_summary
 
+        pending_messages = []
+        mailbox = getattr(self, "mailbox", None)
+        if mailbox is not None:
+            pending_messages = mailbox.peek(limit=10)
+            if pending_messages:
+                task = dict(task)
+                context = dict(task.get("context") or {})
+                context["_mailbox_context"] = mailbox.format_for_context(pending_messages)
+                task["context"] = context
         envelope = await self._execute_task_pipeline(task)
+        if pending_messages and isinstance(envelope, dict) and envelope.get("status") == "success":
+            mailbox.read(max_messages=len(pending_messages))
         if isinstance(envelope, dict):
             attach_result_summary(envelope)
         return envelope
@@ -382,6 +503,13 @@ class AutoAgent(Profile):
 
         self._logger.info(f"[AutoAgent] Executing via Kernel: {task_desc[:100]}...")
 
+        attach_mesh = getattr(self._kernel, "attach_mesh_capabilities", None)
+        if callable(attach_mesh):
+            attach_mesh(
+                peers=getattr(self, "peers", None),
+                mailbox=getattr(self, "mailbox", None),
+            )
+
         # ── Declared single-turn contracts bypass the kernel pipeline ───────
         # (issue #63/JC-003): execution_shape single_response promises "just
         # answer" — one structured completion against the system prompt, not a
@@ -405,13 +533,25 @@ class AutoAgent(Profile):
             self._direct_kernel_turn = False
             self._direct_kernel_complexity = None
             self._direct_kernel_reason = None
+            if isinstance(ctx, dict) and ctx.get("peer_requester_agent_id"):
+                self._direct_kernel_turn = True
+                self._direct_kernel_complexity = "moderate"
+                self._direct_kernel_reason = (
+                    "A peer capability request is a bounded specialist assignment; "
+                    "execute it through one agentic Kernel OODA loop."
+                )
+                complexity = None
+            else:
+                complexity = None
             try:
                 from jarviscore.planning.classifier import ComplexityVerdict, TaskComplexityClassifier
 
                 execution_contract: Dict[str, Any] = {}
                 if isinstance(ctx, dict) and isinstance(ctx.get("execution_contract"), dict):
                     execution_contract = cast(Dict[str, Any], ctx.get("execution_contract"))
-                if execution_contract.get("execution_shape") in {"single_response", "single_artifact"}:
+                if getattr(self, '_direct_kernel_turn', False):
+                    pass
+                elif execution_contract.get("execution_shape") in {"single_response", "single_artifact"}:
                     complexity = ComplexityVerdict(
                         level="moderate",
                         reason=(
@@ -457,6 +597,10 @@ class AutoAgent(Profile):
                     getattr(completed[-1].output, "payload", None)
                     if completed else None
                 )
+                final_metadata = (
+                    getattr(completed[-1].output, "metadata", None) or {}
+                    if completed else {}
+                )
                 return {
                     "status": execution.status if execution.status != "complete" else "success",
                     "output": final_payload if final_payload is not None else execution.result,
@@ -468,6 +612,16 @@ class AutoAgent(Profile):
                     "tokens": goal_tokens,
                     "cost_usd": goal_cost,
                     "repairs": 0,
+                    "yield_metadata": {
+                        key: final_metadata.get(key)
+                        for key in (
+                            "yield_pending", "typed_outcome", "hitl_type",
+                            "system", "connection_id", "workflow_id", "step_id",
+                            "action_id", "action", "consequence",
+                            "autonomous_paths_exhausted", "human_exclusive",
+                        )
+                        if final_metadata.get(key) is not None
+                    },
                 }
 
         # ── Build effective system prompt = profile intelligence + role prompt ──
@@ -878,6 +1032,14 @@ class AutoAgent(Profile):
         env_max_steps = os.environ.get("MAX_GOAL_STEPS")
         if env_max_steps:
             max_steps = int(env_max_steps)
+        from jarviscore.orchestration.envelopes import ExecutionBudget
+        budget = ExecutionBudget.from_record(
+            (context or {}).get("execution_budget")
+            if isinstance(context, dict)
+            else None
+        )
+        max_steps = min(max_steps, budget.max_steps)
+        max_replan_attempts = min(max_replan_attempts, budget.max_replans)
         if self._kernel is None:
             raise RuntimeError(
                 f"{self.__class__.__name__}.execute_goal() called before setup(). "
@@ -985,6 +1147,15 @@ class AutoAgent(Profile):
 
 
         while remaining and steps_run < max_steps:
+            if time.time() - execution.started_at >= budget.max_seconds:
+                _cancel_inflight()
+                execution.status = "blocked"
+                execution.error = (
+                    f"Goal execution reached its {budget.max_seconds:g}s "
+                    "workflow budget."
+                )
+                execution.completed_at = time.time()
+                return await self._finalize_incomplete(execution)
             # ── Dependency-aware step selection (issue #74, review fix) ──────
             # A replanned or model-ordered plan may list a step before its
             # dependency — never run a step whose depends_on are unsatisfied.
@@ -1084,6 +1255,7 @@ class AutoAgent(Profile):
 
             # ── Evaluate step ─────────────────────────────────────────────────
             try:
+                execution.remaining_plan = list(remaining)
                 evaluation = await evaluator.evaluate(step, output, execution)
             except EvaluatorError as exc:
                 self._logger.error(
@@ -1129,11 +1301,31 @@ class AutoAgent(Profile):
             # Durability: every completed step survives a crash (issue #73)
             await self._persist_goal(execution)
 
+            goal_tokens, _ = self._aggregate_goal_telemetry(execution)
+            if goal_tokens["total"] >= budget.max_tokens and remaining:
+                _cancel_inflight()
+                execution.status = "blocked"
+                execution.error = (
+                    f"Goal execution reached its {budget.max_tokens} token "
+                    "workflow budget."
+                )
+                execution.completed_at = time.time()
+                return await self._finalize_incomplete(execution)
+
             self._logger.info(
                 "[AutoAgent] Step %s: verdict=%s (confidence=%.2f) — %s",
                 step.step_id, evaluation.verdict, evaluation.confidence,
                 evaluation.evaluator_note[:120],
             )
+
+            if evaluation.goal_decision == "complete" and evaluation.passed:
+                self._logger.info(
+                    "[AutoAgent] Goal converged after %s: %s",
+                    step.step_id,
+                    evaluation.goal_note[:200],
+                )
+                _cancel_inflight()
+                remaining = []
 
             # ── Handle verdict ────────────────────────────────────────────────
             if evaluation.needs_hitl:
@@ -1171,7 +1363,7 @@ class AutoAgent(Profile):
                                 f"**Confidence:** {evaluation.confidence:.0%}"
                             ),
                             urgency="normal",
-                            category=self._hitl_category_from_output(output),
+                            category=evaluation.hitl_category,
                             context={
                                 "goal": goal,
                                 "step_id": step.step_id,
@@ -1214,7 +1406,9 @@ class AutoAgent(Profile):
                     revised = await planner.replan(
                         goal_execution=execution,
                         failed_step=completed_step,
-                        reason=evaluation.evaluator_note,
+                        reason=(
+                            evaluation.goal_note or evaluation.evaluator_note
+                        ),
                         pending_steps=list(remaining),
                         budget_note=(
                             f"{steps_run} of max {max_steps} steps used; "

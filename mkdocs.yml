@@ -110,6 +110,7 @@ nav:
       - Custom Sub-agents: guides/custom-subagents.md
       - FastAPI: guides/fastapi.md
       - Workflow DAGs: guides/workflows.md
+      - Durable Goal Execution: guides/goal-execution.md
       - HITL Escalation: guides/hitl.md
       - Nexus Credentials: guides/nexus.md
       - Knowledge Base: guides/knowledge-base.md
@@ -142,7 +143,7 @@ nav:
   - Enterprise: infrastructure/enterprise.md
 
 extra:
-  version: "1.2.0"
+  version: "1.11.0"
   social:
     - icon: material/web
       link: https://developers.prescottdata.io

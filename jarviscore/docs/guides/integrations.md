@@ -225,16 +225,24 @@ Personal task management and projects.
 ---
 
 #### Google Drive
-File storage, sharing, and folder management.
+File storage, Google Docs content readback, sharing, and folder management.
 
 | Atom | Description |
 |---|---|
+| `google_drive_search_files` | Search files and folders with Drive query syntax |
 | `google_drive_upload_file` | Upload a file to a specific folder |
 | `google_drive_download_file` | Download a file by ID |
+| `google_drive_export_file` | Export a Google Workspace file to a requested MIME type |
+| `google_drive_get_document` | Read a Google Doc body through the official Docs API |
+| `google_drive_create_document` | Create a Google Doc in a Drive folder |
+| `google_drive_append_document_text` | Append text to an existing Google Doc |
 | `google_drive_create_folder` | Create a new folder |
 | `google_drive_share_file` | Set sharing permissions on a file or folder |
 
-**Required env:** `GOOGLE_DRIVE_CREDENTIALS_JSON`
+Authentication is supplied through a Nexus `google_drive` connection; raw
+Google credentials are not passed to atoms or agent context. Document readback
+requires the connected Google project to have the Google Docs API enabled in
+addition to Drive access. See [Nexus Credentials](nexus.md).
 
 ---
 

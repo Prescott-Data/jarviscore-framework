@@ -168,6 +168,24 @@ class TestEpistemicDecisionPrompt:
         prompt = self._build_prompt(state)
         assert "Turn 7" in prompt
 
+    def test_prompt_resolves_peer_answerable_gaps_before_stopping(self):
+        class StubAgent(BaseSubAgent):
+            def get_system_prompt(self):
+                return "Test system prompt"
+
+            def setup_tools(self):
+                self.register_tool("ask_peer", lambda **_: {}, "Ask a peer")
+                self.register_tool(
+                    "ask_capability", lambda **_: {}, "Ask by capability"
+                )
+
+        agent = StubAgent(agent_id="test", role="researcher", llm_client=None)
+        prompt = agent._build_user_prompt(_make_state(), "## MISSION\n**Task:** Test")
+
+        assert "Before concluding blocked" in prompt
+        assert "ask_peer" in prompt
+        assert "ask_capability" in prompt
+
     def test_prompt_includes_role(self):
         prompt = self._build_prompt()
         assert "RESEARCHER AGENT" in prompt

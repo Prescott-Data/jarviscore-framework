@@ -396,6 +396,64 @@ Workflow execution is crash-safe. If the process restarts with the same `workflo
 
 ---
 
+## Distributed Mesh Goals
+
+Do not confuse the two goal APIs:
+
+- `await agent.execute_goal(...)` runs one AutoAgent's Plan, Execute, Evaluate
+    loop described below.
+- `await mesh.execute_goal(...)` compiles a source goal into a Redis-backed DAG
+    whose steps are claimed independently by capable peers.
+
+An AutoAgent participates in a distributed goal through its normal
+`execute_task()` method. No subclass change is required. Declare provider
+authority when planning needs to distinguish reads, proposals and effects:
+
+```python
+class PipelineAgent(AutoAgent):
+        role = "pipeline"
+        capabilities = ["pipeline_inspection"]
+        capability_descriptions = {
+                "pipeline_inspection": "Inspect and reconcile CRM pipeline state.",
+        }
+        capability_contracts = {
+                "pipeline_inspection": {
+                        "effects": ["read", "propose"],
+                        "systems": ["hubspot"],
+                },
+        }
+```
+
+The distributed task context includes the exact source objective, workflow and
+obligation ledger, durable dependency artifacts, dependency interpretations,
+current capability/effect/systems, and the shared execution budget. A normal
+successful AutoAgent result satisfies the obligations covered by its step.
+Applications that distinguish attempt completion from evidence satisfaction may
+override `execute_task()` and add the optional semantic `interpretation`
+envelope described in [Durable Goal Execution](goal-execution.md#optional-semantic-interpretations).
+
+When attached to a started Mesh, AutoAgent reasoning receives these peer and
+workflow tools automatically:
+
+| Tool | Purpose |
+|---|---|
+| `list_peers()` | Read online peers and capabilities |
+| `ask_peer(role, question)` | Request help from a specific peer role |
+| `ask_capability(capability, question)` | Request any peer owning a capability |
+| `broadcast_update(message)` | Notify every peer without creating a request |
+| `read_mailbox(limit=10)` | Read durable unread peer notifications |
+| `inspect_workflow()` | Read this goal, obligations, steps and live statuses |
+| `read_workflow_step(step_id)` | Read one durable step definition and output |
+
+The peer decides its own tools and provider actions. `ask_capability` selects an
+authority boundary, not an agent implementation. Workflow inspection requires
+Redis; mailbox reading requires a configured mailbox.
+
+For result status, selective revisions, cancellation and deployment rules, see
+[Durable Goal Execution](goal-execution.md).
+
+---
+
 ## Goal-Oriented Execution
 
 Setting `goal_oriented = True` switches the agent from a single OODA loop to a Plan, Execute, Evaluate loop. The agent decomposes the goal into steps, executes each through the Kernel, evaluates the outcome, and replans automatically if a step fails.

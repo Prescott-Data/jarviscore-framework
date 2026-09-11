@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["to", "subject", "body"],
+    "consequence": "Creates one Gmail draft without sending it.",
+}
+
+
 async def gmail_create_draft(to: str, subject: str, body: str) -> dict:
     """Create draft via the gmail API."""
     import base64

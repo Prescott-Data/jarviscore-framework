@@ -198,6 +198,12 @@ def read_contract(source: str, *, system: str = "", expected_name: str = "") -> 
 
     legacy = any(a.arg == LEGACY_AUTH_PARAMETER for a in fn.args.args)
     uses_nexus = AUTH_CALL in source
+    retrieves_token = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_get_nexus_token"
+        for node in ast.walk(fn)
+    )
     policy = AtomPolicy()
     for statement in tree.body:
         if isinstance(statement, ast.Assign) and any(
@@ -216,24 +222,25 @@ def read_contract(source: str, *, system: str = "", expected_name: str = "") -> 
                 problems.append(f"{POLICY_NAME} must be a literal dict")
             break
 
-    if policy.effect not in {"read", "write", "destructive"}:
-        problems.append("ATOM_POLICY.effect must be read, write, or destructive")
+    if policy.effect not in {"read", "write", "notify", "destructive"}:
+        problems.append("ATOM_POLICY.effect must be read, write, notify, or destructive")
     if policy.approval not in {"never", "required"}:
         problems.append("ATOM_POLICY.approval must be never or required")
-    if policy.effect == "destructive":
-        if not policy.requires_approval:
-            problems.append("destructive atoms require approval")
+    if policy.effect in {"write", "notify", "destructive"}:
         if not policy.idempotency_fields:
-            problems.append("destructive atoms require idempotency_fields")
+            problems.append(f"{policy.effect} atoms require idempotency_fields")
         if not policy.consequence:
-            problems.append("destructive atoms require a consequence")
+            problems.append(f"{policy.effect} atoms require a consequence")
         parameter_names = {argument.arg for argument in fn.args.args}
         missing_identity = set(policy.idempotency_fields) - parameter_names
         if missing_identity:
             problems.append(
-                "destructive idempotency_fields must name parameters: "
+                "mutation idempotency_fields must name parameters: "
                 + ", ".join(sorted(missing_identity))
             )
+    if policy.effect == "destructive":
+        if not policy.requires_approval:
+            problems.append("destructive atoms require approval")
     elif _performs_delete(fn, functions_by_name):
         problems.append("atoms that perform HTTP DELETE require a destructive ATOM_POLICY")
 
@@ -244,6 +251,11 @@ def read_contract(source: str, *, system: str = "", expected_name: str = "") -> 
     if system and not fn.name.startswith(f"{system.lower()}_"):
         problems.append(f"`{fn.name}` should start with `{system.lower()}_`")
     if not legacy:
+        if retrieves_token:
+            problems.append(
+                f"`{fn.name}` must not retrieve provider tokens; {AUTH_CALL} "
+                "attaches credentials outside the atom"
+            )
         if not isinstance(fn, ast.AsyncFunctionDef):
             problems.append(f"`{fn.name}` must be `async def` — {AUTH_CALL} is awaited")
         if not uses_nexus:

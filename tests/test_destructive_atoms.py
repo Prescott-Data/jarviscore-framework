@@ -18,6 +18,22 @@ async def gmail_delete_message(message_id: str) -> dict:
     return await nexus_call("DELETE", f"https://example.test/messages/{message_id}")
 '''
 
+WRITE_SOURCE = '''
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["summary", "start_datetime", "end_datetime"],
+    "consequence": "Creates one calendar event.",
+}
+async def google_calendar_create_event(
+    summary: str, start_datetime: str, end_datetime: str
+) -> dict:
+    """Create one calendar event."""
+    return await nexus_call("POST", "https://example.test/events", json={
+        "summary": summary, "start": start_datetime, "end": end_datetime,
+    })
+'''
+
 
 class Registry:
     def get_function_code(self, name):
@@ -56,6 +72,18 @@ def test_idempotency_fields_must_name_parameters():
     assert "must name parameters" in contract.report()
 
 
+def test_write_atom_requires_idempotency_identity_and_consequence():
+    invalid = WRITE_SOURCE.replace(
+        '"idempotency_fields": ["summary", "start_datetime", "end_datetime"],',
+        '"idempotency_fields": [],',
+    )
+    contract = read_contract(
+        invalid, system="google_calendar", expected_name="google_calendar_create_event"
+    )
+    assert not contract.ok
+    assert "write atoms require idempotency_fields" in contract.report()
+
+
 @pytest.mark.asyncio
 async def test_approval_precedes_execution_and_retry_is_idempotent():
     atom = read_contract(
@@ -80,6 +108,39 @@ async def test_approval_precedes_execution_and_retry_is_idempotent():
     agent._run_context["_approved_actions"] = [waiting["action_id"]]
     first = await call(message_id="m-1")
     retry = await call(message_id="m-1")
+
+    assert first == retry
+    agent._tool_execute_code.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_write_atom_executes_without_approval_and_retry_is_idempotent():
+    atom = read_contract(
+        WRITE_SOURCE,
+        system="google_calendar",
+        expected_name="google_calendar_create_event",
+    ).atom
+    assert atom is not None
+    agent = CoderSubAgent.__new__(CoderSubAgent)
+    agent._atoms = {atom.name: atom}
+    agent._run_context = {"workflow_id": "wf", "step_id": "calendar"}
+    agent.code_registry = Registry()
+    agent.redis_store = ExecutionStore()
+    agent._tool_execute_code = AsyncMock(
+        return_value={"status": "success", "data": {"event_id": "evt-1"}}
+    )
+    call = agent._atom_tool(atom.name)
+
+    first = await call(
+        summary="Discovery Call",
+        start_datetime="2026-09-10T13:00:00+03:00",
+        end_datetime="2026-09-10T13:30:00+03:00",
+    )
+    retry = await call(
+        summary="Discovery Call",
+        start_datetime="2026-09-10T13:00:00+03:00",
+        end_datetime="2026-09-10T13:30:00+03:00",
+    )
 
     assert first == retry
     agent._tool_execute_code.assert_awaited_once()

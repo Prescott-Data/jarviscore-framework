@@ -33,8 +33,15 @@ from typing import List, Dict, Any, Optional, Set
 import asyncio
 import logging
 import warnings
+from uuid import uuid4
 
 from .agent import Agent
+from jarviscore.orchestration.envelopes import (
+    ExecutionBudget,
+    neutral_context,
+    terminal_step_status,
+)
+from jarviscore.orchestration.budget import workflow_budget_scope
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +175,9 @@ class Mesh:
         self._blob_storage    = None
         self._nexus_store     = None   # NexusLocalStore — when nexus is configured
         self._athena_client   = None   # AthenaClient — when ATHENA_URL set
-        self._distributed_worker_task = None
+        self._distributed_worker_tasks: List[asyncio.Task] = []
+        self._distributed_step_tasks: Set[asyncio.Task] = set()
+        self._mesh_planner_task: Optional[asyncio.Task] = None
         self._agent_run_tasks: List[asyncio.Task] = []
 
         # Capability set — populated at start() based on what's reachable
@@ -180,6 +189,7 @@ class Mesh:
         self.mode = MeshMode("auto")
 
         self._started = False
+        self._node_id = f"mesh-{uuid4().hex[:12]}"
         self._logger = logging.getLogger("jarviscore.mesh")
         self._logger.info("Mesh created — capabilities will be detected at start()")
 
@@ -437,11 +447,22 @@ class Mesh:
 
         # ── 8. Distributed worker — when Redis is available ───────────────────
         if "redis" in self._capabilities:
-            self._distributed_worker_task = asyncio.create_task(
-                self._run_distributed_worker(),
-                name="distributed-worker",
+            if self._has_planning_llm():
+                self._mesh_planner_task = asyncio.create_task(
+                    self._run_mesh_planner_worker(),
+                    name=f"mesh-planner-{self._node_id}",
+                )
+            self._distributed_worker_tasks = [
+                asyncio.create_task(
+                    self._run_distributed_worker(agent),
+                    name=f"distributed-worker-{agent.agent_id}",
+                )
+                for agent in self.agents
+            ]
+            self._logger.info(
+                "✓ %d distributed worker(s) started (Redis-backed step claiming)",
+                len(self._distributed_worker_tasks),
             )
-            self._logger.info("✓ Distributed worker started (Redis-backed step claiming)")
 
         # ── 9. Prometheus metrics ─────────────────────────────────────────────
         if self._settings and self._settings.prometheus_enabled:
@@ -532,6 +553,506 @@ class Mesh:
         return await self._workflow_engine.execute(
             workflow_id, steps, timeout_per_step=timeout_per_step
         )
+
+    async def execute_goal(
+        self,
+        goal: str,
+        *,
+        workflow_id: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Compile one source goal, publish its DAG, and observe peer claims."""
+        if not self._started:
+            raise RuntimeError("Mesh not started. Call await mesh.start() first.")
+        if self._redis_store is None:
+            raise RuntimeError("Mesh goal execution requires Redis for a shared durable DAG.")
+        source = (goal or "").strip()
+        if not source:
+            raise ValueError("A mesh goal cannot be empty.")
+        identity = workflow_id or f"wf-{uuid4().hex[:12]}"
+        public_context = neutral_context(context)
+        budget_options = dict(self.config.get("execution_budget") or {})
+        if timeout is not None:
+            budget_options.setdefault("max_seconds", timeout)
+        budget = ExecutionBudget.from_record(budget_options)
+        self._redis_store.register_workflow_goal(
+            identity, source, public_context, budget=budget.to_record()
+        )
+        try:
+            definition = self._redis_store.get_workflow_definition(identity)
+            if definition is None:
+                definition = await self._wait_for_workflow_definition(identity, timeout)
+            if definition is None:
+                raise RuntimeError(f"Workflow {identity!r} was not published before timeout")
+            return await self._wait_for_workflow_terminal(identity, definition, timeout)
+        except asyncio.CancelledError:
+            self._redis_store.cancel_workflow(
+                identity, reason="Goal execution was cancelled by its caller"
+            )
+            raise
+
+    def _planning_llm(self):
+        for agent in self.agents:
+            llm = getattr(agent, "llm", None)
+            if llm is not None:
+                return llm
+        raise RuntimeError(
+            "No local planning model is available. Add a started AutoAgent or "
+            "configure a node that can compile mesh goals."
+        )
+
+    def _has_planning_llm(self) -> bool:
+        return any(getattr(agent, "llm", None) is not None for agent in self.agents)
+
+    async def _run_mesh_planner_worker(self) -> None:
+        interval = float(self.config.get("distributed_poll_interval", 2.0))
+        lease_seconds = int(self.config.get("mesh_planning_lease_seconds", 300))
+        from jarviscore.planning.mesh_planner import MeshPlanner
+
+        while self._started:
+            try:
+                for workflow_id in self._redis_store.get_pending_workflow_goals():
+                    if self._redis_store.get_workflow_definition(workflow_id) is not None:
+                        continue
+                    if not self._redis_store.claim_workflow_planning(
+                        workflow_id, self._node_id, lease_seconds
+                    ):
+                        continue
+                    try:
+                        self._redis_store.save_workflow_planning_status(
+                            workflow_id, "planning", planner_id=self._node_id
+                        )
+                        source = self._redis_store.get_workflow_goal(workflow_id)
+                        if source is None:
+                            continue
+                        planner = MeshPlanner(
+                            self._planning_llm(),
+                            capabilities=self._mesh_capability_catalog(),
+                            response_capability=self.config.get(
+                                "mesh_response_capability"
+                            ),
+                        )
+                        with workflow_budget_scope(
+                            self._redis_store,
+                            workflow_id,
+                            epoch_id=f"planning:{self._node_id}",
+                        ):
+                            plan = await planner.plan(
+                                str(source.get("goal") or ""),
+                                context=source.get("context") or {},
+                            )
+                        self._redis_store.publish_workflow(
+                            workflow_id,
+                            goal=plan.goal,
+                            context=source.get("context") or {},
+                            budget=source.get("budget") or {},
+                            obligations=[item.to_dict() for item in plan.obligations],
+                            steps=[step.to_dict() for step in plan.steps],
+                            revision=plan.revision,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        self._redis_store.save_workflow_planning_status(
+                            workflow_id,
+                            "failed",
+                            planner_id=self._node_id,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                    finally:
+                        self._redis_store.release_workflow_planning(
+                            workflow_id, self._node_id
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._logger.warning("[MeshPlanner] Planning attempt failed: %s", exc)
+            await asyncio.sleep(interval)
+
+    def _mesh_capability_catalog(self) -> Dict[str, Any]:
+        catalog: Dict[str, Any] = {}
+        for agent in self.agents:
+            role_description = str(
+                getattr(agent, "description", "") or agent.role
+            )
+            capability_descriptions = (
+                getattr(agent, "capability_descriptions", {}) or {}
+            )
+            contracts = getattr(agent, "capability_contracts", {}) or {}
+            for capability in agent.capabilities:
+                description = str(
+                    capability_descriptions.get(capability) or role_description
+                )
+                authority = contracts.get(capability)
+                if isinstance(authority, dict):
+                    catalog.setdefault(capability, {
+                        "description": description,
+                        "effects": list(authority.get("effects") or []),
+                        "systems": list(authority.get("systems") or []),
+                    })
+                else:
+                    catalog.setdefault(capability, description)
+        coordinator = self._p2p_coordinator
+        for info in getattr(coordinator, "_remote_agent_registry", {}).values():
+            description = str(info.get("description") or info.get("role") or "Remote peer")
+            contracts = info.get("capability_contracts") or {}
+            for capability in info.get("capabilities") or []:
+                authority = contracts.get(str(capability))
+                if isinstance(authority, dict):
+                    catalog.setdefault(str(capability), {
+                        "description": description,
+                        "effects": list(authority.get("effects") or []),
+                        "systems": list(authority.get("systems") or []),
+                    })
+                else:
+                    catalog.setdefault(str(capability), description)
+        return catalog
+
+    async def _wait_for_workflow_definition(
+        self, workflow_id: str, timeout: Optional[float]
+    ) -> Optional[Dict[str, Any]]:
+        deadline = (
+            asyncio.get_running_loop().time() + timeout
+            if timeout is not None else None
+        )
+        interval = float(self.config.get("distributed_poll_interval", 2.0))
+        while deadline is None or asyncio.get_running_loop().time() < deadline:
+            planning = self._redis_store.get_workflow_planning_status(workflow_id)
+            if planning and planning.get("status") == "failed":
+                raise RuntimeError(
+                    f"Workflow {workflow_id!r} planning failed: {planning.get('error')}"
+                )
+            definition = self._redis_store.get_workflow_definition(workflow_id)
+            if definition is not None:
+                return definition
+            await asyncio.sleep(interval)
+        return None
+
+    async def _wait_for_workflow_terminal(
+        self,
+        workflow_id: str,
+        definition: Dict[str, Any],
+        timeout: Optional[float],
+    ) -> Dict[str, Any]:
+        deadline = (
+            asyncio.get_running_loop().time() + timeout
+            if timeout is not None else None
+        )
+        interval = float(self.config.get("distributed_poll_interval", 2.0))
+        while deadline is None or asyncio.get_running_loop().time() < deadline:
+            latest = self._redis_store.get_workflow_definition(workflow_id)
+            if latest is not None:
+                definition = latest
+            step_ids = [str(step["id"]) for step in definition.get("steps", [])]
+            records = [self._redis_store.get_step_definition(workflow_id, step_id) or {}
+                       for step_id in step_ids]
+            statuses = [record.get("status") for record in records]
+            revision = int(definition.get("revision", 1))
+            current_records = [
+                record for record in records
+                if int(record.get("plan_revision", 1)) == revision
+            ] or records
+            current_step_ids = {
+                str(record.get("id")) for record in current_records if record.get("id")
+            }
+            current_statuses = [record.get("status") for record in current_records]
+            if current_statuses and all(
+                status in {
+                    "completed", "failed", "waiting", "blocked", "cancelled",
+                    "superseded",
+                }
+                for status in current_statuses
+            ):
+                steps = []
+                dependency_ids = {
+                    str(dependency)
+                    for step in definition.get("steps", [])
+                    for dependency in step.get("depends_on", [])
+                }
+                terminal_summaries = []
+                for step_id, record in zip(step_ids, records, strict=True):
+                    saved = self._redis_store.get_step_output(workflow_id, step_id)
+                    envelope = saved.get("output") if saved else None
+                    steps.append({**record, "output": envelope})
+                    if (
+                        step_id in current_step_ids
+                        and step_id not in dependency_ids
+                        and record.get("status") == "completed"
+                        and isinstance(envelope, dict)
+                        and isinstance(envelope.get("result_summary"), str)
+                        and envelope["result_summary"].strip()
+                    ):
+                        terminal_summaries.append(envelope["result_summary"].strip())
+                obligation_projection = self._redis_store.get_obligation_projection(
+                    workflow_id
+                )
+                semantic_gaps = [
+                    obligation for obligation in obligation_projection.values()
+                    if obligation.get("state") == "unresolved"
+                    and obligation.get("attempt_interpretations")
+                ]
+                settlement = self._redis_store.get_workflow_reconciliation_settlement(
+                    workflow_id, revision
+                )
+                if not semantic_gaps and revision > 1 and settlement is None:
+                    settlement = {
+                        "event": "semantic_reconciliation_settled",
+                        "revision": revision,
+                        "obligation_status": "satisfied",
+                        "reason": "The amended workflow satisfied the outstanding obligations.",
+                    }
+                    self._redis_store.save_workflow_reconciliation_settlement(
+                        workflow_id, revision, settlement
+                    )
+                if semantic_gaps and settlement is None and self._has_planning_llm():
+                    max_revisions = max(
+                        1, int(self.config.get("mesh_max_reconciliation_revisions", 3))
+                    )
+                    if revision < max_revisions:
+                        from jarviscore.planning.mesh_planner import MeshPlanner
+
+                        lease_seconds = int(self.config.get(
+                            "mesh_planning_lease_seconds", 300
+                        ))
+                        if not self._redis_store.claim_workflow_reconciliation(
+                            workflow_id, revision, self._node_id, lease_seconds
+                        ):
+                            await asyncio.sleep(interval)
+                            continue
+                        try:
+                            settlement = (
+                                self._redis_store.get_workflow_reconciliation_settlement(
+                                    workflow_id, revision
+                                )
+                            )
+                            if settlement is not None:
+                                continue
+                            planner = MeshPlanner(
+                                self._planning_llm(),
+                                capabilities=self._mesh_capability_catalog(),
+                                response_capability=self.config.get(
+                                    "mesh_response_capability"
+                                ),
+                            )
+                            with workflow_budget_scope(
+                                self._redis_store,
+                                workflow_id,
+                                epoch_id=f"reconciliation:{revision}:{self._node_id}",
+                            ):
+                                decision = await planner.reconciliation_decision(
+                                    str(definition.get("goal") or ""),
+                                    obligations=semantic_gaps,
+                                    current_steps=steps,
+                                    revision=revision,
+                                )
+                            self._redis_store.append_ledger_entry(workflow_id, {
+                                "event": "semantic_reconciliation_requested",
+                                "revision": revision,
+                                "decision": decision["decision"],
+                                "reason": decision["reason"],
+                            })
+                            if decision["decision"] == "amend":
+                                remaining = (
+                                    None if deadline is None else max(
+                                        0.0, deadline - asyncio.get_running_loop().time()
+                                    )
+                                )
+                                return await self.replan_goal(
+                                    workflow_id,
+                                    reason=decision["reason"],
+                                    context={
+                                        "semantic_reconciliation": {
+                                            "revision": revision,
+                                            "obligations": semantic_gaps,
+                                        },
+                                    },
+                                    timeout=remaining,
+                                )
+                            settlement = {
+                                "event": "semantic_reconciliation_settled",
+                                "revision": revision,
+                                "obligation_status": "blocked",
+                                "reason": decision["reason"],
+                            }
+                            self._redis_store.save_workflow_reconciliation_settlement(
+                                workflow_id, revision, settlement
+                            )
+                        finally:
+                            self._redis_store.release_workflow_reconciliation(
+                                workflow_id, revision, self._node_id
+                            )
+                    else:
+                        settlement = {
+                            "event": "semantic_reconciliation_settled",
+                            "revision": revision,
+                            "obligation_status": "blocked",
+                            "reason": "The bounded reconciliation revision limit was reached.",
+                        }
+                        self._redis_store.save_workflow_reconciliation_settlement(
+                            workflow_id, revision, settlement
+                        )
+                overall = (
+                    "cancelled" if "cancelled" in current_statuses
+                    else "waiting" if "waiting" in current_statuses
+                    else "failed" if "failed" in current_statuses
+                    else "completed"
+                )
+                obligation_states = [
+                    item.get("state") for item in obligation_projection.values()
+                ]
+                obligation_status = (
+                    "satisfied"
+                    if obligation_states and all(
+                        state == "satisfied" for state in obligation_states
+                    )
+                    else "incomplete" if "pending" in obligation_states
+                    else "blocked" if obligation_states
+                    else "satisfied" if overall == "completed"
+                    else "incomplete"
+                )
+                response_records = [
+                    record for record in current_records
+                    if record.get("effect") == "final_response"
+                ]
+                response_status = "not_required"
+                if response_records:
+                    response_state = str(response_records[-1].get("status") or "")
+                    response_status = {
+                        "completed": "completed",
+                        "waiting": "waiting",
+                    }.get(response_state, "failed")
+                if overall != "waiting":
+                    self._redis_store.unregister_active_workflow(workflow_id)
+                return {
+                    "workflow_id": workflow_id,
+                    "status": overall,
+                    "obligation_status": obligation_status,
+                    "response_status": response_status,
+                    "goal": definition.get("goal", ""),
+                    "obligations": definition.get("obligations", []),
+                    "revision": definition.get("revision", 0),
+                    "result_summary": (
+                        terminal_summaries[0] if len(terminal_summaries) == 1 else ""
+                    ),
+                    "steps": steps,
+                }
+            await asyncio.sleep(interval)
+        raise TimeoutError(f"Workflow {workflow_id!r} did not finish within {timeout}s")
+
+    def cancel_goal(self, workflow_id: str, *, reason: str = "Goal cancelled") -> bool:
+        """Durably cancel shared work so no peer can claim or commit it later."""
+        if self._redis_store is None:
+            raise RuntimeError("Redis-backed Mesh is required to cancel a goal.")
+        return self._redis_store.cancel_workflow(workflow_id, reason=reason)
+
+    async def resume_goal(
+        self,
+        workflow_id: str,
+        step_id: str,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Resume one waiting DAG step and continue the existing workflow."""
+        if not self._started or self._redis_store is None:
+            raise RuntimeError("A started Redis-backed Mesh is required to resume a goal.")
+        definition = self._redis_store.get_workflow_definition(workflow_id)
+        if definition is None:
+            raise KeyError(f"Workflow {workflow_id!r} was not found")
+        self._redis_store.resume_workflow_step(workflow_id, step_id, context=context)
+        return await self._wait_for_workflow_terminal(workflow_id, definition, timeout)
+
+    async def replan_goal(
+        self,
+        workflow_id: str,
+        *,
+        reason: str,
+        context: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Amend unfinished DAG work under a short lease, then resume peer claims."""
+        if not self._started or self._redis_store is None:
+            raise RuntimeError("A started Redis-backed Mesh is required to replan a goal.")
+        definition = self._redis_store.get_workflow_definition(workflow_id)
+        if definition is None:
+            raise KeyError(f"Workflow {workflow_id!r} was not found")
+        revision = int(definition.get("revision", 0))
+        lease_seconds = int(self.config.get("mesh_planning_lease_seconds", 300))
+        if not self._redis_store.claim_workflow_planning(
+            workflow_id, self._node_id, lease_seconds
+        ):
+            raise RuntimeError(f"Workflow {workflow_id!r} is already being replanned")
+
+        from jarviscore.planning.mesh_planner import MeshPlanner
+
+        try:
+            self._redis_store.save_workflow_planning_status(
+                workflow_id, "planning", planner_id=self._node_id
+            )
+            current_steps = []
+            for step in definition.get("steps", []):
+                step_id = str(step["id"])
+                live = self._redis_store.get_step_definition(workflow_id, step_id) or step
+                saved = self._redis_store.get_step_output(workflow_id, step_id)
+                current_steps.append({
+                    **live,
+                    "output": saved.get("output") if saved else None,
+                })
+            planner = MeshPlanner(
+                self._planning_llm(),
+                capabilities=self._mesh_capability_catalog(),
+                response_capability=self.config.get("mesh_response_capability"),
+            )
+            with workflow_budget_scope(
+                self._redis_store,
+                workflow_id,
+                epoch_id=f"replan:{revision + 1}:{self._node_id}",
+            ):
+                projection = self._redis_store.get_obligation_projection(workflow_id)
+                target_obligation_ids = {
+                    str(obligation_id)
+                    for obligation_id, obligation in projection.items()
+                    if obligation.get("state") != "satisfied"
+                }
+                plan = await planner.amend(
+                    str(definition.get("goal") or ""),
+                    obligations=definition.get("obligations", []),
+                    target_obligation_ids=target_obligation_ids,
+                    current_steps=current_steps,
+                    reason=reason,
+                    revision=revision,
+                    context={
+                        key: value
+                        for key, value in (context or {}).items()
+                        if not str(key).startswith("_")
+                    },
+                )
+            self._redis_store.amend_workflow(
+                workflow_id,
+                expected_revision=revision,
+                obligations=[item.to_dict() for item in plan.obligations],
+                steps=[step.to_dict() for step in plan.steps],
+                reason=reason,
+            )
+            self._redis_store.save_workflow_planning_status(
+                workflow_id, "published", planner_id=self._node_id
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._redis_store.save_workflow_planning_status(
+                workflow_id,
+                "failed",
+                planner_id=self._node_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        finally:
+            self._redis_store.release_workflow_planning(workflow_id, self._node_id)
+
+        amended = self._redis_store.get_workflow_definition(workflow_id)
+        return await self._wait_for_workflow_terminal(workflow_id, amended, timeout)
 
     async def fanout(
         self,
@@ -676,6 +1197,12 @@ class Mesh:
         for agent in self.agents:
             agent.request_shutdown()
 
+        await asyncio.gather(*(
+            agent.peers.close()
+            for agent in self.agents
+            if getattr(agent, "peers", None) is not None
+        ), return_exceptions=True)
+
         # Unregister peer clients
         if self._p2p_coordinator:
             for agent in self.agents:
@@ -708,14 +1235,20 @@ class Mesh:
             self._auth_manager = None
             self._logger.info("✓ AuthenticationManager stopped")
 
-        # Cancel distributed worker
-        if self._distributed_worker_task and not self._distributed_worker_task.done():
-            self._distributed_worker_task.cancel()
-            try:
-                await self._distributed_worker_task
-            except asyncio.CancelledError:
-                pass
-        self._distributed_worker_task = None
+        # Cancel distributed workers and any steps they still own.
+        lifecycle_tasks = [*self._distributed_worker_tasks, *self._distributed_step_tasks]
+        if self._mesh_planner_task is not None:
+            lifecycle_tasks.append(self._mesh_planner_task)
+        for task in lifecycle_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *lifecycle_tasks,
+            return_exceptions=True,
+        )
+        self._distributed_worker_tasks.clear()
+        self._distributed_step_tasks.clear()
+        self._mesh_planner_task = None
 
         # Phase 9: Clear infrastructure references
         self._blob_storage = None
@@ -729,7 +1262,7 @@ class Mesh:
     # Distributed worker (autonomous step claiming across nodes)
     # ─────────────────────────────────────────────────────────────────
 
-    async def _run_distributed_worker(self) -> None:
+    async def _run_distributed_worker(self, agent: Agent) -> None:
         """
         Background task: scans active workflows in Redis for pending steps
         that match this node's agent capabilities, claims them atomically
@@ -739,83 +1272,357 @@ class Mesh:
         Mesh handles all routing. No manual wiring or step-ID knowledge needed.
         Runs only in distributed mode when a redis_store is available.
         """
-        capability_map: Dict[str, Any] = {}
-        for agent in self.agents:
-            for cap in ([agent.role] + list(getattr(agent, "capabilities", []))):
-                if cap and cap not in capability_map:
-                    capability_map[cap] = agent
-
-        if not capability_map:
+        capabilities = {agent.role, *getattr(agent, "capabilities", [])}
+        if not capabilities:
             return
 
         self._logger.info(
-            f"[DistributedWorker] Online | capabilities: {list(capability_map)}"
+            "[DistributedWorker] %s online | capabilities: %s",
+            agent.agent_id,
+            sorted(capabilities),
         )
 
         while self._started:
             try:
+                await self._service_capability_needs(agent, capabilities)
                 for workflow_id in self._redis_store.get_active_workflows():
+                    if self._redis_store.is_workflow_cancelled(workflow_id):
+                        self._redis_store.unregister_active_workflow(workflow_id)
+                        continue
                     for step_id in self._redis_store.get_all_step_ids(workflow_id):
                         step_def = self._redis_store.get_step_definition(
                             workflow_id, step_id
                         )
+                        if step_def and step_def.get("status") == "in_progress":
+                            self._redis_store.recover_expired_step_claim(
+                                workflow_id, step_id
+                            )
+                            step_def = self._redis_store.get_step_definition(
+                                workflow_id, step_id
+                            )
+                        if step_def and step_def.get("status") == "blocked":
+                            self._redis_store.requeue_blocked_step(workflow_id, step_id)
+                            step_def = self._redis_store.get_step_definition(
+                                workflow_id, step_id
+                            )
                         if not step_def or step_def.get("status") != "pending":
                             continue
-                        agent = capability_map.get(step_def.get("agent", ""))
-                        if not agent:
+                        requirement = (
+                            step_def.get("capability")
+                            or step_def.get("agent")
+                            or step_def.get("role")
+                        )
+                        if requirement not in capabilities:
                             continue
-                        # Respect dependencies — only claim when all deps are completed
+                        resume_agent_id = step_def.get("resume_agent_id")
+                        if resume_agent_id and resume_agent_id != agent.agent_id:
+                            continue
+                        blockers = self._redis_store.get_dependency_blockers(
+                            workflow_id, step_id
+                        )
+                        if blockers:
+                            self._redis_store.block_step(
+                                workflow_id, step_id, blockers
+                            )
+                            continue
                         if not self._redis_store.are_dependencies_met(workflow_id, step_id):
                             continue
+                        claim_id = f"{agent.agent_id}:{uuid4().hex}"
+                        lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
                         if self._redis_store.claim_step(
-                            workflow_id, step_id, agent.agent_id
+                            workflow_id, step_id, claim_id, lease_seconds=lease_seconds
                         ):
                             self._logger.info(
                                 f"[DistributedWorker] Claimed '{step_id}' "
                                 f"in '{workflow_id}' → {agent.agent_id}"
                             )
-                            asyncio.create_task(
-                                self._execute_distributed_step(
-                                    agent, workflow_id, step_id, step_def
-                                ),
-                                name=f"dist-{step_id}",
+                            await self._execute_distributed_step(
+                                agent, workflow_id, step_id, step_def,
+                                claim_id=claim_id,
+                                lease_seconds=lease_seconds,
                             )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self._logger.warning(f"[DistributedWorker] Error: {exc}")
 
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(float(self.config.get("distributed_poll_interval", 2.0)))
+
+    async def _service_capability_needs(
+        self, agent: Agent, capabilities: set[str]
+    ) -> None:
+        """Claim peer-resolvable gaps by capability, never by central assignment."""
+        lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
+        for workflow_id in self._redis_store.get_workflows_with_capability_needs():
+            if self._redis_store.is_workflow_cancelled(workflow_id):
+                continue
+            for need in self._redis_store.get_open_capability_needs(workflow_id):
+                need_id = str(need.get("id") or "")
+                if need.get("status") == "claimed":
+                    self._redis_store.recover_expired_capability_need(
+                        workflow_id, need_id
+                    )
+                    need = self._redis_store.get_capability_need(
+                        workflow_id, need_id
+                    ) or need
+                if need.get("status") != "open":
+                    continue
+                claim_id = f"{agent.agent_id}:{uuid4().hex}"
+                if not self._redis_store.claim_capability_need(
+                    workflow_id,
+                    need_id,
+                    claim_id,
+                    capabilities,
+                    lease_seconds=lease_seconds,
+                ):
+                    continue
+                workflow = self._redis_store.get_workflow_definition(workflow_id) or {}
+                context = dict(need.get("context") or {})
+                context.setdefault("objective", workflow.get("goal", ""))
+                lineage = [
+                    str(agent_id)
+                    for agent_id in context.get("peer_request_lineage", [])
+                    if agent_id
+                ]
+                requester_id = str(need.get("requester_agent_id") or "")
+                for agent_id in (requester_id, agent.agent_id):
+                    if agent_id and agent_id not in lineage:
+                        lineage.append(agent_id)
+                context.update({
+                    "workflow_id": workflow_id,
+                    "step_id": f"need:{need_id}",
+                    "execution_epoch_id": claim_id,
+                    "execution_budget": ExecutionBudget.from_record(
+                        workflow.get("budget")
+                    ).to_record(),
+                    "peer_requester_agent_id": need.get("requester_agent_id"),
+                    "peer_requester_step_id": need.get("requester_step_id"),
+                    "peer_request_lineage": lineage,
+                })
+                heartbeat = asyncio.create_task(
+                    self._renew_capability_need_claim(
+                        workflow_id, need_id, claim_id, lease_seconds
+                    ),
+                    name=f"capability-need-heartbeat-{need_id}",
+                )
+                try:
+                    try:
+                        with workflow_budget_scope(
+                            self._redis_store,
+                            workflow_id,
+                            epoch_id=f"capability:{claim_id}",
+                        ):
+                            result = await agent.execute_capability_request(
+                                str(need.get("capability") or ""),
+                                str(need.get("question") or ""),
+                                context,
+                            )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        result = {
+                            "status": "failure",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                finally:
+                    heartbeat.cancel()
+                    await asyncio.gather(heartbeat, return_exceptions=True)
+                self._redis_store.fulfill_capability_need(
+                    workflow_id, need_id, claim_id, result
+                )
+
+    async def _renew_capability_need_claim(
+        self,
+        workflow_id: str,
+        need_id: str,
+        claim_id: str,
+        lease_seconds: int,
+    ) -> None:
+        interval = max(0.1, lease_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            if not self._redis_store.renew_capability_need_claim(
+                workflow_id, need_id, claim_id, lease_seconds
+            ):
+                return
 
     async def _execute_distributed_step(
-        self, agent: Any, workflow_id: str, step_id: str, step_def: dict
+        self,
+        agent: Any,
+        workflow_id: str,
+        step_id: str,
+        step_def: dict,
+        *,
+        claim_id: Optional[str] = None,
+        lease_seconds: int = 60,
     ) -> None:
         """Execute a claimed distributed step and persist the result to Redis."""
+        claim_id = claim_id or f"{agent.agent_id}:{uuid4().hex}"
+        if self._redis_store.get_step_status(workflow_id, step_id) == "pending":
+            if not self._redis_store.claim_step(
+                workflow_id, step_id, claim_id, lease_seconds=lease_seconds
+            ):
+                return
+        workflow = self._redis_store.get_workflow_definition(workflow_id) or {}
+        resume_context = step_def.get("resume_context") or {}
+        workflow_context = neutral_context(workflow.get("context") or {})
+        execution_budget = ExecutionBudget.from_record(
+            workflow.get("budget")
+        ).to_record()
+        systems = [str(value) for value in step_def.get("systems", []) if str(value)]
+        effect = str(step_def.get("effect") or "read")
+        previous_step_results = self._redis_store.get_dependency_outputs(
+            workflow_id, step_id
+        )
+        workflow_evidence = None
+        if effect == "final_response":
+            workflow_evidence = self._redis_store.get_workflow_evidence(
+                workflow_id, exclude_step_id=step_id
+            )
+            previous_step_results = workflow_evidence.artifacts
         task = {
             "id": step_id,
             "agent": agent.role,
             "task": step_def.get("task", ""),
             "context": {
-                "previous_step_results": {},
+                **workflow_context,
+                **resume_context,
+                "execution_budget": execution_budget,
+                "objective": workflow.get("goal", ""),
+                "workflow_plan": workflow,
+                "previous_step_results": previous_step_results,
+                "previous_step_interpretations": (
+                    workflow_evidence.interpretations
+                    if workflow_evidence is not None
+                    else self._redis_store.get_dependency_interpretations(
+                        workflow_id, step_id
+                    )
+                ),
                 "workflow_id": workflow_id,
                 "step_id": step_id,
+                "execution_epoch_id": claim_id,
+                "capability": str(
+                    step_def.get("capability")
+                    or step_def.get("agent")
+                    or step_def.get("role")
+                    or ""
+                ),
+                "effect": effect,
+                "systems": systems,
+                **({
+                    "workflow_evidence": workflow_evidence.to_record(),
+                    "workflow_step_states": workflow_evidence.states,
+                } if workflow_evidence is not None else {}),
+                **({"system": systems[0]} if len(systems) == 1 else {}),
+                **({"_resume": True} if step_def.get("resume_agent_id") else {}),
             },
         }
-        try:
-            result = await agent.execute_task(task)
-        except Exception as exc:
-            self._logger.error(
-                f"[DistributedWorker] '{step_id}' in '{workflow_id}' failed: {exc}"
-            )
-            self._redis_store.update_step_status(workflow_id, step_id, "failed")
-            return
-
-        self._redis_store.save_step_output(workflow_id, step_id, output=result)
-        self._redis_store.update_step_status(workflow_id, step_id, "completed")
-        s = result.get("status", "?") if isinstance(result, dict) else "done"
-        self._logger.info(
-            f"[DistributedWorker] '{step_id}' in '{workflow_id}' complete (status={s})"
+        heartbeat = asyncio.create_task(
+            self._renew_distributed_claim(
+                workflow_id, step_id, claim_id, lease_seconds
+            ),
+            name=f"claim-heartbeat-{step_id}",
         )
+        try:
+            try:
+                with workflow_budget_scope(
+                    self._redis_store,
+                    workflow_id,
+                    epoch_id=f"step:{claim_id}",
+                ):
+                    authorization = None
+                    if effect != "final_response":
+                        authorization = await agent.authorize_dependencies(
+                            str(task["task"]),
+                            task["context"]["previous_step_results"],
+                            task["context"]["previous_step_interpretations"],
+                        )
+                        task["context"]["dependency_authorization"] = {
+                            "decision": authorization.decision,
+                            "reason": authorization.reason,
+                        }
+                    if (
+                        authorization is not None
+                        and authorization.decision == "block"
+                        and getattr(agent, "llm", None) is None
+                    ):
+                        result = {
+                            "status": "blocked",
+                            "error": authorization.reason,
+                            "dependency_authorization": task["context"][
+                                "dependency_authorization"
+                            ],
+                        }
+                    else:
+                        result = await agent.execute_task(task)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._logger.error(
+                    f"[DistributedWorker] '{step_id}' in '{workflow_id}' failed: {exc}"
+                )
+                result = {
+                    "status": "failure",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+        s = result.get("status", "?") if isinstance(result, dict) else "done"
+        if s == "epoch_exhausted":
+            continued = self._redis_store.continue_claimed_step(
+                workflow_id,
+                step_id,
+                claim_id,
+                resume_agent_id=agent.agent_id,
+            )
+            if not continued:
+                self._logger.warning(
+                    "[DistributedWorker] Could not continue exhausted epoch for "
+                    "'%s' in '%s'",
+                    step_id,
+                    workflow_id,
+                )
+            return
+        terminal = terminal_step_status(s)
+        committed = self._redis_store.finish_claimed_step(
+            workflow_id,
+            step_id,
+            claim_id,
+            result,
+            status=terminal,
+        )
+        if not committed:
+            self._logger.warning(
+                "[DistributedWorker] Rejected stale result for '%s' in '%s' from %s",
+                step_id,
+                workflow_id,
+                agent.agent_id,
+            )
+            return
+        self._logger.info(
+            "[DistributedWorker] '%s' in '%s' terminal (agent=%s, status=%s)",
+            step_id,
+            workflow_id,
+            agent.agent_id,
+            s,
+        )
+
+    async def _renew_distributed_claim(
+        self,
+        workflow_id: str,
+        step_id: str,
+        claim_id: str,
+        lease_seconds: int,
+    ) -> None:
+        interval = max(0.1, lease_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            if not self._redis_store.renew_step_claim(
+                workflow_id, step_id, claim_id, lease_seconds
+            ):
+                return
 
     # Phase 9: Infrastructure helpers
     # ─────────────────────────────────────────────────────────────────
@@ -1075,9 +1882,16 @@ class Mesh:
                 agent_id=agent.agent_id,
                 agent_role=agent.role,
                 agent_registry=self._agent_registry,
-                node_id=node_id
+                node_id=node_id,
+                redis_store=self._redis_store,
             )
             agent.peers = peer_client
+            request_handler = getattr(agent, "_handle_peer_request", None)
+            if callable(request_handler):
+                peer_client.set_request_handler(request_handler)
+            notification_handler = getattr(agent, "_handle_peer_notify", None)
+            if callable(notification_handler):
+                peer_client.set_notification_handler(notification_handler)
 
             # Register with coordinator for remote message routing (P2P only)
             if is_p2p and self._p2p_coordinator:

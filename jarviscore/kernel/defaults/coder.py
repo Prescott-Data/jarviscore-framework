@@ -1,3 +1,4 @@
+from jarviscore.kernel.gate import GateEvidence
 """
 CoderSubAgent — Production-grade code generation and execution specialist.
 
@@ -16,12 +17,12 @@ Doctrine:
 """
 
 import ast
+import json
 import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from jarviscore.kernel.subagent import BaseSubAgent
-from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.state import KernelState
 
 logger = logging.getLogger(__name__)
@@ -171,13 +172,20 @@ Writing to it, after you succeed:
   enters as a candidate, becomes verified on its first success and golden after
   five, and from then on it is what the next agent finds instead of starting
   from a blank file.
-- Take `auth_info` as the first parameter and authenticate with it, the way the
-  catalogue does, so what you wrote can become a callable capability rather than
-  a snippet.
+- Use `nexus_call` and never accept or retrieve credentials in atom source.
 - Name it for what it does to what: `hubspot_list_contacts`, not `run_task` or
   `main`. The name is how it will be found.
 - Code that only reshapes local data is not worth keeping. An atom earns its
   place by reaching a system.
+
+When an offered atom fails, first decide what the evidence means. Authentication
+or consent, invalid task input, account permissions, rate limits, and a truthful
+provider refusal do not prove its implementation is wrong. If the source itself
+is wrong or stale, call `inspect_atom_for_repair`, correct that exact function,
+submit it with `repair_atom`, and register the successful candidate under the
+same name. The registry keeps the old version as history and makes the proven
+replacement the current version. Never create a parallel name to hide a broken
+atom.
 
 ## CRITICAL RULES (read all before acting)
 
@@ -306,6 +314,7 @@ Writing to it, after you succeed:
 
         # CandidateStore — versioned in-memory record of each code attempt
         self._candidates: List[Dict[str, Any]] = []
+        self._failed_atom_calls: Dict[str, Dict[str, Any]] = {}
 
         # Hard gate flag — delegate_research blocked until first write_code
         self._has_written_code: bool = False
@@ -332,62 +341,32 @@ Writing to it, after you succeed:
         return prompt
 
     def _build_user_prompt(self, state: KernelState, context_block: str) -> str:
-        """Add a coder-specific proof-of-work contract to the generic OODA prompt."""
+        """Keep provider work evidence-backed without forcing irrelevant execution."""
         prompt = super()._build_user_prompt(state, context_block)
-        offered = set(getattr(self, "_atom_tools", ()))
-        has_execution = any(
-            (tool_res.tool_name == "execute_code" or tool_res.tool_name in offered)
-            and tool_res.succeeded
-            for tool_res in state.tool_history
-        )
-        if has_execution:
-            return prompt
-
-        validated_candidates = [
-            tool_res.tool_output.get("candidate_id")
-            for tool_res in state.tool_history
-            if (
-                tool_res.tool_name == "write_code"
-                and tool_res.succeeded
-                and isinstance(tool_res.tool_output, dict)
-                and tool_res.tool_output.get("status") == "validated"
+        first_attempt = ""
+        if not state.tool_history:
+            offered_atoms = sorted(getattr(self, "_atom_tools", ()))
+            useful = offered_atoms + [
+                name for name in (
+                    "ask_capability", "ask_peer", "inspect_workflow", "write_code"
+                )
+                if name in self._tools
+            ]
+            first_attempt = (
+                "\n\nYou have not investigated this task yet. Your next response MUST "
+                "use one relevant tool before emitting DONE or a final artifact. "
+                f"Relevant available paths include: {', '.join(useful) or 'the registered tools above'}. "
+                "Choose from the current gap; do not call a tool merely to make the run pass."
             )
-        ]
-        if validated_candidates:
-            next_action = (
-                f"You already have validated candidate_id={validated_candidates[-1]}. "
-                "Your next response MUST call execute_code with that candidate_id."
-            )
-        elif offered:
-            # Mandating write_code here is what sent an agent to reimplement a
-            # capability it had already been given.
-            next_action = (
-                f"This system's proven capabilities are available to you: "
-                f"{', '.join(sorted(offered))}. Call one if it does what the task "
-                "needs. Otherwise your next response MUST call write_code with "
-                "executable Python code, then execute_code with the returned "
-                "candidate_id."
-            )
-        else:
-            next_action = (
-                "Your next response MUST call write_code with executable Python code. "
-                "After write_code validates it, call execute_code with the returned candidate_id."
-            )
-
         return (
             f"{prompt}\n\n"
-            "## CODER PROOF-OF-WORK GATE\n"
-            "DONE/RESULT is disabled until execute_code has returned status=success.\n"
-            f"{next_action}\n\n"
-            "Valid next response format:\n"
-            "THOUGHT: I need executable proof before completion.\n"
-            "TOOL: write_code\n"
-            "PARAMS: {\"code\": \"result = {'success': True, 'data': ...}\"}\n\n"
-            "If you already have a candidate_id:\n"
-            "THOUGHT: I have validated code and must execute it.\n"
-            "TOOL: execute_code\n"
-            "PARAMS: {\"candidate_id\": <id>}\n\n"
-            "Do not emit DONE. Do not emit RESULT. Do not answer in prose."
+            "## EXECUTION INTEGRITY\n"
+            "Use provider capabilities or executable code when a claim requires live "
+            "evidence. If a meaningful action fails, inspect the error, ask a capable "
+            "peer when useful, and try a relevant alternative. If no reasonable path "
+            "remains, finish with the honest blocker and the evidence gathered. Never "
+            "run unrelated code merely to demonstrate that execution works."
+            f"{first_attempt}"
         )
 
     # ─────────────────────────────────────────────────────────────
@@ -399,78 +378,120 @@ Writing to it, after you succeed:
         state: KernelState,
         parsed: Dict[str, Any],
     ) -> tuple:
-        """
-        Enforce the "Verify Before Done" proof-of-work contract.
-        """
-        # Exemption: If the agent successfully delegated to research, it is handing
-        # control back to the Kernel. It must be allowed to complete.
-        if state.tool_history:
-            last_tool = state.tool_history[-1]
-            if last_tool.tool_name == "delegate_research" and last_tool.succeeded:
-                return (True, "")
-
-        # Scan history for execution proof
-        has_executed = False
-        last_success_output = None
-        execute_calls = 0
-        write_calls = 0
-        atom_calls = 0
-        for tool_res in state.tool_history:
-            if tool_res.tool_name == "execute_code":
-                execute_calls += 1
-            elif tool_res.tool_name == "write_code":
-                write_calls += 1
-            elif tool_res.tool_name in getattr(self, "_atom_tools", ()):
-                # A capability call is a run against a live provider, which is
-                # the thing this gate exists to require. Demanding write_code as
-                # well would mean an agent that used the catalogue correctly gets
-                # told to go and reimplement it.
-                atom_calls += 1
-                if tool_res.succeeded:
-                    has_executed = True
-                    last_success_output = tool_res.tool_output
-            if tool_res.tool_name == "execute_code" and tool_res.succeeded:
-                has_executed = True
-                last_success_output = tool_res.tool_output
-            elif (
-                tool_res.tool_name == "write_code"
-                and tool_res.succeeded
-                and isinstance(tool_res.tool_output, dict)
-                and isinstance(tool_res.tool_output.get("execution_result"), dict)
-                and tool_res.tool_output["execution_result"].get("status") == "success"
-            ):
-                has_executed = True
-                last_success_output = tool_res.tool_output["execution_result"]
-
-        if not has_executed:
+        """Require investigation and one bounded peer review of blocked work."""
+        if not state.tool_history:
             return (
                 False,
                 GateEvidence(
-                    check="proof_of_work",
+                    check="meaningful_attempt",
                     requirement=(
-                        "one execute_code call that succeeded, one write_code call "
-                        "whose execution_result reports success, or one successful "
-                        "capability call against the declared system"
+                        "use a relevant provider, code, workflow, mailbox, or peer tool "
+                        "before claiming success or a blocker"
                     ),
-                    observed={
-                        "tool_calls": len(state.tool_history),
-                        "execute_code_calls": execute_calls,
-                        "write_code_calls": write_calls,
-                        "capability_calls": atom_calls,
-                        "successful_executions": 0,
-                    },
+                    observed={"tool_calls": 0},
                 ),
             )
+        return super()._can_complete(state, parsed)
 
-        # The gate checks that proof exists. It does not replace the answer with
-        # it: overwriting RESULT with the sandbox return value discarded the
-        # agent's conclusion at the one moment it had one, so a Drive listing
-        # reached the person as a dict of ids however well the agent had read it.
-        # The proof stays reachable as evidence for anyone who wants it.
-        if last_success_output is not None:
-            parsed["evidence"] = last_success_output.get("output", last_success_output)
+    async def _pre_execute_hook(
+        self,
+        tool_name: str,
+        params: Dict[str, Any],
+        state: KernelState,
+    ) -> Optional[Dict[str, Any]]:
+        atom = getattr(self, "_atoms", {}).get(tool_name)
+        if atom is None or atom.policy.effect not in {
+            "write", "notify", "destructive"
+        }:
+            return None
+        from jarviscore.orchestration.envelopes import EffectIntentDecision
 
-        return (True, "")
+        evidence = [
+            {
+                "tool": item.tool_name,
+                "input": item.tool_input,
+                "output": item.tool_output,
+                "error": item.error,
+            }
+            for item in state.tool_history
+        ]
+        dependency_artifacts = state.context.get("previous_step_results") or {}
+        dependency_interpretations = (
+            state.context.get("previous_step_interpretations") or {}
+        )
+        prompt = (
+            "Review one proposed external effect against source intent and gathered "
+            "evidence. This is an agent reasoning decision, not provider routing. "
+            "Allow only when the proposed effect is requested and every conditional "
+            "precondition needed for it is supported by evidence. Do not infer absence "
+            "of one resource from absence of another. Return already_satisfied when "
+            "the gathered evidence establishes that the requested real-world outcome "
+            "already exists, so repeating the effect would be redundant. Redirect when "
+            "a relevant observation or verification is still missing. Return only JSON: "
+            '{"decision":"allow|redirect|already_satisfied","reason":"...",'
+            '"missing_evidence":["..."],"supporting_evidence":["..."]}.\n\n'
+            f"Source objective: {state.context.get('objective') or state.task}\n"
+            f"Scoped step task: {state.task}\n"
+            f"Source context: {json.dumps(state.context.get('source_context', {}), default=str)}\n"
+            "Authoritative dependency artifacts: "
+            f"{json.dumps(dependency_artifacts, default=str)}\n"
+            "Authoritative dependency interpretations: "
+            f"{json.dumps(dependency_interpretations, default=str)}\n"
+            f"Proposed effect: {atom.policy.effect}\n"
+            f"Tool: {tool_name}\n"
+            f"Parameters: {json.dumps(params, default=str)}\n"
+            f"Evidence so far: {json.dumps(evidence, default=str)}"
+        )
+        try:
+            call_kwargs = {
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
+                **(
+                    {"model": self.llm_client.nano_model}
+                    if getattr(self.llm_client, "nano_model", None)
+                    else {}
+                ),
+            }
+            try:
+                response = await self.llm_client.generate(**call_kwargs)
+            except TypeError:
+                call_kwargs.pop("response_format", None)
+                response = await self.llm_client.generate(**call_kwargs)
+            content = (
+                response.get("content", "")
+                if isinstance(response, dict)
+                else str(response)
+            )
+            tokens = response.get("tokens", {}) if isinstance(response, dict) else {}
+            cognition = getattr(self, "_cognition", None)
+            if cognition is not None:
+                cognition.track_usage(
+                    "effect_intent_review",
+                    tokens=int(tokens.get("total", 0) or 0),
+                )
+            decision = EffectIntentDecision.from_response(content)
+        except Exception as exc:
+            return {
+                "status": "blocked",
+                "error": f"Effect intent review failed closed: {exc}",
+                "semantic_error": "EFFECT_INTENT_REVIEW_INVALID",
+            }
+        if decision.decision == "allow":
+            return None
+        if decision.decision == "already_satisfied":
+            return {
+                "status": "success",
+                "skipped": True,
+                "semantic_outcome": "EFFECT_ALREADY_SATISFIED",
+                "reason": decision.reason,
+                "supporting_evidence": list(decision.supporting_evidence),
+            }
+        return {
+            "status": "blocked",
+            "error": decision.reason,
+            "semantic_error": "EFFECT_INTENT_REDIRECT",
+            "missing_evidence": list(decision.missing_evidence),
+        }
 
     # ─────────────────────────────────────────────────────────────
     # Tool Registration
@@ -492,6 +513,27 @@ Writing to it, after you succeed:
             (
                 "Generate Python code for a task. Runs ValidationLayer automatically. "
                 "Params: {\"code\": \"<python code>\", \"system\": \"<optional provider name>\"}"
+            ),
+            phase="thinking",
+        )
+        self.register_tool(
+            "inspect_atom_for_repair",
+            self._tool_inspect_atom_for_repair,
+            (
+                "Read the exact registered source and failure evidence for an atom "
+                "that failed in this run. Params: {\"function_name\": \"<atom_name>\"}"
+            ),
+            phase="thinking",
+        )
+        self.register_tool(
+            "repair_atom",
+            self._tool_repair_atom,
+            (
+                "Submit corrected source for an atom that failed in this run. The "
+                "replacement must preserve its registered name and provider contract; "
+                "it is executed against the original invocation before it can replace "
+                "the registry version. Params: {\"function_name\": \"<atom_name>\", "
+                "\"code\": \"<corrected source>\"}"
             ),
             phase="thinking",
         )
@@ -565,7 +607,7 @@ Writing to it, after you succeed:
         """Execute tools, auto-running validated code when runtime proof is required."""
         result = await super()._execute_tool(tool_name, params)
         if (
-            tool_name != "write_code"
+            tool_name not in {"write_code", "repair_atom"}
             or not isinstance(result, dict)
             or result.get("status") != "validated"
             or not self.sandbox
@@ -602,6 +644,98 @@ Writing to it, after you succeed:
             merged["status"] = "error"
             merged["error"] = execution_result.get("error", "Code execution failed.")
         return merged
+
+    def _tool_inspect_atom_for_repair(
+        self,
+        function_name: str,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Expose current source only after that exact atom failed in this run."""
+        failure = self._failed_atom_calls.get(function_name)
+        if failure is None or self.code_registry is None:
+            return {
+                "status": "error",
+                "error": f"No repairable failure for `{function_name}` was observed in this run.",
+                "semantic_error": "ATOM_REPAIR_NOT_OBSERVED",
+            }
+        source = self.code_registry.get_function_code(function_name)
+        metadata = self.code_registry.get_function_metadata(function_name) or {}
+        if not source:
+            return {
+                "status": "error",
+                "error": f"Registered source for `{function_name}` is unavailable.",
+                "semantic_error": "ATOM_SOURCE_UNAVAILABLE",
+            }
+        return {
+            "status": "success",
+            "function_name": function_name,
+            "system": metadata.get("system"),
+            "version": metadata.get("version"),
+            "source": source,
+            "failed_invocation": failure.get("params", {}),
+            "failure": failure.get("error"),
+        }
+
+    def _tool_repair_atom(
+        self,
+        function_name: str,
+        code: str,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Validate a replacement tied to one observed atom failure/version."""
+        from jarviscore.execution.atom_contract import read_contract
+
+        failure = self._failed_atom_calls.get(function_name)
+        if failure is None or self.code_registry is None:
+            return {
+                "status": "error",
+                "error": f"No repairable failure for `{function_name}` was observed in this run.",
+                "semantic_error": "ATOM_REPAIR_NOT_OBSERVED",
+            }
+        metadata = self.code_registry.get_function_metadata(function_name) or {}
+        base_version = metadata.get("version")
+        if base_version != failure.get("version"):
+            return {
+                "status": "error",
+                "error": (
+                    f"`{function_name}` changed from version {failure.get('version')} "
+                    f"to {base_version}; inspect the current version before repairing it."
+                ),
+                "semantic_error": "ATOM_REPAIR_STALE",
+            }
+        contract = read_contract(
+            code,
+            system=str(metadata.get("system") or ""),
+            expected_name=function_name,
+        )
+        if not contract.ok or contract.atom is None or contract.atom.legacy:
+            return {
+                "status": "validation_failed",
+                "error": "; ".join(contract.errors) or "Replacement atom contract is invalid.",
+                "issues": list(contract.errors),
+            }
+        candidate_id = len(self._candidates) + 1
+        self._candidates.append({
+            "candidate_id": candidate_id,
+            "code": code,
+            "system": metadata.get("system"),
+            "status": "validated",
+            "function_name": function_name,
+            "repair_of": function_name,
+            "base_version": base_version,
+            "invocation_params": dict(failure.get("params") or {}),
+            "ts": time.time(),
+        })
+        return {
+            "candidate_id": candidate_id,
+            "status": "validated",
+            "function_name": function_name,
+            "base_version": base_version,
+            "message": (
+                f"Replacement for `{function_name}` v{base_version} is contract-valid. "
+                "It must execute successfully before registry replacement."
+            ),
+        }
 
     # ─────────────────────────────────────────────────────────────
     # Tool: check_registry
@@ -865,6 +999,28 @@ Writing to it, after you succeed:
                 }
             exec_code = candidate["code"]
 
+        if candidate and candidate.get("repair_of"):
+            from jarviscore.execution.atom_contract import invocation, read_contract
+
+            contract = read_contract(
+                exec_code or "",
+                system=str(candidate.get("system") or ""),
+                expected_name=str(candidate["repair_of"]),
+            )
+            if not contract.ok or contract.atom is None:
+                return {
+                    "status": "error",
+                    "error": "; ".join(contract.errors) or "Replacement atom contract is invalid.",
+                    "semantic_error": "ATOM_REPAIR_INVALID",
+                }
+            repair_atom = contract.atom
+            invocation_params = dict(candidate.get("invocation_params") or {})
+            exec_code = f"{exec_code}\n\n{invocation(repair_atom, invocation_params)}"
+            kwargs["_internal_atom"] = (
+                repair_atom,
+                self._atom_action_id(repair_atom, invocation_params),
+            )
+
         if not exec_code:
             return {"status": "error", "error": "No code provided to execute_code."}
 
@@ -891,6 +1047,29 @@ Writing to it, after you succeed:
             for k in SAFE_KEYS:
                 if k in self._run_context:
                     exec_context[k] = self._run_context[k]
+        internal_atom = kwargs.get("_internal_atom")
+        offered_atoms = getattr(self, "_atoms", {})
+        repair_authorized = bool(
+            candidate
+            and candidate.get("repair_of")
+            and isinstance(internal_atom, tuple)
+            and len(internal_atom) == 2
+            and internal_atom[0].name == candidate.get("repair_of")
+        )
+        if (
+            isinstance(internal_atom, tuple)
+            and len(internal_atom) == 2
+            and (
+                internal_atom[0] in offered_atoms.values()
+                or repair_authorized
+            )
+        ):
+            atom, action_id = internal_atom
+            exec_context["_mutation_authority"] = {
+                "atom": atom.name,
+                "action_id": str(action_id),
+                "effect": atom.policy.effect,
+            }
 
         start_ts = time.time()
         result = await self.sandbox.execute(exec_code, context=exec_context or None)
@@ -947,6 +1126,7 @@ Writing to it, after you succeed:
             self.code_registry
             and candidate
             and candidate.get("function_name")
+            and not candidate.get("repair_of")
             and result.get("status") in ("success", "failure")
             and not result.get("access_failure")
         ):
@@ -984,12 +1164,46 @@ Writing to it, after you succeed:
         if not self.code_registry:
             return {"status": "error", "error": "No code_registry configured."}
 
-        final_code = code
-        if candidate_id is not None:
-            candidate = self._get_candidate(candidate_id)
-            if candidate:
-                final_code = candidate.get("code", code)
-                system = system or candidate.get("system")
+        if candidate_id is None:
+            return {
+                "status": "error",
+                "error": "candidate_id is required; registry writes require successful execution evidence.",
+                "semantic_error": "REGISTRY_EXECUTION_PROOF_REQUIRED",
+            }
+        candidate = self._get_candidate(candidate_id)
+        if candidate is None:
+            return {"status": "error", "error": f"candidate_id={candidate_id} not found."}
+        if candidate.get("status") != "success":
+            return {
+                "status": "error",
+                "error": (
+                    f"candidate_id={candidate_id} has status={candidate.get('status')!r}; "
+                    "execute_code must succeed before registration."
+                ),
+                "semantic_error": "REGISTRY_EXECUTION_PROOF_REQUIRED",
+            }
+        final_code = candidate.get("code", code)
+        system = system or candidate.get("system")
+        repair_of = candidate.get("repair_of")
+        if repair_of:
+            if function_name != repair_of:
+                return {
+                    "status": "error",
+                    "error": f"A repair for `{repair_of}` cannot be registered as `{function_name}`.",
+                    "semantic_error": "ATOM_REPAIR_IDENTITY_MISMATCH",
+                }
+            current = self.code_registry.get_function_metadata(repair_of) or {}
+            if current.get("version") != candidate.get("base_version"):
+                return {
+                    "status": "error",
+                    "error": (
+                        f"`{repair_of}` changed after this repair began; inspect and repair "
+                        "the current registry version."
+                    ),
+                    "semantic_error": "ATOM_REPAIR_STALE",
+                }
+            description = description or str(current.get("description") or "")
+            capabilities = capabilities or list(current.get("capabilities") or [])
 
         if not final_code:
             return {"status": "error", "error": "No code to register."}
@@ -1019,6 +1233,11 @@ Writing to it, after you succeed:
             "agent_id": self.agent_id,
             "tags": [system] if system else [],
         }
+        if repair_of:
+            metadata["repair_of_version"] = candidate.get("base_version")
+            metadata["repair_failure"] = (
+                self._failed_atom_calls.get(str(repair_of), {}).get("error")
+            )
 
         success = self.code_registry.register_function(
             function_name=function_name,
@@ -1028,14 +1247,16 @@ Writing to it, after you succeed:
         self._registered_this_run = bool(success)
 
         if success:
+            self.code_registry.update_execution_stats(
+                function_name,
+                success=True,
+                execution_time=float(candidate.get("execution_time") or 0.0),
+            )
             # Registry identity for the result envelope (issue #88): the
             # promoted function's name IS its registry id.
             getattr(self, "_dispatch_metadata", {})["function_id"] = function_name
-            if candidate_id is not None:
-                candidate = self._get_candidate(candidate_id)
-                if candidate:
-                    candidate["function_name"] = function_name
-                    candidate["status"] = "registered"
+            candidate["function_name"] = function_name
+            candidate["status"] = "registered"
 
             return {
                 "status": "registered",
@@ -1299,7 +1520,14 @@ Writing to it, after you succeed:
         self._current_task = str(task)
         self._run_context = context or {}
         await self._sync_connections()
-        self._prepare_access(self._resolved_system())
+        declared_systems = [
+            str(value) for value in self._run_context.get("systems", [])
+            if str(value)
+        ]
+        if len(declared_systems) > 1:
+            self._prepare_access_for_systems(declared_systems)
+        else:
+            self._prepare_access(self._resolved_system())
         try:
             return await super().run(task, context, max_turns, model, **kwargs)
         finally:
@@ -1329,6 +1557,15 @@ Writing to it, after you succeed:
         atoms: Dict[str, Any] = {}
         if not system or not self.code_registry:
             return atoms
+        requested_effect = str(self._run_context.get("effect") or "").strip()
+        allowed_effects = {
+            "read": {"read"},
+            "propose": {"read"},
+            "write": {"read", "write"},
+            "notify": {"read", "notify"},
+            "destructive": {"read", "destructive"},
+            "final_response": {"read"},
+        }.get(requested_effect)
         for entry in self.code_registry.get_functions_by_system(system):
             name = entry.get("function_name")
             code = self.code_registry.get_function_code(name) if name else None
@@ -1338,6 +1575,8 @@ Writing to it, after you succeed:
             atom = contract.atom
             # Only the current shape is offered; a legacy atom cannot be called.
             if not contract.ok or atom is None or atom.legacy:
+                continue
+            if allowed_effects is not None and atom.policy.effect not in allowed_effects:
                 continue
             atoms[name] = atom
         return atoms
@@ -1349,18 +1588,22 @@ Writing to it, after you succeed:
         sometimes skip, and it did. These arrive the way every other tool does,
         so using them is the default path rather than a decision.
         """
+        self._offer_system_capabilities_for([system] if system else [])
+
+    def _offer_system_capabilities_for(self, systems: List[str]) -> None:
+        """Offer current-effect atoms from every connected authorized provider."""
         for name in getattr(self, "_atom_tools", ()):
             self._tools.pop(name, None)
         self._atom_tools = []
-        self._atoms = self._valid_atoms(system)
-        if not system:
-            return
+        self._atoms = {}
+        for system in systems:
+            self._atoms.update(self._valid_atoms(system))
 
         for name, atom in self._atoms.items():
             self.register_tool(
                 name,
                 self._atom_tool(name),
-                f"{atom.describe()} Runs against {system} with "
+                f"{atom.describe()} Runs against {atom.system} with "
                 "credentials resolved outside the sandbox; you never handle them.",
                 phase="action",
             )
@@ -1368,8 +1611,8 @@ Writing to it, after you succeed:
 
         if self._atom_tools:
             self._log.info(
-                "Offering %d %s capability(ies): %s",
-                len(self._atom_tools), system, ", ".join(self._atom_tools),
+                "Offering %d capability(ies) across %s: %s",
+                len(self._atom_tools), ", ".join(systems), ", ".join(self._atom_tools),
             )
 
     async def _sync_connections(self) -> None:
@@ -1414,7 +1657,7 @@ Writing to it, after you succeed:
 
     def _connection_handle(self, system: str) -> str:
         """What the sandbox should call through for this system."""
-        manager = self.auth_manager
+        manager = getattr(self, "auth_manager", None)
         found = manager.connection_handle(system) if manager is not None and hasattr(manager, "connection_handle") else None
         # Local-vault mode: the handle is the provider name.
         return found if isinstance(found, str) and found else system
@@ -1437,6 +1680,21 @@ Writing to it, after you succeed:
             if self._run_context.get("_nexus_provider") != system:
                 self._run_context["_nexus_connection_id"] = self._connection_handle(system)
                 self._run_context["_nexus_provider"] = system
+
+    def _prepare_access_for_systems(self, systems: List[str]) -> None:
+        """Expose read-capable connected systems without choosing one for the agent."""
+        from jarviscore.nexus.store import ConnectionState
+
+        unique = list(dict.fromkeys(systems))
+        connected = [
+            system for system in unique
+            if self._connection_state(system) is ConnectionState.CONNECTED
+        ]
+        self._offered_system = ",".join(unique)
+        self._offer_system_capabilities_for(connected)
+        self._offer_access_request()
+        self._run_context.pop("_nexus_connection_id", None)
+        self._run_context.pop("_nexus_provider", None)
 
     def _refresh_offerings_for(self, system: Optional[str]) -> Optional[str]:
         """Re-offer for a system named after the run began; note what changed."""
@@ -1625,14 +1883,22 @@ Writing to it, after you succeed:
             prior = self._idempotent_result(action_id)
             if prior is not None:
                 return prior
+            self._run_context["_nexus_connection_id"] = self._connection_handle(
+                atom.system
+            )
+            self._run_context["_nexus_provider"] = atom.system
             # Runs where any other sandbox code runs: nexus_call attaches the
             # credential there, so proving an atom is just running it.
             result = await self._tool_execute_code(
                 code=f"{code}\n\n{invocation(atom, params)}",
                 description=f"{name} via {atom.system}",
+                _internal_atom=(atom, action_id),
             )
-            self._record_atom_outcome(name, result)
-            if atom.policy.effect == "destructive" and result.get("status") == "success":
+            self._record_atom_outcome(name, result, params=params)
+            if (
+                atom.policy.effect in {"write", "notify", "destructive"}
+                and result.get("status") == "success"
+            ):
                 self._save_idempotent_result(action_id, result)
             return result
         call.__name__ = name
@@ -1662,7 +1928,13 @@ Writing to it, after you succeed:
         if store is not None and hasattr(store, "save_atom_execution"):
             store.save_atom_execution(action_id, result)
 
-    def _record_atom_outcome(self, name: str, result: Dict[str, Any]) -> None:
+    def _record_atom_outcome(
+        self,
+        name: str,
+        result: Dict[str, Any],
+        *,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """An atom called as a tool is the evidence its stage is built on.
 
         This is the path agents use once a provider is connected, so leaving it
@@ -1681,5 +1953,18 @@ Writing to it, after you succeed:
                 execution_time=float(result.get("execution_time") or 0.0),
                 error_type=result.get("error_type"),
             )
+            if status == "failure":
+                metadata = self.code_registry.get_function_metadata(name) or {}
+                self._failed_atom_calls[name] = {
+                    "version": metadata.get("version"),
+                    "params": dict(params or {}),
+                    "error": result.get("error"),
+                }
+                result["atom_repair"] = {
+                    "available": True,
+                    "function_name": name,
+                    "version": metadata.get("version"),
+                    "next_tool": "inspect_atom_for_repair",
+                }
         except Exception as exc:
             logger.warning("Failed to record outcome for atom %s: %s", name, exc)

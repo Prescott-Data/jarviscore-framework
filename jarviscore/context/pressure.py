@@ -58,6 +58,7 @@ BLOCK_PRIORITY: Dict[str, int] = {
     "budget": 0,
     "failure_memory": 1,
     "knowledge": 1,
+    "mailbox": 1,
     "belief_state": 1,
     "working_memory": 1,
     "input_context": 2,

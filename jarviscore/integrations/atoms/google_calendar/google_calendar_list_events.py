@@ -10,5 +10,26 @@ async def google_calendar_list_events(calendar_id: str='primary', time_min: str=
     if not resp['ok']:
         return {'success': False, 'error': resp['body']}
     data = resp['json']
-    events = [{'id': e['id'], 'summary': e.get('summary'), 'start': e.get('start', {}).get('dateTime', e.get('start', {}).get('date')), 'end': e.get('end', {}).get('dateTime', e.get('end', {}).get('date')), 'location': e.get('location'), 'description': e.get('description')} for e in data.get('items', [])]
+    events = [{
+        'id': e['id'],
+        'summary': e.get('summary'),
+        'start': e.get('start', {}).get('dateTime', e.get('start', {}).get('date')),
+        'end': e.get('end', {}).get('dateTime', e.get('end', {}).get('date')),
+        'location': e.get('location'),
+        'description': e.get('description'),
+        'attendees': [
+            {
+                'email': attendee.get('email'),
+                'displayName': attendee.get('displayName'),
+                'responseStatus': attendee.get('responseStatus'),
+                'self': attendee.get('self', False),
+            }
+            for attendee in e.get('attendees', [])
+        ],
+        'organizer': e.get('organizer'),
+        'status': e.get('status'),
+        'htmlLink': e.get('htmlLink'),
+        'created': e.get('created'),
+        'updated': e.get('updated'),
+    } for e in data.get('items', [])]
     return {'success': True, 'events': events, 'count': len(events)}

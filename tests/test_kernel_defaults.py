@@ -6,6 +6,7 @@ loop, artifact tracking, and error handling without real LLM calls.
 """
 
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 from jarviscore.kernel.defaults import CoderSubAgent, ResearcherSubAgent, CommunicatorSubAgent
@@ -62,6 +63,45 @@ class TestCoderSubAgent:
             "- Scoreboard\n- Provider Registry\n- Engineering Docs"
         )
         assert parsed["result"]["files"][0] == "Scoreboard"
+
+    def test_combined_done_result_terminates_with_the_structured_artifact(
+        self, mock_llm
+    ):
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
+        parsed = coder._parse_response(
+            'DONE/RESULT\n'
+            '{"status":"scheduled","title":"Discovery Call",'
+            '"execution_state":"executed","event_id":"event-1",'
+            '"attendees":["ephy@example.com"]}'
+        )
+
+        assert parsed["type"] == "done"
+        assert parsed["result"]["event_id"] == "event-1"
+        assert parsed["result"]["attendees"] == ["ephy@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_budget_refusal_checkpoints_for_a_new_execution_epoch(self):
+        from jarviscore.orchestration.budget import WorkflowBudgetExceeded
+
+        class ExhaustedLLM:
+            async def generate(self, **kwargs):
+                raise WorkflowBudgetExceeded("epoch capacity exhausted")
+
+        memory = AsyncMock()
+        memory.load_checkpoint.return_value = None
+        coder = CoderSubAgent(agent_id="c1", llm_client=ExhaustedLLM())
+
+        result = await coder.run(
+            task="Continue durable work",
+            context={"workflow_id": "wf-long", "step_id": "step-1"},
+            max_turns=1,
+            memory=memory,
+        )
+
+        assert result.status == "epoch_exhausted"
+        assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+        assert result.metadata["checkpointed"] is True
+        memory.save_checkpoint.assert_awaited_once()
 
     """Tests for CoderSubAgent."""
 

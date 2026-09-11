@@ -7,7 +7,6 @@ import base64
 import contextlib
 import io
 import json
-import os
 import socket
 import sys
 from pathlib import Path
@@ -52,11 +51,43 @@ class ParentRPC:
         return response.get("result")
 
 
+class MeshFacade:
+    """The only mesh operations generated code may request from its parent."""
+
+    def __init__(self, rpc: ParentRPC):
+        self._rpc = rpc
+
+    async def list_peers(self):
+        return await asyncio.to_thread(self._rpc.call, "mesh_list_peers", {})
+
+    async def delegate(
+        self,
+        *,
+        to: str,
+        task: str,
+        context: dict | None = None,
+        capability: str | None = None,
+        timeout: float | None = None,
+    ):
+        return await asyncio.to_thread(
+            self._rpc.call,
+            "mesh_delegate",
+            {
+                "to": to,
+                "task": task,
+                "context": _jsonable(context or {}),
+                "capability": capability,
+                "timeout": timeout,
+            },
+        )
+
+
 async def execute(request: dict) -> dict:
     workspace = Path(request["workspace"]).resolve()
     output_dir = Path(request["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     rpc = ParentRPC(int(request["rpc_fd"]))
+    mesh = MeshFacade(rpc)
     bash = BashExecutor(workspace, timeout=int(request.get("bash_timeout", 120)))
     git = GitHelper(bash, workspace)
 
@@ -95,7 +126,7 @@ async def execute(request: dict) -> dict:
         "__builtins__": __builtins__, "result": None,
         "workspace": workspace, "output_dir": output_dir,
         "blob_path": blob_path, "fetch_artifact": fetch_artifact,
-        "bash": bash, "git": git, "nexus_call": nexus_call,
+        "bash": bash, "git": git, "nexus_call": nexus_call, "mesh": mesh,
         "Path": pathlib.Path, "json": json, "re": re, "datetime": datetime,
         "math": math, "hashlib": hashlib, "uuid": uuid, "shutil": shutil,
         "tempfile": tempfile, "textwrap": textwrap,
@@ -116,7 +147,7 @@ async def execute(request: dict) -> dict:
                 if returned is not None:
                     namespace["result"] = returned
         return {"result": _jsonable(namespace.get("result")), "stdout": stdout.getvalue()}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - serialize child failures to the parent process
         return {"error": str(exc), "error_type": type(exc).__name__, "stdout": stdout.getvalue()}
 
 

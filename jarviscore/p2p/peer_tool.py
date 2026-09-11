@@ -24,7 +24,9 @@ Example:
 """
 import asyncio
 import logging
-from typing import List, Dict, Any, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
+
+from jarviscore.orchestration.envelopes import neutral_context
 
 if TYPE_CHECKING:
     from .peer_client import PeerClient
@@ -43,7 +45,7 @@ class PeerTool:
     """
 
     # Tool names this adapter handles
-    tool_names = ["ask_peer", "broadcast_update", "list_peers"]
+    tool_names = ["ask_peer", "ask_capability", "broadcast_update", "list_peers"]
 
     def __init__(self, peer_client: 'PeerClient'):
         """
@@ -82,6 +84,24 @@ class PeerTool:
         # Get live peer info
         active_roles = self._peers.list_roles()
         peers_info = self._peers.list_peers()
+        active_capabilities = sorted({
+            capability
+            for peer in peers_info
+            for capability in peer.get("capabilities", [])
+        })
+        capability_descriptions = {
+            capability: description
+            for peer in peers_info
+            for capability, description in (
+                peer.get("capability_descriptions", {}) or {}
+            ).items()
+            if description
+        }
+        capability_details = "; ".join(
+            f"{capability}: {capability_descriptions[capability]}"
+            for capability in active_capabilities
+            if capability in capability_descriptions
+        )
 
         # Format for LLM context
         if active_roles:
@@ -120,6 +140,31 @@ class PeerTool:
                 }
             },
             {
+                "name": "ask_capability",
+                "description": (
+                    "Ask any available peer that owns a specific capability to resolve "
+                    "a missing fact or perform specialist analysis. The requesting peer "
+                    "selects the capability; the recipient controls its own tools and authority. "
+                    f"CURRENT CAPABILITIES: [{', '.join(active_capabilities) or 'none online'}]. "
+                    f"CAPABILITY MEANINGS: [{capability_details or 'not supplied'}]."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "capability": {
+                            "type": "string",
+                            "enum": active_capabilities,
+                            "description": "Capability needed to resolve the current gap",
+                        },
+                        "question": {
+                            "type": "string",
+                            "description": "Exact missing fact or specialist request",
+                        },
+                    },
+                    "required": ["capability", "question"],
+                },
+            },
+            {
                 "name": "broadcast_update",
                 "description": (
                     "Send a notification to ALL peers in the mesh. "
@@ -151,7 +196,13 @@ class PeerTool:
             }
         ]
 
-    async def execute(self, tool_name: str, args: Dict[str, Any]) -> str:
+    async def execute(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> str:
         """
         Execute a peer tool call.
 
@@ -162,22 +213,154 @@ class PeerTool:
         Returns:
             String result to feed back to LLM
         """
+        result = await self.execute_result(
+            tool_name,
+            args,
+            context=context,
+            timeout_seconds=timeout_seconds,
+        )
+        if result.get("status") == "success":
+            return str(result.get("output") or "")
+        return f"Error: {result.get('error', 'peer request failed')}"
+
+    async def execute_result(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Execute a peer tool and preserve transport/schema failure semantics."""
         self._logger.debug(f"Executing {tool_name} with args: {args}")
 
         try:
             if tool_name == "ask_peer":
-                return await self._ask_peer(args)
+                return await self._ask_peer_result(
+                    args,
+                    context=context,
+                    timeout_seconds=timeout_seconds,
+                )
+            elif tool_name == "ask_capability":
+                return await self._ask_capability_result(
+                    args,
+                    context=context,
+                    timeout_seconds=timeout_seconds,
+                )
             elif tool_name == "broadcast_update":
-                return await self._broadcast_update(args)
+                return {"status": "success", "output": await self._broadcast_update(args)}
             elif tool_name == "list_peers":
-                return self._list_peers()
+                return {"status": "success", "output": self._list_peers()}
             else:
-                return f"Error: Unknown tool '{tool_name}'"
+                return {
+                    "status": "error",
+                    "error": f"Unknown peer tool '{tool_name}'",
+                    "semantic_error": "UNKNOWN_PEER_TOOL",
+                    "peer_request_attempted": False,
+                }
         except Exception as e:
             self._logger.error(f"Tool execution error: {e}")
-            return f"Error: {str(e)}"
+            return {
+                "status": "error",
+                "error": str(e),
+                "semantic_error": "PEER_TOOL_EXECUTION_ERROR",
+                "peer_request_attempted": True,
+            }
 
-    async def _ask_peer(self, args: Dict[str, Any]) -> str:
+    async def _ask_peer_result(
+        self,
+        args: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        role = str(args.get("role") or "").strip()
+        question = str(args.get("question") or "").strip()
+        missing = [
+            field for field, value in (("role", role), ("question", question))
+            if not value
+        ]
+        if missing:
+            return {
+                "status": "error",
+                "error": f"Missing required peer arguments: {', '.join(missing)}",
+                "semantic_error": "INVALID_PEER_TOOL_ARGUMENTS",
+                "missing_fields": missing,
+                "peer_request_attempted": False,
+            }
+        response = await self._peers.request(
+            role,
+            {"query": question, "from": self._peers.my_role},
+            timeout=max(1.0, float(timeout_seconds or 300.0)),
+            context=neutral_context(context),
+        )
+        if response is None:
+            available_roles = [p["role"] for p in self._peers.list_peers()]
+            return {
+                "status": "error",
+                "error": f"'{role}' not found or did not respond",
+                "semantic_error": "PEER_UNAVAILABLE",
+                "available_roles": available_roles,
+                "peer_request_attempted": True,
+            }
+        if isinstance(response, dict) and response.get("error"):
+            return {
+                "status": "error",
+                "error": str(response["error"]),
+                "semantic_error": "PEER_RESPONSE_ERROR",
+                "peer_request_attempted": True,
+            }
+        payload = response.get("response", response) if isinstance(response, dict) else response
+        return {
+            "status": "success",
+            "output": f"{role}: {payload}",
+            "peer_request_attempted": True,
+        }
+
+    async def _ask_capability_result(
+        self,
+        args: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        capability = str(args.get("capability") or "").strip()
+        question = str(args.get("question") or "").strip()
+        missing = [
+            field
+            for field, value in (("capability", capability), ("question", question))
+            if not value
+        ]
+        if missing:
+            return {
+                "status": "error",
+                "error": f"Missing required capability arguments: {', '.join(missing)}",
+                "semantic_error": "INVALID_PEER_TOOL_ARGUMENTS",
+                "missing_fields": missing,
+                "peer_request_attempted": False,
+            }
+        response = await self._peers.request_capability(
+            capability,
+            question,
+            context=context,
+            timeout=max(1.0, float(timeout_seconds or 300.0)),
+        )
+        if response.get("status") != "success":
+            return {
+                "status": "error",
+                "error": str(response.get("error") or "request failed"),
+                "semantic_error": "CAPABILITY_REQUEST_FAILED",
+                "peer_request_attempted": True,
+            }
+        peer = response.get("peer_role") or capability
+        return {
+            "status": "success",
+            "output": f"{peer} ({capability}): {response.get('result')}",
+            "peer_request_attempted": True,
+        }
+
+    async def _ask_peer(
+        self,
+        args: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Execute ask_peer tool."""
         role = args.get("role")
         question = args.get("question")
@@ -192,7 +375,8 @@ class PeerTool:
         response = await self._peers.request(
             role,
             {"query": question, "from": self._peers.my_role},
-            timeout=7200.0
+            timeout=7200.0,
+            context=neutral_context(context),
         )
         
         self._logger.info(f"ask_peer: Got response: {response}")
@@ -219,6 +403,26 @@ class PeerTool:
             else:
                 return f"{role}: {response}"
         return f"{role}: {response}"
+
+    async def _ask_capability(
+        self,
+        args: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        capability = str(args.get("capability") or "").strip()
+        question = str(args.get("question") or "").strip()
+        if not capability or not question:
+            return "Error: 'capability' and 'question' are required"
+        response = await self._peers.request_capability(
+            capability,
+            question,
+            context=context,
+            timeout=float(args.get("timeout") or 7200.0),
+        )
+        if response.get("status") != "success":
+            return f"Error from {capability}: {response.get('error', 'request failed')}"
+        peer = response.get("peer_role") or capability
+        return f"{peer} ({capability}): {response.get('result')}"
 
     async def _broadcast_update(self, args: Dict[str, Any]) -> str:
         """Execute broadcast_update tool."""

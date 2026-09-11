@@ -20,6 +20,33 @@ async def insightly_get_account(account_id: str) -> dict:
     return {"status": "success", "data": response["json"]}
 '''
 
+CREATE_ATOM_SOURCE = '''\
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["account_name"],
+    "consequence": "Creates one account record.",
+}
+
+async def insightly_create_account(account_name: str) -> dict:
+    """Create an organisation record in Insightly."""
+    response = await nexus_call(
+        "POST", "https://api.na1.insightly.com/v3.1/Organisations",
+        json={"ORGANISATION_NAME": account_name},
+    )
+    return {"status": "success", "data": response["json"]}
+'''
+
+GMAIL_ATOM_SOURCE = '''\
+async def gmail_list_messages(query: str = "") -> dict:
+    """List Gmail messages matching a query."""
+    response = await nexus_call(
+        "GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+        params={"q": query},
+    )
+    return {"status": "success", "data": response["json"]}
+'''
+
 
 class FakeRegistry:
     """Minimal stand-in for the FunctionRegistry surface coder.py touches."""
@@ -47,7 +74,15 @@ def coder():
     agent._atoms = {}
     agent._run_context = {}
     agent.code_registry = FakeRegistry(
-        {"insightly_get_account": {"system": "insightly", "code": ATOM_SOURCE}}
+        {
+            "insightly_get_account": {"system": "insightly", "code": ATOM_SOURCE},
+            "insightly_create_account": {
+                "system": "insightly", "code": CREATE_ATOM_SOURCE,
+            },
+            "gmail_list_messages": {
+                "system": "gmail", "code": GMAIL_ATOM_SOURCE,
+            },
+        }
     )
 
     def register_tool(name, fn, description, phase=None):
@@ -107,7 +142,48 @@ def test_candidate_makes_the_atom_a_callable_tool(coder):
     }
     coder._offer_system_capabilities(coder._resolved_system())
     assert "insightly_get_account" in coder._tools
+    assert set(coder._atom_tools) == {
+        "insightly_get_account", "insightly_create_account",
+    }
+
+
+def test_provider_bound_outcome_offers_read_and_write_atoms_for_agent_reasoning(coder):
+    coder._run_context = {
+        "system": "insightly",
+        "effect": "write",
+        "systems": ["insightly"],
+    }
+
+    coder._offer_system_capabilities(coder._resolved_system())
+
+    assert set(coder._atom_tools) == {
+        "insightly_get_account", "insightly_create_account",
+    }
+
+
+def test_read_outcome_never_offers_write_atoms(coder):
+    coder._run_context = {
+        "system": "insightly",
+        "effect": "read",
+        "systems": ["insightly"],
+    }
+
+    coder._offer_system_capabilities(coder._resolved_system())
+
     assert coder._atom_tools == ["insightly_get_account"]
+
+
+def test_multi_provider_read_offers_each_connected_system_atom(coder):
+    coder._run_context = {
+        "systems": ["insightly", "gmail"],
+        "effect": "read",
+    }
+
+    coder._offer_system_capabilities_for(["insightly", "gmail"])
+
+    assert set(coder._atom_tools) == {
+        "insightly_get_account", "gmail_list_messages",
+    }
 
 
 def test_unresolved_system_offers_nothing(coder):

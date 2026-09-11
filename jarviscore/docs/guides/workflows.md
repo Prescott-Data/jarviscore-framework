@@ -8,6 +8,13 @@ JarvisCore's `WorkflowBuilder` lets you compose multi-agent workflows as Directe
 
 This guide covers the full `WorkflowBuilder` API, the result reference syntax for chaining step outputs, Redis-backed persistence, and production patterns.
 
+Use this API when your application knows the steps and assigns agent roles. If
+the source is a natural-language objective and peers should own work by
+capability rather than preassigned role, use Redis-backed
+[`Mesh.execute_goal()`](goal-execution.md) instead. `Mesh.execute_goal()` creates
+an immutable obligation ledger and append-only revision history; those semantics
+do not apply automatically to a `WorkflowBuilder` DAG.
+
 ---
 
 ## Core Concepts

@@ -11,6 +11,85 @@ This guide covers migrating an existing multi-agent system to JarvisCore from **
 
 ---
 
+## Upgrading JarvisCore 1.10 to 1.11
+
+JarvisCore 1.11 is a backward-compatible minor release. Existing
+`mesh.run_task()`, `mesh.workflow()`, `AutoAgent.execute_task()` and
+`CustomAgent.execute_task()` code does not require a rewrite.
+
+```bash
+pip install --upgrade "jarviscore-framework==1.11.0"
+```
+
+The behavioral changes apply primarily to Redis-backed `Mesh.execute_goal()`:
+
+| 1.10 assumption | 1.11 behavior |
+|---|---|
+| A terminal attempt determines goal truth | Attempts and current source-obligation truth are separate |
+| Replan returns a replacement DAG | Replan appends a selective delta and retains prior attempts |
+| `status` is enough to classify the outcome | Read `status`, `obligation_status` and `response_status` |
+| Every terminal response is equivalent | `result_summary` comes from the current revision |
+| Partial semantic labels may be free-form | Requirement lists should contain stable IDs from `step["covers"]` |
+
+### AutoAgent users
+
+No change is required for normal successful results. If your subclass adds
+domain semantic assessment, return the optional `interpretation` envelope and
+use obligation IDs supplied in the distributed task context. AutoAgent reasoning
+also gains peer, mailbox and workflow-inspection tools while attached to a Mesh.
+See [Distributed Mesh Goals](autoagent.md#distributed-mesh-goals).
+
+`AutoAgent.execute_goal()` remains the single-agent Plan, Execute, Evaluate API.
+It is not an alias for distributed `Mesh.execute_goal()`.
+
+### CustomAgent users
+
+No change is required for `on_peer_request()` or a standard `execute_task()`
+result. Add an interpretation only when your application needs to distinguish a
+completed attempt from sufficient evidence. A pure CustomAgent process still
+does not acquire an LLM planner automatically; it can execute a published goal
+or use an application-declared `mesh.workflow()` DAG. See
+[Participating in `Mesh.execute_goal()`](customagent.md#participating-in-meshexecute_goal).
+
+### Result consumers
+
+If you need only current execution, filter retained history by revision:
+
+```python
+current_steps = [
+    step for step in result["steps"]
+    if step.get("plan_revision", 1) == result["revision"]
+]
+```
+
+Do not treat a failed user response as proof that provider work failed:
+
+```python
+if result["obligation_status"] == "satisfied":
+    business_work_is_complete = True
+
+if result["response_status"] == "failed":
+    queue_response_recovery = True
+```
+
+### Deployment
+
+Redis records without a stored obligation projection remain readable and are
+initialized from their workflow definition. Even so, do not run mixed 1.10 and
+1.11 claimants against an active workflow: older nodes do not implement selective
+supersession or current-revision response selection.
+
+1. Drain or cancel active distributed goals.
+2. Upgrade every node that shares the Redis DAG.
+3. Restart the nodes and verify the same framework version everywhere.
+4. Resume or submit goals with stable workflow IDs.
+
+Review `mesh_max_reconciliation_revisions`, `mesh_response_capability` and the
+shared `execution_budget` before enabling automatic remediation. The complete
+contract is in [Durable Goal Execution](goal-execution.md).
+
+---
+
 ## Migrating from CrewAI
 
 ### Concept Mapping

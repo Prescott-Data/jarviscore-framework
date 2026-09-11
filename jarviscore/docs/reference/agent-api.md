@@ -36,7 +36,7 @@ from jarviscore.profiles import AutoAgent
 
 | Variable | Default | Description |
 |---|---|---|
-| `HITL_ENABLED` | `false` | Enable `AdaptiveHITLPolicy`. Escalates on low-confidence or high-risk Kernel actions. |
+| `HITL_ENABLED` | `false` | Enable typed human-only HITL. Routine failure, low confidence and token spend never escalate. |
 | `BROWSER_ENABLED` | `false` | Activate `BrowserSubAgent` for web automation tasks. |
 | `MAX_GOAL_STEPS` | `30` | Hard step ceiling for goal-oriented agents. |
 | `MAX_REPLAN_ATTEMPTS` | `8` | Maximum replanning cycles before the goal is marked failed. |
@@ -186,7 +186,9 @@ The P2P listener loop. Runs continuously in the background when the agent is sta
 from jarviscore import Mesh
 ```
 
-The central orchestrator. Manages agent lifecycle, workflow execution, and infrastructure detection.
+The runtime host for agent lifecycle, workflow execution and infrastructure
+detection. Distributed goal work is peer-claimed; Mesh does not assign a master
+agent or retain planning authority.
 
 ### Constructor
 
@@ -200,6 +202,12 @@ Mesh(config: Optional[Dict[str, Any]] = None)
 | `p2p_enabled` | `bool` | from `P2P_ENABLED` env | Enable SWIM/ZMQ peer transport |
 | `checkpoint_interval` | `int` | `1` | Save workflow checkpoints every N steps |
 | `max_parallel` | `int` | `5` | Maximum parallel step execution |
+| `distributed_poll_interval` | `float` | `2.0` | Redis DAG polling interval in seconds |
+| `distributed_claim_lease_seconds` | `int` | `60` | Renewable execution-claim lease duration |
+| `mesh_planning_lease_seconds` | `int` | `300` | Goal compilation or amendment lease duration |
+| `mesh_max_reconciliation_revisions` | `int` | `3` | Maximum bounded semantic reconciliation revision |
+| `mesh_response_capability` | `str` | `None` | Capability that owns the optional `final_response` step |
+| `execution_budget` | `dict` | `ExecutionBudget` defaults | Shared limits for the complete distributed goal |
 
 The Mesh auto-detects available infrastructure at `start()` time. Do not pass `mode=`: that argument is deprecated and has no effect.
 
@@ -244,6 +252,151 @@ Each step dict:
 | `complexity` | `str` | No | Model tier hint: `"nano"`, `"standard"`, or `"heavy"` |
 
 Raises `RuntimeError` if `start()` has not been called or if the workflow engine is unavailable.
+
+#### execute_goal
+
+```python
+async def execute_goal(
+    goal: str,
+    *,
+    workflow_id: Optional[str] = None,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+) -> Dict[str, Any]
+```
+
+Register an immutable source goal, wait for any planning-capable node to publish
+a capability-addressed Redis DAG, and observe independent peer claims until the
+workflow reaches `completed`, `failed`, or `waiting`. Requires Redis.
+
+Set `config["execution_budget"]` on `Mesh` to bound the complete execution:
+
+```python
+mesh = Mesh(config={
+    "execution_budget": {
+        "max_seconds": 900,
+        "max_tokens": 240_000,
+        "max_steps": 30,
+        "max_replans": 8,
+        "max_peer_depth": 2,
+        "peer_timeout_seconds": 300,
+    }
+})
+```
+
+The framework stores this as `ExecutionBudget` in the durable
+`WorkflowEnvelope`. Caller context cannot override it. Token usage is enforced
+through one Redis-backed account per workflow: each model call reserves capacity
+before dispatch and settles exact provider-reported usage and cost afterward.
+Planning, evaluators, dependency/effect reviews, direct steps and nested peer
+mandates all debit that same account.
+
+### Atom repair lifecycle
+
+Coder exposes `inspect_atom_for_repair` and `repair_atom` only after an atom has
+failed during the current run. A repair candidate is bound to the atom's name,
+provider, version and failed invocation. `register_function` rejects candidates
+without successful execution evidence and rejects stale or renamed repairs. A
+successful repair becomes the next immutable FunctionRegistry version while the
+superseded source remains available for audit.
+
+### Distributed execution envelopes
+
+```python
+from jarviscore.orchestration import (
+    CapabilityMandate,
+    ExecutionBudget,
+    WorkflowEnvelope,
+    WorkflowEvidence,
+)
+```
+
+`WorkflowEnvelope` is the canonical source/context/DAG record.
+`CapabilityMandate` is the scoped peer-request lifecycle.
+`WorkflowEvidence` is the complete artifact/interpretation/state snapshot used
+for final synthesis, including the current obligation projection. These types
+serialize compatibly with existing Redis records.
+
+`Mesh.execute_goal()` results distinguish process lifecycle from source-goal truth:
+
+- `status` reports whether the distributed execution completed, failed, waited or
+    was cancelled.
+- `obligation_status` reports `satisfied`, `blocked` or `incomplete`.
+- `response_status` reports `completed`, `failed`, `waiting` or `not_required`
+    for the current revision's user-facing response.
+
+The remaining result fields are:
+
+| Field | Description |
+|---|---|
+| `workflow_id` | Durable caller-supplied or generated identity |
+| `goal` | Exact source goal |
+| `obligations` | Independently verifiable source requirements |
+| `revision` | Current published plan revision |
+| `result_summary` | Current revision's terminal user response, when present |
+| `steps` | Immutable attempts from every revision, each carrying `plan_revision` |
+
+A terminal step with an actionable semantic gap can trigger a bounded DAG
+revision. Reconciliation appends new work only for unresolved obligation IDs,
+preserves satisfied obligations and completed effects, records supersession
+lineage, and emits a fresh final response. If no available capability can advance
+the gap, the current revision settles as `blocked` rather than looping or claiming
+that execution completion satisfied the goal.
+
+`status`, `obligation_status` and `response_status` are independent. A response
+failure can therefore coexist with satisfied business obligations. See
+[Durable Goal Execution](../guides/goal-execution.md#read-terminal-status-correctly).
+
+#### resume_goal
+
+```python
+async def resume_goal(
+    workflow_id: str,
+    step_id: str,
+    *,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: float = 900.0,
+) -> Dict[str, Any]
+```
+
+Resume a waiting step with optional human or external context. The original
+executor affinity is retained and blocked descendants become claimable after
+the resumed step succeeds.
+
+#### cancel_goal
+
+```python
+def cancel_goal(
+    workflow_id: str,
+    *,
+    reason: str = "Goal cancelled",
+) -> bool
+```
+
+Durably cancel shared work. Cancellation fences later claims and terminal writes,
+including writes from an executor whose lease expired before cancellation.
+Requires Redis. Cancelling the coroutine running `execute_goal()` performs the
+same durable cancellation before re-raising `CancelledError`.
+
+#### replan_goal
+
+```python
+async def replan_goal(
+    workflow_id: str,
+    *,
+    reason: str,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: float = 900.0,
+) -> Dict[str, Any]
+```
+
+Compile an append-only delta for currently unresolved obligations under a short
+planning lease. The commit uses revision compare-and-swap, assigns new
+`plan_revision` values, and cannot remove, reuse or mutate earlier step IDs and
+outputs. Only obligations covered by the delta gain supersession lineage; other
+satisfied obligations keep their authoritative attempts. The source goal and
+obligation ledger remain immutable, and peers resume capability-based claiming
+after publication.
 
 #### stop
 

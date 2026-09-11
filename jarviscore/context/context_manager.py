@@ -344,6 +344,9 @@ class ContextManager:
             mission += f"**CRITICAL ERROR TO FIX:** {state.last_error}\n"
         add("mission", mission)
         add("goal_state", self._build_goal_state_block(state.context or {}))
+        mailbox_context = (state.context or {}).get("_mailbox_context")
+        if mailbox_context:
+            add("mailbox", str(mailbox_context))
 
         if state.failure_ledger:
             lines = ["## FAILURE MEMORY (Do Not Repeat)"]
@@ -439,8 +442,16 @@ class ContextManager:
                 output = (step_result.get("output", step_result)
                           if isinstance(step_result, dict) else step_result)
                 input_block += f"**[Prior Step: {step_id}]**\n{output}\n\n"
+        interpretations = state.context.get("previous_step_interpretations", {})
+        if interpretations:
+            for step_id, interpretation in interpretations.items():
+                input_block += (
+                    f"**[Prior Step Interpretation: {step_id}]**\n"
+                    f"{self._scrub_value('interpretation', interpretation)}\n\n"
+                )
 
         skip_keys = {"previous_step_results", "workflow_id", "step_id",
+                     "previous_step_interpretations",
                      "system_prompt", "_jarvis_context", "_auth_credentials",
                      "_agent_default_kernel_role",
                      "_goal", "_goal_id", "_goal_facts",
@@ -448,7 +459,8 @@ class ContextManager:
                      "_plan_revision",
                      # Memory is rendered as what it is, in its own block. Under
                      # INPUT CONTEXT it read as part of the task.
-                     "_recalled", "_athena_memory", "_ltm_summary"}
+                     "_recalled", "_athena_memory", "_ltm_summary",
+                     "_mailbox_context"}
         other = {key: value for key, value in state.context.items() if key not in skip_keys}
         allowed = set(filter_input_context_keys(other.keys(), tier))
         cleaned = self._scrub_dict({k: v for k, v in other.items() if k in allowed})

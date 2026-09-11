@@ -349,6 +349,48 @@ class TestAutoAgentExecution:
         assert kernel.calls[0]["use_default_role_as_fallback"] is True
 
     @pytest.mark.asyncio
+    async def test_peer_capability_request_bypasses_nested_goal_planning(self):
+        """Focused peer help stays agentic without becoming another goal program."""
+        from types import SimpleNamespace
+
+        class ClassifierMustNotRun:
+            async def generate(self, **kwargs):
+                raise AssertionError("peer capability work must not run the classifier")
+
+        class FakeKernel:
+            def __init__(self):
+                self.auth_manager = None
+                self.calls = []
+
+            async def execute(self, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(
+                    status="success",
+                    payload={"email": "verified@example.com"},
+                    summary="verified",
+                    metadata={"tokens": {"input": 0, "output": 0, "total": 0}},
+                )
+
+        agent = GoalDirectAutoAgent()
+        setattr(agent, "llm", ClassifierMustNotRun())
+        kernel = FakeKernel()
+        setattr(agent, "_kernel", kernel)
+
+        result = await agent.execute_task({
+            "task": "Resolve the missing contact identity.",
+            "context": {
+                "peer_requester_agent_id": "revenue-operations",
+                "capability": "contact_verification",
+            },
+        })
+
+        assert result["status"] == "success"
+        assert result["payload"] == {"email": "verified@example.com"}
+        assert result["goal_execution"]["planner_mode"] == "direct_kernel"
+        assert "bounded specialist assignment" in result["goal_execution"]["reason"]
+        assert len(kernel.calls) == 1
+
+    @pytest.mark.asyncio
     async def test_goal_oriented_agent_honors_single_response_execution_contract(self):
         """A single-response contract is ONE completion against the system
         prompt — no classifier, no planner, no kernel routing (issue #63).
@@ -398,6 +440,33 @@ class TestAutoAgentExecution:
         assert llm.calls[0]["messages"][0]["content"].endswith(
             GoalDirectAutoAgent.system_prompt
         )
+
+    @pytest.mark.asyncio
+    async def test_single_artifact_contract_accepts_raw_json_after_kernel_work(self):
+        from jarviscore.kernel.kernel import Kernel
+        from jarviscore.testing import MockLLMClient
+
+        artifact = {"status": "ready", "items": [{"id": "acme"}]}
+        llm = MockLLMClient(responses=[
+            {"content": json.dumps({
+                "role": "communicator",
+                "confidence": 0.95,
+                "reason": "Return the structured deliverable.",
+                "evidence_required": False,
+            })},
+            {"content": json.dumps(artifact)},
+        ])
+        agent = GoalDirectAutoAgent()
+        agent.llm = llm
+        agent._kernel = Kernel(llm_client=llm)
+
+        result = await agent.execute_task({
+            "task": "Return the validated artifact.",
+            "context": {"execution_contract": {"execution_shape": "single_artifact"}},
+        })
+
+        assert result["status"] == "success"
+        assert result["output"] == artifact
 
     @pytest.mark.asyncio
     async def test_kernel_routes_access_requests_before_default_coder_role(self):

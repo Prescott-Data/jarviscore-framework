@@ -141,7 +141,7 @@ class AgentOutput(BaseModel):
         trajectory: Tool execution path taken (for audit)
         metadata: Additional context (evidence, facts, cost, etc.)
     """
-    status: Literal["success", "failure", "yield"]
+    status: Literal["success", "failure", "yield", "epoch_exhausted"]
     payload: Optional[Any] = None
     summary: str = ""
     trajectory: List[Dict[str, Any]] = Field(default_factory=list)

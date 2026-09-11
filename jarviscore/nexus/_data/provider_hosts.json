@@ -167,6 +167,7 @@
     "developers.google.com"
   ],
   "google_drive": [
+    "docs.googleapis.com",
     "www.googleapis.com"
   ],
   "google_maps": [
