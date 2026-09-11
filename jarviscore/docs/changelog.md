@@ -24,7 +24,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## Unreleased
+## 1.11.0 <span class="changelog-date">2026-09-11</span>
 
 ### Added
 
@@ -34,6 +34,11 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - `Mesh.resume_goal()` resumes waiting work with executor affinity, and
   `Mesh.replan_goal()` replaces only unfinished work through a revision-fenced
   DAG amendment while preserving the original goal, completed steps and outputs.
+- Terminal Mesh observation now separates execution completion from obligation
+  satisfaction. Evidence-bearing failures and semantic `hold`/`reject` outcomes
+  enter a bounded, revision-leased reconciliation decision: actionable gaps add
+  new remediation work without replaying completed effects, while unactionable
+  gaps settle durably. Results expose `obligation_status` independently of `status`.
 - AutoAgent kernels expose `list_peers`, `ask_peer`, `broadcast_update`,
   `read_mailbox`, `inspect_workflow`, and `read_workflow_step`. Inbound peer
   requests work without application listener wiring, and notifications enter
