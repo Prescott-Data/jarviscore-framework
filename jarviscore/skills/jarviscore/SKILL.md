@@ -54,12 +54,16 @@ class ProcessorAgent(CustomAgent):
         return {"status": "success", "result": ...}
 ```
 
-## Two ways to run, one rule
+## Three ways to run
 
 - `mesh.run_task(agent=..., task=...)`: one task, one agent. Single asks and hand-rolled pipelines.
 - `mesh.workflow(id, steps)`: declared steps as one traced unit with ordering, dependencies, and retries.
+- `mesh.execute_goal(goal, workflow_id=...)`: Redis-backed natural-language goal compiled into capability-addressed work that peers claim independently.
 
 Rule: if you are pasting one agent's output into another agent's prompt by hand, use `workflow`.
+If the application does not know the steps and peers should own work by
+capability, use `execute_goal`; it requires Redis and at least one node with a
+planning LLM.
 
 ```python
 results = await mesh.workflow("wf-1", [
@@ -68,6 +72,12 @@ results = await mesh.workflow("wf-1", [
 ])
 print(results[0]["output"])   # results carry status, output, metadata
 ```
+
+For `execute_goal`, read `status`, `obligation_status` and `response_status`
+independently. Revisions append attempts; filter `steps` by `plan_revision` for
+current execution. Existing AutoAgent and CustomAgent results remain compatible.
+An optional semantic `interpretation` must use the obligation IDs in the current
+step's `covers` list rather than requirement prose.
 
 ## Configuration
 
@@ -110,6 +120,8 @@ Use the installed catalog rather than a fixed integration count. See the
 - Forgetting `await mesh.start()` before running tasks.
 - Using `AutoAgent` for deterministic logic (slow, expensive) or `CustomAgent` for open-ended tasks (you will rebuild the kernel badly).
 - Reading `result["payload"]`. The output key is `output`.
+- Treating distributed `status="completed"` as proof that every source obligation is satisfied.
+- Expecting `replan_goal()` to erase prior attempts; revisions are append-only.
 - Assuming P2P works without the `[p2p]` extra installed.
 
 ## Deeper documentation

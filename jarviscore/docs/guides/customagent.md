@@ -288,6 +288,55 @@ async def execute_task(self, task: dict) -> dict:
     return {"status": "success", "output": result}
 ```
 
+### Participating in `Mesh.execute_goal()`
+
+Existing CustomAgent handlers remain compatible with durable distributed goals.
+The framework routes a capability-addressed step through `execute_task()` and a
+normal completed result satisfies the obligation IDs covered by that step.
+
+When your domain distinguishes successful execution from sufficient evidence,
+add an optional `interpretation` beside `output`:
+
+```python
+async def execute_task(self, task: dict) -> dict:
+    artifact = await self.inspect(task["task"])
+    plan = task["context"]["workflow_plan"]
+    step = next(item for item in plan["steps"] if item["id"] == task["id"])
+    covered = list(step["covers"])
+    verified = artifact.get("verified") is True
+
+    return {
+        "status": "success",
+        "output": artifact,
+        "interpretation": {
+            "meaning": "The required evidence was verified." if verified
+                       else "The attempt completed without verifying the evidence.",
+            "satisfied_requirements": covered if verified else [],
+            "unmet_requirements": [] if verified else covered,
+            "evidence_refs": artifact.get("evidence_refs", []),
+            "verdict": "satisfied" if verified else "unsatisfied",
+            "decision": "proceed" if verified else "hold",
+        },
+    }
+```
+
+Use the exact IDs from `step["covers"]`; do not put requirement prose in those
+lists. Assess every covered ID once. JarvisCore stores the artifact and
+interpretation separately, reduces current obligation truth generically, and
+may append remediation for unresolved IDs. Your agent retains ownership of what
+the evidence means.
+
+The distributed context also provides `previous_step_results`,
+`previous_step_interpretations`, `capability`, `effect`, `systems` and the shared
+`execution_budget`. See [Durable Goal Execution](goal-execution.md#task-context-received-by-agents)
+for the full contract.
+
+CustomAgent does not gain a planning model. A pure CustomAgent node can claim
+and execute an already-published DAG, but `Mesh.execute_goal()` needs at least
+one started node with an LLM-backed agent capable of acquiring the temporary
+planning lease. Use `mesh.workflow()` when your application already knows the
+steps.
+
 ---
 
 ## Planning: a library, not a mode

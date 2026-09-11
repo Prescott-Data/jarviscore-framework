@@ -123,6 +123,23 @@ Start Redis locally for development:
 docker run -d -p 6379:6379 redis:7-alpine
 ```
 
+### Distributed goal configuration
+
+These values are `Mesh(config={...})` keys, not environment variables:
+
+| Key | Default | Description |
+|---|---|---|
+| `distributed_poll_interval` | `2.0` | Redis DAG polling interval in seconds |
+| `distributed_claim_lease_seconds` | `60` | Renewable execution-claim lease duration |
+| `mesh_planning_lease_seconds` | `300` | Initial planning and amendment lease duration |
+| `mesh_max_reconciliation_revisions` | `3` | Bounded automatic semantic revisions |
+| `mesh_response_capability` | `None` | Capability authorized for the optional final response |
+| `execution_budget` | framework defaults | Shared `max_seconds`, `max_steps`, `max_replans`, `max_tokens`, `max_peer_depth` and `peer_timeout_seconds` |
+
+Caller task context cannot override execution authority or the workflow budget.
+All nodes sharing one distributed DAG should run the same JarvisCore minor
+version. See [Durable Goal Execution](../guides/goal-execution.md).
+
 ---
 
 ## Memory: Athena MemOS

@@ -32,17 +32,20 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   source-grounded, capability-addressed DAG. Planning is a temporary leased
   operation; peers claim ready steps independently without an executor router.
 - `Mesh.resume_goal()` resumes waiting work with executor affinity, and
-  `Mesh.replan_goal()` replaces only unfinished work through a revision-fenced
-  DAG amendment while preserving the original goal, completed steps and outputs.
+  `Mesh.replan_goal()` appends new work only for unresolved obligations through
+  a revision-fenced DAG amendment while preserving the original goal and every
+  prior attempt and output.
 - Terminal Mesh observation now separates execution completion from obligation
   satisfaction. Evidence-bearing failures and semantic `hold`/`reject` outcomes
   enter a bounded, revision-leased reconciliation decision: actionable gaps add
   new remediation work without replaying completed effects, while unactionable
-  gaps settle durably. Results expose `obligation_status` independently of `status`.
-- AutoAgent kernels expose `list_peers`, `ask_peer`, `broadcast_update`,
-  `read_mailbox`, `inspect_workflow`, and `read_workflow_step`. Inbound peer
-  requests work without application listener wiring, and notifications enter
-  the durable mailbox before becoming reasoning context.
+  gaps settle durably. Results expose `obligation_status` and `response_status`
+  independently of execution `status`.
+- AutoAgent kernels expose `list_peers`, `ask_peer`, `ask_capability`,
+  `broadcast_update`, `read_mailbox`, `inspect_workflow`, and
+  `read_workflow_step`. Inbound peer requests work without application listener
+  wiring, and notifications enter the durable mailbox before becoming reasoning
+  context.
 - Generated-code sandboxes receive a restricted `mesh` facade for peer listing
   and delegation. The child process cannot mutate Mesh lifecycle or registry state.
 - Redis workflow claims now use renewable leases, unique attempt tokens and
@@ -54,8 +57,10 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - Step evaluation now includes an agent-owned goal convergence decision
   (`continue`, `complete`, `replan`) so newly observed facts can retire obsolete
   conditional work without domain-specific routing rules.
-- Final-response peers receive every workflow artifact, interpretation and step
-  state through one `WorkflowEvidence` snapshot.
+- Final-response peers receive every workflow artifact, interpretation, step
+  state and current obligation projection through one `WorkflowEvidence`
+  snapshot. Response selection uses the current revision while retaining older
+  responses for audit.
 - Semantic dependency relevance is decided by the recipient peer from the
   upstream artifact and interpretation; Redis enforces execution readiness but
   does not turn a partial result into a global business decision.

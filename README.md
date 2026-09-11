@@ -291,7 +291,7 @@ class MyAgent(CustomAgent):
 
 ### P2P Mesh and Distributed Workflows
 
-Agents discover each other over a SWIM protocol gossip mesh using ZMQ transport. Workflows execute across machines with Redis-backed crash recovery and step claiming.
+Agents discover each other over a SWIM protocol gossip mesh using ZMQ transport. Workflows execute across machines with Redis-backed crash recovery and step claiming. For goals whose steps are not known in advance, `Mesh.execute_goal()` publishes capability-addressed work without creating a master agent router.
 
 ```python
 mesh = Mesh(config={
@@ -299,7 +299,18 @@ mesh = Mesh(config={
     "bind_port": 7950,
     "redis_url": "redis://localhost:6379/0",
 })
+
+await mesh.start()
+result = await mesh.execute_goal(
+  "Inspect the active opportunity and prepare a decision brief.",
+  workflow_id="opportunity-2026-09-11",
+)
+print(result["status"], result["obligation_status"], result["response_status"])
 ```
+
+Attempts remain immutable across revisions. Reconciliation appends work only for
+unresolved obligation IDs, while satisfied obligations retain their evidence.
+See [Durable Goal Execution](https://jarviscore.developers.prescottdata.io/guides/goal-execution/).
 
 ### Observability
 

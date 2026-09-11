@@ -87,8 +87,9 @@ not assign agents or retain authority after publication.
 Each peer independently scans the shared DAG and atomically claims ready work
 matching its capabilities. Claims have renewable leases and fenced completion
 tokens, so an expired executor cannot overwrite a newer attempt. Dependency
-outputs, failures, waiting states, resumptions and graph amendments remain in the
-shared ledger. Steps request capabilities, never named agent instances.
+outputs, failures, waiting states, resumptions and append-only graph amendments
+remain in the shared ledger. Steps request capabilities, never named agent
+instances.
 
 The distributed runtime therefore has two distinct planes:
 
@@ -107,6 +108,18 @@ neutral source context, obligations, DAG steps, revision and `ExecutionBudget`.
 Caller context cannot supply provider authority; each peer reconstructs systems
 and effects from its own capability contract.
 
+Step attempts are immutable execution history. Redis also maintains one current
+projection for each source obligation: pending, unresolved or satisfied, with the
+step IDs that currently supply its evidence and the step IDs they superseded. A
+new revision appends steps only for unresolved obligation IDs. It does not ask a
+planner to reproduce the full DAG, and it does not reset satisfied obligations
+that the delta does not cover.
+
+This produces three independent terminal facts: current-revision execution
+status, source-obligation status and current final-response status. A failed
+response cannot erase successful provider work, and a completed attempt cannot
+by itself hide an unresolved domain requirement.
+
 When an agent needs specialist help it creates a scoped `CapabilityMandate`.
 `PeerClient.request_capability()` owns discovery, lineage-cycle prevention,
 durable publication, claiming, lease renewal, fencing, timeout, cancellation and
@@ -118,7 +131,9 @@ After each goal step, the existing evaluator also returns an agent-owned goal
 decision: `continue`, `complete` or `replan`. This lets evidence invalidate
 obsolete conditional work without provider-specific rules. Final-response peers
 receive one `WorkflowEvidence` snapshot containing every artifact, semantic
-interpretation and step state, not only direct dependency outputs.
+interpretation, step state and current obligation projection, not only direct
+dependency outputs. The selected user response always comes from the current
+revision; earlier responses remain audit history.
 
 Before a provider mutation, the agent performs a focused effect-intent review
 against the source objective, source context and evidence gathered in its OODA

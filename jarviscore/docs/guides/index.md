@@ -38,6 +38,13 @@ Step-by-step implementation guides, from your first agent to production deployme
 
     [Read more →](workflows.md)
 
+-   :material-graph: **Durable Goal Execution**
+
+    Compile a source goal into peer-claimed work with obligation truth,
+    selective reconciliation, resume and cancellation.
+
+    [Read more →](goal-execution.md)
+
 -   :material-rocket-launch: **Production Deployment**
 
     Deploy JarvisCore agents to production with Docker, Kubernetes, and cloud providers.

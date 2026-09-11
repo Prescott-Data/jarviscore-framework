@@ -186,7 +186,9 @@ The P2P listener loop. Runs continuously in the background when the agent is sta
 from jarviscore import Mesh
 ```
 
-The central orchestrator. Manages agent lifecycle, workflow execution, and infrastructure detection.
+The runtime host for agent lifecycle, workflow execution and infrastructure
+detection. Distributed goal work is peer-claimed; Mesh does not assign a master
+agent or retain planning authority.
 
 ### Constructor
 
@@ -203,6 +205,9 @@ Mesh(config: Optional[Dict[str, Any]] = None)
 | `distributed_poll_interval` | `float` | `2.0` | Redis DAG polling interval in seconds |
 | `distributed_claim_lease_seconds` | `int` | `60` | Renewable execution-claim lease duration |
 | `mesh_planning_lease_seconds` | `int` | `300` | Goal compilation or amendment lease duration |
+| `mesh_max_reconciliation_revisions` | `int` | `3` | Maximum bounded semantic reconciliation revision |
+| `mesh_response_capability` | `str` | `None` | Capability that owns the optional `final_response` step |
+| `execution_budget` | `dict` | `ExecutionBudget` defaults | Shared limits for the complete distributed goal |
 
 The Mesh auto-detects available infrastructure at `start()` time. Do not pass `mode=`: that argument is deprecated and has no effect.
 
@@ -256,7 +261,7 @@ async def execute_goal(
     *,
     workflow_id: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
-    timeout: float = 900.0,
+    timeout: Optional[float] = None,
 ) -> Dict[str, Any]
 ```
 
@@ -309,19 +314,38 @@ from jarviscore.orchestration import (
 `WorkflowEnvelope` is the canonical source/context/DAG record.
 `CapabilityMandate` is the scoped peer-request lifecycle.
 `WorkflowEvidence` is the complete artifact/interpretation/state snapshot used
-for final synthesis. These types serialize compatibly with existing Redis records.
+for final synthesis, including the current obligation projection. These types
+serialize compatibly with existing Redis records.
 
 `Mesh.execute_goal()` results distinguish process lifecycle from source-goal truth:
 
 - `status` reports whether the distributed execution completed, failed, waited or
     was cancelled.
 - `obligation_status` reports `satisfied`, `blocked` or `incomplete`.
+- `response_status` reports `completed`, `failed`, `waiting` or `not_required`
+    for the current revision's user-facing response.
+
+The remaining result fields are:
+
+| Field | Description |
+|---|---|
+| `workflow_id` | Durable caller-supplied or generated identity |
+| `goal` | Exact source goal |
+| `obligations` | Independently verifiable source requirements |
+| `revision` | Current published plan revision |
+| `result_summary` | Current revision's terminal user response, when present |
+| `steps` | Immutable attempts from every revision, each carrying `plan_revision` |
 
 A terminal step with an actionable semantic gap can trigger a bounded DAG
-revision. Reconciliation preserves completed steps and effects, adds new work
-against their durable artifacts, and emits a fresh final response. If no available
-capability can advance the gap, the current revision settles as `blocked` rather
-than looping or claiming that execution completion satisfied the goal.
+revision. Reconciliation appends new work only for unresolved obligation IDs,
+preserves satisfied obligations and completed effects, records supersession
+lineage, and emits a fresh final response. If no available capability can advance
+the gap, the current revision settles as `blocked` rather than looping or claiming
+that execution completion satisfied the goal.
+
+`status`, `obligation_status` and `response_status` are independent. A response
+failure can therefore coexist with satisfied business obligations. See
+[Durable Goal Execution](../guides/goal-execution.md#read-terminal-status-correctly).
 
 #### resume_goal
 
@@ -339,6 +363,21 @@ Resume a waiting step with optional human or external context. The original
 executor affinity is retained and blocked descendants become claimable after
 the resumed step succeeds.
 
+#### cancel_goal
+
+```python
+def cancel_goal(
+    workflow_id: str,
+    *,
+    reason: str = "Goal cancelled",
+) -> bool
+```
+
+Durably cancel shared work. Cancellation fences later claims and terminal writes,
+including writes from an executor whose lease expired before cancellation.
+Requires Redis. Cancelling the coroutine running `execute_goal()` performs the
+same durable cancellation before re-raising `CancelledError`.
+
 #### replan_goal
 
 ```python
@@ -351,10 +390,13 @@ async def replan_goal(
 ) -> Dict[str, Any]
 ```
 
-Compile a replacement for unfinished work under a short planning lease. The
-commit uses revision compare-and-swap and cannot remove or mutate completed
-steps or their outputs. The original source goal and obligation ledger remain
-authoritative; peers resume normal capability-based claiming after publication.
+Compile an append-only delta for currently unresolved obligations under a short
+planning lease. The commit uses revision compare-and-swap, assigns new
+`plan_revision` values, and cannot remove, reuse or mutate earlier step IDs and
+outputs. Only obligations covered by the delta gain supersession lineage; other
+satisfied obligations keep their authoritative attempts. The source goal and
+obligation ledger remain immutable, and peers resume capability-based claiming
+after publication.
 
 #### stop
 
