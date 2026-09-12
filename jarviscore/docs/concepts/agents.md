@@ -40,6 +40,9 @@ The framework raises `ValueError` at startup if `role`, `capabilities`, or `syst
 | `capabilities` | Yes | A list of capability tags. Other agents use these for capability-based discovery (`peers.discover(capability="research")`). |
 | `system_prompt` | Yes (AutoAgent) | The base LLM instruction set for every task this agent handles. |
 | `description` | No | One-sentence purpose statement used by peer agents when making routing decisions. |
+| `capability_descriptions` | No | Concrete descriptions used by distributed planning and peer discovery to understand what each capability owns. |
+| `capability_contracts` | No | Authorized effects and provider systems for each capability. |
+| `output_schema` | No | Optional Pydantic model used to validate AutoAgent output. |
 
 ### Agent ID
 
@@ -131,7 +134,11 @@ async def teardown(self):
     await super().teardown()         # always call super last
 ```
 
-Do not do expensive work in `__init__`: the Mesh injects infrastructure *after* construction and *before* `setup()`. Anything that requires `self._redis_store` or `self.peers` belongs in `setup()`.
+Do not do expensive work in `__init__`. The Mesh injects stores, mailbox, and
+HITL after construction and before `setup()`, so store-backed initialization
+belongs in `setup()`. Peer clients and optional authentication are attached
+after `setup()`; use them during task execution or after `mesh.start()` returns,
+not from `setup()`.
 
 ---
 
@@ -164,7 +171,7 @@ The `role` and `capabilities` you set on the class are not just labels: they act
 | Peer discovery (`peers.get_peer(role="analyst")`) | `role` |
 | Capability-based routing (`peers.discover(capability="research")`) | `capabilities` |
 | YAML profile loading (expertise, SOPs, escalation targets) | `role` |
-| Model tier selection (coder → `CODING_MODEL`, others → `TASK_MODEL_*`) | `role` |
+| Model tier selection | Kernel execution role and task complexity |
 | Workflow step routing (`{"agent": "researcher", "task": "..."}`) | `role` |
 | HITL escalation targets | Defined in the agent's YAML profile |
 

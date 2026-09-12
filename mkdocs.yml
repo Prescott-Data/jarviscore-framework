@@ -114,6 +114,7 @@ nav:
         - Memory: concepts/memory.md
         - P2P Communication: concepts/p2p.md
       - Tools and Trust:
+        - Contracts and Boundaries: concepts/contracts.md
         - System Bundles & Atoms: concepts/system-bundles.md
         - Nexus: concepts/nexus.md
   - Guides:
