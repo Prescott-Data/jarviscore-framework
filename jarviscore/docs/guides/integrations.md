@@ -82,7 +82,9 @@ See [Nexus Credentials](nexus.md) for local and gateway deployment.
 ## Inspect exact atom names
 
 The generated directory above deliberately summarizes bundles. The installed
-package is authoritative for individual atom names:
+package is authoritative for individual atom names. See the
+[`jarviscore atom list`](../reference/cli.md#atom-list) command reference for
+options and output:
 
 ```bash
 # Every installed bundle and atom
