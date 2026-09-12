@@ -109,18 +109,19 @@ asyncio.run(main())
 
 ## Auto-Injected Infrastructure
 
-The Mesh injects these stores into every agent before `setup()` runs. All three are available immediately inside `setup()`:
+The Mesh injects these stores and the mailbox into every agent before `setup()`
+runs. They are available immediately inside `setup()`:
 
 | Attribute | Type | Available when |
 |---|---|---|
 | `self._redis_store` | `RedisStore` | `REDIS_URL` is set |
 | `self._blob_storage` | `LocalBlobStorage` or `AzureBlobStorage` | Always: falls back to local filesystem |
-| `self.mailbox` | `MailboxManager` | `REDIS_URL` is set |
+| `self.mailbox` | `MailboxManager` | Always: in-memory by default; Redis-backed when configured |
 
 ```python
 async def setup(self):
     await super().setup()
-    # All three already injected: use them immediately
+    # Stores and mailbox are already injected: use them immediately
     self.memory = UnifiedMemory(
         workflow_id="wf-001", step_id=self.role,
         agent_id=self.role,
@@ -245,7 +246,11 @@ For the complete `PeerClient` API, see the [P2P Communication](../concepts/p2p.m
 
 ## Nexus Auth: requires_auth
 
-Set `requires_auth = True` on agents that call third-party services. The Mesh creates an `AuthenticationManager` backed by Nexus and injects it as `self._auth_manager` after `setup()` completes. The full OAuth flow (browser consent, token refresh) is handled automatically.
+Set `requires_auth = True` on agents that call connected third-party services.
+When connected-app authentication is configured, the Mesh creates an
+`AuthenticationManager` backed by Nexus and injects it as `self._auth_manager`
+after `setup()` completes. The OAuth consent and refresh lifecycle remains
+outside model reasoning.
 
 ```python
 class TechnicalAgent(CustomAgent):
@@ -265,7 +270,9 @@ class TechnicalAgent(CustomAgent):
         return {"status": "success", "output": result}
 ```
 
-`_auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set. Always check `if self._auth_manager:` before using it: this is the graceful degradation path for environments without Nexus configured.
+Do not read `_auth_manager` inside `setup()` because it is attached afterward.
+During task execution, use `getattr(self, "_auth_manager", None)` and handle an
+unconfigured or unavailable gateway explicitly.
 
 ---
 

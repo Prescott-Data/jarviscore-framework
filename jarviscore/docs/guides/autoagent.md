@@ -6,7 +6,13 @@ description: Build autonomous Python agents with JarvisCore AutoAgent, including
 
 # AutoAgent Guide
 
-`AutoAgent` is JarvisCore's fully autonomous reasoning agent. You define three class attributes and the framework handles everything else: LLM selection, code generation, sandboxed execution, autonomous repair, and registry-first routing. For multi-step goals, setting `goal_oriented = True` activates the Plan, Execute, Evaluate loop with automatic replanning.
+`AutoAgent` is JarvisCore's autonomous reasoning profile. A minimal agent needs
+three class attributes: `role`, `capabilities`, and `system_prompt`. Production
+agents can also describe each capability, declare its authorized effects and
+systems, validate output, select an execution role, and request Nexus-backed
+credentials. The framework then handles LLM selection, Kernel routing,
+sandboxed execution, repair, and peer participation. For multi-step goals,
+`goal_oriented = True` enables Plan, Execute, Evaluate with automatic replanning.
 
 ---
 
@@ -25,9 +31,10 @@ class ResearcherAgent(AutoAgent):
     """
 ```
 
-The framework requires `role`, `capabilities`, and `system_prompt`; it raises
-`ValueError` during construction or setup when one is absent. The remaining
-attributes are optional.
+The framework requires `role`, `capabilities`, and `system_prompt`; construction
+raises `ValueError` when one is absent. That is the smallest valid AutoAgent,
+not the complete production contract. Add the optional declarations below when
+the Mesh or Kernel needs them to route, authorize, or validate work.
 
 ### Class Attributes
 
@@ -37,9 +44,48 @@ attributes are optional.
 | `capabilities` | Yes | Tags for capability-based peer discovery |
 | `system_prompt` | Yes | Base LLM system prompt; framework raises ValueError if absent |
 | `description` | No | One-sentence purpose used by peers for routing decisions |
+| `capability_descriptions` | No | Mapping from capability name to a concrete routing description. Distributed planning uses it instead of guessing from a short tag. |
+| `capability_contracts` | No | Mapping from capability name to authorized `effects` and provider `systems`. Mesh planning and peer execution propagate this authority into task context. |
+| `output_schema` | No | Pydantic model class enforced on CoderSubAgent execution output. Validate other role outputs or richer work products in an application subclass. |
 | `default_kernel_role` | No | Preferred fallback role for specialist agents; one of `"researcher"`, `"coder"`, `"communicator"`, `"browser"`. Leave unset for generalists. |
 | `goal_oriented` | No | Defaults to `False`; set `True` for multi-step goal decomposition |
 | `requires_auth` | No | Defaults to `False`; set `True` to receive Nexus-backed `_auth_manager` |
+
+### Production Mesh declaration
+
+The class remains an ordinary `AutoAgent` subclass. The additional attributes
+make its routing and authority explicit:
+
+```python title="agents/repository_reviewer.py"
+from jarviscore import AutoAgent
+
+
+class RepositoryReviewer(AutoAgent):
+    role = "repository_reviewer"
+    description = "Reviews repository changes against correctness evidence."
+    capabilities = ["code_review"]
+    capability_descriptions = {
+        "code_review": "Inspect a change, identify defects, and propose review findings.",
+    }
+    capability_contracts = {
+        "code_review": {
+            "effects": ["read", "propose"],
+            "systems": ["github"],
+        },
+    }
+    default_kernel_role = "coder"
+    requires_auth = True
+    system_prompt = """
+    You are a rigorous code reviewer. Ground every finding in repository
+    evidence and return only review findings supported by the inspected change.
+    Always store the final output in `result`.
+    """
+```
+
+`effects` may contain `read`, `propose`, `write`, `notify`, or `destructive`.
+`systems` names the provider boundaries the capability may use. These contracts
+do not grant credentials by themselves: `requires_auth` controls credential
+injection, and provider policy still governs each operation.
 
 ---
 
@@ -109,16 +155,24 @@ async def research(request: dict):
 
 ## What workflow() Returns
 
-`mesh.workflow()` returns a list of step result dicts, one per step, in execution order. Each dict contains:
+`mesh.workflow()` returns a list of step result dicts in the original declared
+order. Each result carries the agent envelope plus its stable `step_id`:
 
 | Key | Description |
 |---|---|
-| `status` | `"success"`, `"failure"`, or `"yield"` |
-| `payload` | The value stored in `result` by the generated code |
-| `summary` | Human-readable outcome description |
-| `metadata` | Execution detail: tokens, cost, elapsed time, distilled facts |
+| `status` | `"success"`, `"failure"`, `"yield"`, or `"hitl"` for a paused goal-oriented execution |
+| `output` | Programmatic task result |
+| `payload` | Alias of `output` on the standard Kernel path |
+| `result_summary` | Guaranteed plain-prose display summary |
+| `error` | `None` on success; failure or yield explanation otherwise |
+| `tokens` | Input, output, and total token counts |
+| `cost_usd` | Estimated execution cost |
+| `step_id` | Stable workflow step identity |
+| `goal_execution` | Present for goal-oriented planning or a classified direct Kernel turn |
 
-Always check `step["status"] == "success"` before reading `step["payload"]`. A `"failure"` result has a populated `"summary"` explaining what went wrong.
+Always check `step["status"] == "success"` before consuming `step["output"]`.
+A failure has `error` plus a human-readable `result_summary`; a yield or HITL
+result carries continuation details in `yield_metadata`.
 
 When calling `agent.execute_task()` directly, the returned envelope always carries `result_summary`: plain prose suitable for display, never JSON. Failure envelopes put a human-readable error sentence there. Structured data stays in `output` / `payload` / `goal_execution` for programmatic consumers.
 
@@ -285,14 +339,14 @@ The turn fuse is an emergency hard-stop. If a sub-agent reaches 32 turns without
 
 You do not configure lease budgets per-agent: they are role-level defaults. If a specific task consistently exhausts the budget, the right fix is usually to narrow the task scope (break it into smaller steps in the workflow DAG), not to increase the budget.
 
-Token budget consumption appears in `step["metadata"]["tokens"]` on every workflow result:
+Token consumption appears in `step["tokens"]` on every AutoAgent workflow result:
 
 ```python
 results = await mesh.workflow("report", [
     {"id": "analyse", "agent": "analyst", "task": "..."}
 ])
 step = results[0]
-print(step["metadata"]["tokens"])
+print(step["tokens"])
 # {"input": 14200, "output": 3100, "total": 17300}
 ```
 
@@ -316,13 +370,18 @@ When `complexity` is omitted, the role's built-in default applies: `communicator
 
 ## Infrastructure Injection
 
-The Mesh injects infrastructure stores into every agent before `setup()` runs. They are available immediately inside `setup()` and `execute_task()`:
+The Mesh injects stores, mailbox, and HITL before `setup()` runs. Peer clients
+and optional authentication are attached later in `mesh.start()` and are
+available before the Mesh accepts work.
 
 | Attribute | Available when |
 |---|---|
 | `self._redis_store` | `REDIS_URL` is set |
 | `self._blob_storage` | Always: falls back to local filesystem |
-| `self.mailbox` | `REDIS_URL` is set |
+| `self.mailbox` | Always: in-memory by default; Redis-backed when configured |
+| `self.hitl` | When the framework HITL component is available; Redis-enhanced when configured |
+| `self.peers` | After `mesh.start()` attaches local or distributed peer transport |
+| `self._auth_manager` | After `setup()`, when `requires_auth = True` and authentication is configured |
 
 ```python
 from jarviscore.memory import UnifiedMemory
@@ -359,7 +418,11 @@ You do not call `save_checkpoint()` or `load_checkpoint()` in application code. 
 
 ## Nexus Auth: requires_auth
 
-Set `requires_auth = True` on agents that call third-party services. The Mesh creates an `AuthenticationManager` backed by Nexus and injects it as `self._auth_manager` after `setup()` completes. The Kernel wires `NexusCallProxy` into the sandbox so generated code receives resolved credentials without ever seeing raw tokens.
+Set `requires_auth = True` on agents that call connected third-party services.
+When connected-app authentication is configured, the Mesh creates an
+`AuthenticationManager` and injects it as `self._auth_manager` after `setup()`.
+The Kernel exposes `nexus_call` inside the sandbox; generated code never receives
+the manager or raw credentials.
 
 ```python
 class GitHubAgent(AutoAgent):
@@ -367,13 +430,17 @@ class GitHubAgent(AutoAgent):
     capabilities = ["github", "code-review"]
     requires_auth = True
     system_prompt = """
-    You have access to GitHub via the injected auth_manager.
-    Use it to create issues, review PRs, and update files.
+    Use the available Nexus-backed GitHub tools for approved provider actions.
+    Never request, print, or store credentials.
     Always store results in `result`.
     """
 ```
 
-`_auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set. Always check `if self._auth_manager:` before accessing it directly in `setup()`.
+Do not access `_auth_manager` from `setup()` because authentication is attached
+later in `mesh.start()`. If application-owned execution code needs to inspect it,
+use `getattr(self, "_auth_manager", None)` during task execution. Connected-app
+calls require a configured and reachable Nexus Gateway; local-vault provider
+calls use the sandbox's `nexus_call` boundary instead.
 
 ---
 
@@ -411,6 +478,27 @@ Do not confuse the two goal APIs:
 An AutoAgent participates in a distributed goal through its normal
 `execute_task()` method. No subclass change is required. Declare provider
 authority when planning needs to distinguish reads, proposals and effects:
+
+### Human goal to a peer-claimed DAG
+
+```mermaid
+flowchart LR
+    Human["Human objective"] --> Register["Mesh.execute_goal()"]
+    Register --> Lease["Temporary planning lease"]
+    Lease --> Plan["Obligations + capability DAG"]
+    Plan --> Ready["Durable ready steps"]
+    Ready --> ClaimA["Eligible peer claims step A"]
+    Ready --> ClaimB["Eligible peer claims step B"]
+    ClaimA --> Attempts["Immutable attempts + artifacts"]
+    ClaimB --> Attempts
+    Attempts --> Truth["Current obligation projection"]
+    Truth --> Response["Current-revision response"]
+```
+
+The planner chooses capabilities, not privileged agent identities. Any eligible
+peer may claim a ready step under a renewable lease. The planning node can also
+execute work if it owns the capability, but it has no permanent coordinator
+role and no special authority after publishing the DAG.
 
 ```python
 class PipelineAgent(AutoAgent):
@@ -479,7 +567,7 @@ The `execute_task()` interface and `mesh.workflow()` call are identical. The res
 ```python
 step["status"]                   # "success" | "failure" | "hitl"
 step["payload"]                  # final synthesised answer
-step["metadata"]["goal_execution"]  # {"steps": 4, "facts": 12, "elapsed_ms": 18420}
+step["goal_execution"]              # planning or direct-Kernel summary
 ```
 
 Control the loop ceiling with environment variables:

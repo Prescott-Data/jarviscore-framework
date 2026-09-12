@@ -87,6 +87,13 @@ framework; jump directly to a concept when diagnosing an existing system.
 
 <div class="grid cards" markdown>
 
+-   :material-file-sign: **Contracts and Boundaries**
+
+    Separate prompt instructions from execution shape, capability authority,
+    output validation, result envelopes, and durable obligation truth.
+
+    [Understand contracts →](contracts.md)
+
 -   :material-puzzle: **System Bundles and Atoms**
 
     Understand typed integration functions, registry discovery, versioning, and

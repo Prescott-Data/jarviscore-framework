@@ -18,8 +18,7 @@ There is nothing in between. Do not simulate one with the other.
 
 ```python
 import asyncio
-from jarviscore import Mesh
-from jarviscore.profiles import AutoAgent
+from jarviscore import AutoAgent, Mesh
 
 class ResearcherAgent(AutoAgent):
     role = "researcher"                      # required
@@ -36,12 +35,17 @@ async def main():
 asyncio.run(main())
 ```
 
-Optional AutoAgent class attributes: `goal_oriented = True` (routes tasks through a Plan, Execute, Evaluate loop), `default_kernel_role = "..."`, `requires_auth = True` (injects Nexus-backed `_auth_manager`).
+Production AutoAgents should also declare `description`,
+`capability_descriptions`, and `capability_contracts` when peers or distributed
+goals need to route and authorize work. Optional execution attributes include
+`output_schema`, `goal_oriented = True` (classifies complex tasks into Plan,
+Execute, Evaluate), `default_kernel_role = "..."`, and `requires_auth = True`
+(injects Nexus-backed `_auth_manager`).
 
 ## Minimal CustomAgent
 
 ```python
-from jarviscore.profiles import CustomAgent
+from jarviscore import CustomAgent
 
 class ProcessorAgent(CustomAgent):
     role = "processor"
@@ -70,7 +74,7 @@ results = await mesh.workflow("wf-1", [
     {"agent": "researcher", "task": "Gather data on X"},
     {"agent": "analyst", "task": "Write a report from the research"},
 ])
-print(results[0]["output"])   # results carry status, output, metadata
+print(results[0]["output"])   # results also carry result_summary, tokens, cost, and step_id
 ```
 
 For `execute_goal`, read `status`, `obligation_status` and `response_status`
@@ -119,7 +123,8 @@ Use the installed catalog rather than a fixed integration count. See the
 - Inventing constructor arguments. Profiles configure via class attributes; `Mesh()` needs no arguments for a single process.
 - Forgetting `await mesh.start()` before running tasks.
 - Using `AutoAgent` for deterministic logic (slow, expensive) or `CustomAgent` for open-ended tasks (you will rebuild the kernel badly).
-- Reading `result["payload"]`. The output key is `output`.
+- Depending on `payload` across every execution path. Prefer `output`; the
+    standard Kernel path also exposes `payload` as an alias.
 - Treating distributed `status="completed"` as proof that every source obligation is satisfied.
 - Expecting `replan_goal()` to erase prior attempts; revisions are append-only.
 - Assuming P2P works without the `[p2p]` extra installed.

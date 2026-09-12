@@ -38,6 +38,8 @@ class ResearcherAgent(AutoAgent):
 | `role` | `str` | Role slug used for peer discovery and profile loading |
 | `description` | `str` | One-sentence description of the agent's purpose |
 | `capabilities` | `list[str]` | Tags used by `PeerClient.discover()` for capability-based routing |
+| `capability_descriptions` | `dict[str, str]` | Routing description for each capability |
+| `capability_contracts` | `dict[str, dict]` | Authorized effects and provider systems for each capability |
 | `system_prompt` | `str` | Base system prompt injected into every LLM call |
 | `default_kernel_role` | `str` | Fallback when planning does not select a sub-agent role; one of `"researcher"`, `"coder"`, `"communicator"`, or `"browser"` |
 
@@ -102,7 +104,7 @@ default_kernel_role: "researcher"
 | `owns` | `list[str]` | Artifacts this agent is accountable for producing |
 | `sops` | `list[str]` | Standing operating procedures followed autonomously, without being asked |
 | `escalates_to` | `list[str]` | People or roles to contact via HITL when the agent is blocked |
-| `default_kernel_role` | `str` | Kernel role override; one of `researcher`, `coder`, `communicator` |
+| `default_kernel_role` | `str` | Kernel role fallback; one of `researcher`, `coder`, `communicator`, or `browser` |
 
 ### How the Profile Block Is Injected
 

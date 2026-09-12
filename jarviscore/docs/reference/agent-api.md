@@ -13,16 +13,19 @@ This is the complete API reference for the two agent profiles and the Mesh orche
 ## AutoAgent
 
 ```python
-from jarviscore.profiles import AutoAgent
+from jarviscore import AutoAgent
 ```
 
-`AutoAgent` is the framework-managed execution profile. You define three class attributes; the framework handles code generation, sandboxed execution, autonomous repair, and model routing.
+`AutoAgent` is the framework-managed execution profile. Three class attributes
+form the minimum valid declaration. Production agents can additionally describe
+capabilities, declare provider authority, validate output, and select execution
+behavior.
 
 ### Required class attributes
 
 | Attribute | Type | Description |
 |---|---|---|
-| `role` | `str` | Agent role identifier. Used by the Mesh for routing and by the Kernel as the fallback sub-agent role. Example: `"researcher"` |
+| `role` | `str` | Agent role identifier used for identity, profile loading, and explicit role routing. Example: `"researcher"` |
 | `capabilities` | `List[str]` | List of capability strings this agent provides. Used by the Mesh workflow engine for task routing. Example: `["research", "analysis"]` |
 | `system_prompt` | `str` | System prompt prepended to every Kernel call. Omitting this raises `ValueError` at instantiation. |
 
@@ -30,9 +33,27 @@ from jarviscore.profiles import AutoAgent
 
 | Attribute | Type | Default | Description |
 |---|---|---|---|
-| `goal_oriented` | `bool` | `False` | When `True`, every `execute_task()` call is routed through the `Plan → Execute → Evaluate` loop. See [Planning](../concepts/planning.md). |
+| `description` | `str` | `""` when absent | Human-readable role purpose used as fallback routing context. |
+| `capability_descriptions` | `Dict[str, str]` | `{}` | Routing description for each capability. Distributed planning uses these descriptions instead of inferring intent from tags alone. |
+| `capability_contracts` | `Dict[str, dict]` | `{}` when absent | Authorized `effects` and provider `systems` for each capability. Mesh planning and peer execution propagate this authority into task context. |
+| `output_schema` | `type[BaseModel]` | `None` | Optional Pydantic model enforced on CoderSubAgent execution output. Other role outputs require application validation. |
+| `goal_oriented` | `bool` | `False` | When `True`, tasks are classified first: complex work uses `Plan → Execute → Evaluate`; bounded work can run as one direct Kernel turn. See [Planning](../concepts/planning.md). |
 | `default_kernel_role` | `str` | `None` | Fallback sub-agent role when the Planner emits `subagent_hint: null`. Valid values: `"coder"`, `"researcher"`, `"communicator"`, `"browser"`. Leave `None` for generalist agents. |
-| `requires_auth` | `bool` | `False` | When `True`, the Mesh creates an `AuthenticationManager` from the Nexus gateway config and injects it as `self._auth_manager` after `setup()`. Requires `NEXUS_GATEWAY_URL` in the environment. |
+| `requires_auth` | `bool` | `False` | Opts into post-`setup()` `AuthenticationManager` injection when connected-app authentication is configured. Connected-app calls require a reachable Nexus Gateway. |
+
+`capability_contracts` uses this shape:
+
+```python
+capability_contracts = {
+    "code_review": {
+        "effects": ["read", "propose"],
+        "systems": ["github"],
+    },
+}
+```
+
+Effects are `read`, `propose`, `write`, `notify`, or `destructive`. A contract
+describes authority; it does not grant credentials or bypass provider policy.
 
 ### Optional environment overrides
 
@@ -49,7 +70,8 @@ from jarviscore.profiles import AutoAgent
 async def execute_task(task: Dict[str, Any]) -> Dict[str, Any]
 ```
 
-The primary entry point called by the Mesh workflow engine. You never call this directly.
+The primary task entry point. The Mesh workflow engine calls it, and application
+code may call it directly after the agent has been started by a Mesh.
 
 **Input:**
 
@@ -62,31 +84,37 @@ The primary entry point called by the Mesh workflow engine. You never call this 
 
 | Key | Type | Description |
 |---|---|---|
-| `status` | `str` | `"success"`, `"failure"`, or `"yield"` |
+| `status` | `str` | `"success"`, `"failure"`, `"yield"`, or `"hitl"` for a paused goal-oriented execution |
 | `output` | `Any` | Task result payload |
-| `error` | `str \| None` | Error message when status is not `"success"` |
+| `payload` | `Any` | Alias of `output` on the standard Kernel path |
+| `result_summary` | `str` | Guaranteed plain-prose display summary; structured data remains in `output`, `payload`, or `goal_execution` |
+| `error` | `str \| None` | `None` on success; failure or yield explanation otherwise |
 | `tokens` | `dict` | Token usage: `{"input": int, "output": int, "total": int}` |
 | `cost_usd` | `float` | Estimated cost in USD |
+| `repairs` | `int` | Autonomous repair attempts. The Kernel path reports `0`; the legacy path reports attempts performed. |
 | `agent_id` | `str` | The agent's unique identifier |
 | `role` | `str` | The agent's role |
 | `function_id` | `str \| None` | FunctionRegistry atom ID if the task was registered |
 | `dispatches` | `list` | Sub-agent dispatch log from the Kernel |
-| `result_id` | `str` | Result identifier from the ResultHandler |
+| `yield_metadata` | `dict` | Typed continuation or HITL metadata when execution yields; otherwise empty |
+| `result_id` | `str` | Present when a configured ResultHandler stores the result |
 
 **Additional keys when `goal_oriented = True`:**
 
 | Key | Type | Description |
 |---|---|---|
-| `goal_execution` | `dict` | Summary of the planning loop: `steps`, `facts`, `elapsed_ms`, and plan revision count |
+| `goal_execution` | `dict` | Planning summary for complex work, or direct-Kernel classification metadata for bounded work |
 
 **Return value (legacy fallback path):**
 
-The legacy pipeline is used only if the Kernel raises an unhandled exception. It adds:
+The legacy pipeline is used when the Kernel has not been initialized. It adds:
 
 | Key | Type | Description |
 |---|---|---|
 | `code` | `str` | The generated code that was executed |
-| `repairs` | `int` | Number of autonomous repair attempts made |
+
+`repairs` remains part of the common envelope and may be greater than zero on
+this path.
 
 ### setup
 
@@ -109,7 +137,7 @@ Called by the Mesh on shutdown. Override to release resources such as database c
 ## CustomAgent
 
 ```python
-from jarviscore.profiles import CustomAgent
+from jarviscore import CustomAgent
 ```
 
 `CustomAgent` is the user-controlled execution profile. You own the execution logic entirely by implementing `on_peer_request()`. The framework provides P2P message routing, FastAPI lifecycle integration, and Mesh registration.
@@ -231,14 +259,20 @@ Raises `ValueError` if an agent with the same `agent_id` is already registered, 
 async def start() -> None
 ```
 
-Probe infrastructure, call `setup()` on all registered agents, inject infrastructure references, and start the workflow engine. Must be called before `workflow()` or `serve_forever()`.
+Probe infrastructure; inject stores, mailbox, and HITL; call `setup()` on every
+agent; attach peer clients and optional authentication; then start the workflow
+engine. Must be called before task execution.
 
 Raises `RuntimeError` if no agents are registered or if `start()` has already been called.
 
 #### workflow
 
 ```python
-async def workflow(workflow_id: str, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]
+async def workflow(
+    workflow_id: str,
+    steps: List[Dict[str, Any]],
+    timeout_per_step: Optional[float] = None,
+) -> List[Dict[str, Any]]
 ```
 
 Execute a multi-step workflow. Returns a list of step results in execution order.
@@ -247,11 +281,13 @@ Each step dict:
 
 | Key | Type | Required | Description |
 |---|---|---|---|
+| `id` | `str` | No | Stable step ID. Generated when omitted. Prefer explicit IDs for readable dependencies and recovery. |
 | `agent` | `str` | Yes | Agent role or capability that should execute this step |
 | `task` | `str` | Yes | Natural language task description |
-| `depends_on` | `List[int]` | No | Zero-based indices of steps this step depends on |
+| `depends_on` | `List[str \| int]` | No | Explicit step IDs or legacy zero-based indices this step depends on |
 | `context` | `dict` | No | Additional context passed to `execute_task()` |
 | `complexity` | `str` | No | Model tier hint: `"nano"`, `"standard"`, or `"heavy"` |
+| `timeout` | `float` | No | Per-step timeout overriding `timeout_per_step` and `WORKFLOW_STEP_TIMEOUT` |
 
 Raises `RuntimeError` if `start()` has not been called or if the workflow engine is unavailable.
 
