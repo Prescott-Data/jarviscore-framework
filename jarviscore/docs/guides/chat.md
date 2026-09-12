@@ -1,5 +1,7 @@
 ---
 icon: material/chat-processing
+title: "Build a Streaming AI Agent Chat Endpoint"
+description: "Build real-time agent chat interfaces with Server-Sent Events, automatic sub-agent routing, and live JarvisCore execution traces."
 ---
 
 # Chat Endpoint

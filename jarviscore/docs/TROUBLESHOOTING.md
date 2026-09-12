@@ -1,5 +1,7 @@
 ---
 icon: material/wrench
+title: "Troubleshoot JarvisCore Installation and Runtime Issues"
+description: "Diagnose JarvisCore installation errors, LLM connectivity, Redis configuration, Mesh deployment, authentication, and agent runtime failures."
 ---
 
 # Troubleshooting

@@ -120,9 +120,8 @@ pip install "jarviscore-framework[redis,prometheus]"
 jarviscore init --examples
 cp .env.example .env
 # Add one LLM credential to .env: AZURE_API_KEY, CLAUDE_API_KEY,
-# GEMINI_API_KEY, LLM_ENDPOINT, or (for eligible launch users):
-# JARVISCORE_PROMO_TOKEN=jc_trial_...
-# Register for the promotion at https://jarviscore.developers.prescottdata.io/promo/
+# GEMINI_API_KEY, or LLM_ENDPOINT.
+# Existing Prescott entitlement holders may instead set JARVISCORE_PROMO_TOKEN.
 
 # Start shared infrastructure (Redis, Mongo, Prometheus, Grafana)
 docker compose -f docker-compose.infra.yml up -d

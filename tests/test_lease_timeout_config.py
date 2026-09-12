@@ -98,3 +98,8 @@ class TestWorkflowTimeoutConfig:
         monkeypatch.setattr(mgr, "_wait_memory", fake_wait_memory)
         await mgr.wait_for(["s1"], {}, timeout=1.5)
         assert seen["timeout"] == 1.5
+
+
+class TestProviderDefaults:
+    def test_azure_uses_current_dated_ga_api(self):
+        assert Settings(_env_file=None).azure_api_version == "2024-10-21"

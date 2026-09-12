@@ -10,6 +10,15 @@ Package: `jarviscore-framework` on PyPI. Import name: `jarviscore`. Python 3.10+
 - [Architecture](https://jarviscore.developers.prescottdata.io/concepts/architecture/): the mental model
 - [Agents](https://jarviscore.developers.prescottdata.io/concepts/agents/): identity and lifecycle
 
+## Evaluate and compare
+
+- [Open Source Agent Framework](https://jarviscore.developers.prescottdata.io/open-source-agent-framework/): framework evaluation by runtime concern
+- [Open Source Agent Harness](https://jarviscore.developers.prescottdata.io/agent-harness/): planning, tools, context, permissions, recovery, and observability
+- [Framework Comparison](https://jarviscore.developers.prescottdata.io/compare/): JarvisCore, CrewAI, LangGraph, and Hermes Agent by operating model
+- [JarvisCore vs CrewAI](https://jarviscore.developers.prescottdata.io/compare/crewai/)
+- [JarvisCore vs LangGraph](https://jarviscore.developers.prescottdata.io/compare/langgraph/)
+- [JarvisCore vs Hermes Agent](https://jarviscore.developers.prescottdata.io/compare/hermes-agent/)
+
 ## Core guides
 
 - [AutoAgent](https://jarviscore.developers.prescottdata.io/guides/autoagent/): autonomous agents with the full cognitive stack

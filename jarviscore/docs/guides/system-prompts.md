@@ -1,5 +1,7 @@
 ---
 icon: material/text-box-edit-outline
+title: "Write Effective System Prompts for AutoAgent"
+description: "Define an AutoAgent's role, output contract, verification behavior, and error handling through clear, testable JarvisCore system prompts."
 ---
 
 # System Prompts

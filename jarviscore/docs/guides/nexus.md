@@ -1,5 +1,7 @@
 ---
 icon: material/key-variant
+title: "Configure Nexus Credential Management for AI Agents"
+description: "Register OAuth2 providers and API keys, manage connections, operate the Nexus gateway, and troubleshoot secure agent authentication."
 ---
 
 # Nexus: Credential Management

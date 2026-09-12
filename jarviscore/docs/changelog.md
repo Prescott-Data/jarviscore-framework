@@ -1,5 +1,7 @@
 ---
 icon: material/history
+title: "JarvisCore Release History and Version Notes"
+description: "Track JarvisCore framework updates, new features, bug fixes, breaking changes, and migration notes across every semantic version."
 hide:
   - toc
 ---

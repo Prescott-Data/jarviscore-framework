@@ -1,5 +1,7 @@
 ---
 icon: material/transit-connection-variant
+title: Peer-to-Peer AI Agent Communication with SWIM and ZMQ
+description: Configure JarvisCore agents to discover and communicate across processes and machines using SWIM gossip, ZeroMQ, and capability-aware peers.
 ---
 
 # P2P Communication
@@ -8,16 +10,48 @@ JarvisCore agents can communicate directly with one another without going throug
 
 The P2P mesh is designed for two distinct use cases. The first is same-node communication between agents running in the same Python process, where messages are delivered in memory without any network overhead. The second is cross-node communication between agents running on separate machines, where the SWIM coordinator handles discovery and ZMQ handles serialisation and delivery.
 
+```mermaid
+flowchart TB
+    subgraph NodeA["Node A"]
+        A1["Agent A"]
+        A2["Agent B"]
+        LocalA["Local agent registry"]
+        A1 <--> LocalA
+        A2 <--> LocalA
+    end
+
+    subgraph NodeB["Node B"]
+        B1["Agent C"]
+        LocalB["Local agent registry"]
+        B1 <--> LocalB
+    end
+
+    SwimA["SWIM membership<br/>capability announcements"]
+    SwimB["SWIM membership<br/>capability announcements"]
+    LocalA --- SwimA
+    LocalB --- SwimB
+    SwimA <-.-> SwimB
+    A1 <-->|"ZMQ request / response"| B1
+    Redis["Redis shared work and mailbox state"]
+    LocalA --> Redis
+    LocalB --> Redis
+```
+
 ---
 
-## Enabling P2P
+## Enabling Cross-Node P2P
 
-P2P is disabled by default. Enable it by setting `P2P_ENABLED=true` in your environment.
+Every agent receives a `PeerClient`. Co-registered agents communicate in process
+without network setup. When the `p2p` extra is installed, the SWIM/ZMQ transport
+is enabled by default; set `P2P_ENABLED=false` to force local-only operation.
+For a multi-node deployment, make the transport and each process address
+explicit:
 
 ```bash title=".env"
 P2P_ENABLED=true
-JC_SWIM_HOST=0.0.0.0
-JC_SWIM_PORT=7946
+REDIS_URL=redis://redis.internal:6379/0
+JARVISCORE_BIND_HOST=0.0.0.0
+JARVISCORE_BIND_PORT=7946
 ```
 
 When `P2P_ENABLED=true`, `Mesh.start()` initialises the SWIM coordinator automatically. No code changes are required.
@@ -26,13 +60,14 @@ For a multi-node deployment, each node specifies the other nodes as seed peers:
 
 ```bash title=".env (node 2)"
 P2P_ENABLED=true
-JC_SWIM_HOST=0.0.0.0
-JC_SWIM_PORT=7947
-JC_SEED_NODES=10.0.0.1:7946
+REDIS_URL=redis://redis.internal:6379/0
+JARVISCORE_BIND_HOST=0.0.0.0
+JARVISCORE_BIND_PORT=7947
+JARVISCORE_SEED_NODES=10.0.0.1:7946
 ```
 
 !!! warning "Port uniqueness on the same machine"
-    Each JarvisCore node on the same machine must use a different `JC_SWIM_PORT`. The ZMQ data port is set automatically to `JC_SWIM_PORT + 1000`. If you run two nodes locally, assign ports `7946` and `7947` respectively.
+    Each JarvisCore node on the same machine must use a different `JARVISCORE_BIND_PORT`. The ZMQ data port is set automatically to `JARVISCORE_BIND_PORT + 1000`. If you run two nodes locally, assign ports `7946` and `7947` respectively.
 
 !!! note "Redis is required for multi-node P2P"
     Cross-node workflow state (mailboxes, step claiming) is coordinated through Redis. P2P messaging itself uses ZMQ directly, but without Redis, distributed workflow execution will not function correctly.
@@ -279,7 +314,7 @@ if worker:
 
 ## SWIM Gossip Protocol
 
-When `P2P_ENABLED=true`, the `SWIMManager` runs a background gossip loop on the configured `JC_SWIM_PORT`. SWIM provides:
+When `P2P_ENABLED=true`, the `SWIMManager` runs a background gossip loop on the configured `JARVISCORE_BIND_PORT`. SWIM provides:
 
 - **Membership**: each node maintains a view of all other live nodes in the cluster.
 - **Failure detection**: nodes that stop responding are marked as suspect and eventually evicted from the membership list.
@@ -295,11 +330,13 @@ The SWIM protocol does not require a leader or centralised registry. Any node ca
 from jarviscore import CustomAgent
 
 class ScoutAgent(CustomAgent):
-    name = "Scout"
     role = "scout"
     capabilities = ["reconnaissance", "data-gathering"]
 
-    async def run(self, task: str, context: dict) -> dict:
+    async def on_peer_request(self, msg) -> dict:
+        task = msg.data.get("task", "")
+        context = msg.context or {}
+
         # Perform primary data gathering
         raw_data = await self.gather_data(task)
 

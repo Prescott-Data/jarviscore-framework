@@ -1,5 +1,7 @@
 ---
 icon: material/sitemap
+title: "Build Multi-Agent Workflow DAGs in Python"
+description: "Compose JarvisCore workflows as dependency-aware DAGs with parallel steps, capability routing, output chaining, and durable recovery."
 ---
 
 # Workflow DAGs
@@ -27,6 +29,14 @@ A **workflow** is a named, executable DAG composed of **steps**. Each step has:
 - An optional `depends_on` list of step IDs that must succeed first
 
 Steps without dependencies are eligible to run immediately. When all dependencies of a step have succeeded, that step becomes eligible. The framework runs all eligible steps concurrently in each round.
+
+```mermaid
+flowchart LR
+    Research["research<br/>researcher"] --> Analyse["analyse<br/>analyst"]
+    Scan["competitor_scan<br/>researcher"] --> Analyse
+    Analyse --> Draft["draft<br/>writer"]
+    Draft --> Review["review<br/>reviewer"]
+```
 
 ---
 
@@ -140,7 +150,6 @@ from jarviscore.orchestration.workflow_builder import WorkflowBuilder
 
 
 class OrchestratorAgent(CustomAgent):
-    name = "Orchestrator"
     role = "orchestrator"
     description = "Composes and executes research-to-report workflows."
 

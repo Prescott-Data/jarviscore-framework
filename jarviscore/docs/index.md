@@ -1,7 +1,7 @@
 ---
 icon: material/home
 title: Python Multi-Agent AI Framework for Production
-description: Open source Python framework for building autonomous multi-agent AI systems. Peer-to-peer agent orchestration, persistent agent memory, zero-trust credentials, and full observability.
+description: Open source Python framework for autonomous multi-agent systems with peer-to-peer orchestration, durable memory, zero-trust credentials, and observability.
 ---
 
 <div class="jc-hero" markdown>
@@ -120,8 +120,8 @@ from jarviscore import Mesh, AutoAgent
 
 
 class ResearcherAgent(AutoAgent):
-    name = "Researcher"
     role = "researcher"
+    capabilities = ["research", "analysis"]
     system_prompt = "You are a rigorous research analyst."
 
 
@@ -129,11 +129,14 @@ async def main():
     mesh = Mesh()
     mesh.add(ResearcherAgent)
     await mesh.start()
-    result = await mesh.run_task(
-        agent="researcher",
-        task="What are the key architectural trade-offs in multi-agent systems?",
-    )
-    print(result)
+    try:
+        result = await mesh.run_task(
+            agent="researcher",
+            task="What are the key architectural trade-offs in multi-agent systems?",
+        )
+        print(result["output"])
+    finally:
+        await mesh.stop()
 
 
 asyncio.run(main())
@@ -154,6 +157,8 @@ If you are new to JarvisCore, read in this order:
 
 If you are evaluating for a specific use case:
 
+- [Compare Agent Frameworks](compare/index.md): CrewAI, LangGraph, Hermes Agent, and JarvisCore by operating model
+- [Open Source Agent Harness](agent-harness.md): planning, tools, context, permissions, recovery, and observability
 - [AutoAgent Guide](guides/autoagent.md): autonomous reasoning agents
 - [CustomAgent Guide](guides/customagent.md): deterministic worker agents
 - [System Bundles & Integrations](guides/integrations.md): the full atom catalog
