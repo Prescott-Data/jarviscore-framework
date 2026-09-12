@@ -1,5 +1,7 @@
 ---
 icon: material/test-tube
+title: "Test Custom AI Agent Integration Atoms"
+description: "Validate custom JarvisCore integration functions with static analysis, dry runs, and Nexus credential resolution before deployment."
 ---
 
 # Testing Custom Atoms

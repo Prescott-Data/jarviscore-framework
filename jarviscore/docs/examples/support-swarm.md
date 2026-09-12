@@ -1,5 +1,7 @@
 ---
 icon: material/lifebuoy
+title: "Customer Support Agent Swarm Example"
+description: "Build four CustomAgent support specialists for ticket classification, peer routing, escalation, and secure provider access through Nexus."
 ---
 
 # Customer Support Swarm

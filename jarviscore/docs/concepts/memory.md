@@ -1,5 +1,7 @@
 ---
 icon: material/database
+title: "Four-Tier Memory for Autonomous AI Agents"
+description: "Build durable agent memory with working scratchpads, episodic ledgers, compressed long-term memory, and semantic recall through Athena."
 ---
 
 # Memory
@@ -11,6 +13,21 @@ The tiers compose automatically. You interact with all of them through a single 
 ---
 
 ## The Four Memory Tiers
+
+```mermaid
+flowchart LR
+    Turn["Agent turn"] --> Log["UnifiedMemory.log_turn()"]
+    Log --> Scratch["Tier 1<br/>Working scratchpad<br/>current step"]
+    Log --> Episodic["Tier 2<br/>Episodic ledger<br/>ordered workflow history"]
+    Episodic --> Compress["Tier 3<br/>Compressed LTM<br/>Redis and blob backup"]
+    Log --> Athena["Tier 4<br/>Athena MemOS<br/>cross-session semantics"]
+
+    Scratch --> Rehydrate["rehydrate_bundle()"]
+    Episodic --> Rehydrate
+    Compress --> Rehydrate
+    Athena --> Rehydrate
+    Rehydrate --> Context["Next Kernel context"]
+```
 
 ### Tier 1: Working Scratchpad
 

@@ -1,5 +1,7 @@
 ---
 icon: material/transit-connection-variant
+title: "Capability-Based LLM Model Routing"
+description: "Route JarvisCore LLM calls through coding, browser, heavy, standard, and nano capability tiers mapped to models in each environment."
 ---
 
 # Model Routing
@@ -20,14 +22,17 @@ This separation means you can swap providers, upgrade models, or tune cost witho
 | **Standard** | `TASK_MODEL_STANDARD` | Web research, general analysis |
 | **Nano** | `TASK_MODEL_NANO` | Step evaluation, context summarisation, short message drafting |
 
-When a tier-specific variable is not set, the framework falls back through the following chain until it finds a configured value:
+When a tier-specific variable is not set, the framework falls back through the
+following chain until it finds a configured value:
 
-```
-BROWSER_MODEL       -> TASK_MODEL_STANDARD -> TASK_MODEL -> default deployment
-TASK_MODEL_NANO     -> TASK_MODEL_STANDARD -> TASK_MODEL -> default deployment
-TASK_MODEL_STANDARD -> TASK_MODEL          -> default deployment
-TASK_MODEL_HEAVY    -> TASK_MODEL_STANDARD -> TASK_MODEL -> default deployment
-CODING_MODEL        -> default deployment (no tier-specific fallback)
+```mermaid
+flowchart LR
+    Browser["BROWSER_MODEL"] --> Standard["TASK_MODEL_STANDARD"]
+    Nano["TASK_MODEL_NANO"] --> Standard
+    Heavy["TASK_MODEL_HEAVY"] --> Standard
+    Standard --> Task["TASK_MODEL"]
+    Task --> Default["Provider default deployment"]
+    Coding["CODING_MODEL"] --> Default
 ```
 
 ---

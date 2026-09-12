@@ -1,5 +1,7 @@
 ---
 icon: material/layers-triple-outline
+title: "Build Custom JarvisCore Kernel Sub-Agents"
+description: "Create domain-specific Kernel execution units for database queries, PDF parsing, structured validation, and other specialized agent tasks."
 ---
 
 # Custom Sub-agents

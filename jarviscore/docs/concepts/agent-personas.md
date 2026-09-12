@@ -1,5 +1,7 @@
 ---
 icon: material/account-circle
+title: "Agent Personas with Class Attributes and YAML Profiles"
+description: "Define JarvisCore agent personas through class attributes and structured role intelligence injected into system prompts at runtime."
 ---
 
 # Agent Personas
@@ -21,7 +23,6 @@ All agents, whether `AutoAgent` or `CustomAgent`, define their persona through c
 from jarviscore import AutoAgent
 
 class ResearcherAgent(AutoAgent):
-    name = "Researcher"
     role = "researcher"
     description = "Conducts systematic research and synthesises findings into structured reports."
     capabilities = ["research", "synthesis", "web-search"]
@@ -34,14 +35,15 @@ class ResearcherAgent(AutoAgent):
 
 | Attribute | Type | Purpose |
 |---|---|---|
-| `name` | `str` | Human-readable display name |
 | `role` | `str` | Role slug used for peer discovery and profile loading |
 | `description` | `str` | One-sentence description of the agent's purpose |
 | `capabilities` | `list[str]` | Tags used by `PeerClient.discover()` for capability-based routing |
 | `system_prompt` | `str` | Base system prompt injected into every LLM call |
-| `default_kernel_role` | `str` | Bypasses the Kernel's role classifier; one of `"researcher"`, `"coder"`, `"communicator"` |
+| `default_kernel_role` | `str` | Fallback when planning does not select a sub-agent role; one of `"researcher"`, `"coder"`, `"communicator"`, or `"browser"` |
 
-Setting `default_kernel_role` is a performance optimisation. The Kernel normally classifies each task at runtime to determine which reasoning mode to use. If you know the agent's role is always the same, set this attribute to eliminate the classification call.
+Set `default_kernel_role` on a specialist when a planning step has no explicit
+sub-agent hint. Generalist agents should leave it unset so the planner can choose
+the appropriate execution role for each step.
 
 ---
 

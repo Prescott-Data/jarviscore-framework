@@ -1,5 +1,7 @@
 ---
 icon: material/robot-outline
+title: JarvisCore Agent and Mesh API Reference
+description: Reference the AutoAgent, CustomAgent, and Mesh APIs for building autonomous and deterministic multi-agent Python applications.
 ---
 
 # Agent API Reference

@@ -1,5 +1,7 @@
 ---
 icon: material/magnify
+title: "Distributed AI Research Network Example"
+description: "Run four autonomous research agents across machines with SWIM discovery, ZMQ messaging, Redis coordination, and capability-matched work claims."
 ---
 
 # Distributed Research Network

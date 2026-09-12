@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://jarviscore.developers.prescottdata.io/sitemap.xml

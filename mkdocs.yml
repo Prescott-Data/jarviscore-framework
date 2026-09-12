@@ -57,6 +57,7 @@ extra_css:
 extra_javascript:
   - javascripts/header.js
   - javascripts/llm-assist.js
+  - javascripts/mermaid-render.js
 
 plugins:
   - search
@@ -64,7 +65,11 @@ plugins:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid-source
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span
@@ -84,47 +89,59 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 nav:
-  - Welcome:
-      - Overview: index.md
-      - Website: https://developers.prescottdata.io
-      - Community: https://discord.gg/jarviscore
-      - Blog: https://developers.prescottdata.io/blog
   - Getting Started: getting-started.md
+  - Compare:
+    - Overview: compare/index.md
+    - Choose a Runtime:
+      - Open Source Agent Framework: open-source-agent-framework.md
+      - Open Source Agent Harness: agent-harness.md
+    - Alternatives:
+      - JarvisCore vs CrewAI: compare/crewai.md
+      - JarvisCore vs LangGraph: compare/langgraph.md
+      - JarvisCore vs Hermes Agent: compare/hermes-agent.md
+    - Migration from CrewAI or LangGraph: guides/migration.md
   - Concepts:
       - Overview: concepts/index.md
-      - Architecture: concepts/architecture.md
-      - Agents: concepts/agents.md
-      - Planning: concepts/planning.md
-      - Language Models: concepts/language-models.md
-      - Model Routing: concepts/model-routing.md
-      - Memory: concepts/memory.md
-      - Agent Personas: concepts/agent-personas.md
-      - P2P Communication: concepts/p2p.md
-      - System Bundles & Atoms: concepts/system-bundles.md
-      - Nexus: concepts/nexus.md
+      - Runtime Foundations:
+        - Architecture: concepts/architecture.md
+        - Agents: concepts/agents.md
+      - Reasoning and Models:
+        - Planning: concepts/planning.md
+        - Language Models: concepts/language-models.md
+        - Model Routing: concepts/model-routing.md
+        - Agent Personas: concepts/agent-personas.md
+      - State and Coordination:
+        - Memory: concepts/memory.md
+        - P2P Communication: concepts/p2p.md
+      - Tools and Trust:
+        - System Bundles & Atoms: concepts/system-bundles.md
+        - Nexus: concepts/nexus.md
   - Guides:
       - Overview: guides/index.md
-      - AutoAgent: guides/autoagent.md
-      - CustomAgent: guides/customagent.md
-      - Adapters: guides/adapters.md
-      - Custom Sub-agents: guides/custom-subagents.md
-      - FastAPI: guides/fastapi.md
-      - Workflow DAGs: guides/workflows.md
-      - Durable Goal Execution: guides/goal-execution.md
-      - HITL Escalation: guides/hitl.md
-      - Nexus Credentials: guides/nexus.md
-      - Knowledge Base: guides/knowledge-base.md
-      - Chat Endpoint: guides/chat.md
-      - Internet Search: guides/internet-search.md
-      - Browser Automation: guides/browser-automation.md
-      - Observability: guides/observability.md
-      - Integrations: guides/integrations.md
-      - Testing Atoms: guides/testing-atoms.md
-      - System Prompts: guides/system-prompts.md
-      - Testing: guides/testing.md
-      - AI Editor Setup: guides/ai-editors.md
-      - Production Deployment: guides/production.md
-      - Migration: guides/migration.md
+      - Build the Agents:
+        - AutoAgent: guides/autoagent.md
+        - CustomAgent: guides/customagent.md
+        - System Prompts: guides/system-prompts.md
+        - Custom Sub-agents: guides/custom-subagents.md
+        - Adapters: guides/adapters.md
+      - Orchestrate Work:
+        - Workflow DAGs: guides/workflows.md
+        - Durable Goal Execution: guides/goal-execution.md
+        - HITL Escalation: guides/hitl.md
+      - Connect Capabilities:
+        - Integrations: guides/integrations.md
+        - Nexus Credentials: guides/nexus.md
+        - Knowledge Base: guides/knowledge-base.md
+        - Internet Search: guides/internet-search.md
+        - Browser Automation: guides/browser-automation.md
+      - Serve, Test, and Operate:
+        - FastAPI: guides/fastapi.md
+        - Chat Endpoint: guides/chat.md
+        - Observability: guides/observability.md
+        - Testing: guides/testing.md
+        - Testing Atoms: guides/testing-atoms.md
+        - AI Editor Setup: guides/ai-editors.md
+        - Production Deployment: guides/production.md
   - Examples:
       - Overview: examples/index.md
       - Financial Pipeline: examples/financial-pipeline.md

@@ -227,7 +227,7 @@ class UnifiedLLMClient:
                     self.azure_client = AsyncAzureOpenAI(
                         api_key=azure_key,
                         azure_endpoint=azure_endpoint,
-                        api_version=self.config.get('azure_api_version', '2025-01-01-preview'),
+                        api_version=self.config.get('azure_api_version', '2024-10-21'),
                         timeout=self.config.get('llm_timeout', 120)
                     )
                     self.provider_order.append(LLMProvider.AZURE)

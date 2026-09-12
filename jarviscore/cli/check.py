@@ -224,7 +224,7 @@ class HealthChecker:
 
             client = AsyncAzureOpenAI(
                 api_key=os.getenv('AZURE_API_KEY') or os.getenv('AZURE_OPENAI_KEY'),
-                api_version=os.getenv('AZURE_API_VERSION', '2024-02-15-preview'),
+                api_version=os.getenv('AZURE_API_VERSION', '2024-10-21'),
                 azure_endpoint=os.getenv('AZURE_ENDPOINT')
             )
 

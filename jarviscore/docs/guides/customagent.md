@@ -1,5 +1,7 @@
 ---
 icon: material/code-braces
+title: CustomAgent Guide - Deterministic Python AI Agents
+description: Build deterministic, auditable Python agents with JarvisCore CustomAgent while retaining Mesh communication, memory, credentials, and storage.
 ---
 
 # CustomAgent Guide
@@ -53,7 +55,6 @@ Return a dict from `on_peer_request()` and the framework sends it back to the re
 |---|---|---|
 | `role` | Yes | Slug used for peer discovery and workflow routing |
 | `capabilities` | Yes | Tags for capability-based peer discovery |
-| `name` | No | Human-readable display name |
 | `description` | No | One-sentence purpose |
 | `requires_auth` | No | Set `True` to receive Nexus-backed `_auth_manager` injection |
 | `listen_timeout` | No | Seconds to wait for messages in the receive loop (default `1.0`) |
@@ -71,7 +72,7 @@ Called once by the Mesh after instantiation. Override to initialise connections,
 async def setup(self):
     await super().setup()
     self.schema_registry = await SchemaRegistry.load(self.config.schema_path)
-    self._logger.info("%s setup complete", self.name)
+    self._logger.info("%s setup complete", self.role)
 ```
 
 ### teardown

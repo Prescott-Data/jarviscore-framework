@@ -1,5 +1,7 @@
 ---
 icon: material/map-outline
+title: "Goal-Oriented AI Agent Planning and Replanning"
+description: "Enable AutoAgent goal decomposition with a Plan, Execute, Evaluate loop that tracks evidence, evaluates steps, and replans when needed."
 ---
 
 # Planning

@@ -1,5 +1,7 @@
 ---
 icon: material/cash-multiple
+title: "AI Investment Committee Agent Example"
+description: "Build a seven-agent investment committee with specialist analysts, a risk officer, deliberation, voting, durable state, and crash recovery."
 ---
 
 # Investment Committee

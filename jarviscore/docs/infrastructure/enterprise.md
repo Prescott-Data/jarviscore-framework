@@ -1,5 +1,7 @@
 ---
-icon: material/office-building
+icon: material/shield-check-outline
+title: "JarvisCore Enterprise Deployment and Operations"
+description: "Run JarvisCore as a managed production platform with deployment support, governance, disaster recovery, service levels, and professional services."
 ---
 
 # JarvisCore Enterprise

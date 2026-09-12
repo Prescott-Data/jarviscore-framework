@@ -1,5 +1,7 @@
 ---
 icon: material/hexagon-multiple
+title: JarvisCore Multi-Agent Framework Architecture
+description: Understand JarvisCore's AutoAgent and CustomAgent profiles, peer-to-peer Mesh, durable workflow state, memory, credentials, and execution model.
 ---
 
 # Architecture Overview
@@ -7,6 +9,46 @@ icon: material/hexagon-multiple
 JarvisCore is a Python framework for building autonomous, multi-agent systems. It provides a structured execution model, a composable infrastructure layer, and a peer-to-peer communication mesh that allows multiple agents to collaborate without centralised coordination.
 
 This page establishes the mental model you need before working with any other part of the framework. Read it once carefully. Every other concept, guide, and reference document in this documentation site assumes familiarity with the terms defined here.
+
+```mermaid
+flowchart TB
+    App["Your Python application"]
+
+    subgraph Profiles["Agent profiles"]
+        Auto["AutoAgent<br/>Kernel OODA harness"]
+        Custom["CustomAgent<br/>Application-owned handlers"]
+    end
+
+    subgraph Runtime["JarvisCore runtime"]
+        Mesh["Mesh lifecycle and identity"]
+        Workflow["Workflow DAG and durable goals"]
+        Peer["PeerClient and mailbox"]
+        Registry["Typed atom registry and sandbox"]
+    end
+
+    subgraph State["State and trust boundaries"]
+        Redis["Redis<br/>claims, attempts, obligations"]
+        Blob["Blob storage<br/>artifacts and scratchpads"]
+        Athena["Athena<br/>semantic memory"]
+        Nexus["Nexus<br/>credential resolution"]
+    end
+
+    Providers["External providers"]
+
+    App --> Auto
+    App --> Custom
+    Auto --> Mesh
+    Custom --> Mesh
+    Mesh --> Workflow
+    Mesh --> Peer
+    Auto --> Registry
+    Workflow --> Redis
+    Peer --> Redis
+    Registry --> Blob
+    Auto --> Athena
+    Registry --> Nexus
+    Nexus --> Providers
+```
 
 ---
 
@@ -26,7 +68,11 @@ Use `AutoAgent` when:
 
 ### CustomAgent
 
-`CustomAgent` is a structured execution agent. You write the `run()` method yourself, giving you complete control over the execution sequence. The framework provides the infrastructure (memory, peer communication, tool access) but does not impose a reasoning loop.
+`CustomAgent` is a structured execution agent. You implement
+`on_peer_request()` for message-driven work and/or `execute_task()` for workflow
+steps, giving you complete control over execution. The framework provides the
+infrastructure (memory, peer communication, tool access) but does not impose a
+reasoning loop.
 
 Use `CustomAgent` when:
 
@@ -60,19 +106,43 @@ The `Mesh` is the top-level runtime object that hosts one or more agents and con
 from jarviscore import Mesh
 
 async def main():
-    mesh = Mesh(agents=[MyResearcher, MyAnalyst])
+    mesh = Mesh()
+    mesh.add(MyResearcher)
+    mesh.add(MyAnalyst)
     await mesh.start()
 ```
 
 `Mesh.start()` performs the following sequence in order:
 
-1. Reads environment variables and initialises the settings object.
-2. Connects to Redis if `REDIS_URL` or `REDIS_HOST` is configured.
-3. Connects to blob storage based on `STORAGE_BACKEND`.
-4. Initialises the `AthenaClient` if `ATHENA_URL` is set.
-5. Starts the SWIM gossip coordinator if `P2P_ENABLED=true`.
-6. Instantiates every agent class and calls its `setup()` method.
-7. Registers agent mailboxes and begins the event loop.
+1. Reads settings and detects Redis, blob storage, Nexus, and Athena.
+2. Injects stores, local mailboxes, and HITL queues into agents registered by
+   `mesh.add()`.
+3. Calls each agent's `setup()` method.
+4. Starts SWIM/ZMQ when the P2P transport is enabled and available.
+5. Injects `PeerClient` instances for local or network peer communication.
+6. Initialises authentication, the workflow engine, and Redis-backed workers.
+7. Starts optional metrics and marks the Mesh ready.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Application
+    participant Mesh
+    participant Infra as Infrastructure
+    participant Agent
+    participant Workers as Runtime workers
+
+    App->>Mesh: add(AgentClass)
+    Mesh->>Agent: construct and validate identity
+    App->>Mesh: start()
+    Mesh->>Infra: detect Redis, blob, Nexus, Athena
+    Mesh->>Agent: inject stores, mailbox, HITL
+    Mesh->>Agent: setup()
+    Mesh->>Infra: start optional SWIM/ZMQ
+    Mesh->>Agent: inject PeerClient and auth manager
+    Mesh->>Workers: start workflow engine and Redis workers
+    Mesh-->>App: ready
+```
 
 Every piece of infrastructure is opt-in. If none of the infrastructure environment variables are set, the Mesh runs in pure in-process mode using only in-memory state.
 
@@ -90,6 +160,23 @@ tokens, so an expired executor cannot overwrite a newer attempt. Dependency
 outputs, failures, waiting states, resumptions and append-only graph amendments
 remain in the shared ledger. Steps request capabilities, never named agent
 instances.
+
+```mermaid
+flowchart LR
+    Goal["Immutable source goal"] --> Lease["Temporary planning lease"]
+    Lease --> Plan["Validated capability DAG"]
+    Plan --> Publish["Atomic Redis publication"]
+    Publish --> ScanA["Peer A scans ready work"]
+    Publish --> ScanB["Peer B scans ready work"]
+    ScanA --> Claim{"Atomic claim"}
+    ScanB --> Claim
+    Claim --> Attempt["Leased immutable attempt"]
+    Attempt --> Evidence["Output and interpretation"]
+    Evidence --> Projection["Current obligation projection"]
+    Projection -->|Satisfied| Response["Current-revision response"]
+    Projection -->|Actionable gap| Revise["Append selective revision"]
+    Revise --> Publish
+```
 
 The distributed runtime therefore has two distinct planes:
 
@@ -178,6 +265,17 @@ execution failure replan or terminate honestly; they never become human work.
 
 The Observe-Orient-Decide-Act loop is the execution model for `AutoAgent`. Understanding it makes the framework's behaviour predictable.
 
+```mermaid
+flowchart LR
+    Observe["Observe<br/>rehydrate context"] --> Orient["Orient<br/>frame task and evidence"]
+    Orient --> Decide["Decide<br/>tool, peer, HITL, or complete"]
+    Decide --> Act["Act<br/>execute and record outcome"]
+    Act --> Done{"Complete or bounded?"}
+    Done -->|Continue| Observe
+    Done -->|Complete| Result["Structured result"]
+    Done -->|Budget or fatal failure| Partial["Honest partial or failure"]
+```
+
 | Phase | What happens |
 |---|---|
 | Observe | The Kernel calls `UnifiedMemory.rehydrate_bundle()` to load all available context: recent episodic turns, the LTM summary, the scratchpad, and any Athena context. |
@@ -199,7 +297,7 @@ JarvisCore's infrastructure is composed of independent, opt-in layers. Each laye
 | Blob Storage | Large output persistence (reports, datasets, generated files) | Always (defaults to local filesystem) |
 | Athena MemOS | Cross-session semantic memory (STM, MTM, LTM graph) | `ATHENA_URL` is set |
 | Nexus Gateway | OAuth and API-key credential management for third-party services | `NEXUS_GATEWAY_URL` is set |
-| P2P / SWIM Mesh | Multi-node agent discovery and message routing | `P2P_ENABLED=true` |
+| P2P / SWIM Mesh | Multi-node agent discovery and message routing | `p2p` extra installed and `P2P_ENABLED=true` (default) |
 
 None of these layers are required for a single-node, single-session workflow. You add them as your operational requirements grow.
 
@@ -209,7 +307,9 @@ None of these layers are required for a single-node, single-session workflow. Yo
 
 Every agent in JarvisCore has an identity that shapes how it reasons and what it is authorised to do. Identity is defined by two complementary mechanisms.
 
-**Class-level attributes** define the agent's static identity: its name, role, capabilities, and system prompt. These are set on the class body and are available before the agent runs.
+**Class-level attributes** define the agent's static identity: its role,
+capabilities, optional description, and system prompt. These are set on the
+class body and are available before the agent runs.
 
 **Agent profiles** (YAML files) inject structured role intelligence into the system prompt at runtime. A profile adds expertise areas, standing operating procedures, artifact ownership, and escalation rules. Profiles are loaded from the directory pointed to by `JARVISCORE_PROFILES_DIR`.
 
@@ -227,8 +327,8 @@ The built-in sub-agents are:
 |---|---|
 | `CoderSubAgent` | Write, review, and execute code |
 | `ResearcherSubAgent` | Search the internet and synthesise findings |
+| `CommunicatorSubAgent` | Format and deliver messages and files |
 | `BrowserSubAgent` | Navigate web pages and interact with browser UIs |
-| `DataAnalystSubAgent` | Analyse structured data and produce visualisations |
 
 You can implement custom sub-agents by subclassing `BaseSubAgent`. Custom sub-agents are registered with the Kernel via the `tools` list on the agent class.
 

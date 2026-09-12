@@ -1,5 +1,7 @@
 ---
 icon: material/graph
+title: Durable Multi-Agent Goal Execution Without a Central Router
+description: Compile natural-language goals into durable capability-addressed DAGs that AI agents claim independently, reconcile, resume, and audit.
 ---
 
 # Durable Goal Execution
@@ -16,6 +18,19 @@ This API is different from the other two ways to run work:
 | `agent.execute_goal()` | One `AutoAgent` should run its own Plan, Execute, Evaluate loop | That AutoAgent |
 | `mesh.workflow()` | Your application already knows the DAG | Your Python code |
 | `mesh.execute_goal()` | The goal should be compiled into distributed, capability-addressed work | A temporary planning lease |
+
+```mermaid
+flowchart TB
+    Source["Source goal and obligations"] --> Plan["Temporary planning lease"]
+    Plan --> DAG["Capability-addressed DAG"]
+    DAG --> Claims["Independent peer claims"]
+    Claims --> Attempts["Immutable attempts and evidence"]
+    Attempts --> Truth{"Current obligations satisfied?"}
+    Truth -->|Yes| Final["Current-revision final response"]
+    Truth -->|Actionable gap| Delta["Append selective revision"]
+    Delta --> Claims
+    Truth -->|No valid remediation| Blocked["Durable blocked settlement"]
+```
 
 ## Define capability authority
 
@@ -149,9 +164,13 @@ truth and should not claim to satisfy source obligations.
 Attempts are immutable execution history. The obligation projection records
 which attempts currently represent each source requirement:
 
-```text
-revision 1: inspect_deal       -> obligation stage = unresolved
-revision 2: inspect_deal_by_id -> obligation stage = satisfied
+```mermaid
+flowchart LR
+    R1["Revision 1<br/>inspect_deal<br/>unresolved"]
+    R2["Revision 2<br/>inspect_deal_by_id<br/>satisfied"]
+    R1 -->|"superseded for this obligation"| R2
+    R1 -.-> Audit["Retained audit history"]
+    R2 --> Current["Current obligation evidence"]
 ```
 
 The revision 1 output remains available for audit. Revision 2 supersedes it only

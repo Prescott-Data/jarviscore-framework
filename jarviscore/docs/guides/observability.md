@@ -1,5 +1,7 @@
 ---
 icon: material/chart-line
+title: "AI Agent Observability with Tracing and Metrics"
+description: "Capture JarvisCore execution traces in Redis, JSONL, and PubSub, emit Prometheus metrics, and inspect durable workflow runs."
 ---
 
 # Observability & Telemetry

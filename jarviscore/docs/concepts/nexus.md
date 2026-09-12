@@ -1,5 +1,7 @@
 ---
 icon: material/shield-key
+title: "Nexus Authentication for AI Agent Integrations"
+description: "Use one secure Nexus call boundary for OAuth2, API keys, and basic authentication while keeping credentials out of agent reasoning."
 ---
 
 # Nexus: Credential Federation
@@ -44,22 +46,31 @@ The agent and the LLM-generated code never know whether a provider uses OAuth2, 
 
 ## How It Works
 
-Nexus operates as a credential layer that agents talk through, not a credential store that agents read from. The boundary is enforced by `NexusCallProxy`, which is the only component that ever touches a raw credential.
+Nexus operates as a credential layer that agents talk through, not a credential
+store that agents read from. The boundary is enforced by `NexusCallProxy`, which
+is the only component that ever touches a raw credential.
 
-```
-Agent task → Kernel → CoderSubAgent
-                          ↓
-                   nexus_call("POST", url, json={...})
-                          ↓
-                   NexusCallProxy.call(connection_id, method, url)
-                          ↓
-                   auth_manager.resolve_strategy(connection_id)
-                          ↓
-                   Nexus Gateway / Local store → credential
-                          ↓
-                   HTTP request with auth header injected
-                          ↓
-                   {ok, status_code, json} returned to agent
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Agent
+    participant Sandbox as Generated code sandbox
+    participant Proxy as NexusCallProxy
+    participant Auth as Auth manager
+    participant Store as Gateway or local store
+    participant Provider
+
+    Agent->>Sandbox: execute provider task
+    Sandbox->>Proxy: nexus_call(method, url, body)
+    Note over Sandbox,Proxy: Opaque connection_id only
+    Proxy->>Auth: resolve_strategy(connection_id)
+    Auth->>Store: resolve or refresh credential
+    Store-->>Auth: scoped credential
+    Auth-->>Proxy: authenticated request strategy
+    Proxy->>Provider: HTTP request with auth injected
+    Provider-->>Proxy: provider response
+    Proxy-->>Sandbox: status and response body
+    Sandbox-->>Agent: result without raw credential
 ```
 
 The agent code that triggers this flow never sees the token. The LLM reasoning process never sees the token. The credential exists only in the encrypted store and in memory for the duration of the HTTP call.

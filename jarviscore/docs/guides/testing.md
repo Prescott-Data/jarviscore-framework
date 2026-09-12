@@ -1,5 +1,7 @@
 ---
 icon: material/test-tube
+title: "Test AI Agents with Fast Deterministic Mocks"
+description: "Write fast JarvisCore unit tests with MockMesh, MockPeerClient, and MockLLM without Redis, live providers, or external infrastructure."
 ---
 
 # Testing Agents

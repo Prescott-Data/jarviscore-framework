@@ -1,5 +1,7 @@
 ---
 icon: material/robot
+title: AutoAgent Guide - Autonomous AI Agents in Python
+description: Build autonomous Python agents with JarvisCore AutoAgent, including planning, tool use, peer collaboration, durable goals, and automatic repair.
 ---
 
 # AutoAgent Guide
@@ -23,7 +25,9 @@ class ResearcherAgent(AutoAgent):
     """
 ```
 
-The framework raises `ValueError` at startup if `system_prompt` is absent. Every other attribute is optional.
+The framework requires `role`, `capabilities`, and `system_prompt`; it raises
+`ValueError` during construction or setup when one is absent. The remaining
+attributes are optional.
 
 ### Class Attributes
 
@@ -32,7 +36,6 @@ The framework raises `ValueError` at startup if `system_prompt` is absent. Every
 | `role` | Yes | Slug used for peer discovery, profile loading, and workflow routing |
 | `capabilities` | Yes | Tags for capability-based peer discovery |
 | `system_prompt` | Yes | Base LLM system prompt; framework raises ValueError if absent |
-| `name` | No | Human-readable display name |
 | `description` | No | One-sentence purpose used by peers for routing decisions |
 | `default_kernel_role` | No | Preferred fallback role for specialist agents; one of `"researcher"`, `"coder"`, `"communicator"`, `"browser"`. Leave unset for generalists. |
 | `goal_oriented` | No | Defaults to `False`; set `True` for multi-step goal decomposition |

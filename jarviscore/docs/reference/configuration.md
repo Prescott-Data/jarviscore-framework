@@ -1,5 +1,7 @@
 ---
 icon: material/tune
+title: "JarvisCore Environment Configuration Reference"
+description: "Configure LLM providers, Redis, storage, Nexus, observability, peer-to-peer networking, browser automation, and sandbox execution."
 ---
 
 # Configuration Reference
@@ -12,13 +14,14 @@ This is the complete reference for all JarvisCore environment variables. Copy `.
 
 Configure exactly one LLM provider. JarvisCore auto-detects the active provider from the environment variables present. The promotional provider is selected first when its token is present. The existing provider order after it is Azure → Claude → vLLM → Gemini → Vertex AI.
 
-### JarvisCore launch promotion
+### Existing Prescott promotional entitlement
 
-Eligible developers can register at `https://jarviscore.developers.prescottdata.io/promo/`
-and set `JARVISCORE_PROMO_TOKEN`. This is a limited, revocable Prescott
-entitlement token—not an upstream model-provider API key. Promotional access is
-selected first when configured. Expiry, exhaustion, and service errors fail
-explicitly and never silently fall through to another configured paid provider.
+Organizations that already received a Prescott promotional entitlement can set
+`JARVISCORE_PROMO_TOKEN`. This is a limited, revocable entitlement token, not an
+upstream model-provider API key. There is currently no public self-service
+enrollment page. Promotional access is selected first when configured. Expiry,
+exhaustion, and service errors fail explicitly and never silently fall through
+to another configured paid provider.
 
 Every promotional call preserves the complete request and HTTP response under a
 stable call ID in `./traces/promo_calls`. Set
@@ -50,7 +53,7 @@ stable call ID in `./traces/promo_calls`. Set
     | `AZURE_API_KEY` | Yes | (none) | Azure OpenAI API key |
     | `AZURE_ENDPOINT` | Yes | (none) | Resource endpoint, e.g. `https://your-resource.openai.azure.com/` |
     | `AZURE_DEPLOYMENT` | Yes | (none) | Deployment name, e.g. `gpt-4o` |
-    | `AZURE_API_VERSION` | No | `2024-02-15-preview` | API version string |
+    | `AZURE_API_VERSION` | No | `2024-10-21` | Azure OpenAI dated GA data-plane API version; override when your deployment requires another supported version |
 
 === "Local / vLLM"
 
@@ -298,15 +301,15 @@ Enables multi-node agent discovery and message routing using the SWIM gossip pro
 
 | Variable | Default | Description |
 |---|---|---|
-| `P2P_ENABLED` | `false` | Activates the SWIM coordinator and ZMQ transport |
-| `JC_SWIM_HOST` | `0.0.0.0` | Bind address; `0.0.0.0` listens on all interfaces |
-| `JC_SWIM_PORT` | `7946` | SWIM gossip port; must be unique per node on the same machine |
-| `JC_SEED_NODES` | (none) | Comma-separated list of seed node addresses, e.g. `10.0.0.1:7946,10.0.0.2:7946` |
+| `P2P_ENABLED` | `true` | Enables SWIM/ZMQ when the optional `p2p` dependencies are installed; set `false` to force local-only peers |
+| `JARVISCORE_BIND_HOST` | `127.0.0.1` | Per-process bind address; use `0.0.0.0` for a node reachable from other machines |
+| `JARVISCORE_BIND_PORT` | `7946` | Per-process SWIM gossip port; ZMQ uses this port plus `1000` |
+| `JARVISCORE_SEED_NODES` | (none) | Comma-separated seed addresses, for example `10.0.0.1:7946,10.0.0.2:7946` |
 
 !!! warning "Port uniqueness"
-    `JC_SWIM_PORT` must be different for each node running on the same machine. The ZMQ data port is set automatically to `JC_SWIM_PORT + 1000`.
+    `JARVISCORE_BIND_PORT` must be different for each node running on the same machine. The ZMQ data port is set automatically to `JARVISCORE_BIND_PORT + 1000`.
 
-The seed node does not set `JC_SEED_NODES`. All other nodes point at the seed node (or any other live node) to join the cluster.
+The seed node does not set `JARVISCORE_SEED_NODES`. All other nodes point at the seed node (or any other live node) to join the cluster. Keep these bind settings per process rather than in a shared `.env` file.
 
 ---
 

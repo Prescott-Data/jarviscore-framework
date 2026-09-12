@@ -1,10 +1,17 @@
 ---
 icon: material/swap-horizontal
+title: Migrate from CrewAI or LangGraph to JarvisCore
+description: Map CrewAI and LangGraph concepts to JarvisCore and migrate existing multi-agent Python applications with practical before-and-after examples.
 ---
 
 # Migration Guide
 
 This guide covers migrating an existing multi-agent system to JarvisCore from **CrewAI** or **LangGraph**. Each section maps the source framework's concepts to their JarvisCore equivalents and provides a before/after code translation.
+
+Still deciding whether the runtime model fits? Read
+[JarvisCore vs CrewAI](../compare/crewai.md) or
+[JarvisCore vs LangGraph](../compare/langgraph.md) first. This guide starts at
+the next step: translating an application after that decision.
 
 > [!IMPORTANT]
 > This guide reflects **CrewAI ≥ 1.14** and **LangGraph ≥ 1.1**. If you are migrating from an earlier 0.x release, some of their internal API names may differ significantly. Verify against your installed version's documentation before migrating.

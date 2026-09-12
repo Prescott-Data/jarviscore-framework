@@ -1,248 +1,260 @@
 ---
 icon: material/puzzle
+title: "System Bundles and Typed Integration Atoms"
+description: "Understand JarvisCore typed provider atoms, effect policies, registry discovery, execution evidence, repair lineage, bundles, and Nexus authentication."
 ---
 
-# System Bundles & Atoms
+# System Bundles and Atoms
 
-JarvisCore's integration model is built around two related ideas: **atoms** and **system bundles**.
+JarvisCore integrations are built from **atoms**: small, typed Python functions
+that perform one provider action. The runtime loads shipped atoms into a
+versioned `FunctionRegistry`, exposes qualifying atoms as tools, records their
+execution evidence, and can register a proven replacement when an atom's source
+is genuinely defective.
 
-An **atom** is a single, versioned, self-contained Python function that performs one action against one external system: send a Slack message, create a GitHub issue, read a Google Sheet row. It has a fixed signature, it owns its HTTP transport, and it never holds state.
+A **system bundle** is generated registry metadata and code-generation context
+for the atoms associated with one provider. It is not a long-running tool server
+and it does not hold credentials.
 
-A **system bundle** is a generated Python class that groups all atoms for a given system together (`SlackCapabilities`, `GitHubCapabilities`, `StripeCapabilities`) making them available to agent code and the code sandbox as a typed, injectable unit.
+```mermaid
+flowchart LR
+    Task["Agent task"] --> Search["Registry-first lookup"]
+    Search -->|"verified or golden match"| Tool["Typed atom tool"]
+    Search -->|"no suitable match"| Generate["Generate candidate code"]
+    Generate --> Validate["Validate and execute in sandbox"]
+    Validate -->|"successful evidence"| Register["Register immutable version"]
+    Register --> Tool
+    Tool --> Proxy["Nexus call boundary"]
+    Proxy --> Provider["External provider API"]
+    Provider --> Evidence["Result and execution evidence"]
+    Evidence --> Registry["Update reliability stage"]
+```
 
-> [!NOTE]
-> **Coming from MCP?** System bundles are JarvisCore's native alternative to MCP tool servers. They are simpler (plain Python functions, no server process), tighter to the agent runtime, and carry an execution history that drives automatic promotion to production-ready status. [See the MCP comparison below.](#this-is-not-mcp)
+## The atom contract
 
----
+An atom is one provider call with a signature that becomes its tool schema. A
+current atom has:
 
-## The Atom
-
-Every atom is a standalone Python function that follows a strict contract:
+- a `{system}_{verb}_{object}` function name;
+- an `async def` entry point;
+- typed parameters and a `dict` result;
+- a docstring describing the action and linking to provider documentation;
+- provider access through `nexus_call()` rather than a token parameter;
+- a module-level `ATOM_POLICY` describing effects and idempotency.
 
 ```python title="jarviscore/integrations/atoms/slack/slack_send_message.py"
-async def slack_send_message(channel: str, text: str, thread_ts: str = None) -> dict:
-    """Post a Slack message. https://api.slack.com/methods/chat.postMessage"""
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "never",
+    "idempotency_fields": ["channel", "text"],
+    "consequence": "Posts one message to the selected Slack channel.",
+}
+
+
+async def slack_send_message(
+    channel: str,
+    text: str,
+    thread_ts: str | None = None,
+) -> dict:
+    """Send a message through the Slack API."""
     payload = {"channel": channel, "text": text}
     if thread_ts:
         payload["thread_ts"] = thread_ts
+
     response = await nexus_call(
-        "POST", "https://slack.com/api/chat.postMessage", json=payload,
+        "POST",
+        "https://slack.com/api/chat.postMessage",
+        headers={"Content-Type": "application/json"},
+        json=payload,
     )
     if not response["ok"]:
         return {"success": False, "error": response["body"]}
     return {"success": True, "data": response["json"]}
 ```
 
-**The atom contract:**
+The exact response shape can preserve provider-native information. The durable
+contract is that the function returns structured data and reports provider
+failure honestly; an HTTP status alone is not a business decision.
 
-| Property | Rule |
-|---|---|
-| Authentication | `nexus_call` only; no credential parameter or auth header |
-| Return type | Always `dict`: structured, never raw HTTP response |
-| Transport | Async provider HTTP intent sent through the parent Nexus boundary |
-| State | Stateless: no class, no instance, no side effects beyond the API call |
-| Error handling | Returns a structured provider failure |
+## Effect policy
 
-Atoms never import an HTTP client for provider calls. This keeps credentials and
-request signing outside generated code while preserving independent execution in
-the process-separated Coder runtime.
+`ATOM_POLICY` lets the runtime reason about side effects before execution.
 
----
+| Field | Allowed values | Meaning |
+|---|---|---|
+| `effect` | `read`, `write`, `notify`, `destructive` | The external effect class |
+| `approval` | `never`, `required` | Whether the action needs explicit human approval |
+| `idempotency_fields` | Function parameter names | Inputs that identify one intended mutation |
+| `consequence` | Short description | The real-world change produced by the atom |
 
-## The System Bundle
+`write`, `notify`, and `destructive` atoms require idempotency fields and a
+consequence. Destructive atoms require approval. An atom that performs HTTP
+`DELETE` must declare a destructive policy.
 
-A system bundle is a generated `{System}Capabilities` class assembled from all atoms registered for a given system. The `FunctionRegistry.create_system_bundle()` method produces it:
+The contract is checked from Python syntax by
+`jarviscore.execution.atom_contract.read_contract()`. Invalid source is not
+offered to agents as a callable capability.
 
-```python
-# Generated by FunctionRegistry.create_system_bundle("slack")
-class SlackCapabilities:
-    """Capabilities for the Slack system.
+## Credentials stay outside the atom
 
-    Available functions:
-    - slack_send_message(channel, text, thread_ts)
-    - slack_list_channels()
-    - slack_get_channel_history(channel_id, limit)
-    """
+Atoms do not accept raw credential parameters and do not retrieve provider
+tokens. `nexus_call()` sends the provider intent through `NexusCallProxy`, where
+the runtime validates the host, resolves the connection, injects authentication,
+and performs the HTTP call.
 
-    @staticmethod
-    def slack_send_message(self, **kwargs):
-        # Registry metadata; Coder offers the validated atom as a tool.
-        raise NotImplementedError("Inject via prepare_code_with_bundle()")
+```mermaid
+sequenceDiagram
+    participant Atom
+    participant Proxy as NexusCallProxy
+    participant Auth as Authentication manager
+    participant Provider
+
+    Atom->>Proxy: nexus_call(method, URL, request data)
+    Note over Atom,Proxy: No raw token in atom or agent context
+    Proxy->>Auth: resolve scoped connection
+    Auth-->>Proxy: request strategy with credential
+    Proxy->>Provider: authenticated HTTP request
+    Provider-->>Proxy: response
+    Proxy-->>Atom: structured response without credential
 ```
 
-The generated bundle is registry and code-preparation metadata. In normal agent
-execution, `CoderSubAgent` validates qualifying atom source and offers each atom
-as a native tool. Generated code calls `nexus_call` for custom provider work; it
-does not receive a credential-bearing bundle instance.
+The proxy may refresh an expired OAuth connection and retry once. Authentication,
+permission, rate-limit, and truthful provider refusals are not evidence that atom
+source should be rewritten.
 
----
+## Catalog ownership
 
-## The Function Registry
+Shipped atoms are loaded into a fresh registry at startup. Existing registries
+receive missing shipped atoms without discarding local execution history or
+valid local repairs. That seeding behavior belongs to the runtime model; the
+provider and atom inventory does not.
 
-Atoms are stored and tracked in the `FunctionRegistry`. The registry is a local filesystem store with an optional Redis cognitive projection for cross-agent discovery.
+Use the installed package for machine-readable inventory:
 
-```
-logs/function_registry/
-├── metadata/
-│   ├── slack_send_message.json      ← execution stats, stage, SHA256
-│   └── github_create_issue.json
-├── atoms/
-│   ├── slack/
-│   │   ├── slack_send_message_v1.py
-│   │   └── slack_send_message_v2.py   ← atoms are immutable and versioned
-│   └── github/
-│       └── github_create_issue_v1.py
-└── bundles/
-    ├── slack_bundle.py
-    └── github_bundle.py
+```bash
+jarviscore atom list
+jarviscore atom list --bundle hubspot
 ```
 
-Every atom is **immutable and versioned**. When an atom is updated (by CoderSubAgent or by seeding), a new `_v2.py` is written rather than overwriting `_v1.py`. The SHA-256 hash of the function source is stored in metadata and verified on load.
+Use the [Integrations guide](../guides/integrations.md) for the human-readable
+provider and atom catalog. Keeping that list in one place prevents concept pages
+from drifting when integrations are added or renamed.
 
-### Graduation
+Shipped external atoms are hand-audited against provider documentation and seed
+as `verified`. Newly generated functions enter as `candidate` and need successful
+execution evidence before promotion.
 
-Every atom has a stage:
+## The FunctionRegistry
 
-| Stage | Threshold | Meaning |
+`FunctionRegistry` owns immutable source versions and current metadata. A
+registration writes a new atom version instead of mutating the prior source.
+Metadata includes:
+
+- provider system, capabilities, description, and tags;
+- current version, source path, and SHA-256 hash;
+- execution count, success/failure counts, and average duration;
+- current reliability stage and consecutive-success streak;
+- repair lineage such as `repair_of_version`;
+- whether the source is managed by the shipped catalog.
+
+The local registry can publish an index to Redis for fleet discovery and copy
+source/metadata to configured blob storage. Those persistence details are runtime
+implementation; agents interact with the registry through tool discovery rather
+than reading storage paths.
+
+### Reliability stages
+
+| Stage | Entry condition | Failure behavior |
 |---|---|---|
-| `candidate` | Newly registered | Generated or seeded but not yet executed in production |
-| `verified` | 1 successful execution | Has run successfully at least once |
-| `golden` | 5 successful executions | Production-tested; preferred by `CoderSubAgent` on registry lookups |
+| `candidate` | New generated function without execution proof | Remains candidate; streak resets |
+| `verified` | Shipped audited atom or at least one consecutive successful execution | Demotes to candidate; streak resets |
+| `golden` | At least five consecutive successful executions | Demotes to verified; streak resets |
 
-Stage advances automatically when `update_execution_stats(success=True)` is called after a successful sandbox run. When `CoderSubAgent` searches the registry for an existing function, golden atoms score higher than verified, which score higher than candidates.
+Stages answer "does this work now?" rather than "did this ever work?" A failure
+records its type, resets the success streak, and demotes one level. Credential
+boundary failures are excluded because the atom did not execute.
 
----
+## How AutoAgent finds and executes atoms
 
-## JIT: Just-In-Time Compilation
+`CoderSubAgent` follows a registry-first path:
 
-The registry's most powerful capability is JIT: agent code generation for systems and actions that don't yet have a pre-built atom.
+1. Normalize the task intent and call `check_registry`.
+2. Rank matching atom metadata. Despite its historical method name,
+   `semantic_search()` is lexical ranking; provider authority comes from the
+   task/capability context, not substring matching.
+3. Offer a qualifying verified or golden atom as a typed tool.
+4. Execute the atom through the sandbox and Nexus boundary.
+5. Record successful or failed execution evidence in the registry.
 
-When a task requires calling an external system and no matching atom exists in the registry, `CoderSubAgent` follows this fallback ladder:
+If no suitable atom exists, the Coder can write candidate code, validate it,
+execute it, and register it only after successful execution. Registration without
+a successful `candidate_id` is rejected.
 
-```
-1. check_registry(task)
-   └── Found a golden/verified atom? → reuse it, skip to execute
-
-2. write_code(task)
-   └── CoderSubAgent writes a new atom from its training knowledge
-   └── ValidationLayer checks syntax and structure
-   └── Atom stored as "candidate" in registry
-
-3. execute_code(function_name)
-   └── SandboxExecutor runs the atom in an isolated environment
-   └── On success → stage promoted to "verified"
-   └── On failure → diagnose, rewrite, retry (max 2 attempts)
-   └── On persistent failure → delegate_research as last resort
-
-4. register_success(function_name)
-   └── Execution stats updated
-   └── Atom available for reuse in future calls
-```
-
-This means the first time your agent needs to call, say, `quickbooks_create_invoice`, it writes and tests that function live. Every subsequent call skips straight to step 1: the atom is already in the registry.
-
-**Naming convention:** All atoms registered by CoderSubAgent follow `{system}_{action}`: e.g. `stripe_create_payment_intent`, `notion_create_page`, `github_list_open_prs`.
-
----
-
-## The 19 Pre-Seeded Systems
-
-JarvisCore ships with 77 pre-built atoms across 19 system bundles, seeded at startup via `seed_registry.py`. Pre-seeded atoms start as `candidate` and promote to `verified` after first successful use in your environment.
-
-### Communication
-
-| System | Atoms | Auth |
-|---|---|---|
-| **Slack** | send_message, list_channels, get_history, create_channel, invite_user, add_reaction | OAuth2 |
-| **Gmail** | send_email, list_messages, get_message, create_draft | OAuth2 |
-| **SendGrid** | send_email, get_stats | API key |
-| **Brevo** | send_email, get_contacts, create_contact | API key |
-| **Mailchimp** | add_subscriber, get_lists, send_campaign | API key |
-
-### Development
-
-| System | Atoms | Auth |
-|---|---|---|
-| **GitHub** | create_issue, list_issues, create_pr, merge_pr, get_file, update_file, add_comment, list_repos | OAuth2 |
-| **Linear** | create_issue, get_issue, list_issues, update_issue, search_issues | OAuth2 |
-| **Jira** | create_issue, get_issue, update_issue | Basic auth |
-
-### Productivity
-
-| System | Atoms | Auth |
-|---|---|---|
-| **Notion** | create_page, get_page, list_databases, query_database, update_page, search | OAuth2 |
-| **Google Drive** | list_files, upload_file, download_file, share_file | OAuth2 |
-| **Google Sheets** | read_range, write_range, append_rows, get_spreadsheet | OAuth2 |
-| **Google Calendar** | list_events, create_event, delete_event | OAuth2 |
-| **Airtable** | list_records, create_record, update_record, delete_record, get_record, search_records, get_schema, batch_create | API key |
-
-### CRM & Sales
-
-| System | Atoms | Auth |
-|---|---|---|
-| **HubSpot** | create_contact, get_contact, create_deal, update_deal, list_contacts | OAuth2 |
-| **Salesforce** | create_record, query_records, update_record, get_record | OAuth2 |
-| **Apollo** | search_people, enrich_person, get_account | API key |
-
-### Finance
-
-| System | Atoms | Auth |
-|---|---|---|
-| **Stripe** | create_payment_intent, list_customers, create_customer, get_balance | API key |
-| **QuickBooks** | get_company_info, list_invoices, create_invoice, get_reports | OAuth2 |
-
-### Search
-
-| System | Atoms | Auth |
-|---|---|---|
-| **Serper** | search, news_search | API key |
-
----
-
-## This Is Not MCP
-
-The Model Context Protocol (MCP) by Anthropic is a standard for connecting LLM applications to external tools via a client-server protocol. It's a well-designed standard: MCP servers run as separate processes, expose tools via a JSON-RPC-like protocol, and clients discover and call them at runtime.
-
-JarvisCore's atom model takes a different approach, and it's worth being explicit about the trade-offs:
-
-| | MCP | JarvisCore Atoms |
-|---|---|---|
-| **Architecture** | Client + server processes | Plain Python functions, no server |
-| **Discovery** | MCP client discovers tools at runtime from the server | Registry lookup; JIT generation if missing |
-| **Transport** | JSON-RPC over stdio/HTTP | Direct Python call in sandbox |
-| **Versioning** | Server manages versions | Immutable `_v1`, `_v2` files + SHA256 |
-| **Execution history** | Not tracked | Tracked: drives candidate→verified→golden promotion |
-| **New tools** | Write a new MCP server handler | `CoderSubAgent` generates the atom JIT from a task description |
-| **Auth** | Varies by implementation | Always via Nexus: credentials never in agent code |
-
-**Does JarvisCore support MCP tools?** Not natively: there is no built-in MCP client. However, `CustomAgent` is flexible enough to wrap an MCP client directly:
-
-```python
-class MCPAgent(CustomAgent):
-    """Agent that wraps an existing MCP tool server."""
-    role = "mcp_bridge"
-    capabilities = ["mcp_tools"]
-
-    async def setup(self):
-        await super().setup()
-        from mcp import Client
-        self.mcp = Client("stdio://./my-server.py")
-        await self.mcp.connect()
-
-    async def run(self, message):
-        result = await self.mcp.call_tool("my_tool", message.data)
-        return result
+```mermaid
+stateDiagram-v2
+    [*] --> RegistryLookup
+    RegistryLookup --> ExecuteKnown: verified or golden match
+    RegistryLookup --> WriteCandidate: no suitable match
+    WriteCandidate --> Validate
+    Validate --> WriteCandidate: contract or syntax failure
+    Validate --> ExecuteCandidate: valid candidate
+    ExecuteCandidate --> Register: successful real execution
+    ExecuteCandidate --> Repair: eligible code failure
+    Repair --> ExecuteCandidate: corrected candidate
+    Register --> Verified
+    ExecuteKnown --> Evidence
+    Verified --> Evidence
+    Evidence --> [*]
 ```
 
-This pattern lets teams adopt JarvisCore's orchestration, memory, and P2P mesh while keeping existing MCP tool servers intact. The atom model and MCP are not mutually exclusive: they operate at different layers.
+## Repair is evidence-bound
 
-**The pragmatic question** for teams evaluating JarvisCore: if you have MCP servers already built and working, wrap them in a `CustomAgent`. If you are starting fresh, atoms give you versioning, execution history, and JIT generation out of the box.
+A registered atom enters repair only after an eligible failure was observed in
+the current run. The Coder must inspect the exact current source/version, submit
+a replacement under the same function identity, and execute it successfully
+against the original invocation.
 
----
+Registration rejects stale repairs when the current atom version changed after
+repair began. A successful replacement records `repair_of_version` and the
+observed failure while retaining all prior immutable source versions.
 
-## Further Reading
+## What a system bundle is
 
-- [System Bundles & Integrations Guide](../guides/integrations.md): how to use pre-built atoms in agent code
-- [Nexus: Credential Federation](nexus.md): how credentials stay outside agent code
-- [AutoAgent Guide](../guides/autoagent.md): how `CoderSubAgent` selects and executes atoms
+`FunctionRegistry.create_system_bundle(system_name)` generates a
+`{System}Capabilities` class from that system's verified and golden functions.
+The class describes available methods and capabilities and is cached as Python
+source. `prepare_code_with_bundle()` can prepend it to generated code as
+code-generation context.
+
+The generated methods intentionally raise `NotImplementedError`; a bundle is not
+a credential-bearing SDK client and application code should not instantiate it
+to call a provider. During normal AutoAgent execution, the Coder offers validated
+atoms as native tools, and custom generated provider code uses `nexus_call()`.
+
+## Relationship to MCP { #this-is-not-mcp }
+
+MCP and JarvisCore atoms solve adjacent problems at different boundaries.
+
+| Concern | MCP server | JarvisCore atom |
+|---|---|---|
+| Unit | Tool exposed by a separate server | Typed Python provider function in the registry |
+| Discovery | Client/server protocol discovery | Registry metadata and capability-aware runtime context |
+| Execution | RPC to the MCP server | Sandbox/native tool execution through runtime boundaries |
+| Credentials | Defined by each MCP deployment | Nexus resolves credentials outside agent-visible code |
+| Evidence | Server-specific | Registry stage, execution stats, immutable versions, and repair lineage |
+
+JarvisCore 1.11 does **not** ship a first-party MCP client. An application may
+wrap an existing MCP client behind a `CustomAgent`, but that is application code,
+not a built-in compatibility promise. Keep working MCP servers when they already
+solve your tool boundary; use atoms when you want JarvisCore's registry,
+execution evidence, Nexus boundary, and repair lifecycle.
+
+## What to read next
+
+- [Integrations](../guides/integrations.md): browse installed systems and atom
+  names.
+- [Testing Atoms](../guides/testing-atoms.md): validate custom atom source and
+  connected behavior.
+- [Nexus](nexus.md): understand the credential boundary.
+- [AutoAgent](../guides/autoagent.md): see how the Kernel offers and executes
+  tools.

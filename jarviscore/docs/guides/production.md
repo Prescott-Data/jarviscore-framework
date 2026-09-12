@@ -1,5 +1,7 @@
 ---
 icon: material/rocket-launch
+title: "Deploy JarvisCore AI Agents to Production"
+description: "Configure sandbox isolation, Nexus credentials, persistent Redis, durable storage, monitoring, and recovery for production JarvisCore deployments."
 ---
 
 # Production Deployment
@@ -59,7 +61,7 @@ At minimum, one LLM provider must be configured:
 AZURE_API_KEY=...
 AZURE_ENDPOINT=https://your-resource.openai.azure.com
 AZURE_DEPLOYMENT=gpt-4o
-AZURE_API_VERSION=2025-01-01-preview
+AZURE_API_VERSION=2024-10-21
 
 # Anthropic Claude
 CLAUDE_API_KEY=...

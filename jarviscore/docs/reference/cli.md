@@ -1,5 +1,7 @@
 ---
 icon: material/console
+title: "JarvisCore Command-Line Interface Reference"
+description: "Use the jarviscore CLI for project setup, environment checks, smoke tests, Nexus, memory, atom validation, and workflow inspection."
 ---
 
 # CLI Reference

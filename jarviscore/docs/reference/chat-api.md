@@ -1,5 +1,7 @@
 ---
 icon: material/chat-outline
+title: "JarvisCore Chat API and Streaming Reference"
+description: "Reference synchronous chat and Server-Sent Events endpoints, FastAPI router setup, Kernel execution, trace events, and response formats."
 ---
 
 # Chat API Reference

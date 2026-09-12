@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     azure_endpoint: Optional[str] = None
     azure_openai_endpoint: Optional[str] = None  # Alias
     azure_deployment: str = "gpt-4o"
-    azure_api_version: str = "2024-02-15-preview"
+    azure_api_version: str = "2024-10-21"
     # Off by default: content-filter hits should be visible failures unless
     # an application explicitly opts into provider-specific prompt repair.
     azure_content_filter_repair_enabled: bool = False

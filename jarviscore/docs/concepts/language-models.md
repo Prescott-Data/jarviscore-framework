@@ -1,5 +1,7 @@
 ---
 icon: material/chip
+title: "LLM Role Assignment and Capability Tiers"
+description: "Assign LLMs to reasoning, coding, browser, and nano roles by capability and cost, with provider models configured per environment."
 ---
 
 # Language Models
