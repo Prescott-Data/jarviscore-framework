@@ -638,7 +638,7 @@ class TestWorkflowDAG:
             steps=[{
                 "id": "verify_retry", "capability": "verification", "effect": "read",
                 "task": "Verify stage from fresh evidence", "depends_on": ["verify_first"],
-                "covers": ["o1"],
+                "covers": ["o1"], "dependency_policy": "terminal_evidence",
             }],
             reason="Fresh evidence is available",
         )
@@ -777,7 +777,7 @@ class TestAtomicStepClaiming:
             resume_agent_id="agent-a",
         )
 
-    def test_partial_semantics_are_preserved_for_recipient_authorization(self, store):
+    def test_partial_semantics_are_available_for_recipient_authorization(self, store):
         store.publish_workflow(
             "wf-semantic-gate",
             goal="Verify then act",
@@ -819,10 +819,74 @@ class TestAtomicStepClaiming:
         verify = store.get_step_definition("wf-semantic-gate", "verify")
         assert verify["semantic_outcome"] == "partial"
         assert verify["semantic_decision"] == "hold"
+        assert store.are_dependencies_met("wf-semantic-gate", "write") is True
         assert store.get_dependency_blockers("wf-semantic-gate", "write") == {}
-        assert store.claim_step("wf-semantic-gate", "write", "peer:write", 30) is True
         assert store.get_dependency_blockers("wf-semantic-gate", "respond") == {}
+        assert store.are_dependencies_met("wf-semantic-gate", "respond") is True
         assert store.claim_step("wf-semantic-gate", "respond", "peer:respond", 30) is True
+
+    def test_final_response_cannot_satisfy_source_obligations(self, store):
+        store.publish_workflow(
+            "wf-response-projection",
+            goal="Verify and report",
+            obligations=[{
+                "id": "o1", "description": "Verify", "source_quote": "Verify",
+            }],
+            steps=[{
+                "id": "respond", "capability": "response", "effect": "final_response",
+                "task": "Report", "depends_on": [], "covers": ["o1"],
+            }],
+        )
+        assert store.claim_step(
+            "wf-response-projection", "respond", "peer:respond", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-response-projection", "respond", "peer:respond",
+            {"status": "success", "result_summary": "Verification is incomplete."},
+        )
+
+        obligation = store.get_obligation_projection("wf-response-projection")["o1"]
+        assert obligation["state"] == "pending"
+        assert obligation["current_step_ids"] == []
+        assert obligation["attempt_states"] == {}
+
+    def test_semantic_proceed_authorizes_ordinary_dependency(self, store):
+        store.publish_workflow(
+            "wf-semantic-proceed",
+            goal="Verify then write",
+            obligations=[],
+            steps=[
+                {
+                    "id": "verify", "capability": "verification", "effect": "read",
+                    "task": "Verify", "depends_on": [],
+                },
+                {
+                    "id": "write", "capability": "writer", "effect": "write",
+                    "task": "Write", "depends_on": ["verify"],
+                },
+            ],
+        )
+        assert store.claim_step("wf-semantic-proceed", "verify", "peer:verify", 30)
+        assert store.finish_claimed_step(
+            "wf-semantic-proceed",
+            "verify",
+            "peer:verify",
+            {
+                "status": "success",
+                "output": {"verified": True},
+                "interpretation": {
+                    "verdict": "satisfied",
+                    "decision": "proceed",
+                    "meaning": "Verification succeeded.",
+                    "satisfied_requirements": ["Verified identity"],
+                    "unmet_requirements": [],
+                    "evidence_refs": ["verified"],
+                },
+            },
+        )
+
+        assert store.are_dependencies_met("wf-semantic-proceed", "write") is True
+        assert store.get_dependency_blockers("wf-semantic-proceed", "write") == {}
 
     def test_recipient_terminal_block_is_not_requeued(self, store):
         store.publish_workflow(

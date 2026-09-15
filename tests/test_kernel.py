@@ -572,6 +572,20 @@ class TestDeclaredSystemCredentials:
 
         assert decision.role == "coder"
         assert decision.reason == "Provider mutation requires the credentialed Coder harness."
+
+    @pytest.mark.asyncio
+    async def test_execution_contract_role_precedes_classifier_and_profile_default(
+        self, kernel, mock_llm
+    ):
+        decision = await kernel._route_task(
+            "Inspect and execute repository tests",
+            {"execution_contract": {"kernel_role": "coder"}},
+            agent_default_role="researcher",
+            use_default_role_as_fallback=True,
+        )
+
+        assert decision.role == "coder"
+        assert decision.reason == "Explicit planner/profile role."
         assert mock_llm.calls == []
 
     @pytest.mark.asyncio

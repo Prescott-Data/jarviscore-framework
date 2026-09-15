@@ -26,6 +26,77 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.12.0 <span class="changelog-date">2026-09-15</span>
+
+### Added
+
+- Blob-backed `SourceSnapshot` manifests and ephemeral `SandboxBinding`
+  projections let capability-addressed peers work over large, structured source
+  collections without adding another storage tier.
+- GitHub repository sources resolve branches and tags to immutable commits
+  through Nexus, enforce trusted file and byte limits, reuse content-addressed
+  blobs, and reject truncated or unsupported snapshots.
+- Claimed Mesh steps receive isolated copy-on-write workspaces. Dependency
+  `WorkspaceDelta` artifacts are applied to fresh bindings, conflicting parallel
+  changes fail closed, and final-response steps consume artifacts without
+  rematerializing source.
+- Coder exposes bounded `workspace_list`, `workspace_read`,
+  `workspace_search`, `workspace_write`, and `workspace_run` tools. Structured
+  fixture writes avoid shell quoting and redirection. Domain command permissions,
+  timeouts and recognized build-cache paths are configured only on trusted Mesh
+  configuration and retain the sandbox deny rules.
+- The public `SourceAdapter` protocol and typed source failures provide one
+  conformance boundary for future Git, archive, object-storage and document
+  adapters. Adapter results must preserve source identity and pass persisted
+  manifest and blob integrity checks before planning.
+
+### Changed
+
+- Source-backed products can set `workspace_required` so the Mesh resolves
+  explicit source identity internally, constrained to trusted providers, before
+  goal registration. Missing identity, unavailable adapters and invalid
+  snapshots fail instead of degrading into prompt-only analysis; universal task
+  interfaces remain provider-neutral.
+- Durable execution epochs are bounded per step. Requests larger than an entire
+  epoch fail terminally, while recoverable exhaustion may resume only up to the
+  trusted `max_epochs_per_step` limit.
+- `DONE` proposals from normal and landing turns now pass the same evidence
+  evaluator. Repeated actionable rejection and lease exhaustion checkpoint rich
+  agent state for a bounded new epoch, preserving gate evidence as the next
+  critical error to resolve; paraphrasing without new evidence no longer resets
+  no-progress detection.
+- Redis enforces dependency execution readiness while recipient peers decide
+  whether upstream semantic uncertainty prevents their task. Diagnosis and
+  remediation can declare `dependency_policy=terminal_evidence` to consume
+  failed or blocked attempts; final responses retain all terminal evidence.
+- Only terminal domain work in each dependency path settles source obligations.
+  Preparatory steps remain durable evidence producers, and framework-owned
+  final-response steps present current truth with `covers=[]`.
+- Final-response context carries full workflow artifacts once and references
+  them by ID in the evidence summary, preventing duplicated evidence from making
+  a synthesis request permanently larger than its execution epoch.
+
+### Security
+
+- Snapshot and delta hydration verify content hashes and byte sizes, reject
+  unsafe or conflicting paths, and clean failed or cancelled bindings.
+- Sandbox timeout and cancellation terminate the full process group and bound
+  RPC cleanup, preventing orphaned commands from surviving an execution lease.
+- Local BlobStorage snapshots are pinned to the materializer node; distributed
+  claims require a shared storage backend.
+
+### Validated
+
+- A live Nexus-authenticated snapshot of `ekizito96/Turn` materialized 146 files
+  at immutable commit `f5113760db03ab254172986dfe1a543edbb664da`, provisioned its
+  locked Cargo dependencies into a trusted shared cache, and passed the complete
+  `cargo test --locked` suite inside a fresh isolated binding.
+- A deterministic Mesh test proves repair proposal delta export, independent
+  verification in a fresh binding, immutable source preservation, and no
+  provider write.
+
+---
+
 ## 1.11.0 <span class="changelog-date">2026-09-11</span>
 
 ### Added

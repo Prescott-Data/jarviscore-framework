@@ -137,7 +137,13 @@ These values are `Mesh(config={...})` keys, not environment variables:
 | `mesh_planning_lease_seconds` | `300` | Initial planning and amendment lease duration |
 | `mesh_max_reconciliation_revisions` | `3` | Bounded automatic semantic revisions |
 | `mesh_response_capability` | `None` | Capability authorized for the optional final response |
-| `execution_budget` | framework defaults | Shared `max_seconds`, `max_steps`, `max_replans`, `max_tokens`, `max_peer_depth` and `peer_timeout_seconds` |
+| `execution_budget` | framework defaults | Shared `max_seconds`, `max_steps`, `max_replans`, `max_tokens`, `max_epochs_per_step`, `max_peer_depth` and `peer_timeout_seconds` |
+| `workspace_required` | `false` | Fail before planning unless a trusted source adapter produces a verified snapshot |
+| `workspace_source_adapters` | `{}` | Provider names mapped to `SourceAdapter` implementations |
+| `workspace_source_catalog` | built-in provider descriptions | Trusted provider descriptions used to resolve explicit source identity from a goal |
+| `workspace_source_resolver` | planning-model resolver | Optional trusted callable that returns source identity before adapter capture |
+| `workspace_command_timeout_seconds` | `120` | Trusted per-command workspace limit; a timeout is evidence and does not stop the DAG |
+| `workspace_command_environment` | `{}` | Trusted recognized package-manager cache paths passed without inheriting parent secrets |
 
 Caller task context cannot override execution authority or the workflow budget.
 All nodes sharing one distributed DAG should run the same JarvisCore minor

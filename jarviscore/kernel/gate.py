@@ -121,15 +121,14 @@ class GateAttempt:
     def repeats(self, other: "GateAttempt") -> bool:
         """True when this attempt carries no information the last one lacked.
 
-        Three things must all hold: the same check failed on the same observed
-        values, the agent submitted the same artifact, and it performed no work
-        in between. Any one of them changing means the attempt is new — an agent
-        that is still moving is not stalled, however many times it has been
-        rejected.
+        The same check must fail on the same observed values with no new tool
+        action in between. Payload wording is retained for audit but is not
+        progress: relevant artifact improvement changes the gate's observations.
+        This prevents paraphrasing an incomplete result from resetting the
+        no-progress boundary.
         """
         return (
             self.fingerprint == other.fingerprint
-            and self.payload_digest == other.payload_digest
             and self.tool_calls == other.tool_calls
         )
 

@@ -511,7 +511,7 @@ async def test_execute_goal_reconciles_actionable_semantic_hold(monkeypatch):
         "task": "Inspect the located resource and verify its content",
         "success_criterion": "Content is verified by readback",
         "expected_findings": ["content verification"], "depends_on": ["locate"],
-        "covers": ["o1"],
+        "covers": ["o1"], "dependency_policy": "terminal_evidence",
     }]
     llm = MockLLMClient(responses=[
         {"content": json.dumps({"obligations": [{
@@ -748,9 +748,8 @@ async def test_hold_blocks_multi_system_effects_but_final_response_still_runs(mo
     }
     assert final_context["workflow_step_states"]["collateral"] == "completed"
     assert final_context["workflow_step_states"]["write"] == "blocked"
-    assert final_context["workflow_evidence"]["artifacts"]["collateral"] == {
-        "document_id": "deck-1", "status": "existing",
-    }
+    assert "artifacts" not in final_context["workflow_evidence"]
+    assert "collateral" in final_context["workflow_evidence"]["artifact_ids"]
     assert final_context["workflow_evidence"]["states"]["write"] == "blocked"
     assert responder.received[0]["context"]["previous_step_interpretations"]["verify"][
         "decision"

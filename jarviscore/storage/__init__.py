@@ -16,9 +16,13 @@ Usage:
     redis_store.save_step_output("wf-1", "step-1", output={"result": 42})
 """
 
+from typing import TYPE_CHECKING
+
 from .base import BlobStorage
 from .local import LocalBlobStorage
-from .redis_store import RedisContextStore
+
+if TYPE_CHECKING:
+    from .redis_store import RedisContextStore
 
 __all__ = [
     "BlobStorage",
@@ -26,6 +30,14 @@ __all__ = [
     "RedisContextStore",
     "get_blob_storage",
 ]
+
+
+def __getattr__(name: str):
+    if name == "RedisContextStore":
+        from .redis_store import RedisContextStore
+
+        return RedisContextStore
+    raise AttributeError(name)
 
 
 def get_blob_storage(settings=None) -> BlobStorage:

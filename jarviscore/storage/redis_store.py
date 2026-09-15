@@ -1226,6 +1226,7 @@ class RedisContextStore:
             current_step_ids = [
                 str(step.get("id") or step.get("step_id"))
                 for step in steps
+                if step.get("effect") != "final_response"
                 if obligation_id in map(str, step.get("covers", []))
             ]
             projection[obligation_id] = {
@@ -1609,7 +1610,8 @@ class RedisContextStore:
             return True
         records = [graph.get(dependency_id, {}) for dependency_id in dependencies]
         effect = str(step.get("effect") or "read")
-        if effect == "final_response":
+        dependency_policy = str(step.get("dependency_policy") or "satisfied")
+        if effect == "final_response" or dependency_policy == "terminal_evidence":
             return all(
                 record.get("status") in {
                     "completed", "failed", "waiting", "blocked", "cancelled"
@@ -1636,7 +1638,8 @@ class RedisContextStore:
         }
         step = graph.get(str(step_id), {})
         effect = str(step.get("effect") or "read")
-        if effect == "final_response":
+        dependency_policy = str(step.get("dependency_policy") or "satisfied")
+        if effect == "final_response" or dependency_policy == "terminal_evidence":
             return {}
         blockers = {}
         for dependency_id in map(str, step.get("depends_on", [])):
@@ -1644,7 +1647,6 @@ class RedisContextStore:
             status = dependency.get("status")
             if status in {"failed", "waiting", "blocked", "cancelled"}:
                 blockers[dependency_id] = f"execution:{status}"
-                continue
         return blockers
 
     def block_step(

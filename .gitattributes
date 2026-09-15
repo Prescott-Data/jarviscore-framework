@@ -1,0 +1,2 @@
+# mesh.py is historically tracked with CRLF; do not treat CR as trailing whitespace.
+jarviscore/core/mesh.py whitespace=cr-at-eol

@@ -131,12 +131,12 @@ class TestRecordAttempt:
         assert streak == 2
         assert previous.turn == 3
 
-    def test_a_changed_result_is_a_new_attempt(self):
+    def test_changed_wording_without_new_evidence_is_still_a_repeat(self):
         history: List[Dict[str, Any]] = []
         evidence = GateEvidence(check="c", observed={"n": 0})
         self._record(history, evidence, {"a": 1}, 2)
         _, streak, _ = self._record(history, evidence, {"a": 2}, 2)
-        assert streak == 1
+        assert streak == 2
 
     def test_work_done_in_between_is_a_new_attempt(self):
         """An agent that ran a tool has produced something the gate has not seen."""
@@ -157,8 +157,8 @@ class TestRecordAttempt:
         stuck = GateEvidence(check="c", observed={"n": 0})
         self._record(history, stuck, {"a": 1}, 2)
         self._record(history, stuck, {"a": 1}, 2)
-        self._record(history, stuck, {"a": 2}, 2)          # moved
-        _, streak, _ = self._record(history, stuck, {"a": 2}, 2)
+        self._record(history, stuck, {"a": 2}, 3)          # tool action moved
+        _, streak, _ = self._record(history, stuck, {"a": 3}, 3)
         assert streak == 2
 
     def test_history_is_plain_data_so_it_survives_checkpointing(self):
@@ -209,6 +209,43 @@ class _GatedAgent(BaseSubAgent):
     def _can_complete(self, state, parsed):
         self.rejections += 1
         return False, self._evidence
+
+
+class _CheckpointMemory:
+    def __init__(self):
+        self.checkpoint = None
+
+    async def save_checkpoint(self, state_json):
+        self.checkpoint = state_json
+
+    async def load_checkpoint(self):
+        return self.checkpoint
+
+    async def recall(self, task, limit=8):
+        return []
+
+
+class _ActionGatedAgent(BaseSubAgent):
+    def __init__(self, llm):
+        super().__init__(agent_id="action-gated", role="coder", llm_client=llm)
+
+    def get_system_prompt(self, *args, **kwargs) -> str:
+        return "system"
+
+    def setup_tools(self) -> None:
+        self.register_tool("inspect", self._tool_inspect, "Inspect evidence")
+
+    def _tool_inspect(self):
+        return {"evidence": "observed"}
+
+    def _can_complete(self, state, parsed):
+        if any(result.tool_name == "inspect" for result in state.tool_history):
+            return True, ""
+        return False, GateEvidence(
+            check="declared_action_evidence",
+            requirement="inspect evidence",
+            observed={"tools_used": []},
+        )
 
 
 def _done(result: str = '{"a": 1}') -> str:
@@ -276,15 +313,54 @@ class TestTerminalBoundary:
         assert result.metadata["gate_evidence"]["observed"] == {"evidence_count": 0}
         assert "evidence" in result.summary
 
-    def test_an_agent_that_keeps_changing_its_answer_is_not_cut_off(self):
-        """Movement is not a stall, however many rejections it takes."""
+    def test_durable_gate_boundary_resumes_same_state_and_can_act(self):
+        llm = _ScriptedLLM([
+            _done(),
+            _done(),
+            _done(),
+            "THOUGHT: inspect the missing evidence\nTOOL: inspect\nPARAMS: {}",
+            _done('{"evidence": "observed"}'),
+        ])
+        memory = _CheckpointMemory()
+        agent = _ActionGatedAgent(llm)
+        context = {"workflow_id": "wf", "step_id": "step"}
+
+        first = asyncio.run(agent.run(
+            task="inspect", context=context, max_turns=3, memory=memory,
+        ))
+        assert first.status == "epoch_exhausted"
+        assert first.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+        checkpoint = KernelState.model_validate_json(memory.checkpoint)
+        assert len(checkpoint.internal_variables["done_gate_attempts"]) == 3
+
+        second = asyncio.run(agent.run(
+            task="inspect",
+            context={**context, "_resume": True, "_new_execution_epoch": True},
+            max_turns=3,
+            memory=memory,
+        ))
+        assert second.status == "success"
+        assert [result.tool_name for result in agent._current_state.tool_history] == [
+            "inspect"
+        ]
+        resumed_prompt = "\n".join(
+            message["content"]
+            for message in llm.seen[3]
+            if message["role"] == "user"
+        )
+        assert "CRITICAL ERROR TO FIX" in resumed_prompt
+        assert "declared_action_evidence" in resumed_prompt
+        assert "tools_used" in resumed_prompt
+
+    def test_changed_wording_without_new_evidence_is_cut_off(self):
+        """Changing prose without changing observed evidence is not movement."""
         llm = _ScriptedLLM([_done(f'{{"a": {n}}}') for n in range(8)])
         agent = _GatedAgent(llm)
 
         result = asyncio.run(agent.run(task="t", max_turns=8))
 
-        assert result.metadata.get("typed_outcome") != "FAIL_DONE_GATE_UNSATISFIED"
-        assert agent.rejections == 8
+        assert result.metadata.get("typed_outcome") == "FAIL_DONE_GATE_UNSATISFIED"
+        assert agent.rejections == 3
 
     def test_the_boundary_is_configurable_per_agent(self):
         class _Patient(_GatedAgent):
@@ -510,6 +586,25 @@ class TestCoderGate:
 
         ok, reason = coder._can_complete(
             state, {"result": {"status": "blocked", "reason": "Contact unresolved"}}
+        )
+
+        assert ok is True
+        assert reason == ""
+
+    def test_unactionable_peer_tools_are_not_required(self):
+        class PhaseBoundCoder(type(self._coder())):
+            def _tool_is_actionable(self, tool_name, state):
+                return False
+
+        coder = PhaseBoundCoder.__new__(PhaseBoundCoder)
+        coder._tools = {"ask_capability": object(), "ask_peer": object()}
+        state = _state(tool_history=[
+            ToolResult(tool_name="workspace_read", status="success", tool_output={}),
+        ])
+
+        ok, reason = coder._can_complete(
+            state,
+            {"result": {"status": "blocked", "unresolved": ["No capable peer"]}},
         )
 
         assert ok is True
