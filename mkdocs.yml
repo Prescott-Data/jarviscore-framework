@@ -128,6 +128,7 @@ nav:
       - Orchestrate Work:
         - Workflow DAGs: guides/workflows.md
         - Durable Goal Execution: guides/goal-execution.md
+        - Source Workspaces: guides/source-workspaces.md
         - HITL Escalation: guides/hitl.md
       - Connect Capabilities:
         - Integrations: guides/integrations.md
@@ -161,7 +162,7 @@ nav:
   - Enterprise: infrastructure/enterprise.md
 
 extra:
-  version: "1.11.0"
+  version: "1.12.0"
   social:
     - icon: material/web
       link: https://developers.prescottdata.io

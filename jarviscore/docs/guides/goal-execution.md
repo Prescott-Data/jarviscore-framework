@@ -58,7 +58,11 @@ class RevenueOperations(AutoAgent):
 
 mesh = Mesh(config={
     "mesh_response_capability": "action_briefing",
-    "execution_budget": {"max_seconds": 900, "max_tokens": 240_000},
+    "execution_budget": {
+        "max_seconds": 900,
+        "max_tokens": 240_000,
+        "max_epochs_per_step": 8,
+    },
 })
 mesh.add(RevenueOperations)
 ```
@@ -92,6 +96,13 @@ Caller context is copied without private keys or execution authority. The
 framework derives capability, effect and systems from the published step and
 injects them into the claiming agent's task context.
 
+Source-backed products should set `workspace_required=True`. Source resolution
+and snapshot integrity validation then complete before the goal is registered or
+the planner sees it. Explicit structured context is accepted from APIs and CLIs;
+message-only clients rely on the Mesh's provider-constrained source preflight.
+Missing source identity, unavailable adapters and invalid snapshots fail the
+request instead of producing a source-less DAG.
+
 ## Task context received by agents
 
 Both `AutoAgent.execute_task()` and `CustomAgent.execute_task()` receive the
@@ -106,7 +117,29 @@ same distributed context:
 | `workflow_id`, `step_id` | Durable execution identity |
 | `capability`, `effect`, `systems` | Authority declared by the published step |
 | `execution_budget` | Shared workflow budget |
-| `workflow_evidence` | Final-response snapshot of artifacts, interpretations, states and obligations |
+| `workflow_evidence` | Final-response snapshot of artifact IDs, interpretations, states and obligations; full artifacts remain in `previous_step_results` |
+
+An exhausted execution epoch may continue from its durable checkpoint, up to
+`max_epochs_per_step`. A request larger than an entire epoch is terminal because
+starting another identical epoch cannot make it fit.
+
+## Completion is evidence-derived
+
+`DONE` is an agent proposal to evaluate the current durable state. It is not a
+state transition by itself. Normal turns and budget-exhaustion landing turns use
+the same completion evaluator. Rejected completion preserves tool history,
+thoughts, failures and work-product state; actionable lease exhaustion continues
+in a fresh bounded epoch rather than becoming a human wait. When repeated
+completion proposals leave the same actionable gate unsatisfied, that boundary
+also checkpoints the same state; the next epoch receives the gate evidence as
+its critical error instead of restarting an equivalent dispatch.
+
+Products may declare `execution_contract.required_tool_groups`. Each group lists
+equivalent tools, and durable history must contain at least one invocation from
+every group before completion is eligible. The gate reports observed tools and
+missing groups; it does not decide domain truth or choose the next action.
+Changing result wording without changing the observed evidence or performing a
+new tool action is not progress and cannot reset the no-progress boundary.
 
 Existing agents do not need to change. A successful result without an
 `interpretation` is reduced from execution status: a completed attempt satisfies
@@ -156,8 +189,18 @@ IDs from the current step's `covers` list, not paraphrased descriptions. Assess
 each covered ID exactly once. Recommended verdicts are `satisfied`, `partial`
 and `unsatisfied`; recommended decisions are `proceed`, `hold` and `reject`.
 
-A final-response step normally has `covers=[]`. It presents current workflow
-truth and should not claim to satisfy source obligations.
+A framework-owned final-response step has `covers=[]`. It presents current
+workflow truth and cannot satisfy source obligations. When multiple steps in one
+dependency path mention the same obligation, only terminal domain work retains
+coverage; ancestor steps remain evidence for that terminal judgment.
+
+Step dependencies use `dependency_policy="satisfied"` by default. Redis decides
+whether dependencies are execution-ready; the recipient peer decides whether a
+completed dependency's semantic uncertainty materially prevents its task. A
+planner may set `dependency_policy="terminal_evidence"` only for work explicitly
+intended to diagnose or remediate a failed or blocked attempt. Final-response
+steps always receive terminal evidence so they can explain blocked and incomplete
+goals.
 
 ## Current obligation truth
 
@@ -213,6 +256,10 @@ be complete while response synthesis fails:
     "response_status": "failed",
 }
 ```
+
+Agent Desk renders `completed` as **Execution finished**. The result separately
+renders **Goal satisfied**, **Goal blocked** or **Goal incomplete** from
+`obligation_status`.
 
 `revision` identifies the current plan. `steps` retains attempts from every
 revision; filter with `step["plan_revision"] == result["revision"]` when you

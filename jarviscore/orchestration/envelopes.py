@@ -36,6 +36,7 @@ class ExecutionBudget:
     max_steps: int = 30
     max_replans: int = 8
     max_tokens: int = 240_000
+    max_epochs_per_step: int = 8
     max_peer_depth: int = 2
     peer_timeout_seconds: float = 300.0
 
@@ -47,6 +48,9 @@ class ExecutionBudget:
             max_steps=max(1, int(values.get("max_steps", 30))),
             max_replans=max(0, int(values.get("max_replans", 8))),
             max_tokens=max(1, int(values.get("max_tokens", 240_000))),
+            max_epochs_per_step=max(
+                1, int(values.get("max_epochs_per_step", 8))
+            ),
             max_peer_depth=max(1, int(values.get("max_peer_depth", 2))),
             peer_timeout_seconds=max(
                 1.0, float(values.get("peer_timeout_seconds", 300.0))
@@ -59,6 +63,7 @@ class ExecutionBudget:
             "max_steps": self.max_steps,
             "max_replans": self.max_replans,
             "max_tokens": self.max_tokens,
+            "max_epochs_per_step": self.max_epochs_per_step,
             "max_peer_depth": self.max_peer_depth,
             "peer_timeout_seconds": self.peer_timeout_seconds,
         }
@@ -110,13 +115,17 @@ class WorkflowEvidence:
     states: Dict[str, str] = field(default_factory=dict)
     obligations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
-    def to_record(self) -> Dict[str, Any]:
-        return {
-            "artifacts": deepcopy(self.artifacts),
+    def to_record(self, *, include_artifacts: bool = True) -> Dict[str, Any]:
+        record = {
             "interpretations": deepcopy(self.interpretations),
             "states": dict(self.states),
             "obligations": deepcopy(self.obligations),
         }
+        if include_artifacts:
+            record["artifacts"] = deepcopy(self.artifacts)
+        else:
+            record["artifact_ids"] = list(self.artifacts)
+        return record
 
 
 MandateStatus = Literal[

@@ -564,6 +564,17 @@ class BaseSubAgent(ABC):
             parsed = self._parse_response_for_contract(content, state.context)
             if parsed.get("type") != "done":
                 return None
+            can_exit, reject_reason = self._can_complete(state, parsed)
+            if not can_exit:
+                evidence = as_evidence(reject_reason)
+                state.add_thought(f"[LANDING_DONE_GATE] {evidence.render()}")
+                state.last_error = evidence.render()
+                await self._persist_memory(state)
+                self._log.info(
+                    "Landing completion rejected: check=%s",
+                    evidence.check,
+                )
+                return None
             state.status = "completed"
             state.output = parsed.get("result")
             await self._persist_memory(state)
@@ -687,7 +698,8 @@ class BaseSubAgent(ABC):
                     if context.get("_new_execution_epoch"):
                         state.turn = 0
                         state.retry_count = 0
-                        state.last_error = None
+                        if not state.internal_variables.get("done_gate_attempts"):
+                            state.last_error = None
                         state.thinking_tokens_used = 0
                         state.action_tokens_used = 0
                         state.tokens_used = 0
@@ -744,6 +756,29 @@ class BaseSubAgent(ABC):
                 )
                 if landing is not None:
                     return landing
+                if memory is not None:
+                    state.status = "active"
+                    state.thinking_tokens_used = self._cognition.lease.thinking_used
+                    state.action_tokens_used = self._cognition.lease.action_used
+                    state.tokens_used = total_tokens["total"]
+                    state.total_cost_usd = total_cost
+                    await memory.save_checkpoint(state.model_dump_json())
+                    return AgentOutput(
+                        status="epoch_exhausted",
+                        summary=(
+                            f"Execution lease exhausted after {turn} turns; durable "
+                            "state was checkpointed for continued agent work."
+                        ),
+                        payload=state.get_final_output(),
+                        trajectory=trajectory,
+                        metadata={
+                            "tokens": total_tokens,
+                            "cost_usd": total_cost,
+                            "lease_exhausted": exhausted,
+                            "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+                            "checkpointed": True,
+                        },
+                    )
                 return AgentOutput(
                     status="yield",
                     summary=f"Lease budget exhausted after {turn} turns: {exhausted}",
@@ -817,6 +852,27 @@ class BaseSubAgent(ABC):
                     state.total_cost_usd = total_cost
                     if memory is not None:
                         await memory.save_checkpoint(state.model_dump_json())
+                    if not e.recoverable:
+                        _trace.log_step_complete(
+                            False,
+                            "LLM request exceeds the execution epoch capacity.",
+                        )
+                        return AgentOutput(
+                            status="failure",
+                            payload=state.output,
+                            summary=(
+                                "The current request cannot fit in any execution epoch; "
+                                "its context must be reduced before retrying."
+                            ),
+                            trajectory=trajectory,
+                            metadata={
+                                "error": str(e),
+                                "tokens": total_tokens,
+                                "cost_usd": total_cost,
+                                "typed_outcome": "CONTEXT_EXCEEDS_EPOCH_CAPACITY",
+                                "checkpointed": memory is not None,
+                            },
+                        )
                     _trace.log_step_complete(
                         False,
                         "Active execution epoch exhausted; checkpointed for continuation.",
@@ -900,15 +956,12 @@ class BaseSubAgent(ABC):
                         )
 
                     if streak >= self.max_identical_done_attempts:
-                        # A boundary, not a verdict on the work. The agent has the
-                        # facts and has stopped producing anything new, so another
-                        # turn cannot change the outcome — and an unsatisfied gate
-                        # is not a success to be granted on the way out.
                         summary = (
                             f"Completion gate '{evidence.check}' unsatisfied after "
                             f"{streak} identical attempts"
                         )
-                        state.status = "failed"
+                        state.status = "active" if memory is not None else "failed"
+                        state.last_error = report
                         state.add_thought(f"[DONE_GATE] {report}")
                         trajectory.append({
                             "turn": turn,
@@ -917,6 +970,27 @@ class BaseSubAgent(ABC):
                             "attempts": streak,
                         })
                         _trace.log_step_complete(False, summary)
+                        if memory is not None:
+                            state.thinking_tokens_used = self._cognition.lease.thinking_used
+                            state.action_tokens_used = self._cognition.lease.action_used
+                            state.tokens_used = total_tokens["total"]
+                            state.total_cost_usd = total_cost
+                            await memory.save_checkpoint(state.model_dump_json())
+                            return AgentOutput(
+                                status="epoch_exhausted",
+                                summary=f"{summary}; durable state was checkpointed",
+                                payload=state.get_final_output(),
+                                trajectory=trajectory,
+                                metadata={
+                                    "tokens": total_tokens,
+                                    "cost_usd": total_cost,
+                                    "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+                                    "checkpointed": True,
+                                    "gate_evidence": evidence.as_dict(),
+                                    "gate_attempts": streak,
+                                    "cognition": self._cognition.get_budget_summary(),
+                                },
+                            )
                         return AgentOutput(
                             status="failure",
                             summary=summary,
@@ -1418,7 +1492,9 @@ class BaseSubAgent(ABC):
             or bool(unresolved)
         )
         peer_tools = {"ask_capability", "ask_peer"}
-        available_peer_tools = peer_tools & set(getattr(self, "_tools", {}))
+        available_peer_tools = {
+            tool for tool in peer_tools if self._tool_is_actionable(tool, state)
+        }
         peer_attempted = any(
             item.tool_name in peer_tools
             and (
@@ -1457,6 +1533,10 @@ class BaseSubAgent(ABC):
                 ),
             )
         return (True, "")
+
+    def _tool_is_actionable(self, tool_name: str, state: KernelState) -> bool:
+        """Whether a registered tool can execute in the current agent state."""
+        return tool_name in getattr(self, "_tools", {})
 
     # ──────────────────────────────────────────────────────────────────────
     # Tool Execution

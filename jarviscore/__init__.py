@@ -64,6 +64,21 @@ from jarviscore.core.mesh import Mesh, MeshMode
 # Execution profiles
 from jarviscore.profiles.autoagent import AutoAgent
 from jarviscore.profiles.customagent import CustomAgent
+from jarviscore.execution.workspace import (
+    BlobSnapshotStore,
+    SandboxBinding,
+    SnapshotEntry,
+    SourceRef,
+    SourceSnapshot,
+    WorkspaceDelta,
+    WorkspaceDeltaConflict,
+)
+from jarviscore.execution.sources import (
+    SourceAdapter,
+    SourceAdapterError,
+    SourceContractError,
+    SourceIntegrityError,
+)
 
 # Custom Profile: Decorator, Wrapper, and Context
 from jarviscore.adapter import jarvis_agent, wrap
@@ -113,6 +128,19 @@ __all__ = [
     # Profiles
     "AutoAgent",
     "CustomAgent",
+
+    # Durable source snapshots and ephemeral execution bindings
+    "SourceRef",
+    "SnapshotEntry",
+    "SourceSnapshot",
+    "WorkspaceDelta",
+    "WorkspaceDeltaConflict",
+    "BlobSnapshotStore",
+    "SandboxBinding",
+    "SourceAdapter",
+    "SourceAdapterError",
+    "SourceContractError",
+    "SourceIntegrityError",
 
     # Custom Profile (decorator and wrapper)
     "jarvis_agent",
