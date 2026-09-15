@@ -138,6 +138,7 @@ nav:
       - Orchestrate Work:
         - Workflow DAGs: guides/workflows.md
         - Durable Goal Execution: guides/goal-execution.md
+        - Source Workspaces: guides/source-workspaces.md
         - HITL Escalation: guides/hitl.md
       - Connect Capabilities:
         - Integrations: guides/integrations.md

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 
@@ -36,6 +36,7 @@ class MeshPlannedStep:
     expected_findings: list[str] = field(default_factory=list)
     depends_on: list[str] = field(default_factory=list)
     covers: list[str] = field(default_factory=list)
+    dependency_policy: str = "satisfied"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +49,7 @@ class MeshPlannedStep:
             "expected_findings": list(self.expected_findings),
             "depends_on": list(self.depends_on),
             "covers": list(self.covers),
+            "dependency_policy": self.dependency_policy,
         }
 
 
@@ -346,12 +348,21 @@ class MeshPlanner:
         reserved_ids: set[str] | None = None,
     ) -> list[MeshPlannedStep]:
         capability = self.response_capability
-        active_response = any(
-            step.capability == capability
+        if not capability:
+            return self._normalize_obligation_coverage(steps)
+        response_ids = {
+            step.step_id
             for step in steps
-        )
-        if not capability or active_response:
-            return steps
+            if step.capability == capability or step.effect == "final_response"
+        }
+        steps = [step for step in steps if step.step_id not in response_ids]
+        if any(
+            dependency in response_ids
+            for step in steps
+            for dependency in step.depends_on
+        ):
+            raise MeshPlanError("Domain steps cannot depend on the final response")
+        steps = self._normalize_obligation_coverage(steps)
         depended_on = {
             dependency for step in steps for dependency in step.depends_on
         }
@@ -382,6 +393,43 @@ class MeshPlanner:
                 depends_on=sinks,
                 covers=[],
             ),
+        ]
+
+    @staticmethod
+    def _normalize_obligation_coverage(
+        steps: list[MeshPlannedStep],
+    ) -> list[MeshPlannedStep]:
+        """Only terminal domain work settles an obligation; ancestors supply evidence."""
+        by_id = {step.step_id: step for step in steps}
+        ancestors: dict[str, set[str]] = {}
+
+        def collect(step_id: str) -> set[str]:
+            if step_id in ancestors:
+                return ancestors[step_id]
+            result: set[str] = set()
+            for dependency_id in by_id[step_id].depends_on:
+                if dependency_id in by_id:
+                    result.add(dependency_id)
+                    result.update(collect(dependency_id))
+            ancestors[step_id] = result
+            return result
+
+        covered_downstream: dict[str, set[str]] = {
+            step_id: set() for step_id in by_id
+        }
+        for step in steps:
+            for ancestor_id in collect(step.step_id):
+                covered_downstream[ancestor_id].update(step.covers)
+        return [
+            replace(
+                step,
+                covers=[
+                    obligation_id
+                    for obligation_id in step.covers
+                    if obligation_id not in covered_downstream[step.step_id]
+                ],
+            )
+            for step in steps
         ]
 
     async def _call_json(self, prompt: str) -> dict[str, Any]:
@@ -479,12 +527,14 @@ PUBLIC CONTEXT:
 
 Return one valid json object with `steps`. Each step has exactly:
 step_id, capability, effect, systems, task, success_criterion,
-expected_findings, depends_on, covers.
+expected_findings, depends_on, covers, dependency_policy.
 - capability must come from LIVE CAPABILITY CATALOG.
 - effect must be exactly one of: read, propose, write, notify, destructive, final_response.
 - systems lists every provider the step will call and must be authorized by the capability.
 - write, notify and destructive outcomes must name exactly one provider in systems.
 - covers contains obligation ids satisfied by the step.
+- dependency_policy is `satisfied` unless this step intentionally diagnoses or
+    remediates an unresolved dependency artifact; only then use `terminal_evidence`.
 - use capabilities, never an agent ID or named instance.
 - reason about the information required to execute each effectful outcome. Every
     required fact must come from the source goal or an ancestor step whose task and
@@ -538,7 +588,7 @@ PUBLIC CONTEXT:
 
 Return one valid json object with a complete replacement `steps` list. Each step
 has exactly: step_id, capability, effect, systems, task, success_criterion,
-expected_findings, depends_on, covers.
+expected_findings, depends_on, covers, dependency_policy.
 - resolve every audit finding without changing or adding obligations.
 - use capabilities, never agent IDs, named instances, atom names, or provider calls.
 - model business outcomes, not conditional branches.
@@ -593,11 +643,12 @@ PUBLIC CONTEXT:
 
 Return one valid json object containing only NEW `steps`. Each step has exactly:
 step_id, capability, effect, systems, task, success_criterion,
-expected_findings, depends_on, covers.
+expected_findings, depends_on, covers, dependency_policy.
 - do not reproduce, alter or remove any current step.
 - every step_id must be new; current step ids may only appear in depends_on.
 - semantic hold or rejection on a completed attempt may be remediated only by adding
-    concrete new work that depends on its durable artifact; never alter or rerun the attempt.
+    concrete new work that depends on its durable artifact and declares
+    dependency_policy=`terminal_evidence`; never alter or rerun the attempt.
 - preserve completed effects as immutable facts and do not add work that repeats them.
 - cover every UNRESOLVED OBLIGATION ID exactly through new work and preserve
     dependencies on completed work; `covers` must not contain any other obligation id.
@@ -895,7 +946,7 @@ list each missing item with description and an exact source_quote."""
                 raise MeshPlanError(f"Step {index} must be an object")
             allowed = {
                 "id", "step_id", "capability", "effect", "systems", "task", "success_criterion",
-                "expected_findings", "depends_on", "covers",
+                "expected_findings", "depends_on", "covers", "dependency_policy",
             }
             unknown = set(item) - allowed
             if unknown:
@@ -910,6 +961,10 @@ list each missing item with description and an exact source_quote."""
             systems = [str(value).strip() for value in item.get("systems") or [] if str(value).strip()]
             task = str(item.get("task") or "").strip()
             criterion = str(item.get("success_criterion") or "").strip()
+            dependency_policy = str(
+                item.get("dependency_policy") or "satisfied"
+            ).strip()
+            covers = [str(value) for value in item.get("covers") or []]
             if not step_id or step_id in step_ids:
                 raise MeshPlanError(f"Step {index} has a missing or duplicate step_id")
             if step_id in (forbidden_step_ids or set()):
@@ -938,6 +993,10 @@ list each missing item with description and an exact source_quote."""
                 )
             if not task or not criterion:
                 raise MeshPlanError(f"Step {step_id} requires task and success_criterion")
+            if dependency_policy not in {"satisfied", "terminal_evidence"}:
+                raise MeshPlanError(
+                    f"Step {step_id} has invalid dependency_policy {dependency_policy!r}"
+                )
             expected_raw = item.get("expected_findings") or []
             expected_findings = (
                 [expected_raw.strip()] if isinstance(expected_raw, str) and expected_raw.strip()
@@ -953,7 +1012,8 @@ list each missing item with description and an exact source_quote."""
                 success_criterion=criterion,
                 expected_findings=expected_findings,
                 depends_on=[str(value) for value in item.get("depends_on") or []],
-                covers=[str(value) for value in item.get("covers") or []],
+                covers=covers,
+                dependency_policy=dependency_policy,
             ))
 
         for step in steps:
@@ -972,7 +1032,12 @@ list each missing item with description and an exact source_quote."""
                     f"Step {step.step_id} covers obligations outside the amendment target: "
                     f"{sorted(unknown_obligations)}"
                 )
-        covered = {obligation for step in steps for obligation in step.covers}
+        covered = {
+            obligation
+            for step in steps
+            if step.effect != "final_response"
+            for obligation in step.covers
+        }
         uncovered = (required_obligation_ids or obligation_ids) - covered
         if uncovered:
             raise MeshPlanError(f"Mesh plan has uncovered obligation(s): {sorted(uncovered)}")

@@ -12,6 +12,10 @@ from uuid import uuid4
 class WorkflowBudgetExceeded(RuntimeError):
     """Raised before an LLM call when its workflow cannot reserve capacity."""
 
+    def __init__(self, message: str, *, recoverable: bool = True):
+        super().__init__(message)
+        self.recoverable = bool(recoverable)
+
 
 @dataclass(frozen=True)
 class WorkflowBudgetAccount:
@@ -28,12 +32,15 @@ class WorkflowBudgetAccount:
             max(1, int(tokens)),
         ):
             usage = self.store.get_workflow_budget_usage(self.workflow_id) or {}
+            limit = int(usage.get("max_tokens_per_epoch", 0) or 0)
+            recoverable = not limit or int(tokens) <= limit
             raise WorkflowBudgetExceeded(
                 f"Workflow {self.workflow_id!r} cannot reserve {tokens} tokens; "
                 f"epoch={self.epoch_id!r}, "
                 f"epoch_used={usage.get('epoch_used_tokens', 0)}, "
                 f"epoch_reserved={usage.get('epoch_reserved_tokens', 0)}, "
-                f"epoch_limit={usage.get('max_tokens_per_epoch', 0)}."
+                f"epoch_limit={limit}.",
+                recoverable=recoverable,
             )
         return reservation_id
 

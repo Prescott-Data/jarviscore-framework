@@ -695,6 +695,11 @@ class Kernel:
         explicit_role = None
         if context:
             explicit_role = context.get("_agent_default_kernel_role")
+            execution_contract = context.get("execution_contract") or {}
+            if isinstance(execution_contract, dict) and execution_contract.get(
+                "kernel_role"
+            ):
+                explicit_role = execution_contract["kernel_role"]
         if agent_default_role and not use_default_role_as_fallback:
             explicit_role = agent_default_role
 

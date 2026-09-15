@@ -41,6 +41,30 @@ def test_rag_pipeline_module_imports_without_optional_dependencies():
     assert proc.returncode == 0, proc.stderr
 
 
+def test_base_import_does_not_require_optional_redis_package():
+    script = """
+import builtins
+original_import = builtins.__import__
+def guarded_import(name, *args, **kwargs):
+    if name == 'redis' or name.startswith('redis.'):
+        raise ModuleNotFoundError('redis intentionally unavailable')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = guarded_import
+import jarviscore
+from jarviscore import SourceAdapter
+from jarviscore.storage import BlobStorage
+assert SourceAdapter is not None
+assert BlobStorage is not None
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_p2p_lazy_exports_still_resolve():
     from jarviscore.p2p import PeerClient  # eager, swim-free
 

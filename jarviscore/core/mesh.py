@@ -31,8 +31,11 @@ Usage:
 """
 from typing import List, Dict, Any, Optional, Set
 import asyncio
+import json
 import logging
 import warnings
+from contextlib import asynccontextmanager
+from dataclasses import asdict
 from uuid import uuid4
 
 from .agent import Agent
@@ -598,6 +601,9 @@ class Mesh:
             raise ValueError("A mesh goal cannot be empty.")
         identity = workflow_id or f"wf-{uuid4().hex[:12]}"
         public_context = neutral_context(context)
+        public_context = await self._prepare_workspace_source(
+            identity, public_context, goal=source
+        )
         budget_options = dict(self.config.get("execution_budget") or {})
         if timeout is not None:
             budget_options.setdefault("max_seconds", timeout)
@@ -617,6 +623,217 @@ class Mesh:
                 identity, reason="Goal execution was cancelled by its caller"
             )
             raise
+
+    async def _prepare_workspace_source(
+        self,
+        workflow_id: str,
+        context: Dict[str, Any],
+        *,
+        goal: str = "",
+    ) -> Dict[str, Any]:
+        """Resolve an explicit source contract into a durable blob snapshot."""
+        context = dict(context)
+        context.pop("source_snapshot", None)
+        context.pop("workspace_binding", None)
+        nested_source = context.get("source_context")
+        source_data = context.get("workspace_source")
+        if source_data is None and isinstance(nested_source, dict):
+            source_data = nested_source.get("workspace_source")
+        if not isinstance(source_data, dict):
+            if self.config.get("workspace_required"):
+                source_data = await self._resolve_workspace_source(goal, context)
+            else:
+                return context
+        if not isinstance(source_data, dict):
+            raise RuntimeError("This Mesh requires workspace_source before planning")
+        from jarviscore.execution.workspace import cleanup_stale_bindings
+        cleanup_stale_bindings()
+        if self._blob_storage is None:
+            raise RuntimeError("workspace_source requires BlobStorage")
+        from jarviscore.execution.sources import (
+            GitHubRepositorySource,
+            SnapshotLimits,
+            capture_source,
+        )
+        from jarviscore.execution.workspace import BlobSnapshotStore, SourceRef
+        from jarviscore.nexus.call_proxy import NexusCallProxy
+
+        source = SourceRef(
+            provider=str(source_data.get("provider") or ""),
+            locator=str(source_data.get("locator") or ""),
+            revision=str(source_data.get("revision") or ""),
+        )
+        adapters = dict(self.config.get("workspace_source_adapters") or {})
+        adapter = adapters.get(source.provider)
+        store = BlobSnapshotStore(self._blob_storage)
+        if adapter is None and source.provider == "github":
+            if self._auth_manager is None:
+                raise RuntimeError("GitHub workspace source requires Nexus authentication")
+            handle = await self._auth_manager.discover("github")
+            if handle is None:
+                raise RuntimeError("GitHub workspace source requires an active Nexus connection")
+            proxy = NexusCallProxy(self._auth_manager)
+            limits = SnapshotLimits(
+                **dict(self.config.get("workspace_snapshot_limits") or {})
+            )
+            adapter = GitHubRepositorySource(
+                proxy.make_nexus_call_fn(proxy, handle), store, limits=limits
+            )
+        if adapter is None:
+            raise ValueError(f"No workspace source adapter for {source.provider!r}")
+        snapshot = await capture_source(adapter, store, source)
+        prepared = dict(context)
+        prepared["workspace_source"] = {
+            "provider": source.provider,
+            "locator": source.locator,
+            "revision": source.revision,
+        }
+        if isinstance(nested_source, dict) and "workspace_source" in nested_source:
+            prepared["source_context"] = {
+                **nested_source,
+                "workspace_source": dict(prepared["workspace_source"]),
+            }
+        prepared["source_snapshot"] = {
+            "snapshot_id": snapshot.snapshot_id,
+            "provider": snapshot.source.provider,
+            "locator": snapshot.source.locator,
+            "requested_revision": snapshot.source.revision,
+            "resolved_revision": snapshot.resolved_revision,
+            "manifest_blob_path": snapshot.manifest_blob_path,
+            "file_count": len(snapshot.entries),
+            "total_bytes": sum(entry.size for entry in snapshot.entries),
+            "allowed_commands": [
+                str(command)
+                for command in self.config.get("workspace_allowed_commands") or []
+                if str(command)
+            ],
+            "storage_scope": (
+                "shared"
+                if getattr(self._settings, "storage_backend", "local") != "local"
+                else "node"
+            ),
+            "materializer_node_id": self._node_id,
+        }
+        self._logger.info(
+            "Prepared source snapshot for %s: provider=%s locator=%s revision=%s files=%d",
+            workflow_id,
+            snapshot.source.provider,
+            snapshot.source.locator,
+            snapshot.resolved_revision,
+            len(snapshot.entries),
+        )
+        return prepared
+
+    async def _resolve_workspace_source(
+        self, goal: str, context: Dict[str, Any]
+    ) -> Dict[str, str]:
+        """Resolve explicit source identity from intent without granting authority."""
+        from jarviscore.execution.sources import SourceContractError
+        from jarviscore.execution.workspace import SourceRef
+
+        adapters = dict(self.config.get("workspace_source_adapters") or {})
+        catalog = {
+            str(provider): dict(details) if isinstance(details, dict) else {}
+            for provider, details in dict(
+                self.config.get("workspace_source_catalog") or {}
+            ).items()
+            if str(provider)
+        }
+        for provider in adapters:
+            catalog.setdefault(str(provider), {})
+        if self.config.get("nexus_enabled") or self._auth_manager is not None:
+            catalog.setdefault("github", {
+                "description": (
+                    "A GitHub repository. locator is owner/repository; revision is "
+                    "an optional branch, tag, or commit."
+                ),
+            })
+        if not catalog:
+            raise SourceContractError(
+                "This Mesh requires a workspace but has no trusted source adapters"
+            )
+
+        resolver = self.config.get("workspace_source_resolver")
+        if resolver is not None:
+            resolved = resolver(goal, dict(context))
+            if hasattr(resolved, "__await__"):
+                resolved = await resolved
+        else:
+            prompt = {
+                "goal": str(goal or ""),
+                "available_sources": [
+                    {
+                        "provider": provider,
+                        "description": str(details.get("description") or provider),
+                    }
+                    for provider, details in sorted(catalog.items())
+                ],
+                "output_schema": {
+                    "provider": "one available provider or empty string",
+                    "locator": "explicit source locator or empty string",
+                    "revision": "explicit revision or empty string",
+                },
+            }
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Resolve only the source identity explicitly named in the goal. "
+                        "Do not infer a repository, account, path, revision, credential, "
+                        "or execution policy. Select only an available provider. Return "
+                        "exactly one JSON object matching output_schema."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+            ]
+            llm = self._planning_llm()
+            try:
+                response = await llm.generate(
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    temperature=0.0,
+                    max_tokens=500,
+                )
+            except TypeError:
+                response = await llm.generate(
+                    messages=messages,
+                    temperature=0.0,
+                    max_tokens=500,
+                )
+            raw = response.get("content", "") if isinstance(response, dict) else response
+            text = str(raw or "").strip()
+            if text.startswith("```"):
+                text = "\n".join(
+                    line for line in text.splitlines()
+                    if not line.strip().startswith("```")
+                ).strip()
+            try:
+                resolved = json.loads(text)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise SourceContractError(
+                    "Workspace source resolution did not return valid JSON"
+                ) from exc
+
+        if isinstance(resolved, SourceRef):
+            resolved = asdict(resolved)
+        if not isinstance(resolved, dict):
+            raise SourceContractError(
+                "Workspace source resolver must return SourceRef or a source object"
+            )
+        source = {
+            "provider": str(resolved.get("provider") or "").strip(),
+            "locator": str(resolved.get("locator") or "").strip(),
+            "revision": str(resolved.get("revision") or "").strip(),
+        }
+        if source["provider"] not in catalog:
+            raise SourceContractError(
+                "Workspace source resolver selected an unavailable provider"
+            )
+        if not source["locator"]:
+            raise SourceContractError(
+                "The goal must explicitly identify a workspace source"
+            )
+        return source
 
     def _planning_llm(self):
         for agent in self.agents:
@@ -1325,6 +1542,8 @@ class Mesh:
                     if self._redis_store.is_workflow_cancelled(workflow_id):
                         self._redis_store.unregister_active_workflow(workflow_id)
                         continue
+                    if not self._node_can_access_workspace(workflow_id):
+                        continue
                     for step_id in self._redis_store.get_all_step_ids(workflow_id):
                         step_def = self._redis_store.get_step_definition(
                             workflow_id, step_id
@@ -1413,7 +1632,10 @@ class Mesh:
                 ):
                     continue
                 workflow = self._redis_store.get_workflow_definition(workflow_id) or {}
-                context = dict(need.get("context") or {})
+                context = {
+                    **neutral_context(workflow.get("context") or {}),
+                    **dict(need.get("context") or {}),
+                }
                 context.setdefault("objective", workflow.get("goal", ""))
                 lineage = [
                     str(agent_id)
@@ -1434,6 +1656,7 @@ class Mesh:
                     "peer_requester_agent_id": need.get("requester_agent_id"),
                     "peer_requester_step_id": need.get("requester_step_id"),
                     "peer_request_lineage": lineage,
+                    "workspace_dependency_step_id": need.get("requester_step_id"),
                 })
                 heartbeat = asyncio.create_task(
                     self._renew_capability_need_claim(
@@ -1448,11 +1671,18 @@ class Mesh:
                             workflow_id,
                             epoch_id=f"capability:{claim_id}",
                         ):
-                            result = await agent.execute_capability_request(
-                                str(need.get("capability") or ""),
-                                str(need.get("question") or ""),
-                                context,
-                            )
+                            capability_task = {
+                                "id": f"need:{need_id}",
+                                "context": context,
+                            }
+                            async with self._bound_step_workspace(
+                                agent, capability_task
+                            ):
+                                result = await agent.execute_capability_request(
+                                    str(need.get("capability") or ""),
+                                    str(need.get("question") or ""),
+                                    context,
+                                )
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
@@ -1546,7 +1776,9 @@ class Mesh:
                 "effect": effect,
                 "systems": systems,
                 **({
-                    "workflow_evidence": workflow_evidence.to_record(),
+                    "workflow_evidence": workflow_evidence.to_record(
+                        include_artifacts=False
+                    ),
                     "workflow_step_states": workflow_evidence.states,
                 } if workflow_evidence is not None else {}),
                 **({"system": systems[0]} if len(systems) == 1 else {}),
@@ -1590,7 +1822,41 @@ class Mesh:
                             ],
                         }
                     else:
-                        result = await agent.execute_task(task)
+                        async def execute_bound_task():
+                            async with self._bound_step_workspace(agent, task) as binding:
+                                bound_result = await agent.execute_task(task)
+                                if (
+                                    binding is not None
+                                    and isinstance(bound_result, dict)
+                                    and bound_result.get("status") == "success"
+                                ):
+                                    delta = await binding.export_delta(
+                                        f"workflows/{workflow_id}/workspace_deltas/{step_id}",
+                                        ignored_names=tuple(
+                                            self.config.get(
+                                                "workspace_delta_ignored_names"
+                                            )
+                                            or (
+                                                ".git",
+                                                ".tmp",
+                                                ".venv",
+                                                "__pycache__",
+                                                "node_modules",
+                                                "output",
+                                                "target",
+                                            )
+                                        ),
+                                    )
+                                    if delta.added or delta.modified or delta.deleted:
+                                        bound_result["workspace_delta"] = asdict(delta)
+                                return bound_result
+
+                        lock = getattr(agent, "_peer_execution_lock", None)
+                        if lock is None:
+                            result = await execute_bound_task()
+                        else:
+                            async with lock:
+                                result = await execute_bound_task()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -1607,6 +1873,29 @@ class Mesh:
 
         s = result.get("status", "?") if isinstance(result, dict) else "done"
         if s == "epoch_exhausted":
+            step_state = self._redis_store.get_step_definition(workflow_id, step_id) or {}
+            execution_epochs = int(step_state.get("execution_epochs") or 1)
+            max_epochs = ExecutionBudget.from_record(
+                workflow.get("budget")
+            ).max_epochs_per_step
+            if execution_epochs >= max_epochs:
+                exhausted = {
+                    "status": "failure",
+                    "error": (
+                        f"Step exhausted {execution_epochs} execution epochs without "
+                        "reaching a terminal result"
+                    ),
+                    "typed_outcome": "EXECUTION_EPOCH_LIMIT_REACHED",
+                    "last_epoch": result,
+                }
+                self._redis_store.finish_claimed_step(
+                    workflow_id,
+                    step_id,
+                    claim_id,
+                    exhausted,
+                    status="failed",
+                )
+                return
             continued = self._redis_store.continue_claimed_step(
                 workflow_id,
                 step_id,
@@ -1644,6 +1933,104 @@ class Mesh:
             agent.agent_id,
             s,
         )
+
+    @staticmethod
+    def _workspace_delta_manifests(value: Any) -> list[str]:
+        manifests = []
+        if isinstance(value, dict):
+            delta = value.get("workspace_delta")
+            if isinstance(delta, dict) and isinstance(delta.get("manifest_blob_path"), str):
+                manifests.append(delta["manifest_blob_path"])
+            for child in value.values():
+                manifests.extend(Mesh._workspace_delta_manifests(child))
+        elif isinstance(value, list):
+            for child in value:
+                manifests.extend(Mesh._workspace_delta_manifests(child))
+        return list(dict.fromkeys(manifests))
+
+    def _node_can_access_workspace(self, workflow_id: str) -> bool:
+        workflow = self._redis_store.get_workflow_definition(workflow_id) or {}
+        snapshot = (workflow.get("context") or {}).get("source_snapshot")
+        if not isinstance(snapshot, dict) or snapshot.get("storage_scope") != "node":
+            return True
+        return snapshot.get("materializer_node_id") == self._node_id
+
+    @asynccontextmanager
+    async def _bound_step_workspace(self, agent: Any, task: Dict[str, Any]):
+        snapshot_data = task.get("context", {}).get("source_snapshot")
+        sandbox = getattr(agent, "sandbox", None)
+        if (
+            task.get("context", {}).get("effect") == "final_response"
+            or not isinstance(snapshot_data, dict)
+            or self._blob_storage is None
+            or sandbox is None
+        ):
+            yield None
+            return
+        from jarviscore.execution.workspace import BlobSnapshotStore, SandboxBinding
+
+        store = BlobSnapshotStore(self._blob_storage)
+        snapshot = await store.load(str(snapshot_data["manifest_blob_path"]))
+        async with SandboxBinding(store, snapshot) as binding:
+            workflow_plan = task["context"].get("workflow_plan") or {}
+            step_id = str(task["context"].get("step_id") or "")
+            dependency_step_id = str(
+                task["context"].get("workspace_dependency_step_id") or step_id
+            )
+            step = next(
+                (
+                    candidate for candidate in workflow_plan.get("steps", [])
+                    if str(candidate.get("id")) == dependency_step_id
+                ),
+                {},
+            )
+            dependency_results = {
+                dependency_id: self._redis_store.get_step_output(
+                    str(task["context"].get("workflow_id") or ""),
+                    str(dependency_id),
+                )
+                for dependency_id in step.get("depends_on", [])
+            }
+            deltas = [
+                await store.load_delta(manifest_path)
+                for manifest_path in self._workspace_delta_manifests(dependency_results)
+            ]
+            await binding.apply_deltas(deltas)
+            bound_sandbox = sandbox.for_workspace(
+                binding.workspace,
+                allowed_commands=set(snapshot_data.get("allowed_commands") or ()),
+                bash_timeout=int(
+                    self.config.get("workspace_command_timeout_seconds", 120)
+                ),
+                command_environment=dict(
+                    self.config.get("workspace_command_environment") or {}
+                ),
+            )
+            kernel = getattr(agent, "_kernel", None)
+            original_kernel_sandbox = getattr(kernel, "sandbox", None)
+            cached = []
+            if kernel is not None:
+                kernel.sandbox = bound_sandbox
+                for subagent in getattr(kernel, "_subagent_cache", {}).values():
+                    if getattr(subagent, "role", None) == "coder":
+                        cached.append((subagent, subagent.sandbox))
+                        subagent.sandbox = bound_sandbox
+            agent.sandbox = bound_sandbox
+            task["context"]["workspace_binding"] = {
+                "path": str(binding.workspace),
+                "snapshot_id": snapshot.snapshot_id,
+                "resolved_revision": snapshot.resolved_revision,
+                "mode": "copy_on_write",
+            }
+            try:
+                yield binding
+            finally:
+                task["context"].pop("workspace_binding", None)
+                agent.sandbox = sandbox
+                if kernel is not None:
+                    kernel.sandbox = original_kernel_sandbox
+                for subagent, original in cached:
+                    subagent.sandbox = original
 
     async def _renew_distributed_claim(
         self,

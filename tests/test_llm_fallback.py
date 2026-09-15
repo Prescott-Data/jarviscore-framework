@@ -242,9 +242,10 @@ async def test_generate_never_dispatches_without_global_capacity():
     })
 
     with workflow_budget_scope(store, "wf-llm-exhausted"):
-        with pytest.raises(WorkflowBudgetExceeded):
+        with pytest.raises(WorkflowBudgetExceeded) as error:
             await llm.generate(prompt="this call cannot fit", max_tokens=20)
 
+    assert error.value.recoverable is False
     llm._generate_inner.assert_not_awaited()
 
 

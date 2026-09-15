@@ -136,6 +136,74 @@ async def test_mesh_planner_adds_configured_user_response_as_the_terminal_step()
 
 
 @pytest.mark.asyncio
+async def test_mesh_planner_assigns_obligation_truth_to_terminal_domain_work():
+    steps = [
+        {
+            "step_id": "inspect", "capability": "research", "effect": "read",
+            "systems": [], "task": "Inspect", "success_criterion": "Mapped",
+            "expected_findings": [], "depends_on": [], "covers": ["o1"],
+        },
+        {
+            "step_id": "verify", "capability": "research", "effect": "read",
+            "systems": [], "task": "Verify", "success_criterion": "Verified",
+            "expected_findings": [], "depends_on": ["inspect"], "covers": ["o1"],
+        },
+    ]
+    planner = MeshPlanner(
+        MockLLMClient(responses=responses(steps=steps)),
+        capabilities={
+            "research": "Research evidence",
+            "action_briefing": {
+                "description": "Produce the user-facing decision",
+                "effects": ["final_response"],
+                "systems": [],
+            },
+        },
+        response_capability="action_briefing",
+    )
+
+    plan = await planner.plan("Find evidence")
+
+    assert plan.steps[0].covers == []
+    assert plan.steps[1].covers == ["o1"]
+    assert plan.steps[2].covers == []
+
+
+@pytest.mark.asyncio
+async def test_mesh_planner_owns_final_response_obligation_coverage():
+    steps = responses()[1]["content"]
+    domain_step = json.loads(steps)["steps"][0]
+    model_response = {
+        "step_id": "model_response",
+        "capability": "action_briefing",
+        "effect": "final_response",
+        "systems": [],
+        "task": "Report the outcome",
+        "success_criterion": "The outcome is reported",
+        "expected_findings": [],
+        "depends_on": ["research"],
+        "covers": ["o1"],
+    }
+    planner = MeshPlanner(
+        MockLLMClient(responses=responses(steps=[domain_step, model_response])),
+        capabilities={
+            "research": "Research evidence",
+            "action_briefing": {
+                "description": "Produce the user-facing decision",
+                "effects": ["final_response"],
+                "systems": [],
+            },
+        },
+        response_capability="action_briefing",
+    )
+
+    plan = await planner.plan("Find evidence")
+
+    assert [step.step_id for step in plan.steps] == ["research", "final_response"]
+    assert plan.steps[-1].covers == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("steps", "error"),
     [

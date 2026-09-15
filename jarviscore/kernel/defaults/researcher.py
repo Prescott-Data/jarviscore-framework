@@ -531,6 +531,12 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             )
         return None
 
+    def _tool_is_actionable(self, tool_name: str, state: Any) -> bool:
+        return (
+            super()._tool_is_actionable(tool_name, state)
+            and self._check_phase_tool_contract(tool_name) is None
+        )
+
     async def _pre_execute_hook(
         self,
         tool_name: str,
