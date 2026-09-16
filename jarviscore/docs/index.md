@@ -163,7 +163,7 @@ If you are evaluating for a specific use case:
 - [CustomAgent Guide](guides/customagent.md): deterministic worker agents
 - [System Bundles & Integrations](guides/integrations.md): the full atom catalog
 - [Configuration Reference](reference/configuration.md): all environment variables
-- [JarvisCore Enterprise](infrastructure/enterprise.md): managed deployment and SLAs
+- [JarvisCore Enterprise](infrastructure/enterprise.md): edition comparison, enterprise capabilities, deployment, and support
 
 ---
 

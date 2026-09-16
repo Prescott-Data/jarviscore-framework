@@ -449,3 +449,15 @@ python committee.py --mode full --ticker NVDA --amount 1500000
 ## License
 
 Apache 2.0. See [LICENSE](https://github.com/Prescott-Data/jarviscore-framework/blob/main/LICENSE) for details.
+
+You can build and sell products using the Apache-licensed framework. There is no revenue or user-count threshold that requires a commercial agreement simply because your product grows. Separately licensed enterprise modules and services have their own terms; see [JarvisCore Enterprise](https://jarviscore.developers.prescottdata.io/infrastructure/enterprise/).
+
+### Built with JarvisCore
+
+Building something with JarvisCore? Help others discover the framework by adding [Built with JarvisCore](https://developers.prescottdata.io) to your product's About page, footer, or documentation.
+
+```markdown
+[Built with JarvisCore](https://developers.prescottdata.io)
+```
+
+This product credit is optional and appreciated. It does not replace the copyright, license, and applicable attribution notices required by Apache 2.0. Use it as a factual acknowledgment, not an implication of endorsement; the [trademark policy](TRADEMARK.md) applies.
