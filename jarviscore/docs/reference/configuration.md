@@ -185,7 +185,7 @@ Blob storage is used by agents to persist large outputs (reports, datasets, gene
 | Variable | Default | Description |
 |---|---|---|
 | `STORAGE_BACKEND` | `local` | `local` or `azure` |
-| `STORAGE_BASE_PATH` | `./jarviscore/blob_storage` | Base directory path for the local backend |
+| `STORAGE_BASE_PATH` | `./.jarviscore/blob_storage` | Base directory path for the local backend |
 | `AZURE_STORAGE_CONNECTION_STRING` | (none) | Required when `STORAGE_BACKEND=azure` |
 
 For Azure:
@@ -388,7 +388,7 @@ See [System Bundles and Atoms](../concepts/system-bundles.md) for a full explana
 | Variable | Default | Description |
 |---|---|---|
 | `TELEMETRY_ENABLED` | `true` | Write execution trace files to disk. |
-| `TELEMETRY_TRACE_DIR` | `./jarviscore/traces` | Directory for execution trace files. |
+| `TELEMETRY_TRACE_DIR` | `./.jarviscore/traces` | Directory for execution trace files. |
 | `PROMETHEUS_ENABLED` | `false` | Start a Prometheus metrics endpoint. |
 | `PROMETHEUS_PORT` | `9090` | Port for the `/metrics` endpoint. |
 
