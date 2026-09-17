@@ -23,13 +23,17 @@ import asyncio
 import logging
 import random
 import time
-from typing import List, Dict, Any, Optional, TYPE_CHECKING
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
-from .messages import PeerInfo, IncomingMessage, OutgoingMessage, MessageType
+from jarviscore.orchestration.envelopes import ExecutionBudget, neutral_context
+
+from .messages import IncomingMessage, MessageType, OutgoingMessage, PeerInfo
 
 if TYPE_CHECKING:
     from .coordinator import P2PCoordinator
+    from .peer_tool import PeerTool
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +77,8 @@ class PeerClient:
         agent_id: str,
         agent_role: str,
         agent_registry: Dict[str, List],
-        node_id: str = ""
+        node_id: str = "",
+        redis_store=None,
     ):
         """
         Initialize PeerClient.
@@ -90,12 +95,20 @@ class PeerClient:
         self._agent_role = agent_role
         self._agent_registry = agent_registry
         self._node_id = node_id
+        self._redis_store = redis_store
 
         # Message queue for incoming messages
         self._message_queue: asyncio.Queue[IncomingMessage] = asyncio.Queue()
 
         # Pending requests waiting for responses (correlation_id -> Future)
         self._pending_requests: Dict[str, asyncio.Future] = {}
+        self._request_handler: Optional[
+            Callable[[IncomingMessage], Awaitable[Optional[Dict[str, Any]]]]
+        ] = None
+        self._notification_handler: Optional[
+            Callable[[IncomingMessage], Awaitable[None]]
+        ] = None
+        self._handler_tasks: set[asyncio.Task] = set()
 
         # Async request inbox (correlation_id -> response data or None)
         self._async_inbox: Dict[str, Optional[Dict[str, Any]]] = {}
@@ -108,6 +121,31 @@ class PeerClient:
         self._peer_last_used: Dict[str, float] = {}   # agent_id -> timestamp
 
         self._logger = logging.getLogger(f"jarviscore.peer_client.{agent_id}")
+
+    def set_request_handler(
+        self,
+        handler: Callable[[IncomingMessage], Awaitable[Optional[Dict[str, Any]]]],
+    ) -> None:
+        """Handle requests directly for task-driven agents without run loops."""
+        self._request_handler = handler
+
+    def set_notification_handler(
+        self, handler: Callable[[IncomingMessage], Awaitable[None]]
+    ) -> None:
+        self._notification_handler = handler
+
+    async def close(self) -> None:
+        """Cancel in-flight handlers and pending requests owned by this client."""
+        tasks = list(self._handler_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._handler_tasks.clear()
+        for future in self._pending_requests.values():
+            if not future.done():
+                future.cancel()
+        self._pending_requests.clear()
 
     # ─────────────────────────────────────────────────────────────────
     # DISCOVERY
@@ -419,6 +457,9 @@ class PeerClient:
                         "role": agent.role,
                         "agent_id": agent.agent_id,
                         "capabilities": list(agent.capabilities),
+                        "capability_descriptions": dict(
+                            getattr(agent, "capability_descriptions", {}) or {}
+                        ),
                         "description": getattr(agent, 'description', ''),
                         "status": "online",
                         "location": "local"
@@ -434,6 +475,9 @@ class PeerClient:
                         "role": remote.get('role', 'unknown'),
                         "agent_id": agent_id,
                         "capabilities": remote.get('capabilities', []),
+                        "capability_descriptions": remote.get(
+                            'capability_descriptions', {}
+                        ),
                         "description": remote.get('description', ''),
                         "status": "online",
                         "location": "remote",
@@ -441,6 +485,122 @@ class PeerClient:
                     })
 
         return peers
+
+    async def request_capability(
+        self,
+        capability: str,
+        question: str,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+        timeout: float = 7200.0,
+    ) -> Dict[str, Any]:
+        """Resolve one scoped capability mandate through durable or direct P2P."""
+        peer_context = neutral_context(context)
+        workflow_id = str(peer_context.get("workflow_id") or "").strip()
+        workflow = (
+            self._redis_store.get_workflow_definition(workflow_id)
+            if workflow_id and self._redis_store is not None
+            else None
+        ) or {}
+        budget = ExecutionBudget.from_record(workflow.get("budget"))
+        lineage = {
+            str(agent_id)
+            for agent_id in peer_context.get("peer_request_lineage", [])
+            if agent_id
+        }
+        lineage.add(self.my_id)
+        if len(lineage) > budget.max_peer_depth:
+            return {
+                "status": "error",
+                "error": (
+                    f"Capability request exceeds max_peer_depth="
+                    f"{budget.max_peer_depth}."
+                ),
+            }
+        matches = [
+            peer
+            for peer in self.discover(capability=capability, strategy="least_recent")
+            if peer.agent_id not in lineage
+        ]
+        if not matches:
+            return {
+                "status": "error",
+                "error": (
+                    f"no non-cyclic peer owns capability {capability!r}; "
+                    "active request ancestors cannot be asked back."
+                ),
+            }
+        peer_context["peer_request_lineage"] = sorted(lineage)
+        timeout = min(float(timeout), budget.peer_timeout_seconds)
+        store = self._redis_store
+        if workflow_id and store is not None and getattr(store, "enabled", False):
+            mandate_id = store.publish_capability_need(
+                workflow_id,
+                requester_agent_id=self.my_id,
+                requester_step_id=str(
+                    peer_context.get("peer_requester_step_id") or ""
+                ),
+                capability=capability,
+                question=question,
+                context=peer_context,
+            )
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                mandate = store.get_capability_need(workflow_id, mandate_id)
+                if mandate and mandate.get("status") == "fulfilled":
+                    return {
+                        "status": "success",
+                        "capability": capability,
+                        "mandate_id": mandate_id,
+                        "result": mandate.get("result"),
+                    }
+                if mandate and mandate.get("status") in {"failed", "cancelled"}:
+                    return {
+                        "status": "error",
+                        "capability": capability,
+                        "mandate_id": mandate_id,
+                        "error": mandate.get("error") or mandate["status"],
+                    }
+                await asyncio.sleep(0.1)
+            store.fail_capability_need(
+                workflow_id,
+                mandate_id,
+                self.my_id,
+                "Capability mandate timed out.",
+            )
+            return {
+                "status": "error",
+                "capability": capability,
+                "mandate_id": mandate_id,
+                "error": "Capability mandate timed out.",
+            }
+
+        target = matches[0]
+        response = await self.request(
+            target.agent_id,
+            {"query": question, "from": self.my_role, "capability": capability},
+            timeout=timeout,
+            context=peer_context,
+        )
+        if response is None:
+            return {
+                "status": "error",
+                "capability": capability,
+                "error": f"Peer {target.role!r} did not respond.",
+            }
+        if isinstance(response, dict) and response.get("error"):
+            return {
+                "status": "error",
+                "capability": capability,
+                "error": response["error"],
+            }
+        return {
+            "status": "success",
+            "capability": capability,
+            "peer_id": target.agent_id,
+            "peer_role": target.role,
+            "result": response,
+        }
 
     # ─────────────────────────────────────────────────────────────────
     # MESSAGING - SEND
@@ -547,7 +707,11 @@ class PeerClient:
 
         except asyncio.TimeoutError:
             self._logger.debug(f"Request to '{target}' timed out after {timeout}s")
-            return None
+            return {
+                "error": f"Peer '{target}' did not respond within {timeout:g} seconds.",
+                "semantic_error": "PEER_RESPONSE_TIMEOUT",
+                "peer_request_attempted": True,
+            }
 
         finally:
             # Cleanup pending request
@@ -1090,13 +1254,17 @@ class PeerClient:
         """
         # 1. Try local registry first (by role)
         agents = self._agent_registry.get(target, [])
-        if agents:
-            return agents[0]
+        peer = next(
+            (agent for agent in agents if agent.agent_id != self._agent_id),
+            None,
+        )
+        if peer is not None:
+            return peer
 
         # 2. Try local agent_id match
         for role_name, agents in self._agent_registry.items():
             for agent in agents:
-                if agent.agent_id == target:
+                if agent.agent_id == target and agent.agent_id != self._agent_id:
                     return agent
 
         # 3. Try remote agents via coordinator
@@ -1219,8 +1387,38 @@ class PeerClient:
                 )
                 return
 
+        if message.type == MessageType.REQUEST and self._request_handler is not None:
+            task = asyncio.create_task(
+                self._handle_request(message),
+                name=f"peer-request-{self._agent_id}-{message.correlation_id or 'uncorrelated'}",
+            )
+            self._handler_tasks.add(task)
+            task.add_done_callback(self._handler_tasks.discard)
+            return
+
+        if message.type == MessageType.NOTIFY and self._notification_handler is not None:
+            task = asyncio.create_task(
+                self._notification_handler(message),
+                name=f"peer-notify-{self._agent_id}-{message.sender}",
+            )
+            self._handler_tasks.add(task)
+            task.add_done_callback(self._handler_tasks.discard)
+            await task
+            return
+
         # Otherwise queue for receive()
         await self._message_queue.put(message)
         self._logger.debug(
             f"Queued {message.type.value} from {message.sender}"
         )
+
+    async def _handle_request(self, message: IncomingMessage) -> None:
+        try:
+            response = await self._request_handler(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._logger.exception("Peer request handler failed")
+            response = {"status": "failure", "error": f"{type(exc).__name__}: {exc}"}
+        if response is not None:
+            await self.respond(message, response)

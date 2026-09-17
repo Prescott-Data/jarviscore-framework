@@ -5,7 +5,11 @@ Tests SWIM protocol, keepalive, broadcaster, and P2P coordinator.
 """
 import pytest
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
 from jarviscore import Mesh
+from jarviscore.p2p.peer_client import PeerClient
+from jarviscore.p2p.peer_tool import PeerTool
 from jarviscore.profiles import AutoAgent, CustomAgent
 
 
@@ -282,6 +286,283 @@ class TestP2PIntegrationWithAgents:
             if "swim" in str(e).lower():
                 pytest.skip("SWIM library not available")
             raise
+
+    @pytest.mark.asyncio
+    async def test_autoagents_answer_peer_requests_without_custom_listener_wiring(self, monkeypatch):
+        class Requester(AutoAgent):
+            role = "requester"
+            capabilities = ["coordination"]
+            system_prompt = "Coordinate work."
+
+            async def setup(self):
+                pass
+
+            async def execute_task(self, task):
+                return {"status": "success", "output": task["task"]}
+
+        class Analyst(AutoAgent):
+            role = "analyst"
+            capabilities = ["analysis"]
+            system_prompt = "Analyse evidence."
+
+            async def setup(self):
+                pass
+
+            async def execute_task(self, task):
+                return {"status": "success", "output": f"analysed: {task['task']}"}
+
+        monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+        monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+        mesh = Mesh()
+        requester = mesh.add(Requester)
+        mesh.add(Analyst)
+
+        await mesh.start()
+        try:
+            response = await requester.peers.as_tool().execute(
+                "ask_peer", {"role": "analyst", "question": "Review Acme"}
+            )
+            assert "analysed: Review Acme" in response
+        finally:
+            await mesh.stop()
+
+    @pytest.mark.asyncio
+    async def test_autoagents_request_help_by_capability_with_recipient_authority(
+        self, monkeypatch
+    ):
+        received = []
+
+        class Requester(AutoAgent):
+            role = "requester"
+            capabilities = ["coordination"]
+            system_prompt = "Coordinate work."
+
+            async def setup(self):
+                pass
+
+        class ContactVerifier(AutoAgent):
+            role = "contact_verifier"
+            capabilities = ["contact_verification"]
+            capability_descriptions = {
+                "contact_verification": "Resolve contact identity from connected sources.",
+            }
+            capability_contracts = {
+                "contact_verification": {
+                    "effects": ["read"], "systems": ["gmail", "hubspot"],
+                },
+            }
+            system_prompt = "Verify contacts."
+
+            async def setup(self):
+                pass
+
+            async def execute_task(self, task):
+                received.append(task)
+                return {"status": "success", "output": {"email": "ephy@example.com"}}
+
+        monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+        monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+        mesh = Mesh(config={"p2p_enabled": False})
+        requester = mesh.add(Requester, agent_id="requester-1")
+        mesh.add(ContactVerifier, agent_id="verifier-1")
+
+        await mesh.start()
+        try:
+            ask_schema = next(
+                item
+                for item in requester.peers.as_tool().schema
+                if item["name"] == "ask_capability"
+            )
+            assert "Resolve contact identity" in ask_schema["description"]
+            response = await requester.peers.as_tool().execute(
+                "ask_capability",
+                {
+                    "capability": "contact_verification",
+                    "question": "Find a verified contact path for Ephy Kizito.",
+                },
+                context={
+                    "workflow_id": "wf-1", "objective": "Prepare the customer meeting",
+                    "system": "google_calendar", "effect": "write",
+                    "_nexus_connection_id": "caller-secret",
+                },
+            )
+        finally:
+            await mesh.stop()
+
+        assert "ephy@example.com" in response
+        context = received[0]["context"]
+        assert context["workflow_id"] == "wf-1"
+        assert context["objective"] == "Prepare the customer meeting"
+        assert context["capability"] == "contact_verification"
+        assert context["effect"] == "read"
+        assert context["systems"] == ["gmail", "hubspot"]
+        assert "system" not in context
+        assert "_nexus_connection_id" not in context
+
+    @pytest.mark.asyncio
+    async def test_peer_tool_schema_error_is_typed_and_never_dispatched(self):
+        peers = MagicMock()
+        peers.my_id = "requester-1"
+        peers.my_role = "requester"
+        peers.list_roles.return_value = ["analyst"]
+        peers.list_peers.return_value = [{
+            "role": "analyst",
+            "capabilities": ["analysis"],
+        }]
+        tool = PeerTool(peers)
+
+        result = await tool.execute_result(
+            "ask_peer",
+            {
+                "peer": "analyst",
+                "task": "Review Acme",
+                "context": "Known facts",
+            },
+        )
+
+        assert result["status"] == "error"
+        assert result["semantic_error"] == "INVALID_PEER_TOOL_ARGUMENTS"
+        assert result["peer_request_attempted"] is False
+        peers.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_peer_request_timeout_is_distinct_from_missing_identity(self):
+        class SlowPeer:
+            agent_id = "slow-peer"
+            role = "slow_peer"
+
+        client = PeerClient.__new__(PeerClient)
+        client._agent_id = "requester"
+        client._agent_role = "requester"
+        client._node_id = "node-1"
+        client._pending_requests = {}
+        client._logger = MagicMock()
+        client._resolve_target = MagicMock(return_value=SlowPeer())
+        client._send_message = AsyncMock(return_value=True)
+
+        result = await client.request(
+            "slow_peer", {"query": "Review evidence"}, timeout=0.001
+        )
+
+        assert result["semantic_error"] == "PEER_RESPONSE_TIMEOUT"
+        assert result["peer_request_attempted"] is True
+
+    @pytest.mark.asyncio
+    async def test_capability_request_rejects_an_active_ancestor(self, monkeypatch):
+        class Requester(AutoAgent):
+            role = "requester"
+            capabilities = ["coordination"]
+            system_prompt = "Coordinate work."
+
+            async def setup(self):
+                pass
+
+        class Reconciler(AutoAgent):
+            role = "reconciler"
+            capabilities = ["crm_reconciliation"]
+            system_prompt = "Reconcile CRM evidence."
+
+            async def setup(self):
+                pass
+
+        monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+        monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+        mesh = Mesh(config={"p2p_enabled": False})
+        requester = mesh.add(Requester, agent_id="requester-1")
+        mesh.add(Reconciler, agent_id="reconciler-1")
+
+        await mesh.start()
+        try:
+            response = await requester.peers.as_tool().execute(
+                "ask_capability",
+                {
+                    "capability": "crm_reconciliation",
+                    "question": "Inspect the associated CRM records.",
+                },
+                context={"peer_request_lineage": ["reconciler-1"]},
+            )
+        finally:
+            await mesh.stop()
+
+        assert "no non-cyclic peer" in response
+
+    @pytest.mark.asyncio
+    async def test_autoagent_notifications_enter_its_durable_mailbox(self, monkeypatch):
+        class Peer(AutoAgent):
+            role = "peer"
+            capabilities = ["work"]
+            system_prompt = "Do peer work."
+
+            async def setup(self):
+                pass
+
+            async def execute_task(self, task):
+                return {"status": "success", "output": "done"}
+
+        monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+        monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+        mesh = Mesh()
+        sender = mesh.add(Peer, agent_id="sender")
+        receiver = mesh.add(Peer, agent_id="receiver")
+
+        await mesh.start()
+        try:
+            await sender.peers.notify(
+                "receiver", {"event": "evidence_ready", "step_id": "research"},
+                context={"workflow_id": "wf-1"},
+            )
+            messages = receiver.mailbox.peek()
+            assert messages[0]["sender"] == "sender"
+            assert messages[0]["message"]["event"] == "evidence_ready"
+            assert messages[0]["workflow_id"] == "wf-1"
+        finally:
+            await mesh.stop()
+
+    @pytest.mark.asyncio
+    async def test_autoagent_preserves_application_peer_request_handler(self, monkeypatch):
+        class Peer(AutoAgent):
+            role = "peer"
+            capabilities = ["work"]
+            system_prompt = "Do peer work."
+
+            async def setup(self):
+                pass
+
+            async def execute_task(self, task):
+                raise AssertionError("custom peer handler must run first")
+
+        class Specialist(Peer):
+            role = "specialist"
+            capabilities = ["specialized"]
+
+            async def on_peer_request(self, message):
+                return {"status": "success", "output": message.data["artifact"]}
+
+        monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+        monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+        mesh = Mesh(config={"p2p_enabled": False})
+        sender = mesh.add(Peer, agent_id="sender")
+        mesh.add(Specialist, agent_id="specialist-1")
+
+        await mesh.start()
+        try:
+            response = await sender.peers.request(
+                "specialist", {"artifact": {"id": "typed-1"}}, timeout=1
+            )
+        finally:
+            await mesh.stop()
+
+        assert response["output"] == {"id": "typed-1"}
 
     @pytest.mark.asyncio
     async def test_customagent_with_p2p(self):

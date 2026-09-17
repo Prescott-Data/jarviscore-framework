@@ -1,12 +1,14 @@
 ---
-icon: material/office-building
+icon: material/shield-check-outline
+title: "JarvisCore Enterprise"
+description: "Compare JarvisCore OSS and Enterprise, including Nexus access controls, Maven cost efficiency, workflow improvement, deployment, and support."
 ---
 
 # JarvisCore Enterprise
 
-JarvisCore is open source under Apache 2.0. You can self-host it, run it on any cloud, and operate it entirely on your own infrastructure: forever, for free.
+The JarvisCore framework is open source under Apache 2.0. You can self-host it and use it in commercial products without a revenue or user-count cap.
 
-**JarvisCore Enterprise** is a managed deployment service. Prescott Data runs, operates, and supports the full JarvisCore stack on your behalf: the same way MongoDB Atlas runs MongoDB or Redis Cloud runs Redis. Your team builds agent systems; we handle the infrastructure that runs them.
+**JarvisCore Enterprise** adds commercially licensed capabilities for agent access control, AI cost efficiency, and workflow improvement, alongside deployment assistance and support from Prescott Data.
 
 ---
 
@@ -14,17 +16,20 @@ JarvisCore is open source under Apache 2.0. You can self-host it, run it on any 
 
 |  | JarvisCore OSS | JarvisCore Enterprise |
 |---|---|---|
-| **Who runs it** | You | Prescott Data |
-| **Deployment** | Self-managed | Fully managed |
-| **Licensing** | Apache 2.0: free | Commercial agreement |
-| **Uptime SLA** |: | 99.9% guaranteed |
-| **Support** | Community (GitHub Issues) | Dedicated engineering + SLA |
-| **Security hardening** | Framework defaults | Enterprise-grade (see below) |
-| **Data isolation** | You configure it | Enforced at the infrastructure layer |
-| **Backup & DR** | You configure it | Automated, cross-region, RPO < 1h |
-| **Agent governance** | None | Policy engine, rate limits, allow/deny lists |
-| **LLM flexibility** | Any provider via config | Bring-your-own LLM, on-prem model support |
-| **Professional services** |: | Onboarding, architecture review, migrations |
+| **Licensing** | Apache 2.0 | Commercial agreement for enterprise modules and services |
+| **Deployment** | Self-managed | Deployment and managed operations scoped to your environment |
+| **Agent runtime** | AutoAgent, CustomAgent, Mesh, memory, and HITL | Same foundation |
+| **Credentials** | Public Nexus credential store and integrations | Nexus registered agent identity, OBO delegation, and session scope enforcement |
+| **Cost controls** | Public model routing, caching, and budget controls | Maven cost-efficiency system |
+| **Workflows** | DAG execution, planning, retries, and in-run replanning | Self-improving workflow DAGs |
+| **Observability** | Framework traces, inspection, and metrics | Assistance integrating and operating your monitoring stack |
+| **LLM flexibility** | Configurable providers and models | Same flexibility, with deployment assistance |
+| **Model routing** | Public model configuration and routing | Task-aware selection using reasoning level, model type, size, and cost |
+| **Model gateway** | Configured provider endpoints | Resource-aware routing across clouds, regions, and compatible compute |
+| **Support** | Community | Commercial support with agreed coverage |
+| **Professional services** | Self-service documentation | Onboarding, architecture review, integrations, and training |
+
+The enterprise column describes the commercial offering; confirm module and version availability with Prescott Data. Code already released under Apache 2.0 retains that license, including existing public Nexus functionality.
 
 ---
 
@@ -32,176 +37,148 @@ JarvisCore is open source under Apache 2.0. You can self-host it, run it on any 
 
 ### Managed Deployment
 
-Prescott Data provisions, configures, and operates the complete JarvisCore stack (agents, mesh, Redis, blob storage, and observability) on your chosen cloud (AWS, Azure, GCP) or in your private network.
+Deployment engagements cover the JarvisCore stack: agents, Mesh, Redis, blob storage, and observability. Scope self-managed deployment assistance or managed operations with Prescott Data based on your environment.
 
-- Zero-ops onboarding: your team connects to a running system, not a setup guide
-- Automated patching, dependency upgrades, and rollbacks
-- Capacity planning and horizontal scaling handled on your behalf
-- Private networking, VPC peering, and on-premises deployment options
-- Kubernetes-native deployment with Helm charts and an operator
+- Installation, configuration, upgrades, and rollback procedures
+- Capacity planning and infrastructure requirements
+- Private-cloud, networking, and on-premises requirements
+- Responsibility for operating each service
 
-**Typical deployment topology:**
-
-```
-Your Infrastructure (VPC / Private Network)
-┌───────────────────────────────────────────────────────────┐
-│                                                           │
-│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
-│   │  Agent Mesh │    │  Workflow   │    │  Nexus OSS  │  │
-│   │  (K8s Pods) │←───│  Engine     │    │  (Auth GW)  │  │
-│   └──────┬──────┘    └─────────────┘    └─────────────┘  │
-│          │                                                │
-│   ┌──────▼──────┐    ┌─────────────┐    ┌─────────────┐  │
-│   │  Redis      │    │  Blob       │    │  SIEM /     │  │
-│   │  (HA Pair)  │    │  Storage    │    │  Observ.    │  │
-│   └─────────────┘    └─────────────┘    └─────────────┘  │
-│                                                           │
-│   Managed by Prescott Data  ·  Your data never leaves    │
-└───────────────────────────────────────────────────────────┘
-```
+For self-hosted setup, see [Production Deployment](../guides/production.md). External model and API calls follow your configured providers; hosting the runtime privately does not by itself keep all processing inside your network.
 
 ---
 
 ### Uptime SLA
 
-Enterprise deployments carry a **99.9% monthly uptime SLA** (≤ 43.8 minutes unplanned downtime per month), with the following terms:
-
-| Metric | Commitment |
-|---|---|
-| Monthly uptime | ≥ 99.9% |
-| Measurement window | Calendar month, per region |
-| SLA credit | Pro-rated service credit if missed |
-| Exclusions | Scheduled maintenance (pre-announced ≥ 48h), force majeure, customer-caused outages |
-| Status page | Provided: real-time and historical incident data |
-
-Full SLA terms are included in the commercial agreement.
+For managed operations, availability targets, measurement, exclusions, and any service credits are specified in the commercial agreement.
 
 ---
 
 ### Backup & Disaster Recovery
 
-| Parameter | Value |
-|---|---|
-| **Recovery Point Objective (RPO)** | < 1 hour |
-| **Recovery Time Objective (RTO)** | < 4 hours |
-| **Backup frequency** | Continuous (Redis AOF + hourly snapshots) |
-| **Backup retention** | 30 days rolling |
-| **Cross-region replication** | Available on Professional and Enterprise plans |
-| **Failover** | Automated: no manual intervention required |
-
-Backups are encrypted with your tenant key and stored in isolated, access-controlled storage separate from the primary deployment.
+The deployment scope defines backup ownership, retention, restore testing, recovery point objectives (RPO), and recovery time objectives (RTO). These depend on the storage services and redundancy selected for your environment.
 
 ---
 
 ### Security & Authentication
 
-- SSO via SAML 2.0 or OIDC, federated against your existing identity provider
-- SCIM provisioning and automatic deprovisioning
-- Role-based access control (RBAC) across agents, tools, data sources, and workflows
-- Secrets management via HashiCorp Vault, AWS KMS, Azure Key Vault, or GCP KMS
-- Encryption at rest and in transit; bring-your-own-key (BYOK) option
-- Audit-grade event logs, tamper-evident, exportable to your SIEM
+Enterprise access controls extend Nexus credential handling:
+
+- **Agent identity:** register each agent with a defined permission boundary. This credential identity is distinct from the role and capabilities used for discovery in the open-source Mesh.
+- **On Behalf Of (OBO) sessions:** human-triggered agents carry the user's delegated permission through time-bound, auditable sessions without receiving the user's raw credentials. Delegation does not expand the agent's registered boundary.
+- **Scope enforcement:** Nexus checks requested scopes against the agent's registered boundary at session request time. This applies to provider OAuth scopes and organization-defined permission names. Consuming services remain responsible for enforcing their resource-level permissions.
+
+For the public credential setup, see [Nexus Credentials](../guides/nexus.md). Bring identity-provider, secrets-management, and audit requirements to the deployment review.
 
 ---
 
 ### Tenant Isolation
 
-Enterprise enforces strict separation at every layer for multi-tenant deployments serving multiple business units or customers.
-
-- Workspace-level partitioning: each tenant's agents, workflows, and memory are fully separated
-- Network isolation: no shared data paths between tenants
-- Per-tenant encryption keys
-- Redis namespaces and blob storage prefixes enforced at the platform layer: not in application code
-- Verified isolation documentation available as part of the security review pack
+For deployments serving multiple business units or customers, the architecture review covers separation of credentials, agent state, storage, and network access. Isolation requirements and their verification belong in the deployment scope.
 
 ---
 
 ### Agent Governance & Policy Controls
 
-Enterprise adds a platform-level policy engine that sits above your agent code. This gives platform and security teams controls that don't require modifying agent implementations.
+The open-source framework already includes execution budgets, [HITL](../guides/hitl.md), and [contracts and boundaries](../concepts/contracts.md). Enterprise adds the Nexus credential identity and delegated-access controls described above. Access enforcement complements agent reasoning; it does not replace it.
 
-- **Rate limiting**: per-agent, per-workflow, and per-tenant request caps with configurable burst allowances
-- **Capability allow/deny lists**: restrict which tools, APIs, and data sources each agent role can access
-- **LLM provider policy**: enforce which LLM providers and model versions agents may use; block unapproved models
-- **Output filtering**: platform-level PII redaction and content policy enforcement on all agent outputs before they leave the mesh
-- **Workflow approval gates**: require human sign-off before specific workflow steps execute in production
-- **Cost guardrails**: per-workspace LLM token budget with configurable alerting and hard caps
+---
+
+### Maven Cost Efficiency
+
+Maven is the enterprise cost-efficiency system for reducing AI execution costs as more work is automated. It is separate from the model configuration, routing, caching, and budget controls available in OSS.
+
+Evaluate Maven on representative workloads using cost per successfully completed task, alongside quality and latency.
+
+---
+
+### Self-Improving Workflow DAGs
+
+Agents learn from execution experience and identify changes to workflow DAGs that could deliver more value to the customer. They test candidate changes through long-running background experiments, rather than immediately applying a promising idea to the workflow.
+
+Only after those experiments demonstrate greater customer value do the agents upgrade the DAG. The objective is better customer outcomes, not simply a different graph or faster execution.
+
+This enterprise capability is distinct from ordinary DAG execution, retries, and replanning within an active task, which remain part of the open-source framework.
 
 ---
 
 ### LLM Flexibility
 
-Enterprise does not lock you into a single AI provider. You bring the models your team has approved.
+Provider configuration and the existing model-routing capabilities remain available in OSS. See [Language Models](../concepts/language-models.md) and [Model Routing](../concepts/model-routing.md). Enterprise extends this with task-aware model selection and a resource-aware model gateway.
 
-- Use any LLM via the existing JarvisCore provider config (OpenAI, Anthropic, Mistral, Cohere, and others)
-- **Bring-your-own-model**: connect to on-premises or VPC-hosted models (Ollama, vLLM, Azure OpenAI private endpoint)
-- Per-agent model routing: different agent roles can use different models and providers
-- Model fallback chains: if a primary provider is unavailable, agents fail over to a configured backup automatically
-- All LLM calls are logged, attributable, and subject to your governance policy
+#### Enterprise Model Routing
+
+Enterprise routing evaluates the reasoning level, model type, model size, and inference cost against the needs of the task. The objective is to meet the task's quality requirements efficiently, rather than always choosing the cheapest or largest model.
+
+| Routing factor | What it informs |
+|---|---|
+| **Reasoning level** | The reasoning capability needed for the task |
+| **Model type** | Suitability for the kind of work being performed |
+| **Model size** | The balance between capability and resource requirements |
+| **Model cost** | Execution economics alongside task quality |
+
+#### Model Gateway
+
+The enterprise model gateway routes execution based on available infrastructure as well as model suitability. It supports service continuity by directing requests to compatible resources as availability changes across cloud and multi-cloud deployments, regions, and compute pools.
+
+Resource-aware routing accounts for different GPU generations, including older and newer GPUs, as well as TPUs and CPUs where the model and serving runtime support them. This lets teams use suitable capacity across their infrastructure rather than depend on a single hardware class or region.
+
+Together, model routing and the gateway address both **which model should do the work** and **where that work can run reliably and efficiently**. Supported models, runtimes, and deployment targets are confirmed for your environment; uptime commitments are defined in the commercial agreement.
 
 ---
 
 ### Data Privacy & Compliance
 
-- PII detection and redaction on agent inputs, outputs, and memory writes
-- Field-level encryption for sensitive workflow data
-- Configurable data residency: choose the region where data is stored and processed
-- Retention policies and deletion workflows, including right-to-delete (GDPR Art. 17)
-- Full provenance metadata on all memory reads and writes
-- Compliance documentation available under NDA: SOC 2 Type II report, architecture overview, threat model
+Deployment review covers data flows to model and API providers, processing locations, retention, deletion, and access to stored agent state. Identify applicable regulatory and internal requirements before selecting the deployment architecture.
 
 ---
 
 ### Observability & Tracing
 
-- OpenTelemetry export (metrics, traces, and logs) to your existing stack (Datadog, Grafana, Splunk, and others)
-- SIEM-ready audit streams with tamper-evident event records
-- Long-retention, searchable workflow traces with replay tooling
-- Prometheus metrics aggregated across all nodes and exportable to your monitoring platform
+Framework tracing, `jarviscore inspect`, and metrics are available in OSS. See [Observability](../guides/observability.md). Enterprise services can include monitoring integration, retention configuration, and incident investigation for your deployment.
 
 ---
 
 ### Professional Services
 
-Beyond the managed platform, Prescott Data offers scoped professional services for teams that need hands-on help:
+Prescott Data offers scoped professional services for teams that need hands-on help:
 
 | Service | Description |
 |---|---|
-| **Onboarding programme** | Guided migration from OSS to Enterprise: infra hand-off, agent review, integration setup (2–4 weeks) |
+| **Onboarding programme** | Environment setup, agent review, and enterprise integration |
 | **Architecture review** | A senior JarvisCore engineer reviews your agent design, workflow DAGs, and memory strategy and provides a written recommendations report |
 | **Custom integrations** | Prescott Data builds and maintains integrations with internal systems (data warehouses, internal APIs, observability stacks) |
 | **Training** | Hands-on workshops for your engineering team covering agent design patterns, workflow modelling, and production operations |
 
-Professional services are scoped and priced separately from the managed platform subscription.
+Professional services are scoped and priced in the commercial proposal.
 
 ---
 
 ### Support Tiers
 
-| Plan | Response time | Coverage | Included |
-|---|---|---|---|
-| **Standard** | Next business day | Business hours | GitHub + email, documentation |
-| **Professional** | 4 hours | 24 × 5 | + Named engineer, Slack/Teams channel |
-| **Enterprise** | 1 hour | 24 × 7 × 365 | + Quarterly architecture reviews, on-call escalation |
+| Support | Access | Scope |
+|---|---|---|
+| **Community** | Public project channels | Questions, bug reports, and documentation |
+| **Commercial** | Agreed support channel | Coverage, response targets, and escalation defined in your agreement |
 
-All paid plans include a named support engineer and a dedicated Slack or Teams channel.
+Include production criticality and required support hours when discussing commercial support.
 
 ---
 
 ## Pricing Model
 
-JarvisCore Enterprise is priced on a **subscription basis**: a flat annual fee based on deployment size (number of active agents and workflow volume), not per-seat or per-API-call. This means your costs are predictable as you scale agent usage, and you don't get billed every time an agent completes a workflow step.
+Enterprise modules and services are covered by a commercial agreement. Contact Prescott Data for pricing based on the capabilities, deployment, and support you need.
 
 Pricing is scoped per engagement. Factors include:
 
-- Number of active agent nodes
-- Monthly workflow execution volume
-- Cloud region and redundancy requirements
-- Support tier
+- Enterprise modules and intended use
+- Deployment size and workflow volume
+- Infrastructure and support requirements
 - Professional services scope
 
-> [!NOTE]
-> Contact us with your cloud provider preference, approximate agent count, and any compliance requirements. We'll prepare a scoped proposal within 2 business days.
+Commercial use of the Apache-licensed framework does not require an enterprise agreement merely because your business grows. Embedding or redistributing proprietary enterprise modules requires appropriate commercial terms.
+
+**Built with JarvisCore:** product credit is optional and appreciated. Add `[Built with JarvisCore](https://developers.prescottdata.io)` to your About page, footer, or documentation. This does not replace Apache's required license, copyright, and applicable attribution notices.
 
 ---
 
@@ -209,42 +186,36 @@ Pricing is scoped per engagement. Factors include:
 
 Enterprise is the right choice when any of these apply:
 
-- **You don't want to run infrastructure.** Your team should build agent systems, not operate Redis clusters, manage blob storage, or debug Kubernetes rollouts.
-- **You have compliance requirements.** SOC 2, GDPR, HIPAA, or internal data governance policies require audited, isolated, documented deployments that pass security review.
-- **You need a guaranteed uptime SLA.** Your agent workflows are in the critical path of production systems and cannot tolerate unplanned downtime.
-- **You operate at multi-tenant scale.** Multiple business units or customers need strict data separation without the cost of running completely separate deployments.
-- **You need a support SLA.** When a production incident happens, you need a guaranteed response time and an engineer who knows your deployment: not a GitHub issue queue.
-- **You need model and vendor governance.** Your organisation requires policy controls over which LLMs agents can call, with auditable records of every call.
+- **Delegated access:** agents need registered credential identities, OBO sessions, and enforced scope boundaries.
+- **Automation costs:** you want to evaluate Maven for recurring AI workloads.
+- **Workflow improvement:** you need DAGs that improve from execution experience across runs.
+- **Production operations:** you need deployment assistance, security review, or contracted support.
 
 ---
 
 ## How Teams Typically Adopt
 
-1. **Build on JarvisCore OSS.** Every framework primitive (agents, memory, orchestration, HITL, Nexus) is available and unrestricted. Validate your architecture on your own infrastructure first.
-2. **Move to Enterprise** when operational overhead, compliance requirements, or uptime SLAs become the constraint: not the framework's capabilities.
-3. Onboarding typically takes **1–2 weeks** from a signed agreement to a fully running managed environment.
+1. **Build on JarvisCore OSS.** Validate your agents, integrations, and workflows on the open-source runtime.
+2. **Evaluate Enterprise** against the access-control, cost, workflow, or operational requirements of your workload.
+3. **Agree the scope.** Confirm modules, versions, licensing, deployment responsibilities, support, and delivery before adoption.
 
 ---
 
 ## Security Review Pack
 
-The security review pack is available to qualified enterprise evaluators under NDA. It includes:
+Ask Prescott Data for the security documentation available for the modules and deployment you are evaluating. Relevant review topics include:
 
 - Architecture overview and data flow diagrams
 - Threat model and mitigations
-- SOC 2 Type II report (latest period)
-- Penetration test summary (latest annual test)
 - Encryption key management documentation
 - Shared responsibility model
 
-Request the pack via the email below and reference "security review" in your subject line.
+Specify any required certifications or independent assessments in your request so their availability can be confirmed.
 
 ---
 
 ## Get In Touch
 
-**Email:** jarviscore-enterprise@prescottdata.io
+**Email:** [jarviscore-enterprise@prescottdata.io](mailto:jarviscore-enterprise@prescottdata.io)
 
-Include your cloud provider preference, approximate agent count, and any specific compliance framework requirements in your first message: it helps us prepare the right materials and route your enquiry to the right team.
-
-We respond to all enterprise enquiries within **one business day**.
+Include the enterprise capabilities you need, your intended deployment, expected workload volume, and any security or support requirements.

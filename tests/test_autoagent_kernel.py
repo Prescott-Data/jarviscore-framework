@@ -64,7 +64,8 @@ class TestKernelOutputFormat:
         mock_sandbox.responses = [{"status": "success", "output": {"output": "hello world"}}]
         mock_llm.responses = [
             _router_response(),
-            _coder_write_response('result = {"output": "hello world"}')
+            _coder_write_response('result = {"output": "hello world"}'),
+            _llm_response('THOUGHT: Read it\nDONE: Printed hello world\nRESULT: {"printed": "hello world"}'),
         ]
         kernel = Kernel(llm_client=mock_llm, sandbox=mock_sandbox)
         output = await kernel.execute(task="Print hello world")
@@ -103,7 +104,9 @@ class TestKernelOutputFormat:
                 'result = {"answer": 42}',
                 tokens={"input": 100, "output": 200, "total": 300},
                 cost=0.05,
-            )
+            ),
+            # The agent reads the run and answers; the run itself is not the answer.
+            _llm_response('THOUGHT: Read it\nDONE: 6 * 7 is 42\nRESULT: {"answer": 42}'),
         ]
         kernel = Kernel(llm_client=mock_llm, sandbox=mock_sandbox)
         output = await kernel.execute(task="Calculate 6 * 7")
@@ -120,8 +123,9 @@ class TestKernelOutputFormat:
         assert legacy["status"] == "success"
         assert legacy["output"] == {"answer": 42}
         assert legacy["error"] is None
-        assert legacy["tokens"]["total"] == 300
-        assert legacy["cost_usd"] == 0.05
+        # Two coder turns now: the run, then the answer.
+        assert legacy["tokens"]["total"] == 450
+        assert legacy["cost_usd"] == pytest.approx(0.051)
 
     @pytest.mark.asyncio
     async def test_yield_maps_to_failure_with_pending(self, mock_llm, mock_sandbox):
@@ -172,5 +176,7 @@ class TestKernelOutputFormat:
         output = await kernel.execute(task="Calculate factorial of 5")
 
         assert output.status == "success"
-        assert output.payload == 120
+        # The agent's DONE is the answer. This asserted the sandbox's raw value
+        # before, which passed only because the agent was cut off before DONE.
+        assert output.payload == {"factorial": 120}
         assert output.metadata["dispatches"][0]["status"] == "success"

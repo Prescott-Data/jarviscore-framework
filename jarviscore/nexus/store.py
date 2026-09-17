@@ -48,10 +48,22 @@ import secrets
 import struct
 import time
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .strategy import unmet_requirement
+
 logger = logging.getLogger(__name__)
+
+
+class ConnectionState(str, Enum):
+    """What the vault holds for a provider, in terms of what it can do."""
+
+    ABSENT = "absent"          # nothing registered
+    REGISTERED = "registered"  # app known, but no credential that can sign a call
+    CONNECTED = "connected"    # a call can be authenticated now
+
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -270,6 +282,31 @@ class NexusLocalStore:
         """Return a list of registered provider names."""
         return sorted(self._read_all().keys())
 
+    def connection_state(self, provider: str) -> "ConnectionState":
+        """Whether this provider can actually authenticate a call right now.
+
+        Registering an app and connecting an account are different events, and
+        collapsing them is how a missing consent step surfaces as an opaque 401
+        deep inside an agent run instead of a consent request before it.
+        """
+        entry = self.get(provider)
+        if not entry:
+            return ConnectionState.ABSENT
+        try:
+            strategy = self.build_strategy(provider)
+        except ValueError:
+            return ConnectionState.REGISTERED
+        if unmet_requirement(strategy) is None:
+            return ConnectionState.CONNECTED
+        return ConnectionState.REGISTERED
+
+    def needs_consent(self, provider: str) -> bool:
+        """A registered OAuth2 app with no consented account behind it."""
+        if self.connection_state(provider) is not ConnectionState.REGISTERED:
+            return False
+        entry = self.get(provider) or {}
+        return (entry.get("auth_type") or "").strip().lower() == "oauth2"
+
     def delete(self, provider: str) -> bool:
         """Remove a provider's credentials. Returns True if it existed."""
         data = self._read_all()
@@ -296,11 +333,11 @@ class NexusLocalStore:
             return None
         auth_type = entry.get("auth_type", "")
         if auth_type == "oauth2":
-            # For registered apps (client_credentials flow), the access_token
-            # is the client_secret used directly as a bearer token.
-            # For full OAuth user flows, NEXUS_GATEWAY_URL handles token exchange.
+            # Only a real token authenticates. A client secret is not one, and
+            # sending it produces a 401 from the provider that says nothing
+            # about the actual cause.
             return {
-                "access_token": entry.get("access_token") or entry.get("client_secret", ""),
+                "access_token": entry.get("access_token", ""),
                 "client_id":     entry.get("client_id", ""),
                 "client_secret": entry.get("client_secret", ""),
             }
@@ -312,6 +349,33 @@ class NexusLocalStore:
                 "password": entry.get("password", ""),
             }
         return entry
+
+    def build_strategy(self, provider: str):
+        """
+        Build the DynamicStrategy for a locally registered provider.
+
+        `auth_config` on the stored entry carries credential placement
+        (header_name / value_prefix / credential_field / param_name) for
+        providers that do not use the RFC 6750 bearer default.
+        """
+        from .models import DynamicStrategy
+
+        entry = self.get(provider)
+        if not entry:
+            return None
+        credentials = self.build_auth_info(provider) or {}
+        auth_type = (entry.get("auth_type") or "oauth2").strip().lower()
+        supported = {"oauth2", "basic_auth", "api_key", "header", "query_param"}
+        if auth_type not in supported:
+            raise ValueError(
+                f"provider {provider!r} has auth_type {auth_type!r}; "
+                f"expected one of {', '.join(sorted(supported))}"
+            )
+        return DynamicStrategy(
+            type=auth_type,
+            credentials={k: str(v) for k, v in credentials.items() if v},
+            config={k: str(v) for k, v in (entry.get("auth_config") or {}).items()},
+        )
 
     def get_summary(self) -> List[Dict[str, str]]:
         """Return a safe summary (no secrets) for display in CLI/dashboard."""

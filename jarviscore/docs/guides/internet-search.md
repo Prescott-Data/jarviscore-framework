@@ -1,5 +1,7 @@
 ---
 icon: material/earth
+title: "Internet Search for AI Agents with Multiple Providers"
+description: "Search Google, Serper, SearXNG, arXiv, and Wikipedia in parallel with result deduplication, trust scoring, and circuit-breaker resilience."
 ---
 
 # Internet Search

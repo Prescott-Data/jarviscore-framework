@@ -54,6 +54,7 @@ from typing import Any, Callable, Dict, List, Optional, cast
 from jarviscore.context.truth import AgentOutput
 from jarviscore.kernel.cognition import AgentCognitionManager, ConvergenceGovernor, FailureLedger
 from jarviscore.kernel.epistemic import EpistemicLedger
+from jarviscore.kernel.gate import GateEvidence, as_evidence, record_attempt
 from jarviscore.kernel.state import KernelState, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -86,8 +87,11 @@ class SubagentLogAdapter(logging.LoggerAdapter):
 # Regex patterns for parsing LLM tool call responses
 _TOOL_PATTERN = re.compile(r"^TOOL:\s*(.+)$", re.MULTILINE)
 _PARAMS_PATTERN = re.compile(r"^PARAMS:\s*(.+)$", re.MULTILINE | re.DOTALL)
-_DONE_PATTERN = re.compile(r"^DONE:\s*(.*)$", re.MULTILINE)
+_DONE_PATTERN = re.compile(r"^DONE:\s*(.+?)(?=\nRESULT:|\Z)", re.MULTILINE | re.DOTALL)
 _RESULT_PATTERN = re.compile(r"^RESULT:\s*(.+)$", re.MULTILINE | re.DOTALL)
+_COMBINED_DONE_RESULT_PATTERN = re.compile(
+    r"^DONE/RESULT\s*:?\s*\n(.+)$", re.MULTILINE | re.DOTALL
+)
 _THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGHT):|\Z)", re.MULTILINE | re.DOTALL)
 
 # ── Observation channel integrity (issue #57) ─────────────────────────────
@@ -270,6 +274,12 @@ class BaseSubAgent(ABC):
     - AgentOutput construction
     """
 
+    #: How many times the same completion attempt may be rejected before the step
+    #: ends. An attempt only counts as the same when the gate observed identical
+    #: values, the agent submitted an identical result, and no tool ran in between
+    #: — so an agent that is still working is never cut off, however long it takes.
+    max_identical_done_attempts: int = 3
+
     def __init__(
         self,
         agent_id: str,
@@ -300,6 +310,7 @@ class BaseSubAgent(ABC):
         # Live KernelState for the current dispatch — set at the top of run()
         # so built-in tools (read_turn_result) can reach the retention ring.
         self._current_state: Optional[KernelState] = None
+        self._current_memory = None
 
         # Let subclass register its tools explicitly
         self.setup_tools()
@@ -312,6 +323,46 @@ class BaseSubAgent(ABC):
     ) -> None:
         """Register a tool available to this subagent."""
         self._tools[name] = ToolDefinition(name, func, description, phase)
+
+    async def _tool_remember(self, fact: str, kind: str = "fact") -> Dict[str, Any]:
+        """Keep something worth knowing in a later session (params: fact, optional kind).
+
+        You are the memory lifecycle: nothing persists across sessions unless
+        you decide it should. Record outcomes and durable facts, in the words a
+        future you would want to read: what was done, what was found, what a
+        person decided. Do not record diagnoses of failures or guesses about
+        why something did not work; those expire with the bug.
+        """
+        memory = self._current_memory
+        if memory is None or not hasattr(memory, "remember"):
+            return {
+                "status": "error",
+                "error": "No cross-session memory is attached to this run, so nothing can be kept.",
+                "semantic_error": "NO_MEMORY",
+            }
+        text = (fact or "").strip()
+        if not text:
+            return {"status": "error", "error": "Nothing to remember: fact was empty."}
+        kept = await memory.remember(text, kind=kind, role=self.role)
+        if not kept:
+            return {
+                "status": "error",
+                "error": "The memory tier did not accept this; it was not kept.",
+                "semantic_error": "NOT_KEPT",
+            }
+        return {"status": "success", "kept": text, "kind": kind}
+
+    async def _tool_recall(self, query: str, limit: int = 5) -> Dict[str, Any]:
+        """Ask what earlier sessions recorded about something (params: query, optional limit).
+
+        Results are the past, scored by relevance. They tell you what was true
+        then, not what is true now.
+        """
+        memory = self._current_memory
+        if memory is None or not hasattr(memory, "recall"):
+            return {"status": "success", "results": [], "note": "No cross-session memory is attached to this run."}
+        results = await memory.recall((query or "").strip(), limit=max(1, min(int(limit), 20)))
+        return {"status": "success", "results": results, "count": len(results)}
 
     def _tool_read_turn_result(self, turn: int, offset: int = 0, length: int = 0) -> Dict[str, Any]:
         """Read the FULL output of a previous tool call when the inline view was clipped (params: turn, optional offset/length).
@@ -432,17 +483,44 @@ class BaseSubAgent(ABC):
     # ──────────────────────────────────────────────────────────────────────
 
     def _build_system_prompt(self) -> str:
-        """Build the full system prompt including tool descriptions and protocol."""
-        parts = [
+        """Build the full system prompt including tool descriptions and protocol.
+
+        The calling agent's identity leads: a sub-agent prompt is an execution
+        harness, not a persona, and an application that trains its agent through
+        ``system_prompt`` must not lose that the moment work enters the kernel.
+        """
+        state = getattr(self, "_current_state", None)
+        identity = ((getattr(state, "context", None) or {}).get("system_prompt") or "").strip()
+        parts = []
+        if identity:
+            parts += [
+                identity,
+                "",
+                "═══ EXECUTION HARNESS (how you operate this turn) ═══",
+                "",
+            ]
+        parts += [
             self.get_system_prompt(),
             "",
             self.get_tool_descriptions(),
             "",
             "Protocol:",
             "  To use a tool: THOUGHT: <reasoning>\\nTOOL: <name>\\nPARAMS: <json>",
-            "  To finish:     THOUGHT: <reasoning>\\nDONE: <summary>\\nRESULT: <json>",
+            "  To finish:     THOUGHT: <reasoning>\\nDONE: <complete human answer>\\nRESULT: <json>",
             "  JSON alternative: {\"thought\": \"...\", \"tool\": \"...\", \"params\": {...}}",
             "  JSON finish:      {\"thought\": \"...\", \"done\": \"<summary>\", \"result\": {...}}",
+            "",
+            "Finishing:",
+            "  DONE is read by the person who asked. Put the complete answer there,",
+            "  including any lists or details they asked for. DONE may span lines.",
+            "  RESULT carries the data behind that answer, shaped for whoever will",
+            "  use it next: the list, the record, the figures. It is not a place",
+            "  for status flags, booleans about your own process, or a diagnosis",
+            "  of the runtime. If there is no data beyond the answer, RESULT may",
+            "  repeat the answer as a string. When the answer needs more than one",
+            "  line, put the complete prose in RESULT under an `answer` field; that",
+            "  prose becomes the human-facing result while the other fields remain",
+            "  available to downstream agents.",
         ]
         return "\n".join(parts)
 
@@ -473,7 +551,7 @@ class BaseSubAgent(ABC):
                 f"Your execution budget is exhausted ({exhausted}). Tools are no "
                 "longer available. Produce your final answer NOW from what you "
                 "have already gathered. Respond with exactly:\n"
-                "DONE: <one-line summary>\nRESULT: <json result>\n"
+                "DONE: <complete human answer; may span lines>\nRESULT: <json result>\n"
                 "If your findings are partial, say so inside the result."
             )})
             kwargs = {"model": model} if model else {}
@@ -483,7 +561,7 @@ class BaseSubAgent(ABC):
             total_tokens["input"] += tokens.get("input", 0)
             total_tokens["output"] += tokens.get("output", 0)
             total_tokens["total"] += tokens.get("total", 0)
-            parsed = self._parse_response(content)
+            parsed = self._parse_response_for_contract(content, state.context)
             if parsed.get("type") != "done":
                 return None
             state.status = "completed"
@@ -522,6 +600,15 @@ class BaseSubAgent(ABC):
             "4. **EXIT CHECK:** Do I have enough to produce a useful result? If yes, call DONE.\n\n"
             "Then emit your TOOL/PARAMS or DONE/RESULT."
         )
+        if "ask_peer" in self._tools:
+            parts.append(
+                "**PEER RESOLUTION:** Before concluding blocked, incomplete, or DONE "
+                "with a material gap, ask whether an available peer can resolve it. "
+                "Use `ask_capability` for the exact missing fact when you know the "
+                "needed capability, or `ask_peer` when a specific role is already clear. "
+                "Include known identifiers, then treat the response as new context and "
+                "re-evaluate. Do not delegate work you can complete with your own tools."
+            )
         return "\n\n".join(parts)
 
     # ──────────────────────────────────────────────────────────────────────
@@ -575,7 +662,7 @@ class BaseSubAgent(ABC):
             from jarviscore.context.context_manager import ContextManager
             context_manager = ContextManager()
 
-        # ── Initialize state ──
+        # ── Initialize or resume state ──
         state = KernelState(
             workflow_id=context.get("workflow_id", "unknown") if context else "unknown",
             step_id=context.get("step_id", "unknown") if context else "unknown",
@@ -585,11 +672,37 @@ class BaseSubAgent(ABC):
             tokens_budget=self._cognition.lease.max_total_tokens,
         )
 
+        if context and context.get("_resume") and memory is not None:
+            raw_checkpoint = await memory.load_checkpoint()
+            if raw_checkpoint:
+                restored = KernelState.model_validate_json(raw_checkpoint)
+                if restored.agent_id == self.agent_id and restored.task == task:
+                    state = restored
+                    state.status = "active"
+                    state.context.update(context)
+                    self._cognition.lease.thinking_used = state.thinking_tokens_used
+                    self._cognition.lease.action_used = state.action_tokens_used
+                    self._cognition.lease.turns_used = state.turn
+                    self._restore_subagent_state(state)
+                    if context.get("_new_execution_epoch"):
+                        state.turn = 0
+                        state.retry_count = 0
+                        state.last_error = None
+                        state.thinking_tokens_used = 0
+                        state.action_tokens_used = 0
+                        state.tokens_used = 0
+                        state.total_cost_usd = 0.0
+                        self._cognition.lease.thinking_used = 0
+                        self._cognition.lease.action_used = 0
+                        self._cognition.lease.turns_used = 0
+
         # Restore cross-task memory (no-op unless memory_enabled=True)
         await self._restore_memory(state)
 
         # Expose state to built-in tools (read_turn_result) for this dispatch.
         self._current_state = state
+        # And the memory handle, so remember/recall reach the same tiers.
+        self._current_memory = memory
 
         # Pre-run hook — subclasses can do deterministic pre-flight work
         await self._pre_run_hook(state)
@@ -597,8 +710,8 @@ class BaseSubAgent(ABC):
         # ── TraceManager: use injected trace or no-op ──
         from jarviscore.kernel.tracing import create_noop_trace
         _trace = trace if trace is not None else create_noop_trace()
-        total_tokens = {"input": 0, "output": 0, "total": 0}
-        total_cost = 0.0
+        total_tokens = {"input": 0, "output": 0, "total": state.tokens_used}
+        total_cost = state.total_cost_usd
         system_prompt = self._build_system_prompt()
 
         # Rolling conversation history for multi-turn LLM continuity
@@ -615,7 +728,7 @@ class BaseSubAgent(ABC):
         # dispatches.
         self._dispatch_metadata: Dict[str, Any] = {}
 
-        for turn in range(max_turns):
+        for turn in range(state.turn, max_turns):
             state.turn = turn
             self._log.set_turn(turn)
 
@@ -693,6 +806,36 @@ class BaseSubAgent(ABC):
                     messages=messages, **kwargs
                 )
             except Exception as e:
+                from jarviscore.orchestration.budget import WorkflowBudgetExceeded
+
+                if isinstance(e, WorkflowBudgetExceeded):
+                    state.status = "active"
+                    state.last_error = str(e)
+                    state.thinking_tokens_used = self._cognition.lease.thinking_used
+                    state.action_tokens_used = self._cognition.lease.action_used
+                    state.tokens_used = total_tokens["total"]
+                    state.total_cost_usd = total_cost
+                    if memory is not None:
+                        await memory.save_checkpoint(state.model_dump_json())
+                    _trace.log_step_complete(
+                        False,
+                        "Active execution epoch exhausted; checkpointed for continuation.",
+                    )
+                    return AgentOutput(
+                        status="epoch_exhausted",
+                        payload=state.output,
+                        summary=(
+                            "Active execution epoch exhausted; durable state was "
+                            "checkpointed for continuation."
+                        ),
+                        trajectory=trajectory,
+                        metadata={
+                            "tokens": total_tokens,
+                            "cost_usd": total_cost,
+                            "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+                            "checkpointed": memory is not None,
+                        },
+                    )
                 self._log.error("LLM call failed: %s", e)
                 state.retry_count += 1
                 if state.retry_count > state.max_retries:
@@ -722,7 +865,7 @@ class BaseSubAgent(ABC):
             state.tokens_used = total_tokens["total"]
 
             # Parse response
-            parsed = self._parse_response(content)
+            parsed = self._parse_response_for_contract(content, context)
 
             # ── Auto-summarize if context is getting large ──
             try:
@@ -737,16 +880,63 @@ class BaseSubAgent(ABC):
                 # ── Done-gate: subclasses can reject premature completion ──
                 can_exit, reject_reason = self._can_complete(state, parsed)
                 if not can_exit:
-                    self._log.info("Done rejected: %s", reject_reason)
-                    state.add_thought(
-                        f"[DONE_GATE] Cannot complete yet: {reject_reason}. "
-                        f"Continue working."
+                    evidence = as_evidence(reject_reason)
+                    attempts = state.internal_variables.setdefault("done_gate_attempts", [])
+                    _, streak, previous = record_attempt(
+                        attempts,
+                        turn=turn,
+                        evidence=evidence,
+                        payload=parsed.get("result"),
+                        tool_calls=len(state.tool_history),
                     )
+                    self._log.info(
+                        "Done rejected: check=%s attempt=%d", evidence.check, streak,
+                    )
+                    report = evidence.render()
+                    if previous is not None and streak > 1:
+                        report += (
+                            f"\n  unchanged  since turn {previous.turn}: same check, same values, "
+                            f"same result submitted, no tool call in between"
+                        )
+
+                    if streak >= self.max_identical_done_attempts:
+                        # A boundary, not a verdict on the work. The agent has the
+                        # facts and has stopped producing anything new, so another
+                        # turn cannot change the outcome — and an unsatisfied gate
+                        # is not a success to be granted on the way out.
+                        summary = (
+                            f"Completion gate '{evidence.check}' unsatisfied after "
+                            f"{streak} identical attempts"
+                        )
+                        state.status = "failed"
+                        state.add_thought(f"[DONE_GATE] {report}")
+                        trajectory.append({
+                            "turn": turn,
+                            "type": "done_gate_unsatisfied",
+                            "check": evidence.check,
+                            "attempts": streak,
+                        })
+                        _trace.log_step_complete(False, summary)
+                        return AgentOutput(
+                            status="failure",
+                            summary=summary,
+                            payload=state.get_final_output(),
+                            trajectory=trajectory,
+                            metadata={
+                                "tokens": total_tokens, "cost_usd": total_cost,
+                                "typed_outcome": "FAIL_DONE_GATE_UNSATISFIED",
+                                "gate_evidence": evidence.as_dict(),
+                                "gate_attempts": streak,
+                                "cognition": self._cognition.get_budget_summary(),
+                            },
+                        )
+
+                    state.add_thought(f"[DONE_GATE] {report}")
                     conversation_history.append({
                         "assistant": content,
                         "observation": (
-                            f"[Turn {turn}] DONE rejected: {reject_reason}\n"
-                            f"You must address this before calling DONE again."
+                            f"[Turn {turn}] {report}\n"
+                            f"DONE was not recorded. It may be attempted again."
                         ),
                     })
                     # Charge tokens WITHOUT the "done" label: track_usage("done")
@@ -853,23 +1043,18 @@ class BaseSubAgent(ABC):
                     tool_name, tool_params, state
                 )
                 if hook_result is not None:
-                    self._log.info("Pre-execute hook blocked '%s': %s", tool_name, str(hook_result)[:200])
-                    state.add_tool_result(
-                        tool_name, tool_params, hook_result,
-                        error=hook_result.get("error") if isinstance(hook_result, dict) else None,
+                    hook_succeeded = (
+                        isinstance(hook_result, dict)
+                        and hook_result.get("status") == "success"
                     )
-                    trajectory.append({
-                        "turn": turn, "type": "pre_execute_block",
-                        "tool": tool_name,
-                        "reason": hook_result.get("error", "blocked by pre-execute hook"),
-                    })
-                    conversation_history.append({
-                        "assistant": content,
-                        "observation": (
-                            f"[Turn {turn}] Tool '{tool_name}' blocked by pre-execute hook: "
-                            f"{str(hook_result)[:500]}"
-                        ),
-                    })
+                    hook_event = (
+                        "pre_execute_resolution" if hook_succeeded
+                        else "pre_execute_block"
+                    )
+                    self._record_pre_execute_result(
+                        state, trajectory, conversation_history, content,
+                        turn, tool_name, tool_params, hook_result, hook_event,
+                    )
                     continue
 
                 # Execute tool
@@ -930,23 +1115,34 @@ class BaseSubAgent(ABC):
                     turn_log["status"] = "success"
                     _trace.log_tool_result(tool_name, tool_result)
 
-                if isinstance(tool_result, dict) and tool_result.get("_auto_complete"):
-                    payload = tool_result.get("output", tool_result)
-                    state.status = "completed"
-                    state.output = payload
+                if isinstance(tool_result, dict) and tool_result.get("status") == "waiting":
+                    state.status = "waiting"
+                    state.turn = turn + 1
+                    state.thinking_tokens_used = self._cognition.lease.thinking_used
+                    state.action_tokens_used = self._cognition.lease.action_used
+                    state.total_cost_usd = total_cost
+                    self._save_subagent_state(state)
                     trajectory.append(turn_log)
-                    summary = tool_result.get("message", f"Tool '{tool_name}' completed the task.")
-                    _trace.log_step_complete(True, summary)
-                    await self._persist_memory(state)
+                    if memory is not None:
+                        await memory.save_checkpoint(state.model_dump_json())
                     return AgentOutput(
-                        status="success",
-                        payload=payload,
-                        summary=summary,
+                        status="yield",
+                        payload=tool_result,
+                        summary=tool_result.get("detail", "Waiting for user action."),
                         trajectory=trajectory,
                         metadata={
                             "tokens": total_tokens,
                             "cost_usd": total_cost,
-                            "exit_type": "tool_auto_complete",
+                            "yield_pending": True,
+                            "typed_outcome": tool_result.get("typed_outcome"),
+                            "hitl_type": tool_result.get("hitl_type"),
+                            "system": tool_result.get("system"),
+                            "connection_id": tool_result.get("connection_id"),
+                            "workflow_id": state.workflow_id,
+                            "step_id": state.step_id,
+                            "action_id": tool_result.get("action_id"),
+                            "action": tool_result.get("action"),
+                            "consequence": tool_result.get("consequence"),
                         },
                     )
 
@@ -1157,6 +1353,12 @@ class BaseSubAgent(ABC):
         """
         pass
 
+    def _save_subagent_state(self, state: KernelState) -> None:
+        """Place subclass runtime state into the serializable checkpoint."""
+
+    def _restore_subagent_state(self, state: KernelState) -> None:
+        """Restore subclass runtime state from a checkpoint."""
+
     async def teardown(self) -> None:
         """Release resources owned by this subagent instance."""
         pass
@@ -1186,17 +1388,122 @@ class BaseSubAgent(ABC):
     ) -> tuple:
         """Called before accepting a DONE signal — subclass gate point.
 
-        Returns (True, "") to allow completion, or (False, reason) to
-        reject it. On rejection the loop continues — the LLM sees the
-        reason and must address it before calling DONE again.
+        Returns ``(True, "")`` to allow completion, or ``(False, reason)`` to
+        reject it. On rejection the loop continues and the agent sees the reason.
 
-        Default: always allow.
+        ``reason`` should be a :class:`~jarviscore.kernel.gate.GateEvidence`:
+        the check that did not hold, what it reads, and what was observed in the
+        agent's own output. A gate that reports a verdict instead ("evidence is
+        required") gives the agent nothing it can act on, so its next attempt is
+        a reworded version of the last one — which is how a rejection turns into
+        a loop. A bare string is still accepted and carried through unchanged.
+
+        Do not advise here. Naming the missing fact is this method's whole job;
+        deciding what to do about it is the agent's.
+
+        The generic boundary requires one real peer-resolution attempt when a
+        top-level result explicitly declares unresolved work and peer tools are
+        available. Incoming peer responders are already the resolution attempt,
+        so they may return their bounded finding without recursive delegation.
         """
+        result = parsed.get("result")
+        result_status = (
+            str(result.get("status", "")).lower()
+            if isinstance(result, dict)
+            else ""
+        )
+        unresolved = result.get("unresolved") if isinstance(result, dict) else None
+        materially_incomplete = (
+            result_status in {"blocked", "incomplete", "partial"}
+            or bool(unresolved)
+        )
+        peer_tools = {"ask_capability", "ask_peer"}
+        available_peer_tools = peer_tools & set(getattr(self, "_tools", {}))
+        peer_attempted = any(
+            item.tool_name in peer_tools
+            and (
+                item.succeeded
+                or (
+                    isinstance(item.tool_output, dict)
+                    and item.tool_output.get("peer_request_attempted") is True
+                )
+            )
+            for item in state.tool_history
+        )
+        fulfilling_peer_request = bool(
+            state.context.get("peer_requester_agent_id")
+        )
+        if (
+            materially_incomplete
+            and available_peer_tools
+            and not peer_attempted
+            and not fulfilling_peer_request
+        ):
+            return (
+                False,
+                GateEvidence(
+                    check="peer_resolution_review",
+                    requirement=(
+                        "one actual attempt using an available peer capability "
+                        "before accepting a blocked or incomplete result"
+                    ),
+                    observed={
+                        "peer_tool_calls": 0,
+                        "unresolved_facts": (
+                            len(unresolved) if isinstance(unresolved, list) else 0
+                        ),
+                        "available_peer_tools": sorted(available_peer_tools),
+                    },
+                ),
+            )
         return (True, "")
 
     # ──────────────────────────────────────────────────────────────────────
     # Tool Execution
     # ──────────────────────────────────────────────────────────────────────
+
+    def _record_pre_execute_result(
+        self,
+        state: KernelState,
+        trajectory: list,
+        conversation_history: list,
+        content: str,
+        turn: int,
+        tool_name: str,
+        tool_params: Dict[str, Any],
+        hook_result: Dict[str, Any],
+        hook_event: str,
+    ) -> None:
+        hook_succeeded = hook_result.get("status") == "success"
+        disposition = "resolved" if hook_succeeded else "blocked"
+        self._log.info(
+            "Pre-execute hook %s '%s': %s",
+            disposition,
+            tool_name,
+            str(hook_result)[:200],
+        )
+        state.add_tool_result(
+            tool_name,
+            tool_params,
+            hook_result,
+            error=hook_result.get("error"),
+        )
+        trajectory.append({
+            "turn": turn,
+            "type": hook_event,
+            "tool": tool_name,
+            "reason": hook_result.get(
+                "reason",
+                hook_result.get("error", "blocked by pre-execute hook"),
+            ),
+        })
+        conversation_history.append({
+            "assistant": content,
+            "observation": (
+                f"[Turn {turn}] Tool '{tool_name}' {disposition} by "
+                f"pre-execute review: {str(hook_result)[:500]}"
+            ),
+        })
 
     async def _execute_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
         """Execute a registered tool."""
@@ -1265,9 +1572,20 @@ class BaseSubAgent(ABC):
         thought_match = _THOUGHT_PATTERN.search(content)
         thought = thought_match.group(1).strip() if thought_match else ""
 
+        combined_match = _COMBINED_DONE_RESULT_PATTERN.search(content)
         done_match = _DONE_PATTERN.search(content)
         result_match = _RESULT_PATTERN.search(content)
         tool_match = _TOOL_PATTERN.search(content)
+
+        if combined_match and not tool_match:
+            result = _extract_json_object(combined_match.group(1).strip())
+            if result is not None:
+                return {
+                    "type": "done",
+                    "thought": thought,
+                    "summary": "Completed via DONE/RESULT block",
+                    "result": result,
+                }
 
         # RESULT alone (no DONE, no TOOL) only completes when it carries a
         # structured JSON object. "RESULT: pending" prose mid-thought must not
@@ -1354,3 +1672,24 @@ class BaseSubAgent(ABC):
 
         # Unparseable
         return {"type": "raw", "content": content}
+
+    @classmethod
+    def _parse_response_for_contract(
+        cls, content: str, context: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        parsed = cls._parse_response(content)
+        contract = (context or {}).get("execution_contract")
+        if (
+            parsed.get("type") == "raw"
+            and isinstance(contract, dict)
+            and contract.get("execution_shape") == "single_artifact"
+        ):
+            artifact = _extract_json_object(content)
+            if artifact is not None:
+                return {
+                    "type": "done",
+                    "thought": "",
+                    "summary": "Structured artifact completed.",
+                    "result": artifact,
+                }
+        return parsed

@@ -203,7 +203,31 @@ class TestStepEvaluation:
         assert StepEvaluation(verdict="fail", confidence=0.2, evaluator_note="").needs_replan
 
     def test_needs_hitl(self):
-        assert StepEvaluation(verdict="hitl", confidence=0.5, evaluator_note="").needs_hitl
+        assert StepEvaluation(
+            verdict="hitl",
+            confidence=0.5,
+            evaluator_note="",
+            hitl_category="critical_action",
+        ).needs_hitl
+
+    def test_data_hitl_requires_exhausted_human_exclusive_evidence(self):
+        lazy = StepEvaluation(
+            verdict="hitl",
+            confidence=0.5,
+            evaluator_note="unsure",
+            hitl_category="data_required",
+        )
+        admissible = StepEvaluation(
+            verdict="hitl",
+            confidence=0.5,
+            evaluator_note="Only the human can choose a new time constraint.",
+            hitl_category="data_required",
+            autonomous_paths_exhausted=True,
+            human_exclusive=True,
+        )
+        assert lazy.needs_hitl is False
+        assert lazy.needs_replan is True
+        assert admissible.needs_hitl is True
 
     def test_not_needs_replan_for_pass(self):
         assert not StepEvaluation(verdict="pass", confidence=0.9, evaluator_note="").needs_replan
@@ -327,34 +351,33 @@ class TestStepEvaluator:
         assert "END-OF-ARTIFACT" in rendered          # the whole artifact is evidence
         assert "[truncated" not in rendered           # nothing silently hidden
 
-    def test_clipped_evidence_is_announced(self):
-        """When evidence must be clipped, the marker is explicit (#55/#85)."""
+    def test_large_evidence_is_never_clipped(self):
+        """#166 — a verdict is about this output, so half of it is a different one."""
         ev = self._evaluator()
         huge = "y" * 10_000
         out = _make_output(summary="s" * 5_000, payload=huge)
         rendered = ev._format_output(out)
-        assert "[truncated: showing 2000 of 5000 chars]" in rendered
-        assert "[truncated: showing 6000 of 10000 chars]" in rendered
+        assert huge in rendered
+        assert "s" * 5_000 in rendered
+        assert "truncated" not in rendered
 
-    def test_evidence_limits_are_tunable(self, monkeypatch):
+    def test_legacy_evidence_limits_no_longer_clip(self, monkeypatch):
+        """The old knobs still import; they no longer shorten the evidence."""
         monkeypatch.setenv("EVALUATOR_PAYLOAD_EVIDENCE_LIMIT", "50")
         ev = self._evaluator()
         out = _make_output(payload="z" * 100)
         rendered = ev._format_output(out)
-        assert "[truncated: showing 50 of 100 chars]" in rendered
+        assert "z" * 100 in rendered
+        assert "truncated" not in rendered
 
-    def test_schema_teaches_truncation_semantics(self):
-        """The verdict contract says clipped evidence is partial, never fail."""
+    def test_schema_no_longer_teaches_around_truncated_evidence(self):
+        """The prompt patch retires with the truncation it was covering for."""
         from jarviscore.planning.evaluator import _EVAL_SCHEMA
-        assert "Truncated evidence" in _EVAL_SCHEMA
-        assert "Never return \"fail\" solely because evidence was clipped" in _EVAL_SCHEMA
+        assert "Truncated evidence" not in _EVAL_SCHEMA
+        assert "the step output above is" in _EVAL_SCHEMA
 
-    def test_accumulated_facts_never_clipped_silently(self):
-        """The facts block in the prompt clips with a marker, not silently (#55/#85).
-
-        Regression: the prompt told the model 'do not re-extract these' while
-        silently hiding everything past 500 chars.
-        """
+    def test_accumulated_facts_are_whole_or_named(self):
+        """#166 — the prompt says 'do not re-extract these', so they must be readable."""
         from jarviscore.context.truth import TruthFact
         ev = self._evaluator()
         ge = GoalExecution(goal="G", agent_id="a")
@@ -364,9 +387,22 @@ class TestStepEvaluator:
             )
         prompt = ev._build_prompt(_make_step(), _make_output(), ge)
         facts_block = prompt.split("Accumulated goal facts", 1)[1]
-        assert "[truncated: showing" in facts_block   # clipped, but honestly
-        # and the window is real: far more than the old 500 silent chars
-        assert "fact_20" in facts_block
+        assert "truncated" not in facts_block
+        assert "fact_20: " + "v" * 60 in facts_block
+
+    def test_facts_past_the_budget_are_named_not_halved(self, monkeypatch):
+        from jarviscore.context.truth import TruthFact
+        monkeypatch.setenv("EVALUATOR_FACTS_BUDGET_CHARS", "400")
+        ev = self._evaluator()
+        ge = GoalExecution(goal="G", agent_id="a")
+        for i in range(20):
+            ge.truth.facts[f"fact_{i:02d}"] = TruthFact(
+                value="v" * 100, source="t", confidence=0.9,
+            )
+        prompt = ev._build_prompt(_make_step(), _make_output(), ge)
+        facts_block = prompt.split("Accumulated goal facts", 1)[1]
+        assert "records are not shown here" in facts_block
+        assert "truncated" not in facts_block
 
     @pytest.mark.asyncio
     async def test_short_circuits_failure_status(self):
@@ -538,6 +574,64 @@ class TestStepEvaluator:
         result = ev._parse_evaluation(raw, _make_step())
         assert result.additional_findings == {}
 
+    def test_parse_evaluation_carries_goal_convergence_decision(self):
+        ev = self._evaluator()
+        raw = json.dumps({
+            "verdict": "pass",
+            "confidence": 0.95,
+            "evaluator_note": "The existing artifact satisfies the observation.",
+            "additional_findings": {"artifact_status": "existing"},
+            "goal_decision": "complete",
+            "goal_note": "The conditional creation branch is obsolete.",
+        })
+
+        result = ev._parse_evaluation(raw, _make_step())
+
+        assert result.goal_decision == "complete"
+        assert "conditional creation branch" in result.goal_note
+
+    def test_parse_evaluation_accepts_null_string_hitl_category(self):
+        ev = self._evaluator()
+        raw = json.dumps({
+            "verdict": "pass",
+            "confidence": 0.9,
+            "evaluator_note": "No human input is needed.",
+            "additional_findings": {},
+            "goal_decision": "continue",
+            "goal_note": "Continue autonomously.",
+            "hitl_category": "null",
+            "autonomous_paths_exhausted": False,
+            "human_exclusive": False,
+        })
+
+        result = ev._parse_evaluation(raw, _make_step())
+
+        assert result.hitl_category is None
+
+    def test_goal_replan_decision_uses_existing_replan_path(self):
+        evaluation = StepEvaluation(
+            verdict="pass",
+            confidence=0.9,
+            evaluator_note="Step passed.",
+            goal_decision="replan",
+            goal_note="New evidence invalidated the remaining plan.",
+        )
+
+        assert evaluation.needs_replan is True
+
+    def test_evaluator_prompt_exposes_remaining_steps_and_conditional_rule(self):
+        ev = self._evaluator()
+        prompt = ev._build_prompt(
+            _make_step(),
+            _make_output(),
+            GoalExecution(goal="Create only if absent", agent_id="a"),
+            remaining_steps=[_make_step("create", task="Create the artifact")],
+        )
+
+        assert "Remaining planned steps" in prompt
+        assert "create: Create the artifact" in prompt
+        assert "conditional branch is false" in prompt
+
 
 # ── Scratchpad scope changes ──────────────────────────────────────────────────
 
@@ -670,7 +764,14 @@ class TestGoalSnapshotRoundTrip:
         ge.record_completed(
             ge.plan[0],
             _make_output(summary="found the auth method"),
-            _make_evaluation(verdict="pass"),
+            StepEvaluation(
+                verdict="pass",
+                confidence=0.9,
+                evaluator_note="Looks good",
+                additional_findings={"discovered_key": "discovered_value"},
+                goal_decision="replan",
+                goal_note="New evidence changed the remaining work.",
+            ),
             elapsed_ms=120.0,
         )
         return ge
@@ -703,6 +804,8 @@ class TestGoalSnapshotRoundTrip:
         cs = restored.completed[0]
         assert cs.step.step_id == "step_01"
         assert cs.evaluation.verdict == "pass"
+        assert cs.evaluation.goal_decision == "replan"
+        assert "changed the remaining work" in cs.evaluation.goal_note
         assert cs.to_summary()["summary"] == "found the auth method"
 
     def test_resumed_context_chains_into_next_step(self):
@@ -810,10 +913,13 @@ class TestHonestPlannerPrompts:
         prompt = llm.prompts[0]
         assert "25 fact(s) known:" in prompt
         assert "- fact_00: v0" in prompt
-        assert "…and 5 more facts not shown" in prompt
+        # An item cap is not a budget. 25 small facts fit, so all 25 are shown.
+        assert "- fact_24: v24" in prompt
+        assert "not shown" not in prompt
 
     @pytest.mark.asyncio
-    async def test_long_fact_values_carry_markers(self):
+    async def test_long_fact_values_are_never_cut(self):
+        """#166 — a fact the planner cannot read is one it plans to re-fetch."""
         import json
         from jarviscore.planning.planner import Planner
         from jarviscore.context.truth import TruthFact
@@ -821,7 +927,50 @@ class TestHonestPlannerPrompts:
         ge = GoalExecution(goal="G", agent_id="a")
         ge.truth.facts["huge"] = TruthFact(value="H" * 700, source="s", confidence=0.9)
         await Planner(llm).plan(goal="G", goal_execution=ge)
-        assert "…[truncated: showing 200 of 700 chars]" in llm.prompts[0]
+        assert "H" * 700 in llm.prompts[0]
+        assert "truncated" not in llm.prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_facts_past_the_budget_are_named_not_halved(self, monkeypatch):
+        import json
+        from jarviscore.planning.planner import Planner
+        from jarviscore.context.truth import TruthFact
+        monkeypatch.setenv("PLANNER_FACTS_BUDGET_CHARS", "300")
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        for i in range(10):
+            ge.truth.facts[f"fact_{i:02d}"] = TruthFact(
+                value="v" * 100, source="s", confidence=0.9
+            )
+        await Planner(llm).plan(goal="G", goal_execution=ge)
+        prompt = llm.prompts[0]
+        assert "records are not shown here" in prompt
+        assert "the goal truth store" in prompt
+        assert "truncated" not in prompt
+        # Whatever is shown is shown whole.
+        assert "v" * 100 in prompt
+
+    @pytest.mark.asyncio
+    async def test_identity_reaches_the_planner_whole(self):
+        """#166 — 400 chars is the persona without the rules that constrain it."""
+        import json
+        from jarviscore.planning.planner import Planner
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        identity = "You are Acme's analyst. " + ("RULE. " * 100) + "NEVER invoice a customer."
+        await Planner(llm, system_prompt=identity).plan(goal="G", goal_execution=ge)
+        assert "NEVER invoice a customer." in llm.prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_legacy_excerpt_argument_still_accepted(self):
+        import json
+        from jarviscore.planning.planner import Planner
+        llm = _PlanLLM(json.dumps({"steps": [_step_json("s1")]}))
+        ge = GoalExecution(goal="G", agent_id="a")
+        await Planner(llm, system_prompt_excerpt="legacy identity").plan(
+            goal="G", goal_execution=ge,
+        )
+        assert "legacy identity" in llm.prompts[0]
 
 
 class TestReplanTailAndBudget:
@@ -868,6 +1017,54 @@ class TestReplanTailAndBudget:
 
 class TestDependencyParallelExecution:
     """Plans that declare depends_on opt into concurrent co-ready steps."""
+
+    @pytest.mark.asyncio
+    async def test_goal_convergence_stops_obsolete_remaining_steps(self):
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-convergence"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+        executed = []
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def execute(self, task, **kwargs):
+                executed.append(kwargs["context"]["step_id"])
+                return _make_output(payload={"status": "existing"})
+
+        agent._kernel = _Kernel()
+        plan = [
+            PlannedStep("inspect", "Inspect artifact", "Existence resolved"),
+            PlannedStep("create", "Create artifact if absent", "Artifact created"),
+        ]
+        converged = StepEvaluation(
+            verdict="pass",
+            confidence=0.98,
+            evaluator_note="The existing artifact satisfies the goal.",
+            goal_decision="complete",
+            goal_note="The conditional creation branch is obsolete.",
+        )
+
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=plan),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=converged),
+        ):
+            execution = await agent.execute_goal("Create the artifact only if absent")
+
+        assert execution.status == "complete"
+        assert executed == ["inspect"]
+        assert [item.step.step_id for item in execution.completed] == ["inspect"]
 
     @pytest.mark.asyncio
     async def test_co_ready_steps_overlap_and_dependents_wait(self, monkeypatch):
@@ -1185,7 +1382,12 @@ class TestHITLConsentGate:
             new=AsyncMock(return_value=plan),
         ), patch(
             "jarviscore.planning.evaluator.StepEvaluator.evaluate",
-            new=AsyncMock(return_value=_make_evaluation(verdict="hitl")),
+            new=AsyncMock(return_value=StepEvaluation(
+                verdict="hitl",
+                confidence=0.9,
+                evaluator_note="The consequential action needs approval.",
+                hitl_category="critical_action",
+            )),
         ):
             execution = await agent.execute_goal("attended goal")
 

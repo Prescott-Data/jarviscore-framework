@@ -23,6 +23,7 @@ Sources:
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import logging
 import os
@@ -955,6 +956,7 @@ def seed_registry(
     registry,
     systems: Optional[List[str]] = None,
     overwrite_verified: bool = False,
+    missing_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Bulk-register all atom functions into the FunctionRegistry.
@@ -963,6 +965,7 @@ def seed_registry(
         registry:           FunctionRegistry instance
         systems:            Optional list of system names to seed (default: all 18)
         overwrite_verified: If False (default), skip atoms already at verified/golden stage
+        missing_only:       Register only atom names absent from the registry
 
     Returns:
         Report dict with registered, skipped, failed counts and details
@@ -997,21 +1000,72 @@ def seed_registry(
         for atom_path in atom_files:
             function_name = atom_path.stem  # filename without .py
             report["total_atoms"] += 1
+            source = atom_path.read_text(encoding="utf-8")
+            existing_metadata = (
+                registry.get_function_metadata(function_name)
+                if registry.has_function(function_name) else None
+            )
 
-            # Skip if already at verified/golden and overwrite not requested
-            if not overwrite_verified and registry.has_function(function_name):
-                existing = registry.get_function_metadata(function_name)
-                if existing and existing.get("registry_stage") in ("verified", "golden"):
-                    logger.debug("[Seed] Skipping %s (already %s)", function_name, existing["registry_stage"])
+            if missing_only and existing_metadata:
+                from jarviscore.execution.atom_contract import read_contract
+
+                existing_source = registry.get_function_code(function_name) or ""
+                shipped_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
+                existing_hash = hashlib.sha256(
+                    existing_source.encode("utf-8")
+                ).hexdigest()
+                existing_contract = read_contract(
+                    existing_source, system=system, expected_name=function_name
+                )
+                shipped_contract = read_contract(
+                    source, system=system, expected_name=function_name
+                )
+                catalogue_managed = bool(
+                    existing_metadata.get("catalogue_managed")
+                    or (
+                        existing_metadata.get("agent_id") is None
+                        and existing_metadata.get("repair_of_version") is None
+                    )
+                )
+                current_catalogue_hash = existing_metadata.get(
+                    "catalogue_source_hash"
+                )
+                repaired_since_seed = bool(
+                    existing_metadata.get("repair_of_version")
+                    or (
+                        current_catalogue_hash
+                        and current_catalogue_hash != existing_hash
+                    )
+                )
+                converged = existing_hash == shipped_hash
+                if (
+                    not shipped_contract.ok
+                    or (existing_contract.ok and (
+                        converged or not catalogue_managed or repaired_since_seed
+                    ))
+                ):
                     report["skipped"].append({
                         "function": function_name,
                         "system": system,
-                        "reason": f"already {existing['registry_stage']}",
+                        "reason": "already registered",
+                    })
+                    continue
+
+            # Skip if already at verified/golden and overwrite not requested
+            if not overwrite_verified and existing_metadata and not missing_only:
+                if existing_metadata.get("registry_stage") in ("verified", "golden"):
+                    logger.debug(
+                        "[Seed] Skipping %s (already %s)",
+                        function_name, existing_metadata["registry_stage"],
+                    )
+                    report["skipped"].append({
+                        "function": function_name,
+                        "system": system,
+                        "reason": f"already {existing_metadata['registry_stage']}",
                     })
                     continue
 
             # Read and validate syntax
-            source = atom_path.read_text(encoding="utf-8")
             try:
                 ast.parse(source)
             except SyntaxError as e:
@@ -1033,6 +1087,10 @@ def seed_registry(
                 "tags": [system, meta["category"]],
                 "strategy": "sandbox",
                 "source": "external_import" if meta["status"] == "verified" else "framework_authored",
+                "catalogue_managed": True,
+                "catalogue_source_hash": hashlib.sha256(
+                    source.encode("utf-8")
+                ).hexdigest(),
             }
 
             try:
@@ -1043,7 +1101,7 @@ def seed_registry(
                 )
                 if success:
                     # External atoms start as verified, new ones as candidate
-                    if meta["status"] == "verified":
+                    if meta["status"] == "verified" and not existing_metadata:
                         registry.update_function_metadata(function_name, {
                             "registry_stage": "verified",
                             "success_count": 1,

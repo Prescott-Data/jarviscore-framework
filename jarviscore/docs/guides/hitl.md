@@ -1,5 +1,7 @@
 ---
 icon: material/account-supervisor
+title: "Human-in-the-Loop Escalation for Autonomous Agents"
+description: "Configure typed human review for critical actions, credentials, and genuinely human-exclusive data without escalating routine system failures."
 ---
 
 # Human-in-the-Loop (HITL) Escalation
@@ -28,6 +30,21 @@ The HITL system enforces a strict **category gate**. Every escalation request mu
 - Routine content review
 
 Agents must handle those cases autonomously. The HITL queue is for the founder's inbox, not for the agent's confidence management.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Evaluate
+    Evaluate --> Autonomous: routine uncertainty or failure
+    Evaluate --> Pending: auth, human-only data, or critical action
+    Autonomous --> [*]: replan, fallback, or fail honestly
+    Pending --> Approved: human approves or supplies input
+    Pending --> Rejected: human rejects
+    Pending --> TimedOut: deadline expires
+    Approved --> Resumed: continue same durable work
+    Rejected --> [*]
+    TimedOut --> [*]
+    Resumed --> [*]
+```
 
 ---
 
@@ -163,7 +180,6 @@ The standard HITL pattern for a `CustomAgent`:
 from jarviscore import CustomAgent
 
 class CampaignSenderAgent(CustomAgent):
-    name = "Campaign Sender"
     role = "campaign-sender"
 
     async def on_peer_request(self, msg) -> dict:

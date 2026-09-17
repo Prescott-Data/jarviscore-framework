@@ -1,10 +1,16 @@
 ---
 icon: material/text-box-edit-outline
+title: "Write Effective System Prompts for AutoAgent"
+description: "Define an AutoAgent's role, output contract, verification behavior, and error handling through clear, testable JarvisCore system prompts."
 ---
 
 # System Prompts
 
-The system prompt is the primary control surface for a JarvisCore `AutoAgent`. The Kernel uses it to determine what the agent is, what it knows, what it should produce, and how it should handle edge cases. A well-written system prompt is the difference between an agent that needs constant supervision and one that runs autonomously with high reliability.
+The system prompt is the primary reasoning instruction for a JarvisCore
+`AutoAgent`. It explains ownership, method, evidence standards, deliverable
+semantics, and how to represent uncertainty. Runtime contracts separately
+enforce authority, execution shape, output validity, and durable completion.
+A prompt is not a substitute for those boundaries.
 
 ---
 
@@ -25,21 +31,103 @@ When the Kernel starts an OODA loop turn, it assembles a full context bundle:
 
 The base system prompt sits between the profile block and the runtime context. It is the part you control at the class level. The Kernel prepends the profile block: the system prompt should never repeat what the profile block already defines (role, expertise, SOPs).
 
+## Compose Prompts from Named Sections
+
+Avoid one long anonymous string for a production agent. Named sections make
+ownership and omissions visible in review, allow focused assertions in tests,
+and keep the static prefix byte-stable for provider prompt caching. JarvisCore
+receives the compiled string; section composition is an application pattern,
+not another agent profile.
+
+A useful section order is:
+
+1. **Role and ownership**: what this agent owns and what belongs to peers.
+2. **Method**: how it investigates, reasons, and uses evidence.
+3. **Authority**: how to interpret available tools and effect boundaries.
+4. **Deliverable**: the meaning and shape of a complete result.
+5. **Uncertainty**: how to report missing evidence, blocked work, and partial results.
+
+```python title="prompts/repository_reviewer.py"
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class PromptSection:
+  name: str
+  body: str
+
+
+def compile_prompt(sections: tuple[PromptSection, ...]) -> str:
+  names = [section.name for section in sections]
+  if len(names) != len(set(names)):
+    raise ValueError("prompt section names must be unique")
+  return "\n\n".join(section.body.strip() for section in sections)
+
+
+REVIEW_SECTIONS = (
+  PromptSection(
+    "ownership",
+    """## Ownership
+You own evidence-backed review findings. You do not merge code or invent
+requirements that are absent from the repository.""",
+  ),
+  PromptSection(
+    "method",
+    """## Method
+Inspect the changed behavior, its callers, and the narrowest relevant tests.
+Prefer reproducible defects over stylistic preference.""",
+  ),
+  PromptSection(
+    "deliverable",
+    """## Deliverable
+Return findings with severity, file location, evidence, impact, and a concrete
+repair. Return an empty findings list when no defect is supported.""",
+  ),
+  PromptSection(
+    "uncertainty",
+    """## Uncertainty
+Name missing evidence explicitly. Do not present an unverified suspicion as a
+finding.""",
+  ),
+)
+
+REPOSITORY_REVIEWER_PROMPT = compile_prompt(REVIEW_SECTIONS)
+```
+
+Use the compiled value normally:
+
+```python
+from jarviscore import AutoAgent
+
+
+class RepositoryReviewer(AutoAgent):
+  role = "repository_reviewer"
+  capabilities = ["code_review"]
+  system_prompt = REPOSITORY_REVIEWER_PROMPT
+```
+
+Keep per-request data out of the class-level prompt. Put repository state,
+account data, user input, and other changing material in the task or context.
+This prevents state leakage between runs and preserves a stable cacheable
+prefix. Test section names, order, required headings, and critical boundary
+language without snapshotting every word.
+
 ---
 
 ## The Minimum Viable System Prompt
 
-Three things are required in every AutoAgent system prompt:
+Four questions should be answered by every production AutoAgent prompt:
 
-1. **What the agent is**: role identity in one sentence
-2. **What `result` must contain**: exact variable name and structure
-3. **What to do when something fails**: error handling instruction
+1. **What does this agent own, and what does it not own?**
+2. **How should it reason and what evidence is acceptable?**
+3. **What makes the deliverable complete?**
+4. **How should it represent missing evidence or blocked work?**
 
 ```python
 system_prompt = """
 You are a financial data analyst specialising in public equity markets.
 
-Your output must be stored in a variable named `result` as a dict:
+For coder-sandbox work, store the output in a variable named `result` as a dict:
   {
     "ticker":      str,   # e.g. "AAPL"
     "price":       float, # current price in USD
@@ -52,13 +140,24 @@ descriptive string and leave other keys as None.
 """
 ```
 
-Missing any of these three creates predictable failure modes: vague identity → wrong sub-agent routing; missing `result` shape → parser errors on output; missing error handling → silent null payloads on failure.
+The class-level `role`, `capabilities`, `capability_descriptions`, and
+`capability_contracts` carry routing and authority. The prompt supplies the
+domain judgment those declarations cannot express.
 
 ---
 
-## What the Kernel Expects in `result`
+## Choose the Output Boundary
 
-The Kernel always reads from a Python variable named `result` in the sandbox. It does not infer output from print statements, return values, or side effects. The system prompt must explicitly instruct the agent to assign its output to `result`.
+The required completion shape depends on how the task executes:
+
+| Execution path | Completion boundary |
+|---|---|
+| Normal Kernel OODA | The framework appends its `DONE` plus `RESULT` protocol. `DONE` is complete human-facing prose; `RESULT` is data for downstream work. |
+| Coder sandbox | Generated Python must assign its output to `result`. Print output and function return values are not the sandbox result. |
+| `single_response` | One direct completion returns visible prose; no Python `result` variable or Kernel completion protocol is involved. |
+| `single_artifact` | One bounded Kernel turn may finish with a raw JSON object. Validate domain artifacts before returning them. |
+
+For the coder path:
 
 ```python
 # ✅ Correct: result is assigned
@@ -72,24 +171,26 @@ def get_summary():
     return {"summary": "..."}
 ```
 
-If `result` is not assigned, `step["payload"]` will be `None` and `step["status"]` will still be `"success"` because the sandbox did not raise an exception.
+Do not repeat the raw `DONE`/`RESULT` parser syntax in every application prompt;
+the execution harness already supplies it. Describe what the answer and data
+mean. A shared application subclass may reinforce the `RESULT` schema when it
+validates a domain work product. See [Contracts and Boundaries](../concepts/contracts.md).
 
 ---
 
 ## Specifying Tools and APIs
 
-The Kernel generates code that runs in a sandbox. The sandbox has access to Python standard library and any system bundles registered in the Registry. Tell the agent exactly what is available:
+The Kernel appends live tool descriptions from the Registry. Use the system
+prompt to explain when and why the agent should use its authorized tools; do not
+copy provider credentials or invent signatures that are not registered.
 
 ```python
 system_prompt = """
 You are a GitHub activity analyst.
 
-Available tools (via registered system bundle):
-  github_list_prs(repo: str, state: str) -> list
-  github_get_pr_diff(repo: str, pr_number: int) -> str
-  github_post_comment(repo: str, pr_number: int, body: str) -> dict
-
-Data source: github.com API via auth_manager (credentials injected automatically).
+Use the available Nexus-backed GitHub tools to inspect pull requests and diffs.
+Treat a proposed review comment separately from a posted comment. Never request,
+print, or store provider credentials.
 
 Output stored in `result` as:
   {
@@ -98,17 +199,24 @@ Output stored in `result` as:
     "reviews":  list[dict]   # [{pr_number, title, summary}]
   }
 
-If the GitHub API rate-limits or returns 403, set result["error"] and stop.
+If the provider cannot complete an operation, preserve its exact evidence and
+report the work as blocked or incomplete. Do not infer the cause from an HTTP
+status code alone.
 """
 ```
 
-Named tools referenced in the system prompt are what the `CoderSubAgent` generates calls to. If a tool is not mentioned, the agent may invent an API call that fails in the sandbox.
+Tool schemas come from the live registry. Keep the prompt focused on domain
+behavior and let registered schemas define callable names and arguments.
 
 ---
 
 ## Multi-Step Goal Prompts
 
-For agents with `goal_oriented = True`, the system prompt shapes the planning phase, not just the execution phase. The planner reads it to understand what the goal decomposition should look like.
+For `agent.execute_goal()` and complex tasks on an agent with
+`goal_oriented = True`, the system prompt shapes that agent's planning phase as
+well as execution. This is separate from `Mesh.execute_goal()`, whose temporary
+planner builds a capability-addressed DAG from the human objective and the Mesh
+capability catalog.
 
 ```python
 system_prompt = """
@@ -281,12 +389,15 @@ Your output must be stored in `result` as:
 """
 ```
 
-Apply this template for every new agent. The more precisely you fill each section, the fewer autonomous repair cycles the Kernel needs.
+Use these as named sections rather than one anonymous block. Precise sections
+make omissions testable; runtime contracts still enforce the boundaries that
+downstream code must trust.
 
 ---
 
 ## Further Reading
 
 - [AutoAgent Guide](autoagent.md): How the Kernel uses the system prompt in the OODA loop
+- [Contracts and Boundaries](../concepts/contracts.md): What prompts instruct versus what the runtime enforces
 - [Agent Personas](../concepts/agent-personas.md): Full AgentProfile YAML schema and profile loading
 - [Workflow DAGs](workflows.md): How depends_on replaces manual context injection in system prompts

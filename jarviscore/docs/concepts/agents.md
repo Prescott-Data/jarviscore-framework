@@ -1,5 +1,7 @@
 ---
 icon: material/robot-outline
+title: "AI Agent Identity and Execution Models"
+description: "Understand JarvisCore agent identity, AutoAgent and CustomAgent execution profiles, lifecycle hooks, capabilities, and task processing."
 ---
 
 # Agents
@@ -18,7 +20,6 @@ Agent identity is defined by class attributes set directly on the class body. Th
 from jarviscore import AutoAgent
 
 class ResearcherAgent(AutoAgent):
-    name         = "Researcher"
     role         = "researcher"
     description  = "Synthesises web research into structured intelligence reports."
     capabilities = ["research", "synthesis", "web-search"]
@@ -38,8 +39,10 @@ The framework raises `ValueError` at startup if `role`, `capabilities`, or `syst
 | `role` | Yes | The agent's role slug. Used as the lookup key for peer discovery, profile loading, and workflow routing. Must be unique within a mesh. |
 | `capabilities` | Yes | A list of capability tags. Other agents use these for capability-based discovery (`peers.discover(capability="research")`). |
 | `system_prompt` | Yes (AutoAgent) | The base LLM instruction set for every task this agent handles. |
-| `name` | No | Human-readable display name shown in traces and dashboards. Defaults to the class name. |
 | `description` | No | One-sentence purpose statement used by peer agents when making routing decisions. |
+| `capability_descriptions` | No | Concrete descriptions used by distributed planning and peer discovery to understand what each capability owns. |
+| `capability_contracts` | No | Authorized effects and provider systems for each capability. |
+| `output_schema` | No | Optional Pydantic model used to validate AutoAgent output. |
 
 ### Agent ID
 
@@ -98,25 +101,25 @@ Use `CustomAgent` when the execution sequence is deterministic and known in adva
 
 Every agent goes through the same lifecycle regardless of execution model:
 
-```
-Mesh.add(AgentClass)
-    │
-    ▼
-Mesh.start()
-    ├── Agent.__init__()              # role, capabilities validated; agent_id assigned
-    ├── Agent.setup()                 # infrastructure injected; one-time init runs
-    │       ├── self._redis_store     # injected when REDIS_URL is set
-    │       ├── self._blob_storage    # always injected (local filesystem default)
-    │       ├── self.peers            # injected when P2P_ENABLED=true
-    │       ├── self.mailbox          # injected when REDIS_URL is set
-    │       └── self._auth_manager   # injected when requires_auth=True + NEXUS_GATEWAY_URL set
-    │
-    ▼
-Running: processes tasks and/or peer messages
-    │
-    ▼
-Mesh.stop()
-    └── Agent.teardown()             # release resources, close connections
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Application
+    participant Mesh
+    participant Agent
+    participant Infra as Runtime infrastructure
+
+    App->>Mesh: add(AgentClass)
+    Mesh->>Agent: construct and validate role/capabilities
+    Mesh->>Agent: assign agent_id and Mesh reference
+    App->>Mesh: start()
+    Mesh->>Infra: initialize configured services
+    Mesh->>Agent: inject stores, mailbox, HITL
+    Mesh->>Agent: setup()
+    Mesh->>Agent: inject peers and optional auth
+    Agent-->>App: ready for tasks and messages
+    App->>Mesh: stop()
+    Mesh->>Agent: teardown()
 ```
 
 Override `setup()` for one-time initialisation and `teardown()` for cleanup:
@@ -131,7 +134,11 @@ async def teardown(self):
     await super().teardown()         # always call super last
 ```
 
-Do not do expensive work in `__init__`: the Mesh injects infrastructure *after* construction and *before* `setup()`. Anything that requires `self._redis_store` or `self.peers` belongs in `setup()`.
+Do not do expensive work in `__init__`. The Mesh injects stores, mailbox, and
+HITL after construction and before `setup()`, so store-backed initialization
+belongs in `setup()`. Peer clients and optional authentication are attached
+after `setup()`; use them during task execution or after `mesh.start()` returns,
+not from `setup()`.
 
 ---
 
@@ -141,14 +148,17 @@ The Mesh injects infrastructure stores into every agent between `__init__` and `
 
 | Attribute | Type | Available when |
 |---|---|---|
-| `self._redis_store` | `RedisStore` | `REDIS_URL` is set |
+| `self._redis_store` | `RedisContextStore` | `REDIS_URL` is set |
 | `self._blob_storage` | `BlobStorage` | Always: local filesystem by default |
-| `self.peers` | `PeerClient` | `P2P_ENABLED=true` |
-| `self.mailbox` | `MailboxManager` | `REDIS_URL` is set |
+| `self.peers` | `PeerClient` | Always: local routing by default; SWIM/ZMQ transport when P2P is active |
+| `self.mailbox` | `MailboxManager` | Always: in-memory by default; Redis-backed when configured |
+| `self.hitl` | `HITLQueue` | Always when the framework HITL component is available; Redis-enhanced when configured |
 | `self._auth_manager` | `AuthenticationManager` | `requires_auth = True` on the class and `NEXUS_GATEWAY_URL` is set |
 | `self._athena_client` | `AthenaClient` | `ATHENA_URL` is set |
 
-None of these are required. Every injected attribute is `None` when its infrastructure is not configured. Always guard with `if self._redis_store:` before accessing optional infrastructure.
+External services remain optional. Guard service-backed attributes such as
+`self._redis_store`, `self._auth_manager`, and `self._athena_client` before use;
+local peer and mailbox implementations remain available without Redis or SWIM.
 
 ---
 
@@ -161,7 +171,7 @@ The `role` and `capabilities` you set on the class are not just labels: they act
 | Peer discovery (`peers.get_peer(role="analyst")`) | `role` |
 | Capability-based routing (`peers.discover(capability="research")`) | `capabilities` |
 | YAML profile loading (expertise, SOPs, escalation targets) | `role` |
-| Model tier selection (coder → `CODING_MODEL`, others → `TASK_MODEL_*`) | `role` |
+| Model tier selection | Kernel execution role and task complexity |
 | Workflow step routing (`{"agent": "researcher", "task": "..."}`) | `role` |
 | HITL escalation targets | Defined in the agent's YAML profile |
 

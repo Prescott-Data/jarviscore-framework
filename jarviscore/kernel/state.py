@@ -161,19 +161,25 @@ class KernelState(BaseModel):
         return self.tool_history[-1] if self.tool_history else None
 
     def get_final_output(self) -> Any:
-        """Extract the best output for the caller.
+        """The agent's answer, if it gave one.
 
-        Priority:
-        1. Explicit self.output (set by subagent)
-        2. Last successful tool output
-        3. Last thought
+        Only what the agent set at DONE counts. Falling back to the last tool's
+        output presented a sandbox return value as the conclusion of a task the
+        agent had not finished reasoning about; the last thought is the same
+        thing in prose. A run that did not conclude has no answer, and saying
+        so is more useful to the caller than a payload it will misread as one.
         """
+        return self.output
+
+    def unfinished_account(self) -> Optional[str]:
+        """What the agent was doing when the run stopped, for a run with no answer."""
         if self.output is not None:
-            return self.output
-        # Walk backwards for last successful tool output
+            return None
+        parts = []
+        if self.thoughts:
+            parts.append(f"Last reasoning: {self.thoughts[-1]}")
         for tr in reversed(self.tool_history):
             if tr.succeeded and tr.tool_output is not None:
-                return tr.tool_output
-        if self.thoughts:
-            return self.thoughts[-1]
-        return None
+                parts.append(f"Last tool: {tr.tool_name}")
+                break
+        return " | ".join(parts) or None

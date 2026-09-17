@@ -101,10 +101,9 @@ class TestKnowledgeAccumulator:
             internal_section = context[internal_idx:internal_idx + 500]
             assert "some_other_var" in internal_section
 
-    def test_knowledge_accumulator_budget_cap(self):
-        """Knowledge Accumulator should be capped at 4000 tokens."""
+    def test_knowledge_accumulator_keeps_every_item(self):
+        """Findings are evicted as a block under pressure, never silently trimmed (#154)."""
         state = _make_state()
-        # Create a very large set of findings
         state.internal_variables["research_findings"] = [
             {"summary": f"Finding {i}: " + "x" * 200} for i in range(50)
         ]
@@ -112,14 +111,14 @@ class TestKnowledgeAccumulator:
             {"method": "GET", "path": f"/v1/resource_{i}", "summary": f"Resource {i}"} for i in range(50)
         ]
 
-        cm = ContextManager()
-        context = cm.build_context(state)
+        context = ContextManager().build_context(state)
 
-        # Block should exist but be bounded (not explode the context)
         assert "WHAT I KNOW SO FAR" in context
-        # Only last 8 specs and last 5 findings should be shown
+        # The oldest discovery is as retrievable as the newest.
         assert "resource_49" in context
-        assert "resource_0" not in context  # Too old, should be trimmed
+        assert "resource_0" in context
+        assert "Finding 0:" in context
+        assert "truncated" not in context
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -168,6 +167,24 @@ class TestEpistemicDecisionPrompt:
         state = _make_state(turn=7)
         prompt = self._build_prompt(state)
         assert "Turn 7" in prompt
+
+    def test_prompt_resolves_peer_answerable_gaps_before_stopping(self):
+        class StubAgent(BaseSubAgent):
+            def get_system_prompt(self):
+                return "Test system prompt"
+
+            def setup_tools(self):
+                self.register_tool("ask_peer", lambda **_: {}, "Ask a peer")
+                self.register_tool(
+                    "ask_capability", lambda **_: {}, "Ask by capability"
+                )
+
+        agent = StubAgent(agent_id="test", role="researcher", llm_client=None)
+        prompt = agent._build_user_prompt(_make_state(), "## MISSION\n**Task:** Test")
+
+        assert "Before concluding blocked" in prompt
+        assert "ask_peer" in prompt
+        assert "ask_capability" in prompt
 
     def test_prompt_includes_role(self):
         prompt = self._build_prompt()

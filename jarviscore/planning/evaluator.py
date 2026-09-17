@@ -23,6 +23,7 @@ import json
 import os
 from typing import Any, Optional
 
+from jarviscore.context.fidelity import Record, select_whole
 from .goal_context import GoalExecution, PlannedStep, StepEvaluation
 
 _EVAL_SCHEMA = """\
@@ -33,7 +34,12 @@ Return ONLY a JSON object with exactly these fields:
   "evaluator_note"      : "<concise explanation of verdict — 1-2 sentences>",
   "additional_findings" : {
     "<snake_case_key>" : "<value extracted from the output that future steps should know>"
-  }
+    },
+    "goal_decision"      : "<continue|complete|replan>",
+    "goal_note"          : "<why the remaining plan is still needed, obsolete, or must change>",
+    "hitl_category"      : "<auth_required|data_required|critical_action|null>",
+    "autonomous_paths_exhausted": <true|false>,
+    "human_exclusive"    : <true|false>
 }
 
 Verdict guide:
@@ -57,13 +63,24 @@ additional_findings:
   Return an empty object {} if there is nothing new to add.
   Do NOT duplicate facts already listed in accumulated_goal_facts.
 
-Truncated evidence:
-  Step output may end with a marker like "[truncated: showing N of M chars]".
-  That means the work exists but only part of it is visible to you. If the
-  visible portion satisfies the criterion and ONLY the truncation prevents
-  full verification, return "partial" and note what you could not see.
-  Never return "fail" solely because evidence was clipped — a hidden tail
-  is not a failed step, and "fail" burns a replan cycle on blindness.
+goal_decision:
+    "continue" — remaining steps are still necessary under current evidence.
+    "complete" — the overall goal is already satisfied; remaining steps are obsolete.
+    "replan"   — new evidence invalidated the remaining plan, but the goal is not complete.
+    Respect conditional intent. If an observation proves a conditional branch is false,
+    do not execute, compensate for, or replace that branch merely because it was planned.
+
+HITL admissibility:
+    Low confidence, token spend, failed analysis, or incomplete routine work NEVER justify HITL.
+    auth_required: a person must grant account access or credentials.
+    critical_action: a consequential action requires explicit human approval.
+    data_required: allowed only when autonomous_paths_exhausted=true AND human_exclusive=true.
+    Otherwise use fail/partial and replan autonomously.
+
+Withheld facts:
+  The accumulated goal facts may end with a note saying some records are not
+  shown. That note concerns the fact list only — the step output above is
+  always complete. Judge the criterion against the output as given.
 """
 
 
@@ -79,8 +96,9 @@ class EvaluatorError(Exception):
 def _honest_clip(text: str, limit: int) -> str:
     """Clip with an explicit marker — never silently (#55/#85).
 
-    Prompt views may be bounded, but a bound the model cannot see poisons
-    the judgment: markers are the floor.
+    Only used on an LLM response that failed to parse, where the text is being
+    quoted back as a diagnostic rather than judged. Evidence is never clipped:
+    see ``_format_output`` (#166).
     """
     if len(text) <= limit:
         return text
@@ -111,6 +129,7 @@ class StepEvaluator:
         step: PlannedStep,
         output: Any,                # AgentOutput
         goal_execution: GoalExecution,
+        remaining_steps: Optional[list[PlannedStep]] = None,
     ) -> StepEvaluation:
         """
         Evaluate a completed step against its success criterion.
@@ -172,6 +191,13 @@ class StepEvaluator:
                     additional_findings={},
                 )
             # Genuine HITL: convergence stall or unknown yield reason
+            hitl_type = str(meta.get("hitl_type") or "").lower()
+            category = {
+                "auth": "auth_required",
+                "approval": "critical_action",
+                "data": "data_required",
+                "input": "data_required",
+            }.get(hitl_type)
             return StepEvaluation(
                 verdict="hitl",
                 confidence=0.98,
@@ -180,10 +206,17 @@ class StepEvaluator:
                     f"{getattr(output, 'summary', 'yield triggered')}"
                 ),
                 additional_findings={},
+                hitl_category=category,
+                autonomous_paths_exhausted=bool(
+                    meta.get("autonomous_paths_exhausted")
+                ),
+                human_exclusive=bool(meta.get("human_exclusive")),
             )
 
         # ── LLM evaluation for "success" outputs ──────────────────────────────
-        prompt = self._build_prompt(step, output, goal_execution)
+        prompt = self._build_prompt(
+            step, output, goal_execution, remaining_steps=remaining_steps
+        )
 
         # Evaluator is a fast 4-way classification task (pass/partial/fail/hitl).
         # Route to the nano/fast tier — cheaper, lower latency, no quality loss.
@@ -235,13 +268,24 @@ class StepEvaluator:
         step: PlannedStep,
         output: Any,
         goal_execution: GoalExecution,
+        remaining_steps: Optional[list[PlannedStep]] = None,
     ) -> str:
         output_repr = self._format_output(output)
-        facts_limit = int(os.environ.get("EVALUATOR_FACTS_EVIDENCE_LIMIT", "2000"))
-        known = _honest_clip(
-            json.dumps(goal_execution.truth.to_flat_dict(), default=str),
-            facts_limit,
-        )
+        facts = goal_execution.truth.to_flat_dict()
+        records = [
+            Record(key=str(key), text=f"  - {key}: {value}", priority=1)
+            for key, value in facts.items()
+        ]
+        selection = select_whole(records, self._facts_budget())
+        known = selection.render() or "None yet."
+        if not selection.complete:
+            known += f"\n  {selection.notice('the goal truth store')}"
+        if remaining_steps is None:
+            remaining_steps = goal_execution.remaining_plan
+        remaining = "\n".join(
+            f"  - {item.step_id}: {item.task}"
+            for item in (remaining_steps or [])
+        ) or "  None."
 
         return (
             f"Evaluate whether this agent step met its success criterion.\n\n"
@@ -250,7 +294,8 @@ class StepEvaluator:
             f"Success criterion: {step.success_criterion}\n"
             f"Expected findings: {step.expected_findings}\n\n"
             f"Step output:\n{output_repr}\n\n"
-            f"Accumulated goal facts (do not re-extract these): {known}\n\n"
+            f"Accumulated goal facts (do not re-extract these):\n{known}\n\n"
+            f"Remaining planned steps:\n{remaining}\n\n"
             f"{_EVAL_SCHEMA}"
         )
 
@@ -295,19 +340,25 @@ class StepEvaluator:
 
         return response.get("content", "") if isinstance(response, dict) else str(response)
 
+    @staticmethod
+    def _facts_budget() -> int:
+        return int(os.environ.get("EVALUATOR_FACTS_BUDGET_CHARS", "40000"))
+
     def _format_output(self, output: Any) -> str:
         """
         Render AgentOutput fields for the evaluation prompt.
         Keeps it focused: status, summary, and payload.
 
-        Evidence windows are generous and tunable, and clipping is announced
-        with an honest marker (issue #85). A blind verdict drives the whole
-        Plan-Execute-Evaluate loop, so a few KB of evidence is cheap next to
-        the replan cycle a false "fail" costs.
-        """
-        summary_limit = int(os.environ.get("EVALUATOR_SUMMARY_EVIDENCE_LIMIT", "2000"))
-        payload_limit = int(os.environ.get("EVALUATOR_PAYLOAD_EVIDENCE_LIMIT", "6000"))
+        The evidence is never cut (#166). A verdict is a judgment about this
+        output, so judging half of it is not a slightly worse judgment, it is a
+        judgment about something else — and a step whose proof of success fell
+        past a character limit gets marked failed, which costs a replan cycle
+        and buries the real result. Whatever the step produced goes in whole.
 
+        EVALUATOR_SUMMARY_EVIDENCE_LIMIT and EVALUATOR_PAYLOAD_EVIDENCE_LIMIT
+        are still read so existing configuration keeps working, but they no
+        longer shorten anything.
+        """
         parts = []
         status = getattr(output, "status", "unknown")
         summary = getattr(output, "summary", None)
@@ -315,13 +366,13 @@ class StepEvaluator:
 
         parts.append(f"status: {status}")
         if summary:
-            parts.append(f"summary: {_honest_clip(summary, summary_limit)}")
+            parts.append(f"summary: {summary}")
         if payload is not None:
             if isinstance(payload, dict):
                 payload_str = json.dumps(payload, default=str)
             else:
                 payload_str = str(payload)
-            parts.append(f"payload: {_honest_clip(payload_str, payload_limit)}")
+            parts.append(f"payload: {payload_str}")
 
         return "\n".join(parts)
 
@@ -499,9 +550,36 @@ class StepEvaluator:
         if not isinstance(additional, dict):
             additional = {}
 
+        goal_decision = str(parsed.get("goal_decision") or "continue").lower().strip()
+        if goal_decision not in {"continue", "complete", "replan"}:
+            raise EvaluatorError(
+                f"Evaluator returned invalid goal_decision: {goal_decision!r}. "
+                "Must be one of: continue, complete, replan."
+            )
+
+        hitl_category = parsed.get("hitl_category")
+        if hitl_category is not None:
+            hitl_category = str(hitl_category).lower().strip()
+            if hitl_category in {"", "null", "none"}:
+                hitl_category = None
+        if hitl_category is not None:
+            if hitl_category not in {
+                "auth_required", "data_required", "critical_action"
+            }:
+                raise EvaluatorError(
+                    f"Evaluator returned invalid hitl_category: {hitl_category!r}."
+                )
+
         return StepEvaluation(
             verdict=verdict,
             confidence=confidence,
             evaluator_note=_honest_clip(str(parsed.get("evaluator_note", "")), 600),
             additional_findings=additional,
+            goal_decision=goal_decision,
+            goal_note=_honest_clip(str(parsed.get("goal_note", "")), 600),
+            hitl_category=hitl_category,
+            autonomous_paths_exhausted=bool(
+                parsed.get("autonomous_paths_exhausted", False)
+            ),
+            human_exclusive=bool(parsed.get("human_exclusive", False)),
         )

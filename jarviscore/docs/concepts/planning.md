@@ -1,10 +1,15 @@
 ---
 icon: material/map-outline
+title: "Goal-Oriented AI Agent Planning and Replanning"
+description: "Enable AutoAgent goal decomposition with a Plan, Execute, Evaluate loop that tracks evidence, evaluates steps, and replans when needed."
 ---
 
 # Planning
 
-Goal-oriented planning is an opt-in mode for `AutoAgent`. By default, an `AutoAgent` executes each task as a single OODA loop and returns. When planning is enabled, the same task string is treated as a goal: the agent decomposes it into an ordered sequence of steps, executes each one, evaluates whether it succeeded, and revises the plan if something fails.
+Goal-oriented planning is an opt-in capability for `AutoAgent`. By default, an
+`AutoAgent` executes each task as a single OODA loop and returns. When planning
+is enabled, a complexity classifier sends genuinely multi-step work through
+Plan, Execute, Evaluate; bounded work still uses one direct Kernel turn.
 
 Planning is available exclusively on `AutoAgent`. `CustomAgent` does not have access to the planning loop.
 
@@ -24,7 +29,11 @@ class ResearchAgent(AutoAgent):
     goal_oriented = True   # enables the Plan → Execute → Evaluate loop
 ```
 
-With this set, every `execute_task()` call is routed through the planning loop automatically. The calling code is unchanged: you still call `mesh.workflow()` with a normal task dict. The response envelope is identical, with one addition: a `goal_execution` key containing a summary of the steps run, facts accumulated, and elapsed time.
+With this set, every `execute_task()` call is classified automatically. Complex
+work enters the planning loop; simple and moderate work executes directly. The
+calling code is unchanged: you still call `mesh.workflow()` with a normal task
+dict. The response includes `goal_execution`: a planning summary for complex
+work or direct-Kernel classification metadata for bounded work.
 
 Two environment variables allow you to tune the loop without code changes:
 
@@ -96,15 +105,22 @@ If the step returned `status == "yield"`, the evaluator checks the yield type. R
 
 The `subagent_hint` in each `PlannedStep` is a routing recommendation. The Kernel treats it as an override: if the hint is set and valid, the Kernel dispatches directly to that sub-agent role rather than classifying the task by keyword.
 
-The Planner normalises hints aggressively. Common LLM hallucinations like `analyst`, `architect`, `writer`, and `developer` are remapped to the nearest valid role. Unknown hints that cannot be resolved via alias or fuzzy matching are silently dropped to `null`, letting the Kernel classify automatically from the task text. The plan is never rejected over a bad hint.
-
-Valid routing hints are: `researcher`, `coder`, `communicator`, `browser`.
+Valid routing hints are `researcher`, `coder`, `communicator`, and `browser`.
+The Planner accepts `null` when it should leave routing to the Kernel. Any other
+value is a contract violation and raises `PlannerError`; JarvisCore does not
+silently remap an invented role or discard it. This keeps execution routing
+auditable and prevents a model-generated alias from changing which tool surface
+receives a step.
 
 ---
 
 ## When Planning Fails
 
-A `PlannerError` is a hard failure. The Planner does not retry with a degraded plan and does not silently return a partial result. If the LLM call fails, the JSON is malformed, the response contains no valid steps array, or a step is missing `task` or `success_criterion`, the error surfaces immediately to the caller.
+A `PlannerError` is a hard failure. The Planner does not retry with a degraded
+plan and does not silently return a partial result. If the LLM call fails, the
+JSON is malformed, the response contains no valid steps array, a step is missing
+`task` or `success_criterion`, or a non-null `subagent_hint` is not one of the
+four supported roles, the error surfaces immediately to the caller.
 
 The goal execution layer handles this by marking the goal as failed. There is no automatic retry of the planning call itself: planning failures typically indicate a prompt issue, a model configuration issue, or an unreachable LLM, none of which benefit from a blind retry.
 

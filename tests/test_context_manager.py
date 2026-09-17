@@ -215,35 +215,21 @@ def big_cm():
     return ContextManager(BudgetConfig())
 
 
-class TestHonestTruncation:
-    """Every value cut for the agent's eyes carries an explicit marker (#55)."""
+class TestNoTruncation:
+    """Values render whole; the budget is managed by eviction, not by cutting (#154)."""
 
-    def test_clip_within_limit_is_byte_identical(self):
-        assert ContextManager._clip("short value", 100) == "short value"
-
-    def test_clip_at_exact_limit_is_byte_identical(self):
-        text = "x" * 100
-        assert ContextManager._clip(text, 100) == text
-
-    def test_clip_over_limit_carries_marker(self):
-        text = "y" * 250
-        out = ContextManager._clip(text, 100)
-        assert out.startswith("y" * 100)
-        assert "…[truncated: showing 100 of 250 chars]" in out
-
-    def test_prior_step_output_truncation_is_marked(self, big_cm):
-        state = _kernel_state(context={
-            "previous_step_results": {
-                "step_a": {"output": "Z" * 5000},
-            },
-        })
+    def test_prior_step_output_renders_whole(self, big_cm):
+        payload = "Z" * 5000
+        state = _kernel_state(context={"previous_step_results": {"step_a": {"output": payload}}})
         rendered = big_cm.build_context(state)
-        assert "…[truncated: showing 2000 of 5000 chars]" in rendered
+        assert payload in rendered
+        assert "truncated" not in rendered
 
-    def test_belief_value_truncation_is_marked(self, big_cm):
+    def test_belief_value_renders_whole(self, big_cm):
         state = _kernel_state(belief_state={"hypothesis": "B" * 900})
         rendered = big_cm.build_context(state)
-        assert "…[truncated: showing 200 of 900 chars]" in rendered
+        assert "B" * 900 in rendered
+        assert "truncated" not in rendered
 
     def test_short_values_render_without_markers(self, big_cm):
         state = _kernel_state(
@@ -253,58 +239,75 @@ class TestHonestTruncation:
         rendered = big_cm.build_context(state)
         assert "…[truncated" not in rendered
 
-    def test_limits_are_configurable(self):
-        cm = ContextManager(BudgetConfig(belief_value_limit=50))
-        state = _kernel_state(belief_state={"h": "C" * 120})
+    def test_tool_output_renders_whole(self, big_cm):
+        state = _kernel_state()
+        state.add_tool_result("read_file", {"path": "/x"}, "D" * 1500)
+        rendered = big_cm.build_context(state)
+        assert "D" * 1500 in rendered
+        assert "truncated" not in rendered
+
+
+class TestPressureTiers:
+    """Under pressure whole blocks stop being inlined, and the agent is told (#154)."""
+
+    def _crowded_state(self):
+        state = _kernel_state(
+            context={"previous_step_results": {"step_a": {"output": "Z" * 20000}}},
+            belief_state={"hypothesis": "B" * 2000},
+            internal_variables={"scratch_detail": "S" * 20000},
+        )
+        return state
+
+    def test_low_priority_blocks_are_evicted_before_high(self):
+        cm = ContextManager(BudgetConfig(total_tokens=3000))
+        rendered = cm.build_context(self._crowded_state())
+        assert "## MISSION" in rendered
+        assert "## INTERNAL STATE" not in rendered
+
+    def test_evicted_prior_steps_become_retrievable_references(self):
+        cm = ContextManager(BudgetConfig(total_tokens=1200))
+        rendered = cm.build_context(self._crowded_state())
+        assert "## PRIOR STEP REFERENCES" in rendered
+        assert "`step_output:wf:step_a`" in rendered
+        assert "Z" * 20000 not in rendered
+
+    def test_pressure_is_visible_to_the_agent_and_recorded(self):
+        cm = ContextManager(BudgetConfig(total_tokens=1200))
+        state = self._crowded_state()
         rendered = cm.build_context(state)
-        assert "…[truncated: showing 50 of 120 chars]" in rendered
+        assert "## CONTEXT PRESSURE" in rendered
+        assert "Nothing was truncated" in rendered
+        assert state.internal_variables["context_pressure"]["tier"] != "normal"
+        assert state.internal_variables["context_pressure"]["evicted"]
+
+    def test_a_comfortable_budget_shows_no_pressure(self, big_cm):
+        state = _kernel_state(context={"note": "small"})
+        rendered = big_cm.build_context(state)
+        assert "## CONTEXT PRESSURE" not in rendered
 
 
-class TestKeyOverflowNotices:
-    """Past the key cap, hidden keys are announced by name — recency wins (#56)."""
+class TestEveryKeyRenders:
+    """Keys are dropped whole under pressure, never silently capped (#154)."""
 
-    def test_overflow_names_the_hidden_keys(self, big_cm):
+    def test_all_belief_keys_render(self, big_cm):
         beliefs = {f"belief_{i:02d}": f"value {i}" for i in range(14)}
         rendered = big_cm.build_context(_kernel_state(belief_state=beliefs))
-        assert "…and 4 earlier key(s) not shown" in rendered
-        for hidden in ["belief_00", "belief_01", "belief_02", "belief_03"]:
-            assert f"`{hidden}`" in rendered
+        for i in range(14):
+            assert f"- `belief_{i:02d}`: value {i}" in rendered
 
-    def test_most_recent_keys_survive(self, big_cm):
-        beliefs = {f"belief_{i:02d}": f"value {i}" for i in range(14)}
-        rendered = big_cm.build_context(_kernel_state(belief_state=beliefs))
-        # Newest key renders with its value; oldest only in the overflow notice
-        assert "- `belief_13`: value 13" in rendered
-        assert "- `belief_00`:" not in rendered
+    def test_all_input_context_keys_render(self, big_cm):
+        ctx = {f"key_{i:02d}": f"val {i}" for i in range(13)}
+        rendered = big_cm.build_context(_kernel_state(context=ctx))
+        for i in range(13):
+            assert f"- `key_{i:02d}`: val {i}" in rendered
 
-    def test_at_or_under_cap_renders_identically_with_no_notice(self, big_cm):
-        beliefs = {f"b{i}": "v" for i in range(10)}
-        rendered = big_cm.build_context(_kernel_state(belief_state=beliefs))
-        assert "not shown" not in rendered
-
-    def test_internal_variable_skip_keys_do_not_consume_the_cap(self, big_cm):
-        # 4 dedicated/underscore keys + 10 real ones: all 10 real keys must render
+    def test_internal_variable_skip_keys_are_still_skipped(self, big_cm):
         vars_ = {"long_term_memory": [], "research_findings": [], "_private": 1, "api_specs": []}
         vars_.update({f"var_{i}": f"value {i}" for i in range(10)})
         rendered = big_cm.build_context(_kernel_state(internal_variables=vars_))
         for i in range(10):
             assert f"- `var_{i}`: value {i}" in rendered
-        assert "not shown" not in rendered
-
-    def test_input_context_overflow_named(self, big_cm):
-        ctx = {f"key_{i:02d}": f"val {i}" for i in range(13)}
-        rendered = big_cm.build_context(_kernel_state(context=ctx))
-        assert "…and 3 earlier key(s) not shown" in rendered
-
-
-class TestToolHistoryMarkers:
-    """The tool-history window uses the same honest markers."""
-
-    def test_history_output_truncation_is_marked(self, big_cm):
-        state = _kernel_state()
-        state.add_tool_result("read_file", {"path": "/x"}, "D" * 1500)
-        rendered = big_cm.build_context(state)
-        assert "…[truncated: showing 600 of" in rendered
+        assert "`_private`" not in rendered
 
 
 # ======================================================================
@@ -536,13 +539,13 @@ class TestLtmRenderOverflow:
         state = _kernel_state()
         state.internal_variables["long_term_memory"] = [_ltm_entry(i) for i in range(9)]
         rendered = big_cm.build_context(state)
-        assert "…and 4 older memories not shown" in rendered
+        assert "…and 4 older memories held in long-term memory" in rendered
 
     def test_no_notice_at_or_under_render_limit(self, big_cm):
         state = _kernel_state()
         state.internal_variables["long_term_memory"] = [_ltm_entry(i) for i in range(5)]
         rendered = big_cm.build_context(state)
-        assert "older memories not shown" not in rendered
+        assert "older memories held" not in rendered
 
 
 # ======================================================================
@@ -598,18 +601,21 @@ class TestGoalStateBlock:
         rendered = big_cm.build_context(_kernel_state(context={"plain": "ctx"}))
         assert "## GOAL STATE" not in rendered
 
-    def test_fact_overflow_is_announced_by_name(self, big_cm):
+    def test_every_fact_renders(self, big_cm):
         ctx = _goal_context(n_facts=25)
         rendered = big_cm.build_context(_kernel_state(context=ctx))
-        assert "earlier key(s) not shown" in rendered
+        for i in range(25):
+            assert f"- `fact_{i}`" in rendered
 
-    def test_step_overflow_is_announced(self, big_cm):
+    def test_every_completed_step_renders(self, big_cm):
         ctx = _goal_context(n_steps=12)
         rendered = big_cm.build_context(_kernel_state(context=ctx))
-        assert "…and 4 earlier steps not shown" in rendered
+        assert "- [pass] `step_00`: did thing 0" in rendered
+        assert "- [pass] `step_11`: did thing 11" in rendered
 
-    def test_long_fact_values_carry_markers(self, big_cm):
+    def test_long_fact_values_render_whole(self, big_cm):
         ctx = _goal_context()
         ctx["_goal_facts"]["huge"] = "H" * 900
         rendered = big_cm.build_context(_kernel_state(context=ctx))
-        assert "…[truncated: showing 200 of 900 chars]" in rendered
+        assert "H" * 900 in rendered
+        assert "truncated" not in rendered

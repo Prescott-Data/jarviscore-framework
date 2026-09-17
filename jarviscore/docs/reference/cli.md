@@ -1,5 +1,7 @@
 ---
 icon: material/console
+title: "JarvisCore Command-Line Interface Reference"
+description: "Use the jarviscore CLI for project setup, environment checks, smoke tests, Nexus, memory, atom validation, and workflow inspection."
 ---
 
 # CLI Reference
@@ -133,10 +135,20 @@ jarviscore nexus register github \
     --client-secret=YOUR_GITHUB_CLIENT_SECRET
 ```
 
-**API-key providers** (Stripe, Airtable, Brevo, Mailchimp, Apollo):
+**API-key providers** (Stripe, Airtable, Brevo, Serper):
 
 ```bash
 jarviscore nexus register stripe --api-key=sk_live_...
+```
+
+**Any other provider.** The catalog holds defaults for providers already looked up, but it is not a list of what you are allowed to register. Pass the auth type, and for an API key say where the key goes:
+
+```bash
+jarviscore nexus register okta --api-key=YOUR_KEY --auth-type=api_key \
+    --header-name=Authorization --value-prefix='SSWS '
+
+jarviscore nexus register gitlab --api-key=YOUR_TOKEN --auth-type=api_key \
+    --header-name=PRIVATE-TOKEN
 ```
 
 | Option | Description |
@@ -144,6 +156,17 @@ jarviscore nexus register stripe --api-key=sk_live_...
 | `--client-id` | OAuth client ID, or username for basic authentication |
 | `--client-secret` | OAuth client secret, or password for basic authentication |
 | `--api-key` | API key for providers that use key-based authentication |
+| `--auth-type` | `oauth2`, `api_key` or `basic_auth`. Required for providers not already in the catalog |
+| `--header-name` | Header that carries the credential, such as `X-API-KEY` or `PRIVATE-TOKEN` |
+| `--value-prefix` | Scheme word placed before the credential, such as `'Bearer '` or `'SSWS '` |
+| `--param-name` | Query parameter that carries the credential, for keys sent in the URL |
+| `--credential-field` | Credential field to send when it is not the default for the auth type |
+
+### Where a credential goes
+
+An API key has no standard location. Okta expects `Authorization: SSWS <key>`, Zoho expects `Authorization: Zoho-oauthtoken <token>`, GitLab expects `PRIVATE-TOKEN`, Serper expects `X-API-KEY`, and some providers expect a query parameter. JarvisCore records the location per provider rather than guessing, because a header the provider ignores returns an opaque 401 that is difficult to trace back to its cause.
+
+If you register an API key without saying where it goes, the command stops and tells you which flag to add. OAuth2 defaults to `Authorization: Bearer <token>` as described in RFC 6750, so it needs no placement unless the provider uses its own scheme word.
 
 Credentials are stored AES-256-GCM encrypted at rest in the local credential store. If `NEXUS_GATEWAY_URL` is set and the gateway is reachable, credentials are also registered with the gateway.
 
@@ -322,7 +345,7 @@ jarviscore atom test --bundle slack --mode dry-run
 # Check a single atom
 jarviscore atom test --bundle slack --atom slack_send_message --mode dry-run
 
-# Check every atom across all 150 bundles
+# Check every atom across the installed bundles
 jarviscore atom test --mode dry-run --all
 ```
 
@@ -333,7 +356,7 @@ Dry-run validates:
 | File exists | `integrations/atoms/<bundle>/<atom>.py` is present |
 | Valid Python | File parses without a `SyntaxError` |
 | Function name | Top-level function name matches filename stem |
-| Signature | First parameter is `auth_info: dict` |
+| Contract | Async function, authenticates only through `nexus_call` |
 | Return type | Return annotation is `-> dict` |
 | Docstring | Function has a docstring |
 | Return statement | At least one `return` with a value |
@@ -355,7 +378,10 @@ The integration check does not call the provider API: it confirms the Nexus Gate
 
 ### atom list
 
-Lists all registered atom bundles and their atoms.
+Lists the built-in bundle directories and atom files shipped with your installed
+version. Use this local inventory as the source of truth for catalog availability;
+it does not query a running registry or certify that atoms have been verified
+against live provider APIs.
 
 ```bash
 # All bundles
@@ -365,22 +391,25 @@ jarviscore atom list
 jarviscore atom list --bundle slack
 ```
 
-Example output:
+Illustrative output (names are abbreviated; counts come from your installation):
 
 ```
 JarvisCore Atom Registry
 jarviscore/integrations/atoms
 
-  slack  (6 atoms)
-    · slack_add_reaction
-    · slack_get_messages
-    · slack_get_user
-    · slack_list_channels
-    · slack_list_users
+  slack  (<atom count> atoms)
     · slack_send_message
+    · ...
 
-150 bundles  ·  1224 atoms total
+... remaining installed bundles ...
+
+<bundle count> bundles  ·  <total atom count> atoms total
 ```
+
+The complete output reports totals from the installed catalog, counting atom
+files rather than parsing their functions and excluding package initializers.
+These totals change as bundles and atoms are added or removed. Use `atom test`
+for structural validation; listing an atom is not a validation result.
 
 See [Testing Atoms](../guides/testing-atoms.md) for the full workflow: from writing a new atom to promoting it to `verified`.
 

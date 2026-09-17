@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "1.5.1"
+version = "1.11.0"
 description = "Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,6 +35,9 @@ dependencies = [
     "httpx>=0.25.0",
     "aiohttp>=3.9.0",
     "certifi",
+
+    # Agent profiles ship as YAML and are read on every AutoAgent load.
+    "pyyaml>=6.0",
 
     # LLM Providers — the engine. Always available, zero-config.
     # Developer picks which provider to use via env vars, not pip extras.
@@ -93,7 +96,7 @@ full = [
     "jarviscore-framework[p2p,web,redis,prometheus,azure,browser,rag,research,memory-athena]",
 ]
 dev = [
-    "jarviscore-framework[p2p,web,redis]",
+    "jarviscore-framework[p2p,web,redis,prometheus]",
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
@@ -132,7 +135,9 @@ jarviscore = [
     "skills/jarviscore/SKILL.md",
     # Nexus local-stack data — bundled so pip install users don't need the repo
     "nexus/_data/docker-compose.nexus.yml",
-    "nexus/_data/001_initial_schema.sql",
+    # Which hosts each provider is called on — without it no credential can be
+    # sent anywhere, so the wheel must carry it
+    "nexus/_data/provider_hosts.json",
     # Athena MemOS local-stack compose — bundled for same reason
     "memory/_data/docker-compose.athena.yml",
     "memory/_data/init-mongo.js",

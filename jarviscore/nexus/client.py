@@ -34,6 +34,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from .models import ConnectionRequest, DynamicStrategy
+from .providers import broker_name
+from .strategy import apply_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,25 @@ class NexusClient:
         )
 
     # ── Control Plane ─────────────────────────────────────────────
+
+    async def ensure_provider(self, profile: Dict[str, Any]) -> None:
+        """Create a provider profile through the public Gateway API if absent."""
+        name = str(profile.get("name") or "")
+        response = await self.client.get("/v1/providers")
+        response.raise_for_status()
+        grouped = response.json()
+        present = any(name in providers for providers in grouped.values() if isinstance(providers, dict))
+        if present:
+            return
+        created = await self.client.post("/v1/providers", json={"profile": profile})
+        if created.status_code not in (200, 201, 409):
+            created.raise_for_status()
+
+    async def capture_schema(self, state: str) -> Dict[str, Any]:
+        """Schema for a non-OAuth credential form; contains no credential values."""
+        response = await self.client.get("/v1/capture-schema", params={"state": state})
+        response.raise_for_status()
+        return response.json()
 
     @staticmethod
     def _ensure_uuid(user_id: str) -> str:
@@ -119,7 +140,7 @@ class NexusClient:
 
         payload = ConnectionRequest(
             user_id=self._ensure_uuid(user_id),
-            provider_name=provider,
+            provider_name=broker_name(provider),
             scopes=scopes,
             return_url=return_url,
         ).model_dump()
@@ -198,6 +219,29 @@ class NexusClient:
         response.raise_for_status()
         return response.json()
 
+    async def resolve_active(self, provider: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        The active credential for a provider in this workspace, if one exists.
+
+        GET /v1/resolve?workspace_id=...&provider_name=...
+
+        A consent completed in one process is invisible to the next: every
+        process starts with no connections and only learns about the ones it
+        made itself. This is how it learns about the rest. None means no active
+        connection, which is a state and not an error.
+        """
+        response = await self.client.get(
+            "/v1/resolve",
+            params={
+                "workspace_id": self._ensure_uuid(user_id),
+                "provider_name": broker_name(provider),
+            },
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+
     async def resolve_strategy(self, connection_id: str) -> DynamicStrategy:
         """
         Resolve a connection into a DynamicStrategy.
@@ -206,9 +250,13 @@ class NexusClient:
         Use apply_strategy_to_request() to inject auth headers.
         """
         token_data = await self.get_token(connection_id)
+        strategy = token_data.get("strategy")
+        if not isinstance(strategy, dict):
+            strategy = {}
         return DynamicStrategy(
-            type=token_data.get("type", "oauth2"),
+            type=strategy.get("type") or token_data.get("type") or "oauth2",
             credentials=token_data.get("credentials", {}),
+            config=strategy.get("config") or {},
             expires_at=token_data.get("expires_at"),
         )
 
@@ -223,7 +271,7 @@ class NexusClient:
         **kwargs,
     ) -> Dict[str, Any]:
         """
-        Apply auth headers to an HTTP request based on strategy type.
+        Apply auth credentials to an HTTP request using the strategy's placement.
 
         Returns a dict with method, url, headers, and any extra kwargs
         suitable for httpx/requests:
@@ -231,21 +279,7 @@ class NexusClient:
             async with httpx.AsyncClient() as c:
                 resp = await c.request(**request_kwargs)
         """
-        headers = dict(headers) if headers else {}
-
-        if strategy.type == "oauth2":
-            token = strategy.credentials.get("access_token", "")
-            headers["Authorization"] = f"Bearer {token}"
-        elif strategy.type == "api_key":
-            key = strategy.credentials.get("api_key", "")
-            headers["X-Api-Key"] = key
-        elif strategy.type == "basic_auth":
-            username = strategy.credentials.get("username", "")
-            password = strategy.credentials.get("password", "")
-            encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
-            headers["Authorization"] = f"Basic {encoded}"
-
-        return {"method": method, "url": url, "headers": headers, **kwargs}
+        return apply_strategy(strategy, method, url, headers=headers, **kwargs)
 
     # ── Lifecycle ─────────────────────────────────────────────────
 

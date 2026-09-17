@@ -6,6 +6,7 @@ multi-dispatch retry, HITL escalation, and cost aggregation.
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from jarviscore.kernel import Kernel
@@ -137,6 +138,16 @@ class TestTaskClassification:
         assert output.metadata["dispatches"][0]["role"] == "database"
         assert "COMMUNICATION SPECIALIST" in mock_llm.calls[0]["messages"][0]["content"]
 
+    def test_workflow_budget_caps_existing_role_lease(self, kernel):
+        lease = kernel._lease_for_role(
+            "coder",
+            {"max_tokens": 60_000, "max_seconds": 45},
+        )
+
+        assert lease.max_total_tokens == 60_000
+        assert lease.thinking_budget + lease.action_budget == 60_000
+        assert lease.wall_clock_ms == 45_000
+
 
 # ── Model Routing ─────────────────────────────────────────────────────
 
@@ -175,6 +186,121 @@ class TestSubagentCreation:
         with pytest.raises(ValueError, match="Unknown subagent role"):
             kernel._create_subagent("hacker", "test")
 
+    def test_mesh_capabilities_reach_every_subagent_including_cached(self, kernel):
+        class FakePeerTool:
+            tool_names = ["ask_peer", "broadcast_update", "list_peers"]
+
+            @property
+            def schema(self):
+                return [
+                    {"name": name, "description": name, "input_schema": {"type": "object"}}
+                    for name in self.tool_names
+                ]
+
+            async def execute(self, name, args):
+                return {"name": name, "args": args}
+
+        class FakePeers:
+            def as_tool(self):
+                return FakePeerTool()
+
+        cached = kernel._create_subagent("researcher", "test_researcher")
+        kernel._subagent_cache["test:researcher"] = cached
+        mailbox = object()
+
+        kernel.attach_mesh_capabilities(peers=FakePeers(), mailbox=mailbox)
+
+        for role in ("coder", "researcher", "communicator", "browser"):
+            subagent = cached if role == "researcher" else kernel._create_subagent(role, f"test_{role}")
+            assert {"ask_peer", "broadcast_update", "list_peers"} <= set(subagent.tool_names)
+        assert kernel.mailbox is mailbox
+
+    @pytest.mark.asyncio
+    async def test_ask_peer_carries_shared_context_without_caller_authority(self, kernel):
+        class FakePeerTool:
+            tool_names = ["ask_peer"]
+
+            def __init__(self):
+                self.calls = []
+
+            @property
+            def schema(self):
+                return [{"name": "ask_peer", "description": "ask", "input_schema": {}}]
+
+            async def execute(self, name, args, context=None):
+                self.calls.append((name, args, context))
+                return {"status": "success"}
+
+        class FakePeers:
+            def __init__(self, tool):
+                self.tool = tool
+
+            def as_tool(self):
+                return self.tool
+
+        peer_tool = FakePeerTool()
+        kernel.attach_mesh_capabilities(peers=FakePeers(peer_tool))
+        subagent = kernel._create_subagent("coder", "calendar-agent")
+        subagent._current_state = SimpleNamespace(
+            workflow_id="wf-1",
+            step_id="calendar",
+            context={
+                "objective": "Coordinate the full customer workflow",
+                "workflow_plan": {"steps": [{"id": "calendar"}]},
+                "previous_step_results": {"crm": {"email": "known@example.com"}},
+                "system": "google_calendar",
+                "systems": ["google_calendar"],
+                "effect": "write",
+                "capability": "calendar_scheduling",
+                "_nexus_connection_id": "secret-handle",
+            },
+        )
+
+        await subagent._tools["ask_peer"].func(
+            role="revenue_operations", question="Resolve the lead identity"
+        )
+
+        _, _, context = peer_tool.calls[0]
+        assert context["workflow_id"] == "wf-1"
+        assert context["objective"] == "Coordinate the full customer workflow"
+        assert context["previous_step_results"]["crm"]["email"] == "known@example.com"
+        assert context["peer_requester_step_id"] == "calendar"
+        assert not ({"system", "systems", "effect", "capability", "step_id"} & set(context))
+        assert all(not key.startswith("_") for key in context)
+
+    @pytest.mark.asyncio
+    async def test_every_subagent_can_inspect_its_workflow_and_read_step_output(
+        self, kernel
+    ):
+        class Store:
+            def get_workflow_definition(self, workflow_id):
+                assert workflow_id == "wf-1"
+                return {
+                    "workflow_id": workflow_id,
+                    "goal": "Research then analyse",
+                    "obligations": [{"id": "o1"}],
+                    "steps": [{"id": "research"}, {"id": "analyse"}],
+                }
+
+            def get_step_definition(self, workflow_id, step_id):
+                return {"id": step_id, "status": "completed", "completed_by": "peer-1"}
+
+            def get_step_output(self, workflow_id, step_id):
+                return {"output": {"evidence": ["source-1"]}}
+
+        kernel.redis_store = Store()
+        subagent = kernel._create_subagent("researcher", "test_researcher")
+        subagent._current_state = SimpleNamespace(workflow_id="wf-1")
+
+        workflow = await subagent._execute_tool("inspect_workflow", {})
+        step = await subagent._execute_tool(
+            "read_workflow_step", {"step_id": "research"}
+        )
+
+        assert workflow["goal"] == "Research then analyse"
+        assert workflow["steps"][0]["completed_by"] == "peer-1"
+        assert step["output"] == {"evidence": ["source-1"]}
+
 
 # ── Execute: Success Path ─────────────────────────────────────────────
 
@@ -185,7 +311,8 @@ class TestKernelExecuteSuccess:
         mock_sandbox.responses = [{"status": "success", "output": {"factorial": 3628800}}]
         mock_llm.responses = [
             _router_response("coder"),
-            _coder_write_response('import math\nresult = {"factorial": math.factorial(10)}')
+            _coder_write_response('import math\nresult = {"factorial": math.factorial(10)}'),
+            _llm_response('THOUGHT: Read it\nDONE: 10! is 3628800\nRESULT: {"factorial": 3628800}'),
         ]
         output = await kernel.execute(task="Calculate factorial of 10")
         assert output.status == "success"
@@ -233,14 +360,43 @@ class TestKernelExecuteSuccess:
             system_prompt="You are a data processor.",
         )
         assert output.status == "success"
-        # Verify context data reached the LLM — it appears in the user message
-        # (messages[1]) since the subagent injects context into the task prompt.
-        # The system message (messages[0]) is the subagent's own hardcoded persona.
+        # Context data reaches the LLM in the user message; the agent's identity
+        # leads the system message (issue #91).
         all_content = " ".join(
             str(m.get("content", "")) for m in mock_llm.calls[1]["messages"]
         )
         assert "data" in all_content
         assert "Process data" in all_content
+        assert mock_llm.calls[1]["messages"][0]["content"].startswith("You are a data processor.")
+
+    @pytest.mark.asyncio
+    async def test_agent_identity_leads_the_system_message(self, kernel, mock_llm):
+        """issue #91 — a sub-agent prompt is an execution harness, not a persona."""
+        mock_llm.responses = [
+            _router_response("communicator"),
+            _llm_response("THOUGHT: Answered\nDONE: Answered\nRESULT: {\"who\": \"Acme\"}"),
+        ]
+        await kernel.execute(
+            task="Who are you and what company do you work for?",
+            system_prompt="You are the VP of Marketing at Acme.",
+        )
+        system = mock_llm.calls[1]["messages"][0]["content"]
+        assert system.startswith("You are the VP of Marketing at Acme.")
+        assert system.index("Acme") < system.index("EXECUTION HARNESS")
+        # The harness still ships in full: role prompt, tools and protocol.
+        assert "COMMUNICATION SPECIALIST" in system.upper()
+        assert "Available tools:" in system and "Protocol:" in system
+
+    @pytest.mark.asyncio
+    async def test_callers_passing_no_identity_are_unchanged(self, kernel, mock_llm):
+        mock_llm.responses = [
+            _router_response("communicator"),
+            _llm_response("THOUGHT: Drafted\nDONE: Drafted\nRESULT: {}"),
+        ]
+        await kernel.execute(task="Draft a status report")
+        system = mock_llm.calls[1]["messages"][0]["content"]
+        assert "EXECUTION HARNESS" not in system
+        assert "Available tools:" in system
 
 
 # ── Execute: Failure + Retry ──────────────────────────────────────────
@@ -250,19 +406,19 @@ class TestKernelExecuteFailure:
     @pytest.mark.asyncio
     async def test_all_dispatches_fail(self, kernel, mock_llm):
         """Protocol-invalid responses must not become successful work."""
-        # Empty responses use the mock default, which violates TOOL/DONE and
-        # cannot satisfy coder proof-of-work.
-        mock_llm.responses = []  # Will use default response
+        mock_llm.responses = [
+            _router_response("coder"),
+            _llm_response("This response has neither TOOL nor DONE."),
+            _llm_response("Still not following the execution protocol."),
+            _llm_response("No valid action or completion marker."),
+        ]
         output = await kernel.execute(
             task="Do something complex",
             max_dispatches=2,
             agent_default_role="coder",
         )
-        assert output.status == "yield"
-        # A rejected DONE no longer marks the agent done and kills it next turn
-        # (issue #139); an agent that can never satisfy proof-of-work now runs
-        # to the emergency turn fuse, which is the honest outcome.
-        assert output.metadata["typed_outcome"] == "YIELD_EMERGENCY_TURN_FUSE"
+        assert output.status == "failure"
+        assert output.metadata["typed_outcome"] == "FAIL_ALL_DISPATCHES_EXHAUSTED"
 
     @pytest.mark.asyncio
     async def test_failure_then_success(self, kernel, mock_llm):
@@ -341,6 +497,144 @@ class TestKernelHITL:
 
 
 # ── Dispatch Records ──────────────────────────────────────────────────
+
+def _patch_vault(monkeypatch, *, connected=(), unconsented=()):
+    """A vault double that separates holding an app from holding a credential."""
+    from jarviscore.nexus.store import ConnectionState
+
+    class Vault:
+        def get(self, name):
+            if name in connected or name in unconsented:
+                return {"auth_type": "oauth2"}
+            return None
+
+        def connection_state(self, name):
+            if name in connected:
+                return ConnectionState.CONNECTED
+            if name in unconsented:
+                return ConnectionState.REGISTERED
+            return ConnectionState.ABSENT
+
+        def needs_consent(self, name):
+            return name in unconsented
+
+    monkeypatch.setattr("jarviscore.nexus.store.get_store", lambda: Vault())
+
+
+class TestDeclaredSystemCredentials:
+    """issue #151 — a declared provider with no credentials is a human decision."""
+
+    @pytest.mark.asyncio
+    async def test_missing_credentials_yield_before_spending_a_dispatch(
+        self, kernel, mock_llm, monkeypatch
+    ):
+        _patch_vault(monkeypatch)
+        mock_llm.responses = [_router_response("coder"), _coder_write_response()]
+        output = await kernel.execute(task="Read our CRM contacts", context={"system": "hubspot"})
+
+        assert output.status == "yield"
+        assert output.metadata["typed_outcome"] == "YIELD_AUTH_REQUIRED"
+        assert output.metadata["escalation_reason"] == "auth_required"
+        assert output.metadata["system"] == "hubspot"
+        assert output.metadata["yield_pending"] is True
+        assert "not connected here" in output.summary
+        # Routing costs one call; the dispatch that could not authenticate never ran.
+        assert len(mock_llm.calls) == 1
+        assert output.metadata["dispatches"] == []
+
+    @pytest.mark.asyncio
+    async def test_registered_provider_still_dispatches(
+        self, kernel, mock_llm, mock_sandbox, monkeypatch
+    ):
+        _patch_vault(monkeypatch, connected={"hubspot"})
+        mock_sandbox.responses = [{"status": "success", "output": {"contacts": 2}}]
+        mock_llm.responses = [
+            _router_response("coder"),
+            _coder_write_response('result = {"contacts": 2}'),
+            _llm_response('THOUGHT: Read it\nDONE: Two contacts\nRESULT: {"contacts": 2}'),
+        ]
+        output = await kernel.execute(task="Read our CRM contacts", context={"system": "hubspot"})
+        assert output.status == "success"
+        assert output.payload == {"contacts": 2}
+
+    @pytest.mark.asyncio
+    async def test_provider_mutation_uses_coder_without_preselecting_an_atom(
+        self, kernel, mock_llm, monkeypatch
+    ):
+        _patch_vault(monkeypatch, connected={"hubspot"})
+
+        decision = await kernel._route_task(
+            "Establish the lead's deal and current stage",
+            {"system": "hubspot", "effect": "write"},
+            agent_default_role="researcher",
+            use_default_role_as_fallback=True,
+        )
+
+        assert decision.role == "coder"
+        assert decision.reason == "Provider mutation requires the credentialed Coder harness."
+        assert mock_llm.calls == []
+
+    @pytest.mark.asyncio
+    async def test_provider_authority_overrides_planner_browser_hint(self, kernel):
+        decision = await kernel._route_task(
+            "Search the connected Drive account",
+            context={
+                "system": "google_drive",
+                "systems": ["google_drive"],
+                "effect": "read",
+                "_agent_default_kernel_role": "browser",
+            },
+            agent_default_role="researcher",
+            use_default_role_as_fallback=True,
+        )
+
+        assert decision.role == "coder"
+        assert decision.reason == (
+            "Connected-system work requires the credentialed Coder harness."
+        )
+
+    @pytest.mark.asyncio
+    async def test_multi_provider_read_capability_uses_credentialed_coder(
+        self, kernel, mock_llm
+    ):
+        decision = await kernel._route_task(
+            "Resolve the contact from connected systems",
+            {"systems": ["gmail", "hubspot"], "effect": "read"},
+            agent_default_role="researcher",
+            use_default_role_as_fallback=True,
+        )
+
+        assert decision.role == "coder"
+        assert decision.reason == "Connected-system work requires the credentialed Coder harness."
+        assert mock_llm.calls == []
+
+    @pytest.mark.asyncio
+    async def test_unconsented_app_without_channel_reports_auth_required(
+        self, kernel, mock_llm, monkeypatch
+    ):
+        """Telling someone to register what they already registered is a dead end."""
+        _patch_vault(monkeypatch, unconsented={"slack"})
+        mock_llm.responses = [_router_response("coder"), _coder_write_response()]
+        output = await kernel.execute(
+            task="Post the update to Slack", context={"system": "slack"}
+        )
+
+        assert output.status == "yield"
+        assert output.metadata["typed_outcome"] == "YIELD_AUTH_REQUIRED"
+        assert output.metadata["escalation_reason"] == "auth_required"
+        assert "not connected here" in output.summary
+        assert output.metadata["dispatches"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_task_naming_no_system_is_unaffected(self, kernel, mock_llm, mock_sandbox):
+        mock_sandbox.responses = [{"status": "success", "output": {"v": 1}}]
+        mock_llm.responses = [
+            _router_response("coder"),
+            _coder_write_response('result = {"v": 1}'),
+        ]
+        output = await kernel.execute(task="Add two numbers")
+        assert output.status == "success"
+
 
 class TestDispatchRecords:
 

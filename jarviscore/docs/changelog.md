@@ -1,5 +1,7 @@
 ---
 icon: material/history
+title: "JarvisCore Release History and Version Notes"
+description: "Track JarvisCore framework updates, new features, bug fixes, breaking changes, and migration notes across every semantic version."
 hide:
   - toc
 ---
@@ -21,6 +23,489 @@ All notable changes to JarvisCore Framework are documented here. This project fo
     avoided. They will be yanked from PyPI. Pin `jarviscore-framework>=1.1.0`.
 
 ---
+
+<div class="changelog-release" markdown>
+
+## 1.11.0 <span class="changelog-date">2026-09-11</span>
+
+### Added
+
+- Redis-backed `Mesh.execute_goal()` compiles a natural-language goal into a
+  source-grounded, capability-addressed DAG. Planning is a temporary leased
+  operation; peers claim ready steps independently without an executor router.
+- `Mesh.resume_goal()` resumes waiting work with executor affinity, and
+  `Mesh.replan_goal()` appends new work only for unresolved obligations through
+  a revision-fenced DAG amendment while preserving the original goal and every
+  prior attempt and output.
+- Terminal Mesh observation now separates execution completion from obligation
+  satisfaction. Evidence-bearing failures and semantic `hold`/`reject` outcomes
+  enter a bounded, revision-leased reconciliation decision: actionable gaps add
+  new remediation work without replaying completed effects, while unactionable
+  gaps settle durably. Results expose `obligation_status` and `response_status`
+  independently of execution `status`.
+- AutoAgent kernels expose `list_peers`, `ask_peer`, `ask_capability`,
+  `broadcast_update`, `read_mailbox`, `inspect_workflow`, and
+  `read_workflow_step`. Inbound peer requests work without application listener
+  wiring, and notifications enter the durable mailbox before becoming reasoning
+  context.
+- Generated-code sandboxes receive a restricted `mesh` facade for peer listing
+  and delegation. The child process cannot mutate Mesh lifecycle or registry state.
+- Redis workflow claims now use renewable leases, unique attempt tokens and
+  fenced terminal writes, with append-only audit events for planning, claims,
+  completion, failure, waiting, resume, recovery and DAG amendment.
+- Distributed context, peer mandates, evidence and runtime limits now share one
+  canonical envelope model. Capability requests have explicit terminal states,
+  lineage-cycle prevention, lease heartbeats and bounded direct-Kernel execution.
+- Step evaluation now includes an agent-owned goal convergence decision
+  (`continue`, `complete`, `replan`) so newly observed facts can retire obsolete
+  conditional work without domain-specific routing rules.
+- Final-response peers receive every workflow artifact, interpretation, step
+  state and current obligation projection through one `WorkflowEvidence`
+  snapshot. Response selection uses the current revision while retaining older
+  responses for audit.
+- Semantic dependency relevance is decided by the recipient peer from the
+  upstream artifact and interpretation; Redis enforces execution readiness but
+  does not turn a partial result into a global business decision.
+- HITL now requires a canonical human-only category. Data requests additionally
+  require proof that autonomous paths are exhausted and the missing decision or
+  fact is exclusive to the human; confidence and token spend cannot escalate.
+- Provider reads now preserve Calendar participant/state fields, export Google
+  Workspace document content, and inspect HubSpot contact-deal associations so
+  peers can decide from provider evidence rather than incomplete metadata.
+- Failed registered atoms can enter an evidence-bound Coder repair lifecycle.
+  Only a contract-valid replacement that succeeds against the original
+  invocation can become immutable registry version `v+1`; authentication and
+  provider refusals do not automatically imply source repair.
+- Pre-effect review can return `already_satisfied` with supporting evidence,
+  completing a redundant mutation as a successful no-op.
+- LLM calls across planning, evaluation, reviews, distributed steps and nested
+  peer mandates reserve and settle against one Redis-backed workflow token/cost
+  account. Parallel peers no longer each receive the full workflow allowance.
+- Peer tool schema and remote failures remain typed failures. Malformed calls do
+  not count as peer-resolution attempts, while failed requests that actually
+  reached a peer retain that attempt evidence.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
+## 1.10.0 <span class="changelog-date">2026-09-08</span>
+
+Long-running agents can now cross authentication and human-approval boundaries
+without losing their run, use several connected systems in one isolated
+execution, and return the artifact they actually produced.
+
+### Added
+
+- A process-separated Coder runtime with a scrubbed environment. Generated code
+  sends HTTP intent to the trusted parent over RPC; credentials remain in the
+  parent and are host-bound before placement. This is a credential and process
+  boundary, not OS/container isolation from the host filesystem.
+- Durable consent, credential-input and destructive-action approval states. A
+  run checkpoints before yielding and resumes the same workflow and step after
+  the human decision.
+- Provider discovery and self-seeding through the Nexus Gateway. A fresh process
+  can discover active connections created elsewhere instead of asking for
+  consent again.
+- Per-call multi-provider routing with
+  `nexus_call(method, url, provider="...")`. Connected provider names reach the
+  model as non-secret context; opaque handles and credentials do not.
+- Explicit destructive atom policy: consequence, required approval and
+  parameter-backed idempotency identity. The shipped delete/remove corpus is
+  classified, and reachable undeclared HTTP DELETE calls fail registration.
+- Deliberate cross-session memory tools. Agents choose what to remember and
+  recall by relevance; intermediate turns remain in recovery tiers rather than
+  poisoning future tasks.
+- A sanitized trace event sink for public activity views without raw thoughts,
+  arguments, outputs or credentials.
+
+### Fixed
+
+- Registered OAuth applications are no longer treated as connected accounts.
+- Credentials can no longer be sent to a host owned by another provider.
+- Auth and provider decisions no longer depend on matching status-code,
+  provider-name or error-message substrings.
+- OAuth waits no longer block inside a tool call or time out the run.
+- Planned AutoAgent execution preserves the final structured step payload in
+  `output`; the evaluator's prose remains separately available as
+  `result_summary`.
+- Coder no longer auto-completes from a tool success, overwrites proof/result
+  state, or exposes raw execution envelopes as the user answer.
+- The process-separated runtime keeps advertised allow-listed commands such as
+  `git`, `ls` and Python available without inheriting the rest of the parent
+  environment.
+- HTTP 401/403 remains credential-boundary evidence, not an automatic semantic
+  verdict; typed connection state and lifecycle evidence drive recovery.
+
+### Validation
+
+- Full local suite: 1,968 passed, 42 skipped, 1 expected failure on Python 3.12.
+- Live Nexus calls verified against HubSpot, Google Drive, Gmail and Google
+  Calendar, including a natural-language agent task spanning three providers.
+- Built wheel includes the child runtime, provider host policy and destructive
+  atom policy data.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
+## 1.9.0 <span class="changelog-date">2026-09-07</span>
+
+The shipped atom catalogue is callable. It was loaded but unusable: the atoms
+took a raw credential dict and built their own headers, and no caller for that
+shape existed, so agents rewrote integrations that were already on disk.
+
+### Added
+
+- The atom catalogue is seeded when the registry is empty, so the Kernel's
+  registry-first search and the coder's `check_registry` find what ships.
+- 1,174 atoms across 150 providers migrated onto `nexus_call`. An atom is now
+  `async def`, authenticates through the call proxy, and returns provider errors
+  rather than raising them. The credential never appears in the atom, so proving
+  one works is running it.
+- An atom for the connected system arrives as a tool, the way every other tool
+  does, rather than something the agent has to remember to look for.
+- `--auth-type`, `--header-name`, `--value-prefix`, `--param-name` and
+  `--credential-field` on `jarviscore nexus register`, so a provider that uses
+  `SSWS`, `Zoho-oauthtoken`, `PRIVATE-TOKEN`, `X-API-KEY` or a query parameter
+  can be registered without a code change.
+- Files written in the sandbox reach blob storage and come back as a durable
+  handle, so an agent can read in a later run what it produced in an earlier
+  one. Which backend that is remains the developer's choice.
+
+### Fixed
+
+- **Agent results were discarded.** The sandbox awaited `main()` and threw away
+  its return value, so a run that succeeded reported "finished without returning
+  any content". A returned dict was then read as the sandbox's own envelope, so
+  an atom's payload vanished unless it happened to use a key named `data`.
+- **Credential placement was guessed, and the two paths guessed differently.**
+  The gateway path sent `X-Api-Key` while the local store path sent
+  `Authorization: Bearer`, so which header a provider received depended on
+  whether the gateway happened to be reachable. Both paths now apply one
+  strategy, and placement is recorded per provider.
+- `resolve_strategy` read the auth type from the wrong key. The gateway nests it
+  under `strategy`, so every connection resolved as `oauth2` and received a
+  bearer header regardless of its real type.
+- The local store passed a client secret off as an access token. Registering a
+  provider's app is not the same as connecting an account, and saying otherwise
+  turned a missing consent step into an opaque 401 inside an agent run.
+- An API key registered without a stated location is refused with the flag to
+  add, rather than sent as a bearer token the provider ignores.
+- `jarviscore nexus register` rejected any provider missing from the built-in
+  catalog, limiting registration to 22 providers while the framework ships atoms
+  for 150. The catalog is defaults; flags override it.
+- The coder registered sandbox scripts as atoms after a successful run, putting
+  entries in the catalog that could not be called, named from the task text, and
+  promoting them on a success that had not happened.
+- `google_drive` and `kra` each shipped atoms twice under different filenames,
+  both files defining the same function. The catalogue advertised 1,224 where
+  1,218 exist.
+
+### Changed
+
+- The bundled Nexus stack stands on its own: it ships its own Redis instead of
+  expecting a container from another compose project, publishes its ports
+  through `NEXUS_BROKER_PORT` and `NEXUS_GATEWAY_PORT` so it can coexist with
+  other services, and tells the broker its own address so OAuth redirect URIs
+  are absolute rather than relative.
+- `nexus-broker` and `nexus-gateway` are pinned to a release rather than
+  following `latest`, so an upgrade is a decision. From broker v0.3.0 the broker
+  carries and applies its own migrations, so JarvisCore no longer ships a copy of
+  its schema. That copy is what drifted, surfacing as registration failures
+  naming a column that did not exist.
+
+### Note for contributors
+
+44 atoms across 11 providers still take `auth_info`. Each needs account
+configuration, such as a tenant URL, turned into a parameter before it can move.
+They are pinned in `tests/test_atom_corpus.py` so the number can only fall.
+
+</div>
+
+---
+
+<div class="changelog-release" markdown>
+
+## 1.8.0 <span class="changelog-date">2026-09-06</span>
+
+!!! warning "1.6.0 and 1.7.0 were tagged but never published to PyPI"
+
+    Both contain #170 — the Athena event write sat inside a branch that nothing
+    triggered, so no agent event reached the memory tier — and a nested f-string
+    in `jarviscore/cli/atom.py` that raises `SyntaxError` on import under Python
+    3.10 and 3.11. Their GitHub releases and changelog entries stand as history.
+    On PyPI, 1.8.0 follows 1.5.1 and contains everything from both.
+
+**Fixed**
+
+- Athena has stored nothing since 1.4.0 (#170). `_store_event` built the request
+  and then posted it *inside* `if serialized_timestamp:`. `_rfc3339(None)` returns
+  `None` and nothing passes a timestamp — `record_thought`, `record_action`,
+  `record_observation` and every `on_*` helper call the write without one — so the
+  request was assembled and dropped, `store_event` returned `False`, and no caller
+  checks the return. Any deployment with `ATHENA_URL` set has an empty STM tier,
+  and therefore no MTM chains and no cross-session recall, since both are
+  summarised from events that were never written. The only test on the path used a
+  fake `AthenaMemory`, so it verified the layer above the broken one.
+- The Athena tier is self-healing and its delivery is countable (#128). Writes are
+  queued and shipped in order by one worker, so a slow Athena no longer adds
+  latency to a reasoning turn. A failed start opens a circuit breaker with a
+  cooldown probe instead of setting the client to `None` for the life of the
+  process, which turned a thirty-second restart into a dead memory tier. A cached
+  session id is checked before reuse: a 404 mints a new session and replaces the
+  mapping, while an unreachable Athena keeps the id, because a network blink is
+  not evidence that a session was deleted.
+- The planner and evaluator stop cutting inside a record (#166). Agent identity was
+  clipped to 400 characters twice, once by the caller and again in the `Planner`
+  constructor, so the component choosing the steps saw a persona without the rules
+  that constrain it. The evaluator clipped the step summary and payload and then
+  instructed the model never to fail a step merely because evidence was clipped —
+  managing the damage rather than removing it. Evidence now goes in whole, and that
+  instruction retires with the problem it was covering for.
+- `jarviscore/cli/atom.py` could not be imported on Python 3.10 or 3.11 (#167).
+  Three print statements nested an f-string inside an f-string and reused the same
+  quote in the replacement field, which is PEP 701 syntax valid only from 3.12.
+- PyYAML was never declared as a dependency although `AgentProfile.load()` reads
+  agent profiles from YAML on every `AutoAgent` load, and returned `None` with a
+  warning when the import failed — an agent silently missing its role intelligence.
+  It is now a dependency, and an unreadable profile raises.
+
+**Added**
+
+- A test job runs the suite on every pull request across Python 3.10, 3.11 and
+  3.12 (#167). CodeQL was previously the only check a pull request waited on. The
+  suite was believed to have 38 permanent failures; every one was a missing
+  dependency, and the real state is 1709 passing and none failing.
+- `jarviscore.context.fidelity` — spends a prompt budget on whole records in
+  priority order and names what did not fit, instead of halving values.
+- Athena delivery counters on `AthenaMemory.delivery_stats` and
+  `UnifiedMemory.athena_delivery_stats`: submitted, shipped, retried, dropped,
+  queue depth, breaker state and last success.
+- `AthenaClient.write_event`, which raises instead of reporting `False`, and
+  `AthenaClient.session_exists`.
+- Athena settings: `athena_outbox_max_events`, `athena_write_max_attempts`,
+  `athena_breaker_threshold`, `athena_breaker_cooldown_seconds`,
+  `athena_deduplicates_writes`. Planning budgets: `PLANNER_FACTS_BUDGET_CHARS`,
+  `PLANNER_CONTEXT_BUDGET_CHARS`, `EVALUATOR_FACTS_BUDGET_CHARS`.
+
+**Changed**
+
+- `EVALUATOR_SUMMARY_EVIDENCE_LIMIT` and `EVALUATOR_PAYLOAD_EVIDENCE_LIMIT` are
+  still read so existing configuration keeps importing, and no longer shorten
+  anything.
+
+**Behaviour changes to know about (compatible, but read this)**
+
+- **Athena writes are asynchronous.** `record_thought` and friends return once the
+  event is queued. Call `AthenaMemory.close()` or `UnifiedMemory.close()` on
+  shutdown to flush; both report whether anything was still unsent.
+- **Write retries are off by default.** Athena has no client-supplied deduplication
+  key, so replaying a write that actually landed would store it twice, and a memory
+  tier with invented corroboration is worse than one with a counted gap. JarvisCore
+  attaches an `idempotency_key` and retries only when `athena_deduplicates_writes`
+  is set — a claim about a deployment that only an operator can make.
+- **The planner receives the whole system prompt.** `system_prompt_excerpt` is
+  still accepted as an argument name.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 1.7.0 <span class="changelog-date">2026-09-06</span>
+
+**Fixed**
+
+- A rejected `DONE` now tells the agent what it produced instead of what rule it
+  broke (#144). The gate returned a verdict in its own vocabulary —
+  `DONE_VALIDATION_FAILED: evidence is required` — and the observation was
+  identical on every attempt, so nothing in the agent's input changed between the
+  first rejection and the eighth. The facts already existed:
+  `_validate_done_payload` computes `evidence_count`, `bad_evidence`,
+  `bad_api_specs` and `incomplete_specs` on every call, and the report was
+  discarded to return a sentence. A gate now names the check that did not hold,
+  what it reads, and what it observed. The harness recognises an attempt that
+  carries no new information — same check failing on the same values, same result
+  submitted, no tool run in between — reports that too, and ends the step after
+  `max_identical_done_attempts` (default 3) of them rather than spending the
+  remaining lease re-submitting a rejected artifact. An agent that is still
+  changing its output is never cut off.
+- `single_response` can no longer report an unfinished completion as success
+  (#148). A truncated answer, a refusal, a content-filter block and a completed
+  answer were indistinguishable to the caller, because the provider's finish
+  reason was discarded by every adapter before the profile could read it. Native
+  reasons and completion metadata now travel with the response, and success
+  requires a terminal reason. A missing reason stays `None` — a generation that
+  stops short of the cap is not evidence that it finished, and inferring one
+  would manufacture the confidence this removes. Gemini output tokens now include
+  `thoughts_token_count`, thought parts are excluded from content, and
+  `execution_contract.max_output_tokens` is honoured instead of ignored.
+- Search no longer cancels healthy grounded requests (#147). Every provider ran
+  under one hard six-second deadline, so Gemini grounded search — a generative
+  call — was routinely cut off and the run lost its highest-weight provider
+  without saying so. Deadlines are now per provider (45s grounded, 15s otherwise)
+  and configurable; a failing provider is named in the log with its error type
+  and the deadline it exceeded, instead of an anonymous "Search provider failed".
+- Docs and the packaged skill report the installed atom catalog rather than a
+  count that was true when the page was written (#149).
+
+**Added**
+
+- `jarviscore.kernel.gate`: `GateEvidence` for reporting a completion failure as
+  the check that did not hold plus what was observed, and the attempt ledger the
+  harness uses to recognise a repeat.
+- Per-provider search deadlines via `RESEARCH_GROUNDED_TIMEOUT_SECONDS` and
+  `RESEARCH_SEARCH_TIMEOUT_SECONDS`, or constructor arguments on either public
+  `InternetSearch` client.
+- `finish_reason` and `provider_metadata` on every LLM response.
+
+**Behaviour changes to know about (compatible, but read this)**
+
+- **A step can now end on an unsatisfied completion gate.** `_can_complete` keeps
+  its `(bool, reason)` signature and a bare string is still accepted — carried
+  through as a verdict with no observations behind it — but a gate that rejects
+  the same unchanged attempt three times ends the step as
+  `FAIL_DONE_GATE_UNSATISFIED` instead of running to the emergency turn fuse. The
+  outcome names the gate rather than reporting "out of turns".
+- **A single-response turn that used to succeed may now fail.** Truncated,
+  refused and filtered completions are reported as failures that name their cause.
+  They were already failures; they were being reported as successes.
+- **Grounded search takes longer before giving up.** The default grounded
+  deadline is 45s. A run that previously lost that provider at six seconds will
+  now wait for it, and return better evidence for the wait.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 1.6.0 <span class="changelog-date">2026-09-06</span>
+
+**Added**
+
+- Context pressure tiers replace per-value truncation (#154). Blocks are composed
+  at full fidelity and the least aggressive tier that fits the budget is chosen:
+  `NORMAL` → `COMPRESS` → `EVICT_P3` → `EVICT_P2` → `RECOVERY`. Under pressure whole
+  blocks stop being inlined in priority order — mission and goal state are never
+  evicted — and withheld records are named with the key they live under, so an agent
+  retrieves a whole artifact instead of reasoning from a fragment of one. The active
+  tier is rendered into the prompt and recorded in `internal_variables["context_pressure"]`.
+
+**Fixed**
+
+- An agent's `system_prompt` now reaches the LLM in every sub-agent dispatch (#91).
+  It was composed, passed to the kernel, stored in context and dropped: only the
+  coder read it back, and only as a keyword check. Every researcher and communicator
+  turn ran as a generic role stub, so authored personas, playbooks and guardrails
+  had no effect. Identity now leads the system message, with the role prompt
+  following as an execution harness.
+- A coder run that returns nothing no longer completes the task (#150). `_auto_complete`
+  fired on any clean sandbox exit, so a run with `data: None` and empty stdout was
+  reported as a success whose "answer" was the execution envelope. Completion now
+  requires a returned value, stdout, or a written file.
+- Missing credentials for a declared system yield for access instead of warning to
+  logs (#151). The kernel already knew no connection could be resolved; it now
+  returns the existing `YIELD_AUTH_REQUIRED` contract at that point rather than
+  spending a dispatch on code that cannot authenticate.
+- Athena memory writes keep full fidelity (#153). `log_turn` wrote the whole thought
+  and result to the scratchpad and episodic ledger, then wrote `thought[:500]` and
+  `result[:300]` to Athena — the longest-retention tier held the only damaged copy,
+  and mid-term chains were summarised from it. Domain events were clipped at 200–300
+  characters. A read may abridge and recover; a write cannot.
+
+**Changed**
+
+- `BudgetConfig`'s per-value character limits (`context_value_limit`,
+  `history_value_limit`, `memory_item_limit`, `belief_value_limit`,
+  `internal_var_limit`, `prior_step_value_limit`, `state_keys_limit`,
+  `summary_evidence_limit`) are retained so existing configuration keeps importing,
+  but no longer affect rendering. `total_tokens` still scales from the lease profile.
+
+**Behaviour changes to know about (compatible, but read this)**
+
+- **Prompts carry more, and reference the rest.** Values are no longer cut, so a turn
+  that previously showed 800 characters of a payload now shows all of it — or, under
+  budget pressure, none of it plus a pointer. Agents that silently reasoned from
+  fragments will now either see the whole record or be told where it is.
+- **A dispatch whose code returns nothing costs an extra turn** instead of ending with
+  a success it did not earn.
+- **A task declaring a system with no credentials yields instead of running.** Declaring
+  a provider is a statement of intent, so a mis-declaration now surfaces rather than
+  failing obscurely later.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 1.5.1 <span class="changelog-date">2026-09-04</span>
+
+**Fixed**
+
+- Local Nexus vault was unreachable from agents (#142). `jarviscore nexus register`
+  promised "no further setup needed", but `nexus_call()` in the agent sandbox was
+  always a raise-stub and the kernel only resolved connections through a gateway.
+  Agents now get a real call proxy in both gateway and local-vault modes, and the
+  kernel tags the opaque provider handle when the vault holds credentials. Agent
+  code, prompts and generated code never see the token.
+- Traces omitted model and token data, and the scrubber redacted token counts (#143).
+  LLM trace events now carry `model` and `tokens`; the secret scrubber only redacts
+  string values, since a token *count* is not a credential; `jarviscore inspect`
+  renders per-call models and no longer crashes on legacy scrubbed traces.
+- `claimer`: "No agent found" for a step with no local agent is normal in distributed
+  mode, and is now an info log with honest wording (#141).
+
+**Added**
+
+- `examples/demo_synthesizer.py` and `examples/demo_node_{1,2,3}.py`: the four-process
+  distributed research demo — SWIM gossip discovery, ledger-claimed steps, live web
+  research, synthesis, and Slack delivery through the credential vault.
+- `examples/slack_notify_demo.py`: minimal single-agent vault-to-Slack end-to-end.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 1.5.0 <span class="changelog-date">2026-09-04</span>
+
+**Fixed**
+
+- A rejected DONE no longer kills the agent as "Cognitive budget exhausted" (#139).
+  The done-gate rejection set `done_called`, so an agent that tried to finish early
+  was terminated the next turn under a label that named the wrong cause. Wall-clock
+  interventions now fire at 40% and 15% remaining, exhaustion yields always name the
+  dimension that expired, and a landing turn produces a partial result
+  (`SUCCESS_ON_LANDING`) instead of dead air.
+- Settings `kernel_*` and `WORKFLOW_STEP_TIMEOUT` env knobs now reach lease
+  enforcement (#135). Per-role profiles merge key-wise, so a partial override no
+  longer drops the rest of the profile.
+- Researcher wall clock raised 240s → 600s and communicator → 360s (#136): the
+  previous walls could not complete a modest real web-research task.
+- SWIM probe budgets stop assuming idle round-trip times (#138, mitigation):
+  `PING_TIMEOUT` floor 2s, `SUSPECT_TIMEOUT` floor 15s, adaptive timing off by
+  default. `SWIM_*` env vars still take precedence. Kept open for transport process
+  isolation.
+
+**Added**
+
+- `mesh.workflow(timeout_per_step=...)`, per-step `timeout` keys, and a
+  `WORKFLOW_STEP_TIMEOUT` setting (#137). The crash-recovery path resolves its own
+  default.
+
+**Behaviour changes to know about (compatible, but read this)**
+
+- **Agents run longer and may spend more by default.** Runs that previously died
+  early now keep working; pin your own budgets via `kernel_role_profiles` or
+  `KERNEL_*` env vars if you depended on the old walls.
+- **New success path.** Runs that previously yielded on lease expiry can return
+  `status="success"` with `typed_outcome=SUCCESS_ON_LANDING` and a partial result.
+  Check `metadata["landing_turn"]` to distinguish full from partial completions.
+- **Slower peer-death detection.** Set `SWIM_*` env vars to restore tighter probes
+  on dedicated transport hosts.
+
+</div>
 
 <div class="changelog-release" markdown>
 

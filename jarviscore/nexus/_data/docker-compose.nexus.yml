@@ -27,9 +27,9 @@
 #    (network_mode: service:nexus-broker) so localhost:8080 IS the broker.
 #    This means the broker must also publish port 8090 for host access.
 #
-# 2. The broker binary does NOT auto-migrate its DB schema. You must
-#    apply nexus/migrations/001_initial_schema.sql manually on first run,
-#    or mount it into postgres initdb.d.
+# 2. The broker applies its own migrations on boot (nexus-broker v0.3.0+),
+#    recording them in a schema_migrations ledger. Set AUTO_MIGRATE=false to
+#    leave that to a separate step.
 #
 # 3. provider_profiles and workspaces must be pre-seeded. Use the
 #    nexus register CLI or apply nexus/seeds/seed_providers.sql.
@@ -57,11 +57,17 @@ services:
   # in this container's network namespace (see nexus-gateway below) and binds
   # to port 8090 within that namespace.
   nexus-broker:
-    image: ghcr.io/prescott-data/nexus-broker:latest
+    # Pinned, not :latest, so an upgrade is a decision rather than a surprise.
+    # From v0.3.0 the broker carries its own migrations and applies them on boot,
+    # so nothing here needs to know what its schema looks like.
+    image: ghcr.io/prescott-data/nexus-broker:${NEXUS_BROKER_IMAGE_TAG:-v0.3.0}
     container_name: nexus-broker
     ports:
-      - "8080:8080"   # Broker API (OAuth callbacks, provider lookups)
-      - "8090:8090"   # Gateway port (gateway shares this network namespace)
+      # Host ports are configurable because 8080 is a popular port and a
+      # framework has to coexist with whatever else the developer is running.
+      # Changing the broker port means changing BASE_URL to match.
+      - "${NEXUS_BROKER_PORT:-8080}:8080"   # Broker API (OAuth callbacks, provider lookups)
+      - "${NEXUS_GATEWAY_PORT:-8090}:8090"  # Gateway port (gateway shares this network namespace)
     environment:
       # Required: token encryption key. Must be stable across restarts.
       # Generate: openssl rand -base64 32
@@ -71,10 +77,16 @@ services:
       STATE_KEY: "${NEXUS_STATE_KEY:?Set NEXUS_STATE_KEY in .env or export it}"
       # Internal API key the Gateway uses to call the Broker.
       BROKER_API_KEY: ${NEXUS_BROKER_API_KEY:-dev-broker-api-key-change-in-prod}
+      # Where the provider sends the user back after consent. Without this the
+      # broker builds a relative redirect_uri and every provider rejects it.
+      # This exact value must be whitelisted in the provider's app settings.
+      BASE_URL: ${NEXUS_BROKER_BASE_URL:-http://localhost:8080}
+      REDIRECT_PATH: ${NEXUS_REDIRECT_PATH:-/auth/callback}
       # Local Postgres — sslmode=disable required (no TLS in dev).
       DATABASE_URL: postgresql://nexus:nexus@nexus-db:5432/nexus?sslmode=disable
-      # Redis (reuses existing jarviscore Redis if on same network).
-      REDIS_URL: ${NEXUS_REDIS_URL:-redis://jarviscore-framework-redis-1:6379/1}
+      # Redis. Defaults to the one this stack ships so a fresh install works on
+      # its own; point NEXUS_REDIS_URL at your own instance to share one.
+      REDIS_URL: ${NEXUS_REDIS_URL:-redis://nexus-redis:6379/1}
       # Where the Broker redirects users after OAuth consent.
       DEFAULT_RETURN_URL: ${NEXUS_RETURN_URL:-http://localhost:8000/oauth/callback}
       # Allow localhost OAuth callbacks (required for local dev).
@@ -82,6 +94,8 @@ services:
       ENFORCE_RETURN_URL: "false"
     depends_on:
       nexus-db:
+        condition: service_healthy
+      nexus-redis:
         condition: service_healthy
     networks:
       - nexus_net
@@ -101,7 +115,7 @@ services:
   # broker=http://localhost:8080 dial actually reaches the broker container.
   # The broker container publishes port 8090 to the host on its behalf.
   nexus-gateway:
-    image: ghcr.io/prescott-data/nexus-gateway:latest
+    image: ghcr.io/prescott-data/nexus-gateway:${NEXUS_GATEWAY_IMAGE_TAG:-v0.3.0}
     container_name: nexus-gateway
     # Share the broker's network namespace — localhost:8080 = broker, :8090 = gateway
     network_mode: "service:nexus-broker"
@@ -125,7 +139,7 @@ services:
       start_period: 8s
 
   # ── Nexus Database ──────────────────────────────────────────────────────────
-  # Postgres for broker state. Schema auto-applied from initdb.d on first boot.
+  # Postgres for broker state. The broker applies its own schema on boot.
   nexus-db:
     image: postgres:16-alpine
     container_name: nexus-db
@@ -135,13 +149,25 @@ services:
       POSTGRES_DB: nexus
     volumes:
       - nexus_db_data:/var/lib/postgresql/data
-      # Mount migration SQL so Postgres applies it on first container creation.
-      # If data volume already exists, initdb.d is NOT re-run — safe for restarts.
-      - ./nexus/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
     networks:
       - nexus_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Nexus Redis ─────────────────────────────────────────────────────────────
+  # Short-lived OAuth state. Shipped with the stack so a fresh install has no
+  # external dependency; override NEXUS_REDIS_URL to use an existing instance.
+  nexus-redis:
+    image: redis:7-alpine
+    container_name: nexus-redis
+    networks:
+      - nexus_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5

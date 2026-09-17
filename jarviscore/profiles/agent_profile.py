@@ -102,11 +102,14 @@ class AgentProfile:
             return None
 
         try:
-            import yaml  # PyYAML — already in most envs, graceful fallback otherwise
-        except ImportError:
-            logger.warning("[AgentProfile] PyYAML not installed — agent profiles disabled. "
-                           "Install with: pip install pyyaml")
-            return None
+            import yaml
+        except ImportError as exc:  # pragma: no cover - a declared dependency is missing
+            raise RuntimeError(
+                f"A profile exists at {yaml_path} but PyYAML is not importable, so it "
+                "cannot be read. PyYAML is a declared dependency of "
+                "jarviscore-framework; reinstall the package. Running without the "
+                "profile would drop the agent's role intelligence silently."
+            ) from exc
 
         try:
             with open(yaml_path, "r", encoding="utf-8") as f:

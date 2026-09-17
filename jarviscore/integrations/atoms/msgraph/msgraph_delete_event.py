@@ -1,20 +1,11 @@
-def msgraph_delete_event(auth_info: dict, event_id: str) -> dict:
-    import requests
+ATOM_POLICY = {"effect": "destructive", "approval": "required", "idempotency_fields": ["event_id"], "consequence": "Deletes the Microsoft calendar event."}
+
+async def msgraph_delete_event(event_id: str) -> dict:
+    """Delete event via the msgraph API."""
     try:
-        access_token = _get_nexus_token(auth_info)
+        resp = await nexus_call('DELETE', f'https://graph.microsoft.com/v1.0/me/events/{event_id}')
+        if resp['status_code'] != 204:
+            return {'success': False, 'data': None, 'error': f"Delete event failed: {resp['status_code']} {resp['body']}"}
+        return {'success': True, 'data': {'event_id': event_id, 'deleted': True}, 'error': None}
     except Exception as e:
-        return {"success": False, "data": None, "error": f"Auth error: {str(e)}"}
-
-    try:
-        resp = requests.delete(
-            f"https://graph.microsoft.com/v1.0/me/events/{event_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=30
-        )
-        if resp.status_code != 204:
-            return {"success": False, "data": None, "error": f"Delete event failed: {resp.status_code} {resp.text}"}
-
-        return {"success": True, "data": {"event_id": event_id, "deleted": True}, "error": None}
-
-    except Exception as e:
-        return {"success": False, "data": None, "error": str(e)}
+        return {'success': False, 'data': None, 'error': str(e)}

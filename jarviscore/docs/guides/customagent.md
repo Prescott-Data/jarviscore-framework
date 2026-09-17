@@ -1,5 +1,7 @@
 ---
 icon: material/code-braces
+title: CustomAgent Guide - Deterministic Python AI Agents
+description: Build deterministic, auditable Python agents with JarvisCore CustomAgent while retaining Mesh communication, memory, credentials, and storage.
 ---
 
 # CustomAgent Guide
@@ -53,7 +55,6 @@ Return a dict from `on_peer_request()` and the framework sends it back to the re
 |---|---|---|
 | `role` | Yes | Slug used for peer discovery and workflow routing |
 | `capabilities` | Yes | Tags for capability-based peer discovery |
-| `name` | No | Human-readable display name |
 | `description` | No | One-sentence purpose |
 | `requires_auth` | No | Set `True` to receive Nexus-backed `_auth_manager` injection |
 | `listen_timeout` | No | Seconds to wait for messages in the receive loop (default `1.0`) |
@@ -71,7 +72,7 @@ Called once by the Mesh after instantiation. Override to initialise connections,
 async def setup(self):
     await super().setup()
     self.schema_registry = await SchemaRegistry.load(self.config.schema_path)
-    self._logger.info("%s setup complete", self.name)
+    self._logger.info("%s setup complete", self.role)
 ```
 
 ### teardown
@@ -108,18 +109,19 @@ asyncio.run(main())
 
 ## Auto-Injected Infrastructure
 
-The Mesh injects these stores into every agent before `setup()` runs. All three are available immediately inside `setup()`:
+The Mesh injects these stores and the mailbox into every agent before `setup()`
+runs. They are available immediately inside `setup()`:
 
 | Attribute | Type | Available when |
 |---|---|---|
 | `self._redis_store` | `RedisStore` | `REDIS_URL` is set |
 | `self._blob_storage` | `LocalBlobStorage` or `AzureBlobStorage` | Always: falls back to local filesystem |
-| `self.mailbox` | `MailboxManager` | `REDIS_URL` is set |
+| `self.mailbox` | `MailboxManager` | Always: in-memory by default; Redis-backed when configured |
 
 ```python
 async def setup(self):
     await super().setup()
-    # All three already injected: use them immediately
+    # Stores and mailbox are already injected: use them immediately
     self.memory = UnifiedMemory(
         workflow_id="wf-001", step_id=self.role,
         agent_id=self.role,
@@ -244,7 +246,11 @@ For the complete `PeerClient` API, see the [P2P Communication](../concepts/p2p.m
 
 ## Nexus Auth: requires_auth
 
-Set `requires_auth = True` on agents that call third-party services. The Mesh creates an `AuthenticationManager` backed by Nexus and injects it as `self._auth_manager` after `setup()` completes. The full OAuth flow (browser consent, token refresh) is handled automatically.
+Set `requires_auth = True` on agents that call connected third-party services.
+When connected-app authentication is configured, the Mesh creates an
+`AuthenticationManager` backed by Nexus and injects it as `self._auth_manager`
+after `setup()` completes. The OAuth consent and refresh lifecycle remains
+outside model reasoning.
 
 ```python
 class TechnicalAgent(CustomAgent):
@@ -264,7 +270,9 @@ class TechnicalAgent(CustomAgent):
         return {"status": "success", "output": result}
 ```
 
-`_auth_manager` is `None` when `NEXUS_GATEWAY_URL` is not set. Always check `if self._auth_manager:` before using it: this is the graceful degradation path for environments without Nexus configured.
+Do not read `_auth_manager` inside `setup()` because it is attached afterward.
+During task execution, use `getattr(self, "_auth_manager", None)` and handle an
+unconfigured or unavailable gateway explicitly.
 
 ---
 
@@ -287,6 +295,55 @@ async def execute_task(self, task: dict) -> dict:
     result = await self.process_query(query)
     return {"status": "success", "output": result}
 ```
+
+### Participating in `Mesh.execute_goal()`
+
+Existing CustomAgent handlers remain compatible with durable distributed goals.
+The framework routes a capability-addressed step through `execute_task()` and a
+normal completed result satisfies the obligation IDs covered by that step.
+
+When your domain distinguishes successful execution from sufficient evidence,
+add an optional `interpretation` beside `output`:
+
+```python
+async def execute_task(self, task: dict) -> dict:
+    artifact = await self.inspect(task["task"])
+    plan = task["context"]["workflow_plan"]
+    step = next(item for item in plan["steps"] if item["id"] == task["id"])
+    covered = list(step["covers"])
+    verified = artifact.get("verified") is True
+
+    return {
+        "status": "success",
+        "output": artifact,
+        "interpretation": {
+            "meaning": "The required evidence was verified." if verified
+                       else "The attempt completed without verifying the evidence.",
+            "satisfied_requirements": covered if verified else [],
+            "unmet_requirements": [] if verified else covered,
+            "evidence_refs": artifact.get("evidence_refs", []),
+            "verdict": "satisfied" if verified else "unsatisfied",
+            "decision": "proceed" if verified else "hold",
+        },
+    }
+```
+
+Use the exact IDs from `step["covers"]`; do not put requirement prose in those
+lists. Assess every covered ID once. JarvisCore stores the artifact and
+interpretation separately, reduces current obligation truth generically, and
+may append remediation for unresolved IDs. Your agent retains ownership of what
+the evidence means.
+
+The distributed context also provides `previous_step_results`,
+`previous_step_interpretations`, `capability`, `effect`, `systems` and the shared
+`execution_budget`. See [Durable Goal Execution](goal-execution.md#task-context-received-by-agents)
+for the full contract.
+
+CustomAgent does not gain a planning model. A pure CustomAgent node can claim
+and execute an already-published DAG, but `Mesh.execute_goal()` needs at least
+one started node with an LLM-backed agent capable of acquiring the temporary
+planning lease. Use `mesh.workflow()` when your application already knows the
+steps.
 
 ---
 

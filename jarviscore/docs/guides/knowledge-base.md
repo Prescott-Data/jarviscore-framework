@@ -1,5 +1,7 @@
 ---
 icon: material/book-search
+title: "Build an AI Agent Knowledge Base with RAG"
+description: "Ingest PDF, Markdown, and text documents into FAISS so JarvisCore research agents can combine internal knowledge with live web results."
 ---
 
 # Knowledge Base (RAG)

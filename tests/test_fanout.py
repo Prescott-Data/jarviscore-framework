@@ -245,7 +245,7 @@ class TestAggregation:
 
     def test_run_fanout_validates_inputs(self):
         with pytest.raises(ValueError, match="concurrency"):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 run_fanout(
                     fanout_id="f", find_agent=lambda s: None, agent="a",
                     items=[], task="t", concurrency=0,

@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     azure_endpoint: Optional[str] = None
     azure_openai_endpoint: Optional[str] = None  # Alias
     azure_deployment: str = "gpt-4o"
-    azure_api_version: str = "2024-02-15-preview"
+    azure_api_version: str = "2024-10-21"
     # Off by default: content-filter hits should be visible failures unless
     # an application explicitly opts into provider-specific prompt repair.
     azure_content_filter_repair_enabled: bool = False
@@ -221,6 +221,13 @@ class Settings(BaseSettings):
     athena_session_ttl_days: int = 30           # How long session_id is cached in Redis
     athena_api_key: Optional[str] = None         # Optional Athena X-API-Key credential
     athena_jwt_token: Optional[str] = None       # Optional Athena X-JWT-Token credential
+    athena_outbox_max_events: int = 1000         # Queued writes before the oldest is dropped
+    athena_write_max_attempts: int = 4           # Tries per write, only used when deduplicating
+    athena_breaker_threshold: int = 3            # Consecutive failures before the breaker opens
+    athena_breaker_cooldown_seconds: float = 30.0  # Wait before one probe call is let through
+    # Only enable when the Athena deployment deduplicates on the idempotency key
+    # JarvisCore attaches: without it, a retry stores the same event twice.
+    athena_deduplicates_writes: bool = False
 
 
     # === Browser ===

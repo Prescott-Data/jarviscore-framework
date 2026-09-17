@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  <script
+    src="https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js"
+    integrity="sha384-1ggI9FC3CkghppRD/XCR4aD+jp4DxwXlJIW0wxhyTLNKuiZEW3c4BwcjKXl0iVAJ"
+    crossorigin="anonymous"
+  ></script>
+  {% set page_title = page.meta.title if page and page.meta and page.meta.title else page.title if page else config.site_name %}
+  {% set full_title = page_title ~ " - " ~ config.site_name if page_title != config.site_name else config.site_name %}
+  {% set page_description = page.meta.description if page and page.meta and page.meta.description else config.site_description %}
+  {% set canonical_url = page.canonical_url if page and page.canonical_url else config.site_url %}
+  {% set social_image = config.site_url ~ "assets/social-card.png" %}
+  <meta property="og:type" content="{{ 'article' if page and page.url else 'website' }}">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ full_title }}">
+  <meta property="og:description" content="{{ page_description }}">
+  <meta property="og:url" content="{{ canonical_url }}">
+  <meta property="og:image" content="{{ social_image }}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="JarvisCore - The production runtime for multi-agent systems">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ full_title }}">
+  <meta name="twitter:description" content="{{ page_description }}">
+  <meta name="twitter:image" content="{{ social_image }}">
+  <meta name="twitter:image:alt" content="JarvisCore - The production runtime for multi-agent systems">
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Organization",
+          "@id": "https://developers.prescottdata.io/#organization",
+          "name": "Prescott Data",
+          "url": "https://developers.prescottdata.io/",
+          "sameAs": [
+            "https://github.com/Prescott-Data",
+            "https://www.linkedin.com/company/jarviscore",
+            "https://x.com/prescottdata"
+          ]
+        },
+        {
+          "@type": "SoftwareApplication",
+          "@id": "{{ config.site_url }}#software",
+          "name": "JarvisCore",
+          "description": {{ config.site_description | tojson }},
+          "url": "{{ config.site_url }}",
+          "applicationCategory": "DeveloperApplication",
+          "operatingSystem": "Cross-platform",
+          "softwareVersion": "{{ config.extra.version }}",
+          "isAccessibleForFree": true,
+          "license": "https://www.apache.org/licenses/LICENSE-2.0",
+          "codeRepository": "{{ config.repo_url }}",
+          "publisher": { "@id": "https://developers.prescottdata.io/#organization" }
+        },
+        {
+          "@type": "WebSite",
+          "@id": "{{ config.site_url }}#website",
+          "name": "JarvisCore Documentation",
+          "url": "{{ config.site_url }}",
+          "publisher": { "@id": "https://developers.prescottdata.io/#organization" }
+        }{% if page and page.url %},
+        {
+          "@type": "TechArticle",
+          "headline": {{ page_title | tojson }},
+          "description": {{ page_description | tojson }},
+          "url": "{{ canonical_url }}",
+          "isPartOf": { "@id": "{{ config.site_url }}#website" },
+          "about": { "@id": "{{ config.site_url }}#software" },
+          "publisher": { "@id": "https://developers.prescottdata.io/#organization" }
+        },
+        {
+          "@type": "BreadcrumbList",
+          "itemListElement": [
+            {
+              "@type": "ListItem",
+              "position": 1,
+              "name": "JarvisCore Documentation",
+              "item": "{{ config.site_url }}"
+            },
+            {
+              "@type": "ListItem",
+              "position": 2,
+              "name": {{ page_title | tojson }},
+              "item": "{{ canonical_url }}"
+            }
+          ]
+        }{% endif %}
+      ]
+    }
+  </script>
+{% endblock %}

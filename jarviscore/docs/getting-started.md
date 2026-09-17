@@ -1,5 +1,7 @@
 ---
-icon: material/rocket-launch
+icon: material/rocket-launch-outline
+title: Install JarvisCore and Build Your First AI Agent
+description: Install the JarvisCore Python framework, configure an LLM provider, and run your first autonomous AI agent in under ten minutes.
 ---
 
 # Getting Started
@@ -12,12 +14,15 @@ This guide takes you from a fresh Python environment to a running JarvisCore age
 
 JarvisCore requires Python 3.10 or later. No infrastructure is required to run a minimal agent. The first working example in this guide uses only an LLM API key.
 
-**Optional: Docker** is required for two capabilities:
+**Docker is optional.** It is used by the local infrastructure commands:
 
 - `jarviscore nexus up` starts the local Nexus broker and gateway for OAuth2 credential management
-- `jarviscore-framework[browser]` runs Playwright in a Docker-managed Chromium for browser automation
+- `jarviscore memory init` starts the local Athena memory stack
+- remote sandbox deployments may run the execution service in a container
 
-If you are not using Nexus or browser automation, Docker is not needed.
+Local browser automation uses Playwright directly and does not require Docker.
+If you are not starting local infrastructure or a containerized sandbox, Docker
+is not needed.
 
 ---
 
@@ -118,16 +123,16 @@ cp .env.example .env
 
 Configure exactly one provider by adding the appropriate variables to your `.env` file.
 
-=== "Launch promotion"
-    Eligible early developers can register at
-    [jarviscore.developers.prescottdata.io/promo](https://jarviscore.developers.prescottdata.io/promo/)
-    and set the issued Prescott entitlement token:
+=== "Existing Prescott entitlement"
+    If Prescott Data has already issued your organization a promotional
+    entitlement, set it directly:
 
     ```bash title=".env"
     JARVISCORE_PROMO_TOKEN=jc_trial_...
     ```
 
     This is limited hosted inference access, not an upstream provider API key.
+    There is currently no public self-service enrollment page.
 
 === "Anthropic Claude"
     ```bash title=".env"
@@ -146,7 +151,7 @@ Configure exactly one provider by adding the appropriate variables to your `.env
     AZURE_API_KEY=...
     AZURE_ENDPOINT=https://your-resource.openai.azure.com/
     AZURE_DEPLOYMENT=gpt-4o
-    AZURE_API_VERSION=2024-02-15-preview
+    AZURE_API_VERSION=2024-10-21
     ```
 
 === "Local / vLLM"
@@ -169,7 +174,8 @@ This command validates your Python version, package installation, and LLM config
 jarviscore check --validate-llm
 ```
 
-Expected output when everything is correctly configured:
+The exact Python version and configured provider vary. A successful check includes
+output like:
 
 ```
 ======================================================================
@@ -178,17 +184,17 @@ Expected output when everything is correctly configured:
 
 [System Requirements]
   Python Version:             3.12.2
-  JarvisCore Package:         v1.3.0
+    JarvisCore Package:         v1.11.0
 
 [Dependencies]
   pydantic:                   Core validation
   pydantic_settings:          Configuration management
 
 [LLM Configuration]
-  JarvisCore Promotion:       JARVISCORE_PROMO_TOKEN=jc_t...oken
+    Claude:                     CLAUDE_API_KEY=sk-a...key
 
 [LLM Connectivity Test]
-  JarvisCore Promotion API:   Connected
+    Claude API:                 Connected
 
   All checks passed. Ready to use JarvisCore.
 ```
@@ -220,8 +226,8 @@ from jarviscore import Mesh, AutoAgent
 
 
 class ResearcherAgent(AutoAgent):
-    name = "Researcher"
     role = "researcher"
+    capabilities = ["research", "analysis"]
     description = "Researches topics and produces concise summaries."
     system_prompt = """
     You are a systematic research analyst. When given a topic,
@@ -234,13 +240,14 @@ async def main():
     mesh = Mesh()
     mesh.add(ResearcherAgent)
     await mesh.start()
-
-    result = await mesh.run_task(
-        agent="researcher",
-        task="What are the main architectural differences between the SWIM and Raft consensus protocols?",
-    )
-
-    print(result)
+    try:
+        result = await mesh.run_task(
+            agent="researcher",
+            task="What are the main architectural differences between the SWIM and Raft consensus protocols?",
+        )
+        print(result["output"])
+    finally:
+        await mesh.stop()
 
 
 if __name__ == "__main__":
@@ -255,19 +262,23 @@ python main.py
 
 The agent will reason through the task using the OODA loop and return a structured response. Because no infrastructure is configured beyond the LLM key, all state is held in process memory and discarded when the script exits.
 
-The same agent as a `CustomAgent`, when you want to own the logic instead of describing the task:
+The same identity contract applies to `CustomAgent`, but you own the execution
+logic:
 
 ```python title="main.py (CustomAgent variant)"
 from jarviscore.profiles import CustomAgent
 
 
-class ResearcherAgent(CustomAgent):
-    role = "researcher"
-    capabilities = ["research"]
+class WordCountAgent(CustomAgent):
+    role = "word_counter"
+    capabilities = ["text_analysis"]
 
     async def execute_task(self, task):
-        findings = await my_research_pipeline(task["task"])   # your code
-        return {"status": "success", "output": findings}
+        text = task["task"]
+        return {
+            "status": "success",
+            "output": {"words": len(text.split())},
+        }
 ```
 
 Everything else on this page works identically for both profiles.
@@ -284,15 +295,15 @@ from jarviscore import Mesh, AutoAgent
 
 
 class ScoutAgent(AutoAgent):
-    name = "Scout"
     role = "scout"
+    capabilities = ["web_research"]
     description = "Gathers raw data on a given subject."
     system_prompt = "You gather raw, factual data on the subject provided. Be thorough and cite your sources."
 
 
 class AnalystAgent(AutoAgent):
-    name = "Analyst"
     role = "analyst"
+    capabilities = ["analysis", "reporting"]
     description = "Analyses data and produces structured intelligence reports."
     system_prompt = "You receive raw research data and produce a structured intelligence report with clear conclusions."
 
@@ -302,20 +313,21 @@ async def main():
     mesh.add(ScoutAgent)
     mesh.add(AnalystAgent)
     await mesh.start()
-
-    # Step 1: Scout gathers raw data
-    raw_data = await mesh.run_task(
-        agent="scout",
-        task="Gather data on the current state of vector database technology.",
-    )
-
-    # Step 2: Analyst processes the raw data
-    report = await mesh.run_task(
-        agent="analyst",
-        task=f"Analyse the following research data and produce a structured report:\n\n{raw_data}",
-    )
-
-    print(report)
+    try:
+        results = await mesh.workflow("vector-database-report", [
+            {
+                "agent": "scout",
+                "task": "Gather sourced evidence on the current state of vector database technology.",
+            },
+            {
+                "agent": "analyst",
+                "task": "Analyse the upstream evidence and produce a structured report.",
+                "depends_on": [0],
+            },
+        ])
+        print(results[-1]["output"])
+    finally:
+        await mesh.stop()
 
 
 if __name__ == "__main__":
@@ -324,12 +336,19 @@ if __name__ == "__main__":
 
 ---
 
-## Two Ways to Run
+## Choose How Work Runs
 
-- `mesh.run_task(agent=..., task=...)` runs one task on one agent. Use it for single asks and hand-rolled pipelines where your code decides what happens between steps.
-- `mesh.workflow(id, steps)` runs declared steps as one traced unit: ordering, dependencies, retries, and a single workflow id. Use it when steps belong together.
+| API | Use it when | Planning owner | Redis required |
+|---|---|---|---|
+| `mesh.run_task()` | One known agent should handle one bounded task | Your application | No |
+| `agent.execute_goal()` | One `AutoAgent` should plan and execute a multi-step goal internally | That AutoAgent | No |
+| `mesh.workflow()` | Your application knows the agents, steps, and dependencies | Your application | No |
+| `mesh.execute_goal()` | A source goal should become durable, capability-addressed work claimed by peers | Temporary planning lease | Yes |
 
-Rule of thumb: passing one agent's output into another agent's prompt by hand means you want `workflow`. See [Workflow DAGs](guides/workflows.md).
+Rule of thumb: if your code manually passes one agent's output into another
+agent's prompt, use [`mesh.workflow()`](guides/workflows.md). If the steps are not
+known in advance and several peers should own the work, use
+[`mesh.execute_goal()`](guides/goal-execution.md).
 
 ---
 
@@ -364,7 +383,25 @@ jarviscore nexus register github --client-id=YOUR_ID --client-secret=YOUR_SECRET
 
 ```bash title=".env"
 P2P_ENABLED=true
-JC_SWIM_PORT=7946
+REDIS_URL=redis://localhost:6379/0
+JARVISCORE_BIND_HOST=0.0.0.0
+JARVISCORE_BIND_PORT=7946
+# Set on nodes joining an existing seed node:
+JARVISCORE_SEED_NODES=192.168.1.10:7946
 ```
 
-See the [Configuration Reference](reference/configuration.md) for the complete list of environment variables and their defaults.
+Each process needs its own bind port. Redis is the shared work/state plane;
+SWIM and ZMQ provide cross-node discovery and communication.
+
+Continue in this order:
+
+1. Read [Concepts](concepts/index.md) for the runtime mental model.
+2. Follow [Guides](guides/index.md) to choose an agent profile and execution API.
+3. Use [Workflow DAGs](guides/workflows.md) when your application knows the steps.
+4. Use [Durable Goal Execution](guides/goal-execution.md) when peers should derive
+    and claim work from a source goal.
+5. Apply the [Production Deployment](guides/production.md) checklist before
+    running unattended workloads.
+
+See the [Configuration Reference](reference/configuration.md) for every
+environment variable and default.

@@ -1,5 +1,7 @@
 ---
-icon: material/book-alphabet
+icon: material/code-braces-box
+title: "JarvisCore API and Configuration Reference"
+description: "Find complete JarvisCore reference documentation for agent APIs, chat endpoints, CLI commands, environment variables, and troubleshooting."
 ---
 
 # Reference

@@ -18,8 +18,7 @@ There is nothing in between. Do not simulate one with the other.
 
 ```python
 import asyncio
-from jarviscore import Mesh
-from jarviscore.profiles import AutoAgent
+from jarviscore import AutoAgent, Mesh
 
 class ResearcherAgent(AutoAgent):
     role = "researcher"                      # required
@@ -36,12 +35,17 @@ async def main():
 asyncio.run(main())
 ```
 
-Optional AutoAgent class attributes: `goal_oriented = True` (routes tasks through a Plan, Execute, Evaluate loop), `default_kernel_role = "..."`, `requires_auth = True` (injects Nexus-backed `_auth_manager`).
+Production AutoAgents should also declare `description`,
+`capability_descriptions`, and `capability_contracts` when peers or distributed
+goals need to route and authorize work. Optional execution attributes include
+`output_schema`, `goal_oriented = True` (classifies complex tasks into Plan,
+Execute, Evaluate), `default_kernel_role = "..."`, and `requires_auth = True`
+(injects Nexus-backed `_auth_manager`).
 
 ## Minimal CustomAgent
 
 ```python
-from jarviscore.profiles import CustomAgent
+from jarviscore import CustomAgent
 
 class ProcessorAgent(CustomAgent):
     role = "processor"
@@ -54,20 +58,30 @@ class ProcessorAgent(CustomAgent):
         return {"status": "success", "result": ...}
 ```
 
-## Two ways to run, one rule
+## Three ways to run
 
 - `mesh.run_task(agent=..., task=...)`: one task, one agent. Single asks and hand-rolled pipelines.
 - `mesh.workflow(id, steps)`: declared steps as one traced unit with ordering, dependencies, and retries.
+- `mesh.execute_goal(goal, workflow_id=...)`: Redis-backed natural-language goal compiled into capability-addressed work that peers claim independently.
 
 Rule: if you are pasting one agent's output into another agent's prompt by hand, use `workflow`.
+If the application does not know the steps and peers should own work by
+capability, use `execute_goal`; it requires Redis and at least one node with a
+planning LLM.
 
 ```python
 results = await mesh.workflow("wf-1", [
     {"agent": "researcher", "task": "Gather data on X"},
     {"agent": "analyst", "task": "Write a report from the research"},
 ])
-print(results[0]["output"])   # results carry status, output, metadata
+print(results[0]["output"])   # results also carry result_summary, tokens, cost, and step_id
 ```
+
+For `execute_goal`, read `status`, `obligation_status` and `response_status`
+independently. Revisions append attempts; filter `steps` by `plan_revision` for
+current execution. Existing AutoAgent and CustomAgent results remain compatible.
+An optional semantic `interpretation` must use the obligation IDs in the current
+step's `covers` list rather than requirement prose.
 
 ## Configuration
 
@@ -91,8 +105,11 @@ jarviscore memory init     # pull + start the Athena memory stack (Docker)
 jarviscore memory status   # health of all memory tiers
 jarviscore nexus init      # zero-trust credential broker (Docker)
 jarviscore inspect [wf]    # read recorded traces: what did my agents do?
-jarviscore atom list       # 46 service integrations, 237+ prebuilt actions
+jarviscore atom list       # inspect bundles and atoms in the installed catalog
 ```
+
+Use the installed catalog rather than a fixed integration count. See the
+[`jarviscore atom list` reference](https://jarviscore.developers.prescottdata.io/reference/cli/#atom-list).
 
 ## House rules the framework enforces (do not fight them)
 
@@ -106,7 +123,10 @@ jarviscore atom list       # 46 service integrations, 237+ prebuilt actions
 - Inventing constructor arguments. Profiles configure via class attributes; `Mesh()` needs no arguments for a single process.
 - Forgetting `await mesh.start()` before running tasks.
 - Using `AutoAgent` for deterministic logic (slow, expensive) or `CustomAgent` for open-ended tasks (you will rebuild the kernel badly).
-- Reading `result["payload"]`. The output key is `output`.
+- Depending on `payload` across every execution path. Prefer `output`; the
+    standard Kernel path also exposes `payload` as an alias.
+- Treating distributed `status="completed"` as proof that every source obligation is satisfied.
+- Expecting `replan_goal()` to erase prior attempts; revisions are append-only.
 - Assuming P2P works without the `[p2p]` extra installed.
 
 ## Deeper documentation

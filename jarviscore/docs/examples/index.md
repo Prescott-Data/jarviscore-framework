@@ -1,5 +1,7 @@
 ---
-icon: material/book-open-variant
+icon: material/flask-outline
+title: Multi-Agent Python Examples with JarvisCore
+description: Explore complete JarvisCore examples for financial pipelines, distributed research, support swarms, content workflows, and investment committees.
 ---
 
 # Examples

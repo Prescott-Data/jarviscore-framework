@@ -28,7 +28,9 @@ from jarviscore.context.truth import AgentOutput
 from jarviscore.context.context_manager import ContextManager, BudgetConfig
 from jarviscore.execution.llm import LLMProvider
 from jarviscore.kernel.lease import ExecutionLease, ROLE_LEASE_PROFILES
+from jarviscore.orchestration.envelopes import ExecutionBudget, neutral_context
 from jarviscore.kernel.cognition import AgentCognitionManager
+from jarviscore.context.fidelity import Record, select_whole
 from jarviscore.kernel.state import KernelState
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
 from jarviscore.promo import PROMO_MODEL
@@ -42,6 +44,16 @@ _BUILTIN_KERNEL_ROLES = frozenset(ROLE_LEASE_PROFILES.keys())
 
 class RoutingError(RuntimeError):
     """Raised when Kernel cannot obtain a valid, typed routing decision."""
+
+
+#: Roles that can use a resolved Nexus credential. The coder sandbox holds the
+#: only call proxy, so every other role reaches a declared system unauthenticated.
+CREDENTIALED_ROLES = frozenset({"coder"})
+
+_ROUTING_ESSENTIAL_KEYS = frozenset({
+    "workflow_id", "step_id", "system", "system_credentials_available",
+})
+_ROUTER_CONTEXT_BUDGET_CHARS = 8000
 
 
 @dataclass(frozen=True)
@@ -71,6 +83,23 @@ Built-in role contract:
 - researcher: gather unknown facts from web/docs/files, investigate, compare evidence.
 - communicator: draft/review/summarize/structure decisions, reports, messages, requests, JSON contracts.
 - browser: operate an interactive browser/UI: navigation, clicks, screenshots, forms, login flows.
+
+Credentials:
+context_summary may carry system_credentials_available. When it is true, the task
+names a system this deployment can already authenticate to, and only coder can use
+that credential — every other role would have to reach the system unauthenticated
+and ask a human to log in to something access was already granted for. Treat such a
+task as API work and route it to coder, unless it genuinely requires interactive UI
+that no API exposes. When it is false, the credential is missing rather than unused,
+and the choice of role does not change that.
+
+context_summary may also carry providers_reachable_by_api, naming every provider
+this deployment can reach through Nexus and its state. "connected" means coder can
+act on it now. "one_consent_away" means the app is set up and coder can ask the
+person to approve access, after which it acts. A task about one of these providers
+is API work even when it never says so: sending it to browser lands on that
+provider's sign-in page and asks a human to log in by hand to something they
+already granted, or could grant with one click.
 
 Use the task, context summary, agent default role, and available registry/handoff context.
 For custom roles, use role_catalog from the payload as the authoritative contract.
@@ -162,17 +191,29 @@ processing is actually required.
             "step_id",
             "complexity",
             "system",
+            "system_credentials_available",
+            "providers_reachable_by_api",
             "previous_step_results",
             "registry_candidate",
             "meeting_step_id",
             "task_id",
         ]
-        summary: Dict[str, Any] = {}
-        for key in keys:
-            if key in context:
-                value = context[key]
-                rendered = json.dumps(value, ensure_ascii=False, default=str)
-                summary[key] = rendered[:1200]
+        records = [
+            Record(
+                key=key,
+                text=json.dumps(context[key], ensure_ascii=False, default=str),
+                # Identity and credential availability decide the route; the rest
+                # is supporting detail that can be left out whole if it will not fit.
+                priority=0 if key in _ROUTING_ESSENTIAL_KEYS else 1,
+            )
+            for key in keys
+            if key in context
+        ]
+        selection = select_whole(records, _ROUTER_CONTEXT_BUDGET_CHARS)
+        summary: Dict[str, Any] = {record.key: record.text for record in selection.kept}
+        if not selection.complete:
+            # A router reading half a JSON value is reading a different value.
+            summary["withheld"] = selection.notice("the step context")
         return summary
 
     @staticmethod
@@ -236,6 +277,8 @@ class Kernel:
         self.blob_storage = blob_storage
         self.config = config or {}
         self.hitl_policy = hitl_policy
+        self.peer_tool: Any = None
+        self.peers: Any = None
 
         # Auth manager — Mesh-injected via requires_auth=True on agent class.
         # AutoAgent forwards it lazily at execute_task() time (because Mesh
@@ -273,6 +316,123 @@ class Kernel:
             min_confidence=float(self.config.get("kernel_router_min_confidence", 0.55)),
             valid_roles=sorted(self._role_lease_profiles),
             role_catalog=self._role_catalog,
+        )
+
+    def attach_mesh_capabilities(self, peers=None, mailbox=None) -> None:
+        """Attach capabilities injected by Mesh after Kernel construction."""
+        self.mailbox = mailbox
+        self.peers = peers
+        self.peer_tool = peers.as_tool() if peers is not None else None
+        for subagent in self._subagent_cache.values():
+            self._attach_mesh_tools(subagent)
+
+    def _attach_mesh_tools(self, subagent) -> None:
+        if hasattr(subagent, "mailbox"):
+            subagent.mailbox = self.mailbox
+        if hasattr(subagent, "peers"):
+            subagent.peers = self.peers
+        if self.mailbox is not None:
+            def read_mailbox(limit: int = 10) -> Dict[str, Any]:
+                bounded = max(1, min(int(limit), 50))
+                messages = self.mailbox.peek(limit=bounded)
+                return {
+                    "status": "success",
+                    "messages": messages,
+                    "count": len(messages),
+                }
+
+            subagent.register_tool(
+                "read_mailbox",
+                read_mailbox,
+                "Read durable unread peer notifications for this agent. Params: {\"limit\": 10}",
+                phase="thinking",
+            )
+        if self.peer_tool is not None:
+            definitions = {item["name"]: item for item in self.peer_tool.schema}
+            for name in self.peer_tool.tool_names:
+                definition = definitions[name]
+
+                async def execute_peer_tool(_name=name, **kwargs):
+                    state = getattr(subagent, "_current_state", None)
+                    source_context = dict(getattr(state, "context", {}) or {})
+                    peer_context = neutral_context(source_context)
+                    workflow_id = str(getattr(state, "workflow_id", "") or "")
+                    step_id = str(getattr(state, "step_id", "") or "")
+                    if workflow_id and workflow_id != "unknown":
+                        peer_context["workflow_id"] = workflow_id
+                    if step_id and step_id != "unknown":
+                        peer_context["peer_requester_step_id"] = step_id
+                    peer_context["peer_requester_role"] = subagent.role
+                    execution_budget = source_context.get("execution_budget")
+                    if hasattr(execution_budget, "to_record"):
+                        execution_budget = execution_budget.to_record()
+                    peer_timeout = (
+                        execution_budget.get("peer_timeout_seconds")
+                        if isinstance(execution_budget, dict)
+                        else None
+                    )
+                    execute_result = getattr(self.peer_tool, "execute_result", None)
+                    if callable(execute_result):
+                        return await execute_result(
+                            _name,
+                            kwargs,
+                            context=peer_context,
+                            timeout_seconds=peer_timeout,
+                        )
+                    legacy_output = await self.peer_tool.execute(
+                        _name, kwargs, context=peer_context
+                    )
+                    return {"status": "success", "output": legacy_output}
+
+                phase = "thinking" if name == "list_peers" else "action"
+                subagent.register_tool(
+                    name, execute_peer_tool, definition["description"], phase=phase
+                )
+        if self.redis_store is None:
+            return
+
+        def current_workflow_id() -> str:
+            state = getattr(subagent, "_current_state", None)
+            return str(getattr(state, "workflow_id", "") or "")
+
+        def inspect_workflow() -> Dict[str, Any]:
+            workflow_id = current_workflow_id()
+            if not workflow_id or workflow_id == "unknown":
+                return {"status": "error", "error": "This dispatch has no workflow identity."}
+            definition = self.redis_store.get_workflow_definition(workflow_id)
+            if definition is None:
+                return {"status": "error", "error": f"Workflow {workflow_id!r} was not found."}
+            live_steps = []
+            for planned in definition.get("steps", []):
+                step_id = str(planned.get("id") or planned.get("step_id") or "")
+                live_steps.append(self.redis_store.get_step_definition(workflow_id, step_id) or planned)
+            return {"status": "success", **definition, "steps": live_steps}
+
+        def read_workflow_step(step_id: str) -> Dict[str, Any]:
+            workflow_id = current_workflow_id()
+            if not workflow_id or workflow_id == "unknown":
+                return {"status": "error", "error": "This dispatch has no workflow identity."}
+            definition = self.redis_store.get_step_definition(workflow_id, step_id)
+            if definition is None:
+                return {"status": "error", "error": f"Step {step_id!r} was not found."}
+            saved = self.redis_store.get_step_output(workflow_id, step_id)
+            return {
+                "status": "success",
+                "step": definition,
+                "output": saved.get("output") if saved else None,
+            }
+
+        subagent.register_tool(
+            "inspect_workflow",
+            inspect_workflow,
+            "Inspect this workflow's source goal, obligations, steps, dependencies, owners, and live statuses. Params: {}",
+            phase="thinking",
+        )
+        subagent.register_tool(
+            "read_workflow_step",
+            read_workflow_step,
+            "Read one step definition and its durable output from this workflow. Params: {\"step_id\": \"<step id>\"}",
+            phase="thinking",
         )
 
     def _get_model_for_tier(self, tier: str, complexity: Optional[str] = None) -> Optional[str]:
@@ -333,6 +493,44 @@ class Kernel:
         return None
 
 
+    async def _resolve_connection(self, system_name: str) -> Optional[str]:
+        """Opaque connection handle for a declared system, or None if we hold none.
+
+        Asked twice per dispatch and answered the same way both times: once before
+        routing, so the router knows whether a credentialed path exists, and again
+        at dispatch to tag the coder's context. Never returns credential material.
+        """
+        if not system_name:
+            return None
+        if self.auth_manager:
+            # A read, never a handshake. get_connection_id() falls through to
+            # authenticate(), which would start a consent flow and block routing
+            # for its full timeout. Asking for consent is the agent's move, made
+            # in the loop through request_access where a person can see it.
+            discover = getattr(self.auth_manager, "discover", None)
+            if callable(discover):
+                handle = await discover(system_name)
+                if handle is not None:
+                    return handle
+        # Local-vault mode: connection_id IS the provider name — NexusCallProxy
+        # resolves it from NexusLocalStore at call time.
+        try:
+            from jarviscore.nexus.store import ConnectionState, get_store
+            if get_store().connection_state(system_name) is ConnectionState.CONNECTED:
+                return system_name
+        except Exception as store_exc:
+            logger.debug("[Kernel] Nexus local vault unavailable: %s", store_exc)
+        return None
+
+    def _awaiting_consent(self, system_name: str) -> bool:
+        """Registered app, no consented account — a different ask than 'register it'."""
+        try:
+            from jarviscore.nexus.store import get_store
+            return get_store().needs_consent(system_name)
+        except Exception as store_exc:
+            logger.debug("[Kernel] Consent state unavailable: %s", store_exc)
+            return False
+
     async def _route_task(
         self,
         task: str,
@@ -344,6 +542,11 @@ class Kernel:
         """
         Route a task into a subagent role using explicit contracts first, then
         a structured LLM router. Keyword routing is intentionally not used.
+
+        A declared system is resolved before routing so the router is told whether
+        credentials exist for it. Without that, it chose rationally from what it
+        had and sent tasks holding a working token to roles that cannot use one,
+        which then asked a human to log in (#152).
         """
         explicit_role = None
         if context:
@@ -351,6 +554,24 @@ class Kernel:
         if agent_default_role and not use_default_role_as_fallback:
             explicit_role = agent_default_role
 
+        system_name = (context or {}).get("system")
+        system_names = [
+            str(value) for value in (context or {}).get("systems", [])
+            if str(value)
+        ]
+        effect = str((context or {}).get("effect") or "").strip()
+        if system_name and effect in {"write", "notify", "destructive"}:
+            return RoutingDecision(
+                role="coder",
+                confidence=1.0,
+                reason="Provider mutation requires the credentialed Coder harness.",
+            )
+        if system_names and effect in {"read", "propose", "write", "notify", "destructive"}:
+            return RoutingDecision(
+                role="coder",
+                confidence=1.0,
+                reason="Connected-system work requires the credentialed Coder harness.",
+            )
         if explicit_role:
             normalized_role = str(explicit_role).lower().strip()
             if normalized_role not in self._role_lease_profiles:
@@ -360,14 +581,69 @@ class Kernel:
                 confidence=1.0,
                 reason="Explicit planner/profile role.",
             )
+        routing_context = dict(context or {})
+        credentialed = False
+        if system_name:
+            credentialed = await self._resolve_connection(str(system_name)) is not None
+            routing_context["system_credentials_available"] = credentialed
+        # A task rarely names its provider, and without this the router only ever
+        # saw the words. "List our Google Drive files" reads as browser work until
+        # you know a Drive connection is one consent away.
+        reachable = await self._provider_inventory()
+        if reachable:
+            routing_context["providers_reachable_by_api"] = reachable
 
-        return await self._task_router.route(
+        decision = await self._task_router.route(
             task=task,
-            context=context,
+            context=routing_context,
             agent_default_role=agent_default_role,
         )
 
-    def _lease_for_role(self, role: str) -> ExecutionLease:
+        if credentialed and decision.role not in CREDENTIALED_ROLES:
+            # Not overridden: the router may have a reason this task needs a UI.
+            # But a credential we hold and did not use is worth saying out loud,
+            # because the symptom is an agent asking for access it already has.
+            logger.warning(
+                "[Kernel] system=%s has resolvable credentials, but routed to %s, "
+                "which has no credential path — the token will not be used and the "
+                "run may ask a human to log in. Router reason: %s",
+                system_name, decision.role, decision.reason,
+            )
+        return decision
+
+    async def _provider_inventory(self) -> Dict[str, str]:
+        """Providers this deployment can reach through Nexus, and their state.
+
+        The vault knows what was registered here; the gateway knows what has
+        been connected. A consent completed in another process is only visible
+        through the second, so both are asked.
+        """
+        try:
+            from jarviscore.nexus.store import ConnectionState, get_store
+            store = get_store()
+            providers = store.list()
+            discover_all = getattr(self.auth_manager, "discover_all", None)
+            if callable(discover_all):
+                await discover_all(providers)
+            connected_at_gateway = getattr(self.auth_manager, "is_connected", lambda _p: False)
+            inventory = {}
+            for provider in providers:
+                if connected_at_gateway(provider):
+                    inventory[provider] = "connected"
+                elif store.connection_state(provider) is ConnectionState.CONNECTED:
+                    inventory[provider] = "connected"
+                elif store.needs_consent(provider):
+                    inventory[provider] = "one_consent_away"
+                else:
+                    inventory[provider] = "registered_but_unusable"
+            return inventory
+        except Exception as exc:
+            logger.debug("[Kernel] Provider inventory unavailable: %s", exc)
+            return {}
+
+    def _lease_for_role(
+        self, role: str, execution_budget: Optional[Dict[str, Any]] = None
+    ) -> ExecutionLease:
         """Create a lease from built-in or application-registered role profile."""
         profile = self._role_lease_profiles.get(role)
         if profile is None:
@@ -375,7 +651,19 @@ class Kernel:
                 f"No lease profile registered for kernel role {role!r}. "
                 "Add config['kernel_role_profiles'][role] or use a built-in role."
             )
-        return ExecutionLease(**profile)
+        lease = ExecutionLease(**profile)
+        if execution_budget is not None:
+            budget = ExecutionBudget.from_record(execution_budget)
+            original_total = max(1, lease.max_total_tokens)
+            capped_total = min(original_total, budget.max_tokens)
+            ratio = capped_total / original_total
+            lease.max_total_tokens = capped_total
+            lease.thinking_budget = max(1, int(lease.thinking_budget * ratio))
+            lease.action_budget = max(1, int(lease.action_budget * ratio))
+            lease.wall_clock_ms = min(
+                lease.wall_clock_ms, int(budget.max_seconds * 1000)
+            )
+        return lease
 
     def _get_or_create_subagent(self, role: str, agent_id: str, step_id: str):
         """Get a cached subagent or create a new one.
@@ -430,7 +718,7 @@ class Kernel:
         )
 
         if role == "coder":
-            return CoderSubAgent(
+            subagent = CoderSubAgent(
                 agent_id=agent_id,
                 llm_client=self.llm_client,
                 sandbox=self.sandbox,
@@ -441,7 +729,7 @@ class Kernel:
                 blob_storage=self.blob_storage,
             )
         elif role == "researcher":
-            return ResearcherSubAgent(
+            subagent = ResearcherSubAgent(
                 agent_id=agent_id,
                 llm_client=self.llm_client,
                 search_client=self.search_client,
@@ -450,7 +738,7 @@ class Kernel:
                 blob_storage=self.blob_storage,
             )
         elif role == "communicator":
-            return CommunicatorSubAgent(
+            subagent = CommunicatorSubAgent(
                 agent_id=agent_id,
                 llm_client=self.llm_client,
                 mailbox=self.mailbox,
@@ -458,7 +746,7 @@ class Kernel:
                 blob_storage=self.blob_storage,
             )
         elif role == "browser":
-            return BrowserSubAgent(
+            subagent = BrowserSubAgent(
                 agent_id=agent_id,
                 llm_client=self.llm_client,
                 headless=self.config.get("browser_headless", True),
@@ -468,6 +756,8 @@ class Kernel:
             )
         else:
             raise ValueError(f"Unknown subagent role: {role}")
+        self._attach_mesh_tools(subagent)
+        return subagent
 
     def _create_memory(self, workflow_id: str, step_id: str, agent_id: str):
         """Create a UnifiedMemory instance for the current step.
@@ -535,21 +825,22 @@ class Kernel:
 
         Returns a registry candidate dict if a verified/golden function matches.
         Returns None if no match found — caller should proceed to coder.
+
+        Only ever searches within an already-known provider. Ranking atoms across
+        all providers let lexical scoring pick one, and it scored the letter "a"
+        inside a function name as strongly as the subject of the task, so a task
+        naming one system could surface an atom that calls a different API.
         """
-        if not self.code_registry:
+        if not self.code_registry or not system:
             return None
         try:
             matches = self.code_registry.semantic_search(task, limit=5)
-            # Filter: verified/golden only
+            matches = [m for m in matches if m.get("system") == system]
             production = [
                 m for m in matches
                 if m.get("registry_stage") in ("verified", "golden")
                 and m.get("_score", 0) >= _REGISTRY_REUSE_SCORE_THRESHOLD
             ]
-            if system:
-                system_matches = [m for m in production if m.get("system") == system]
-                if system_matches:
-                    production = system_matches
             if not production:
                 return None
             top = production[0]
@@ -582,15 +873,9 @@ class Kernel:
         meta = getattr(output, "metadata", {}) or {}
         if meta.get("signal_researcher"):
             return True
-        # Failed with a real error on first attempt → researcher can fetch live docs
-        if output.status == "failure" and dispatch_num == 0:
-            summary = (output.summary or "").lower()
-            research_signals = [
-                "404", "not found", "api error", "invalid endpoint",
-                "schema mismatch", "unexpected field", "rate limit",
-            ]
-            if any(sig in summary for sig in research_signals):
-                return True
+        # The coder says whether it is missing knowledge; reading that back out of
+        # its summary matched "404" inside amounts and ids, and "rate limit" in
+        # text that was describing a limit rather than hitting one.
         return False
 
     async def execute(
@@ -624,8 +909,11 @@ class Kernel:
         total_tokens = {"input": 0, "output": 0, "total": 0}
         total_cost = 0.0
 
-        workflow_id = context.get("workflow_id", "unknown") if context else "unknown"
-        step_id = context.get("step_id", f"step_{int(time.time())}") if context else f"step_{int(time.time())}"
+        context = dict(context or {})
+        trace_sink = context.pop("_trace_sink", None)
+
+        workflow_id = context.get("workflow_id", "unknown")
+        step_id = context.get("step_id", f"step_{int(time.time())}")
 
         # Create TraceManager for real-time streaming to UI
         from jarviscore.kernel.tracing import TraceManager, create_noop_trace
@@ -633,6 +921,7 @@ class Kernel:
             _kernel_trace = TraceManager(
                 workflow_id=workflow_id,
                 step_id=step_id,
+                event_sink=trace_sink,
             )
         except Exception as _te:
             logger.debug("[Kernel] TraceManager init failed (non-fatal): %s", _te)
@@ -653,11 +942,9 @@ class Kernel:
                     registry_candidate["score"],
                 )
                 enriched_context = dict(context) if context else {}
+                # The candidate is evidence. What to do about it is taught in the
+                # role prompt, not dictated by a sentence smuggled into state.
                 enriched_context["registry_candidate"] = registry_candidate
-                enriched_context["_hint"] = (
-                    f"Verified function `{registry_candidate['function_name']}` found in registry. "
-                    "Call execute_code with its code directly — skip write_code."
-                )
             else:
                 enriched_context = dict(context) if context else {}
 
@@ -701,7 +988,9 @@ class Kernel:
             )
 
             # 2. DECIDE: create lease, cognition, memory, context manager
-            lease = self._lease_for_role(role)
+            lease = self._lease_for_role(
+                role, enriched_context.get("execution_budget")
+            )
             cognition = AgentCognitionManager(
                 lease=lease,
                 agent_id=agent_id,
@@ -729,18 +1018,17 @@ class Kernel:
             # Create memory (graceful degradation if no Redis/blob)
             memory = self._create_memory(workflow_id, step_id, agent_id)
 
-            # ── Inject Athena memory context into enriched_context ──────────────
-            # Agents see their cross-session STM + MTM chains before deciding.
-            # This is what gives them continuity across shifts and sessions.
+            # ── Recall what earlier sessions hold about this task ─────────────
+            # A question scored by relevance, not the last fifteen things the
+            # agent thought about anything. What comes back is evidence from the
+            # past and is rendered as that, apart from the task, never beside it.
             if memory is not None:
                 try:
-                    bundle = await memory.rehydrate_bundle(ledger_tail=5)
-                    if bundle.get("athena_context"):
-                        enriched_context["_athena_memory"] = bundle["athena_context"]
-                    if bundle.get("ltm_summary"):
-                        enriched_context["_ltm_summary"] = bundle["ltm_summary"]
+                    recalled = await memory.recall(task, limit=8)
+                    if recalled:
+                        enriched_context["_recalled"] = recalled
                 except Exception as _me:
-                    logger.debug("[Kernel] Memory rehydration failed (non-fatal): %s", _me)
+                    logger.debug("[Kernel] Memory recall failed (non-fatal): %s", _me)
 
             ctx_manager = self._create_context_manager(role)
 
@@ -764,28 +1052,25 @@ class Kernel:
                     enriched_context.get("system")
                     or (context.get("system") if context else None)
                 )
+                if not system_name:
+                    # The registry resolved the provider even though the task did
+                    # not name it. Safe to arm because the call proxy binds the
+                    # credential to that provider's own hosts; the yield below is
+                    # still left to declared systems, since an inferred provider
+                    # must not harden into an access demand.
+                    candidate = enriched_context.get("registry_candidate") or {}
+                    inferred = candidate.get("system")
+                    if inferred:
+                        conn_id = await self._resolve_connection(str(inferred))
+                        if conn_id is not None:
+                            enriched_context["_nexus_connection_id"] = conn_id
+                            enriched_context["_nexus_provider"] = inferred
+                            logger.info(
+                                "[Kernel] Nexus connection_id tagged for "
+                                "registry-resolved system=%s", inferred,
+                            )
                 if system_name:
-                    conn_id = None
-                    if self.auth_manager:
-                        try:
-                            conn_id = await self.auth_manager.get_connection_id(system_name)
-                        except Exception as auth_exc:
-                            logger.debug(
-                                "[Kernel] Nexus gateway unavailable for system=%s — "
-                                "trying local vault: %s",
-                                system_name, auth_exc,
-                            )
-                    if conn_id is None:
-                        # Local-vault mode: connection_id IS the provider name —
-                        # NexusCallProxy resolves it from NexusLocalStore at call time.
-                        try:
-                            from jarviscore.nexus.store import get_store
-                            if get_store().get(system_name):
-                                conn_id = system_name
-                        except Exception as store_exc:
-                            logger.debug(
-                                "[Kernel] Nexus local vault unavailable: %s", store_exc
-                            )
+                    conn_id = await self._resolve_connection(str(system_name))
                     if conn_id is not None:
                         # Only the opaque handle goes into context — NEVER tokens or keys
                         enriched_context["_nexus_connection_id"] = conn_id
@@ -795,12 +1080,37 @@ class Kernel:
                             system_name,
                         )
                     else:
-                        logger.warning(
-                            "[Kernel] No Nexus credentials for system=%s — "
-                            "register with: jarviscore nexus register %s (local vault) "
-                            "or set NEXUS_GATEWAY_URL (gateway)",
-                            system_name, system_name,
-                        )
+                        pending_consent = self._awaiting_consent(str(system_name))
+                        if pending_consent and self.auth_manager is not None:
+                            # Coder owns the real resumable consent path. It exposes
+                            # request_access with a provider URL and connection ID.
+                            enriched_context["_consent_required_system"] = system_name
+                        else:
+                            summary = (
+                                f"This task needs {system_name}, which is not "
+                                "connected here. Someone has to grant access to it "
+                                "before the task can run."
+                            )
+                            logger.warning(
+                                "[Kernel] %s (system=%s) — no consent channel is available",
+                                summary, system_name,
+                            )
+                            await self._cleanup_step(step_id)
+                            return AgentOutput(
+                                status="yield",
+                                summary=summary,
+                                trajectory=[],
+                                metadata={
+                                    "tokens": total_tokens,
+                                    "cost_usd": total_cost,
+                                    "dispatches": dispatches,
+                                    "yield_pending": True,
+                                    "escalation_reason": "auth_required",
+                                    "system": system_name,
+                                    "hitl_type": "auth",
+                                    "typed_outcome": "YIELD_AUTH_REQUIRED",
+                                },
+                            )
 
 
             # ── Dispatch subagent with full infrastructure ──
@@ -869,8 +1179,31 @@ class Kernel:
                     },
                 )
 
+            if output.status == "epoch_exhausted":
+                return AgentOutput(
+                    status="epoch_exhausted",
+                    payload=output.payload,
+                    summary=output.summary,
+                    trajectory=output.trajectory,
+                    metadata={
+                        "tokens": total_tokens,
+                        "cost_usd": total_cost,
+                        "dispatches": dispatches,
+                        "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+                        "checkpointed": meta.get("checkpointed", False),
+                    },
+                )
+
             if output.status == "yield":
                 # HITL needed or budget exhausted — pass through
+                pass_through = {
+                    key: meta.get(key)
+                    for key in (
+                        "typed_outcome", "hitl_type", "system", "connection_id",
+                        "workflow_id", "step_id", "action_id", "action", "consequence",
+                    )
+                    if meta.get(key) is not None
+                }
                 return AgentOutput(
                     status="yield",
                     payload=output.payload,
@@ -881,8 +1214,8 @@ class Kernel:
                         "cost_usd": total_cost,
                         "dispatches": dispatches,
                         "yield_pending": True,
-                        "typed_outcome": meta.get("typed_outcome"),
                         "elapsed_ms": (time.time() - start_time) * 1000,
+                        **pass_through,
                     },
                 )
 
@@ -922,10 +1255,6 @@ class Kernel:
                 )
                 if research_output.status == "success" and research_output.payload:
                     enriched_context["research_findings"] = research_output.payload
-                    enriched_context["_hint"] = (
-                        "Research findings above contain the correct API specs. "
-                        "Use them to rewrite the code. Do NOT use your prior failed approach."
-                    )
                     context = enriched_context
                     logger.info("[Kernel] Research complete — retrying coder with findings.")
                     continue
@@ -944,8 +1273,8 @@ class Kernel:
                 return AgentOutput(
                     status="yield",
                     summary=(
-                        f"Auth failure — {auth_error_type} for system={system_name}. "
-                        "Human must provide or refresh credentials via Nexus."
+                        f"Access to {system_name} failed while running this task. "
+                        "The connection has to be renewed before it can continue."
                     ),
                     trajectory=output.trajectory,
                     metadata={
@@ -959,42 +1288,6 @@ class Kernel:
                         "typed_outcome": "YIELD_AUTH_REQUIRED",
                     },
                 )
-
-            # Check HITL policy for escalation — only on the FINAL dispatch.
-            # Intermediate failures should be retried (possibly with research
-            # findings), not dumped to human review.  Goal-oriented agents get
-            # their recovery from the Planner's replan loop; premature HITL
-            # escalation short-circuits that and floods the review queue.
-            is_final_dispatch = (dispatch_num == max_dispatches - 1)
-            if self.hitl_policy and is_final_dispatch:
-                # Gentler confidence decay: 0.15 per dispatch instead of 0.25.
-                # dispatch 0 → 0.85, dispatch 1 → 0.70, dispatch 2 → 0.55.
-                # This gives the retry loop room to succeed before the
-                # confidence drops below the escalation threshold.
-                dispatch_confidence = max(0.1, 1.0 - (dispatch_num * 0.15))
-                tokens_spent = total_tokens.get("total", 0)
-                risk_from_spend = min(0.9, tokens_spent / 200_000)
-
-                should_escalate, reason = self.hitl_policy.should_escalate(
-                    reason_code="execution_failure",
-                    confidence=dispatch_confidence,
-                    risk_score=risk_from_spend,
-                )
-                if should_escalate:
-                    await self._cleanup_step(step_id)
-                    return AgentOutput(
-                        status="yield",
-                        summary=f"Escalated to human: {reason}",
-                        trajectory=output.trajectory,
-                        metadata={
-                            "tokens": total_tokens,
-                            "cost_usd": total_cost,
-                            "dispatches": dispatches,
-                            "yield_pending": True,
-                            "escalation_reason": reason,
-                            "typed_outcome": "YIELD_HITL_POLICY",
-                        },
-                    )
 
         # All dispatches exhausted
         elapsed = (time.time() - start_time) * 1000

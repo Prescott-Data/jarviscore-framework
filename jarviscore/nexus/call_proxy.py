@@ -26,6 +26,9 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+from .strategy import apply_strategy
+from .hosts import ensure_host_allowed
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,9 +52,33 @@ class NexusCallProxy:
     def __init__(self, auth_manager):
         """
         Args:
-            auth_manager: jarviscore.auth.manager.AuthenticationManager instance.
+            auth_manager: an AuthenticationManager, or a zero-argument callable
+                returning the one to use right now. The callable form exists
+                because the mesh injects the shared manager after agent setup,
+                and a proxy that captured a fallback at setup signed from a
+                connection table the consent flow never wrote to.
         """
-        self._auth = auth_manager
+        self._auth_source = auth_manager
+
+    @property
+    def _auth(self):
+        source = self._auth_source
+        return source() if callable(source) else source
+
+    def _provider_for(self, connection_id: str) -> str:
+        """The provider behind an opaque handle, so its hosts can be checked."""
+        connections = getattr(self._auth, "_connections", None) or {}
+        for provider, cid in connections.items():
+            if cid == connection_id:
+                return str(provider).lower()
+        # Local-vault mode: the handle is the provider name ("github:user123").
+        return connection_id.split(":")[0].lower()
+
+    def connection_handle(self, provider: str) -> str:
+        """Resolve a provider name to its opaque active handle when available."""
+        lookup = getattr(self._auth, "connection_handle", None)
+        handle = lookup(provider) if callable(lookup) else None
+        return handle if isinstance(handle, str) and handle else provider
 
     async def call(
         self,
@@ -78,6 +105,7 @@ class NexusCallProxy:
                 "ok":          bool,         # True if status < 400
                 "status_code": int,
                 "body":        str,          # raw response text
+                "content":     bytes,        # raw response body, for downloads
                 "json":        Any,          # parsed JSON or None
                 "headers":     dict,
             }
@@ -87,6 +115,12 @@ class NexusCallProxy:
         """
         from jarviscore.nexus.client import NexusClient
         from jarviscore.nexus.store import get_store
+
+        store = get_store()
+        provider = self._provider_for(connection_id)
+        # Before a credential is placed, not after: the destination is chosen by
+        # generated code, so it is the least trustworthy part of the request.
+        ensure_host_allowed(provider, url, store.get(provider))
 
         strategy = None
         request_kwargs = None
@@ -106,36 +140,14 @@ class NexusCallProxy:
 
         # ── Local store fallback (zero-dep mode) ──────────────────────────────
         if request_kwargs is None:
-            store = get_store()
-            # connection_id is treated as provider name in local mode
-            provider = connection_id.split(":")[0].lower()   # e.g. "github:user123" → "github"
-            auth_info = store.build_auth_info(provider)
-            if not auth_info:
+            strategy = store.build_strategy(provider)
+            if strategy is None:
                 raise RuntimeError(
                     f"NexusCallProxy: no credentials found for {connection_id!r}. "
                     f"Run: python -m jarviscore.cli nexus register {provider} --client-id=... --client-secret=..."
                 )
-            # Build the httpx request with auth injected directly from auth_info
-            merged_headers = dict(headers or {})
-            auth_type = store.get(provider).get("auth_type", "")
-            if auth_type == "oauth2":
-                token = auth_info.get("access_token", "")
-                merged_headers["Authorization"] = f"Bearer {token}"
-            elif auth_type == "api_key":
-                # For Stripe-style Bearer, X-Api-Key, or Authorization: Bearer
-                api_key = auth_info.get("api_key", "")
-                merged_headers["Authorization"] = f"Bearer {api_key}"
-            elif auth_type == "basic_auth":
-                import base64 as _b64
-                cred = f"{auth_info.get('username','')}:{auth_info.get('password','')}"
-                encoded = _b64.b64encode(cred.encode()).decode()
-                merged_headers["Authorization"] = f"Basic {encoded}"
-            request_kwargs = {
-                "method":  method.upper(),
-                "url":     url,
-                "headers": merged_headers,
-                **kwargs,
-            }
+            request_kwargs = apply_strategy(strategy, method, url, headers=headers, **kwargs)
+            url = request_kwargs["url"]
         request_kwargs.setdefault("timeout", timeout)
 
         async with httpx.AsyncClient() as client:
@@ -180,6 +192,7 @@ class NexusCallProxy:
                 "ok": response.status_code < 400,
                 "status_code": response.status_code,
                 "body": response.text,
+                "content": response.content,
                 "json": json_body,
                 "headers": dict(response.headers),
             }
@@ -202,7 +215,9 @@ class NexusCallProxy:
         Returns:
             Async callable suitable for injection into a sandbox namespace.
         """
-        async def nexus_call(method: str, url: str, **kwargs) -> Dict[str, Any]:
+        async def nexus_call(
+            method: str, url: str, provider: Optional[str] = None, **kwargs
+        ) -> Dict[str, Any]:
             """
             Call a provider API endpoint through Nexus.
 
@@ -215,11 +230,13 @@ class NexusCallProxy:
                 **kwargs: httpx kwargs (json=, params=, data=, headers=, etc.)
 
             Returns:
-                {"ok": bool, "status_code": int, "body": str, "json": Any, "headers": dict}
+                {"ok": bool, "status_code": int, "body": str, "content": bytes,
+                 "json": Any, "headers": dict}
 
             Raises:
                 RuntimeError if Nexus connection is unavailable.
             """
-            return await proxy.call(connection_id, method, url, **kwargs)
+            target = proxy.connection_handle(provider) if provider else connection_id
+            return await proxy.call(target, method, url, **kwargs)
 
         return nexus_call

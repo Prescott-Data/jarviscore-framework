@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'jarviscore/docs/**'
+      - 'overrides/**'
       - 'README.md'
       - 'mkdocs.yml'
       - '.github/workflows/docs.yml'
@@ -37,7 +38,10 @@ jobs:
         run: pip install "mkdocs<2.0" "mkdocs-material<10"
 
       - name: Build site
-        run: mkdocs build --clean
+        run: mkdocs build --strict --clean
+
+      - name: Validate SEO metadata
+        run: python scripts/validate_docs_seo.py
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

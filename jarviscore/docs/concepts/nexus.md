@@ -1,10 +1,12 @@
 ---
 icon: material/shield-key
+title: "Nexus Authentication for AI Agent Integrations"
+description: "Use one secure Nexus call boundary for OAuth2, API keys, and basic authentication while keeping credentials out of agent reasoning."
 ---
 
 # Nexus: Credential Federation
 
-Nexus is JarvisCore's answer to two compounding problems in agentic systems. Agents need credentials to call external services, but agents should never handle credentials. And with 46 integrations, writing authentication glue code for each one is unsustainable.
+Nexus is JarvisCore's answer to two compounding problems in agentic systems. Agents need credentials to call external services, but agents should never handle credentials. Across a growing integration catalog, writing authentication glue code for each service is unsustainable. Inspect your installed catalog with [`jarviscore atom list`](../reference/cli.md#atom-list).
 
 ---
 
@@ -27,7 +29,7 @@ cred = base64.b64encode(f"{email}:{api_token}".encode()).decode()
 headers = {"Authorization": f"Basic {cred}"}
 ```
 
-Three providers, three auth patterns, three environment variables, and three separate token expiry and refresh paths. Scaled to 150 integrations across a multi-agent fleet, this becomes a maintenance problem that never ends.
+Three providers, three auth patterns, three environment variables, and three separate token expiry and refresh paths. Scaled across the integration catalog and a multi-agent fleet, this becomes a maintenance problem that never ends.
 
 **Nexus collapses all of this to one interface:**
 
@@ -44,22 +46,31 @@ The agent and the LLM-generated code never know whether a provider uses OAuth2, 
 
 ## How It Works
 
-Nexus operates as a credential layer that agents talk through, not a credential store that agents read from. The boundary is enforced by `NexusCallProxy`, which is the only component that ever touches a raw credential.
+Nexus operates as a credential layer that agents talk through, not a credential
+store that agents read from. The boundary is enforced by `NexusCallProxy`, which
+is the only component that ever touches a raw credential.
 
-```
-Agent task → Kernel → CoderSubAgent
-                          ↓
-                   nexus_call("POST", url, json={...})
-                          ↓
-                   NexusCallProxy.call(connection_id, method, url)
-                          ↓
-                   auth_manager.resolve_strategy(connection_id)
-                          ↓
-                   Nexus Gateway / Local store → credential
-                          ↓
-                   HTTP request with auth header injected
-                          ↓
-                   {ok, status_code, json} returned to agent
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Agent
+    participant Sandbox as Generated code sandbox
+    participant Proxy as NexusCallProxy
+    participant Auth as Auth manager
+    participant Store as Gateway or local store
+    participant Provider
+
+    Agent->>Sandbox: execute provider task
+    Sandbox->>Proxy: nexus_call(method, url, body)
+    Note over Sandbox,Proxy: Opaque connection_id only
+    Proxy->>Auth: resolve_strategy(connection_id)
+    Auth->>Store: resolve or refresh credential
+    Store-->>Auth: scoped credential
+    Auth-->>Proxy: authenticated request strategy
+    Proxy->>Provider: HTTP request with auth injected
+    Provider-->>Proxy: provider response
+    Proxy-->>Sandbox: status and response body
+    Sandbox-->>Agent: result without raw credential
 ```
 
 The agent code that triggers this flow never sees the token. The LLM reasoning process never sees the token. The credential exists only in the encrypted store and in memory for the duration of the HTTP call.
@@ -126,12 +137,12 @@ The two modes are not mutually exclusive. When `NEXUS_GATEWAY_URL` is set and re
 
 **It does not replace your application's auth.** If you are building an API on top of JarvisCore, user authentication for your end users is outside Nexus's scope.
 
-Nexus has one job: ensure that agent code can call 46 third-party APIs through a single authenticated interface, without handling credentials directly.
+Nexus has one job: ensure that agent code can call third-party APIs through a single authenticated interface, without handling credentials directly.
 
 ---
 
 ## Further Reading
 
 - [Nexus Setup Guide](../guides/nexus.md) covers credential registration, the CLI reference, the Gateway API contract, and production deployment.
-- [Service Integrations](../guides/integrations.md) lists the 46 provider bundles that use Nexus for authentication.
+- [Service Integrations](../guides/integrations.md) describes the built-in provider bundles that use Nexus for authentication.
 - [Nexus Framework on GitHub](https://github.com/Prescott-Data/nexus-framework) is the open-source repository for the Nexus credential federation framework.

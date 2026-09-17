@@ -26,9 +26,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from typing import Any, Dict, List, Optional
 
+from jarviscore.context.fidelity import Record, select_whole
 from .goal_context import GoalExecution, PlannedStep
 
 logger = logging.getLogger(__name__)
@@ -121,12 +123,13 @@ class Planner:
 
     Args:
         llm_client:            The LLM client (same instance the Kernel uses).
-        system_prompt_excerpt: First ~400 chars of the agent's system_prompt,
-                               used to give the planner the agent's identity
-                               and domain context.
+        system_prompt:         The agent's full system_prompt, giving the planner
+                               its identity, domain and operating rules.
+                               ``system_prompt_excerpt`` is the former name and
+                               is still accepted.
 
     Usage:
-        planner = Planner(llm_client, system_prompt_excerpt=agent.system_prompt[:400])
+        planner = Planner(llm_client, system_prompt=agent.system_prompt)
 
         # Initial plan
         steps = await planner.plan(goal="Run the weekly market analysis", goal_execution=exec)
@@ -135,32 +138,37 @@ class Planner:
         steps = await planner.replan(goal_execution=exec, failed_step=cs, reason="API timeout")
     """
 
-    def __init__(self, llm_client, system_prompt_excerpt: str = ""):
+    def __init__(self, llm_client, system_prompt: str = "", system_prompt_excerpt: str = ""):
         self.llm = llm_client
-        self._identity = system_prompt_excerpt[:400] if system_prompt_excerpt else ""
+        # Identity is the smallest and most load-bearing thing in the prompt; an
+        # excerpt is the persona without the rules that constrain it (#91).
+        self._identity = str(system_prompt or system_prompt_excerpt or "")
 
     @staticmethod
-    def _clip(value: Any, limit: int) -> str:
-        """Honest cut — a planner working from amputated facts plans wrong."""
-        text = str(value)
-        if len(text) <= limit:
-            return text
-        return f"{text[:limit]}…[truncated: showing {limit} of {len(text)} chars]"
+    def _facts_budget() -> int:
+        return int(os.environ.get("PLANNER_FACTS_BUDGET_CHARS", "40000"))
 
-    def _render_facts(self, facts: Dict[str, Any], limit: int = 20) -> str:
-        """Render known facts one per line with an honest count (#74).
+    @staticmethod
+    def _context_budget() -> int:
+        return int(os.environ.get("PLANNER_CONTEXT_BUDGET_CHARS", "20000"))
 
-        Replaces the old clipped-JSON-blob rendering, which silently cut
-        facts mid-key at 800 chars — lost facts produce wrong plans.
+    def _render_facts(self, facts: Dict[str, Any]) -> str:
+        """Render known facts one per line, whole (#74, #166).
+
+        A fact the planner cannot read is a fact it will plan to go and find
+        again, so a clipped value costs a step. Facts that do not fit are named
+        rather than halved.
         """
         if not facts:
             return "None yet."
-        items = list(facts.items())
-        lines = [f"{len(items)} fact(s) known:"]
-        for key, value in items[:limit]:
-            lines.append(f"  - {key}: {self._clip(value, 200)}")
-        if len(items) > limit:
-            lines.append(f"  …and {len(items) - limit} more facts not shown")
+        records = [
+            Record(key=str(key), text=f"  - {key}: {value}", priority=1)
+            for key, value in facts.items()
+        ]
+        selection = select_whole(records, self._facts_budget())
+        lines = [f"{len(records)} fact(s) known:", selection.render()]
+        if not selection.complete:
+            lines.append(f"  {selection.notice('the goal truth store')}")
         return "\n".join(lines)
 
     async def plan(
@@ -192,7 +200,14 @@ class Planner:
         if context:
             public = {k: v for k, v in context.items() if not str(k).startswith("_")}
             if public:
-                ctx_note = f"\nAvailable context:\n{self._clip(json.dumps(public, default=str), 600)}\n"
+                records = [
+                    Record(key=str(key), text=f"  {key}: {json.dumps(value, default=str)}", priority=1)
+                    for key, value in public.items()
+                ]
+                selection = select_whole(records, self._context_budget())
+                ctx_note = f"\nAvailable context:\n{selection.render()}\n"
+                if not selection.complete:
+                    ctx_note += f"{selection.notice('the workflow context')}\n"
 
         prompt = self._build_initial_prompt(goal, known_str, ctx_note)
         return await self._call_and_parse(prompt, goal)
@@ -230,7 +245,7 @@ class Planner:
             PlannerError: if the LLM call fails or response is unparseable.
         """
         completed_summary = "\n".join(
-            f"  - [{cs.evaluation.verdict.upper()}] {cs.step.step_id}: {self._clip(cs.step.task, 120)}"
+            f"  - [{cs.evaluation.verdict.upper()}] {cs.step.step_id}: {cs.step.task}"
             for cs in goal_execution.completed
         )
 
@@ -240,7 +255,7 @@ class Planner:
         pending_summary = ""
         if pending_steps:
             pending_summary = "\n".join(
-                f"  - {s.step_id}: {self._clip(s.task, 120)}"
+                f"  - {s.step_id}: {s.task}"
                 for s in pending_steps
             )
 

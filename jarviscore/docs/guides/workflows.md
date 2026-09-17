@@ -1,5 +1,7 @@
 ---
 icon: material/sitemap
+title: "Build Multi-Agent Workflow DAGs in Python"
+description: "Compose JarvisCore workflows as dependency-aware DAGs with parallel steps, capability routing, output chaining, and durable recovery."
 ---
 
 # Workflow DAGs
@@ -7,6 +9,13 @@ icon: material/sitemap
 JarvisCore's `WorkflowBuilder` lets you compose multi-agent workflows as Directed Acyclic Graphs (DAGs). Each step is assigned to a specific agent role, steps declare their dependencies, and the framework executes them in topological order: parallelising independent steps automatically.
 
 This guide covers the full `WorkflowBuilder` API, the result reference syntax for chaining step outputs, Redis-backed persistence, and production patterns.
+
+Use this API when your application knows the steps and assigns agent roles. If
+the source is a natural-language objective and peers should own work by
+capability rather than preassigned role, use Redis-backed
+[`Mesh.execute_goal()`](goal-execution.md) instead. `Mesh.execute_goal()` creates
+an immutable obligation ledger and append-only revision history; those semantics
+do not apply automatically to a `WorkflowBuilder` DAG.
 
 ---
 
@@ -20,6 +29,14 @@ A **workflow** is a named, executable DAG composed of **steps**. Each step has:
 - An optional `depends_on` list of step IDs that must succeed first
 
 Steps without dependencies are eligible to run immediately. When all dependencies of a step have succeeded, that step becomes eligible. The framework runs all eligible steps concurrently in each round.
+
+```mermaid
+flowchart LR
+    Research["research<br/>researcher"] --> Analyse["analyse<br/>analyst"]
+    Scan["competitor_scan<br/>researcher"] --> Analyse
+    Analyse --> Draft["draft<br/>writer"]
+    Draft --> Review["review<br/>reviewer"]
+```
 
 ---
 
@@ -133,7 +150,6 @@ from jarviscore.orchestration.workflow_builder import WorkflowBuilder
 
 
 class OrchestratorAgent(CustomAgent):
-    name = "Orchestrator"
     role = "orchestrator"
     description = "Composes and executes research-to-report workflows."
 

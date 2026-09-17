@@ -28,6 +28,7 @@ def _make_manager_with_mock_nexus(**extra_config):
     manager.nexus_client.request_connection = AsyncMock(
         return_value=("conn_abc", "https://provider.com/auth")
     )
+    manager.nexus_client.ensure_provider = AsyncMock()
     manager.nexus_client.check_connection_status = AsyncMock(return_value="ACTIVE")
     manager.lifecycle_monitor.monitor_connection = AsyncMock()
     manager.flow_handler.present_auth_url = AsyncMock()
@@ -39,6 +40,15 @@ def _make_manager_with_mock_nexus(**extra_config):
 
 class TestNoNexusConfigured:
 
+    @pytest.fixture(autouse=True)
+    def _no_gateway(self, monkeypatch):
+        """State the precondition: these assert what happens with no gateway at all.
+
+        The manager reads NEXUS_GATEWAY_URL from the environment, so a developer
+        who has one exported is a configured deployment, not an unconfigured one.
+        """
+        monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+
     def test_manager_created_without_nexus_client(self):
         """AuthenticationManager can be created without gateway_url (no Nexus client)."""
         manager = AuthenticationManager({})
@@ -48,7 +58,7 @@ class TestNoNexusConfigured:
     async def test_authenticate_raises_when_no_nexus(self):
         """authenticate() raises RuntimeError when NEXUS_GATEWAY_URL is not set."""
         manager = AuthenticationManager({})
-        with pytest.raises(RuntimeError, match="NEXUS_GATEWAY_URL is not configured"):
+        with pytest.raises(RuntimeError, match="no way to run a consent flow"):
             await manager.authenticate("shopify")
 
     @pytest.mark.asyncio
@@ -84,8 +94,9 @@ class TestNoNexusConfigured:
 
 class TestProdMode:
 
-    def test_no_nexus_client_when_gateway_url_absent(self):
+    def test_no_nexus_client_when_gateway_url_absent(self, monkeypatch):
         """Without gateway_url, nexus_client is None — no hard error at construction."""
+        monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
         manager = AuthenticationManager({"auth_mode": "production"})
         assert manager.nexus_client is None
 
@@ -100,6 +111,7 @@ class TestProdMode:
         manager.nexus_client.request_connection = AsyncMock(
             return_value=("conn_prod_1", "https://auth.test.com/oauth")
         )
+        manager.nexus_client.ensure_provider = AsyncMock()
         manager.lifecycle_monitor.monitor_connection = AsyncMock()
 
         # Mock the flow handler so it doesn't open a browser or poll
@@ -113,7 +125,7 @@ class TestProdMode:
 
         # Verify flow handler was invoked
         manager.flow_handler.present_auth_url.assert_called_once_with(
-            "https://auth.test.com/oauth", "shopify"
+            "https://auth.test.com/oauth", "shopify", connection_id="conn_prod_1"
         )
         manager.flow_handler.wait_for_completion.assert_called_once()
 
@@ -129,6 +141,7 @@ class TestProdMode:
         manager.nexus_client.request_connection = AsyncMock(
             return_value=("conn_fail_1", "https://auth.test.com/oauth")
         )
+        manager.nexus_client.ensure_provider = AsyncMock()
         manager.flow_handler.present_auth_url = AsyncMock()
         manager.flow_handler.wait_for_completion = AsyncMock(return_value="FAILED")
 
@@ -222,8 +235,9 @@ class TestResolveStrategy:
         await manager.close()
 
     @pytest.mark.asyncio
-    async def test_resolve_strategy_raises_when_no_nexus(self):
+    async def test_resolve_strategy_raises_when_no_nexus(self, monkeypatch):
         """resolve_strategy raises AttributeError when nexus_client is None."""
+        monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
         manager = AuthenticationManager({})
         with pytest.raises(AttributeError):
             await manager.resolve_strategy("conn_xyz")
@@ -327,6 +341,7 @@ class TestCLIFlowHandler:
         manager.nexus_client.request_connection = AsyncMock(
             return_value=("conn_custom", "https://auth.test.com/custom")
         )
+        manager.nexus_client.ensure_provider = AsyncMock()
         manager.lifecycle_monitor.monitor_connection = AsyncMock()
 
         conn_id = await manager.authenticate("slack")

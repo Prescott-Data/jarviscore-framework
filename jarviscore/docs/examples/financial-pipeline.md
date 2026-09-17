@@ -1,5 +1,7 @@
 ---
 icon: material/trending-up
+title: "Multi-Agent Financial Intelligence Pipeline Example"
+description: "Run three AutoAgent specialists that analyze market data, generate signals, and produce Markdown briefings through dependency-ordered work."
 ---
 
 # Financial Intelligence Pipeline

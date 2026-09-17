@@ -80,6 +80,7 @@ Your job: transform raw data into clear, actionable output for your audience.
         blob_storage=None,
     ):
         self.mailbox = mailbox
+        self.peers = None
         self._drafts: List[Dict[str, Any]] = []
         super().__init__(
             agent_id=agent_id,
@@ -231,6 +232,17 @@ Your job: transform raw data into clear, actionable output for your audience.
         if not message:
             return {"status": "error", "error": "Missing message — specify what to send"}
 
+        if self.peers is not None:
+            sent = await self.peers.notify(
+                peer_role,
+                {"message": message, "priority": priority},
+            )
+            return {
+                "status": "sent" if sent else "error",
+                "peer": peer_role,
+                "priority": priority,
+                **({} if sent else {"error": "Peer was not found or unavailable"}),
+            }
         if not self.mailbox:
             return {"status": "error", "error": "No mailbox configured"}
 

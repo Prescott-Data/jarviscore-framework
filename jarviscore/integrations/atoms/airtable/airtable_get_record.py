@@ -1,34 +1,36 @@
-def airtable_get_record(auth_info: dict, base_id: str, table_name: str, record_id: str) -> dict:
-    import requests
-    _base = "https://api.airtable.com/v0"
-    _h = {"Authorization": f"Bearer {auth_info.get('access_token', '')}", "Content-Type": "application/json"}
-    def _get(p, params=None, headers=None):
-        _r = requests.get(f"{_base}{p}", headers={**_h, **(headers or {})}, params=params or {}, timeout=30)
-        _r.raise_for_status()
-        return _r.json()
-    def _post(p, data=None, headers=None):
-        _r = requests.post(f"{_base}{p}", headers={**_h, **(headers or {})}, json=data, timeout=30)
-        _r.raise_for_status()
-        return _r.json()
-    def _put(p, data=None, headers=None):
-        _r = requests.put(f"{_base}{p}", headers={**_h, **(headers or {})}, json=data, timeout=30)
-        _r.raise_for_status()
-        return _r.json()
-    def _patch(p, data=None, headers=None):
-        _r = requests.patch(f"{_base}{p}", headers={**_h, **(headers or {})}, json=data, timeout=30)
-        _r.raise_for_status()
-        return _r.json() if _r.content else {}
-    def _delete(p, headers=None):
-        _r = requests.delete(f"{_base}{p}", headers={**_h, **(headers or {})}, timeout=30)
-        _r.raise_for_status()
-        return _r.json() if _r.content else {}
-    """
-    Fetch a single record from an Airtable table by its record ID.
+async def airtable_get_record(base_id: str, table_name: str, record_id: str) -> dict:
+    """Get record via the airtable API."""
+    _base = 'https://api.airtable.com/v0'
+    _h = {'Content-Type': 'application/json'}
 
-    Args:
-        auth_info: Dict with access_token for the tool
-        base_id:       Airtable base ID (e.g. appXXXXXXXXXXXXXX)
-        table_name:    Table name or table ID
-        record_id:     Record ID (e.g. recXXXXXXXXXXXXXX)
-    """
-    return _get(f"/{base_id}/{table_name}/{record_id}")
+    async def _get(p, params=None, headers=None):
+        _r = await nexus_call('GET', f'{_base}{p}', headers={**_h, **(headers or {})}, params=params or {})
+        if not _r['ok']:
+            return {'success': False, 'error': _r['body']}
+        return _r['json']
+
+    async def _post(p, data=None, headers=None):
+        _r = await nexus_call('POST', f'{_base}{p}', headers={**_h, **(headers or {})}, json=data)
+        if not _r['ok']:
+            return {'success': False, 'error': _r['body']}
+        return _r['json']
+
+    async def _put(p, data=None, headers=None):
+        _r = await nexus_call('PUT', f'{_base}{p}', headers={**_h, **(headers or {})}, json=data)
+        if not _r['ok']:
+            return {'success': False, 'error': _r['body']}
+        return _r['json']
+
+    async def _patch(p, data=None, headers=None):
+        _r = await nexus_call('PATCH', f'{_base}{p}', headers={**_h, **(headers or {})}, json=data)
+        if not _r['ok']:
+            return {'success': False, 'error': _r['body']}
+        return _r['json'] if _r['content'] else {}
+
+    async def _delete(p, headers=None):
+        _r = await nexus_call('DELETE', f'{_base}{p}', headers={**_h, **(headers or {})})
+        if not _r['ok']:
+            return {'success': False, 'error': _r['body']}
+        return _r['json'] if _r['content'] else {}
+    '\n    Fetch a single record from an Airtable table by its record ID.\n\n    Args:\n        auth_info: Dict with access_token for the tool\n        base_id:       Airtable base ID (e.g. appXXXXXXXXXXXXXX)\n        table_name:    Table name or table ID\n        record_id:     Record ID (e.g. recXXXXXXXXXXXXXX)\n    '
+    return await _get(f'/{base_id}/{table_name}/{record_id}')

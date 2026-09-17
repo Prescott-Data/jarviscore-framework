@@ -47,6 +47,40 @@ class _MiniAuto(AutoAgent):
 class TestAutoAgentLoudFailures:
 
     @pytest.mark.asyncio
+    async def test_mailbox_context_is_acknowledged_only_after_success(self, monkeypatch):
+        class _Mailbox:
+            def __init__(self):
+                self.messages = [{"sender": "peer", "message": {"evidence": "ready"}}]
+                self.acked = 0
+
+            def peek(self, limit=10):
+                return self.messages[:limit]
+
+            def read(self, max_messages=5):
+                self.acked += max_messages
+                return self.messages[:max_messages]
+
+            def format_for_context(self, messages):
+                return "peer evidence is ready"
+
+        agent = _MiniAuto()
+        agent.mailbox = _Mailbox()
+        seen = []
+
+        async def execute(task):
+            seen.append(task)
+            return {"status": "failure" if len(seen) == 1 else "success", "output": "done"}
+
+        monkeypatch.setattr(agent, "_execute_task_pipeline", execute)
+
+        await agent.execute_task({"task": "work", "context": {}})
+        assert seen[0]["context"]["_mailbox_context"] == "peer evidence is ready"
+        assert agent.mailbox.acked == 0
+
+        await agent.execute_task({"task": "work", "context": {}})
+        assert agent.mailbox.acked == 1
+
+    @pytest.mark.asyncio
     async def test_used_before_start_raises_descriptive_error(self):
         agent = _MiniAuto()
         with pytest.raises(RuntimeError, match="before mesh.start"):

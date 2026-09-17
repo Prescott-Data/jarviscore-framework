@@ -1,5 +1,7 @@
 ---
 icon: material/api
+title: "Integrate JarvisCore AI Agents with FastAPI"
+description: "Start and stop a JarvisCore Mesh with FastAPI lifespan hooks, run agent loops in the background, and expose production web endpoints."
 ---
 
 # FastAPI Integration

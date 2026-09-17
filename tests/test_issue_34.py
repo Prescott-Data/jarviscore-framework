@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from jarviscore.profiles.autoagent import AutoAgent
@@ -59,6 +60,9 @@ async def test_complexity_gate_complex(mock_execute_goal, MockClassifier):
         status = "complete"
         result = "Done"
         error = None
+        completed = [SimpleNamespace(output=SimpleNamespace(
+            payload={"status": "research_incomplete", "account_name": "Acme"}
+        ))]
         def to_summary_dict(self):
             return {}
 
@@ -74,6 +78,8 @@ async def test_complexity_gate_complex(mock_execute_goal, MockClassifier):
 
     # Result should be from the goal execution
     assert result["status"] == "success"
+    assert result["output"] == {"status": "research_incomplete", "account_name": "Acme"}
+    assert result["result_summary"] == "Done"
 
 @pytest.mark.asyncio
 @patch("jarviscore.planning.classifier.TaskComplexityClassifier")

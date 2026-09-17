@@ -1,7 +1,7 @@
 ---
 icon: material/home
 title: Python Multi-Agent AI Framework for Production
-description: Open source Python framework for building autonomous multi-agent AI systems. Peer-to-peer agent orchestration, persistent agent memory, zero-trust credentials, and full observability.
+description: Open source Python framework for autonomous multi-agent systems with peer-to-peer orchestration, durable memory, zero-trust credentials, and observability.
 ---
 
 <div class="jc-hero" markdown>
@@ -63,9 +63,9 @@ Agents discover and message each other via a `PeerClient` API over SWIM gossip a
 <div class="jc-card" markdown>
 <span class="jc-card-label">Integrations</span>
 
-### 46 service integrations
+### Built-in service integrations
 
-Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and 40 more. 237+ prebuilt actions your agents can call directly. No glue code, no auth wiring.
+Prebuilt actions for Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and more. No glue code, no auth wiring. Inspect the catalog in your installed version with [`jarviscore atom list`](reference/cli.md#atom-list).
 
 [Browse integrations →](guides/integrations.md)
 </div>
@@ -120,8 +120,8 @@ from jarviscore import Mesh, AutoAgent
 
 
 class ResearcherAgent(AutoAgent):
-    name = "Researcher"
     role = "researcher"
+    capabilities = ["research", "analysis"]
     system_prompt = "You are a rigorous research analyst."
 
 
@@ -129,11 +129,14 @@ async def main():
     mesh = Mesh()
     mesh.add(ResearcherAgent)
     await mesh.start()
-    result = await mesh.run_task(
-        agent="researcher",
-        task="What are the key architectural trade-offs in multi-agent systems?",
-    )
-    print(result)
+    try:
+        result = await mesh.run_task(
+            agent="researcher",
+            task="What are the key architectural trade-offs in multi-agent systems?",
+        )
+        print(result["output"])
+    finally:
+        await mesh.stop()
 
 
 asyncio.run(main())
@@ -154,11 +157,13 @@ If you are new to JarvisCore, read in this order:
 
 If you are evaluating for a specific use case:
 
+- [Compare Agent Frameworks](compare/index.md): CrewAI, LangGraph, Hermes Agent, and JarvisCore by operating model
+- [Open Source Agent Harness](agent-harness.md): planning, tools, context, permissions, recovery, and observability
 - [AutoAgent Guide](guides/autoagent.md): autonomous reasoning agents
 - [CustomAgent Guide](guides/customagent.md): deterministic worker agents
 - [System Bundles & Integrations](guides/integrations.md): the full atom catalog
 - [Configuration Reference](reference/configuration.md): all environment variables
-- [JarvisCore Enterprise](infrastructure/enterprise.md): managed deployment and SLAs
+- [JarvisCore Enterprise](infrastructure/enterprise.md): edition comparison, enterprise capabilities, deployment, and support
 
 ---
 

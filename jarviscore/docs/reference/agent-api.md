@@ -1,5 +1,7 @@
 ---
 icon: material/robot-outline
+title: JarvisCore Agent and Mesh API Reference
+description: Reference the AutoAgent, CustomAgent, and Mesh APIs for building autonomous and deterministic multi-agent Python applications.
 ---
 
 # Agent API Reference
@@ -11,16 +13,19 @@ This is the complete API reference for the two agent profiles and the Mesh orche
 ## AutoAgent
 
 ```python
-from jarviscore.profiles import AutoAgent
+from jarviscore import AutoAgent
 ```
 
-`AutoAgent` is the framework-managed execution profile. You define three class attributes; the framework handles code generation, sandboxed execution, autonomous repair, and model routing.
+`AutoAgent` is the framework-managed execution profile. Three class attributes
+form the minimum valid declaration. Production agents can additionally describe
+capabilities, declare provider authority, validate output, and select execution
+behavior.
 
 ### Required class attributes
 
 | Attribute | Type | Description |
 |---|---|---|
-| `role` | `str` | Agent role identifier. Used by the Mesh for routing and by the Kernel as the fallback sub-agent role. Example: `"researcher"` |
+| `role` | `str` | Agent role identifier used for identity, profile loading, and explicit role routing. Example: `"researcher"` |
 | `capabilities` | `List[str]` | List of capability strings this agent provides. Used by the Mesh workflow engine for task routing. Example: `["research", "analysis"]` |
 | `system_prompt` | `str` | System prompt prepended to every Kernel call. Omitting this raises `ValueError` at instantiation. |
 
@@ -28,15 +33,33 @@ from jarviscore.profiles import AutoAgent
 
 | Attribute | Type | Default | Description |
 |---|---|---|---|
-| `goal_oriented` | `bool` | `False` | When `True`, every `execute_task()` call is routed through the `Plan → Execute → Evaluate` loop. See [Planning](../concepts/planning.md). |
+| `description` | `str` | `""` when absent | Human-readable role purpose used as fallback routing context. |
+| `capability_descriptions` | `Dict[str, str]` | `{}` | Routing description for each capability. Distributed planning uses these descriptions instead of inferring intent from tags alone. |
+| `capability_contracts` | `Dict[str, dict]` | `{}` when absent | Authorized `effects` and provider `systems` for each capability. Mesh planning and peer execution propagate this authority into task context. |
+| `output_schema` | `type[BaseModel]` | `None` | Optional Pydantic model enforced on CoderSubAgent execution output. Other role outputs require application validation. |
+| `goal_oriented` | `bool` | `False` | When `True`, tasks are classified first: complex work uses `Plan → Execute → Evaluate`; bounded work can run as one direct Kernel turn. See [Planning](../concepts/planning.md). |
 | `default_kernel_role` | `str` | `None` | Fallback sub-agent role when the Planner emits `subagent_hint: null`. Valid values: `"coder"`, `"researcher"`, `"communicator"`, `"browser"`. Leave `None` for generalist agents. |
-| `requires_auth` | `bool` | `False` | When `True`, the Mesh creates an `AuthenticationManager` from the Nexus gateway config and injects it as `self._auth_manager` after `setup()`. Requires `NEXUS_GATEWAY_URL` in the environment. |
+| `requires_auth` | `bool` | `False` | Opts into post-`setup()` `AuthenticationManager` injection when connected-app authentication is configured. Connected-app calls require a reachable Nexus Gateway. |
+
+`capability_contracts` uses this shape:
+
+```python
+capability_contracts = {
+    "code_review": {
+        "effects": ["read", "propose"],
+        "systems": ["github"],
+    },
+}
+```
+
+Effects are `read`, `propose`, `write`, `notify`, or `destructive`. A contract
+describes authority; it does not grant credentials or bypass provider policy.
 
 ### Optional environment overrides
 
 | Variable | Default | Description |
 |---|---|---|
-| `HITL_ENABLED` | `false` | Enable `AdaptiveHITLPolicy`. Escalates on low-confidence or high-risk Kernel actions. |
+| `HITL_ENABLED` | `false` | Enable typed human-only HITL. Routine failure, low confidence and token spend never escalate. |
 | `BROWSER_ENABLED` | `false` | Activate `BrowserSubAgent` for web automation tasks. |
 | `MAX_GOAL_STEPS` | `30` | Hard step ceiling for goal-oriented agents. |
 | `MAX_REPLAN_ATTEMPTS` | `8` | Maximum replanning cycles before the goal is marked failed. |
@@ -47,7 +70,8 @@ from jarviscore.profiles import AutoAgent
 async def execute_task(task: Dict[str, Any]) -> Dict[str, Any]
 ```
 
-The primary entry point called by the Mesh workflow engine. You never call this directly.
+The primary task entry point. The Mesh workflow engine calls it, and application
+code may call it directly after the agent has been started by a Mesh.
 
 **Input:**
 
@@ -60,31 +84,37 @@ The primary entry point called by the Mesh workflow engine. You never call this 
 
 | Key | Type | Description |
 |---|---|---|
-| `status` | `str` | `"success"`, `"failure"`, or `"yield"` |
+| `status` | `str` | `"success"`, `"failure"`, `"yield"`, or `"hitl"` for a paused goal-oriented execution |
 | `output` | `Any` | Task result payload |
-| `error` | `str \| None` | Error message when status is not `"success"` |
+| `payload` | `Any` | Alias of `output` on the standard Kernel path |
+| `result_summary` | `str` | Guaranteed plain-prose display summary; structured data remains in `output`, `payload`, or `goal_execution` |
+| `error` | `str \| None` | `None` on success; failure or yield explanation otherwise |
 | `tokens` | `dict` | Token usage: `{"input": int, "output": int, "total": int}` |
 | `cost_usd` | `float` | Estimated cost in USD |
+| `repairs` | `int` | Autonomous repair attempts. The Kernel path reports `0`; the legacy path reports attempts performed. |
 | `agent_id` | `str` | The agent's unique identifier |
 | `role` | `str` | The agent's role |
 | `function_id` | `str \| None` | FunctionRegistry atom ID if the task was registered |
 | `dispatches` | `list` | Sub-agent dispatch log from the Kernel |
-| `result_id` | `str` | Result identifier from the ResultHandler |
+| `yield_metadata` | `dict` | Typed continuation or HITL metadata when execution yields; otherwise empty |
+| `result_id` | `str` | Present when a configured ResultHandler stores the result |
 
 **Additional keys when `goal_oriented = True`:**
 
 | Key | Type | Description |
 |---|---|---|
-| `goal_execution` | `dict` | Summary of the planning loop: `steps`, `facts`, `elapsed_ms`, and plan revision count |
+| `goal_execution` | `dict` | Planning summary for complex work, or direct-Kernel classification metadata for bounded work |
 
 **Return value (legacy fallback path):**
 
-The legacy pipeline is used only if the Kernel raises an unhandled exception. It adds:
+The legacy pipeline is used when the Kernel has not been initialized. It adds:
 
 | Key | Type | Description |
 |---|---|---|
 | `code` | `str` | The generated code that was executed |
-| `repairs` | `int` | Number of autonomous repair attempts made |
+
+`repairs` remains part of the common envelope and may be greater than zero on
+this path.
 
 ### setup
 
@@ -107,7 +137,7 @@ Called by the Mesh on shutdown. Override to release resources such as database c
 ## CustomAgent
 
 ```python
-from jarviscore.profiles import CustomAgent
+from jarviscore import CustomAgent
 ```
 
 `CustomAgent` is the user-controlled execution profile. You own the execution logic entirely by implementing `on_peer_request()`. The framework provides P2P message routing, FastAPI lifecycle integration, and Mesh registration.
@@ -186,7 +216,9 @@ The P2P listener loop. Runs continuously in the background when the agent is sta
 from jarviscore import Mesh
 ```
 
-The central orchestrator. Manages agent lifecycle, workflow execution, and infrastructure detection.
+The runtime host for agent lifecycle, workflow execution and infrastructure
+detection. Distributed goal work is peer-claimed; Mesh does not assign a master
+agent or retain planning authority.
 
 ### Constructor
 
@@ -200,6 +232,12 @@ Mesh(config: Optional[Dict[str, Any]] = None)
 | `p2p_enabled` | `bool` | from `P2P_ENABLED` env | Enable SWIM/ZMQ peer transport |
 | `checkpoint_interval` | `int` | `1` | Save workflow checkpoints every N steps |
 | `max_parallel` | `int` | `5` | Maximum parallel step execution |
+| `distributed_poll_interval` | `float` | `2.0` | Redis DAG polling interval in seconds |
+| `distributed_claim_lease_seconds` | `int` | `60` | Renewable execution-claim lease duration |
+| `mesh_planning_lease_seconds` | `int` | `300` | Goal compilation or amendment lease duration |
+| `mesh_max_reconciliation_revisions` | `int` | `3` | Maximum bounded semantic reconciliation revision |
+| `mesh_response_capability` | `str` | `None` | Capability that owns the optional `final_response` step |
+| `execution_budget` | `dict` | `ExecutionBudget` defaults | Shared limits for the complete distributed goal |
 
 The Mesh auto-detects available infrastructure at `start()` time. Do not pass `mode=`: that argument is deprecated and has no effect.
 
@@ -221,14 +259,20 @@ Raises `ValueError` if an agent with the same `agent_id` is already registered, 
 async def start() -> None
 ```
 
-Probe infrastructure, call `setup()` on all registered agents, inject infrastructure references, and start the workflow engine. Must be called before `workflow()` or `serve_forever()`.
+Probe infrastructure; inject stores, mailbox, and HITL; call `setup()` on every
+agent; attach peer clients and optional authentication; then start the workflow
+engine. Must be called before task execution.
 
 Raises `RuntimeError` if no agents are registered or if `start()` has already been called.
 
 #### workflow
 
 ```python
-async def workflow(workflow_id: str, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]
+async def workflow(
+    workflow_id: str,
+    steps: List[Dict[str, Any]],
+    timeout_per_step: Optional[float] = None,
+) -> List[Dict[str, Any]]
 ```
 
 Execute a multi-step workflow. Returns a list of step results in execution order.
@@ -237,13 +281,160 @@ Each step dict:
 
 | Key | Type | Required | Description |
 |---|---|---|---|
+| `id` | `str` | No | Stable step ID. Generated when omitted. Prefer explicit IDs for readable dependencies and recovery. |
 | `agent` | `str` | Yes | Agent role or capability that should execute this step |
 | `task` | `str` | Yes | Natural language task description |
-| `depends_on` | `List[int]` | No | Zero-based indices of steps this step depends on |
+| `depends_on` | `List[str \| int]` | No | Explicit step IDs or legacy zero-based indices this step depends on |
 | `context` | `dict` | No | Additional context passed to `execute_task()` |
 | `complexity` | `str` | No | Model tier hint: `"nano"`, `"standard"`, or `"heavy"` |
+| `timeout` | `float` | No | Per-step timeout overriding `timeout_per_step` and `WORKFLOW_STEP_TIMEOUT` |
 
 Raises `RuntimeError` if `start()` has not been called or if the workflow engine is unavailable.
+
+#### execute_goal
+
+```python
+async def execute_goal(
+    goal: str,
+    *,
+    workflow_id: Optional[str] = None,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+) -> Dict[str, Any]
+```
+
+Register an immutable source goal, wait for any planning-capable node to publish
+a capability-addressed Redis DAG, and observe independent peer claims until the
+workflow reaches `completed`, `failed`, or `waiting`. Requires Redis.
+
+Set `config["execution_budget"]` on `Mesh` to bound the complete execution:
+
+```python
+mesh = Mesh(config={
+    "execution_budget": {
+        "max_seconds": 900,
+        "max_tokens": 240_000,
+        "max_steps": 30,
+        "max_replans": 8,
+        "max_peer_depth": 2,
+        "peer_timeout_seconds": 300,
+    }
+})
+```
+
+The framework stores this as `ExecutionBudget` in the durable
+`WorkflowEnvelope`. Caller context cannot override it. Token usage is enforced
+through one Redis-backed account per workflow: each model call reserves capacity
+before dispatch and settles exact provider-reported usage and cost afterward.
+Planning, evaluators, dependency/effect reviews, direct steps and nested peer
+mandates all debit that same account.
+
+### Atom repair lifecycle
+
+Coder exposes `inspect_atom_for_repair` and `repair_atom` only after an atom has
+failed during the current run. A repair candidate is bound to the atom's name,
+provider, version and failed invocation. `register_function` rejects candidates
+without successful execution evidence and rejects stale or renamed repairs. A
+successful repair becomes the next immutable FunctionRegistry version while the
+superseded source remains available for audit.
+
+### Distributed execution envelopes
+
+```python
+from jarviscore.orchestration import (
+    CapabilityMandate,
+    ExecutionBudget,
+    WorkflowEnvelope,
+    WorkflowEvidence,
+)
+```
+
+`WorkflowEnvelope` is the canonical source/context/DAG record.
+`CapabilityMandate` is the scoped peer-request lifecycle.
+`WorkflowEvidence` is the complete artifact/interpretation/state snapshot used
+for final synthesis, including the current obligation projection. These types
+serialize compatibly with existing Redis records.
+
+`Mesh.execute_goal()` results distinguish process lifecycle from source-goal truth:
+
+- `status` reports whether the distributed execution completed, failed, waited or
+    was cancelled.
+- `obligation_status` reports `satisfied`, `blocked` or `incomplete`.
+- `response_status` reports `completed`, `failed`, `waiting` or `not_required`
+    for the current revision's user-facing response.
+
+The remaining result fields are:
+
+| Field | Description |
+|---|---|
+| `workflow_id` | Durable caller-supplied or generated identity |
+| `goal` | Exact source goal |
+| `obligations` | Independently verifiable source requirements |
+| `revision` | Current published plan revision |
+| `result_summary` | Current revision's terminal user response, when present |
+| `steps` | Immutable attempts from every revision, each carrying `plan_revision` |
+
+A terminal step with an actionable semantic gap can trigger a bounded DAG
+revision. Reconciliation appends new work only for unresolved obligation IDs,
+preserves satisfied obligations and completed effects, records supersession
+lineage, and emits a fresh final response. If no available capability can advance
+the gap, the current revision settles as `blocked` rather than looping or claiming
+that execution completion satisfied the goal.
+
+`status`, `obligation_status` and `response_status` are independent. A response
+failure can therefore coexist with satisfied business obligations. See
+[Durable Goal Execution](../guides/goal-execution.md#read-terminal-status-correctly).
+
+#### resume_goal
+
+```python
+async def resume_goal(
+    workflow_id: str,
+    step_id: str,
+    *,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: float = 900.0,
+) -> Dict[str, Any]
+```
+
+Resume a waiting step with optional human or external context. The original
+executor affinity is retained and blocked descendants become claimable after
+the resumed step succeeds.
+
+#### cancel_goal
+
+```python
+def cancel_goal(
+    workflow_id: str,
+    *,
+    reason: str = "Goal cancelled",
+) -> bool
+```
+
+Durably cancel shared work. Cancellation fences later claims and terminal writes,
+including writes from an executor whose lease expired before cancellation.
+Requires Redis. Cancelling the coroutine running `execute_goal()` performs the
+same durable cancellation before re-raising `CancelledError`.
+
+#### replan_goal
+
+```python
+async def replan_goal(
+    workflow_id: str,
+    *,
+    reason: str,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: float = 900.0,
+) -> Dict[str, Any]
+```
+
+Compile an append-only delta for currently unresolved obligations under a short
+planning lease. The commit uses revision compare-and-swap, assigns new
+`plan_revision` values, and cannot remove, reuse or mutate earlier step IDs and
+outputs. Only obligations covered by the delta gain supersession lineage; other
+satisfied obligations keep their authoritative attempts. The source goal and
+obligation ledger remain immutable, and peers resume capability-based claiming
+after publication.
 
 #### stop
 

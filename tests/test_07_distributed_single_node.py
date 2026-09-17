@@ -302,6 +302,34 @@ class TestDistributedWorkflowExecution:
         assert "gen-step" in memory
         assert "analyze-step" in memory
 
+    @pytest.mark.asyncio
+    async def test_claimed_step_receives_goal_graph_and_dependency_outputs(self):
+        from jarviscore.testing import MockRedisContextStore
+
+        store = MockRedisContextStore()
+        mesh = Mesh(config={"p2p_enabled": False})
+        analyzer = mesh.add(DataAnalyzerAgent)
+        mesh._redis_store = store
+        store.publish_workflow(
+            "wf-shared-view",
+            goal="Generate evidence and analyse it",
+            obligations=[{"id": "o1", "description": "Analyse generated evidence", "source_quote": "analyse it"}],
+            steps=[
+                {"id": "generate", "capability": "data_generation", "task": "Generate", "depends_on": []},
+                {"id": "analyse", "capability": "analysis", "task": "Analyse", "depends_on": ["generate"], "covers": ["o1"]},
+            ],
+        )
+        store.save_step_output("wf-shared-view", "generate", output={"rows": [1, 2, 3]})
+        store.update_step_status("wf-shared-view", "generate", "completed")
+
+        step = store.get_step_definition("wf-shared-view", "analyse")
+        await mesh._execute_distributed_step(analyzer, "wf-shared-view", "analyse", step)
+
+        context = analyzer.context_received[-1]
+        assert context["objective"] == "Generate evidence and analyse it"
+        assert context["previous_step_results"] == {"generate": {"rows": [1, 2, 3]}}
+        assert {item["id"] for item in context["workflow_plan"]["steps"]} == {"generate", "analyse"}
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TEST CLASS: Step Broadcasting

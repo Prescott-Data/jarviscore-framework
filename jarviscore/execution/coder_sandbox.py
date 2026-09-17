@@ -27,10 +27,13 @@ Output contract (result variable in generated code):
 import ast
 import asyncio
 import io
+import json
 import logging
 import os
 import re
 import shlex
+import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -47,6 +50,49 @@ logger = logging.getLogger(__name__)
 # Result Model
 # ─────────────────────────────────────────────────────────────────
 
+class _SealedEnviron(dict):
+    """The process environment, withheld from generated code.
+
+    Empty rather than absent so ordinary lookups return nothing instead of
+    crashing, and explicit about why on any attempt to read a name.
+    """
+
+    def __getitem__(self, key):
+        raise KeyError(
+            f"{key!r}: the process environment is not readable from here. "
+            "Credentials are attached by nexus_call outside the sandbox, so "
+            "nothing in here needs them."
+        )
+
+
+class _SealedOS:
+    """`os` with the environment withheld from the injected namespace.
+
+    The real module handed generated code NEXUS_ENCRYPTION_KEY, the key the
+    credential vault is encrypted with, alongside every other secret this process
+    holds, and an agent duly listed them into a user-facing answer.
+
+    This is a guard rail, not a boundary: the sandbox executes in-process, so
+    `import os` still reaches the real environment. Closing that needs the
+    generated code to run somewhere without the secrets, which is process
+    isolation, not a namespace substitution.
+    """
+
+    environ = _SealedEnviron()
+    environb = _SealedEnviron()
+
+    @staticmethod
+    def getenv(key, default=None):
+        return default
+
+    @staticmethod
+    def putenv(*args, **kwargs):
+        raise PermissionError("The process environment cannot be changed from here.")
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+
 @dataclass
 class CoderResult:
     """Structured result from a CoderSandbox execution."""
@@ -59,6 +105,11 @@ class CoderResult:
     error: Optional[str] = None
     error_type: Optional[str] = None
     execution_time: float = 0.0
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    #: What the credential boundary refused, if it refused. Recorded there rather
+    #: than read back out of a message, because generated code catches broadly and
+    #: a stringified exception loses the only reliable statement of what happened.
+    access_failure: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict:
         return {
@@ -70,7 +121,9 @@ class CoderResult:
             "data": self.data,
             "error": self.error,
             "error_type": self.error_type,
+            "access_failure": self.access_failure,
             "execution_time": self.execution_time,
+            "artifacts": self.artifacts,
         }
 
 
@@ -312,15 +365,24 @@ class CoderSandbox:
         bash_timeout: int = 120,
         output_subdir: str = runtime_path("output"),
         nexus_call_proxy=None,  # Optional[NexusCallProxy]
+        mesh_proxy=None,
+        blob_storage=None,      # Optional[BlobStorage]
+        artifact_prefix: str = "artifacts",
     ):
         self.workspace = Path(workspace_dir) if workspace_dir else Path.cwd()
         self.timeout = timeout
         # created lazily at execute() time; idle sandbox leaves no dir
         self.output_dir = self.workspace / output_subdir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Where a run's files end up is the developer's choice: any BlobStorage
+        # backend, local or remote. The sandbox only decides that they leave.
+        self.blob_storage = blob_storage
+        self.artifact_prefix = artifact_prefix
 
         self._bash = BashExecutor(self.workspace, timeout=bash_timeout)
         self._git = GitHelper(self._bash, self.workspace)
         self._nexus_call_proxy = nexus_call_proxy  # NexusCallProxy | None
+        self._mesh_proxy = mesh_proxy
 
         logger.info(
             "CoderSandbox initialized: workspace=%s timeout=%ds nexus=%s",
@@ -332,6 +394,179 @@ class CoderSandbox:
     # ─────────────────────────────────────────────────────────────
 
     async def execute(
+        self,
+        code: str,
+        context: Optional[Dict] = None,
+        timeout: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Execute generated code in a child process with no parent secrets."""
+        return await self._execute_subprocess(code, context, timeout or self.timeout)
+
+    async def _execute_subprocess(
+        self, code: str, context: Optional[Dict], timeout: int
+    ) -> Dict[str, Any]:
+        start = time.time()
+        self._access_failure = None
+        before = self._snapshot_output()
+        parent_socket, child_socket = socket.socketpair()
+        safe_context = {
+            key: value for key, value in (context or {}).items()
+            if key in {"task", "system", "workflow_id", "step_id", "prior_outputs"}
+        }
+        request = {
+            "code": code, "context": safe_context,
+            "workspace": str(self.workspace), "output_dir": str(self.output_dir),
+            "bash_timeout": self._bash.timeout, "rpc_fd": child_socket.fileno(),
+        }
+        command_dirs = {
+            str(Path(found).parent)
+            for command in _BASH_ALLOW_LIST
+            if (found := shutil.which(command)) is not None
+        }
+        command_dirs.add(str(Path(sys.executable).parent))
+        safe_env = {
+            "PATH": os.pathsep.join(sorted(command_dirs)),
+            "HOME": str(self.workspace),
+            "TMPDIR": str(self.workspace / ".tmp"),
+            "LANG": "C.UTF-8",
+            "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+        }
+        Path(safe_env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "jarviscore.execution.sandbox_worker",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, env=safe_env,
+            pass_fds=(child_socket.fileno(),), start_new_session=True,
+        )
+        child_socket.close()
+        rpc_task = asyncio.create_task(self._serve_child_rpc(parent_socket, context or {}))
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(json.dumps(request).encode()), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return self._to_sandbox_dict(CoderResult(
+                success=False, error=f"Coder execution timed out after {timeout}s",
+                error_type="ExecutionTimeout", execution_time=time.time() - start,
+            ))
+        finally:
+            parent_socket.close()
+            await asyncio.gather(rpc_task, return_exceptions=True)
+
+        if process.returncode != 0:
+            return self._to_sandbox_dict(CoderResult(
+                success=False, error=stderr.decode(errors="replace")[-2000:] or "Sandbox child failed.",
+                error_type="SandboxProcessError", execution_time=time.time() - start,
+            ))
+        try:
+            response = json.loads(stdout)
+        except Exception:
+            response = {"error": "Sandbox child returned an invalid response.", "error_type": "SandboxProtocolError"}
+        if response.get("error"):
+            cr = CoderResult(
+                success=False, stdout=response.get("stdout", ""),
+                error=response["error"], error_type=response.get("error_type"),
+                execution_time=time.time() - start,
+            )
+        else:
+            cr = self._parse_result(response.get("result"), response.get("stdout", ""), time.time() - start)
+            await self._collect_artifacts(cr, before)
+        return self._to_sandbox_dict(cr)
+
+    async def _serve_child_rpc(self, sock: socket.socket, context: Dict[str, Any]) -> None:
+        sock.setblocking(False)
+        reader, writer = await asyncio.open_connection(sock=sock)
+        try:
+            while line := await reader.readline():
+                request = json.loads(line)
+                try:
+                    if request["operation"] == "nexus_call":
+                        payload = request["payload"]
+                        method = str(payload.get("method") or "GET").upper()
+                        mutation = context.get("_mutation_authority")
+                        if method not in {"GET", "HEAD", "OPTIONS"} and not (
+                            isinstance(mutation, dict)
+                            and mutation.get("atom")
+                            and mutation.get("action_id")
+                        ):
+                            raise RuntimeError(
+                                "Provider mutations must use a registered atom with "
+                                "declared policy and idempotency identity."
+                            )
+                        requested_provider = payload.get("provider")
+                        provider = str(
+                            requested_provider
+                            or context.get("_nexus_provider")
+                            or ""
+                        ).strip().lower()
+                        connection_id = context.get("_nexus_connection_id")
+                        if requested_provider and self._nexus_call_proxy:
+                            connection_id = self._nexus_call_proxy.connection_handle(provider)
+                        if not self._nexus_call_proxy or not connection_id:
+                            raise RuntimeError("No provider account is connected for this task.")
+                        call = self._recording_nexus_call(
+                            lambda method, url, **kwargs: self._nexus_call_proxy.call(
+                                connection_id, method, url, **kwargs
+                            ),
+                            provider or str(connection_id),
+                        )
+                        result = await call(
+                            method, payload["url"], **payload.get("kwargs", {})
+                        )
+                    elif request["operation"] == "fetch_artifact":
+                        if self.blob_storage is None:
+                            raise RuntimeError("No blob storage is configured.")
+                        import base64
+                        content = await self.blob_storage.read(request["payload"]["key"])
+                        if content is None:
+                            raise FileNotFoundError(request["payload"]["key"])
+                        if isinstance(content, str):
+                            content = content.encode()
+                        result = {"content": base64.b64encode(content).decode("ascii")}
+                    elif request["operation"] == "mesh_list_peers":
+                        if self._mesh_proxy is None:
+                            raise RuntimeError("No mesh is attached to this agent.")
+                        result = self._mesh_proxy.list_peers()
+                        if hasattr(result, "__await__"):
+                            result = await result
+                    elif request["operation"] == "mesh_delegate":
+                        if self._mesh_proxy is None:
+                            raise RuntimeError("No mesh is attached to this agent.")
+                        payload = request["payload"]
+                        result = await self._mesh_proxy.delegate(
+                            to=str(payload.get("to") or ""),
+                            task=str(payload.get("task") or ""),
+                            context=payload.get("context"),
+                            capability=payload.get("capability"),
+                            timeout=payload.get("timeout"),
+                        )
+                    else:
+                        raise RuntimeError("Unknown sandbox RPC operation.")
+                    response = {"id": request["id"], "result": self._rpc_jsonable(result)}
+                except Exception as exc:
+                    response = {"id": request.get("id"), "error": str(exc), "error_type": type(exc).__name__}
+                writer.write((json.dumps(response) + "\n").encode())
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    @staticmethod
+    def _rpc_jsonable(value: Any) -> Any:
+        import base64
+        if isinstance(value, bytes):
+            return {"__bytes__": base64.b64encode(value).decode("ascii")}
+        if isinstance(value, dict):
+            return {str(key): CoderSandbox._rpc_jsonable(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [CoderSandbox._rpc_jsonable(item) for item in value]
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        return str(value)
+
+    async def _execute_local(
         self,
         code: str,
         context: Optional[Dict] = None,
@@ -375,9 +610,10 @@ class CoderSandbox:
         timeout = timeout or self.timeout
         start = time.time()
 
-        self.output_dir.mkdir(parents=True, exist_ok=True)  # sandbox output dir created here
+        self._access_failure = None
         namespace = self._build_namespace(context)
         stdout_capture = io.StringIO()
+        before = self._snapshot_output()
 
         try:
             # Syntax check before execution
@@ -420,8 +656,9 @@ class CoderSandbox:
                 )
                 return self._to_sandbox_dict(cr)
 
-            raw = namespace.get("result") or {}
+            raw = namespace.get("result")
             cr = self._parse_result(raw, stdout_capture.getvalue(), time.time() - start)
+            await self._collect_artifacts(cr, before)
             return self._to_sandbox_dict(cr)
 
         except asyncio.TimeoutError:
@@ -479,10 +716,17 @@ class CoderSandbox:
         try:
             with redirect_stdout(stdout_capture):
                 exec(code, namespace)  # noqa: S102
+                entry = None
                 if "main" in namespace and callable(namespace["main"]):
-                    await namespace["main"]()
+                    entry = namespace["main"]
                 elif "run" in namespace and callable(namespace["run"]):
-                    await namespace["run"]()
+                    entry = namespace["run"]
+                if entry is not None:
+                    returned = await entry()
+                    # What the entry point returns is the outcome. Code that
+                    # assigns `result` itself still wins when it returns nothing.
+                    if returned is not None:
+                        namespace["result"] = returned
             return {}
         except Exception as e:
             return {"error": str(e), "error_type": type(e).__name__}
@@ -539,6 +783,29 @@ class CoderSandbox:
             p.parent.mkdir(parents=True, exist_ok=True)
             return p
 
+        storage = self.blob_storage
+
+        async def fetch_artifact(key: str) -> Path:
+            """Bring an artifact from a previous run back into this workspace.
+
+            Long-horizon work needs yesterday's output to still be reachable,
+            wherever the developer configured storage to be.
+            """
+            if storage is None:
+                raise RuntimeError(
+                    "No blob storage is configured, so artifacts from earlier "
+                    "runs cannot be fetched. Configure one on the mesh."
+                )
+            content = await storage.read(key)
+            if content is None:
+                raise FileNotFoundError(f"No artifact stored at {key!r}")
+            local = blob_path(key.rsplit("/", 1)[-1])
+            if isinstance(content, str):
+                local.write_text(content, encoding="utf-8")
+            else:
+                local.write_bytes(content)
+            return local
+
         namespace = {
             "__builtins__": builtins,
             "result": None,
@@ -547,6 +814,7 @@ class CoderSandbox:
             "workspace": workspace,
             "output_dir": output_dir,
             "blob_path": blob_path,
+            "fetch_artifact": fetch_artifact,
 
             # Controlled execution tools
             "bash": bash,
@@ -555,7 +823,7 @@ class CoderSandbox:
             # Standard library convenience
             "Path": pathlib.Path,
             "json": json,
-            "os": os,
+            "os": _SealedOS(),
             "re": _re,
             "sys": sys,
             "datetime": datetime,
@@ -574,15 +842,18 @@ class CoderSandbox:
         _conn_id = (context or {}).get("_nexus_connection_id") if context else None
         if self._nexus_call_proxy and _conn_id:
             from jarviscore.nexus.call_proxy import NexusCallProxy
-            namespace["nexus_call"] = NexusCallProxy.make_nexus_call_fn(
-                self._nexus_call_proxy, _conn_id
+            namespace["nexus_call"] = self._recording_nexus_call(
+                NexusCallProxy.make_nexus_call_fn(self._nexus_call_proxy, _conn_id),
+                str((context or {}).get("_nexus_provider") or _conn_id),
             )
         else:
             # No Nexus connection available — inject a stub that raises clearly
             async def _nexus_unavailable(method: str, url: str, **kwargs):
                 raise RuntimeError(
-                    "nexus_call is not available: no Nexus connection_id for this task. "
-                    "Ensure NEXUS_GATEWAY_URL is set and the agent task specifies a 'system'."
+                    "No provider account is connected for this task, so this call "
+                    "cannot be signed. Name the provider you need with "
+                    "write_code(system=...), and if it is registered but not yet "
+                    "connected, request_access will ask someone to approve it."
                 )
             namespace["nexus_call"] = _nexus_unavailable
 
@@ -617,6 +888,7 @@ class CoderSandbox:
         We satisfy that contract while also promoting CoderResult-specific
         fields to the top level so Coder.execute_task() can read them directly.
         """
+        cr.access_failure = cr.access_failure or getattr(self, "_access_failure", None)
         d = cr.to_dict()
         return {
             # SandboxExecutor contract (what CoderSubAgent reads)
@@ -624,6 +896,7 @@ class CoderSandbox:
             "output":         d,           # full CoderResult dict lives here
             "error":          cr.error,
             "error_type":     cr.error_type,
+            "access_failure": cr.access_failure,
             "execution_time": cr.execution_time,
             "mode":           "coder_sandbox",
             # Promoted fields (convenience for Coder.execute_task())
@@ -632,11 +905,96 @@ class CoderSandbox:
             "git_branch":     cr.git_branch,
             "data":           cr.data,
             "stdout":         cr.stdout,
+            "artifacts":      cr.artifacts,
         }
+
+    def _recording_nexus_call(self, call_fn, provider: str):
+        """Wrap nexus_call so a refusal at the credential boundary is kept as fact."""
+        from jarviscore.nexus.hosts import HostNotAllowed
+        from jarviscore.nexus.strategy import StrategyError
+
+        async def nexus_call(method: str, url: str, **kwargs):
+            try:
+                response = await call_fn(method, url, **kwargs)
+            except StrategyError as exc:
+                self._access_failure = {
+                    "kind": "no_usable_credential",
+                    "provider": provider,
+                    "detail": str(exc),
+                }
+                raise
+            except HostNotAllowed as exc:
+                self._access_failure = {
+                    "kind": "destination_not_owned_by_provider",
+                    "provider": provider,
+                    "detail": str(exc),
+                }
+                raise
+            if not response.get("ok") and response.get("status_code") in (401, 403):
+                # Evidence, not a verdict: the credential was formed and placed,
+                # and the provider rejected it. What that means is decided with
+                # the connection state, not here.
+                self._access_failure = {
+                    "kind": "provider_rejected_credential",
+                    "provider": provider,
+                    "status_code": response.get("status_code"),
+                    "detail": str(response.get("body") or "")[:400],
+                }
+            return response
+
+        return nexus_call
 
     # ─────────────────────────────────────────────────────────────
     # Result Parsing
     # ─────────────────────────────────────────────────────────────
+
+    #: Keys that only this sandbox's result contract uses. `success` and `error`
+    #: are excluded on purpose: atoms return those as part of their own answer.
+    _ENVELOPE_KEYS = frozenset({
+        "files_created", "files_modified", "git_branch", "data", "error_type", "stdout",
+    })
+
+    def _snapshot_output(self) -> Dict[str, float]:
+        """Modification times under output_dir, to tell apart what a run produced."""
+        snapshot = {}
+        for path in self.output_dir.rglob("*"):
+            if path.is_file():
+                snapshot[str(path)] = path.stat().st_mtime_ns
+        return snapshot
+
+    async def _collect_artifacts(self, cr: "CoderResult", before: Dict[str, float]) -> None:
+        """Hand what the run produced to storage, and report it as a handle.
+
+        An agent that downloads a file has to be able to say what it produced
+        and reach it again in a later run. Reporting is observed rather than
+        declared, because code that forgets to list a file has still made one.
+        """
+        after = self._snapshot_output()
+        produced = [p for p, stamp in after.items() if before.get(p) != stamp]
+        if not produced:
+            return
+
+        for path in sorted(produced):
+            local = Path(path)
+            record: Dict[str, Any] = {
+                "name": str(local.relative_to(self.output_dir)),
+                "path": str(local),
+                "bytes": local.stat().st_size,
+                "key": None,
+            }
+            if self.blob_storage is not None:
+                key = f"{self.artifact_prefix}/{record['name']}"
+                try:
+                    await self.blob_storage.save(key, local.read_bytes())
+                    record["key"] = key
+                except Exception as exc:  # noqa: BLE001 - storage must not fail the run
+                    logger.warning("Could not store artifact %s: %s", key, exc)
+                    record["error"] = str(exc)
+            cr.artifacts.append(record)
+            if path not in before:
+                cr.files_created.append(path)
+            elif path not in cr.files_modified:
+                cr.files_modified.append(path)
 
     def _parse_result(
         self,
@@ -661,6 +1019,19 @@ class CoderSandbox:
 
         if not isinstance(raw, dict):
             return CoderResult(success=True, data=raw, stdout=stdout, execution_time=elapsed)
+
+        # A dict is only this sandbox's envelope when it carries a key that
+        # belongs to the envelope. An atom returns its own answer shape, often
+        # with `success` and `error` of its own, and reading `data` out of that
+        # would discard the very thing that was asked for.
+        if not (raw.keys() & self._ENVELOPE_KEYS):
+            return CoderResult(
+                success=bool(raw.get("success", True)),
+                data=raw,
+                stdout=stdout,
+                error=raw.get("error"),
+                execution_time=elapsed,
+            )
 
         # Normalise file lists — accept str or list
         def _as_list(val) -> List[str]:
@@ -743,6 +1114,9 @@ def create_coder_sandbox(
     timeout: int = 300,
     bash_timeout: int = 120,
     nexus_call_proxy=None,  # Optional[NexusCallProxy] — wires nexus_call() into sandbox
+    mesh_proxy=None,
+    blob_storage=None,      # Optional[BlobStorage] — where a run's files end up
+    artifact_prefix: str = "artifacts",
 ) -> CoderSandbox:
     """
     Create a CoderSandbox scoped to the given workspace directory.
@@ -764,4 +1138,7 @@ def create_coder_sandbox(
         timeout=timeout,
         bash_timeout=bash_timeout,
         nexus_call_proxy=nexus_call_proxy,
+        mesh_proxy=mesh_proxy,
+        blob_storage=blob_storage,
+        artifact_prefix=artifact_prefix,
     )

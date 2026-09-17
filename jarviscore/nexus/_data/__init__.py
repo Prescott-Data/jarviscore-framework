@@ -10,6 +10,11 @@ broker DB with the correct auth/token endpoints without needing the
 broker binary's catalog.
 """
 
+# Google issues a refresh token only when the authorization request says the
+# app will work while the user is away. Without these two, every token dies at
+# sixty minutes and the only way back is another consent screen.
+_GOOGLE_OFFLINE = {"access_type": "offline", "prompt": "consent"}
+
 PROVIDER_URLS: dict = {
     "linkedin": {
         "auth_url":          "https://www.linkedin.com/oauth/v2/authorization",
@@ -31,21 +36,25 @@ PROVIDER_URLS: dict = {
         "token_url":         "https://oauth2.googleapis.com/token",
         "user_info_endpoint":"https://www.googleapis.com/oauth2/v3/userinfo",
         "issuer":            "https://accounts.google.com",
+        "params":            _GOOGLE_OFFLINE,
     },
     "google_sheets": {
         "auth_url":          "https://accounts.google.com/o/oauth2/v2/auth",
         "token_url":         "https://oauth2.googleapis.com/token",
         "user_info_endpoint":"https://www.googleapis.com/oauth2/v3/userinfo",
+        "params":            _GOOGLE_OFFLINE,
     },
     "google_drive": {
         "auth_url":          "https://accounts.google.com/o/oauth2/v2/auth",
         "token_url":         "https://oauth2.googleapis.com/token",
         "user_info_endpoint":"https://www.googleapis.com/oauth2/v3/userinfo",
+        "params":            _GOOGLE_OFFLINE,
     },
     "google_calendar": {
         "auth_url":          "https://accounts.google.com/o/oauth2/v2/auth",
         "token_url":         "https://oauth2.googleapis.com/token",
         "user_info_endpoint":"https://www.googleapis.com/oauth2/v3/userinfo",
+        "params":            _GOOGLE_OFFLINE,
     },
     "hubspot": {
         "auth_url":          "https://app.hubspot.com/oauth/authorize",

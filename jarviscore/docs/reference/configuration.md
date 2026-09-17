@@ -1,5 +1,7 @@
 ---
 icon: material/tune
+title: "JarvisCore Environment Configuration Reference"
+description: "Configure LLM providers, Redis, storage, Nexus, observability, peer-to-peer networking, browser automation, and sandbox execution."
 ---
 
 # Configuration Reference
@@ -12,13 +14,14 @@ This is the complete reference for all JarvisCore environment variables. Copy `.
 
 Configure exactly one LLM provider. JarvisCore auto-detects the active provider from the environment variables present. The promotional provider is selected first when its token is present. The existing provider order after it is Azure → Claude → vLLM → Gemini → Vertex AI.
 
-### JarvisCore launch promotion
+### Existing Prescott promotional entitlement
 
-Eligible developers can register at `https://jarviscore.developers.prescottdata.io/promo/`
-and set `JARVISCORE_PROMO_TOKEN`. This is a limited, revocable Prescott
-entitlement token—not an upstream model-provider API key. Promotional access is
-selected first when configured. Expiry, exhaustion, and service errors fail
-explicitly and never silently fall through to another configured paid provider.
+Organizations that already received a Prescott promotional entitlement can set
+`JARVISCORE_PROMO_TOKEN`. This is a limited, revocable entitlement token, not an
+upstream model-provider API key. There is currently no public self-service
+enrollment page. Promotional access is selected first when configured. Expiry,
+exhaustion, and service errors fail explicitly and never silently fall through
+to another configured paid provider.
 
 Every promotional call preserves the complete request and HTTP response under a
 stable call ID in `./.jarviscore/traces/promo_calls`. Set
@@ -50,7 +53,7 @@ stable call ID in `./.jarviscore/traces/promo_calls`. Set
     | `AZURE_API_KEY` | Yes | (none) | Azure OpenAI API key |
     | `AZURE_ENDPOINT` | Yes | (none) | Resource endpoint, e.g. `https://your-resource.openai.azure.com/` |
     | `AZURE_DEPLOYMENT` | Yes | (none) | Deployment name, e.g. `gpt-4o` |
-    | `AZURE_API_VERSION` | No | `2024-02-15-preview` | API version string |
+    | `AZURE_API_VERSION` | No | `2024-10-21` | Azure OpenAI dated GA data-plane API version; override when your deployment requires another supported version |
 
 === "Local / vLLM"
 
@@ -123,6 +126,23 @@ Start Redis locally for development:
 docker run -d -p 6379:6379 redis:7-alpine
 ```
 
+### Distributed goal configuration
+
+These values are `Mesh(config={...})` keys, not environment variables:
+
+| Key | Default | Description |
+|---|---|---|
+| `distributed_poll_interval` | `2.0` | Redis DAG polling interval in seconds |
+| `distributed_claim_lease_seconds` | `60` | Renewable execution-claim lease duration |
+| `mesh_planning_lease_seconds` | `300` | Initial planning and amendment lease duration |
+| `mesh_max_reconciliation_revisions` | `3` | Bounded automatic semantic revisions |
+| `mesh_response_capability` | `None` | Capability authorized for the optional final response |
+| `execution_budget` | framework defaults | Shared `max_seconds`, `max_steps`, `max_replans`, `max_tokens`, `max_peer_depth` and `peer_timeout_seconds` |
+
+Caller task context cannot override execution authority or the workflow budget.
+All nodes sharing one distributed DAG should run the same JarvisCore minor
+version. See [Durable Goal Execution](../guides/goal-execution.md).
+
 ---
 
 ## Memory: Athena MemOS
@@ -182,6 +202,21 @@ AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
 ---
 
 ## Search
+
+### Provider deadlines
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESEARCH_GROUNDED_TIMEOUT_SECONDS` | `45` | Per-call deadline for Google Grounded (generative search) |
+| `RESEARCH_SEARCH_TIMEOUT_SECONDS` | `15` | Per-call deadline for each other search provider |
+
+Both `InternetSearch` implementations accept `grounded_timeout_seconds` and
+`search_timeout_seconds` keyword arguments, which take precedence over these
+environment variables. Values must be positive finite seconds. For example,
+`InternetSearch(grounded_timeout_seconds=60, search_timeout_seconds=20)`.
+These deadlines bound each provider including its retries; existing HTTP-request
+timeouts still apply. They do not change agent leases or the overall task budget.
+Timeout diagnostics identify the provider, exception type and configured deadline.
 
 JarvisCore runs multiple search providers in parallel and merges results. All providers have circuit breakers: a failing provider is skipped automatically. See the [Internet Search guide](../guides/internet-search.md) for provider details, ranking logic, and usage patterns.
 
@@ -266,15 +301,15 @@ Enables multi-node agent discovery and message routing using the SWIM gossip pro
 
 | Variable | Default | Description |
 |---|---|---|
-| `P2P_ENABLED` | `false` | Activates the SWIM coordinator and ZMQ transport |
-| `JC_SWIM_HOST` | `0.0.0.0` | Bind address; `0.0.0.0` listens on all interfaces |
-| `JC_SWIM_PORT` | `7946` | SWIM gossip port; must be unique per node on the same machine |
-| `JC_SEED_NODES` | (none) | Comma-separated list of seed node addresses, e.g. `10.0.0.1:7946,10.0.0.2:7946` |
+| `P2P_ENABLED` | `true` | Enables SWIM/ZMQ when the optional `p2p` dependencies are installed; set `false` to force local-only peers |
+| `JARVISCORE_BIND_HOST` | `127.0.0.1` | Per-process bind address; use `0.0.0.0` for a node reachable from other machines |
+| `JARVISCORE_BIND_PORT` | `7946` | Per-process SWIM gossip port; ZMQ uses this port plus `1000` |
+| `JARVISCORE_SEED_NODES` | (none) | Comma-separated seed addresses, for example `10.0.0.1:7946,10.0.0.2:7946` |
 
 !!! warning "Port uniqueness"
-    `JC_SWIM_PORT` must be different for each node running on the same machine. The ZMQ data port is set automatically to `JC_SWIM_PORT + 1000`.
+    `JARVISCORE_BIND_PORT` must be different for each node running on the same machine. The ZMQ data port is set automatically to `JARVISCORE_BIND_PORT + 1000`.
 
-The seed node does not set `JC_SEED_NODES`. All other nodes point at the seed node (or any other live node) to join the cluster.
+The seed node does not set `JARVISCORE_SEED_NODES`. All other nodes point at the seed node (or any other live node) to join the cluster. Keep these bind settings per process rather than in a shared `.env` file.
 
 ---
 

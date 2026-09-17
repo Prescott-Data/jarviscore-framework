@@ -65,11 +65,11 @@ class TestPolicyDisabled:
 
 class TestPolicyConfidence:
 
-    def test_low_confidence_triggers(self):
+    def test_low_confidence_never_triggers(self):
         policy = AdaptiveHITLPolicy(enabled=True, max_confidence=0.8)
         should, reason = policy.should_escalate(confidence=0.5)
-        assert should is True
-        assert "low_confidence" in reason
+        assert should is False
+        assert reason == ""
 
     def test_high_confidence_passes(self):
         policy = AdaptiveHITLPolicy(enabled=True, max_confidence=0.8)
@@ -85,11 +85,11 @@ class TestPolicyConfidence:
 
 class TestPolicyRiskScore:
 
-    def test_high_risk_triggers(self):
+    def test_untyped_high_risk_never_triggers(self):
         policy = AdaptiveHITLPolicy(enabled=True, min_risk_score=0.7)
         should, reason = policy.should_escalate(risk_score=0.9)
-        assert should is True
-        assert "high_risk" in reason
+        assert should is False
+        assert reason == ""
 
     def test_low_risk_passes(self):
         policy = AdaptiveHITLPolicy(enabled=True, min_risk_score=0.7)
@@ -105,25 +105,40 @@ class TestPolicyRiskScore:
 
 class TestPolicyReasonCodes:
 
-    def test_matching_reason_code_triggers(self):
+    def test_explicit_critical_action_triggers(self):
         policy = AdaptiveHITLPolicy(
-            enabled=True, reason_codes=["destructive_action", "external_api"]
+            enabled=True, reason_codes=["critical_action"]
         )
-        should, reason = policy.should_escalate(reason_code="destructive_action")
+        should, reason = policy.should_escalate(reason_code="critical_action")
         assert should is True
-        assert "reason_code:destructive_action" in reason
+        assert "category:critical_action" in reason
 
     def test_non_matching_reason_code_passes(self):
         policy = AdaptiveHITLPolicy(
-            enabled=True, reason_codes=["destructive_action"]
+            enabled=True, reason_codes=["critical_action"]
         )
         should, _ = policy.should_escalate(reason_code="safe_action")
         assert should is False
 
-    def test_empty_reason_codes_list(self):
+    def test_data_required_needs_exhaustion_and_human_exclusivity(self):
         policy = AdaptiveHITLPolicy(enabled=True, reason_codes=[])
-        should, _ = policy.should_escalate(reason_code="anything")
+        should, _ = policy.should_escalate(reason_code="data_required")
         assert should is False
+        should, reason = policy.should_escalate(
+            reason_code="data_required",
+            autonomous_paths_exhausted=True,
+            human_exclusive=True,
+        )
+        assert should is True
+        assert reason == "category:data_required"
+
+    def test_execution_failure_is_not_a_human_category(self):
+        policy = AdaptiveHITLPolicy(enabled=True)
+        should, reason = policy.should_escalate(
+            reason_code="execution_failure", confidence=0.1, risk_score=0.99
+        )
+        assert should is False
+        assert reason == ""
 
 
 class TestPolicyNoTriggers:

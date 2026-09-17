@@ -45,6 +45,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+class AthenaWriteRejected(RuntimeError):
+    """Athena accepted the request and declined to store the event."""
+
 # Event types mirroring Athena's STMEventType
 ROLE_AGENT  = "agent"
 ROLE_USER   = "user"
@@ -78,12 +82,14 @@ class AthenaClient:
         timeout: float = 10.0,
         api_key: Optional[str] = None,
         jwt_token: Optional[str] = None,
+        session_ttl_days: int = 30,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._tenant_id = tenant_id
         self._timeout = timeout
         self._api_key = api_key
         self._jwt_token = jwt_token
+        self._session_ttl_seconds = max(1, int(session_ttl_days)) * 86400
         self._client = None  # lazy-init httpx.AsyncClient
 
     @classmethod
@@ -114,6 +120,7 @@ class AthenaClient:
             timeout=timeout,
             api_key=os.getenv("ATHENA_API_KEY") or None,
             jwt_token=os.getenv("ATHENA_JWT_TOKEN") or None,
+            session_ttl_days=int(os.getenv("ATHENA_SESSION_TTL_DAYS", "30")),
         )
 
     async def _http(self):
@@ -235,6 +242,7 @@ class AthenaClient:
         resolved_user_id = user_id or agent_id
         redis_key = f"athena_session:{self._tenant_id}:{resolved_user_id}:{agent_id}"
         legacy_redis_key = f"athena_session:{agent_id}"
+        session_ttl = self._session_ttl_seconds
 
         # 1. Try Redis cache
         if redis_store:
@@ -243,10 +251,18 @@ class AthenaClient:
                 if not cached:
                     cached = redis_store._redis.get(legacy_redis_key)
                     if cached:
-                        redis_store._redis.set(redis_key, cached, ex=30 * 86400)
-                if cached:
+                        redis_store._redis.set(redis_key, cached, ex=session_ttl)
+                if cached and await self.session_exists(cached):
                     logger.debug(f"[Athena] Reusing session for '{agent_id}': {cached}")
                     return cached
+                if cached:
+                    # Athena no longer has it — reusing the id writes into a void
+                    # that nothing reports, so mint a new one and replace the
+                    # mapping rather than keep a pointer to nothing (#128).
+                    logger.info(
+                        "[Athena] Cached session %s for '%s' no longer exists; recreating",
+                        cached, agent_id,
+                    )
             except Exception:
                 pass
 
@@ -257,14 +273,29 @@ class AthenaClient:
         if not session_id:
             return None
 
-        # 3. Cache in Redis (TTL = 30 days so sessions are very long-lived)
+        # 3. Cache in Redis (TTL from athena_session_ttl_days)
         if redis_store:
             try:
-                redis_store._redis.set(redis_key, session_id, ex=30 * 86400)
+                redis_store._redis.set(redis_key, session_id, ex=session_ttl)
             except Exception:
                 pass
 
         return session_id
+
+    async def session_exists(self, session_id: str) -> bool:
+        """Whether Athena still holds this session.
+
+        Unreachable is not the same as deleted, so a transport failure answers
+        True: discarding a good session id because the network blinked would
+        scatter one agent's memory across new sessions.
+        """
+        try:
+            http = await self._http()
+            resp = await http.get(f"/api/v1/sessions/{session_id}")
+        except Exception as exc:
+            logger.debug(f"[Athena] session_exists unreachable for {session_id}: {exc}")
+            return True
+        return resp.status_code != 404
 
     # ── Memory Writes ─────────────────────────────────────────────────────────
 
@@ -382,36 +413,72 @@ class AthenaClient:
         payload: Optional[bytes],
         mime_type: Optional[str],
     ) -> Optional[Dict[str, Any]]:
-        if payload is not None and not mime_type:
-            raise ValueError("mime_type is required when payload is provided")
         try:
-            http = await self._http()
-            request: Dict[str, Any] = {
-                "session_id": session_id,
-                "role": role,
-                "type": event_type,
-                "content": content,
-                "metadata": {
-                    "tenant_id": self._tenant_id,
-                    "origin_service": "jarviscore",
-                    **(metadata or {}),
-                },
-            }
-            serialized_timestamp = _rfc3339(timestamp)
-            if serialized_timestamp:
-                request["timestamp"] = serialized_timestamp
-            if payload is not None:
-                request["payload"] = base64.b64encode(payload).decode("ascii")
-                request["mime_type"] = mime_type
-            resp = await http.post(
-                f"/api/v1/sessions/{session_id}/events", json=request
+            return await self.write_event(
+                session_id,
+                role,
+                event_type,
+                content,
+                metadata,
+                timestamp=timestamp,
+                payload=payload,
+                mime_type=mime_type,
             )
-            resp.raise_for_status()
-            data = resp.json()
-            return data if data.get("success", True) else None
+        except ValueError:
+            raise
         except Exception as exc:
             logger.warning(f"[Athena] store_event failed: {exc}")
             return None
+
+    async def write_event(
+        self,
+        session_id: str,
+        role: str,
+        event_type: str,
+        content: str,
+        metadata: Optional[Dict[str, str]] = None,
+        *,
+        timestamp: Optional[datetime | str] = None,
+        payload: Optional[bytes] = None,
+        mime_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Store an event, raising on failure.
+
+        ``store_event`` reports a failed write as ``False`` and moves on, which
+        is why an unreachable Athena looked identical to a working one. A caller
+        that intends to retry, count or alert needs the failure itself, so this
+        is the path the durable outbox uses (#128).
+        """
+        if payload is not None and not mime_type:
+            raise ValueError("mime_type is required when payload is provided")
+        http = await self._http()
+        request: Dict[str, Any] = {
+            "session_id": session_id,
+            "role": role,
+            "type": event_type,
+            "content": content,
+            "metadata": {
+                "tenant_id": self._tenant_id,
+                "origin_service": "jarviscore",
+                **(metadata or {}),
+            },
+        }
+        serialized_timestamp = _rfc3339(timestamp)
+        if serialized_timestamp:
+            request["timestamp"] = serialized_timestamp
+        if payload is not None:
+            request["payload"] = base64.b64encode(payload).decode("ascii")
+            request["mime_type"] = mime_type
+        resp = await http.post(
+            f"/api/v1/sessions/{session_id}/events", json=request
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("success", True):
+            raise AthenaWriteRejected(
+                f"Athena rejected the event for session {session_id}: {data}"
+            )
+        return data
 
     # ── Memory Reads ──────────────────────────────────────────────────────────
 

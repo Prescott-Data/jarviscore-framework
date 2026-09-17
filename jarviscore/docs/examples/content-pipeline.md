@@ -1,5 +1,7 @@
 ---
 icon: material/text-box-edit
+title: "Multi-Agent Content Production Pipeline Example"
+description: "Run four CustomAgent specialists in a deterministic content workflow with research, drafting, SEO review, Redis memory, and publishing."
 ---
 
 # Content Production Pipeline

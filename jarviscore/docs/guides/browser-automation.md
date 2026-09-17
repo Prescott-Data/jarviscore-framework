@@ -1,5 +1,7 @@
 ---
 icon: material/web
+title: "AI Browser Automation with Playwright and Computer Use"
+description: "Automate navigation, forms, and JavaScript-heavy websites with BrowserSubAgent using computer-use and multimodal language models."
 ---
 
 # Browser Automation

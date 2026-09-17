@@ -13,7 +13,7 @@ Tier availability:
 """
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .scratchpad import WorkingScratchpad
 from .episodic import EpisodicLedger
@@ -102,9 +102,24 @@ class UnifiedMemory:
                 redis_store=self._redis,
             )
         except Exception as exc:
+            # Athena restarting is a condition to recover from, not a reason to
+            # disable the tier for the life of the process. The client's breaker
+            # keeps the retry cheap while it is down (#128).
             logger.warning("[UnifiedMemory] Athena init failed (non-fatal): %s", exc)
-            self._athena_client = None   # disable so we don't retry on every turn
         return self._athena_memory
+
+    @property
+    def athena_delivery_stats(self) -> Optional[Dict[str, Any]]:
+        """Delivery counters for the Athena tier, or None when it is not active."""
+        if self._athena_memory is None:
+            return None
+        return self._athena_memory.delivery_stats
+
+    async def close(self, timeout: float = 5.0) -> bool:
+        """Flush queued memory writes. False if anything was still unsent."""
+        if self._athena_memory is None:
+            return True
+        return await self._athena_memory.close(timeout=timeout)
 
 
     async def log_turn(
@@ -145,16 +160,45 @@ class UnifiedMemory:
         if self.episodic:
             await self.episodic.append(entry)
 
-        # ── Tier 4: Athena STM write ──────────────────────────────────────────
+        # Athena is cross-session memory, and a turn is not a memory. Writing
+        # every intermediate thought there made a mid-run diagnosis of a bug
+        # ("Drive calls are blocked") outlive the bug and return as a premise the
+        # next day. Turns stay in the scratchpad and ledger for recovery within a
+        # session; Athena receives outcomes and what the agent chose to remember.
+
+    async def remember(self, fact: str, kind: str = "fact", **metadata: str) -> bool:
+        """Keep something the agent decided is worth knowing next time.
+
+        The agent is the memory lifecycle: it chooses what deserves to persist.
+        Returns False when no cross-session tier is available, so the caller can
+        say so instead of believing something was kept.
+        """
         am = await self._get_athena_memory()
-        if am:
-            try:
-                if thought:
-                    await am.record_thought(thought[:500])
-                outcome = f"{action}: {result[:300]}" if result else action
-                await am.record_action(outcome)
-            except Exception as exc:
-                logger.debug("[UnifiedMemory] Athena log_turn write failed (non-fatal): %s", exc)
+        if not am:
+            return False
+        try:
+            await am.record_observation(
+                fact, metadata={"event": "remembered", "kind": kind, **metadata}
+            )
+            return True
+        except Exception as exc:
+            logger.debug("[UnifiedMemory] remember failed (non-fatal): %s", exc)
+            return False
+
+    async def recall(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """What earlier sessions hold that bears on this, scored by relevance.
+
+        A question, not a dump: the last N things the agent thought about
+        anything are not what it needs to know about this.
+        """
+        am = await self._get_athena_memory()
+        if not am:
+            return []
+        try:
+            return await am.search(query, limit=limit)
+        except Exception as exc:
+            logger.debug("[UnifiedMemory] recall failed (non-fatal): %s", exc)
+            return []
 
 
     async def save_checkpoint(self, state_json: str) -> None:

@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>The production runtime for multi-agent systems — a peer-to-peer mesh with no central orchestrator, zero-trust credentials, durable state that survives <code>kill -9</code>, and 1,224 typed atoms across 150 services. Observability included, not upsold.</strong>
+  <strong>The production runtime for multi-agent systems — a peer-to-peer mesh with no central orchestrator, zero-trust credentials, durable state that survives <code>kill -9</code>, and a built-in catalog of typed integration atoms. Observability included, not upsold.</strong>
 </p>
 
 <p align="center">
@@ -17,6 +17,15 @@
 ```bash
 pip install jarviscore-framework
 ```
+
+<p align="center">
+  <img src="jarviscore/docs/assets/mesh_demo.gif" alt="4 agents in 4 separate processes discover each other over SWIM gossip, claim research steps from a shared ledger, research the live web, and deliver the synthesized brief to Slack through the encrypted credential vault" width="820" />
+</p>
+<p align="center">
+  <sub>4 agents, 4 separate processes, no MCP, no orchestrator. They discover each other over SWIM gossip, claim steps from a shared ledger,<br/>
+  research the live web, and deliver the brief to Slack — the token never visible to agent code, resolved by the encrypted vault at the call boundary.<br/>
+  Real run, time compressed — <a href="https://github.com/Prescott-Data/jarviscore-framework/releases/download/v1.5.1/mesh_demo_full.mp4">full 4-minute narrated video</a> · reproduce it with <a href="examples/demo_synthesizer.py"><code>examples/demo_synthesizer.py</code></a> + <code>demo_node_1/2/3.py</code></sub>
+</p>
 
 <p align="center">
   <img src="jarviscore/docs/assets/demo.gif" alt="7-agent investment committee evaluates a $1.5M position; the process is kill -9'd mid-deliberation, rerun with the same workflow id, and finishes without re-running the four analysts" width="820" />
@@ -35,7 +44,7 @@ Six things you get here that you will not assemble from a typical agent framewor
 
 **1. Agents never touch credentials.** Nexus, a zero-trust credential broker, ships inside the framework. Set `requires_auth = True` and the runtime injects scoped, encrypted credentials into atoms at call time — no raw keys in prompts, agent context, or `.env` sprawl. A leaked agent trace leaks no secrets.
 
-**2. Tools without MCP plumbing.** 1,224 typed atoms across 150 services (`jarviscore atom list`), auth injected at runtime. Missing one? Write a Python function, validate it with `jarviscore atom test`, drop it in the registry — no server to stand up, no wiring. And when no atom exists, AutoAgents write their own sandboxed code with self-repair and keep what worked in a verified-work registry.
+**2. Tools without MCP plumbing.** Built-in typed atoms with auth injected at runtime; inspect your installed catalog with [`jarviscore atom list`](https://jarviscore.developers.prescottdata.io/reference/cli/#atom-list). Missing one? Write a Python function, validate it with `jarviscore atom test`, drop it in the registry — no server to stand up, no wiring. And when no atom exists, AutoAgents write their own sandboxed code with self-repair and keep what worked in a verified-work registry.
 
 **3. No central orchestrator to babysit.** Agents form a SWIM gossip mesh over ZMQ, discover each other by capability, and claim workflow steps atomically from Redis. Any node can die — another claims its work. There is no coordinator process whose crash takes the fleet down.
 
@@ -111,9 +120,8 @@ pip install "jarviscore-framework[redis,prometheus]"
 jarviscore init --examples
 cp .env.example .env
 # Add one LLM credential to .env: AZURE_API_KEY, CLAUDE_API_KEY,
-# GEMINI_API_KEY, LLM_ENDPOINT, or (for eligible launch users):
-# JARVISCORE_PROMO_TOKEN=jc_trial_...
-# Register for the promotion at https://jarviscore.developers.prescottdata.io/promo/
+# GEMINI_API_KEY, or LLM_ENDPOINT.
+# Existing Prescott entitlement holders may instead set JARVISCORE_PROMO_TOKEN.
 
 # Start shared infrastructure (Redis, Mongo, Prometheus, Grafana)
 docker compose -f docker-compose.infra.yml up -d
@@ -201,12 +209,12 @@ The Kernel runs an Observe-Orient-Decide-Act (OODA) loop for every AutoAgent tas
 | **GoalContext** | Tracks plan state, step history, and convergence signals |
 | **EpistemicLedger** | Records what the agent knows, assumes, and has verified |
 
-### Service Integrations (150 bundles, 1,224 atoms)
+### Service Integrations
 
 Every integration is a single-file Python function called an **atom**. Atoms are registered in the seed registry and discovered by agents at runtime. No SDK wiring required.
 
 <details>
-<summary><strong>View the 150 integration bundles by category</strong></summary>
+<summary><strong>Browse integration bundles by category</strong></summary>
 
 | Category | Bundles |
 |----------|---------|
@@ -282,7 +290,7 @@ class MyAgent(CustomAgent):
 
 ### P2P Mesh and Distributed Workflows
 
-Agents discover each other over a SWIM protocol gossip mesh using ZMQ transport. Workflows execute across machines with Redis-backed crash recovery and step claiming.
+Agents discover each other over a SWIM protocol gossip mesh using ZMQ transport. Workflows execute across machines with Redis-backed crash recovery and step claiming. For goals whose steps are not known in advance, `Mesh.execute_goal()` publishes capability-addressed work without creating a master agent router.
 
 ```python
 mesh = Mesh(config={
@@ -290,7 +298,18 @@ mesh = Mesh(config={
     "bind_port": 7950,
     "redis_url": "redis://localhost:6379/0",
 })
+
+await mesh.start()
+result = await mesh.execute_goal(
+  "Inspect the active opportunity and prepare a decision brief.",
+  workflow_id="opportunity-2026-09-11",
+)
+print(result["status"], result["obligation_status"], result["response_status"])
 ```
+
+Attempts remain immutable across revisions. Reconciliation appends work only for
+unresolved obligation IDs, while satisfied obligations retain their evidence.
+See [Durable Goal Execution](https://jarviscore.developers.prescottdata.io/guides/goal-execution/).
 
 ### Observability
 
@@ -397,7 +416,7 @@ If you build multi-agent systems, star the repo ⭐ to support open-source agent
 | [Getting Started](https://jarviscore.developers.prescottdata.io/getting-started/) | Install, scaffold, and run your first agent in 5 minutes |
 | [Concepts](https://jarviscore.developers.prescottdata.io/concepts/architecture/) | Architecture, model routing, planning, memory, Nexus |
 | [Guides](https://jarviscore.developers.prescottdata.io/guides/autoagent/) | AutoAgent, CustomAgent, workflows, HITL, browser, testing, production |
-| [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/) | All 150 service bundles with usage examples |
+| [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/) | Built-in service bundles with usage examples |
 | [Reference](https://jarviscore.developers.prescottdata.io/reference/agent-api/) | Agent API, CLI, configuration, and troubleshooting |
 | [Changelog](https://jarviscore.developers.prescottdata.io/changelog/) | Full release history |
 
@@ -430,3 +449,15 @@ python committee.py --mode full --ticker NVDA --amount 1500000
 ## License
 
 Apache 2.0. See [LICENSE](https://github.com/Prescott-Data/jarviscore-framework/blob/main/LICENSE) for details.
+
+You can build and sell products using the Apache-licensed framework. There is no revenue or user-count threshold that requires a commercial agreement simply because your product grows. Separately licensed enterprise modules and services have their own terms; see [JarvisCore Enterprise](https://jarviscore.developers.prescottdata.io/infrastructure/enterprise/).
+
+### Built with JarvisCore
+
+Building something with JarvisCore? Help others discover the framework by adding [Built with JarvisCore](https://developers.prescottdata.io) to your product's About page, footer, or documentation.
+
+```markdown
+[Built with JarvisCore](https://developers.prescottdata.io)
+```
+
+This product credit is optional and appreciated. It does not replace the copyright, license, and applicable attribution notices required by Apache 2.0. Use it as a factual acknowledgment, not an implication of endorsement; the [trademark policy](TRADEMARK.md) applies.

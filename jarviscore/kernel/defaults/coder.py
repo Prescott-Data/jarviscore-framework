@@ -1,3 +1,4 @@
+from jarviscore.kernel.gate import GateEvidence
 """
 CoderSubAgent — Production-grade code generation and execution specialist.
 
@@ -16,47 +17,67 @@ Doctrine:
 """
 
 import ast
+import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from jarviscore.kernel.subagent import BaseSubAgent
 from jarviscore.kernel.state import KernelState
 
 logger = logging.getLogger(__name__)
 
-
 # ─────────────────────────────────────────────────────────────────
-# Auth Error Classification
+# Auth Outcome
 # ─────────────────────────────────────────────────────────────────
 
-_AUTH_ERROR_PATTERNS = {
-    "expired_token": [
-        "token expired", "token has expired", "jwt expired",
-        "access token expired", "refresh token expired",
-    ],
-    "missing_auth": [
-        "authentication required", "no auth", "missing token",
-        "unauthorized", "401",
-    ],
-    "invalid_token": [
-        "invalid token", "bad token", "malformed token",
-        "invalid credentials", "invalid access token",
-    ],
-    "permission_denied": [
-        "forbidden", "permission denied", "insufficient scope",
-        "access denied", "403", "not authorized",
-    ],
-}
 
+def classify_access_failure(
+    access_failure: Optional[Dict[str, Any]],
+    connection_state: Optional[str] = None,
+) -> Optional[str]:
+    """Name what went wrong at the credential boundary, from what it recorded.
 
-def classify_auth_error(error_msg: str) -> Optional[str]:
-    """Classify error message into auth category, or None if not auth-related."""
-    lower = error_msg.lower()
-    for category, patterns in _AUTH_ERROR_PATTERNS.items():
-        if any(p in lower for p in patterns):
-            return category
+    Reads the boundary's own statement rather than the rendered message. The
+    message was matched against substrings before, which classified "Created 401
+    contacts successfully" as an authentication failure and asked a human to log
+    in after a run that worked.
+
+    A provider rejecting a credential is evidence, not a verdict: whether that
+    means "never connected" or "the token went stale" is answered by what the
+    vault holds, so the state is asked for rather than guessed.
+    """
+    if not access_failure:
+        return None
+    kind = access_failure.get("kind")
+    if kind == "no_usable_credential":
+        return "missing_auth"
+    if kind == "destination_not_owned_by_provider":
+        return None  # a routing mistake, not an access grant a human can give
+    if kind == "provider_rejected_credential":
+        return "expired_token" if connection_state == "connected" else "missing_auth"
     return None
+
+
+def _produced_output(output: Any) -> bool:
+    """Did the run leave anything a caller could read?
+
+    The sandbox envelope (marked by ``success``) always reports its own
+    bookkeeping — timings, file lists — so its presence says only that code ran.
+    Answering requires a returned value, stdout, or a written file. Anything the
+    sandbox hands back that is not that envelope is already the result itself.
+    """
+    if output is None:
+        return False
+    if not isinstance(output, dict):
+        return str(output).strip() != ""
+    if "success" not in output:
+        return bool(output)
+    return (
+        output.get("data") is not None
+        or bool(str(output.get("stdout") or "").strip())
+        or bool(output.get("files_created") or output.get("files_modified"))
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -94,6 +115,78 @@ A result that never touched the sandbox is not a result. If you catch yourself
 about to report an answer you computed mentally, stop and write the code that
 proves it — that is the entire job.
 
+## THE CATALOGUE (this is how the swarm stops re-solving the same problem)
+
+The FunctionRegistry holds atoms: functions that already ran against a real API
+and worked, scoped to the provider they call. It is a ratchet — every task that
+succeeds should leave the next one less work.
+
+When the provider for a task is known — because the task named a connected
+system, or because the registry already matched a proven atom to it — that
+provider's capabilities are already in your tool list, named for what they do —
+`hubspot_list_contacts`, `slack_send_message`. They run where the credentials
+are, so you call one the way you call any other tool and get a result; you never
+handle a token and never see how the call was authenticated.
+
+Call one when it does what the task needs. Writing code to make a request that
+is already sitting in your tools is slower, unproven, and leaves a second
+version of something that already works.
+
+## WHEN A PROVIDER IS REGISTERED BUT NOBODY HAS CONNECTED
+
+Registering a provider's app and connecting an account are two different events.
+The first is done by whoever set the system up; the second needs a person to
+consent once, and until they do there is no token and nothing can be signed.
+
+When that is the case you will have `request_access` instead of that provider's
+capabilities. Call it when the task actually needs that provider. It shows a
+human the consent link and waits for them, so the cost of asking is time, not
+tokens. When it returns, the capabilities are in your tools and you carry on
+with the task in the same run.
+
+Do not write code to work around a missing connection, and do not report the
+provider as unavailable without asking. Both leave the human with a dead end
+they could have cleared with one click.
+
+## WHEN YOU CANNOT DO IT
+
+Say what the task needed and what stopped you, in the terms of the person who
+asked. They asked about their customers, their files, their messages — so the
+answer is "the Slack account is not connected yet", not a report on environment
+variables, gateway URLs or container state.
+
+How this deployment is wired is not your subject and not your finding. If you
+notice something an operator would need to fix, one plain sentence names it and
+you stop; do not go looking for it, do not probe configuration to confirm it,
+and never hand back a diagnosis of the plumbing as if it were the work.
+
+The registry also holds atoms that are not yet callable, and `check_registry`
+finds them. A `candidate` has been dry-run but never confirmed against a live
+API, so it is readable code rather than a tool — read it, start from it, and
+prove it in the sandbox. That run is what makes it callable for everyone after.
+
+Writing to it, after you succeed:
+
+- When you write new code that executes successfully against a provider, call
+  `register_function` to keep it, with the `system` set to that provider. It
+  enters as a candidate, becomes verified on its first success and golden after
+  five, and from then on it is what the next agent finds instead of starting
+  from a blank file.
+- Use `nexus_call` and never accept or retrieve credentials in atom source.
+- Name it for what it does to what: `hubspot_list_contacts`, not `run_task` or
+  `main`. The name is how it will be found.
+- Code that only reshapes local data is not worth keeping. An atom earns its
+  place by reaching a system.
+
+When an offered atom fails, first decide what the evidence means. Authentication
+or consent, invalid task input, account permissions, rate limits, and a truthful
+provider refusal do not prove its implementation is wrong. If the source itself
+is wrong or stale, call `inspect_atom_for_repair`, correct that exact function,
+submit it with `repair_atom`, and register the successful candidate under the
+same name. The registry keeps the old version as history and makes the proven
+replacement the current version. Never create a parallel name to hide a broken
+atom.
+
 ## CRITICAL RULES (read all before acting)
 
 1. **CODE, DON'T META-CODE** — Produce actual Python functions, not plans or descriptions.
@@ -101,10 +194,10 @@ proves it — that is the entire job.
    Right: TOOL: write_code, PARAMS: {"code": "import requests\\ndef run():\\n    ..."}
 
 2. **FALLBACK LADDER** (follow in order):
-   a. write_code → Use your training knowledge to write code directly
-   b. If execution fails with a CONCRETE unknown (wrong endpoint, unknown field, unexpected response shape):
+   a. check_registry when the task names a system — reuse beats rewriting
+   b. write_code → Use your training knowledge to write code directly
+   c. If execution fails with a CONCRETE unknown (wrong endpoint, unknown field, unexpected response shape):
       Use quick_api_search or read_api_docs to look up the specific detail you need
-   c. If still stuck: check_registry to search for existing working functions
    d. If stuck after 2 failed attempts + self-research: call delegate_research as ABSOLUTE LAST RESORT
    NEVER call delegate_research before attempting to write code AND self-research first.
 
@@ -158,7 +251,11 @@ proves it — that is the entire job.
    headers = {"Authorization": "Bearer ..."}  # VIOLATION — agent must never see credentials
    ```
 
-   - `nexus_call(method, url, **kwargs)` is always available in the sandbox
+     - `nexus_call(method, url, **kwargs)` is always available in the sandbox
+     - For work spanning connected systems, route each call explicitly:
+         `await nexus_call("GET", url, provider="gmail")`. The trusted parent
+         resolves that provider's opaque handle and host policy; no credential map
+         enters your code. Never send one provider's call under another provider.
    - It returns `{"ok": bool, "status_code": int, "body": str, "json": Any}`
    - If it raises RuntimeError, declare `auth_required=True` in your DONE summary
    - NEVER read `auth`, `token`, `api_key`, `access_token`, or any credential variable
@@ -217,6 +314,7 @@ proves it — that is the entire job.
 
         # CandidateStore — versioned in-memory record of each code attempt
         self._candidates: List[Dict[str, Any]] = []
+        self._failed_atom_calls: Dict[str, Dict[str, Any]] = {}
 
         # Hard gate flag — delegate_research blocked until first write_code
         self._has_written_code: bool = False
@@ -243,50 +341,32 @@ proves it — that is the entire job.
         return prompt
 
     def _build_user_prompt(self, state: KernelState, context_block: str) -> str:
-        """Add a coder-specific proof-of-work contract to the generic OODA prompt."""
+        """Keep provider work evidence-backed without forcing irrelevant execution."""
         prompt = super()._build_user_prompt(state, context_block)
-        has_execution = any(
-            tool_res.tool_name == "execute_code" and tool_res.succeeded
-            for tool_res in state.tool_history
-        )
-        if has_execution:
-            return prompt
-
-        validated_candidates = [
-            tool_res.tool_output.get("candidate_id")
-            for tool_res in state.tool_history
-            if (
-                tool_res.tool_name == "write_code"
-                and tool_res.succeeded
-                and isinstance(tool_res.tool_output, dict)
-                and tool_res.tool_output.get("status") == "validated"
+        first_attempt = ""
+        if not state.tool_history:
+            offered_atoms = sorted(getattr(self, "_atom_tools", ()))
+            useful = offered_atoms + [
+                name for name in (
+                    "ask_capability", "ask_peer", "inspect_workflow", "write_code"
+                )
+                if name in self._tools
+            ]
+            first_attempt = (
+                "\n\nYou have not investigated this task yet. Your next response MUST "
+                "use one relevant tool before emitting DONE or a final artifact. "
+                f"Relevant available paths include: {', '.join(useful) or 'the registered tools above'}. "
+                "Choose from the current gap; do not call a tool merely to make the run pass."
             )
-        ]
-        if validated_candidates:
-            next_action = (
-                f"You already have validated candidate_id={validated_candidates[-1]}. "
-                "Your next response MUST call execute_code with that candidate_id."
-            )
-        else:
-            next_action = (
-                "Your next response MUST call write_code with executable Python code. "
-                "After write_code validates it, call execute_code with the returned candidate_id."
-            )
-
         return (
             f"{prompt}\n\n"
-            "## CODER PROOF-OF-WORK GATE\n"
-            "DONE/RESULT is disabled until execute_code has returned status=success.\n"
-            f"{next_action}\n\n"
-            "Valid next response format:\n"
-            "THOUGHT: I need executable proof before completion.\n"
-            "TOOL: write_code\n"
-            "PARAMS: {\"code\": \"result = {'success': True, 'data': ...}\"}\n\n"
-            "If you already have a candidate_id:\n"
-            "THOUGHT: I have validated code and must execute it.\n"
-            "TOOL: execute_code\n"
-            "PARAMS: {\"candidate_id\": <id>}\n\n"
-            "Do not emit DONE. Do not emit RESULT. Do not answer in prose."
+            "## EXECUTION INTEGRITY\n"
+            "Use provider capabilities or executable code when a claim requires live "
+            "evidence. If a meaningful action fails, inspect the error, ask a capable "
+            "peer when useful, and try a relevant alternative. If no reasonable path "
+            "remains, finish with the honest blocker and the evidence gathered. Never "
+            "run unrelated code merely to demonstrate that execution works."
+            f"{first_attempt}"
         )
 
     # ─────────────────────────────────────────────────────────────
@@ -298,46 +378,120 @@ proves it — that is the entire job.
         state: KernelState,
         parsed: Dict[str, Any],
     ) -> tuple:
-        """
-        Enforce the "Verify Before Done" proof-of-work contract.
-        """
-        # Exemption: If the agent successfully delegated to research, it is handing
-        # control back to the Kernel. It must be allowed to complete.
-        if state.tool_history:
-            last_tool = state.tool_history[-1]
-            if last_tool.tool_name == "delegate_research" and last_tool.succeeded:
-                return (True, "")
-
-        # Scan history for execution proof
-        has_executed = False
-        last_success_output = None
-        for tool_res in state.tool_history:
-            if tool_res.tool_name == "execute_code" and tool_res.succeeded:
-                has_executed = True
-                last_success_output = tool_res.tool_output
-            elif (
-                tool_res.tool_name == "write_code"
-                and tool_res.succeeded
-                and isinstance(tool_res.tool_output, dict)
-                and isinstance(tool_res.tool_output.get("execution_result"), dict)
-                and tool_res.tool_output["execution_result"].get("status") == "success"
-            ):
-                has_executed = True
-                last_success_output = tool_res.tool_output["execution_result"]
-
-        if not has_executed:
+        """Require investigation and one bounded peer review of blocked work."""
+        if not state.tool_history:
             return (
                 False,
-                "PROOF OF WORK REQUIRED: You cannot call DONE without executing code first.\n"
-                "You must use the `write_code` or `execute_code` tool to write and run actual Python code.\n"
-                "Do NOT just output the answer in the RESULT block. You MUST execute a Python script that sets the `result` variable."
+                GateEvidence(
+                    check="meaningful_attempt",
+                    requirement=(
+                        "use a relevant provider, code, workflow, mailbox, or peer tool "
+                        "before claiming success or a blocker"
+                    ),
+                    observed={"tool_calls": 0},
+                ),
             )
+        return super()._can_complete(state, parsed)
 
-        # Force the payload to be the actual sandbox execution result.
-        if last_success_output is not None:
-            parsed["result"] = last_success_output.get("output", last_success_output)
+    async def _pre_execute_hook(
+        self,
+        tool_name: str,
+        params: Dict[str, Any],
+        state: KernelState,
+    ) -> Optional[Dict[str, Any]]:
+        atom = getattr(self, "_atoms", {}).get(tool_name)
+        if atom is None or atom.policy.effect not in {
+            "write", "notify", "destructive"
+        }:
+            return None
+        from jarviscore.orchestration.envelopes import EffectIntentDecision
 
-        return (True, "")
+        evidence = [
+            {
+                "tool": item.tool_name,
+                "input": item.tool_input,
+                "output": item.tool_output,
+                "error": item.error,
+            }
+            for item in state.tool_history
+        ]
+        dependency_artifacts = state.context.get("previous_step_results") or {}
+        dependency_interpretations = (
+            state.context.get("previous_step_interpretations") or {}
+        )
+        prompt = (
+            "Review one proposed external effect against source intent and gathered "
+            "evidence. This is an agent reasoning decision, not provider routing. "
+            "Allow only when the proposed effect is requested and every conditional "
+            "precondition needed for it is supported by evidence. Do not infer absence "
+            "of one resource from absence of another. Return already_satisfied when "
+            "the gathered evidence establishes that the requested real-world outcome "
+            "already exists, so repeating the effect would be redundant. Redirect when "
+            "a relevant observation or verification is still missing. Return only JSON: "
+            '{"decision":"allow|redirect|already_satisfied","reason":"...",'
+            '"missing_evidence":["..."],"supporting_evidence":["..."]}.\n\n'
+            f"Source objective: {state.context.get('objective') or state.task}\n"
+            f"Scoped step task: {state.task}\n"
+            f"Source context: {json.dumps(state.context.get('source_context', {}), default=str)}\n"
+            "Authoritative dependency artifacts: "
+            f"{json.dumps(dependency_artifacts, default=str)}\n"
+            "Authoritative dependency interpretations: "
+            f"{json.dumps(dependency_interpretations, default=str)}\n"
+            f"Proposed effect: {atom.policy.effect}\n"
+            f"Tool: {tool_name}\n"
+            f"Parameters: {json.dumps(params, default=str)}\n"
+            f"Evidence so far: {json.dumps(evidence, default=str)}"
+        )
+        try:
+            call_kwargs = {
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
+                **(
+                    {"model": self.llm_client.nano_model}
+                    if getattr(self.llm_client, "nano_model", None)
+                    else {}
+                ),
+            }
+            try:
+                response = await self.llm_client.generate(**call_kwargs)
+            except TypeError:
+                call_kwargs.pop("response_format", None)
+                response = await self.llm_client.generate(**call_kwargs)
+            content = (
+                response.get("content", "")
+                if isinstance(response, dict)
+                else str(response)
+            )
+            tokens = response.get("tokens", {}) if isinstance(response, dict) else {}
+            cognition = getattr(self, "_cognition", None)
+            if cognition is not None:
+                cognition.track_usage(
+                    "effect_intent_review",
+                    tokens=int(tokens.get("total", 0) or 0),
+                )
+            decision = EffectIntentDecision.from_response(content)
+        except Exception as exc:
+            return {
+                "status": "blocked",
+                "error": f"Effect intent review failed closed: {exc}",
+                "semantic_error": "EFFECT_INTENT_REVIEW_INVALID",
+            }
+        if decision.decision == "allow":
+            return None
+        if decision.decision == "already_satisfied":
+            return {
+                "status": "success",
+                "skipped": True,
+                "semantic_outcome": "EFFECT_ALREADY_SATISFIED",
+                "reason": decision.reason,
+                "supporting_evidence": list(decision.supporting_evidence),
+            }
+        return {
+            "status": "blocked",
+            "error": decision.reason,
+            "semantic_error": "EFFECT_INTENT_REDIRECT",
+            "missing_evidence": list(decision.missing_evidence),
+        }
 
     # ─────────────────────────────────────────────────────────────
     # Tool Registration
@@ -359,6 +513,27 @@ proves it — that is the entire job.
             (
                 "Generate Python code for a task. Runs ValidationLayer automatically. "
                 "Params: {\"code\": \"<python code>\", \"system\": \"<optional provider name>\"}"
+            ),
+            phase="thinking",
+        )
+        self.register_tool(
+            "inspect_atom_for_repair",
+            self._tool_inspect_atom_for_repair,
+            (
+                "Read the exact registered source and failure evidence for an atom "
+                "that failed in this run. Params: {\"function_name\": \"<atom_name>\"}"
+            ),
+            phase="thinking",
+        )
+        self.register_tool(
+            "repair_atom",
+            self._tool_repair_atom,
+            (
+                "Submit corrected source for an atom that failed in this run. The "
+                "replacement must preserve its registered name and provider contract; "
+                "it is executed against the original invocation before it can replace "
+                "the registry version. Params: {\"function_name\": \"<atom_name>\", "
+                "\"code\": \"<corrected source>\"}"
             ),
             phase="thinking",
         )
@@ -432,7 +607,7 @@ proves it — that is the entire job.
         """Execute tools, auto-running validated code when runtime proof is required."""
         result = await super()._execute_tool(tool_name, params)
         if (
-            tool_name != "write_code"
+            tool_name not in {"write_code", "repair_atom"}
             or not isinstance(result, dict)
             or result.get("status") != "validated"
             or not self.sandbox
@@ -445,14 +620,122 @@ proves it — that is the entire job.
         if execution_result.get("status") == "success":
             merged["status"] = "success"
             merged["output"] = execution_result.get("output")
-            merged["_auto_complete"] = True
             merged["message"] = (
                 f"Code validated and executed successfully (candidate_id={result['candidate_id']})."
             )
+            # The result is the agent's to read, not the run's to return. Ending
+            # the loop here handed callers the sandbox's raw return value as the
+            # answer, with the agent never having looked at it: a Drive listing
+            # arrived as a dict of ids instead of "your three most recent files
+            # are". Proof is still required, by _can_complete, at DONE.
+            if _produced_output(execution_result.get("output")):
+                merged["message"] += (
+                    " Read the result, then answer the task in your own words with "
+                    "DONE. If the task needs more, continue."
+                )
+            else:
+                merged["message"] += (
+                    " The run returned no value and printed nothing, so there is no "
+                    "result to report yet. Return your findings from main() (or print "
+                    "them), then finish — or, if the task genuinely has no output, "
+                    "finish with DONE and say so explicitly."
+                )
         else:
             merged["status"] = "error"
             merged["error"] = execution_result.get("error", "Code execution failed.")
         return merged
+
+    def _tool_inspect_atom_for_repair(
+        self,
+        function_name: str,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Expose current source only after that exact atom failed in this run."""
+        failure = self._failed_atom_calls.get(function_name)
+        if failure is None or self.code_registry is None:
+            return {
+                "status": "error",
+                "error": f"No repairable failure for `{function_name}` was observed in this run.",
+                "semantic_error": "ATOM_REPAIR_NOT_OBSERVED",
+            }
+        source = self.code_registry.get_function_code(function_name)
+        metadata = self.code_registry.get_function_metadata(function_name) or {}
+        if not source:
+            return {
+                "status": "error",
+                "error": f"Registered source for `{function_name}` is unavailable.",
+                "semantic_error": "ATOM_SOURCE_UNAVAILABLE",
+            }
+        return {
+            "status": "success",
+            "function_name": function_name,
+            "system": metadata.get("system"),
+            "version": metadata.get("version"),
+            "source": source,
+            "failed_invocation": failure.get("params", {}),
+            "failure": failure.get("error"),
+        }
+
+    def _tool_repair_atom(
+        self,
+        function_name: str,
+        code: str,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Validate a replacement tied to one observed atom failure/version."""
+        from jarviscore.execution.atom_contract import read_contract
+
+        failure = self._failed_atom_calls.get(function_name)
+        if failure is None or self.code_registry is None:
+            return {
+                "status": "error",
+                "error": f"No repairable failure for `{function_name}` was observed in this run.",
+                "semantic_error": "ATOM_REPAIR_NOT_OBSERVED",
+            }
+        metadata = self.code_registry.get_function_metadata(function_name) or {}
+        base_version = metadata.get("version")
+        if base_version != failure.get("version"):
+            return {
+                "status": "error",
+                "error": (
+                    f"`{function_name}` changed from version {failure.get('version')} "
+                    f"to {base_version}; inspect the current version before repairing it."
+                ),
+                "semantic_error": "ATOM_REPAIR_STALE",
+            }
+        contract = read_contract(
+            code,
+            system=str(metadata.get("system") or ""),
+            expected_name=function_name,
+        )
+        if not contract.ok or contract.atom is None or contract.atom.legacy:
+            return {
+                "status": "validation_failed",
+                "error": "; ".join(contract.errors) or "Replacement atom contract is invalid.",
+                "issues": list(contract.errors),
+            }
+        candidate_id = len(self._candidates) + 1
+        self._candidates.append({
+            "candidate_id": candidate_id,
+            "code": code,
+            "system": metadata.get("system"),
+            "status": "validated",
+            "function_name": function_name,
+            "repair_of": function_name,
+            "base_version": base_version,
+            "invocation_params": dict(failure.get("params") or {}),
+            "ts": time.time(),
+        })
+        return {
+            "candidate_id": candidate_id,
+            "status": "validated",
+            "function_name": function_name,
+            "base_version": base_version,
+            "message": (
+                f"Replacement for `{function_name}` v{base_version} is contract-valid. "
+                "It must execute successfully before registry replacement."
+            ),
+        }
 
     # ─────────────────────────────────────────────────────────────
     # Tool: check_registry
@@ -474,39 +757,72 @@ proves it — that is the entire job.
             normalized_task = await normalizer.normalize(task)
 
             matches = self.code_registry.semantic_search(normalized_task, limit=5)
+
+            # The declared provider is not a preference to be outweighed. An atom
+            # for another system is not a weaker match, it is the wrong API — and
+            # semantic search will happily rank a verified atom from one CRM above
+            # a candidate from the one actually being asked about.
+            declared = system or (getattr(self, "_run_context", None) or {}).get("system")
+            if not declared:
+                # Ranking across every provider let word overlap choose one, and
+                # it is not a judgement worth trusting to substring counting.
+                return {
+                    "found": False,
+                    "message": (
+                        "Name the provider to search within, as system=<name>. "
+                        "Which API a task needs is yours to decide; the registry "
+                        "only says what already works for a provider you name."
+                    ),
+                }
+            matches = [m for m in matches if m.get("system") == declared]
+            if not matches:
+                return {
+                    "found": False,
+                    "system": declared,
+                    "message": (
+                        f"No function in the registry targets {declared}. "
+                        "Write one, and register it against that system so the "
+                        "next agent finds it."
+                    ),
+                }
+
+            # Within the right system, stage decides: something confirmed against a
+            # live API beats something only dry-run.
             production = [
                 m for m in matches
                 if m.get("registry_stage") in ("verified", "golden")
             ]
-            if system:
-                system_matches = [m for m in production if m.get("system") == system]
-                if system_matches:
-                    production = system_matches
-            if not production:
-                return {"found": False, "message": "No verified functions found for this task."}
-
-            top = production[0]
+            top = (production or matches)[0]
             code = self.code_registry.get_function_code(top["function_name"])
+            stage = top.get("registry_stage")
 
             # Surface the reuse candidate's identity in the envelope (#88).
             getattr(self, "_dispatch_metadata", {}).setdefault(
                 "registry_match", top["function_name"]
             )
 
+            if stage in ("verified", "golden"):
+                message = (
+                    f"`{top['function_name']}` is {stage} with "
+                    f"{top.get('success_count', 0)} successful execution(s) against a live API."
+                )
+            else:
+                message = (
+                    f"`{top['function_name']}` is a {stage}: written for this call and "
+                    "dry-run, never confirmed against a live API. Executing it "
+                    "successfully is what promotes it to verified."
+                )
+
             return {
                 "found": True,
                 "function_name": top["function_name"],
                 "system": top.get("system"),
-                "stage": top.get("registry_stage"),
+                "stage": stage,
                 "description": top.get("description"),
                 "capabilities": top.get("capabilities", []),
                 "success_count": top.get("success_count", 0),
-                "code_preview": (code or "")[:400] if code else None,
-                "message": (
-                    f"Found verified function `{top['function_name']}` "
-                    f"({top.get('success_count', 0)} successful executions). "
-                    "Consider reusing it directly via execute_code."
-                ),
+                "code": code,
+                "message": message,
             }
         except Exception as exc:
             logger.warning("CoderSubAgent.check_registry failed: %s", exc)
@@ -524,6 +840,11 @@ proves it — that is the entire job.
     ) -> Dict[str, Any]:
         """Record + validate a code candidate."""
         self._has_written_code = True  # Unlock delegate_research gate
+
+        # Often the agent is the first to work out which provider the task needs.
+        # Offerings are refreshed here so a proven atom or a missing consent is
+        # discovered at that moment rather than after a failed call.
+        access_note = self._refresh_offerings_for(system)
 
         candidate_id = len(self._candidates) + 1
 
@@ -604,12 +925,15 @@ proves it — that is the entire job.
         }
         self._candidates.append(candidate)
 
-        return {
+        result = {
             "candidate_id": candidate_id,
             "status": "validated",
             "length": len(code),
             "message": f"Code validated (candidate_id={candidate_id}). Call execute_code next.",
         }
+        if access_note:
+            result["system_access"] = access_note
+        return result
 
     # ─────────────────────────────────────────────────────────────
     # Tool: validate_code
@@ -675,6 +999,28 @@ proves it — that is the entire job.
                 }
             exec_code = candidate["code"]
 
+        if candidate and candidate.get("repair_of"):
+            from jarviscore.execution.atom_contract import invocation, read_contract
+
+            contract = read_contract(
+                exec_code or "",
+                system=str(candidate.get("system") or ""),
+                expected_name=str(candidate["repair_of"]),
+            )
+            if not contract.ok or contract.atom is None:
+                return {
+                    "status": "error",
+                    "error": "; ".join(contract.errors) or "Replacement atom contract is invalid.",
+                    "semantic_error": "ATOM_REPAIR_INVALID",
+                }
+            repair_atom = contract.atom
+            invocation_params = dict(candidate.get("invocation_params") or {})
+            exec_code = f"{exec_code}\n\n{invocation(repair_atom, invocation_params)}"
+            kwargs["_internal_atom"] = (
+                repair_atom,
+                self._atom_action_id(repair_atom, invocation_params),
+            )
+
         if not exec_code:
             return {"status": "error", "error": "No code provided to execute_code."}
 
@@ -696,20 +1042,47 @@ proves it — that is the entire job.
         exec_context: Dict[str, Any] = {}
         if hasattr(self, '_run_context') and self._run_context:
             SAFE_KEYS = {"task", "system", "workflow_id", "step_id",
-                         "prior_outputs", "registry_candidate", "_hint",
+                         "prior_outputs", "registry_candidate",
                          "_nexus_connection_id", "_nexus_provider"}
             for k in SAFE_KEYS:
                 if k in self._run_context:
                     exec_context[k] = self._run_context[k]
+        internal_atom = kwargs.get("_internal_atom")
+        offered_atoms = getattr(self, "_atoms", {})
+        repair_authorized = bool(
+            candidate
+            and candidate.get("repair_of")
+            and isinstance(internal_atom, tuple)
+            and len(internal_atom) == 2
+            and internal_atom[0].name == candidate.get("repair_of")
+        )
+        if (
+            isinstance(internal_atom, tuple)
+            and len(internal_atom) == 2
+            and (
+                internal_atom[0] in offered_atoms.values()
+                or repair_authorized
+            )
+        ):
+            atom, action_id = internal_atom
+            exec_context["_mutation_authority"] = {
+                "atom": atom.name,
+                "action_id": str(action_id),
+                "effect": atom.policy.effect,
+            }
 
         start_ts = time.time()
         result = await self.sandbox.execute(exec_code, context=exec_context or None)
         exec_time = time.time() - start_ts
 
 
-        # Classify auth errors
-        if result.get("status") == "failure" and result.get("error"):
-            auth_category = classify_auth_error(result["error"])
+        # Classify auth outcomes from what the credential boundary recorded.
+        access_failure = result.get("access_failure")
+        if access_failure:
+            provider = access_failure.get("provider")
+            auth_category = classify_access_failure(
+                access_failure, self._connection_state(provider).value
+            )
             if auth_category:
                 result["auth_error_type"] = auth_category
                 result["hitl_required"] = True
@@ -747,17 +1120,22 @@ proves it — that is the entire job.
         result["execution_time"] = exec_time
         result["candidate_id"] = candidate_id
 
+        # Both outcomes are evidence about the atom. A refusal at the credential
+        # boundary is not: the atom never ran, so it says nothing about it.
         if (
             self.code_registry
-            and result.get("status") == "success"
             and candidate
             and candidate.get("function_name")
+            and not candidate.get("repair_of")
+            and result.get("status") in ("success", "failure")
+            and not result.get("access_failure")
         ):
             try:
                 self.code_registry.update_execution_stats(
                     candidate["function_name"],
-                    success=True,
+                    success=result["status"] == "success",
                     execution_time=exec_time,
+                    error_type=result.get("error_type"),
                 )
             except Exception as exc:
                 logger.warning(
@@ -786,12 +1164,46 @@ proves it — that is the entire job.
         if not self.code_registry:
             return {"status": "error", "error": "No code_registry configured."}
 
-        final_code = code
-        if candidate_id is not None:
-            candidate = self._get_candidate(candidate_id)
-            if candidate:
-                final_code = candidate.get("code", code)
-                system = system or candidate.get("system")
+        if candidate_id is None:
+            return {
+                "status": "error",
+                "error": "candidate_id is required; registry writes require successful execution evidence.",
+                "semantic_error": "REGISTRY_EXECUTION_PROOF_REQUIRED",
+            }
+        candidate = self._get_candidate(candidate_id)
+        if candidate is None:
+            return {"status": "error", "error": f"candidate_id={candidate_id} not found."}
+        if candidate.get("status") != "success":
+            return {
+                "status": "error",
+                "error": (
+                    f"candidate_id={candidate_id} has status={candidate.get('status')!r}; "
+                    "execute_code must succeed before registration."
+                ),
+                "semantic_error": "REGISTRY_EXECUTION_PROOF_REQUIRED",
+            }
+        final_code = candidate.get("code", code)
+        system = system or candidate.get("system")
+        repair_of = candidate.get("repair_of")
+        if repair_of:
+            if function_name != repair_of:
+                return {
+                    "status": "error",
+                    "error": f"A repair for `{repair_of}` cannot be registered as `{function_name}`.",
+                    "semantic_error": "ATOM_REPAIR_IDENTITY_MISMATCH",
+                }
+            current = self.code_registry.get_function_metadata(repair_of) or {}
+            if current.get("version") != candidate.get("base_version"):
+                return {
+                    "status": "error",
+                    "error": (
+                        f"`{repair_of}` changed after this repair began; inspect and repair "
+                        "the current registry version."
+                    ),
+                    "semantic_error": "ATOM_REPAIR_STALE",
+                }
+            description = description or str(current.get("description") or "")
+            capabilities = capabilities or list(current.get("capabilities") or [])
 
         if not final_code:
             return {"status": "error", "error": "No code to register."}
@@ -821,22 +1233,30 @@ proves it — that is the entire job.
             "agent_id": self.agent_id,
             "tags": [system] if system else [],
         }
+        if repair_of:
+            metadata["repair_of_version"] = candidate.get("base_version")
+            metadata["repair_failure"] = (
+                self._failed_atom_calls.get(str(repair_of), {}).get("error")
+            )
 
         success = self.code_registry.register_function(
             function_name=function_name,
             function=final_code,
             metadata=metadata,
         )
+        self._registered_this_run = bool(success)
 
         if success:
+            self.code_registry.update_execution_stats(
+                function_name,
+                success=True,
+                execution_time=float(candidate.get("execution_time") or 0.0),
+            )
             # Registry identity for the result envelope (issue #88): the
             # promoted function's name IS its registry id.
             getattr(self, "_dispatch_metadata", {})["function_id"] = function_name
-            if candidate_id is not None:
-                candidate = self._get_candidate(candidate_id)
-                if candidate:
-                    candidate["function_name"] = function_name
-                    candidate["status"] = "registered"
+            candidate["function_name"] = function_name
+            candidate["status"] = "registered"
 
             return {
                 "status": "registered",
@@ -1081,6 +1501,12 @@ proves it — that is the entire job.
         """All candidates generated during this run (audit trail)."""
         return list(self._candidates)
 
+    def _save_subagent_state(self, state: KernelState) -> None:
+        state.internal_variables["_coder_candidates"] = self._candidates
+
+    def _restore_subagent_state(self, state: KernelState) -> None:
+        self._candidates = list(state.internal_variables.get("_coder_candidates") or [])
+
     # ─────────────────────────────────────────────────────────────
     # Run Override
     # ─────────────────────────────────────────────────────────────
@@ -1090,10 +1516,455 @@ proves it — that is the entire job.
         self._candidates = []
         self._has_written_code = False
         self._read_urls = set()
+        self._registered_this_run = False
         self._current_task = str(task)
         self._run_context = context or {}
+        await self._sync_connections()
+        declared_systems = [
+            str(value) for value in self._run_context.get("systems", [])
+            if str(value)
+        ]
+        if len(declared_systems) > 1:
+            self._prepare_access_for_systems(declared_systems)
+        else:
+            self._prepare_access(self._resolved_system())
         try:
             return await super().run(task, context, max_turns, model, **kwargs)
         finally:
             self._current_task = ""
             self._run_context = {}
+
+    def _resolved_system(self) -> Optional[str]:
+        """The system whose capabilities belong in this dispatch.
+
+        A declared system is the task naming a provider. A registry candidate is
+        the registry having already found the provider's verified atom for this
+        task. Both identify the same thing, so both make the atoms callable.
+        Only the declared one carries credential-gate semantics; that stays in
+        the kernel and is deliberately not read here.
+        """
+        declared = self._run_context.get("system")
+        if declared:
+            return str(declared)
+        candidate = self._run_context.get("registry_candidate") or {}
+        resolved = candidate.get("system") if isinstance(candidate, dict) else None
+        return str(resolved) if resolved else None
+
+    def _valid_atoms(self, system: Optional[str]) -> Dict[str, Any]:
+        """The atoms for a system that are actually callable in their current shape."""
+        from jarviscore.execution.atom_contract import read_contract
+
+        atoms: Dict[str, Any] = {}
+        if not system or not self.code_registry:
+            return atoms
+        requested_effect = str(self._run_context.get("effect") or "").strip()
+        allowed_effects = {
+            "read": {"read"},
+            "propose": {"read"},
+            "write": {"read", "write"},
+            "notify": {"read", "notify"},
+            "destructive": {"read", "destructive"},
+            "final_response": {"read"},
+        }.get(requested_effect)
+        for entry in self.code_registry.get_functions_by_system(system):
+            name = entry.get("function_name")
+            code = self.code_registry.get_function_code(name) if name else None
+            if not code:
+                continue
+            contract = read_contract(code, system=system, expected_name=name)
+            atom = contract.atom
+            # Only the current shape is offered; a legacy atom cannot be called.
+            if not contract.ok or atom is None or atom.legacy:
+                continue
+            if allowed_effects is not None and atom.policy.effect not in allowed_effects:
+                continue
+            atoms[name] = atom
+        return atoms
+
+    def _offer_system_capabilities(self, system: Optional[str]) -> None:
+        """Register the connected system's atoms as tools for this dispatch.
+
+        A capability the agent has to remember to go looking for is one it will
+        sometimes skip, and it did. These arrive the way every other tool does,
+        so using them is the default path rather than a decision.
+        """
+        self._offer_system_capabilities_for([system] if system else [])
+
+    def _offer_system_capabilities_for(self, systems: List[str]) -> None:
+        """Offer current-effect atoms from every connected authorized provider."""
+        for name in getattr(self, "_atom_tools", ()):
+            self._tools.pop(name, None)
+        self._atom_tools = []
+        self._atoms = {}
+        for system in systems:
+            self._atoms.update(self._valid_atoms(system))
+
+        for name, atom in self._atoms.items():
+            self.register_tool(
+                name,
+                self._atom_tool(name),
+                f"{atom.describe()} Runs against {atom.system} with "
+                "credentials resolved outside the sandbox; you never handle them.",
+                phase="action",
+            )
+            self._atom_tools.append(name)
+
+        if self._atom_tools:
+            self._log.info(
+                "Offering %d capability(ies) across %s: %s",
+                len(self._atom_tools), ", ".join(systems), ", ".join(self._atom_tools),
+            )
+
+    async def _sync_connections(self) -> None:
+        """Learn what the gateway holds before deciding what to offer.
+
+        Offerings are decided synchronously during the run, so the gateway is
+        asked once here. Without it a consent completed in the previous run is
+        invisible and the agent asks for access it already has.
+        """
+        manager = self.auth_manager
+        if manager is None or not hasattr(manager, "discover_all"):
+            return
+        try:
+            from jarviscore.nexus.store import ConnectionState, get_store
+
+            store = get_store()
+            providers = store.list()
+            await manager.discover_all(providers)
+            self._run_context["connected_providers"] = sorted(
+                provider for provider in providers
+                if manager.is_connected(provider)
+                or store.connection_state(provider) is ConnectionState.CONNECTED
+            )
+        except Exception as exc:
+            self._log.debug("Connection sync unavailable: %s", exc)
+
+    def _connection_state(self, system: Optional[str]):
+        from jarviscore.nexus.store import ConnectionState, get_store
+
+        if not system:
+            return ConnectionState.ABSENT
+        # The gateway knows what has been connected; the vault knows what was
+        # registered here. A token that landed elsewhere lives only in the first.
+        connected_at_gateway = getattr(self.auth_manager, "is_connected", None)
+        if callable(connected_at_gateway) and connected_at_gateway(system):
+            return ConnectionState.CONNECTED
+        try:
+            return get_store().connection_state(system)
+        except Exception as exc:
+            self._log.debug("Connection state unavailable for %s: %s", system, exc)
+            return ConnectionState.ABSENT
+
+    def _connection_handle(self, system: str) -> str:
+        """What the sandbox should call through for this system."""
+        manager = getattr(self, "auth_manager", None)
+        found = manager.connection_handle(system) if manager is not None and hasattr(manager, "connection_handle") else None
+        # Local-vault mode: the handle is the provider name.
+        return found if isinstance(found, str) and found else system
+
+    def _prepare_access(self, system: Optional[str]) -> None:
+        """Offer what this system can do right now, and nothing it cannot.
+
+        Offering an atom for a provider with no usable credential produces a
+        confident call that cannot be signed, which reads as a broken capability
+        rather than a missing connection.
+        """
+        from jarviscore.nexus.store import ConnectionState
+
+        self._offered_system = system
+        connected = self._connection_state(system) is ConnectionState.CONNECTED
+        self._offer_system_capabilities(system if connected else None)
+        self._offer_access_request(system)
+        if connected and system:
+            # Keeps the credential and the capability pointing at the same provider.
+            if self._run_context.get("_nexus_provider") != system:
+                self._run_context["_nexus_connection_id"] = self._connection_handle(system)
+                self._run_context["_nexus_provider"] = system
+
+    def _prepare_access_for_systems(self, systems: List[str]) -> None:
+        """Expose read-capable connected systems without choosing one for the agent."""
+        from jarviscore.nexus.store import ConnectionState
+
+        unique = list(dict.fromkeys(systems))
+        connected = [
+            system for system in unique
+            if self._connection_state(system) is ConnectionState.CONNECTED
+        ]
+        self._offered_system = ",".join(unique)
+        self._offer_system_capabilities_for(connected)
+        self._offer_access_request()
+        self._run_context.pop("_nexus_connection_id", None)
+        self._run_context.pop("_nexus_provider", None)
+
+    def _refresh_offerings_for(self, system: Optional[str]) -> Optional[str]:
+        """Re-offer for a system named after the run began; note what changed."""
+        if not system or system == getattr(self, "_offered_system", None):
+            return None
+        self._prepare_access(system)
+        if self._atom_tools:
+            return (
+                f"{system} has {len(self._atom_tools)} proven capabilities, now in "
+                f"your tools: {', '.join(self._atom_tools)}. Prefer them over code "
+                "that repeats what they already do."
+            )
+        if self._access_tools:
+            return (
+                f"{system}'s app is registered but no account is connected, so no "
+                "call to it can be signed, and its capabilities are held back "
+                "until one is. request_access is now in your tools; it asks a "
+                "human to consent and returns when they have."
+            )
+        return None
+
+    def _providers_awaiting_consent(self) -> List[Tuple[str, int]]:
+        """Registered providers missing usable credentials, and what each unlocks.
+
+        Two sources, because consent is lost two ways: an app registered and
+        never connected (the vault knows), or a connection the broker has since
+        marked as needing re-consent (the auth manager knows).
+        """
+        pending: Dict[str, int] = {}
+        connected_at_gateway = getattr(self.auth_manager, "is_connected", lambda _p: False)
+        try:
+            from jarviscore.nexus.store import get_store
+            store = get_store()
+            for provider in store.list():
+                # The vault holds only the app; the token may have landed at the
+                # gateway. Asking again for access already granted is the exact
+                # thing this whole path exists to stop.
+                from jarviscore.nexus.store import ConnectionState
+                state_fn = getattr(store, "connection_state", None)
+                awaiting = (
+                    state_fn(provider) is ConnectionState.REGISTERED
+                    if state_fn is not None
+                    else store.needs_consent(provider)
+                )
+                if awaiting and not connected_at_gateway(provider):
+                    pending[provider] = len(self._valid_atoms(provider))
+        except Exception as exc:
+            self._log.debug("Consent states unavailable: %s", exc)
+        manager = self.auth_manager
+        if manager is not None and hasattr(manager, "providers_needing_attention"):
+            for provider in manager.providers_needing_attention():
+                pending.setdefault(provider, len(self._valid_atoms(provider)))
+        return sorted(pending.items())
+
+    def _offer_access_request(self, system: Optional[str] = None) -> None:
+        """Offer a way to get connected, for anything that is one consent away.
+
+        Not keyed to a system resolved before the run: the agent is often the
+        first to work out which provider a task needs, and a capability it can
+        only ask for after naming it is one it will never think to ask for.
+        """
+        for name in getattr(self, "_access_tools", ()):
+            self._tools.pop(name, None)
+        self._access_tools = []
+
+        pending = self._providers_awaiting_consent()
+        if not pending:
+            return
+        described = ", ".join(
+            f"{provider} ({count} capabilities)" for provider, count in pending
+        )
+        self.register_tool(
+            "request_access",
+            self._access_tool(),
+            "Ask a human to connect an account for a provider whose app is "
+            f"registered but which nobody has consented to yet: {described}. "
+            "Nothing can be signed for these, so their capabilities are held "
+            "back. Pass system=<name>. This shows the human a consent link and "
+            "waits for them; when it returns, that provider's capabilities are "
+            "in your tools and you continue with the task.",
+            phase="action",
+        )
+        self._access_tools = ["request_access"]
+
+    def _access_tool(self):
+        async def request_access(system: str):
+            if not system:
+                return {
+                    "status": "error",
+                    "error": "request_access needs the system to connect.",
+                    "semantic_error": "SYSTEM_NOT_NAMED",
+                }
+            if not self.auth_manager:
+                self._log.error(
+                    "%s needs a consent flow but no Nexus gateway is configured "
+                    "to run one; set NEXUS_GATEWAY_URL.", system,
+                )
+                return {
+                    "status": "error",
+                    "error": (
+                        f"Nobody can approve access to {system} from here, so it "
+                        "cannot be used for this task. Say plainly that the task "
+                        f"needs {system} and that access to it is unavailable."
+                    ),
+                    "semantic_error": "NO_CONSENT_CHANNEL",
+                }
+            try:
+                return_url = self.auth_manager.return_url
+                run_id = self._run_context.get("run_id")
+                if run_id:
+                    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+                    parsed = urlparse(return_url)
+                    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+                    query["run_id"] = str(run_id)
+                    return_url = urlunparse(parsed._replace(query=urlencode(query)))
+                connection_id, auth_url = await self.auth_manager.begin_authentication(
+                    system, return_url=return_url
+                )
+                from jarviscore.nexus.store import get_store
+                store = get_store()
+                profile = store.get(system) if hasattr(store, "get") else None
+                auth_type = str((profile or {}).get("auth_type") or "oauth2")
+                if auth_type == "oauth2":
+                    await self.auth_manager.flow_handler.present_auth_url(
+                        auth_url, system, connection_id=connection_id,
+                        context=self._run_context,
+                    )
+                else:
+                    state, schema = await self.auth_manager.credential_capture(auth_url)
+                    await self.auth_manager.flow_handler.present_credential_input(
+                        schema, system, connection_id, state, self._run_context
+                    )
+            except Exception as exc:
+                return {
+                    "status": "error",
+                    "error": f"Access to {system} could not be requested: {exc}",
+                    "semantic_error": "CONSENT_NOT_STARTED",
+                }
+            return {
+                "status": "waiting",
+                "hitl_required": True,
+                "hitl_type": "auth",
+                "typed_outcome": "WAITING_FOR_CONSENT",
+                "system": system,
+                "connection_id": connection_id,
+                "workflow_id": self._run_context.get("workflow_id"),
+                "step_id": self._run_context.get("step_id"),
+                "detail": (
+                    f"Waiting for a person to connect {system}. The task will "
+                    "resume from this turn after consent completes."
+                ),
+            }
+
+        return request_access
+
+    def _atom_tool(self, name: str):
+        async def call(**params):
+            from jarviscore.execution.atom_contract import invocation
+
+            atom = self._atoms.get(name)
+            registry = self.code_registry
+            code = registry.get_function_code(name) if registry is not None else None
+            if atom is None or not code:
+                return {
+                    "status": "error",
+                    "error": f"`{name}` is no longer in the registry.",
+                    "semantic_error": "ATOM_UNAVAILABLE",
+                }
+            action_id = self._atom_action_id(atom, params)
+            if atom.policy.requires_approval and action_id not in set(
+                self._run_context.get("_approved_actions") or ()
+            ):
+                return {
+                    "status": "waiting",
+                    "hitl_required": True,
+                    "hitl_type": "approval",
+                    "typed_outcome": "WAITING_FOR_APPROVAL",
+                    "system": atom.system,
+                    "action_id": action_id,
+                    "action": atom.describe(),
+                    "consequence": atom.policy.consequence,
+                    "workflow_id": self._run_context.get("workflow_id"),
+                    "step_id": self._run_context.get("step_id"),
+                    "detail": f"Waiting for approval before {atom.name} runs.",
+                }
+            prior = self._idempotent_result(action_id)
+            if prior is not None:
+                return prior
+            self._run_context["_nexus_connection_id"] = self._connection_handle(
+                atom.system
+            )
+            self._run_context["_nexus_provider"] = atom.system
+            # Runs where any other sandbox code runs: nexus_call attaches the
+            # credential there, so proving an atom is just running it.
+            result = await self._tool_execute_code(
+                code=f"{code}\n\n{invocation(atom, params)}",
+                description=f"{name} via {atom.system}",
+                _internal_atom=(atom, action_id),
+            )
+            self._record_atom_outcome(name, result, params=params)
+            if (
+                atom.policy.effect in {"write", "notify", "destructive"}
+                and result.get("status") == "success"
+            ):
+                self._save_idempotent_result(action_id, result)
+            return result
+        call.__name__ = name
+        return call
+
+    @staticmethod
+    def _atom_action_id(atom, params: Dict[str, Any]) -> str:
+        import hashlib
+        import json
+
+        identity = {
+            field: params.get(field) for field in atom.policy.idempotency_fields
+        }
+        encoded = json.dumps(
+            {"atom": atom.name, "identity": identity}, sort_keys=True, default=str
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _idempotent_result(self, action_id: str):
+        store = self.redis_store
+        if store is None or not hasattr(store, "get_atom_execution"):
+            return None
+        return store.get_atom_execution(action_id)
+
+    def _save_idempotent_result(self, action_id: str, result: Dict[str, Any]) -> None:
+        store = self.redis_store
+        if store is not None and hasattr(store, "save_atom_execution"):
+            store.save_atom_execution(action_id, result)
+
+    def _record_atom_outcome(
+        self,
+        name: str,
+        result: Dict[str, Any],
+        *,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """An atom called as a tool is the evidence its stage is built on.
+
+        This is the path agents use once a provider is connected, so leaving it
+        unrecorded meant the registry never learned from the calls that matter.
+        A refusal at the credential boundary is not recorded: the atom never ran.
+        """
+        if self.code_registry is None:
+            return
+        status = result.get("status")
+        if status not in ("success", "failure") or result.get("access_failure"):
+            return
+        try:
+            self.code_registry.update_execution_stats(
+                name,
+                success=status == "success",
+                execution_time=float(result.get("execution_time") or 0.0),
+                error_type=result.get("error_type"),
+            )
+            if status == "failure":
+                metadata = self.code_registry.get_function_metadata(name) or {}
+                self._failed_atom_calls[name] = {
+                    "version": metadata.get("version"),
+                    "params": dict(params or {}),
+                    "error": result.get("error"),
+                }
+                result["atom_repair"] = {
+                    "available": True,
+                    "function_name": name,
+                    "version": metadata.get("version"),
+                    "next_tool": "inspect_atom_for_repair",
+                }
+        except Exception as exc:
+            logger.warning("Failed to record outcome for atom %s: %s", name, exc)

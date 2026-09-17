@@ -12,6 +12,17 @@ from .dependency import DependencyManager
 from .status import StatusManager, StepStatus
 from .state import WorkflowState
 from .workflow_builder import WorkflowBuilder, Workflow, WorkflowStep
+from .envelopes import (
+    CapabilityMandate,
+    ClaimRecord,
+    DependencyAuthorization,
+    ExecutionBudget,
+    EffectIntentDecision,
+    FulfillmentRecord,
+    WorkflowEnvelope,
+    WorkflowEvidence,
+    neutral_context,
+)
 
 __all__ = [
     'WorkflowEngine',
@@ -24,4 +35,13 @@ __all__ = [
     'WorkflowBuilder',
     'Workflow',
     'WorkflowStep',
+    'CapabilityMandate',
+    'ClaimRecord',
+    'DependencyAuthorization',
+    'ExecutionBudget',
+    'EffectIntentDecision',
+    'FulfillmentRecord',
+    'WorkflowEnvelope',
+    'WorkflowEvidence',
+    'neutral_context',
 ]

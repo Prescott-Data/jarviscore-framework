@@ -42,10 +42,8 @@ class AdaptiveHITLPolicy:
     """
     Decides when the kernel should pause for human input.
 
-    Triggers (any match → escalate):
-      - reason_code in reason_codes
-      - confidence < max_confidence   (agent not confident enough)
-      - risk_score > min_risk_score   (action too risky to auto-proceed)
+        HITL is admissible only for one of the canonical human-only categories.
+        Confidence, token spend, and routine execution failure never qualify.
 
     Default: disabled — agents never escalate unless you turn this on.
 
@@ -72,6 +70,8 @@ class AdaptiveHITLPolicy:
         reason_code: Optional[str] = None,
         confidence: Optional[float] = None,
         risk_score: Optional[float] = None,
+        autonomous_paths_exhausted: bool = False,
+        human_exclusive: bool = False,
     ) -> Tuple[bool, str]:
         """
         Evaluate whether to escalate to a human.
@@ -82,19 +82,18 @@ class AdaptiveHITLPolicy:
         if not self.enabled:
             return False, ""
 
-        # Reason code match
-        if reason_code and self.reason_codes and reason_code in self.reason_codes:
-            return True, f"reason_code:{reason_code}"
+        allowed = {"auth_required", "data_required", "critical_action"}
+        category = str(reason_code or "")
+        if category not in allowed:
+            return False, ""
+        if self.reason_codes and category not in self.reason_codes:
+            return False, ""
+        if category == "data_required" and not (
+            autonomous_paths_exhausted and human_exclusive
+        ):
+            return False, ""
+        return True, f"category:{category}"
 
-        # Low confidence
-        if confidence is not None and confidence < self.max_confidence:
-            return True, f"low_confidence:{confidence:.2f}<{self.max_confidence:.2f}"
-
-        # High risk
-        if risk_score is not None and risk_score > self.min_risk_score:
-            return True, f"high_risk:{risk_score:.2f}>{self.min_risk_score:.2f}"
-
-        return False, ""
 
 
 __all__ = [

@@ -1,5 +1,7 @@
 ---
 icon: material/swap-horizontal
+title: "Adapt Existing Agent Code to the JarvisCore Mesh"
+description: "Convert LangChain, CrewAI, and plain Python objects into JarvisCore agents without rewriting their core behavior by using adapters and wrappers."
 ---
 
 # Adapters

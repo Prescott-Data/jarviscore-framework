@@ -1,7 +1,7 @@
 ---
 icon: material/robot-happy
 title: AI Editor Setup - Copilot, Claude Code, Cursor
-description: Teach your AI coding editor JarvisCore. Install the JarvisCore skill for GitHub Copilot and Claude Code, wire up Cursor with AGENTS.md, and point any tool at llms.txt.
+description: Teach GitHub Copilot, Claude Code, Cursor, and other AI coding editors to write correct JarvisCore code with the bundled skill and AGENTS.md.
 ---
 
 # AI Editor Setup

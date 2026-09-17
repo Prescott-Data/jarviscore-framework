@@ -13,6 +13,9 @@ import logging
 import threading
 from typing import Optional
 
+from .scheduling import SchedulingMonitor
+from .suspicion import SuspicionGuard
+
 # swim-p2p announces itself on stdout at import; a library must stay quiet
 with contextlib.redirect_stdout(io.StringIO()) as _swim_import_noise:
     from swim.transport.hybrid import HybridTransport
@@ -45,6 +48,8 @@ class SWIMThreadManager:
         self.swim_zmq_bridge = None
         self.event_dispatcher = None
         self.bind_addr = None  # Store bind address for node_id access
+        self.scheduling_monitor: Optional[SchedulingMonitor] = None
+        self.suspicion_guard: Optional[SuspicionGuard] = None
         self._started = False
         self._initialized = threading.Event()
         self._shutdown_event = threading.Event()
@@ -145,11 +150,11 @@ class SWIMThreadManager:
                 "STABILITY_TIMEOUT_SECONDS": 3.0
             })
 
-            # Transport must tolerate co-resident inference (issue #138).
-            # Adaptive timing tunes PING_TIMEOUT toward idle sub-ms RTTs; a GIL
-            # pause from LLM/tokenizer work then blows the probe and flaps live
-            # peers to SUSPECT/DEAD. Until transport runs in its own process,
-            # probe budgets must assume inference pauses, not idle latency.
+            # A probe budget is a guess about how long inference might hold the
+            # GIL; the scheduling monitor measures it instead, and the suspicion
+            # guard refuses to call a peer suspect over a window this process was
+            # not running for (#138). The floors below remain only so ordinary
+            # jitter does not churn state between probes.
             # Env SWIM_* vars still win when explicitly set.
             import os as _os
             if "SWIM_PING_TIMEOUT" not in _os.environ:
@@ -161,6 +166,8 @@ class SWIMThreadManager:
                     float(swim_config.get("SUSPECT_TIMEOUT", 5.0)), 15.0
                 )
             if "SWIM_ADAPTIVE_TIMING" not in _os.environ:
+                # Tunes toward idle sub-millisecond RTTs, which is the opposite
+                # of what a co-resident inference workload needs.
                 swim_config["ADAPTIVE_TIMING_ENABLED"] = False
 
             # Validate config
@@ -198,6 +205,22 @@ class SWIMThreadManager:
                 return
 
             logger.info(f"SWIM node created at {self.bind_addr}")
+
+            # Watch this loop's own scheduling before the protocol starts, so the
+            # first probe already has a window to check against.
+            self.scheduling_monitor = SchedulingMonitor(
+                tick=float(self.config.get("scheduling_tick", 0.1)),
+                window=max(30.0, float(swim_config["SUSPECT_TIMEOUT"]) * 2),
+            )
+            self.scheduling_monitor.start()
+            self.suspicion_guard = SuspicionGuard(
+                self.scheduling_monitor,
+                probe_budget=float(swim_config["PING_TIMEOUT"]),
+                min_observed_fraction=float(
+                    self.config.get("min_observed_probe_fraction", 0.5)
+                ),
+            )
+            self.suspicion_guard.attach(self.swim_node.members)
 
             # Setup ZMQ integration
             zmq_port = self.bind_addr[1] + swim_config.get("ZMQ_PORT_OFFSET", zmq_port_offset)
@@ -307,6 +330,8 @@ class SWIMThreadManager:
             return
 
         logger.info("Shutting down SWIM thread...")
+        if self.scheduling_monitor and self.swim_loop:
+            self.swim_loop.call_soon_threadsafe(self.scheduling_monitor.stop)
         self._shutdown_event.set()
 
         if self.swim_thread:
