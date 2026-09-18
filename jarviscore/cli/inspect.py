@@ -1,7 +1,7 @@
 """
 jarviscore inspect - read trace JSONL files and show what your agents did.
 
-Every run already writes a flight record to traces/ (no Redis needed).
+Every run already writes a flight record to .jarviscore/traces/ (no Redis needed).
 This command turns those files into something a human can read:
 
     jarviscore inspect                       # list recorded runs
@@ -220,7 +220,7 @@ def main() -> None:
         description="Read recorded traces and show what your agents actually did.",
     )
     parser.add_argument("workflow", nargs="?", help="workflow id (prefix ok); omit to list runs")
-    parser.add_argument("--dir", default="traces", help="trace directory (default: ./traces)")
+    parser.add_argument("--dir", default=os.path.join(".jarviscore", "traces"), help="trace directory (default: ./.jarviscore/traces)")
     parser.add_argument("--step", default=None, help="only events for this step id")
     parser.add_argument("--errors", action="store_true", help="failures and recoveries only")
     args = parser.parse_args()

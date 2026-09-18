@@ -16,6 +16,8 @@ Usage:
     redis_store.save_step_output("wf-1", "step-1", output={"result": 42})
 """
 
+from jarviscore.config.paths import runtime_path
+
 from .base import BlobStorage
 from .local import LocalBlobStorage
 from .redis_store import RedisContextStore
@@ -52,5 +54,5 @@ def get_blob_storage(settings=None) -> BlobStorage:
         )
 
     return LocalBlobStorage(
-        base_path=getattr(settings, "storage_base_path", "./blob_storage"),
+        base_path=getattr(settings, "storage_base_path", None) or runtime_path("blob_storage"),
     )

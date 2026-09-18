@@ -96,7 +96,7 @@ async def cmd_status(_args: argparse.Namespace) -> None:
     if storage_backend == "azure":
         _ok("Blob  Azure Blob Storage  [configured]") if os.getenv("AZURE_STORAGE_CONNECTION_STRING") else _warn("Blob  Azure — AZURE_STORAGE_CONNECTION_STRING not set")
     else:
-        base = os.getenv("STORAGE_BASE_PATH", "./blob_storage")
+        base = os.getenv("STORAGE_BASE_PATH", os.path.join(".jarviscore", "blob_storage"))
         _ok(f"Blob  Local filesystem  [{base}]")
 
     print()

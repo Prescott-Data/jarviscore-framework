@@ -89,7 +89,9 @@ class TestStorageIsTheDevelopersChoice:
         artifact = out["artifacts"][0]
         assert artifact["name"] == "local.txt"
         assert artifact["key"] is None
-        assert (tmp_path / "work/output/local.txt").read_text() == "kept on disk"
+        # default write location is the consolidated runtime dir
+        assert (
+            tmp_path / "work/.jarviscore/output/local.txt").read_text() == "kept on disk"
 
     @pytest.mark.asyncio
     async def test_fetching_without_storage_explains_itself(self, tmp_path):

@@ -214,14 +214,14 @@ def create_chat_router(
         Useful for replaying a conversation's trace in a UI without
         maintaining an SSE connection.
         """
-        from jarviscore.kernel.tracing import TraceManager
+        from jarviscore.kernel.tracing import TraceManager, DEFAULT_TRACE_DIR
         try:
             tm = TraceManager.__new__(TraceManager)
             tm.workflow_id = workflow_id
             tm.step_id = step_id
             import os
-            tm.trace_dir = "traces"
-            tm.trace_file = os.path.join("traces", f"{workflow_id}_{step_id}.jsonl")
+            tm.trace_dir = DEFAULT_TRACE_DIR
+            tm.trace_file = os.path.join(DEFAULT_TRACE_DIR, f"{workflow_id}_{step_id}.jsonl")
             tm.redis_client = TraceManager._init_redis()
             return {"events": tm.get_history()}
         except Exception as exc:

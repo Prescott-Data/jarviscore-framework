@@ -28,6 +28,7 @@ Every subsequent phase depends on this store working correctly.
 """
 
 import json
+import os
 import time
 
 import pytest
@@ -1263,7 +1264,7 @@ class TestSettingsIntegration:
         from jarviscore.config.settings import Settings
         s = Settings()
         assert s.storage_backend == "local"
-        assert s.storage_base_path == "./blob_storage"
+        assert s.storage_base_path == os.path.join(".jarviscore", "blob_storage")
 
     def test_kernel_settings(self):
         from jarviscore.config.settings import Settings
