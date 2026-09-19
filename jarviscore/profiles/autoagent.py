@@ -14,6 +14,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
 from jarviscore.core.profile import Profile
+from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 
 if TYPE_CHECKING:
     from jarviscore.planning.goal_context import GoalExecution
@@ -603,6 +604,22 @@ class AutoAgent(Profile):
                     )
                     complexity = await classifier.classify(task_desc, context=ctx)
                     self._complexity_decision = complexity
+            except WorkflowBudgetExceeded as budget_exc:
+                return {
+                    "status": "epoch_exhausted",
+                    "output": None,
+                    "payload": None,
+                    "error": str(budget_exc),
+                    "tokens": {"input": 0, "output": 0, "total": 0},
+                    "cost_usd": 0.0,
+                    "repairs": 0,
+                    "agent_id": self.agent_id,
+                    "role": self.role,
+                    "yield_metadata": {
+                        "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+                        "checkpointed": False,
+                    },
+                }
             except Exception as e:
                 # A flaky preflight must not kill work the Kernel could do
                 # (issue #63): fall back to a direct Kernel turn instead of

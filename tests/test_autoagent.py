@@ -452,6 +452,44 @@ class TestAutoAgentExecution:
         assert result["cost_usd"] == pytest.approx(0.00200168)
 
     @pytest.mark.asyncio
+    async def test_typesafe_complexity_budget_exhaustion_requests_a_new_epoch(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from jarviscore.orchestration.budget import WorkflowBudgetExceeded
+
+        class KernelMustNotRun:
+            auth_manager = None
+
+            async def execute(self, **kwargs):
+                raise AssertionError("budget exhaustion must not reach the Kernel")
+
+        agent = GoalDirectAutoAgent()
+        agent._mesh = SimpleNamespace(
+            config={"task_complexity_provider": "typesafe"}
+        )
+        agent.decisions = SimpleNamespace(
+            evaluate=AsyncMock(
+                side_effect=WorkflowBudgetExceeded(
+                    "The complexity decision does not fit in this epoch."
+                )
+            )
+        )
+        agent.llm = SimpleNamespace(generate=AsyncMock())
+        agent._kernel = KernelMustNotRun()
+
+        result = await agent.execute_task(
+            {"task": "Classify this task", "context": {}}
+        )
+
+        assert result["status"] == "epoch_exhausted"
+        assert result["yield_metadata"] == {
+            "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+            "checkpointed": False,
+        }
+        agent.llm.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_peer_capability_request_bypasses_nested_goal_planning(self):
         """Focused peer help stays agentic without becoming another goal program."""
         from types import SimpleNamespace

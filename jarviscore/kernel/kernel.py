@@ -33,6 +33,7 @@ from jarviscore.kernel.cognition import AgentCognitionManager
 from jarviscore.context.fidelity import Record, select_whole
 from jarviscore.kernel.state import KernelState
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
+from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 from jarviscore.promo import PROMO_MODEL
 
 logger = logging.getLogger(__name__)
@@ -179,6 +180,8 @@ processing is actually required.
             kwargs["model"] = self.model
         try:
             response = await self.llm.generate(**kwargs)
+        except WorkflowBudgetExceeded:
+            raise
         except TypeError:
             kwargs.pop("response_format", None)
             response = await self.llm.generate(**kwargs)
@@ -1095,6 +1098,25 @@ class Kernel:
                     class_ctx,
                     agent_default_role=agent_default_role,
                     use_default_role_as_fallback=use_default_role_as_fallback,
+                )
+            except WorkflowBudgetExceeded as budget_exc:
+                logger.info("[Kernel] Routing exhausted the active workflow epoch")
+                return AgentOutput(
+                    status="epoch_exhausted",
+                    payload=None,
+                    summary=(
+                        "Active execution epoch exhausted before routing; "
+                        "continue in a new execution epoch."
+                    ),
+                    trajectory=[],
+                    metadata={
+                        "tokens": total_tokens,
+                        "cost_usd": total_cost,
+                        "dispatches": dispatches,
+                        "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+                        "checkpointed": False,
+                        "budget_error": str(budget_exc),
+                    },
                 )
             except RoutingError as route_exc:
                 logger.error("[Kernel] Routing failed: %s", route_exc)

@@ -116,6 +116,33 @@ class TestTaskClassification:
         assert decision.cost_usd == 0.00000126
         assert mock_llm.calls == []
 
+    @pytest.mark.asyncio
+    async def test_typesafe_router_budget_exhaustion_requests_a_new_epoch(
+        self, mock_llm, mock_sandbox
+    ):
+        decision_client = SimpleNamespace(
+            evaluate=AsyncMock(
+                side_effect=WorkflowBudgetExceeded(
+                    "The routing decision does not fit in this epoch."
+                )
+            )
+        )
+        kernel = Kernel(
+            llm_client=mock_llm,
+            sandbox=mock_sandbox,
+            decision_client=decision_client,
+            config={"kernel_router_provider": "typesafe"},
+        )
+
+        output = await kernel.execute(task="Route this task", max_dispatches=1)
+
+        assert output.status == "epoch_exhausted"
+        assert output.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+        assert output.metadata["checkpointed"] is False
+        assert output.metadata["dispatches"] == []
+        assert "routing decision" in output.metadata["budget_error"]
+        assert mock_llm.calls == []
+
     def test_unknown_kernel_router_provider_is_rejected(self, mock_llm, mock_sandbox):
         with pytest.raises(ValueError, match="kernel_router_provider"):
             Kernel(
