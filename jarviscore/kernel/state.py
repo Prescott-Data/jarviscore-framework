@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 class ToolReceiptError(ValueError):
@@ -288,12 +288,13 @@ class KernelState(BaseModel):
                     prior_observations[receipt_id] = CommandObservation.model_validate(
                         candidate
                     )
-                except Exception:
+                except ValidationError:
                     try:
                         prior_mutations[receipt_id] = WorkspaceMutation.model_validate(
                             candidate
                         )
-                    except Exception:
+                    except ValidationError:
+                        # Recursive context can contain unrelated receipt-shaped data.
                         pass
             for item in candidate.values():
                 collect_prior(item)
@@ -443,10 +444,11 @@ def hydrate_receipt_evidence(
                 return
             try:
                 commands[receipt_id] = CommandObservation.model_validate(candidate)
-            except Exception:
+            except ValidationError:
                 try:
                     mutations[receipt_id] = WorkspaceMutation.model_validate(candidate)
-                except Exception:
+                except ValidationError:
+                    # Recursive evidence can contain unrelated receipt-shaped data.
                     pass
         for item in candidate.values():
             collect(item)

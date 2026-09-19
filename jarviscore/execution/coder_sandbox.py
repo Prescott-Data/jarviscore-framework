@@ -250,6 +250,8 @@ class BashExecutor:
         shell_tokens = list(lexer)
         if any(token in {"<", ">", "<<", ">>"} for token in shell_tokens):
             raise BashPermissionError("Shell redirection is not allowed")
+        if "&" in shell_tokens:
+            raise BashPermissionError("Background shell commands are not allowed")
         command_indexes = [0]
         command_indexes.extend(
             index + 1
@@ -286,22 +288,33 @@ class BashExecutor:
             for name, value in self.command_environment.items():
                 if name.endswith(("_HOME", "_DIR", "CACHE")):
                     Path(value).expanduser().mkdir(parents=True, exist_ok=True)
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 command,
                 shell=True,
                 cwd=str(work_dir),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=self.timeout,
                 env=safe_env,
+                start_new_session=os.name == "posix",
             )
+            stdout, stderr = proc.communicate(timeout=self.timeout)
             return {
                 "success": proc.returncode == 0,
-                "stdout": proc.stdout.strip(),
-                "stderr": proc.stderr.strip(),
+                "stdout": stdout.strip(),
+                "stderr": stderr.strip(),
                 "returncode": proc.returncode,
             }
         except subprocess.TimeoutExpired:
+            try:
+                if os.name == "posix":
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+            except ProcessLookupError:
+                # The command exited between the timeout and termination attempt.
+                pass
+            proc.communicate()
             return {
                 "success": False,
                 "stdout": "",
@@ -800,6 +813,7 @@ class CoderSandbox:
             else:
                 process.kill()
         except ProcessLookupError:
+            # The sandbox exited between the return-code check and group kill.
             pass
         await process.wait()
 
@@ -1069,7 +1083,8 @@ class CoderSandbox:
         available = []
         import types
         for key, value in ns.items():
-            if key == '__builtins__': continue
+            if key == '__builtins__':
+                continue
             if isinstance(value, types.ModuleType):
                 available.append(f"- {key} (module)")
             elif isinstance(value, type):

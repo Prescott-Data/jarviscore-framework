@@ -1,4 +1,6 @@
 import asyncio
+import shlex
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -173,6 +175,33 @@ def test_workspace_run_validates_every_chained_command(tmp_path):
     result = sandbox.run_workspace("echo one && echo two")
     assert result["success"] is True
     assert result["stdout"] == "one\ntwo"
+
+
+def test_workspace_run_rejects_background_command_bypass(tmp_path):
+    sandbox = create_coder_sandbox(workspace_dir=tmp_path)
+
+    with pytest.raises(BashPermissionError, match="Background"):
+        sandbox.run_workspace("echo safe & uname -a")
+
+
+def test_workspace_run_timeout_kills_child_processes(tmp_path):
+    marker = tmp_path / "orphaned.txt"
+    child = (
+        "import time; from pathlib import Path; time.sleep(0.5); "
+        f"Path({str(marker)!r}).write_text('orphaned')"
+    )
+    parent = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "time.sleep(30)"
+    )
+    sandbox = create_coder_sandbox(workspace_dir=tmp_path, bash_timeout=0.1)
+
+    result = sandbox.run_workspace(f"python -c {shlex.quote(parent)}")
+    time.sleep(0.7)
+
+    assert result["status"] == "timeout"
+    assert not marker.exists()
 
 
 @pytest.mark.asyncio
