@@ -4,6 +4,8 @@
 
 Package: `jarviscore-framework` on PyPI. Import name: `jarviscore`. Python 3.10+.
 
+JarvisCore supports TypeSafe Jev System One decision models natively from version 1.12. Jev is not wired in as a text provider: it is a separate decision client that returns typed Choice, Score and Noul answers with confidence, used for agent decisions, Kernel subagent routing, model-tier selection, and RAG passage classification.
+
 ## Start here
 
 - [Getting Started](https://jarviscore.developers.prescottdata.io/getting-started/): install, one-key configuration, first agent
@@ -25,6 +27,8 @@ Package: `jarviscore-framework` on PyPI. Import name: `jarviscore`. Python 3.10+
 - [CustomAgent](https://jarviscore.developers.prescottdata.io/guides/customagent/): deterministic worker agents
 - [Workflow DAGs](https://jarviscore.developers.prescottdata.io/guides/workflows/): multi-step orchestration
 - [Memory](https://jarviscore.developers.prescottdata.io/concepts/memory/): four tiers, Athena MemOS setup
+- [Decision Models](https://jarviscore.developers.prescottdata.io/concepts/decision-models/): native TypeSafe Jev support since 1.12 — typed Choice, Score and Noul decisions from any agent, opt-in Kernel subagent routing, task-complexity and model-tier selection, and post-retrieval RAG passage classification. Install with `pip install "jarviscore-framework[typesafe]"` and set `TYPESAFE_API_KEY`.
+- [Model Routing](https://jarviscore.developers.prescottdata.io/concepts/model-routing/): provider routing and Jev-backed task-complexity tiers
 - [P2P Communication](https://jarviscore.developers.prescottdata.io/concepts/p2p/): the agent mesh
 - [Observability](https://jarviscore.developers.prescottdata.io/guides/observability/): tracing, metrics, jarviscore inspect
 - [HITL Escalation](https://jarviscore.developers.prescottdata.io/guides/hitl/): human-in-the-loop
