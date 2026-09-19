@@ -11,9 +11,7 @@ import logging
 import os
 from typing import List, Dict, Any, Optional
 
-from jarviscore.rag.embedding import EmbeddingModel
 from jarviscore.rag.chunking import chunk_text
-from jarviscore.rag.faiss_store import FaissVectorStore
 from jarviscore.rag.evidence import build_evidence_record
 
 logger = logging.getLogger(__name__)
@@ -55,6 +53,8 @@ _PASSAGE_QUESTIONS = {
 
 class RagPipeline:
     def __init__(self, decision_client=None, decision_config: Optional[Dict[str, Any]] = None):
+        from jarviscore.rag.embedding import EmbeddingModel
+
         self.decision_client = decision_client
         self.decision_config = dict(decision_config or {})
         model_name = os.environ.get("RAG_EMBED_MODEL", _DEFAULT_EMBED_MODEL)
@@ -71,6 +71,8 @@ class RagPipeline:
 
     def _init_store(self):
         """Pick vector store backend from RAG_VECTOR_STORE env var."""
+        from jarviscore.rag.faiss_store import FaissVectorStore
+
         index_path = os.environ.get("RAG_INDEX_PATH", _DEFAULT_INDEX_PATH)
         meta_path = os.environ.get("RAG_META_PATH", _DEFAULT_META_PATH)
 
