@@ -251,7 +251,9 @@ processing is actually required.
         except WorkflowBudgetExceeded:
             raise
         except Exception as exc:
-            raise RoutingError(f"TypeSafe Kernel routing failed: {exc}") from exc
+            raise RoutingError(
+                f"TypeSafe Kernel routing failed ({type(exc).__name__})."
+            ) from exc
 
         answer = result.answers.get("kernel_role") or {}
         role = str(answer.get("choice") or "").lower().strip()

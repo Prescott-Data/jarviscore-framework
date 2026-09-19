@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from jarviscore.cli.scaffold import copy_env_example, get_data_path
 from jarviscore.cli.check import HealthChecker
 
@@ -67,3 +69,32 @@ def test_typesafe_live_check_requires_an_api_key(monkeypatch):
 
     assert checker.check_typesafe_config() is False
     assert checker.issues == ["--validate-typesafe requires TYPESAFE_API_KEY."]
+
+
+@pytest.mark.asyncio
+async def test_typesafe_connectivity_failure_does_not_print_provider_secret(
+    monkeypatch, capsys
+):
+    secret = "SENSITIVE_TEST_VALUE_THAT_MUST_NOT_ESCAPE"
+
+    class FailingClient:
+        async def evaluate(self, **kwargs):
+            raise RuntimeError(f"Authorization Bearer {secret}")
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "jarviscore.execution.decisions.JevDecisionClient", FailingClient
+    )
+    checker = HealthChecker(validate_typesafe=True)
+
+    await checker.validate_typesafe_connectivity()
+
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert all(secret not in issue for issue in checker.issues)
+    assert checker.issues == [
+        "TypeSafe Jev connectivity test failed (RuntimeError)."
+    ]

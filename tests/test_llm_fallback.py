@@ -11,7 +11,7 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 import jarviscore.execution.llm as _llm_module
-from jarviscore.execution.decisions import JevDecisionClient
+from jarviscore.execution.decisions import DecisionClientError, JevDecisionClient
 from jarviscore.execution.llm import UnifiedLLMClient, LLMProvider
 from jarviscore.orchestration.budget import (
     WorkflowBudgetExceeded,
@@ -169,6 +169,32 @@ async def test_cancelled_jev_call_releases_its_workflow_reservation():
     assert usage["used_tokens"] == 0
     assert usage["call_count"] == 0
     assert usage["epoch_reserved_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_jev_provider_errors_do_not_expose_secret_text():
+    secret = "SENSITIVE_TEST_VALUE_THAT_MUST_NOT_ESCAPE"
+    client = JevDecisionClient(
+        client=SimpleNamespace(
+            system_one=AsyncMock(
+                side_effect=RuntimeError(f"Authorization Bearer {secret}")
+            )
+        )
+    )
+
+    with pytest.raises(DecisionClientError) as error:
+        await client.evaluate(
+            state="connectivity check",
+            questions={
+                "check": {
+                    "type": "noul",
+                    "instructions": "Is this a connectivity check?",
+                }
+            },
+        )
+
+    assert secret not in str(error.value)
+    assert "RuntimeError" in str(error.value)
 
 
 @pytest.mark.asyncio

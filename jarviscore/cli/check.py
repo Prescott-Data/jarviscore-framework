@@ -197,8 +197,13 @@ class HealthChecker:
             self.successes.append("TypeSafe Jev connectivity OK")
             self._print_status("  TypeSafe Jev API", True, result.model)
         except Exception as exc:
-            self.issues.append(f"TypeSafe Jev connectivity test failed: {exc}")
-            self._print_status("  TypeSafe Jev API", False, str(exc))
+            error_type = type(exc).__name__
+            self.issues.append(
+                f"TypeSafe Jev connectivity test failed ({error_type})."
+            )
+            self._print_status(
+                "  TypeSafe Jev API", False, f"Request failed ({error_type})"
+            )
         finally:
             await client.close()
 

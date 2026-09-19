@@ -1280,7 +1280,10 @@ class Mesh:
             try:
                 await self._decision_client.close()
             except Exception as exc:
-                self._logger.warning("TypeSafe decision client shutdown failed: %s", exc)
+                self._logger.warning(
+                    "TypeSafe decision client shutdown failed (%s)",
+                    type(exc).__name__,
+                )
             self._decision_client = None
 
         # Phase 9: Clear infrastructure references

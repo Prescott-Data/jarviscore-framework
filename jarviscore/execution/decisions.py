@@ -104,7 +104,9 @@ class JevDecisionClient:
                 budget_account.release(reservation_id)
             if not isinstance(exc, Exception):
                 raise
-            raise DecisionClientError(f"TypeSafe Jev decision failed: {exc}") from exc
+            raise DecisionClientError(
+                f"TypeSafe Jev decision failed ({type(exc).__name__})."
+            ) from exc
 
         usage = response.usage
         input_tokens = int(usage.input_tokens or 0)

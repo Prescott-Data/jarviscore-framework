@@ -90,8 +90,9 @@ class TaskComplexityClassifier:
                 raise
             except Exception as exc:
                 logger.warning(
-                    "TypeSafe complexity classification failed; using the existing LLM classifier: %s",
-                    exc,
+                    "TypeSafe complexity classification failed (%s); "
+                    "using the existing LLM classifier",
+                    type(exc).__name__,
                 )
         return await self._classify_with_llm(task, context)
 
