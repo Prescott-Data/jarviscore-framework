@@ -175,6 +175,7 @@ class Mesh:
         self._blob_storage    = None
         self._nexus_store     = None   # NexusLocalStore — when nexus is configured
         self._athena_client   = None   # AthenaClient — when ATHENA_URL set
+        self._decision_client = None   # JevDecisionClient — when TypeSafe is configured
         self._distributed_worker_tasks: List[asyncio.Task] = []
         self._distributed_step_tasks: Set[asyncio.Task] = set()
         self._mesh_planner_task: Optional[asyncio.Task] = None
@@ -317,6 +318,26 @@ class Mesh:
         # Athena: optional, when ATHENA_URL is set
         self._athena_client = self._init_athena(self._settings)
 
+        # TypeSafe: optional typed-decision model, separate from text generation
+        self._decision_client = self._init_decision_client(self._settings)
+
+        # AutoAgent constructs its Kernel during setup, so routing settings must
+        # reach Mesh config before agent.setup() reads it.
+        for knob in (
+            "kernel_router_provider",
+            "typesafe_router_min_confidence",
+            "task_complexity_provider",
+            "typesafe_complexity_min_confidence",
+            "rag_decision_provider",
+            "rag_typesafe_max_concurrent",
+            "rag_typesafe_injection_max",
+            "rag_typesafe_contradicts_min",
+            "rag_typesafe_relevant_min",
+            "rag_typesafe_evidence_min",
+        ):
+            if knob in self._settings.model_fields_set:
+                self.config.setdefault(knob, getattr(self._settings, knob))
+
         if self._redis_store:
             self._capabilities.add("redis")
             self._capabilities.add("peer_distributed")
@@ -326,6 +347,8 @@ class Mesh:
             self._capabilities.add("nexus")
         if self._athena_client:
             self._capabilities.add("athena")
+        if self._decision_client:
+            self._capabilities.add("decisions_typesafe")
 
         # ── 2. Infrastructure injection into agents ───────────────────────────
         # Must happen before agent.setup() so agents can use stores during setup
@@ -338,6 +361,9 @@ class Mesh:
                 self._logger.info("Agent setup complete: %s", agent.agent_id)
             except Exception as exc:
                 self._logger.error("Failed to setup agent %s: %s", agent.agent_id, exc)
+                if self._decision_client is not None:
+                    await self._decision_client.close()
+                    self._decision_client = None
                 raise
 
         # ── 4. P2P coordinator (when SWIM is configured) ──────────────────────
@@ -1250,6 +1276,16 @@ class Mesh:
         self._distributed_step_tasks.clear()
         self._mesh_planner_task = None
 
+        if self._decision_client is not None:
+            try:
+                await self._decision_client.close()
+            except Exception as exc:
+                self._logger.warning(
+                    "TypeSafe decision client shutdown failed (%s)",
+                    type(exc).__name__,
+                )
+            self._decision_client = None
+
         # Phase 9: Clear infrastructure references
         self._blob_storage = None
         self._settings = None
@@ -1729,6 +1765,17 @@ class Mesh:
             self._logger.debug("Athena client init skipped: %s", exc)
             return None
 
+    def _init_decision_client(self, settings):
+        """Initialize TypeSafe Jev only when an API key is configured."""
+        from jarviscore.execution.decisions import create_decision_client
+
+        resolved = settings.model_dump()
+        resolved.update(self.config)
+        client = create_decision_client(resolved)
+        if client is not None:
+            self._logger.info("TypeSafe Jev decision client ready")
+        return client
+
     def _resolve_auto_mode(self) -> "MeshMode":
         """
         Detect the best operational mode from the live environment.
@@ -1770,6 +1817,7 @@ class Mesh:
         Every agent ends up with:
           agent._redis_store   — RedisContextStore (or None)
           agent._blob_storage  — BlobStorage (or None)
+          agent.decisions      — JevDecisionClient (or None)
           agent.mailbox        — MailboxManager (always; in-memory when no Redis)
           agent.hitl           — HITLQueue (always, writes to hitl_inbox/)
         """
@@ -1789,6 +1837,7 @@ class Mesh:
             agent._blob_storage  = self._blob_storage
             agent._nexus_store   = self._nexus_store    # always set (NexusLocalStore)
             agent._athena_client = self._athena_client  # set when ATHENA_URL configured
+            agent.decisions      = self._decision_client
 
             # Mailbox: use Redis when available, local-only otherwise
             if self._redis_store:

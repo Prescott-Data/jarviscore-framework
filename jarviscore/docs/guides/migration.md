@@ -18,25 +18,30 @@ the next step: translating an application after that decision.
 
 ---
 
-## Upgrading JarvisCore 1.10 to 1.11
+## Upgrading JarvisCore 1.11 to 1.12
 
-JarvisCore 1.11 is a backward-compatible minor release. Existing
+JarvisCore 1.12 is a backward-compatible minor release. Existing
 `mesh.run_task()`, `mesh.workflow()`, `AutoAgent.execute_task()` and
 `CustomAgent.execute_task()` code does not require a rewrite.
 
 ```bash
-pip install --upgrade "jarviscore-framework==1.11.0"
+pip install --upgrade "jarviscore-framework==1.12.0"
+
+# Only when enabling Jev decision paths
+pip install --upgrade "jarviscore-framework[typesafe]==1.12.0"
 ```
 
-The behavioral changes apply primarily to Redis-backed `Mesh.execute_goal()`:
+The 1.11 distributed goal contracts remain compatible. Version 1.12 adds
+optional TypeSafe Jev decision-model paths; none are enabled without explicit
+configuration:
 
-| 1.10 assumption | 1.11 behavior |
+| 1.11 default | 1.12 option |
 |---|---|
-| A terminal attempt determines goal truth | Attempts and current source-obligation truth are separate |
-| Replan returns a replacement DAG | Replan appends a selective delta and retains prior attempts |
-| `status` is enough to classify the outcome | Read `status`, `obligation_status` and `response_status` |
-| Every terminal response is equivalent | `result_summary` comes from the current revision |
-| Partial semantic labels may be free-form | Requirement lists should contain stable IDs from `step["covers"]` |
+| LLM-backed Kernel role selection | `KERNEL_ROUTER_PROVIDER=typesafe` |
+| LLM-backed task complexity classification | `TASK_COMPLEXITY_PROVIDER=typesafe` |
+| Complexity selects direct execution or planning | It also selects `nano` or `standard` for direct Kernel work |
+| FAISS shortlist goes directly to Researcher | `RAG_DECISION_PROVIDER=typesafe` adds accepted, conflicting and excluded views |
+| No framework decision client | Configured agents receive `self.decisions`; AutoAgents also receive `evaluate_decisions` |
 
 ### AutoAgent users
 
@@ -48,6 +53,11 @@ See [Distributed Mesh Goals](autoagent.md#distributed-mesh-goals).
 
 `AutoAgent.execute_goal()` remains the single-agent Plan, Execute, Evaluate API.
 It is not an alias for distributed `Mesh.execute_goal()`.
+
+Jev is opt-in. Set `KERNEL_ROUTER_PROVIDER=typesafe` for subagent selection,
+`TASK_COMPLEXITY_PROVIDER=typesafe` for execution-shape and model-tier
+classification, or `RAG_DECISION_PROVIDER=typesafe` for passage decisions.
+Leaving those variables unset preserves 1.11 behavior.
 
 ### CustomAgent users
 
@@ -81,10 +91,9 @@ if result["response_status"] == "failed":
 
 ### Deployment
 
-Redis records without a stored obligation projection remain readable and are
-initialized from their workflow definition. Even so, do not run mixed 1.10 and
-1.11 claimants against an active workflow: older nodes do not implement selective
-supersession or current-revision response selection.
+Existing 1.11 Redis workflow records remain readable. Even so, do not run mixed
+1.11 and 1.12 claimants against an active workflow: 1.11 nodes do not expose the
+decision client, decision provenance, or updated execution telemetry.
 
 1. Drain or cancel active distributed goals.
 2. Upgrade every node that shares the Redis DAG.

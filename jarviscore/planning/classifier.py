@@ -1,10 +1,34 @@
 import json
+import logging
 from typing import Dict, Any, Optional
 
+from jarviscore.orchestration.budget import WorkflowBudgetExceeded
+
+logger = logging.getLogger(__name__)
+
 class ComplexityVerdict:
-    def __init__(self, level: str, reason: str):
+    def __init__(
+        self,
+        level: str,
+        reason: str,
+        *,
+        confidence: float = 1.0,
+        provider: str = "contract",
+        probabilities: Optional[Dict[str, float]] = None,
+        request_id: Optional[str] = None,
+        model: Optional[str] = None,
+        usage: Optional[Dict[str, int]] = None,
+        cost_usd: float = 0.0,
+    ):
         self.level = level
         self.reason = reason
+        self.confidence = confidence
+        self.provider = provider
+        self.probabilities = probabilities or {}
+        self.request_id = request_id
+        self.model = model
+        self.usage = usage or {}
+        self.cost_usd = cost_usd
 
 class ComplexityClassificationError(RuntimeError):
     """Raised when the complexity classifier cannot produce a valid verdict."""
@@ -14,8 +38,25 @@ class TaskComplexityClassifier:
     Cognitive router that gates tasks before the full Planner DAG.
     Classifies tasks as 'trivial', 'moderate', or 'complex'.
     """
-    def __init__(self, llm_client):
+    def __init__(
+        self,
+        llm_client,
+        *,
+        decision_client=None,
+        provider: str = "llm",
+        min_confidence: float = 0.5,
+    ):
         self.llm = llm_client
+        self.decision_client = decision_client
+        self.provider = str(provider).lower()
+        self.min_confidence = max(0.0, min(1.0, float(min_confidence)))
+        if self.provider not in {"llm", "typesafe"}:
+            raise ValueError("task_complexity_provider must be either 'llm' or 'typesafe'")
+        if self.provider == "typesafe" and self.decision_client is None:
+            raise ValueError(
+                "task_complexity_provider='typesafe' requires TYPESAFE_API_KEY "
+                'and the `jarviscore-framework[typesafe]` extra'
+            )
         self.system_prompt = (
             "You are a cognitive router for a multi-agent framework. "
             "Your job is to classify the complexity of a user's task to determine "
@@ -41,6 +82,91 @@ class TaskComplexityClassifier:
         self,
         task: str,
         context: Optional[Dict[str, Any]] = None,
+    ) -> ComplexityVerdict:
+        if self.provider == "typesafe":
+            try:
+                return await self._classify_with_typesafe(task, context)
+            except WorkflowBudgetExceeded:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "TypeSafe complexity classification failed (%s); "
+                    "using the existing LLM classifier",
+                    type(exc).__name__,
+                )
+        return await self._classify_with_llm(task, context)
+
+    async def _classify_with_typesafe(
+        self,
+        task: str,
+        context: Optional[Dict[str, Any]],
+    ) -> ComplexityVerdict:
+        result = await self.decision_client.evaluate(
+            state={
+                "task": task,
+                "context_summary": self._summarize_context(context or {}),
+            },
+            questions={
+                "complexity": {
+                    "type": "choice",
+                    "instructions": "What execution shape does this task require?",
+                    "criteria": {
+                        "trivial": (
+                            "One bounded answer or one API call; no planning or trial and error."
+                        ),
+                        "moderate": (
+                            "Two or three straightforward operations, or one bounded artifact."
+                        ),
+                        "complex": (
+                            "Significant planning, research, multiple specialists, verification, "
+                            "or trial and error."
+                        ),
+                    },
+                }
+            },
+        )
+        answer = result.answers.get("complexity") or {}
+        level = str(answer.get("choice") or "").lower().strip()
+        if level not in {"trivial", "moderate", "complex"}:
+            raise ComplexityClassificationError(
+                f"TypeSafe complexity classifier returned invalid level {level!r}"
+            )
+        confidence = max(0.0, min(1.0, float(answer.get("confidence") or 0.0)))
+        probabilities = {
+            str(name): float(probability)
+            for name, probability in (answer.get("probabilities") or {}).items()
+        }
+        if confidence < self.min_confidence:
+            return ComplexityVerdict(
+                level="complex",
+                reason=(
+                    f"TypeSafe complexity confidence {confidence:.2f} is below "
+                    f"{self.min_confidence:.2f}; preserving the planning path."
+                ),
+                confidence=confidence,
+                provider="typesafe",
+                probabilities=probabilities,
+                request_id=result.request_id,
+                model=result.model,
+                usage=dict(result.usage),
+                cost_usd=float(result.cost_usd),
+            )
+        return ComplexityVerdict(
+            level=level,
+            reason="TypeSafe Jev classified the task execution shape.",
+            confidence=confidence,
+            provider="typesafe",
+            probabilities=probabilities,
+            request_id=result.request_id,
+            model=result.model,
+            usage=dict(result.usage),
+            cost_usd=float(result.cost_usd),
+        )
+
+    async def _classify_with_llm(
+        self,
+        task: str,
+        context: Optional[Dict[str, Any]],
     ) -> ComplexityVerdict:
         payload: Any = task
         if context:
@@ -88,6 +214,7 @@ class TaskComplexityClassifier:
         return ComplexityVerdict(
             level=level,
             reason=str(data.get("reason", "")),
+            provider="llm",
         )
 
     @staticmethod

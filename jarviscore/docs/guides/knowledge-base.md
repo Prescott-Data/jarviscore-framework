@@ -103,6 +103,30 @@ for chunk in result["results"]:
 
 The `result["evidence"]` key contains a list of `Evidence` records, each with a confidence score derived from the cosine similarity, ready to be passed to a `TruthContext` or logged to the episodic ledger.
 
+### TypeSafe passage classification
+
+With the `rag` and `typesafe` extras installed, add an async decision stage
+after retrieval:
+
+```python
+rag = RagPipeline(decision_client=agent.decisions)
+result = await rag.retrieve_with_decisions("How do sessions expire?", top_k=8)
+
+for passage in result["accepted_results"]:
+    print(passage["source"], passage["decision"]["answers"])
+```
+
+For `ResearcherSubAgent`, enable the same path with
+`RAG_DECISION_PROVIDER=typesafe`. FAISS still builds the shortlist. Jev then
+scores each query-passage pair for relevance, usable evidence, premise
+contradiction, and prompt injection. The complete shortlist remains in
+`results` on the direct pipeline API; accepted, conflicting, and excluded
+subsets are additional views. The Researcher tool removes excluded passage text
+from its model observation while retaining source and decision metadata.
+
+Injection classification reduces exposure but is not a security boundary.
+Every retrieved passage must still be handled as untrusted source text.
+
 ---
 
 ## Automatic Integration with ResearcherSubAgent
@@ -202,6 +226,10 @@ RAG_META_PATH=/data/rag/faiss_meta.json
 RAG_TOP_K=5
 RAG_CHUNK_SIZE=1200
 RAG_CHUNK_OVERLAP=200
+
+# Optional Jev classification after vector retrieval
+# RAG_DECISION_PROVIDER=typesafe
+# RAG_TYPESAFE_MAX_CONCURRENT=4
 ```
 
 | Variable | Default | Description |

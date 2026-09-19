@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
+import pytest
+
 from jarviscore.cli.scaffold import copy_env_example, get_data_path
+from jarviscore.cli.check import HealthChecker
 
 
 def test_packaged_templates_exist_and_are_tracked():
@@ -18,6 +21,7 @@ def test_default_init_writes_the_minimal_template(tmp_path):
     assert len(lines) < 50, f"minimal template grew to {len(lines)} lines"
     for provider_key in ("CLAUDE_API_KEY", "AZURE_API_KEY", "GEMINI_API_KEY", "LLM_ENDPOINT"):
         assert provider_key in content
+    assert "TYPESAFE_API_KEY" in content
     assert "--full" in content       # points at the full reference
 
 
@@ -49,3 +53,67 @@ def test_templates_resolve_from_repo_checkout():
         "gitignored by an unanchored 'data/' pattern"
     )
     assert Path(str(data)).name == "data"
+
+
+def test_typesafe_health_check_is_optional_without_an_api_key(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    checker = HealthChecker()
+
+    assert checker.check_typesafe_config() is False
+    assert checker.issues == []
+
+
+def test_typesafe_live_check_requires_an_api_key(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    checker = HealthChecker(validate_typesafe=True)
+
+    assert checker.check_typesafe_config() is False
+    assert checker.issues == ["--validate-typesafe requires TYPESAFE_API_KEY."]
+
+
+def test_configured_provider_checks_never_print_key_fragments(monkeypatch, capsys):
+    secret = "START_sensitive_material_END"
+    monkeypatch.setenv("TYPESAFE_API_KEY", secret)
+    monkeypatch.setenv("CLAUDE_API_KEY", secret)
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object())
+    checker = HealthChecker(verbose=True)
+
+    assert checker.check_typesafe_config() is True
+    configured = checker.check_llm_config()
+
+    captured = capsys.readouterr()
+    assert configured["Claude"] is True
+    assert secret not in captured.out
+    assert "START" not in captured.out
+    assert "_END" not in captured.out
+    assert "TYPESAFE_API_KEY is set" in captured.out
+    assert "CLAUDE_API_KEY is set" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_typesafe_connectivity_failure_does_not_print_provider_secret(
+    monkeypatch, capsys
+):
+    secret = "SENSITIVE_TEST_VALUE_THAT_MUST_NOT_ESCAPE"
+
+    class FailingClient:
+        async def evaluate(self, **kwargs):
+            raise RuntimeError(f"Authorization Bearer {secret}")
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "jarviscore.execution.decisions.JevDecisionClient", FailingClient
+    )
+    checker = HealthChecker(validate_typesafe=True)
+
+    await checker.validate_typesafe_connectivity()
+
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert all(secret not in issue for issue in checker.issues)
+    assert checker.issues == [
+        "TypeSafe Jev connectivity test failed (RuntimeError)."
+    ]

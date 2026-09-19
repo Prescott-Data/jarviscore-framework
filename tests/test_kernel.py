@@ -7,10 +7,13 @@ multi-dispatch retry, HITL escalation, and cost aggregation.
 
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from jarviscore.kernel import Kernel
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
+from jarviscore.execution.decisions import DecisionResult
+from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 from jarviscore.testing import MockLLMClient, MockSandboxExecutor
 
 
@@ -67,6 +70,201 @@ def kernel(mock_llm, mock_sandbox):
 # ── Task Classification ──────────────────────────────────────────────
 
 class TestTaskClassification:
+
+    @pytest.mark.asyncio
+    async def test_typesafe_router_selects_role_and_preserves_probability_evidence(
+        self, mock_llm, mock_sandbox
+    ):
+        decision_client = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value=DecisionResult(
+                    model="jev-1.13",
+                    answers={
+                        "kernel_role": {
+                            "type": "choice",
+                            "choice": "researcher",
+                            "probabilities": {
+                                "browser": 0.03,
+                                "coder": 0.06,
+                                "communicator": 0.01,
+                                "researcher": 0.9,
+                            },
+                            "confidence": 0.86,
+                        }
+                    },
+                    usage={"input_tokens": 30, "output_tokens": 8},
+                    cost_usd=0.00000126,
+                    request_id="request-router",
+                )
+            )
+        )
+        kernel = Kernel(
+            llm_client=mock_llm,
+            sandbox=mock_sandbox,
+            decision_client=decision_client,
+            config={"kernel_router_provider": "typesafe"},
+        )
+
+        decision = await kernel._route_task("Find current evidence")
+
+        assert decision.role == "researcher"
+        assert decision.provider == "typesafe"
+        assert decision.probabilities["researcher"] == 0.9
+        assert decision.request_id == "request-router"
+        assert decision.model == "jev-1.13"
+        assert decision.usage == {"input_tokens": 30, "output_tokens": 8}
+        assert decision.cost_usd == 0.00000126
+        assert mock_llm.calls == []
+
+    @pytest.mark.asyncio
+    async def test_typesafe_router_budget_exhaustion_requests_a_new_epoch(
+        self, mock_llm, mock_sandbox
+    ):
+        decision_client = SimpleNamespace(
+            evaluate=AsyncMock(
+                side_effect=WorkflowBudgetExceeded(
+                    "The routing decision does not fit in this epoch."
+                )
+            )
+        )
+        kernel = Kernel(
+            llm_client=mock_llm,
+            sandbox=mock_sandbox,
+            decision_client=decision_client,
+            config={"kernel_router_provider": "typesafe"},
+        )
+
+        output = await kernel.execute(task="Route this task", max_dispatches=1)
+
+        assert output.status == "epoch_exhausted"
+        assert output.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+        assert output.metadata["checkpointed"] is False
+        assert output.metadata["dispatches"] == []
+        assert "routing decision" in output.metadata["budget_error"]
+        assert mock_llm.calls == []
+
+    def test_unknown_kernel_router_provider_is_rejected(self, mock_llm, mock_sandbox):
+        with pytest.raises(ValueError, match="kernel_router_provider"):
+            Kernel(
+                llm_client=mock_llm,
+                sandbox=mock_sandbox,
+                config={"kernel_router_provider": "unknown"},
+            )
+
+    def test_typesafe_router_requires_a_configured_client(self, mock_llm, mock_sandbox):
+        with pytest.raises(ValueError, match="TYPESAFE_API_KEY"):
+            Kernel(
+                llm_client=mock_llm,
+                sandbox=mock_sandbox,
+                config={"kernel_router_provider": "typesafe"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_explicit_role_bypasses_configured_typesafe_router(
+        self, mock_llm, mock_sandbox
+    ):
+        decision_client = SimpleNamespace(evaluate=AsyncMock())
+        kernel = Kernel(
+            llm_client=mock_llm,
+            sandbox=mock_sandbox,
+            decision_client=decision_client,
+            config={"kernel_router_provider": "typesafe"},
+        )
+
+        decision = await kernel._route_task(
+            "Run the planner-assigned research step",
+            agent_default_role="researcher",
+        )
+
+        assert decision.role == "researcher"
+        decision_client.evaluate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_configured_jev_client_is_available_as_a_subagent_tool(
+        self, mock_llm, mock_sandbox
+    ):
+        decision_client = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value=DecisionResult(
+                    model="jev-1.13",
+                    answers={"route": {"type": "choice", "choice": "researcher"}},
+                    usage={"input_tokens": 20, "output_tokens": 4},
+                    cost_usd=0.00000084,
+                    request_id="request-tool",
+                )
+            )
+        )
+        kernel = Kernel(
+            llm_client=mock_llm,
+            sandbox=mock_sandbox,
+            decision_client=decision_client,
+        )
+        subagent = kernel._create_subagent("researcher", "test-researcher")
+
+        result = await subagent._execute_tool(
+            "evaluate_decisions",
+            {
+                "state": {"task": "Find evidence"},
+                "questions": {
+                    "route": {
+                        "type": "choice",
+                        "instructions": "Which role should handle this?",
+                        "criteria": {"coder": None, "researcher": None},
+                    }
+                },
+            },
+        )
+
+        assert result["status"] == "success"
+        assert result["decision"]["answers"]["route"]["choice"] == "researcher"
+        assert result["decision"]["request_id"] == "request-tool"
+        decision_client.evaluate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_jev_tool_budget_exhaustion_requests_a_new_execution_epoch(
+        self, mock_llm, mock_sandbox
+    ):
+        decision_client = SimpleNamespace(
+            evaluate=AsyncMock(
+                side_effect=WorkflowBudgetExceeded(
+                    "The decision call does not fit in this epoch."
+                )
+            )
+        )
+        kernel = Kernel(
+            llm_client=mock_llm,
+            sandbox=mock_sandbox,
+            decision_client=decision_client,
+        )
+        mock_llm.responses = [
+            _llm_response(
+                "THOUGHT: Classify the task\n"
+                "TOOL: evaluate_decisions\n"
+                "PARAMS: "
+                + json.dumps(
+                    {
+                        "state": {"task": "Find evidence"},
+                        "questions": {
+                            "route": {
+                                "type": "choice",
+                                "instructions": "Which role should handle this?",
+                                "criteria": {"coder": None, "researcher": None},
+                            }
+                        },
+                    }
+                )
+            )
+        ]
+
+        output = await kernel.execute(
+            task="Find evidence",
+            agent_default_role="communicator",
+            max_dispatches=1,
+        )
+
+        assert output.status == "epoch_exhausted"
+        assert output.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+        assert output.metadata["dispatches"][0]["status"] == "epoch_exhausted"
 
     @pytest.mark.asyncio
     async def test_explicit_role_routes_without_llm(self, kernel, mock_llm):

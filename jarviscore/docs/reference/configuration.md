@@ -107,6 +107,35 @@ These become important once you run more than two agents concurrently against a 
 
 ---
 
+## Decision Models: TypeSafe Jev
+
+TypeSafe Jev is an optional decision model for typed `Choice`, `Score`, and
+`Noul` judgments. Install `jarviscore-framework[typesafe]`. AutoAgent still
+requires one generative LLM provider from the preceding section.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TYPESAFE_API_KEY` | (none) | Enables the shared Jev decision client. |
+| `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | TypeSafe model used for decisions. |
+| `TYPESAFE_BASE_URL` | TypeSafe SDK default | Optional compatible gateway or test endpoint. |
+| `TYPESAFE_TIMEOUT` | `10.0` | Decision request timeout in seconds. |
+| `KERNEL_ROUTER_PROVIDER` | `llm` | Set to `typesafe` to opt into Jev-backed Kernel role selection. |
+| `TYPESAFE_ROUTER_MIN_CONFIDENCE` | `0.5` | Minimum Jev routing confidence. Validate against your workload before changing production behavior. |
+| `TASK_COMPLEXITY_PROVIDER` | `llm` | Set to `typesafe` to classify direct Kernel versus Planner execution with Jev. |
+| `TYPESAFE_COMPLEXITY_MIN_CONFIDENCE` | `0.5` | Below this confidence, preserve the full planning path. |
+| `RAG_DECISION_PROVIDER` | `vector` | Set to `typesafe` to classify the FAISS shortlist before Researcher consumes it. |
+| `RAG_TYPESAFE_MAX_CONCURRENT` | `4` | Maximum concurrent passage-classification calls. |
+| `RAG_TYPESAFE_INJECTION_MAX` | `0.70` | Exclude passages above this prompt-injection probability. Advisory, not a security boundary. |
+| `RAG_TYPESAFE_CONTRADICTS_MIN` | `0.70` | Route passages above this premise-conflict probability to the conflict set. |
+| `RAG_TYPESAFE_RELEVANT_MIN` | `0.45` | Exclude passages below this relevance probability. |
+| `RAG_TYPESAFE_EVIDENCE_MIN` | `0.55` | Include passages above this usable-evidence probability after earlier checks. |
+| `TYPESAFE_INPUT_COST_PER_MILLION_USD` | `0.042` | Input-token price used for workflow cost accounting; update if TypeSafe pricing changes. |
+
+See [Decision Models](../concepts/decision-models.md) for agent APIs, routing
+precedence, privacy boundaries, and examples.
+
+---
+
 ## Redis
 
 Without Redis, JarvisCore runs in in-process mode: workflows execute locally, mailboxes are file-backed, and distributed features are unavailable. With Redis, the following capabilities become active: distributed workflow DAGs, durable mailboxes, cross-node step claiming, episodic ledger, and LTM compression.

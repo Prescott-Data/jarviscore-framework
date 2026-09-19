@@ -15,6 +15,32 @@ def test_importing_jarviscore_prints_nothing():
     assert proc.stdout == "", f"import jarviscore wrote to stdout: {proc.stdout!r}"
 
 
+def test_decision_model_types_are_public_without_optional_sdk_installed():
+    from jarviscore import DecisionResult, JevDecisionClient
+
+    assert DecisionResult.__name__ == "DecisionResult"
+    assert JevDecisionClient.__name__ == "JevDecisionClient"
+
+
+def test_rag_pipeline_module_imports_without_optional_dependencies():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                'import sys; sys.modules["numpy"] = None; '
+                'sys.modules["faiss"] = None; '
+                "from jarviscore.rag.pipeline import RagPipeline; "
+                'assert RagPipeline.__name__ == "RagPipeline"'
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_p2p_lazy_exports_still_resolve():
     from jarviscore.p2p import PeerClient  # eager, swim-free
 

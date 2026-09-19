@@ -80,6 +80,28 @@ class TestBlobStorageInit:
 
 class TestInfrastructureInjection:
     @pytest.mark.asyncio
+    async def test_agents_share_configured_decision_client(self):
+        decision_client = MagicMock()
+        decision_client.close = AsyncMock()
+
+        with patch(
+            "jarviscore.execution.decisions.create_decision_client",
+            return_value=decision_client,
+        ):
+            mesh = Mesh(mode="autonomous")
+            first = mesh.add(WorkerAgent)
+            second = mesh.add(Worker2Agent)
+            await mesh.start()
+            try:
+                assert first.decisions is decision_client
+                assert second.decisions is decision_client
+                assert mesh.has_capability("decisions_typesafe")
+            finally:
+                await mesh.stop()
+
+        decision_client.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_agent_receives_blob_storage(self):
         """Every agent gets the same _blob_storage as the mesh."""
         mesh = Mesh(mode="autonomous")
@@ -214,6 +236,46 @@ class TestMailboxInjection:
 # ======================================================================
 
 class TestInfrastructureAvailableInSetup:
+    @pytest.mark.asyncio
+    async def test_typesafe_router_environment_is_merged_before_agent_setup(
+        self, monkeypatch
+    ):
+        seen = {}
+
+        class SetupCheckAgent(Agent):
+            role = "typesafe_setup_checker"
+            capabilities = ["check"]
+
+            async def setup(self):
+                seen["provider"] = self._mesh.config.get("kernel_router_provider")
+                seen["confidence"] = self._mesh.config.get(
+                    "typesafe_router_min_confidence"
+                )
+                seen["complexity_provider"] = self._mesh.config.get(
+                    "task_complexity_provider"
+                )
+                seen["rag_provider"] = self._mesh.config.get("rag_decision_provider")
+
+            async def execute_task(self, task):
+                return {"status": "success", "output": "done"}
+
+        monkeypatch.setenv("KERNEL_ROUTER_PROVIDER", "typesafe")
+        monkeypatch.setenv("TYPESAFE_ROUTER_MIN_CONFIDENCE", "0.72")
+        monkeypatch.setenv("TASK_COMPLEXITY_PROVIDER", "typesafe")
+        monkeypatch.setenv("RAG_DECISION_PROVIDER", "typesafe")
+        mesh = Mesh(mode="autonomous")
+        mesh.add(SetupCheckAgent)
+        await mesh.start()
+        try:
+            assert seen == {
+                "provider": "typesafe",
+                "confidence": 0.72,
+                "complexity_provider": "typesafe",
+                "rag_provider": "typesafe",
+            }
+        finally:
+            await mesh.stop()
+
     @pytest.mark.asyncio
     async def test_blob_storage_available_in_setup(self):
         """_blob_storage is already injected when agent.setup() is called."""

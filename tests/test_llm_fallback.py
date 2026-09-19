@@ -5,10 +5,13 @@ Tests the fallback order: Azure → Claude → Gemini → Vertex AI → vLLM
 Azure is the primary provider in this deployment.
 """
 
+import asyncio
+import json
 import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 import jarviscore.execution.llm as _llm_module
+from jarviscore.execution.decisions import DecisionClientError, JevDecisionClient
 from jarviscore.execution.llm import UnifiedLLMClient, LLMProvider
 from jarviscore.orchestration.budget import (
     WorkflowBudgetExceeded,
@@ -23,6 +26,175 @@ def _budget_test_client(result):
     llm._semaphore = None
     llm._generate_inner = AsyncMock(return_value=result)
     return llm
+
+
+@pytest.mark.asyncio
+async def test_jev_decision_client_preserves_typed_answers_and_usage():
+    sdk_client = SimpleNamespace(
+        system_one=AsyncMock(
+            return_value=SimpleNamespace(
+                model="jev-1.13",
+                request_id="request-123",
+                usage=SimpleNamespace(input_tokens=31, output_tokens=9),
+                answers={
+                    "route": SimpleNamespace(
+                        type="choice",
+                        choice="researcher",
+                        probabilities={"coder": 0.1, "researcher": 0.9},
+                        confidence=0.8,
+                    ),
+                    "risk": SimpleNamespace(type="noul", noul=0.12),
+                    "severity": SimpleNamespace(
+                        type="score",
+                        score=1.4,
+                        legend={0: "low", 1: "medium", 2: "high"},
+                        probabilities={0: 0.1, 1: 0.4, 2: 0.5},
+                        confidence=0.44,
+                    ),
+                },
+            )
+        )
+    )
+    client = JevDecisionClient(client=sdk_client)
+
+    result = await client.evaluate(
+        state={"task": "Find current evidence"},
+        questions={
+            "route": {
+                "type": "choice",
+                "instructions": "Which role should handle this task?",
+                "criteria": {"coder": None, "researcher": None},
+            },
+            "risk": {
+                "type": "noul",
+                "instructions": "Does this task propose a risky action?",
+            },
+            "severity": {
+                "type": "score",
+                "instructions": "How severe is the task?",
+                "criteria": ["low", "medium", "high"],
+            },
+        },
+    )
+
+    assert result.to_dict() == {
+        "model": "jev-1.13",
+        "answers": {
+            "route": {
+                "type": "choice",
+                "choice": "researcher",
+                "probabilities": {"coder": 0.1, "researcher": 0.9},
+                "confidence": 0.8,
+            },
+            "risk": {"type": "noul", "noul": 0.12},
+            "severity": {
+                "type": "score",
+                "score": 1.4,
+                "legend": {"0": "low", "1": "medium", "2": "high"},
+                "probabilities": {"0": 0.1, "1": 0.4, "2": 0.5},
+                "confidence": 0.44,
+            },
+        },
+        "usage": {"input_tokens": 31, "output_tokens": 9},
+        "cost_usd": 31 * 0.042 / 1_000_000,
+        "request_id": "request-123",
+    }
+    assert json.loads(json.dumps(result.to_dict())) == result.to_dict()
+    sdk_client.system_one.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_jev_decision_client_settles_usage_into_the_workflow_budget():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-jev-budget",
+        "Bound every decision call",
+        budget={"max_tokens": 1000},
+    )
+    sdk_client = SimpleNamespace(
+        system_one=AsyncMock(
+            return_value=SimpleNamespace(
+                model="jev-1.13",
+                request_id="request-budget",
+                usage=SimpleNamespace(input_tokens=40, output_tokens=5),
+                answers={"relevant": SimpleNamespace(type="noul", noul=0.91)},
+            )
+        )
+    )
+    client = JevDecisionClient(client=sdk_client)
+
+    with workflow_budget_scope(store, "wf-jev-budget"):
+        await client.evaluate(
+            state="Current evidence",
+            questions={
+                "relevant": {
+                    "type": "noul",
+                    "instructions": "Is this evidence relevant?",
+                }
+            },
+        )
+
+    usage = store.get_workflow_budget_usage("wf-jev-budget", "default")
+    assert usage["used_tokens"] == 45
+    assert usage["cost_usd"] == 40 * 0.042 / 1_000_000
+    assert usage["call_count"] == 1
+    assert usage["epoch_reserved_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_jev_call_releases_its_workflow_reservation():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-jev-cancelled",
+        "Release cancelled decision calls",
+        budget={"max_tokens": 1000},
+    )
+    client = JevDecisionClient(
+        client=SimpleNamespace(system_one=AsyncMock(side_effect=asyncio.CancelledError()))
+    )
+
+    with workflow_budget_scope(store, "wf-jev-cancelled"):
+        with pytest.raises(asyncio.CancelledError):
+            await client.evaluate(
+                state="Cancel this request",
+                questions={
+                    "cancelled": {
+                        "type": "noul",
+                        "instructions": "Was this request cancelled?",
+                    }
+                },
+            )
+
+    usage = store.get_workflow_budget_usage("wf-jev-cancelled", "default")
+    assert usage["used_tokens"] == 0
+    assert usage["call_count"] == 0
+    assert usage["epoch_reserved_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_jev_provider_errors_do_not_expose_secret_text():
+    secret = "SENSITIVE_TEST_VALUE_THAT_MUST_NOT_ESCAPE"
+    client = JevDecisionClient(
+        client=SimpleNamespace(
+            system_one=AsyncMock(
+                side_effect=RuntimeError(f"Authorization Bearer {secret}")
+            )
+        )
+    )
+
+    with pytest.raises(DecisionClientError) as error:
+        await client.evaluate(
+            state="connectivity check",
+            questions={
+                "check": {
+                    "type": "noul",
+                    "instructions": "Is this a connectivity check?",
+                }
+            },
+        )
+
+    assert secret not in str(error.value)
+    assert "RuntimeError" in str(error.value)
 
 
 @pytest.mark.asyncio

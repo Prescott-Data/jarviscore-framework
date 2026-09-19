@@ -88,6 +88,17 @@ class Settings(BaseSettings):
         validation_alias="JARVISCORE_PROMO_RAW_ARTIFACT_DIR",
     )
 
+    # TypeSafe Jev decision model. Separate from generation providers because
+    # System One returns typed judgments rather than text completions.
+    typesafe_api_key: Optional[str] = Field(None, validation_alias="TYPESAFE_API_KEY")
+    typesafe_model: str = Field("jev-latest", validation_alias="TYPESAFE_DEFAULT_MODEL")
+    typesafe_base_url: Optional[str] = Field(None, validation_alias="TYPESAFE_BASE_URL")
+    typesafe_timeout: float = Field(10.0, validation_alias="TYPESAFE_TIMEOUT")
+    typesafe_input_cost_per_million_usd: float = Field(
+        0.042,
+        validation_alias="TYPESAFE_INPUT_COST_PER_MILLION_USD",
+    )
+
 
 
     # Claude
@@ -150,6 +161,16 @@ class Settings(BaseSettings):
     kernel_thinking_budget: int = 56000
     kernel_action_budget: int = 24000
     kernel_wall_clock_ms: int = 180000
+    kernel_router_provider: str = "llm"
+    typesafe_router_min_confidence: float = 0.5
+    task_complexity_provider: str = "llm"
+    typesafe_complexity_min_confidence: float = 0.5
+    rag_decision_provider: str = "vector"
+    rag_typesafe_max_concurrent: int = 4
+    rag_typesafe_injection_max: float = 0.70
+    rag_typesafe_contradicts_min: float = 0.70
+    rag_typesafe_relevant_min: float = 0.45
+    rag_typesafe_evidence_min: float = 0.55
 
     # === Workflow orchestration ===
     # Max seconds the coordinator waits for a step (local dependency gates and

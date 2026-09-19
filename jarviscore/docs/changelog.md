@@ -26,6 +26,29 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.12.0 <span class="changelog-date">2026-09-19</span>
+
+### Added
+
+- Native TypeSafe Jev decision-model support through an optional async client
+  for typed `Choice`, `Score`, and `Noul` questions. Mesh injects one shared
+  client into agents, AutoAgent exposes the same capability as a thinking tool,
+  and reported usage participates in workflow budgets and execution metadata.
+  Verified against live `jev-1.13.0` with `typesafe-sdk` 0.7.0.
+- Opt-in Jev-backed Kernel subagent selection with complete probability,
+  confidence, model, request, usage, and cost provenance. Explicit execution
+  contracts and deterministic credentialed-system routing retain precedence.
+- Opt-in Jev task-complexity classification now selects direct `nano` or
+  `standard` Kernel execution versus the full Planner path. Low-confidence
+  decisions preserve planning; provider failures retain the existing LLM classifier.
+- Optional post-retrieval Jev classification routes FAISS candidates into
+  accepted, conflicting, and excluded views while retaining the complete
+  shortlist and per-passage decision provenance.
+- `jarviscore check --validate-typesafe` performs one live typed decision so a
+  deployment can prove connectivity without writing agent code.
+
+---
+
 ## 1.11.0 <span class="changelog-date">2026-09-11</span>
 
 ### Added

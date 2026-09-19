@@ -91,6 +91,7 @@ class Agent(ABC):
         self._blob_storage   = None
         self._nexus_store    = None   # NexusLocalStore — credential vault (always available)
         self._athena_client  = None   # AthenaClient — when ATHENA_URL set
+        self.decisions       = None   # JevDecisionClient — when TYPESAFE_API_KEY set
 
         # Cloud deployment support (standalone mode)
         self._standalone_p2p: Optional['P2PCoordinator'] = None
