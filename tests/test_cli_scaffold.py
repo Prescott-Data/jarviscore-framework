@@ -71,6 +71,25 @@ def test_typesafe_live_check_requires_an_api_key(monkeypatch):
     assert checker.issues == ["--validate-typesafe requires TYPESAFE_API_KEY."]
 
 
+def test_configured_provider_checks_never_print_key_fragments(monkeypatch, capsys):
+    secret = "START_sensitive_material_END"
+    monkeypatch.setenv("TYPESAFE_API_KEY", secret)
+    monkeypatch.setenv("CLAUDE_API_KEY", secret)
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object())
+    checker = HealthChecker(verbose=True)
+
+    assert checker.check_typesafe_config() is True
+    configured = checker.check_llm_config()
+
+    captured = capsys.readouterr()
+    assert configured["Claude"] is True
+    assert secret not in captured.out
+    assert "START" not in captured.out
+    assert "_END" not in captured.out
+    assert "TYPESAFE_API_KEY is set" in captured.out
+    assert "CLAUDE_API_KEY is set" in captured.out
+
+
 @pytest.mark.asyncio
 async def test_typesafe_connectivity_failure_does_not_print_provider_secret(
     monkeypatch, capsys

@@ -134,9 +134,8 @@ class HealthChecker:
 
             if is_configured:
                 key_name = next(var for var in env_vars if os.getenv(var))
-                masked = self._mask_api_key(os.getenv(key_name))
                 self.successes.append(f"{provider} configured")
-                self._print_status(f"  {provider}", True, f"{key_name}={masked}")
+                self._print_status(f"  {provider}", True, f"{key_name} is set")
             else:
                 self._print_status(f"  {provider}", False, "Not configured")
 
@@ -171,7 +170,7 @@ class HealthChecker:
         self._print_status(
             "  TypeSafe Jev",
             True,
-            f"TYPESAFE_API_KEY={self._mask_api_key(api_key)}",
+            "TYPESAFE_API_KEY is set",
         )
         return True
 
@@ -424,14 +423,6 @@ class HealthChecker:
             print(f"{symbol} {label_padded} {detail}")
         else:
             print(f"{symbol} {label_padded} OK")
-
-    def _mask_api_key(self, key: str) -> str:
-        """Mask API key for display."""
-        if not key:
-            return "None"
-        if len(key) <= 8:
-            return "*" * len(key)
-        return f"{key[:4]}...{key[-4:]}"
 
     async def run(self) -> bool:
         """Run all health checks."""
