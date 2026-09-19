@@ -61,6 +61,15 @@ extra_javascript:
 
 plugins:
   - search
+  - social:
+      cards_layout_dir: layouts
+      cards_layout: jarviscore
+      cards_layout_options:
+        background_color: "#0533AC"
+        color: "#ffffff"
+        font_family: Inter
+        # The wordmark is 776x118 and crops badly in the square logo slot.
+        logo: jarviscore/docs/assets/monogram-white.svg
 
 markdown_extensions:
   - admonition
