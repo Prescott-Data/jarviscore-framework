@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT / "jarviscore" / "docs"
 SITE_DIR = ROOT / "site"
 SITE_URL = "https://jarviscore.developers.prescottdata.io/"
-SOCIAL_IMAGE_URL = f"{SITE_URL}assets/social-card.png"
+SOCIAL_CARD_PREFIX = f"{SITE_URL}assets/images/social/"
 MERMAID_SCRIPT = "https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js"
 FRONT_MATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
 
@@ -149,10 +149,13 @@ def validate_rendered(errors: list[str]) -> int:
         missing = sorted(key for key in required_meta if not parser.meta.get(key))
         if missing:
             errors.append(f"{relative}: missing metadata {', '.join(missing)}")
-        if parser.meta.get("og:image") != SOCIAL_IMAGE_URL:
-            errors.append(f"{relative}: incorrect og:image")
-        if parser.meta.get("twitter:image") != SOCIAL_IMAGE_URL:
-            errors.append(f"{relative}: incorrect twitter:image")
+        card = parser.meta.get("og:image", "")
+        if not card.startswith(SOCIAL_CARD_PREFIX) or not card.endswith(".png"):
+            errors.append(f"{relative}: og:image is not a generated social card")
+        elif not (SITE_DIR / card[len(SITE_URL) :]).is_file():
+            errors.append(f"{relative}: social card is missing from the build")
+        if parser.meta.get("twitter:image") != card:
+            errors.append(f"{relative}: twitter:image does not match og:image")
         if parser.meta.get("twitter:card") != "summary_large_image":
             errors.append(f"{relative}: incorrect twitter:card")
         if len(parser.json_ld) != 1:
@@ -184,14 +187,19 @@ def validate_static_files(errors: list[str]) -> None:
         errors.append("robots.txt does not advertise the canonical sitemap")
     if not (SITE_DIR / "sitemap.xml").exists():
         errors.append("sitemap.xml is missing")
-    image = SITE_DIR / "assets" / "social-card.png"
-    try:
-        dimensions = png_dimensions(image)
-    except (OSError, ValueError) as exc:
-        errors.append(f"social-card.png is invalid: {exc}")
-    else:
-        if dimensions != (1200, 630):
-            errors.append(f"social-card.png is {dimensions}, expected (1200, 630)")
+    cards = sorted((SITE_DIR / "assets" / "images" / "social").rglob("*.png"))
+    if not cards:
+        errors.append("no social cards were generated")
+    for card in cards:
+        try:
+            dimensions = png_dimensions(card)
+        except (OSError, ValueError) as exc:
+            errors.append(f"{card.relative_to(SITE_DIR)} is invalid: {exc}")
+        else:
+            if dimensions != (1200, 630):
+                errors.append(
+                    f"{card.relative_to(SITE_DIR)} is {dimensions}, expected (1200, 630)"
+                )
 
     source_diagrams = sum(
         path.read_text(encoding="utf-8").count("```mermaid")

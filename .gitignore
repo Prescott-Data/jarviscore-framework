@@ -83,3 +83,6 @@ pytest-of-*/
 
 # Memos written by the investment-committee demo at runtime
 examples/investment_committee/data/
+
+# Social card render cache
+.cache/

@@ -1,0 +1,111 @@
+# Social card layout for JarvisCore docs.
+# Same structure as the Material default, except the site-name text layer is
+# replaced by the JarvisCore wordmark image. The monogram stays top right.
+
+definitions:
+  - &background_color >-
+    {{ layout.background_color or "#0533AC" }}
+
+  - &color >-
+    {{ layout.color or "#ffffff" }}
+
+  - &font_family >-
+    {%- if layout.font_family -%}
+      {{ layout.font_family }}
+    {%- elif config.theme.font is mapping -%}
+      {{ config.theme.font.get("text", "Roboto") }}
+    {%- else -%}
+      Roboto
+    {%- endif -%}
+
+  - &wordmark >-
+    layouts/assets/wordmark-card.svg
+
+  - &logo >-
+    {%- if layout.logo -%}
+      {{ layout.logo }}
+    {%- elif config.theme.logo -%}
+      {{ config.docs_dir }}/{{ config.theme.logo }}
+    {%- endif -%}
+
+  - &page_title >-
+    {%- if layout.title -%}
+      {{ layout.title }}
+    {%- else -%}
+      {{ page.meta.get("title", page.title) }}
+    {%- endif -%}
+
+  - &page_title_with_site_name >-
+    {%- if not page.is_homepage -%}
+      {{ page.meta.get("title", page.title) }} - {{ config.site_name }}
+    {%- else -%}
+      {{ config.site_name }}
+    {%- endif -%}
+
+  - &page_description >-
+    {%- if layout.description -%}
+      {{ layout.description }}
+    {%- else -%}
+      {{ page.meta.get("description", config.site_description) | x }}
+    {%- endif -%}
+
+tags:
+  og:type: website
+  og:title: *page_title_with_site_name
+  og:description: *page_description
+  og:image: "{{ image.url }}"
+  og:image:type: "{{ image.type }}"
+  og:image:width: "{{ image.width }}"
+  og:image:height: "{{ image.height }}"
+  og:image:alt: *page_title_with_site_name
+  og:url: "{{ page.canonical_url }}"
+
+  twitter:card: summary_large_image
+  twitter:title: *page_title_with_site_name
+  twitter:description: *page_description
+  twitter:image: "{{ image.url }}"
+  twitter:image:alt: *page_title_with_site_name
+
+size: { width: 1200, height: 630 }
+layers:
+  - background:
+      color: *background_color
+
+  # Monogram, top right.
+  - size: { width: 144, height: 144 }
+    offset: { x: 992, y: 64 }
+    background:
+      image: *logo
+
+  # Wordmark, top left. Sized to the asset's 776x118 ratio so it is not cropped.
+  - size: { width: 237, height: 36 }
+    offset: { x: 64, y: 68 }
+    background:
+      image: *wordmark
+
+  # Font size is derived from box height / line count, so these boxes set the scale.
+  - size: { width: 832, height: 250 }
+    offset: { x: 62, y: 180 }
+    typography:
+      content: *page_title
+      align: start
+      color: *color
+      line:
+        amount: 3
+        height: 1.25
+      font:
+        family: *font_family
+        style: Bold
+
+  - size: { width: 832, height: 56 }
+    offset: { x: 64, y: 498 }
+    typography:
+      content: *page_description
+      align: start
+      color: *color
+      line:
+        amount: 2
+        height: 1.5
+      font:
+        family: *font_family
+        style: Regular

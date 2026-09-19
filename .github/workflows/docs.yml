@@ -33,9 +33,16 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install imaging libraries
+        # Social card generation renders SVG through CairoSVG, which needs the
+        # native Cairo/Pango stack.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libfreetype6-dev libffi-dev libjpeg-dev libpng-dev libz-dev
+
       - name: Install MkDocs Material
         # Pin to MkDocs 1.x + Material 9.x — MkDocs 2.0 is incompatible with material theme
-        run: pip install "mkdocs<2.0" "mkdocs-material<10"
+        run: pip install "mkdocs<2.0" "mkdocs-material[imaging]<10"
 
       - name: Build site
         run: mkdocs build --strict --clean
