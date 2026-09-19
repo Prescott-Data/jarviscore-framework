@@ -19,6 +19,9 @@ export TYPESAFE_API_KEY=...
 jarviscore check --validate-typesafe
 ```
 
+The repository includes a complete Mesh and CustomAgent example at
+[`examples/typesafe_jev_decisions.py`](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/typesafe_jev_decisions.py).
+
 ## Use Jev in a CustomAgent
 
 When TypeSafe is configured, the Mesh injects one shared async client as

@@ -460,9 +460,13 @@ If you build multi-agent systems, star the repo ⭐ to support open-source agent
 
 ## Examples
 
-All examples require Redis (`docker compose -f docker-compose.infra.yml up -d`).
+The Jev decision demo needs only a TypeSafe key. Distributed examples require
+Redis (`docker compose -f docker-compose.infra.yml up -d`).
 
 ```bash
+# Native Choice, Score, and Noul decisions (no Redis or LLM key)
+TYPESAFE_API_KEY=... python examples/typesafe_jev_decisions.py
+
 # Financial pipeline (single process, AutoAgent)
 python examples/financial_pipeline.py
 
@@ -482,7 +486,7 @@ python committee.py --mode full --ticker NVDA --amount 1500000
 
 ## Version
 
-**1.3.0**
+**1.12.0**
 
 ## License
 

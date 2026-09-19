@@ -6,11 +6,12 @@ description: Explore complete JarvisCore examples for financial pipelines, distr
 
 # Examples
 
-Real, runnable programs that demonstrate JarvisCore in production-grade scenarios. Each example is a complete Python script (or multi-script cluster) in the [`examples/`](https://github.com/Prescott-Data/jarviscore-framework/tree/main/examples) directory of the repo: clone it, set up infra, and run.
+Real, runnable programs that demonstrate JarvisCore in production-grade scenarios. Each example is a complete Python script (or multi-script cluster) in the [`examples/`](https://github.com/Prescott-Data/jarviscore-framework/tree/main/examples) directory of the repo: clone it, install the required extras, and run.
 
 ## Prerequisites
 
-All examples require Redis. Start it once before running any example:
+The TypeSafe Jev decision demo needs no Redis or generative model. The
+distributed examples require Redis:
 
 ```bash
 docker compose -f docker-compose.infra.yml up -d  # Redis + optional infra
@@ -24,6 +25,7 @@ pip install -e ".[redis,prometheus]"
 
 | Example | Profile | Infra | What it teaches |
 |---------|---------|-------|-----------------|
+| [TypeSafe Jev Decisions](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/typesafe_jev_decisions.py) | `CustomAgent` | TypeSafe API key | Native Choice, Score, and Noul decisions through Mesh injection |
 | [Financial Pipeline](financial-pipeline.md) | `AutoAgent` | Redis | Workflow DAGs, crash recovery, blob storage |
 | [Research Network](research-network.md) | `AutoAgent` | Redis + P2P | Multi-node SWIM clusters, capability-based dispatch |
 | [Support Swarm](support-swarm.md) | `CustomAgent` | Redis + P2P | Mailbox routing, Nexus OSS OAuth, auth injection |
@@ -36,7 +38,7 @@ pip install -e ".[redis,prometheus]"
 
 === "New to JarvisCore?"
 
-    Start with **[Financial Pipeline](financial-pipeline.md)**. It's a single file, single process, and walks through the core concepts in order: define agents → build a mesh → run a workflow DAG.
+    Start with the **[TypeSafe Jev decision demo](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/typesafe_jev_decisions.py)** for one agent and no infrastructure, or **[Financial Pipeline](financial-pipeline.md)** for a durable workflow DAG.
 
 === "Building distributed systems?"
 
