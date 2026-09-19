@@ -47,6 +47,18 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - `jarviscore check --validate-typesafe` performs one live typed decision so a
   deployment can prove connectivity without writing agent code.
 
+### Fixed
+
+- Jev-backed complexity classification, Kernel routing, and the AutoAgent
+  decision tool now preserve workflow-budget exhaustion as a durable
+  `epoch_exhausted` result so work can continue in a new execution epoch.
+- Concurrent RAG passage decisions cancel and join sibling requests before
+  propagating an error, and optional NumPy and FAISS imports remain lazy for
+  installations that do not enable the `rag` extra.
+- TypeSafe client, Mesh shutdown, and CLI validation failures report sanitized
+  exception classes without exposing provider response bodies or API-key
+  fragments.
+
 ---
 
 ## 1.11.0 <span class="changelog-date">2026-09-11</span>
