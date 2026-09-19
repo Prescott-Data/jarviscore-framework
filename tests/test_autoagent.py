@@ -193,6 +193,39 @@ class TestAutoAgentInitialization:
 
 
 class TestAutoAgentSetup:
+    @pytest.mark.asyncio
+    async def test_typesafe_features_require_injected_decision_client(self):
+        from types import SimpleNamespace
+
+        agent = ValidAutoAgent()
+        agent._mesh = SimpleNamespace(
+            config={"task_complexity_provider": "typesafe"}
+        )
+        agent.decisions = None
+
+        with pytest.raises(ValueError, match="TYPESAFE_API_KEY"):
+            await agent.setup()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("config", "message"),
+        [
+            ({"rag_decision_provider": "unknown"}, "rag_decision_provider"),
+            ({"rag_typesafe_relevant_min": 1.2}, "rag_typesafe_relevant_min"),
+            ({"rag_typesafe_max_concurrent": 0}, "rag_typesafe_max_concurrent"),
+        ],
+    )
+    async def test_invalid_rag_decision_config_fails_during_setup(
+        self, config, message
+    ):
+        from types import SimpleNamespace
+
+        agent = ValidAutoAgent()
+        agent._mesh = SimpleNamespace(config=config)
+
+        with pytest.raises(ValueError, match=message):
+            await agent.setup()
+
     """Test AutoAgent setup."""
 
     @pytest.mark.asyncio
@@ -347,6 +380,76 @@ class TestAutoAgentExecution:
         assert len(kernel.calls) == 1
         assert kernel.calls[0]["agent_default_role"] is None
         assert kernel.calls[0]["use_default_role_as_fallback"] is True
+        assert kernel.calls[0]["context"]["complexity"] == "standard"
+
+    @pytest.mark.asyncio
+    async def test_typesafe_complexity_selects_model_tier_and_reports_usage(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from jarviscore.execution.decisions import DecisionResult
+
+        class LlmMustNotClassify:
+            async def generate(self, **kwargs):
+                raise AssertionError("TypeSafe should own complexity classification")
+
+        class FakeKernel:
+            def __init__(self):
+                self.auth_manager = None
+                self.calls = []
+
+            async def execute(self, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(
+                    status="success",
+                    payload={"ok": True},
+                    summary="done",
+                    metadata={
+                        "tokens": {"input": 10, "output": 5, "total": 15},
+                        "cost_usd": 0.002,
+                        "elapsed_ms": 1,
+                    },
+                )
+
+        decisions = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value=DecisionResult(
+                    model="jev-1.13.0",
+                    answers={
+                        "complexity": {
+                            "type": "choice",
+                            "choice": "moderate",
+                            "probabilities": {
+                                "trivial": 0.02,
+                                "moderate": 0.96,
+                                "complex": 0.02,
+                            },
+                            "confidence": 0.94,
+                        }
+                    },
+                    usage={"input_tokens": 40, "output_tokens": 8},
+                    cost_usd=0.00000168,
+                    request_id="request-autoagent-complexity",
+                )
+            )
+        )
+        agent = GoalDirectAutoAgent()
+        agent._mesh = SimpleNamespace(
+            config={"task_complexity_provider": "typesafe"}
+        )
+        agent.llm = LlmMustNotClassify()
+        agent.decisions = decisions
+        kernel = FakeKernel()
+        agent._kernel = kernel
+
+        result = await agent.execute_task(
+            {"task": "Read a CSV and save one chart.", "context": {}}
+        )
+
+        assert result["status"] == "success"
+        assert kernel.calls[0]["context"]["complexity"] == "standard"
+        assert result["tokens"] == {"input": 50, "output": 13, "total": 63}
+        assert result["cost_usd"] == pytest.approx(0.00200168)
 
     @pytest.mark.asyncio
     async def test_peer_capability_request_bypasses_nested_goal_planning(self):

@@ -108,6 +108,7 @@ nav:
       - Reasoning and Models:
         - Planning: concepts/planning.md
         - Language Models: concepts/language-models.md
+        - Decision Models: concepts/decision-models.md
         - Model Routing: concepts/model-routing.md
         - Agent Personas: concepts/agent-personas.md
       - State and Coordination:
@@ -161,7 +162,7 @@ nav:
   - Enterprise: infrastructure/enterprise.md
 
 extra:
-  version: "1.11.0"
+  version: "1.12.0"
   social:
     - icon: material/web
       link: https://developers.prescottdata.io

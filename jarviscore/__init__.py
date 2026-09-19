@@ -68,6 +68,11 @@ from jarviscore.profiles.customagent import CustomAgent
 # Custom Profile: Decorator, Wrapper, and Context
 from jarviscore.adapter import jarvis_agent, wrap
 from jarviscore.context import JarvisContext, MemoryAccessor, DependencyAccessor
+from jarviscore.execution.decisions import (
+    DecisionClientError,
+    DecisionResult,
+    JevDecisionClient,
+)
 
 # Long-horizon planning (lazy import — requires no extra dependencies)
 try:
@@ -120,6 +125,11 @@ __all__ = [
     "JarvisContext",
     "MemoryAccessor",
     "DependencyAccessor",
+
+    # Decision models
+    "DecisionClientError",
+    "DecisionResult",
+    "JevDecisionClient",
 
     # P2P Direct Communication
     "PeerClient",

@@ -20,8 +20,14 @@ import importlib.util
 class HealthChecker:
     """Health check orchestrator for JarvisCore setup."""
 
-    def __init__(self, validate_llm: bool = False, verbose: bool = False):
+    def __init__(
+        self,
+        validate_llm: bool = False,
+        validate_typesafe: bool = False,
+        verbose: bool = False,
+    ):
         self.validate_llm = validate_llm
+        self.validate_typesafe = validate_typesafe
         self.verbose = verbose
         self.issues: List[str] = []
         self.warnings: List[str] = []
@@ -140,6 +146,61 @@ class HealthChecker:
             )
 
         return configured
+
+    def check_typesafe_config(self) -> bool:
+        """Check the optional TypeSafe decision-model configuration."""
+        print("\n[Decision Model Configuration]")
+        api_key = os.getenv("TYPESAFE_API_KEY")
+        if not api_key:
+            self._print_status("  TypeSafe Jev", False, "Not configured (optional)")
+            if self.validate_typesafe:
+                self.issues.append(
+                    "--validate-typesafe requires TYPESAFE_API_KEY."
+                )
+            return False
+
+        if importlib.util.find_spec("typesafe_sdk") is None:
+            self.issues.append(
+                'TYPESAFE_API_KEY is set but the optional SDK is missing. Install '
+                '`jarviscore-framework[typesafe]`.'
+            )
+            self._print_status("  TypeSafe Jev", False, "typesafe-sdk not installed")
+            return False
+
+        self.successes.append("TypeSafe Jev configured")
+        self._print_status(
+            "  TypeSafe Jev",
+            True,
+            f"TYPESAFE_API_KEY={self._mask_api_key(api_key)}",
+        )
+        return True
+
+    async def validate_typesafe_connectivity(self) -> None:
+        """Make one typed Noul request through the public decision client."""
+        print("\n[Decision Model Connectivity Test]")
+        from jarviscore.execution.decisions import JevDecisionClient
+
+        client = JevDecisionClient()
+        try:
+            result = await client.evaluate(
+                state="JarvisCore TypeSafe connectivity check",
+                questions={
+                    "is_connectivity_check": {
+                        "type": "noul",
+                        "instructions": "Is this state a connectivity check?",
+                    }
+                },
+            )
+            probability = result.answers["is_connectivity_check"]["noul"]
+            if not 0.0 <= probability <= 1.0:
+                raise ValueError(f"Noul response is outside [0, 1]: {probability}")
+            self.successes.append("TypeSafe Jev connectivity OK")
+            self._print_status("  TypeSafe Jev API", True, result.model)
+        except Exception as exc:
+            self.issues.append(f"TypeSafe Jev connectivity test failed: {exc}")
+            self._print_status("  TypeSafe Jev API", False, str(exc))
+        finally:
+            await client.close()
 
     async def validate_llm_connectivity(self, configured: Dict[str, bool]):
         """Test actual LLM connectivity."""
@@ -393,10 +454,13 @@ class HealthChecker:
             load_dotenv(env_path)
 
         llm_configured = self.check_llm_config()
+        typesafe_configured = self.check_typesafe_config()
 
         # LLM connectivity test (optional)
         if self.validate_llm and any(llm_configured.values()):
             await self.validate_llm_connectivity(llm_configured)
+        if self.validate_typesafe and typesafe_configured:
+            await self.validate_typesafe_connectivity()
 
         # Sandbox config
         self.check_sandbox_config()
@@ -418,6 +482,11 @@ def main():
         help='Test LLM API connectivity (makes actual API calls)'
     )
     parser.add_argument(
+        '--validate-typesafe',
+        action='store_true',
+        help='Test TypeSafe Jev connectivity (makes one actual API call)'
+    )
+    parser.add_argument(
         '--verbose',
         action='store_true',
         help='Show detailed information'
@@ -427,6 +496,7 @@ def main():
 
     checker = HealthChecker(
         validate_llm=args.validate_llm,
+        validate_typesafe=args.validate_typesafe,
         verbose=args.verbose
     )
 

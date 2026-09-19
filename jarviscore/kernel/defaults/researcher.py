@@ -998,7 +998,10 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
 
     def _get_rag_pipeline(self) -> RagPipeline:
         if self._rag_pipeline is None:
-            self._rag_pipeline = RagPipeline()
+            self._rag_pipeline = RagPipeline(
+                decision_client=getattr(self, "decision_client", None),
+                decision_config=getattr(self, "rag_decision_config", None),
+            )
         return self._rag_pipeline
 
     def _ingest_rag_documents(self, documents: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2319,7 +2322,10 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
     async def _tool_rag_query(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         self.tracer.log_tool_start("rag_query", {"query": query})
         rag = self._get_rag_pipeline()
-        result = rag.retrieve(query, top_k=top_k)
+        if getattr(self, "rag_decision_provider", "vector") == "typesafe":
+            result = await rag.retrieve_with_decisions(query, top_k=top_k)
+        else:
+            result = rag.retrieve(query, top_k=top_k)
 
         # Extract api_specs from retrieved passages so the api_doc gate can see
         # them.  RAG is built from previously ingested API documentation — the
@@ -2329,7 +2335,8 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         # sitting in the index the whole time.
         extracted_count = 0
         if isinstance(result, dict):
-            for item in result.get("results", []):
+            passages = result.get("accepted_results", result.get("results", []))
+            for item in passages:
                 if not isinstance(item, dict):
                     continue
                 passage = str(item.get("content") or item.get("text") or item.get("passage") or "")
@@ -2339,6 +2346,27 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     if specs:
                         self._add_api_specs(specs)
                         extracted_count += len(specs)
+
+        if (
+            isinstance(result, dict)
+            and getattr(self, "rag_decision_provider", "vector") == "typesafe"
+        ):
+            result = dict(result)
+            accepted = list(result.get("accepted_results", []))
+            conflicting = list(result.get("conflicting_results", []))
+            result["results"] = accepted + conflicting
+            result["evidence"] = list(result.get("accepted_evidence", [])) + list(
+                result.get("conflicting_evidence", [])
+            )
+            result["excluded_results"] = [
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key not in {"text", "content", "passage"}
+                }
+                for item in result.get("excluded_results", [])
+                if isinstance(item, dict)
+            ]
 
         if result and self.current_state:
             self._add_research_finding({

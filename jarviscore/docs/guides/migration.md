@@ -25,7 +25,7 @@ JarvisCore 1.11 is a backward-compatible minor release. Existing
 `CustomAgent.execute_task()` code does not require a rewrite.
 
 ```bash
-pip install --upgrade "jarviscore-framework==1.11.0"
+pip install --upgrade "jarviscore-framework==1.12.0"
 ```
 
 The behavioral changes apply primarily to Redis-backed `Mesh.execute_goal()`:

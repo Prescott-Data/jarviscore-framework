@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from jarviscore.cli.scaffold import copy_env_example, get_data_path
+from jarviscore.cli.check import HealthChecker
 
 
 def test_packaged_templates_exist_and_are_tracked():
@@ -18,6 +19,7 @@ def test_default_init_writes_the_minimal_template(tmp_path):
     assert len(lines) < 50, f"minimal template grew to {len(lines)} lines"
     for provider_key in ("CLAUDE_API_KEY", "AZURE_API_KEY", "GEMINI_API_KEY", "LLM_ENDPOINT"):
         assert provider_key in content
+    assert "TYPESAFE_API_KEY" in content
     assert "--full" in content       # points at the full reference
 
 
@@ -49,3 +51,19 @@ def test_templates_resolve_from_repo_checkout():
         "gitignored by an unanchored 'data/' pattern"
     )
     assert Path(str(data)).name == "data"
+
+
+def test_typesafe_health_check_is_optional_without_an_api_key(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    checker = HealthChecker()
+
+    assert checker.check_typesafe_config() is False
+    assert checker.issues == []
+
+
+def test_typesafe_live_check_requires_an_api_key(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    checker = HealthChecker(validate_typesafe=True)
+
+    assert checker.check_typesafe_config() is False
+    assert checker.issues == ["--validate-typesafe requires TYPESAFE_API_KEY."]

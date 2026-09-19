@@ -117,6 +117,7 @@ runs. They are available immediately inside `setup()`:
 | `self._redis_store` | `RedisStore` | `REDIS_URL` is set |
 | `self._blob_storage` | `LocalBlobStorage` or `AzureBlobStorage` | Always: falls back to local filesystem |
 | `self.mailbox` | `MailboxManager` | Always: in-memory by default; Redis-backed when configured |
+| `self.decisions` | `JevDecisionClient` | `TYPESAFE_API_KEY` is set and the `typesafe` extra is installed |
 
 ```python
 async def setup(self):

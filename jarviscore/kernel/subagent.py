@@ -53,6 +53,7 @@ from typing import Any, Callable, Dict, List, Optional, cast
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.kernel.cognition import AgentCognitionManager, ConvergenceGovernor, FailureLedger
+from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 from jarviscore.kernel.epistemic import EpistemicLedger
 from jarviscore.kernel.gate import GateEvidence, as_evidence, record_attempt
 from jarviscore.kernel.state import KernelState, ToolResult
@@ -806,8 +807,6 @@ class BaseSubAgent(ABC):
                     messages=messages, **kwargs
                 )
             except Exception as e:
-                from jarviscore.orchestration.budget import WorkflowBudgetExceeded
-
                 if isinstance(e, WorkflowBudgetExceeded):
                     state.status = "active"
                     state.last_error = str(e)
@@ -1073,7 +1072,63 @@ class BaseSubAgent(ABC):
                     _trace.log_thinking(thought)
                 _trace.log_tool_start(tool_name, tool_params)
 
-                tool_result = await self._execute_tool(tool_name, tool_params)
+                try:
+                    tool_result = await self._execute_tool(tool_name, tool_params)
+                except WorkflowBudgetExceeded as exc:
+                    state.status = "active"
+                    state.last_error = str(exc)
+                    state.thinking_tokens_used = self._cognition.lease.thinking_used
+                    state.action_tokens_used = self._cognition.lease.action_used
+                    state.tokens_used = total_tokens["total"]
+                    state.total_cost_usd = total_cost
+                    turn_log["status"] = "epoch_exhausted"
+                    turn_log["error"] = str(exc)
+                    trajectory.append(turn_log)
+                    if memory is not None:
+                        await memory.save_checkpoint(state.model_dump_json())
+                    _trace.log_step_complete(
+                        False,
+                        "Active execution epoch exhausted; checkpointed for continuation.",
+                    )
+                    return AgentOutput(
+                        status="epoch_exhausted",
+                        payload=state.output,
+                        summary=(
+                            "Active execution epoch exhausted; durable state was "
+                            "checkpointed for continuation."
+                        ),
+                        trajectory=trajectory,
+                        metadata={
+                            "tokens": total_tokens,
+                            "cost_usd": total_cost,
+                            "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+                            "checkpointed": memory is not None,
+                        },
+                    )
+                decision = tool_result.get("decision") if isinstance(tool_result, dict) else None
+                decision_usage = (
+                    tool_result.get("decision_usage")
+                    if isinstance(tool_result, dict)
+                    else None
+                )
+                if not isinstance(decision_usage, dict) and isinstance(decision, dict):
+                    decision_usage = decision.get("usage")
+                if isinstance(decision_usage, dict):
+                    decision_input = int(decision_usage.get("input_tokens") or 0)
+                    decision_output = int(decision_usage.get("output_tokens") or 0)
+                    total_tokens["input"] += decision_input
+                    total_tokens["output"] += decision_output
+                    total_tokens["total"] += decision_input + decision_output
+                    decision_cost = (
+                        tool_result.get("decision_cost_usd")
+                        if isinstance(tool_result, dict)
+                        else None
+                    )
+                    if decision_cost is None and isinstance(decision, dict):
+                        decision_cost = decision.get("cost_usd")
+                    total_cost += float(decision_cost or 0.0)
+                    state.tokens_used = total_tokens["total"]
+                    state.total_cost_usd = total_cost
                 turn_log["result"] = str(tool_result)[:500]
 
                 # ── Retain the full result for honest retrieval (issue #57) ──
@@ -1548,6 +1603,8 @@ class BaseSubAgent(ABC):
             if "status" not in result:
                 result["status"] = "success"
             return result
+        except WorkflowBudgetExceeded:
+            raise
         except Exception as e:
             self._log.warning("Tool '%s' failed: %s", tool_name, e)
             return {"status": "error", "error": str(e)}

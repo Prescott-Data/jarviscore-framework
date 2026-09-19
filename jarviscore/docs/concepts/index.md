@@ -47,6 +47,12 @@ framework; jump directly to a concept when diagnosing an existing system.
 
     [Understand language models →](language-models.md)
 
+-   :material-call-split: **Decision Models**
+
+    Use TypeSafe Jev for bounded, typed judgments inside agent workflows.
+
+    [Use decision models →](decision-models.md)
+
 -   :material-transit-connection-variant: **Model Routing**
 
     See how capability tiers select models for reasoning, coding, browser work,

@@ -134,6 +134,16 @@ Two framework components also make LLM calls outside the sub-agent loop:
 | `StepEvaluator` | nano | A four-choice verdict (pass / partial / fail / hitl), classification not reasoning |
 | Auto-summariser | nano | Compresses conversation history when the context window grows large |
 
+When TypeSafe support is configured, two classification decisions can move
+off the generation tiers without changing the models that perform the work:
+
+- `KERNEL_ROUTER_PROVIDER=typesafe` selects the subagent role.
+- `TASK_COMPLEXITY_PROVIDER=typesafe` selects direct execution versus planning;
+    direct `trivial` work maps to `nano` and `moderate` work maps to `standard`.
+
+Jev is a decision model, not a generation tier. It cannot be assigned to
+`TASK_MODEL_NANO`, because that tier also drafts and summarises text.
+
 ---
 
 ## Overriding Complexity Per Task

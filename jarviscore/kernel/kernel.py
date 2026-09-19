@@ -62,6 +62,12 @@ class RoutingDecision:
     confidence: float
     reason: str
     evidence_required: bool = False
+    provider: str = "contract"
+    probabilities: Optional[Dict[str, float]] = None
+    request_id: Optional[str] = None
+    model: Optional[str] = None
+    usage: Optional[Dict[str, int]] = None
+    cost_usd: float = 0.0
 
 
 class TaskRouter:
@@ -115,12 +121,25 @@ processing is actually required.
         min_confidence: float = 0.55,
         valid_roles: Optional[List[str]] = None,
         role_catalog: Optional[Dict[str, str]] = None,
+        decision_client=None,
+        provider: str = "llm",
     ):
         self.llm = llm_client
         self.model = model
         self.min_confidence = min_confidence
         self.valid_roles = frozenset(valid_roles or sorted(_BUILTIN_KERNEL_ROLES))
         self.role_catalog = role_catalog or {}
+        self.decision_client = decision_client
+        self.provider = provider
+        if self.provider not in {"llm", "typesafe"}:
+            raise ValueError(
+                "kernel_router_provider must be either 'llm' or 'typesafe'"
+            )
+        if self.provider == "typesafe" and self.decision_client is None:
+            raise ValueError(
+                "kernel_router_provider='typesafe' requires TYPESAFE_API_KEY "
+                'and the `jarviscore-framework[typesafe]` extra'
+            )
 
     async def route(
         self,
@@ -129,6 +148,12 @@ processing is actually required.
         context: Optional[Dict[str, Any]] = None,
         agent_default_role: Optional[str] = None,
     ) -> RoutingDecision:
+        if self.provider == "typesafe":
+            return await self._route_with_typesafe(
+                task=task,
+                context=context,
+                agent_default_role=agent_default_role,
+            )
         if self.llm is None:
             raise RoutingError("Kernel routing requires an LLM client when no explicit role is provided")
 
@@ -182,6 +207,70 @@ processing is actually required.
             confidence=confidence,
             reason=str(data.get("reason", ""))[:500],
             evidence_required=bool(data.get("evidence_required", False)),
+            provider="llm",
+            usage=dict(response.get("tokens") or {}) if isinstance(response, dict) else None,
+            cost_usd=float(response.get("cost_usd") or 0.0) if isinstance(response, dict) else 0.0,
+        )
+
+    async def _route_with_typesafe(
+        self,
+        *,
+        task: str,
+        context: Optional[Dict[str, Any]],
+        agent_default_role: Optional[str],
+    ) -> RoutingDecision:
+        builtin_criteria = {
+            "coder": "Write or execute code, process files or data, call APIs, or compute results.",
+            "researcher": "Gather unknown facts from web, documentation, or files and compare evidence.",
+            "communicator": "Draft, review, summarize, or structure reports, messages, and requests.",
+            "browser": "Operate an interactive browser through navigation, clicks, screenshots, or forms.",
+        }
+        criteria = {
+            role: self.role_catalog.get(role) or builtin_criteria.get(role) or role
+            for role in sorted(self.valid_roles)
+        }
+        state = {
+            "task": task,
+            "context_summary": self._summarize_context(context or {}),
+            "agent_default_role": agent_default_role,
+        }
+        try:
+            result = await self.decision_client.evaluate(
+                state=state,
+                questions={
+                    "kernel_role": {
+                        "type": "choice",
+                        "instructions": "Which single role is best equipped to execute this task?",
+                        "criteria": criteria,
+                    }
+                },
+            )
+        except Exception as exc:
+            raise RoutingError(f"TypeSafe Kernel routing failed: {exc}") from exc
+
+        answer = result.answers.get("kernel_role") or {}
+        role = str(answer.get("choice") or "").lower().strip()
+        if role not in self.valid_roles:
+            raise RoutingError(f"TypeSafe Kernel router returned invalid role {role!r}")
+        confidence = max(0.0, min(1.0, float(answer.get("confidence") or 0.0)))
+        if confidence < self.min_confidence:
+            raise RoutingError(
+                f"TypeSafe Kernel router confidence too low ({confidence:.2f}) "
+                f"for role {role!r}"
+            )
+        return RoutingDecision(
+            role=role,
+            confidence=confidence,
+            reason="TypeSafe Jev selected the role from the configured role criteria.",
+            provider="typesafe",
+            probabilities={
+                str(name): float(probability)
+                for name, probability in (answer.get("probabilities") or {}).items()
+            },
+            request_id=result.request_id,
+            model=result.model,
+            usage=dict(result.usage),
+            cost_usd=float(result.cost_usd),
         )
 
     @staticmethod
@@ -265,6 +354,7 @@ class Kernel:
         mailbox=None,
         redis_store=None,
         blob_storage=None,
+        decision_client=None,
         config: Optional[Dict] = None,
         hitl_policy: Optional[AdaptiveHITLPolicy] = None,
     ):
@@ -275,6 +365,7 @@ class Kernel:
         self.mailbox = mailbox
         self.redis_store = redis_store
         self.blob_storage = blob_storage
+        self.decision_client = decision_client
         self.config = config or {}
         self.hitl_policy = hitl_policy
         self.peer_tool: Any = None
@@ -313,9 +404,15 @@ class Kernel:
         self._task_router = TaskRouter(
             llm_client=llm_client,
             model=self._get_model_for_tier("task", complexity="nano"),
-            min_confidence=float(self.config.get("kernel_router_min_confidence", 0.55)),
+            min_confidence=float(
+                self.config.get("typesafe_router_min_confidence", 0.5)
+                if str(self.config.get("kernel_router_provider", "llm")).lower() == "typesafe"
+                else self.config.get("kernel_router_min_confidence", 0.55)
+            ),
             valid_roles=sorted(self._role_lease_profiles),
             role_catalog=self._role_catalog,
+            decision_client=decision_client,
+            provider=str(self.config.get("kernel_router_provider", "llm")).lower(),
         )
 
     def attach_mesh_capabilities(self, peers=None, mailbox=None) -> None:
@@ -331,6 +428,46 @@ class Kernel:
             subagent.mailbox = self.mailbox
         if hasattr(subagent, "peers"):
             subagent.peers = self.peers
+        subagent.decision_client = self.decision_client
+        subagent.rag_decision_provider = str(
+            self.config.get("rag_decision_provider", "vector")
+        ).lower()
+        subagent.rag_decision_config = {
+            "max_concurrent": int(self.config.get("rag_typesafe_max_concurrent", 4)),
+            "thresholds": {
+                "injection_max": float(
+                    self.config.get("rag_typesafe_injection_max", 0.70)
+                ),
+                "contradicts_min": float(
+                    self.config.get("rag_typesafe_contradicts_min", 0.70)
+                ),
+                "relevant_min": float(
+                    self.config.get("rag_typesafe_relevant_min", 0.45)
+                ),
+                "evidence_min": float(
+                    self.config.get("rag_typesafe_evidence_min", 0.55)
+                ),
+            },
+        }
+        if self.decision_client is not None:
+            async def evaluate_decisions(
+                state: Any,
+                questions: Dict[str, Any],
+                model: Optional[str] = None,
+            ) -> Dict[str, Any]:
+                result = await self.decision_client.evaluate(
+                    state=state,
+                    questions=questions,
+                    model=model,
+                )
+                return {"status": "success", "decision": result.to_dict()}
+
+            subagent.register_tool(
+                "evaluate_decisions",
+                evaluate_decisions,
+                "Evaluate bounded Choice, Score, or Noul questions against explicit state with TypeSafe Jev. Params: {\"state\": <text or JSON>, \"questions\": {<id>: {\"type\": \"choice|score|noul\", \"instructions\": <question>, \"criteria\": <options or rubric when required>}}, \"model\": <optional override>}",
+                phase="thinking",
+            )
         if self.mailbox is not None:
             def read_mailbox(limit: int = 10) -> Dict[str, Any]:
                 bounded = max(1, min(int(limit), 50))
@@ -973,11 +1110,25 @@ class Kernel:
                     },
                 )
             role = routing.role
+            routing_usage = routing.usage or {}
+            if routing.provider == "typesafe":
+                routing_input = int(routing_usage.get("input_tokens") or 0)
+                routing_output = int(routing_usage.get("output_tokens") or 0)
+                total_tokens["input"] += routing_input
+                total_tokens["output"] += routing_output
+                total_tokens["total"] += routing_input + routing_output
+                total_cost += routing.cost_usd
             enriched_context["_kernel_routing"] = {
                 "role": routing.role,
                 "confidence": routing.confidence,
                 "reason": routing.reason,
                 "evidence_required": routing.evidence_required,
+                "provider": routing.provider,
+                "probabilities": routing.probabilities,
+                "request_id": routing.request_id,
+                "model": routing.model,
+                "usage": routing.usage,
+                "cost_usd": routing.cost_usd,
             }
             logger.info(
                 "[Kernel] Dispatch %d: task → %s (confidence=%.2f, reason=%s)",

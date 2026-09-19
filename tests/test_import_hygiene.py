@@ -15,6 +15,13 @@ def test_importing_jarviscore_prints_nothing():
     assert proc.stdout == "", f"import jarviscore wrote to stdout: {proc.stdout!r}"
 
 
+def test_decision_model_types_are_public_without_optional_sdk_installed():
+    from jarviscore import DecisionResult, JevDecisionClient
+
+    assert DecisionResult.__name__ == "DecisionResult"
+    assert JevDecisionClient.__name__ == "JevDecisionClient"
+
+
 def test_p2p_lazy_exports_still_resolve():
     from jarviscore.p2p import PeerClient  # eager, swim-free
 

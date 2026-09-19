@@ -48,6 +48,9 @@ import pytest
 pytestmark = pytest.mark.asyncio
 
 from jarviscore.context.truth import AgentOutput, TruthContext
+from jarviscore.execution.decisions import DecisionResult
+from jarviscore.orchestration.budget import WorkflowBudgetExceeded
+from jarviscore.planning.classifier import TaskComplexityClassifier
 from jarviscore.planning.evaluator import EvaluatorError, StepEvaluator
 from jarviscore.planning.goal_context import (
     CompletedStep,
@@ -86,6 +89,126 @@ def _make_evaluation(verdict="pass", confidence=0.9, note="Looks good", addition
         evaluator_note=note,
         additional_findings=additional_findings or {"discovered_key": "discovered_value"},
     )
+
+
+class TestTaskComplexityClassifier:
+    def test_typesafe_provider_requires_a_decision_client(self):
+        with pytest.raises(ValueError, match="TYPESAFE_API_KEY"):
+            TaskComplexityClassifier(
+                llm_client=None,
+                provider="typesafe",
+            )
+
+    async def test_typesafe_classifies_execution_shape_with_provenance(self):
+        decision_client = MagicMock()
+        decision_client.evaluate = AsyncMock(
+            return_value=DecisionResult(
+                model="jev-1.13.0",
+                answers={
+                    "complexity": {
+                        "type": "choice",
+                        "choice": "moderate",
+                        "probabilities": {
+                            "trivial": 0.03,
+                            "moderate": 0.94,
+                            "complex": 0.03,
+                        },
+                        "confidence": 0.91,
+                    }
+                },
+                usage={"input_tokens": 40, "output_tokens": 8},
+                cost_usd=0.00000168,
+                request_id="request-complexity",
+            )
+        )
+        classifier = TaskComplexityClassifier(
+            llm_client=None,
+            decision_client=decision_client,
+            provider="typesafe",
+        )
+
+        verdict = await classifier.classify("Read a CSV and save one chart")
+
+        assert verdict.level == "moderate"
+        assert verdict.provider == "typesafe"
+        assert verdict.confidence == 0.91
+        assert verdict.probabilities["moderate"] == 0.94
+        assert verdict.request_id == "request-complexity"
+
+    async def test_low_confidence_typesafe_verdict_preserves_planning(self):
+        decision_client = MagicMock()
+        decision_client.evaluate = AsyncMock(
+            return_value=DecisionResult(
+                model="jev-1.13.0",
+                answers={
+                    "complexity": {
+                        "type": "choice",
+                        "choice": "trivial",
+                        "probabilities": {
+                            "trivial": 0.37,
+                            "moderate": 0.33,
+                            "complex": 0.30,
+                        },
+                        "confidence": 0.08,
+                    }
+                },
+                usage={"input_tokens": 40, "output_tokens": 8},
+                cost_usd=0.00000168,
+            )
+        )
+        classifier = TaskComplexityClassifier(
+            llm_client=None,
+            decision_client=decision_client,
+            provider="typesafe",
+            min_confidence=0.5,
+        )
+
+        verdict = await classifier.classify("Ambiguous work")
+
+        assert verdict.level == "complex"
+        assert verdict.provider == "typesafe"
+        assert "preserving the planning path" in verdict.reason
+
+    async def test_typesafe_provider_failure_uses_existing_llm_classifier(self):
+        decision_client = MagicMock()
+        decision_client.evaluate = AsyncMock(side_effect=RuntimeError("provider down"))
+        llm = MagicMock()
+        llm.generate = AsyncMock(
+            return_value={
+                "content": json.dumps(
+                    {"level": "moderate", "reason": "Bounded fallback task."}
+                )
+            }
+        )
+        classifier = TaskComplexityClassifier(
+            llm_client=llm,
+            decision_client=decision_client,
+            provider="typesafe",
+        )
+
+        verdict = await classifier.classify("Read one supplied document")
+
+        assert verdict.level == "moderate"
+        assert verdict.provider == "llm"
+        llm.generate.assert_awaited_once()
+
+    async def test_typesafe_budget_exhaustion_does_not_fall_back_to_llm(self):
+        decision_client = MagicMock()
+        decision_client.evaluate = AsyncMock(
+            side_effect=WorkflowBudgetExceeded("epoch exhausted")
+        )
+        llm = MagicMock()
+        llm.generate = AsyncMock()
+        classifier = TaskComplexityClassifier(
+            llm_client=llm,
+            decision_client=decision_client,
+            provider="typesafe",
+        )
+
+        with pytest.raises(WorkflowBudgetExceeded, match="epoch exhausted"):
+            await classifier.classify("Bounded task")
+
+        llm.generate.assert_not_awaited()
 
 
 # ── GoalExecution contracts ───────────────────────────────────────────────────

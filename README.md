@@ -109,8 +109,11 @@ pip install "jarviscore-framework[redis]"
 # With Prometheus metrics
 pip install "jarviscore-framework[prometheus]"
 
+# With TypeSafe Jev decision models
+pip install "jarviscore-framework[typesafe]"
+
 # Everything
-pip install "jarviscore-framework[redis,prometheus]"
+pip install "jarviscore-framework[full]"
 ```
 
 ## Quick Start
@@ -208,6 +211,39 @@ The Kernel runs an Observe-Orient-Decide-Act (OODA) loop for every AutoAgent tas
 | **StepEvaluator** | Classifies step outcomes using nano-tier models for fast, cheap evaluation |
 | **GoalContext** | Tracks plan state, step history, and convergence signals |
 | **EpistemicLedger** | Records what the agent knows, assumes, and has verified |
+
+### TypeSafe Jev Decision Models
+
+JarvisCore supports [TypeSafe Jev](https://typesafe.ai/) for bounded `Choice`,
+`Score`, and `Noul` judgments. Configure `TYPESAFE_API_KEY`; the Mesh injects one
+shared async client as `self.decisions`, and AutoAgents receive an
+`evaluate_decisions` thinking tool. Jev complements the generative model used
+for planning and execution; it does not replace it.
+
+```python
+result = await self.decisions.evaluate(
+  state={"ticket": "Customers are seeing 500 errors."},
+  questions={
+    "team": {
+      "type": "choice",
+      "instructions": "Which team should handle this?",
+      "criteria": {
+        "support": "Account and product assistance.",
+        "engineering": "Defects and service incidents.",
+      },
+    }
+  },
+)
+print(result.answers["team"])
+```
+
+Set `KERNEL_ROUTER_PROVIDER=typesafe` to opt into Jev-backed subagent selection.
+Explicit planner, profile, and execution-contract roles retain precedence. See
+[Decision Models](https://jarviscore.developers.prescottdata.io/concepts/decision-models/).
+
+Set `TASK_COMPLEXITY_PROVIDER=typesafe` to select direct Kernel execution and
+its model tier, or `RAG_DECISION_PROVIDER=typesafe` to classify the FAISS
+shortlist into accepted, conflicting, and excluded passages before generation.
 
 ### Service Integrations
 
@@ -334,6 +370,7 @@ Every agent receives the full infrastructure stack automatically through depende
 | Distributed workflow | `WorkflowEngine` | `REDIS_URL` |
 | Nexus credentials | `self._auth_manager` | `requires_auth=True` + `NEXUS_GATEWAY_URL` |
 | Unified memory | `UnifiedMemory`, `EpisodicLedger`, `LTM` | `REDIS_URL` |
+| TypeSafe decisions | `self.decisions`, `evaluate_decisions` tool | `TYPESAFE_API_KEY` + `typesafe` extra |
 
 ## CLI Reference
 
@@ -341,6 +378,7 @@ Every agent receives the full infrastructure stack automatically through depende
 jarviscore init              # Scaffold a new project (.env.example + optional examples)
 jarviscore check             # Validate environment and provider connectivity
 jarviscore check --validate-llm  # Also test LLM round-trip
+jarviscore check --validate-typesafe  # Test one Jev decision round-trip
 jarviscore smoketest         # Quick end-to-end smoke test
 jarviscore atom list         # List all registered integration atoms
 jarviscore atom test         # Validate atom structure or live Nexus connection

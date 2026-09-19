@@ -288,6 +288,36 @@ class AutoAgent(Profile):
 
         # Get config from mesh (or use empty dict)
         config = self._mesh.config if self._mesh else {}
+        rag_provider = str(config.get("rag_decision_provider", "vector")).lower()
+        if rag_provider not in {"vector", "typesafe"}:
+            raise ValueError(
+                "rag_decision_provider must be either 'vector' or 'typesafe'"
+            )
+        for threshold_name in (
+            "rag_typesafe_injection_max",
+            "rag_typesafe_contradicts_min",
+            "rag_typesafe_relevant_min",
+            "rag_typesafe_evidence_min",
+        ):
+            threshold = float(config.get(threshold_name, 0.5))
+            if not 0.0 <= threshold <= 1.0:
+                raise ValueError(f"{threshold_name} must be between 0 and 1")
+        if int(config.get("rag_typesafe_max_concurrent", 4)) < 1:
+            raise ValueError("rag_typesafe_max_concurrent must be at least 1")
+        typesafe_features = {
+            "task complexity": config.get("task_complexity_provider") == "typesafe",
+            "RAG decisions": config.get("rag_decision_provider") == "typesafe",
+        }
+        enabled_typesafe_features = [
+            name for name, enabled in typesafe_features.items() if enabled
+        ]
+        if enabled_typesafe_features and getattr(self, "decisions", None) is None:
+            raise ValueError(
+                "TypeSafe "
+                + " and ".join(enabled_typesafe_features)
+                + " require TYPESAFE_API_KEY and the "
+                '`jarviscore-framework[typesafe]` extra'
+            )
 
         # Import execution components
         from jarviscore.execution import (
@@ -366,6 +396,7 @@ class AutoAgent(Profile):
             search_client=self.search,
             redis_store=getattr(self, '_redis_store', None),
             blob_storage=getattr(self, '_blob_storage', None),
+            decision_client=getattr(self, 'decisions', None),
             config=config,
         )
 
@@ -533,6 +564,7 @@ class AutoAgent(Profile):
             self._direct_kernel_turn = False
             self._direct_kernel_complexity = None
             self._direct_kernel_reason = None
+            self._complexity_decision = None
             if isinstance(ctx, dict) and ctx.get("peer_requester_agent_id"):
                 self._direct_kernel_turn = True
                 self._direct_kernel_complexity = "moderate"
@@ -560,8 +592,17 @@ class AutoAgent(Profile):
                         ),
                     )
                 else:
-                    classifier = TaskComplexityClassifier(self.llm)
+                    routing_config = self._mesh.config if self._mesh else {}
+                    classifier = TaskComplexityClassifier(
+                        self.llm,
+                        decision_client=getattr(self, "decisions", None),
+                        provider=routing_config.get("task_complexity_provider", "llm"),
+                        min_confidence=routing_config.get(
+                            "typesafe_complexity_min_confidence", 0.5
+                        ),
+                    )
                     complexity = await classifier.classify(task_desc, context=ctx)
+                    self._complexity_decision = complexity
             except Exception as e:
                 # A flaky preflight must not kill work the Kernel could do
                 # (issue #63): fall back to a direct Kernel turn instead of
@@ -592,6 +633,15 @@ class AutoAgent(Profile):
                     context=ctx,
                 )
                 goal_tokens, goal_cost = self._aggregate_goal_telemetry(execution)
+                decision = getattr(self, "_complexity_decision", None)
+                if getattr(decision, "provider", None) == "typesafe":
+                    usage = decision.usage or {}
+                    goal_tokens["input"] += int(usage.get("input_tokens") or 0)
+                    goal_tokens["output"] += int(usage.get("output_tokens") or 0)
+                    goal_tokens["total"] += int(usage.get("input_tokens") or 0) + int(
+                        usage.get("output_tokens") or 0
+                    )
+                    goal_cost += float(decision.cost_usd or 0.0)
                 completed = getattr(execution, "completed", None) or []
                 final_payload = (
                     getattr(completed[-1].output, "payload", None)
@@ -652,6 +702,13 @@ class AutoAgent(Profile):
                     kernel_ctx["output_schema"] = self.output_schema
                 if getattr(self, "_trace_sink", None):
                     kernel_ctx["_trace_sink"] = self._trace_sink
+                if getattr(self, "_direct_kernel_turn", False):
+                    model_complexity = {
+                        "trivial": "nano",
+                        "moderate": "standard",
+                    }.get(getattr(self, "_direct_kernel_complexity", None))
+                    if model_complexity:
+                        kernel_ctx.setdefault("complexity", model_complexity)
 
                 output = await self._kernel.execute(
                     task=task_desc,
@@ -664,6 +721,19 @@ class AutoAgent(Profile):
 
                 meta = output.metadata or {}
                 from jarviscore.core.envelope import derive_result_summary
+                result_tokens = dict(
+                    meta.get("tokens", {"input": 0, "output": 0, "total": 0})
+                )
+                result_cost = float(meta.get("cost_usd", 0.0))
+                decision = getattr(self, "_complexity_decision", None)
+                if getattr(decision, "provider", None) == "typesafe":
+                    usage = decision.usage or {}
+                    decision_input = int(usage.get("input_tokens") or 0)
+                    decision_output = int(usage.get("output_tokens") or 0)
+                    result_tokens["input"] += decision_input
+                    result_tokens["output"] += decision_output
+                    result_tokens["total"] += decision_input + decision_output
+                    result_cost += float(decision.cost_usd or 0.0)
                 result = {
                     "status": output.status,
                     "output": output.payload,
@@ -673,8 +743,8 @@ class AutoAgent(Profile):
                         output.status, output.payload, None if output.status == "success" else output.summary,
                         summary=output.summary,
                     ),
-                    "tokens": meta.get("tokens", {"input": 0, "output": 0, "total": 0}),
-                    "cost_usd": meta.get("cost_usd", 0.0),
+                    "tokens": result_tokens,
+                    "cost_usd": result_cost,
                     "repairs": 0,
                     "agent_id": self.agent_id,
                     "role": self.role,

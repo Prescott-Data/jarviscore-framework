@@ -19,6 +19,13 @@ from .llm import (
     create_llm_client
 )
 
+from .decisions import (
+    DecisionClientError,
+    DecisionResult,
+    JevDecisionClient,
+    create_decision_client,
+)
+
 # Internet Search
 from .search import (
     InternetSearch,
@@ -91,6 +98,12 @@ __all__ = [
     'LLMProvider',
     'TOKEN_PRICING',
     'create_llm_client',
+
+    # Decision models
+    'DecisionClientError',
+    'DecisionResult',
+    'JevDecisionClient',
+    'create_decision_client',
 
     # Search
     'InternetSearch',
