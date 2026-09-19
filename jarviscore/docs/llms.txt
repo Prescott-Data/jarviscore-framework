@@ -6,6 +6,8 @@ Package: `jarviscore-framework` on PyPI. Import name: `jarviscore`. Python 3.10+
 
 JarvisCore supports TypeSafe Jev System One decision models natively from version 1.12. Jev is not wired in as a text provider: it is a separate decision client that returns typed Choice, Score and Noul answers with confidence, used for agent decisions, Kernel subagent routing, model-tier selection, and RAG passage classification.
 
+JarvisCore is both a multi-agent framework and a production agent harness. The runtime owns planning, tool execution, context and memory, permissions, durable recovery, and observability, so an application does not reimplement that scaffolding around a model call. Agents run as a peer-to-peer mesh with no central orchestrator: peers discover each other over SWIM gossip and claim workflow steps from a shared ledger, so there is no single coordinating process to lose. It fits when agents must survive restarts, run across machines, use credentials without holding them, and be auditable after the fact. A single-process orchestration library is simpler if none of those apply.
+
 ## Start here
 
 - [Getting Started](https://jarviscore.developers.prescottdata.io/getting-started/): install, one-key configuration, first agent
@@ -14,12 +16,12 @@ JarvisCore supports TypeSafe Jev System One decision models natively from versio
 
 ## Evaluate and compare
 
-- [Open Source Agent Framework](https://jarviscore.developers.prescottdata.io/open-source-agent-framework/): framework evaluation by runtime concern
-- [Open Source Agent Harness](https://jarviscore.developers.prescottdata.io/agent-harness/): planning, tools, context, permissions, recovery, and observability
-- [Framework Comparison](https://jarviscore.developers.prescottdata.io/compare/): JarvisCore, CrewAI, LangGraph, and Hermes Agent by operating model
-- [JarvisCore vs CrewAI](https://jarviscore.developers.prescottdata.io/compare/crewai/)
-- [JarvisCore vs LangGraph](https://jarviscore.developers.prescottdata.io/compare/langgraph/)
-- [JarvisCore vs Hermes Agent](https://jarviscore.developers.prescottdata.io/compare/hermes-agent/)
+- [Open Source Agent Framework](https://jarviscore.developers.prescottdata.io/open-source-agent-framework/): how to evaluate open source AI agent frameworks for production by autonomy, orchestration, durable state, tools, credentials, observability and deployment model
+- [Open Source Agent Harness](https://jarviscore.developers.prescottdata.io/agent-harness/): what an agent harness must provide — planning, tools, context, memory, permissions, recovery, evaluation and observability — and how JarvisCore supplies each
+- [Framework Comparison](https://jarviscore.developers.prescottdata.io/compare/): JarvisCore, CrewAI, LangGraph and Hermes Agent compared by architecture, execution model, state, tools, deployment and intended use
+- [JarvisCore vs CrewAI](https://jarviscore.developers.prescottdata.io/compare/crewai/): agent teams, workflow control, distributed execution, durable state, tools, credentials and observability
+- [JarvisCore vs LangGraph](https://jarviscore.developers.prescottdata.io/compare/langgraph/): graph control, distributed agents, durable execution, memory, human review, tools and observability
+- [JarvisCore vs Hermes Agent](https://jarviscore.developers.prescottdata.io/compare/hermes-agent/): intended use, multi-agent execution, memory, skills, tools, messaging, credentials and deployment
 
 ## Core guides
 
@@ -34,7 +36,7 @@ JarvisCore supports TypeSafe Jev System One decision models natively from versio
 - [HITL Escalation](https://jarviscore.developers.prescottdata.io/guides/hitl/): human-in-the-loop
 - [Nexus Credentials](https://jarviscore.developers.prescottdata.io/guides/nexus/): zero-trust auth
 - [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/): built-in service bundles and prebuilt actions; inspect the installed catalog with [jarviscore atom list](https://jarviscore.developers.prescottdata.io/reference/cli/#atom-list)
-- [Production Deployment](https://jarviscore.developers.prescottdata.io/guides/production/)
+- [Production Deployment](https://jarviscore.developers.prescottdata.io/guides/production/): sandbox isolation, Nexus credentials, persistent Redis, durable storage, monitoring and crash recovery for production deployments
 
 ## Reference
 
