@@ -245,6 +245,8 @@ processing is actually required.
                     }
                 },
             )
+        except WorkflowBudgetExceeded:
+            raise
         except Exception as exc:
             raise RoutingError(f"TypeSafe Kernel routing failed: {exc}") from exc
 
