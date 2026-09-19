@@ -44,6 +44,15 @@ class GoalDirectAutoAgent(AutoAgent):
     system_prompt = "You are a goal direct test agent."
 
 
+class CustomKernelAutoAgent(AutoAgent):
+    role = "custom_kernel"
+    capabilities = ["testing"]
+    system_prompt = "You are a custom-kernel test agent."
+
+    def _create_kernel(self):
+        return "product-owned-kernel"
+
+
 class TestAutoAgentInitialization:
     """Test AutoAgent initialization."""
 
@@ -97,6 +106,15 @@ class TestAutoAgentInitialization:
 
         assert agent.default_kernel_role == "researcher"
         assert "ROLE INTELLIGENCE" in agent._profile_block
+
+    @pytest.mark.asyncio
+    async def test_setup_uses_overridable_kernel_factory(self, monkeypatch):
+        agent = CustomKernelAutoAgent()
+        monkeypatch.setattr(AutoAgent, "_load_agent_profile", lambda self: None)
+
+        await agent.setup()
+
+        assert agent._kernel == "product-owned-kernel"
 
     def test_agent_profile_does_not_override_explicit_kernel_role(self, tmp_path, monkeypatch):
         """Class-level default_kernel_role remains authoritative."""

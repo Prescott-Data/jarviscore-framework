@@ -45,9 +45,9 @@ the Mesh or Kernel needs them to route, authorize, or validate work.
 | `system_prompt` | Yes | Base LLM system prompt; framework raises ValueError if absent |
 | `description` | No | One-sentence purpose used by peers for routing decisions |
 | `capability_descriptions` | No | Mapping from capability name to a concrete routing description. Distributed planning uses it instead of guessing from a short tag. |
-| `capability_contracts` | No | Mapping from capability name to authorized `effects` and provider `systems`. Mesh planning and peer execution propagate this authority into task context. |
+| `capability_contracts` | No | Mapping from capability name to authorized `effects`, provider `systems`, and optional planner-visible `produces` artifact descriptions. |
 | `output_schema` | No | Pydantic model class enforced on CoderSubAgent execution output. Validate other role outputs or richer work products in an application subclass. |
-| `default_kernel_role` | No | Preferred fallback role for specialist agents; one of `"researcher"`, `"coder"`, `"communicator"`, `"browser"`. Leave unset for generalists. |
+| `default_kernel_role` | No | Preferred fallback role for specialist agents. Built-ins are `"researcher"`, `"coder"`, `"communicator"`, and `"browser"`; products may register custom roles through an extended Kernel. Leave unset for generalists. |
 | `goal_oriented` | No | Defaults to `False`; set `True` for multi-step goal decomposition |
 | `requires_auth` | No | Defaults to `False`; set `True` to receive Nexus-backed `_auth_manager` |
 
@@ -71,6 +71,7 @@ class RepositoryReviewer(AutoAgent):
         "code_review": {
             "effects": ["read", "propose"],
             "systems": ["github"],
+            "produces": "ReviewReport(findings, inspected_revision)",
         },
     }
     default_kernel_role = "coder"

@@ -88,6 +88,14 @@ from jarviscore.execution.decisions import (
     DecisionResult,
     JevDecisionClient,
 )
+from jarviscore.kernel.state import (
+    ArtifactReference,
+    ArtifactReferenceError,
+    CommandObservation,
+    WorkspaceMutation,
+    hydrate_artifact_references,
+    hydrate_receipt_evidence,
+)
 
 # Long-horizon planning (lazy import — requires no extra dependencies)
 try:
@@ -153,6 +161,12 @@ __all__ = [
     "JarvisContext",
     "MemoryAccessor",
     "DependencyAccessor",
+    "ArtifactReference",
+    "ArtifactReferenceError",
+    "CommandObservation",
+    "WorkspaceMutation",
+    "hydrate_artifact_references",
+    "hydrate_receipt_evidence",
 
     # Decision models
     "DecisionClientError",

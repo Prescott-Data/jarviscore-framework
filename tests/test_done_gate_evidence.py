@@ -510,7 +510,7 @@ class TestCoderGate:
         assert reason == ""
         assert parsed["result"]["status"] == "blocked"
 
-    def test_blocked_result_requires_a_peer_resolution_attempt(self):
+    def test_blocked_result_with_real_action_does_not_require_peer_routing(self):
         coder = self._coder()
         coder._tools = {"ask_capability": object(), "ask_peer": object()}
         state = _state(tool_history=[
@@ -520,15 +520,10 @@ class TestCoderGate:
 
         ok, evidence = coder._can_complete(state, parsed)
 
-        assert ok is False
-        assert evidence.check == "peer_resolution_review"
-        assert evidence.observed["peer_tool_calls"] == 0
+        assert ok is True
+        assert evidence == ""
 
-        ok, repeated = coder._can_complete(state, parsed)
-        assert ok is False
-        assert repeated.check == "peer_resolution_review"
-
-    def test_unresolved_facts_require_peer_resolution_even_for_existing_record(self):
+    def test_unresolved_facts_do_not_force_peer_routing_for_existing_record(self):
         coder = self._coder()
         coder._tools = {"ask_capability": object()}
         state = _state(tool_history=[
@@ -546,8 +541,8 @@ class TestCoderGate:
 
         ok, evidence = coder._can_complete(state, parsed)
 
-        assert ok is False
-        assert evidence.check == "peer_resolution_review"
+        assert ok is True
+        assert evidence == ""
 
     def test_peer_responder_is_not_forced_to_delegate_its_response_again(self):
         coder = self._coder()
@@ -610,7 +605,7 @@ class TestCoderGate:
         assert ok is True
         assert reason == ""
 
-    def test_malformed_peer_call_does_not_satisfy_resolution_attempt(self):
+    def test_malformed_peer_call_does_not_override_a_meaningful_attempt(self):
         coder = self._coder()
         coder._tools = {"ask_peer": object()}
         state = _state(tool_history=[
@@ -631,8 +626,8 @@ class TestCoderGate:
             {"result": {"status": "blocked", "reason": "Deck unavailable"}},
         )
 
-        assert ok is False
-        assert evidence.check == "peer_resolution_review"
+        assert ok is True
+        assert evidence == ""
 
     def test_no_attempt_cannot_finish_with_an_unsupported_result(self):
         state = _state(tool_history=[])

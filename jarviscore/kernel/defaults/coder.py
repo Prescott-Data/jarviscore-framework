@@ -560,10 +560,25 @@ atom.
             "workspace_write",
             self._tool_workspace_write,
             (
-                "Write one bounded UTF-8 file inside the copy-on-write workspace. "
-                "Use this for tests and fixtures instead of shell redirection, heredocs, "
+                "Create or fully replace one bounded UTF-8 file inside the copy-on-write "
+                "workspace. content must contain the complete final file; never use this "
+                "for a partial edit. Use workspace_edit for existing source files. "
+                "Use this for new tests and fixtures instead of shell redirection, heredocs, "
                 "or generated writer scripts. Params: {\"path\": \"tests/case.json\", "
                 "\"content\": \"<exact file content>\", \"executable\": false}"
+            ),
+            phase="action",
+        )
+        self.register_tool(
+            "workspace_edit",
+            self._tool_workspace_edit,
+            (
+                "Replace an inclusive line range in an existing UTF-8 file while preserving "
+                "all other content. First call workspace_read and pass its sha256 as "
+                "expected_sha256; stale source fails closed. Params: {\"path\": "
+                "\"src/store.rs\", \"start_line\": 43, \"end_line\": 49, "
+                "\"replacement\": \"<complete replacement lines>\", "
+                "\"expected_sha256\": \"<sha256 from workspace_read>\"}"
             ),
             phase="action",
         )
@@ -625,6 +640,25 @@ atom.
         if self.sandbox is None:
             return {"status": "error", "error": "No workspace sandbox is attached."}
         return self.sandbox.write_workspace(path, content, executable=executable)
+
+    def _tool_workspace_edit(
+        self,
+        path: str,
+        start_line: int,
+        end_line: int,
+        replacement: str,
+        expected_sha256: str,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.edit_workspace(
+            path,
+            start_line,
+            end_line,
+            replacement,
+            expected_sha256,
+        )
 
     def _tool_workspace_run(
         self, command: str, cwd: str = ".", **kwargs

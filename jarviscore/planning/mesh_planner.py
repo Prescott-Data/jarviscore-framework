@@ -7,6 +7,9 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 
+DEPENDENCY_POLICIES = frozenset({"satisfied", "terminal_evidence"})
+
+
 class MeshPlanError(ValueError):
     """The proposed plan cannot faithfully and safely enter the shared ledger."""
 
@@ -77,6 +80,7 @@ class MeshPlanner:
         llm_client,
         capabilities: dict[str, Any],
         response_capability: str | None = None,
+        planning_brief: str | None = None,
     ):
         self.llm = llm_client
         all_effects = {
@@ -88,22 +92,40 @@ class MeshPlanner:
                 effects = {str(value) for value in offering.get("effects", [])}
                 systems = [str(value) for value in offering.get("systems", [])]
                 description = str(offering.get("description") or name)
+                produces = str(offering.get("produces") or "").strip()
+                artifact_types = [
+                    str(value).strip()
+                    for value in offering.get("artifact_types") or []
+                    if str(value).strip()
+                ]
+                requires_artifact_types = [
+                    str(value).strip()
+                    for value in offering.get("requires_artifact_types") or []
+                    if str(value).strip()
+                ]
             else:
                 effects = set(all_effects)
                 systems = []
                 description = str(offering)
+                produces = ""
+                artifact_types = []
+                requires_artifact_types = []
             if not effects or not effects <= all_effects:
                 raise MeshPlanError(f"Capability {name!r} has invalid effect authority")
             self.capability_contracts[str(name)] = {
                 "description": description,
                 "effects": effects,
                 "systems": systems,
+                "produces": produces,
+                "artifact_types": artifact_types,
+                "requires_artifact_types": requires_artifact_types,
             }
         self.capabilities = {
             name: contract["description"]
             for name, contract in self.capability_contracts.items()
         }
         self.response_capability = response_capability
+        self.planning_brief = str(planning_brief or "").strip()
         if response_capability and response_capability not in self.capabilities:
             raise MeshPlanError(
                 f"Configured response capability {response_capability!r} is unavailable"
@@ -126,7 +148,9 @@ class MeshPlanner:
             raise MeshPlanError("No mesh capabilities are available")
         obligation_raw = await self._call_json(self._obligation_prompt(source))
         try:
-            obligations = self._parse_obligations(obligation_raw, source)
+            obligations = self._parse_obligations(
+                obligation_raw, source, require_source_ref=True
+            )
         except MeshPlanError as first_error:
             try:
                 repaired_raw = await self._call_json(
@@ -134,7 +158,9 @@ class MeshPlanner:
                         source, obligation_raw, str(first_error)
                     )
                 )
-                obligations = self._parse_obligations(repaired_raw, source)
+                obligations = self._parse_obligations(
+                    repaired_raw, source, require_source_ref=True
+                )
             except Exception as repair_error:
                 raise MeshPlanError(
                     f"{first_error}; obligation repair failed: {repair_error}"
@@ -142,7 +168,9 @@ class MeshPlanner:
         step_raw = await self._call_json(
             self._step_prompt(source, obligations, context or {})
         )
-        steps = self._ensure_response_step(self._parse_steps(step_raw, obligations))
+        steps = self._ensure_declared_artifact_dependencies(
+            self._ensure_response_step(self._parse_steps(step_raw, obligations))
+        )
         plan = MeshPlan(goal=source, obligations=obligations, steps=steps)
         audit = await self._call_json(self._audit_prompt(plan))
         first_failure = audit.get("missing") or audit
@@ -153,17 +181,27 @@ class MeshPlanner:
                 corrected_obligations = audit.get("obligations")
                 if corrected_obligations is not None:
                     obligations = self._parse_obligations(
-                        {"obligations": corrected_obligations}, source
+                        {"obligations": corrected_obligations},
+                        source,
+                        require_source_ref=True,
                     )
                     repair_raw = await self._call_json(
                         self._step_prompt(source, obligations, context or {})
                     )
+                elif audit.get("corrections") is not None:
+                    plan = self._apply_audit_corrections(plan, audit)
+                    audit = await self._call_json(self._audit_prompt(plan))
+                    continue
                 else:
                     repair_raw = await self._call_json(
                         self._repair_prompt(plan, audit, context or {})
                     )
-                repaired_steps = self._ensure_response_step(
-                    self._parse_steps(repair_raw, obligations)
+                    if repair_raw.get("corrections") is not None:
+                        plan = self._apply_audit_corrections(plan, repair_raw)
+                        audit = await self._call_json(self._audit_prompt(plan))
+                        continue
+                repaired_steps = self._ensure_declared_artifact_dependencies(
+                    self._ensure_response_step(self._parse_steps(repair_raw, obligations))
                 )
                 plan = MeshPlan(
                     goal=source,
@@ -182,6 +220,108 @@ class MeshPlanner:
                 f"{audit.get('missing') or audit}"
             )
         return plan
+
+    @staticmethod
+    def _apply_audit_corrections(plan: MeshPlan, audit: dict[str, Any]) -> MeshPlan:
+        corrections = audit.get("corrections")
+        if not isinstance(corrections, list) or not corrections:
+            raise MeshPlanError("Audit corrections must be a non-empty list")
+        steps_by_id = {step.step_id: step for step in plan.steps}
+        dependencies = {
+            step.step_id: list(step.depends_on) for step in plan.steps
+        }
+        for index, correction in enumerate(corrections):
+            if not isinstance(correction, dict):
+                raise MeshPlanError(f"Audit correction {index} must be an object")
+            allowed = {"operation", "step_id", "producer_step_ids"}
+            unknown = set(correction) - allowed
+            if unknown:
+                raise MeshPlanError(
+                    f"Audit correction {index} has unsupported fields: {sorted(unknown)}"
+                )
+            if correction.get("operation") != "add_dependencies":
+                raise MeshPlanError(
+                    f"Audit correction {index} has unsupported operation"
+                )
+            step_id = str(correction.get("step_id") or "").strip()
+            producer_ids = correction.get("producer_step_ids")
+            if step_id not in steps_by_id:
+                raise MeshPlanError(
+                    f"Audit correction {index} targets unknown step {step_id!r}"
+                )
+            if not isinstance(producer_ids, list) or not producer_ids:
+                raise MeshPlanError(
+                    f"Audit correction {index} requires producer_step_ids"
+                )
+            for producer_id in producer_ids:
+                producer_id = str(producer_id).strip()
+                if producer_id not in steps_by_id or producer_id == step_id:
+                    raise MeshPlanError(
+                        f"Audit correction {index} has invalid producer {producer_id!r}"
+                    )
+                if producer_id not in dependencies[step_id]:
+                    dependencies[step_id].append(producer_id)
+        steps = [
+            replace(step, depends_on=dependencies[step.step_id])
+            for step in plan.steps
+        ]
+        MeshPlanner._reject_cycles(steps)
+        return replace(plan, steps=steps)
+
+    def _ensure_declared_artifact_dependencies(
+        self,
+        steps: list[MeshPlannedStep],
+        *,
+        external_steps: list[dict[str, Any]] | None = None,
+    ) -> list[MeshPlannedStep]:
+        """Close direct edges required by typed capability artifact contracts."""
+        produced_by: dict[str, list[str]] = {}
+        producers = [
+            (step.step_id, step.capability) for step in steps
+        ] + [
+            (
+                str(step.get("id") or step.get("step_id") or ""),
+                str(step.get("capability") or ""),
+            )
+            for step in external_steps or []
+        ]
+        for step_id, capability in producers:
+            if not step_id or capability not in self.capability_contracts:
+                continue
+            for artifact_type in self.capability_contracts[capability][
+                "artifact_types"
+            ]:
+                produced_by.setdefault(artifact_type, []).append(step_id)
+
+        closed = []
+        for step in steps:
+            dependencies = list(step.depends_on)
+            required = self.capability_contracts[step.capability][
+                "requires_artifact_types"
+            ]
+            for artifact_type in required:
+                producers = [
+                    producer_id
+                    for producer_id in produced_by.get(artifact_type, [])
+                    if producer_id != step.step_id
+                ]
+                if not producers:
+                    raise MeshPlanError(
+                        f"Step {step.step_id} requires artifact type "
+                        f"{artifact_type!r}, but no step declares that output"
+                    )
+                for producer_id in producers:
+                    if producer_id not in dependencies:
+                        dependencies.append(producer_id)
+            closed.append(replace(step, depends_on=dependencies))
+        self._reject_cycles(
+            closed,
+            external_ids={
+                str(step.get("id") or step.get("step_id") or "")
+                for step in external_steps or []
+            },
+        )
+        return closed
 
     async def amend(
         self,
@@ -222,15 +362,18 @@ class MeshPlanner:
             for step in current_steps
         }
         try:
-            steps = self._ensure_response_step(
-                self._parse_steps(
-                    step_raw, parsed_obligations,
-                    allowed_dependency_ids=current_ids,
-                    forbidden_step_ids=current_ids,
-                    required_obligation_ids=targets,
-                    allowed_cover_ids=targets,
+            steps = self._ensure_declared_artifact_dependencies(
+                self._ensure_response_step(
+                    self._parse_steps(
+                        step_raw, parsed_obligations,
+                        allowed_dependency_ids=current_ids,
+                        forbidden_step_ids=current_ids,
+                        required_obligation_ids=targets,
+                        allowed_cover_ids=targets,
+                    ),
+                    reserved_ids=current_ids,
                 ),
-                reserved_ids=current_ids,
+                external_steps=current_steps,
             )
         except MeshPlanError as first_error:
             last_error = first_error
@@ -240,21 +383,25 @@ class MeshPlanner:
                         self._invalid_amendment_repair_prompt(
                             source,
                             parsed_obligations,
+                            target_obligation_ids=targets,
                             current_steps=current_steps,
                             rejected=step_raw,
                             reason=reason,
                             validation_error=str(last_error),
                         )
                     )
-                    steps = self._ensure_response_step(
-                        self._parse_steps(
-                            step_raw, parsed_obligations,
-                            allowed_dependency_ids=current_ids,
-                            forbidden_step_ids=current_ids,
-                            required_obligation_ids=targets,
-                            allowed_cover_ids=targets,
+                    steps = self._ensure_declared_artifact_dependencies(
+                        self._ensure_response_step(
+                            self._parse_steps(
+                                step_raw, parsed_obligations,
+                                allowed_dependency_ids=current_ids,
+                                forbidden_step_ids=current_ids,
+                                required_obligation_ids=targets,
+                                allowed_cover_ids=targets,
+                            ),
+                            reserved_ids=current_ids,
                         ),
-                        reserved_ids=current_ids,
+                        external_steps=current_steps,
                     )
                     break
                 except Exception as exc:
@@ -272,6 +419,7 @@ class MeshPlanner:
         )
         audit = await self._call_json(self._amendment_audit_prompt(
             plan, current_steps=current_steps, reason=reason,
+            planning_brief=self.planning_brief,
         ))
         first_failure = audit.get("missing") or audit
         for repair_attempt in range(1, 3):
@@ -283,16 +431,20 @@ class MeshPlanner:
                     audit=audit,
                     current_steps=current_steps,
                     reason=reason,
+                    planning_brief=self.planning_brief,
                 ))
-                repaired_steps = self._ensure_response_step(
-                    self._parse_steps(
-                        repair_raw, parsed_obligations,
-                        allowed_dependency_ids=current_ids,
-                        forbidden_step_ids=current_ids,
-                        required_obligation_ids=targets,
-                        allowed_cover_ids=targets,
+                repaired_steps = self._ensure_declared_artifact_dependencies(
+                    self._ensure_response_step(
+                        self._parse_steps(
+                            repair_raw, parsed_obligations,
+                            allowed_dependency_ids=current_ids,
+                            forbidden_step_ids=current_ids,
+                            required_obligation_ids=targets,
+                            allowed_cover_ids=targets,
+                        ),
+                        reserved_ids=current_ids,
                     ),
-                    reserved_ids=current_ids,
+                    external_steps=current_steps,
                 )
                 plan = MeshPlan(
                     goal=source,
@@ -302,6 +454,7 @@ class MeshPlanner:
                 )
                 audit = await self._call_json(self._amendment_audit_prompt(
                     plan, current_steps=current_steps, reason=reason,
+                    planning_brief=self.planning_brief,
                 ))
             except Exception as exc:
                 if repair_attempt == 2:
@@ -382,12 +535,14 @@ class MeshPlanner:
                 systems=[],
                 task=(
                     "Synthesize the completed peer artifacts into the explicit "
-                    "user-facing response. State the outcome and direct reason "
-                    "concisely; keep workflow internals in the artifact only."
+                    "user-facing response. Honor the source goal's requested format, "
+                    "scope and disclosure constraints. State the outcome and direct "
+                    "reason concisely; keep workflow internals in the artifact only."
                 ),
                 success_criterion=(
-                    "A concise user response states the outcome and direct reason "
-                    "without workflow IDs, step IDs, evidence pointers or trace details."
+                    "A concise user response satisfies the source goal's output "
+                    "constraints and states the outcome and direct reason without "
+                    "workflow IDs, step IDs, evidence pointers or trace details."
                 ),
                 expected_findings=["user-facing outcome"],
                 depends_on=sinks,
@@ -461,14 +616,19 @@ class MeshPlanner:
 
     @staticmethod
     def _obligation_prompt(goal: str) -> str:
+        source_blocks = MeshPlanner._source_blocks(goal)
         return f"""Extract the complete obligation ledger from one source goal.
 
 SOURCE GOAL:
 {goal}
 
+IMMUTABLE SOURCE BLOCKS:
+{json.dumps(source_blocks, ensure_ascii=False)}
+
 Return one valid json object with `obligations`. Each obligation has exactly:
-id, description, source_quote.
-- source_quote is an exact non-empty quote from SOURCE GOAL.
+id, description, source_ref.
+- source_ref must be exactly one id from IMMUTABLE SOURCE BLOCKS. The compiler
+    binds that reference to exact source text; do not copy or paraphrase source text.
 - capture every requested outcome, constraint, prohibition, approval boundary,
   fallback condition, scope limit and evidence requirement.
 - split independently verifiable obligations; do not add or execute work.
@@ -483,10 +643,14 @@ id, description, source_quote.
         invalid: dict[str, Any],
         validation_error: str,
     ) -> str:
+        source_blocks = MeshPlanner._source_blocks(goal)
         return f"""Repair one invalid obligation extraction against immutable source text.
 
 SOURCE GOAL (immutable):
 {goal}
+
+IMMUTABLE SOURCE BLOCKS:
+{json.dumps(source_blocks, ensure_ascii=False)}
 
 INVALID OBLIGATIONS:
 {json.dumps(invalid, ensure_ascii=False)}
@@ -495,8 +659,9 @@ VALIDATION ERROR:
 {validation_error}
 
 Return one valid json object with `obligations`. Each obligation has exactly:
-id, description, source_quote.
-- Every source_quote must be one contiguous exact substring of SOURCE GOAL.
+id, description, source_ref.
+- Every source_ref must be exactly one id from IMMUTABLE SOURCE BLOCKS. The
+    compiler binds it to exact source text; do not copy or paraphrase source text.
 - Preserve the intended meaning of every invalid obligation.
 - Do not add, remove, merge or split obligations.
 - Do not execute work or add requirements."""
@@ -522,6 +687,8 @@ IMMUTABLE OBLIGATION LEDGER:
 LIVE CAPABILITY CATALOG:
 {catalog}
 
+{self._planning_brief_section()}
+
 PUBLIC CONTEXT:
 {json.dumps(public_context, ensure_ascii=False, default=str)}
 
@@ -536,9 +703,16 @@ expected_findings, depends_on, covers, dependency_policy.
 - dependency_policy is `satisfied` unless this step intentionally diagnoses or
     remediates an unresolved dependency artifact; only then use `terminal_evidence`.
 - use capabilities, never an agent ID or named instance.
-- reason about the information required to execute each effectful outcome. Every
-    required fact must come from the source goal or an ancestor step whose task and
-    success criterion resolve it. naming an entity does not supply its provider identifiers.
+- reason about the information required to execute each effectful outcome. Every required fact
+    discovered by another step must come from a producer directly listed in `depends_on`;
+    runtime context contains direct dependency artifacts only. Transitive ancestry establishes ordering only
+    and does not deliver an ancestor's artifact. If a step needs artifacts from
+    multiple earlier producers, list every producer directly. naming an entity does not supply its provider identifiers.
+- a direct dependency supplies only the artifact promised by its own task, success criterion
+    and expected findings. Do not assume a summary, ranking, approval or other transformation
+    relays the input artifacts it consumed unless its declared output explicitly promises them.
+    When downstream work needs both original evidence and a transformed decision, depend directly
+    on both producers.
 - when downstream work needs an artifact's contents, the producing step must inspect
     and return provider-readback evidence of usable content; a matching name, identifier,
     link or MIME type proves resource identity, not content sufficiency.
@@ -583,12 +757,18 @@ INDEPENDENT AUDIT FINDINGS:
 LIVE CAPABILITY CATALOG:
 {self._render_capability_catalog()}
 
+{self._planning_brief_section()}
+
 PUBLIC CONTEXT:
 {json.dumps(public_context, ensure_ascii=False, default=str)}
 
-Return one valid json object with a complete replacement `steps` list. Each step
-has exactly: step_id, capability, effect, systems, task, success_criterion,
-expected_findings, depends_on, covers, dependency_policy.
+Return one valid json object using exactly one repair shape:
+- When every audit finding can be fixed only by adding direct dependencies between
+    existing steps, return only `corrections`. Each correction has exactly
+    operation=`add_dependencies`, step_id, and producer_step_ids. Do not return `steps`.
+- Otherwise return a complete replacement `steps` list. Each step has exactly:
+    step_id, capability, effect, systems, task, success_criterion,
+    expected_findings, depends_on, covers, dependency_policy.
 - resolve every audit finding without changing or adding obligations.
 - use capabilities, never agent IDs, named instances, atom names, or provider calls.
 - model business outcomes, not conditional branches.
@@ -598,8 +778,13 @@ expected_findings, depends_on, covers, dependency_policy.
     return concrete identifiers or links needed by dependents.
 - mutating outcomes use exactly one provider and an effect authorized by capability.
 - never make required downstream work depend on an optional mutation-only branch.
-- repair missing information dependencies: every effectful outcome must receive the
-    facts needed to fulfill the source objective from the source goal or an ancestor.
+- repair missing information dependencies: every outcome must receive each required artifact
+    from its producer directly listed in `depends_on`. Runtime context contains direct dependency
+    artifacts only; Transitive ancestry establishes ordering only and an intermediate step must
+    not be assumed to relay another producer's artifact.
+- a direct dependency supplies only its own declared artifact. Do not assume a summary, ranking,
+    approval or other transformation relays its input artifacts; add the original producers as
+    direct dependencies whenever the repaired step needs their evidence.
 - preserve real data dependencies and allow independent outcomes to run in parallel.
 
 Do not execute work or add requirements."""
@@ -638,8 +823,12 @@ AMENDMENT REASON:
 LIVE CAPABILITY CATALOG:
 {catalog}
 
+{self._planning_brief_section()}
+
 PUBLIC CONTEXT:
 {json.dumps(context, ensure_ascii=False, default=str)}
+
+{self._amendment_step_invariants(target_obligation_ids)}
 
 Return one valid json object containing only NEW `steps`. Each step has exactly:
 step_id, capability, effect, systems, task, success_criterion,
@@ -649,9 +838,15 @@ expected_findings, depends_on, covers, dependency_policy.
 - semantic hold or rejection on a completed attempt may be remediated only by adding
     concrete new work that depends on its durable artifact and declares
     dependency_policy=`terminal_evidence`; never alter or rerun the attempt.
-- preserve completed effects as immutable facts and do not add work that repeats them.
-- cover every UNRESOLVED OBLIGATION ID exactly through new work and preserve
-    dependencies on completed work; `covers` must not contain any other obligation id.
+- preserve completed external side effects as immutable facts. Never repeat an executed
+    write, notify or destructive provider outcome. A semantically rejected read or propose
+    attempt may be followed by new work that directly resolves its named gap and depends on
+    the rejected artifact; this continues the obligation without altering or rerunning history.
+- every artifact required by new work must come from its producer directly listed in `depends_on`.
+    Runtime context contains direct dependency artifacts only; Transitive ancestry establishes ordering only
+    and an intermediate step does not relay artifacts.
+- a direct dependency supplies only its own declared artifact. New work that needs original evidence
+    plus a transformed decision must depend directly on both producers.
 - capability must come from LIVE CAPABILITY CATALOG.
 - effect must be exactly one of: read, propose, write, notify, destructive, final_response.
 - systems lists every provider the step will call and must be authorized by the capability.
@@ -683,6 +878,8 @@ CURRENT REVISION: {revision}
 LIVE CAPABILITY CATALOG:
 {self._render_capability_catalog()}
 
+{self._planning_brief_section()}
+
 Return exactly one json object with `decision` and `reason`.
 - decision=`amend` only when an unmet or partially met source obligation can be
   advanced by concrete new work authorized by the live capability catalog.
@@ -690,8 +887,10 @@ Return exactly one json object with `decision` and `reason`.
     authority, missing human input, or facts no available capability can obtain.
 - this decision is invoked only while obligation gaps exist; never claim all source
     obligations are satisfied here. Satisfaction is derived after those gaps close.
-- treat completed effects and provider identities as authoritative world state;
-  never propose repeating an already completed effect.
+- treat executed external write, notify and destructive effects plus provider identities as
+    authoritative world state; never propose repeating those side effects. A completed read or
+    propose attempt that was semantically rejected may be advanced by distinct corrective work
+    depending on its durable artifact.
 - reason identifies the remaining obligation and why another DAG revision can or
   cannot make progress.
 
@@ -703,6 +902,7 @@ Do not choose tools, name atoms, execute work, alter completed artifacts, or add
         *,
         current_steps: list[dict[str, Any]],
         reason: str,
+        planning_brief: str = "",
     ) -> str:
         completed = [step for step in current_steps if step.get("status") == "completed"]
         ledger = MeshPlanner._amendment_ledger_view(completed)
@@ -723,21 +923,31 @@ AUTHORITATIVE ATTEMPT OUTCOMES:
 RECONCILIATION REASON:
 {reason}
 
+{MeshPlanner._format_planning_brief(planning_brief)}
+
 PROPOSED NEW-STEP DELTA:
 {json.dumps([step.to_dict() for step in plan.steps], ensure_ascii=False)}
 
 Return exactly one json object: {{"complete": true, "missing": []}} only when:
 - every proposed step is new and completed history is left untouched;
-- new work can advance the reconciliation reason using available dependencies;
-- no new step repeats a provider effect whose authoritative outcome says it executed;
+- new work can advance the reconciliation reason using artifacts from producers directly listed in `depends_on`;
+    runtime context contains direct dependency artifacts only, while
+    Transitive ancestry establishes ordering only and does not deliver artifacts;
+- each direct dependency supplies only its own declared artifact; do not assume a transformation
+    relays the artifacts it consumed;
+- no new write, notify or destructive step repeats a provider side effect whose authoritative
+    outcome says it executed; semantically rejected read or propose attempts may receive
+    distinct corrective successors that depend on their durable artifacts;
 - every immutable obligation remains covered by completed history or executable new work;
 - a fresh final response follows the new terminal work when one is configured.
 
 Durable step status `completed` means the attempt ended; it does not prove its provider
 effect executed. Use typed output `execution_state`, semantic decision and provider evidence
-to determine effect truth. A new effectful step may remediate a completed attempt whose
-authoritative outcome is blocked or `not_executed`, but must not repeat an already executed
-provider outcome. A capability-change amendment may advance only the blocked obligations named
+to determine effect truth. A new external side-effect step may remediate a completed attempt
+whose authoritative outcome is blocked or `not_executed`, but must not repeat an already
+executed provider outcome. Read and propose attempts are evidence production, not irreversible
+provider effects: when semantically rejected, distinct corrective successors may continue the
+same obligation from their durable artifacts. A capability-change amendment may advance only the blocked obligations named
 by its reconciliation reason; other obligations already represented by completed blocked
 attempts may remain unresolved history and do not require invented replacement work. Do not
 retroactively reject, reorder or demand prerequisites for an effect that actually executed.
@@ -751,6 +961,7 @@ Otherwise return complete=false with `missing` entries describing the amendment 
         audit: dict[str, Any],
         current_steps: list[dict[str, Any]],
         reason: str,
+        planning_brief: str = "",
     ) -> str:
         completed = [
             step for step in current_steps if step.get("status") == "completed"
@@ -779,9 +990,17 @@ REJECTED NEW-STEP DELTA:
 AUDIT FINDINGS:
 {json.dumps(audit, ensure_ascii=False, default=str)}
 
+{MeshPlanner._format_planning_brief(planning_brief)}
+
+{MeshPlanner._amendment_step_invariants({item.id for item in plan.obligations})}
+
 Return one valid json object containing only NEW `steps` using the normal step
 schema. Current step ids may appear only in depends_on. Add remediation work after
 completed history and a distinct final response after its sinks when configured.
+Every artifact required by a new step must come from its producer directly listed in `depends_on`;
+Transitive ancestry establishes ordering only and does not deliver artifacts.
+Each direct dependency supplies only its own declared artifact; add original evidence producers
+directly when a transformation's output does not explicitly relay their artifacts.
 Never repeat a completed effect, alter source obligations, choose tools, or name atoms."""
 
     def _invalid_amendment_repair_prompt(
@@ -789,6 +1008,7 @@ Never repeat a completed effect, alter source obligations, choose tools, or name
         goal: str,
         obligations: list[GoalObligation],
         *,
+        target_obligation_ids: set[str] | None = None,
         current_steps: list[dict[str, Any]],
         rejected: dict[str, Any],
         reason: str,
@@ -815,17 +1035,35 @@ RECONCILIATION REASON:
 LIVE CAPABILITY CATALOG:
 {self._render_capability_catalog()}
 
+{self._planning_brief_section()}
+
 REJECTED AMENDMENT:
 {json.dumps(rejected, ensure_ascii=False, default=str)}
 
 VALIDATION ERROR:
 {validation_error}
 
+{self._amendment_step_invariants(
+    target_obligation_ids or {item.id for item in obligations}
+)}
+
 Return one valid json object containing only NEW `steps` using the normal step
 schema and capabilities in the live catalog. Current step ids may appear only in
 depends_on. Preserve completed effects and add a fresh final response after
-remediation when configured. Do not choose tools, name atoms, add capabilities,
+remediation when configured. Every required artifact must come from its producer directly listed in `depends_on`;
+Transitive ancestry establishes ordering only and does not deliver
+artifacts. Each direct dependency supplies only its own declared artifact; add original evidence
+producers directly when a transformation does not explicitly relay their artifacts. Do not choose tools, name atoms, add capabilities,
 or copy runtime fields."""
+
+    @staticmethod
+    def _amendment_step_invariants(target_obligation_ids: set[str]) -> str:
+        return f"""AUTHORITATIVE NEW-STEP INVARIANTS:
+- dependency_policy must be exactly `satisfied` or `terminal_evidence`.
+- use `terminal_evidence` only when diagnosing or remediating a terminal dependency artifact;
+    otherwise use `satisfied`.
+- cover every UNRESOLVED OBLIGATION ID exactly through new work: {json.dumps(sorted(target_obligation_ids))}.
+- `covers` must not contain any obligation ID outside that set."""
 
     @staticmethod
     def _amendment_ledger_view(
@@ -858,16 +1096,44 @@ or copy runtime fields."""
             systems = ", ".join(contract["systems"]) or "none declared"
             effects = ", ".join(sorted(contract["effects"]))
             lines.append(
-                f"- {name}: {contract['description']} | effects: {effects} | systems: {systems}"
+                f"- {name}: {contract['description']} | effects: {effects} | "
+                f"systems: {systems} | produces: {contract['produces'] or 'not declared'} | "
+                f"artifact types: {', '.join(contract['artifact_types']) or 'none'} | "
+                "requires artifact types: "
+                f"{', '.join(contract['requires_artifact_types']) or 'none'}"
             )
         return "\n".join(lines)
 
+    def _planning_brief_section(self) -> str:
+        return self._format_planning_brief(self.planning_brief)
+
     @staticmethod
-    def _audit_prompt(plan: MeshPlan) -> str:
+    def _format_planning_brief(planning_brief: str) -> str:
+        if not planning_brief:
+            return "TARGET MESH PLANNING BRIEF:\nNo additional product method is declared."
+        return f"""TARGET MESH PLANNING BRIEF (trusted product method, not source obligations):
+{planning_brief}
+
+- Use this brief to choose, audit and repair the method of work appropriate to this Mesh.
+- Never derive source obligations from this brief or claim the user requested its normal outcomes.
+- The SOURCE GOAL and immutable obligation ledger define requested outcomes and constraints.
+- Explicit source scope, prohibitions and approval boundaries override the normal method.
+- The live capability catalog remains the complete authority boundary.
+- Apply brief stages only when relevant to the source goal and available capabilities.
+- When an applicable brief stage is contingent on predecessor evidence, include one
+    decision-capable outcome whose peer inspects that evidence and either acts or returns
+    a verified no-op; do not omit the stage merely because its mutation may be unnecessary.
+- A negative result may complete only when it meets the brief's declared evidence standard."""
+
+    def _audit_prompt(self, plan: MeshPlan) -> str:
+        source_blocks = self._source_blocks(plan.goal)
         return f"""Audit a proposed mesh DAG against its immutable source goal.
 
 SOURCE GOAL:
 {plan.goal}
+
+IMMUTABLE SOURCE BLOCKS:
+{json.dumps(source_blocks, ensure_ascii=False)}
 
 OBLIGATIONS:
 {json.dumps([item.to_dict() for item in plan.obligations], ensure_ascii=False)}
@@ -875,13 +1141,17 @@ OBLIGATIONS:
 DAG STEPS:
 {json.dumps([step.to_dict() for step in plan.steps], ensure_ascii=False)}
 
+{self._planning_brief_section()}
+
 Return exactly one json object: {{"complete": true, "missing": []}} only if every requested
 outcome, constraint, prohibition, approval boundary, fallback condition, scope
 limit and evidence requirement in SOURCE GOAL exists in the obligation ledger
 and is covered by an executable DAG step. For every write, notify, or destructive
 step, verify that information needed to perform the intended action is supplied by the
-source goal or an ancestor step; naming a person, account, file, channel, or event is
-not equivalent to having its provider identifier or contact details. Flag parallel
+source goal or a producer directly listed in `depends_on`. Runtime context contains direct
+dependency artifacts only. Transitive ancestry establishes ordering only and does not deliver
+an ancestor's artifact; require every needed producer as a direct dependency. Naming a person,
+account, file, channel, or event is not equivalent to having its provider identifier or contact details. Flag parallel
 steps when one needs facts the other is expected to discover. A provider-owned
 inspect-or-create outcome is executable when its task explicitly discovers its own
 same-provider identifiers and its success criterion returns the concrete identifiers
@@ -889,19 +1159,51 @@ or links required downstream; do not demand atom-level steps for that discovery.
 When a downstream outcome needs an artifact's content, require the producing step's
 task and success criterion to inspect and return provider-readback evidence of usable
 content. Resource existence, title, identifier, link or MIME type alone is insufficient.
+Treat each direct dependency as supplying only the artifact promised by its own task,
+success criterion and expected findings. Do not assume a summary, ranking, approval or
+other transformation relays its input artifacts unless its declared output explicitly
+promises them. Require direct dependencies on original evidence producers whenever
+downstream work needs both that evidence and a transformed decision.
 Every obligation must also have an independently verifiable success criterion. A named
 workflow or playbook is not an additional obligation when its meaning is fully defined
 by the atomic outcomes that follow it. Do not require a synthesis or inspection step
-merely to restate completion of those outcomes.
+merely to restate completion of those outcomes. Also reject a DAG that omits an
+applicable stage or evidence standard from the TARGET MESH PLANNING BRIEF. Do not
+apply a brief stage that the source goal narrows, prohibits, or leaves unauthorized.
+For a missing brief-method stage, describe the method gap but set `source_ref` to
+one id from IMMUTABLE SOURCE BLOCKS that makes the stage applicable. Never derive
+source provenance from TARGET MESH PLANNING BRIEF text.
 
 For an invalid obligation ledger, return complete=false, `missing`, and a corrected
-`obligations` list using exactly id, description, source_quote. The corrected ledger may
+`obligations` list using exactly id, description, source_ref. The corrected ledger may
 remove only redundant composite obligations and must preserve every independently
 verifiable source requirement. For an executable-step defect, omit `obligations` and
-list each missing item with description and an exact source_quote."""
+list each missing item with description and one source_ref from IMMUTABLE SOURCE BLOCKS.
+When every executable-step defect can be resolved solely by adding direct artifact
+dependencies between existing steps, also return `corrections`. Each correction has
+exactly operation=`add_dependencies`, step_id, and producer_step_ids. Choose the producer
+step ids whose declared artifacts the target step requires. Corrections may only add
+edges; never use them to alter tasks, criteria, capabilities, effects, systems, coverage,
+or obligations. Omit `corrections` when any other DAG change is required."""
 
     @staticmethod
-    def _parse_obligations(raw: dict[str, Any], goal: str) -> list[GoalObligation]:
+    def _source_blocks(goal: str) -> list[dict[str, str]]:
+        lines = [line for line in goal.splitlines() if line.strip()]
+        blocks = [
+            {"id": f"source-{index}", "text": line}
+            for index, line in enumerate(lines, start=1)
+        ]
+        if len(lines) > 1:
+            blocks.append({"id": "source-all", "text": goal})
+        return blocks
+
+    @staticmethod
+    def _parse_obligations(
+        raw: dict[str, Any],
+        goal: str,
+        *,
+        require_source_ref: bool = False,
+    ) -> list[GoalObligation]:
         raw_obligations = raw.get("obligations")
         if not isinstance(raw_obligations, list) or not raw_obligations:
             raise MeshPlanError("Mesh plan requires at least one obligation")
@@ -913,7 +1215,23 @@ list each missing item with description and an exact source_quote."""
                 raise MeshPlanError(f"Obligation {index} must be an object")
             obligation_id = str(item.get("id") or "").strip()
             description = str(item.get("description") or "").strip()
+            source_ref = str(item.get("source_ref") or "").strip()
             source_quote = str(item.get("source_quote") or "").strip()
+            if require_source_ref and not source_ref:
+                raise MeshPlanError(
+                    f"Obligation {obligation_id or index} has no source_ref"
+                )
+            if source_ref:
+                source_by_id = {
+                    block["id"]: block["text"]
+                    for block in MeshPlanner._source_blocks(goal)
+                }
+                if source_ref not in source_by_id:
+                    raise MeshPlanError(
+                        f"Obligation {obligation_id or index} has unknown source_ref "
+                        f"{source_ref!r}"
+                    )
+                source_quote = source_by_id[source_ref]
             if not obligation_id or obligation_id in obligation_ids:
                 raise MeshPlanError(f"Obligation {index} has a missing or duplicate id")
             if not description:
@@ -993,7 +1311,7 @@ list each missing item with description and an exact source_quote."""
                 )
             if not task or not criterion:
                 raise MeshPlanError(f"Step {step_id} requires task and success_criterion")
-            if dependency_policy not in {"satisfied", "terminal_evidence"}:
+            if dependency_policy not in DEPENDENCY_POLICIES:
                 raise MeshPlanError(
                     f"Step {step_id} has invalid dependency_policy {dependency_policy!r}"
                 )

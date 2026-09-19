@@ -28,6 +28,10 @@ class LocalBlobStorage(BlobStorage):
             raise ValueError(f"Path traversal detected: {path}")
         return full
 
+    def has_local_path(self, path: str) -> bool:
+        """Whether this process can access a persisted local blob path."""
+        return os.path.isfile(self._full_path(path))
+
     async def save(self, path: str, content: Union[str, bytes]) -> str:
         full_path = self._full_path(path)
         os.makedirs(os.path.dirname(full_path), exist_ok=True)

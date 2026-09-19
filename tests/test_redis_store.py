@@ -451,13 +451,19 @@ class TestWorkflowDAG:
             steps=[
                 {"id": "research", "capability": "research", "task": "Research", "depends_on": []},
                 {"id": "analyse", "capability": "analysis", "task": "Analyse", "depends_on": ["research"]},
+                {"id": "report", "capability": "reporting", "task": "Report", "depends_on": ["analyse"]},
             ],
         )
         store.save_step_output("wf-context", "research", output={"evidence": ["source-1"]})
         store.update_step_status("wf-context", "research", "completed")
+        store.save_step_output("wf-context", "analyse", output={"conclusion": "supported"})
+        store.update_step_status("wf-context", "analyse", "completed")
 
         assert store.get_dependency_outputs("wf-context", "analyse") == {
             "research": {"evidence": ["source-1"]},
+        }
+        assert store.get_dependency_outputs("wf-context", "report") == {
+            "analyse": {"conclusion": "supported"},
         }
 
     def test_dependency_interpretations_are_preserved_separately_from_artifacts(self, store):
@@ -576,7 +582,6 @@ class TestWorkflowDAG:
             "wf-amend", "analyse_v2", "analyst:claim",
             {"status": "success", "output": {"analysis": "complete"}},
         )
-        terminal_definition = store.get_workflow_definition("wf-amend")
         with pytest.raises(ValueError, match="at least one new step"):
             store.amend_workflow(
                 "wf-amend",
@@ -825,6 +830,69 @@ class TestAtomicStepClaiming:
         assert store.are_dependencies_met("wf-semantic-gate", "respond") is True
         assert store.claim_step("wf-semantic-gate", "respond", "peer:respond", 30) is True
 
+    def test_final_response_waits_for_semantic_reconciliation_settlement(self, store):
+        store.publish_workflow(
+            "wf-response-reconciliation",
+            goal="Verify then report",
+            obligations=[{
+                "id": "o1", "description": "Verify", "source_quote": "Verify",
+            }],
+            steps=[
+                {
+                    "id": "verify", "capability": "verification", "effect": "read",
+                    "task": "Verify", "depends_on": [], "covers": ["o1"],
+                    "plan_revision": 1,
+                },
+                {
+                    "id": "respond", "capability": "response",
+                    "effect": "final_response", "task": "Respond",
+                    "depends_on": ["verify"], "plan_revision": 1,
+                },
+            ],
+        )
+        assert store.claim_step(
+            "wf-response-reconciliation", "verify", "peer:verify", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-response-reconciliation",
+            "verify",
+            "peer:verify",
+            {
+                "status": "success",
+                "output": {"verified": False},
+                "interpretation": {
+                    "verdict": "unsatisfied",
+                    "decision": "reject",
+                    "meaning": "Verification is incomplete.",
+                    "satisfied_requirements": [],
+                    "unmet_requirements": ["o1"],
+                    "evidence_refs": [],
+                },
+            },
+        )
+
+        assert not store.are_dependencies_met(
+            "wf-response-reconciliation", "respond"
+        )
+        assert not store.claim_step(
+            "wf-response-reconciliation", "respond", "peer:respond", 30
+        )
+        assert store.save_workflow_reconciliation_settlement(
+            "wf-response-reconciliation",
+            1,
+            {
+                "event": "semantic_reconciliation_settled",
+                "obligation_status": "blocked",
+                "reason": "No executable remediation remains.",
+            },
+        )
+        assert store.are_dependencies_met(
+            "wf-response-reconciliation", "respond"
+        )
+        assert store.claim_step(
+            "wf-response-reconciliation", "respond", "peer:respond", 30
+        )
+
     def test_final_response_cannot_satisfy_source_obligations(self, store):
         store.publish_workflow(
             "wf-response-projection",
@@ -849,6 +917,36 @@ class TestAtomicStepClaiming:
         assert obligation["state"] == "pending"
         assert obligation["current_step_ids"] == []
         assert obligation["attempt_states"] == {}
+
+    def test_large_step_output_round_trips_without_losing_artifact_evidence(self, store):
+        store.publish_workflow(
+            "wf-large-artifact",
+            goal="Preserve evidence",
+            obligations=[],
+            steps=[{
+                "id": "evidence", "capability": "research", "effect": "read",
+                "task": "Return evidence", "depends_on": [],
+            }],
+        )
+        large_evidence = {
+            "status": "verified",
+            "observations": ["evidence"] * 100_000,
+        }
+        assert store.claim_step(
+            "wf-large-artifact", "evidence", "peer:evidence", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-large-artifact",
+            "evidence",
+            "peer:evidence",
+            {"status": "success", "output": large_evidence},
+        )
+
+        assert store.get_dependency_outputs(
+            "wf-large-artifact", "missing-consumer"
+        ) == {}
+        saved = store.get_step_output("wf-large-artifact", "evidence")
+        assert saved["output"]["output"] == large_evidence
 
     def test_semantic_proceed_authorizes_ordinary_dependency(self, store):
         store.publish_workflow(
@@ -1179,7 +1277,6 @@ class TestTraceEvents:
         })
 
         # The List key stores all published events
-        import fakeredis
         # Access the internal redis client to verify List
         raw = store._store._redis.lrange("trace_log:trace_events:wf-1", 0, -1)
         assert len(raw) == 1

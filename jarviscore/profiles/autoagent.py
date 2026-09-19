@@ -149,6 +149,7 @@ class AutoAgent(Profile):
     #         system_prompt = "You are a market researcher..."
     #         goal_oriented = True   # ← that's it. framework handles the rest.
     goal_oriented: bool = False
+    artifact_reference_paths: tuple[tuple[str, ...], ...] = ()
 
     # ── default_kernel_role ──────────────────────────────────────────────────
     # Declare this agent's fixed subagent role for the Planner null-hint case.
@@ -388,18 +389,8 @@ class AutoAgent(Profile):
         #    Registry-first (Option A) → Coder with ValidationLayer (Option B)
         #    → Research-on-failure only (Option C)
         #    Matches an earlier internal agent pipeline.
-        from jarviscore.kernel.kernel import Kernel
         self._logger.info("Initializing Kernel (registry-first routing + ValidationLayer)...")
-        self._kernel = Kernel(
-            llm_client=self.llm,
-            sandbox=self.sandbox,
-            code_registry=self.code_registry,
-            search_client=self.search,
-            redis_store=getattr(self, '_redis_store', None),
-            blob_storage=getattr(self, '_blob_storage', None),
-            decision_client=getattr(self, 'decisions', None),
-            config=config,
-        )
+        self._kernel = self._create_kernel()
 
         # 9. Wire AdaptiveHITLPolicy from mesh config if enabled.
         #    The Kernel's execute() checks self.hitl_policy.should_escalate()
@@ -424,6 +415,22 @@ class AutoAgent(Profile):
         # The Kernel receives _auth_manager lazily at execute_task() time.
 
         self._logger.info(f"✓ AutoAgent ready: {self.agent_id}")
+
+    def _create_kernel(self):
+        """Create the execution Kernel; products may override for custom roles."""
+        from jarviscore.kernel.kernel import Kernel
+
+        config = self._mesh.config if self._mesh else {}
+        return Kernel(
+            llm_client=self.llm,
+            sandbox=self.sandbox,
+            code_registry=self.code_registry,
+            search_client=self.search,
+            redis_store=getattr(self, '_redis_store', None),
+            blob_storage=getattr(self, '_blob_storage', None),
+            decision_client=getattr(self, 'decisions', None),
+            config=config,
+        )
 
     async def teardown(self) -> None:
         """Release AutoAgent-owned runtime resources."""
@@ -489,6 +496,32 @@ class AutoAgent(Profile):
                 context["_mailbox_context"] = mailbox.format_for_context(pending_messages)
                 task["context"] = context
         envelope = await self._execute_task_pipeline(task)
+        context = task.get("context") or {} if isinstance(task, dict) else {}
+        if (
+            isinstance(envelope, dict)
+            and envelope.get("status") == "success"
+            and envelope.get("output") is not None
+        ):
+            from jarviscore.kernel.state import (
+                ArtifactReferenceError,
+                hydrate_artifact_references,
+            )
+
+            try:
+                envelope["output"] = hydrate_artifact_references(
+                    envelope["output"],
+                    previous_step_results=context.get("previous_step_results") or {},
+                    required_reference_paths=getattr(
+                        self, "artifact_reference_paths", ()
+                    ),
+                )
+            except ArtifactReferenceError as exc:
+                envelope = {
+                    **envelope,
+                    "status": "failure",
+                    "output": None,
+                    "error": f"Artifact composition failed: {exc}",
+                }
         if pending_messages and isinstance(envelope, dict) and envelope.get("status") == "success":
             mailbox.read(max_messages=len(pending_messages))
         if isinstance(envelope, dict):
@@ -767,6 +800,7 @@ class AutoAgent(Profile):
                     "role": self.role,
                     "function_id": meta.get("function_id"),
                     "dispatches": meta.get("dispatches", []),
+                    "_tool_receipts": meta.get("tool_receipts", []),
                     "yield_metadata": {
                         key: meta.get(key)
                         for key in (
@@ -1136,7 +1170,6 @@ class AutoAgent(Profile):
         from jarviscore.planning.goal_context import GoalExecution
         from jarviscore.planning.planner import Planner, PlannerError
         from jarviscore.planning.evaluator import StepEvaluator, EvaluatorError
-        from jarviscore.context.distillation import merge_facts
 
         self._logger.info(
             "[AutoAgent] execute_goal started: goal=%s (max_steps=%d)",

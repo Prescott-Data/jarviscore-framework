@@ -542,6 +542,7 @@ class CoderSandbox:
         return {
             "status": "success",
             "path": path,
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
             "start_line": first,
             "end_line": min(last, len(lines)),
             "content": "\n".join(lines[first - 1:last]),
@@ -576,6 +577,69 @@ class CoderSandbox:
             "bytes": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),
             "executable": bool(executable),
+        }
+
+    def edit_workspace(
+        self,
+        path: str,
+        start_line: int,
+        end_line: int,
+        replacement: str,
+        expected_sha256: str,
+        *,
+        max_bytes: int = 5 * 1024 * 1024,
+    ) -> Dict[str, Any]:
+        """Replace an exact inclusive line range after verifying source identity."""
+        target = self._workspace_path(path)
+        if not target.is_file():
+            return {"status": "not_found", "path": path}
+        original = target.read_bytes()
+        observed_sha256 = hashlib.sha256(original).hexdigest()
+        if observed_sha256 != str(expected_sha256):
+            return {
+                "status": "conflict",
+                "path": path,
+                "expected_sha256": str(expected_sha256),
+                "observed_sha256": observed_sha256,
+            }
+        try:
+            text = original.decode("utf-8")
+        except UnicodeDecodeError:
+            return {"status": "binary", "path": path, "size": len(original)}
+        lines = text.splitlines(keepends=True)
+        first = int(start_line)
+        last = int(end_line)
+        if first < 1 or last < first or last > len(lines):
+            return {
+                "status": "error",
+                "path": path,
+                "error": f"Invalid inclusive line range {first}-{last}",
+            }
+        replacement_text = str(replacement)
+        replaced_ended_with_newline = lines[last - 1].endswith(("\n", "\r"))
+        if replacement_text and replaced_ended_with_newline and not replacement_text.endswith(
+            ("\n", "\r")
+        ):
+            replacement_text += "\r\n" if "\r\n" in text else "\n"
+        payload = (
+            "".join(lines[: first - 1])
+            + replacement_text
+            + "".join(lines[last:])
+        ).encode("utf-8")
+        bounded_max = max(1, min(int(max_bytes), 20 * 1024 * 1024))
+        if len(payload) > bounded_max:
+            return {
+                "status": "error",
+                "path": path,
+                "error": f"Workspace edit exceeds {bounded_max} bytes",
+            }
+        target.write_bytes(payload)
+        return {
+            "status": "success",
+            "path": path,
+            "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "executable": bool(target.stat().st_mode & 0o100),
         }
 
     def search_workspace(

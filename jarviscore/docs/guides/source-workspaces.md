@@ -118,24 +118,35 @@ choosing one silently. Runtime and build directories such as `.tmp`, `output`,
 Final-response steps consume prior artifacts and do not materialize the source
 again. Bindings clean up after success, failure, or cancellation.
 
+If a step exhausts one bounded execution epoch without completing, JarvisCore
+exports that epoch's partial delta before releasing the claim. The next epoch
+restores both the Kernel checkpoint and the same-step delta. This means an agent
+can inspect in one epoch, edit in another, and complete later without losing the
+file state or the original mutation receipt. The final delta remains cumulative
+from the immutable source snapshot.
+
 ## Coder workspace tools
 
-Coder receives five direct tools when a workspace is attached:
+Coder receives six direct tools when a workspace is attached:
 
 | Tool | Purpose |
 |---|---|
 | `workspace_list` | List bounded file or directory metadata. |
 | `workspace_read` | Read a bounded UTF-8 line range. |
 | `workspace_search` | Search text and return path/line evidence. |
-| `workspace_write` | Write one bounded UTF-8 file in the copy-on-write workspace. |
+| `workspace_write` | Create or fully replace one bounded UTF-8 file. The supplied content is the complete final file. |
+| `workspace_edit` | Replace an inclusive line range in an existing UTF-8 file after matching the `sha256` returned by `workspace_read`. |
 | `workspace_run` | Run a trusted allow-listed command in a workspace directory. |
 
 These tools avoid generating Python merely to inspect or author files. Agents
-should use `workspace_write` for fixtures instead of shell redirection, heredocs
-or generated writer scripts. Path resolution rejects traversal outside the
-workspace. Command permissions, timeout and cache environment extend the
-existing CoderSandbox policy only through trusted Mesh configuration. A command
-timeout is returned as typed evidence and does not terminate the workflow.
+should use `workspace_write` for new fixtures and complete-file replacement,
+never for a partial source edit. Existing source files should be read first and
+changed with `workspace_edit`; a stale source hash returns a conflict instead of
+overwriting newer content. Path resolution rejects traversal outside the
+workspace. Both write tools produce `WorkspaceMutation` receipts. Command
+permissions, timeout and cache environment extend the existing CoderSandbox
+policy only through trusted Mesh configuration. A command timeout is returned as
+typed evidence and does not terminate the workflow.
 
 ## Storage and distributed execution
 

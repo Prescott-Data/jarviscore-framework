@@ -41,8 +41,9 @@ OODA Loop Architecture:
     - Emergency turn fuse       — max_turns reached
 """
 
-import inspect
 import ast
+import asyncio
+import inspect
 import json
 import logging
 import os
@@ -56,7 +57,7 @@ from jarviscore.kernel.cognition import AgentCognitionManager, ConvergenceGovern
 from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 from jarviscore.kernel.epistemic import EpistemicLedger
 from jarviscore.kernel.gate import GateEvidence, as_evidence, record_attempt
-from jarviscore.kernel.state import KernelState, ToolResult
+from jarviscore.kernel.state import KernelState, ToolReceiptError
 
 logger = logging.getLogger(__name__)
 
@@ -510,6 +511,9 @@ class BaseSubAgent(ABC):
             "  To finish:     THOUGHT: <reasoning>\\nDONE: <complete human answer>\\nRESULT: <json>",
             "  JSON alternative: {\"thought\": \"...\", \"tool\": \"...\", \"params\": {...}}",
             "  JSON finish:      {\"thought\": \"...\", \"done\": \"<summary>\", \"result\": {...}}",
+            "  This protocol is one action per turn, not one action per task. After each",
+            "  tool result you receive another turn; continue calling tools until the task",
+            "  is complete. Never use DONE merely because additional tool calls are needed.",
             "",
             "Finishing:",
             "  DONE is read by the person who asked. Put the complete answer there,",
@@ -565,7 +569,9 @@ class BaseSubAgent(ABC):
             parsed = self._parse_response_for_contract(content, state.context)
             if parsed.get("type") != "done":
                 return None
-            can_exit, reject_reason = self._can_complete(state, parsed)
+            can_exit, reject_reason = self._ground_completion(state, parsed)
+            if can_exit:
+                can_exit, reject_reason = self._can_complete(state, parsed)
             if not can_exit:
                 evidence = as_evidence(reject_reason)
                 state.add_thought(f"[LANDING_DONE_GATE] {evidence.render()}")
@@ -587,7 +593,8 @@ class BaseSubAgent(ABC):
                 trajectory=[{"turn": state.turn, "type": "landing", "summary": parsed["summary"]}],
                 metadata={"tokens": total_tokens, "cost_usd": total_cost,
                           "lease_exhausted": exhausted, "landing_turn": True,
-                          "typed_outcome": "SUCCESS_ON_LANDING"},
+                          "typed_outcome": "SUCCESS_ON_LANDING",
+                          "tool_receipts": state.receipt_evidence(state.output)},
             )
         except Exception as exc:
             self._log.warning("Landing turn failed: %s", exc)
@@ -933,7 +940,9 @@ class BaseSubAgent(ABC):
             # ═══ Handle DONE ═══
             if parsed["type"] == "done":
                 # ── Done-gate: subclasses can reject premature completion ──
-                can_exit, reject_reason = self._can_complete(state, parsed)
+                can_exit, reject_reason = self._ground_completion(state, parsed)
+                if can_exit:
+                    can_exit, reject_reason = self._can_complete(state, parsed)
                 if not can_exit:
                     evidence = as_evidence(reject_reason)
                     attempts = state.internal_variables.setdefault("done_gate_attempts", [])
@@ -1057,6 +1066,7 @@ class BaseSubAgent(ABC):
                     metadata={
                         "tokens": total_tokens,
                         "cost_usd": total_cost,
+                        "tool_receipts": state.receipt_evidence(parsed.get("result")),
                         **getattr(self, "_dispatch_metadata", {}),
                     },
                 )
@@ -1146,6 +1156,8 @@ class BaseSubAgent(ABC):
                     _trace.log_thinking(thought)
                 _trace.log_tool_start(tool_name, tool_params)
 
+                tool_started_at = time.time()
+                tool_started = time.monotonic()
                 try:
                     tool_result = await self._execute_tool(tool_name, tool_params)
                 except WorkflowBudgetExceeded as exc:
@@ -1179,6 +1191,7 @@ class BaseSubAgent(ABC):
                             "checkpointed": memory is not None,
                         },
                     )
+                tool_duration_ms = round((time.monotonic() - tool_started) * 1000)
                 decision = tool_result.get("decision") if isinstance(tool_result, dict) else None
                 decision_usage = (
                     tool_result.get("decision_usage")
@@ -1216,7 +1229,15 @@ class BaseSubAgent(ABC):
 
                 # Record in state
                 error_str = tool_result.get("error") if isinstance(tool_result, dict) else None
-                state.add_tool_result(tool_name, tool_params, tool_result, error=error_str)
+                tool_receipt = state.add_tool_result(
+                    tool_name,
+                    tool_params,
+                    tool_result,
+                    error=error_str,
+                    timestamp=tool_started_at,
+                    duration_ms=tool_duration_ms,
+                )
+                turn_log["tool_receipt_id"] = tool_receipt.receipt_id
 
                 # ── Record in epistemic ledger + check knowledge plateau ──
                 _epistemic.record_outcome(
@@ -1299,7 +1320,8 @@ class BaseSubAgent(ABC):
                         # Record conversation for continuity through the pivot
                         observation = (
                             f"Tool '{tool_name}' returned: "
-                            f"{_clip_observation(str(tool_result), turn)}"
+                            f"{_clip_observation(str(tool_result), turn)}\n"
+                            f"Authoritative tool receipt: {tool_receipt.receipt_id}"
                         )
                         conversation_history.append({
                             "assistant": content,
@@ -1334,6 +1356,9 @@ class BaseSubAgent(ABC):
                 observation = (
                     f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}):\n"
                     f"{result_str}\n\n"
+                    f"Authoritative tool receipt: {tool_receipt.receipt_id}. "
+                    "When final JSON reports this command execution, include this exact "
+                    "value as `tool_receipt_id`; JarvisCore binds the runtime facts.\n\n"
                     f"Reflect: What new information does this provide? "
                     f"Does it change your strategy?"
                 )
@@ -1386,6 +1411,7 @@ class BaseSubAgent(ABC):
                         metadata={
                             "tokens": total_tokens, "cost_usd": total_cost,
                             "exit_type": "state_driven",
+                            "tool_receipts": state.receipt_evidence(state.output),
                         },
                     )
 
@@ -1530,61 +1556,33 @@ class BaseSubAgent(ABC):
         Do not advise here. Naming the missing fact is this method's whole job;
         deciding what to do about it is the agent's.
 
-        The generic boundary requires one real peer-resolution attempt when a
-        top-level result explicitly declares unresolved work and peer tools are
-        available. Incoming peer responders are already the resolution attempt,
-        so they may return their bounded finding without recursive delegation.
+        Peer tools remain available reasoning actions, not a mandatory route for
+        every unresolved result. Product evidence contracts and concrete attempt
+        history decide whether completion is supported.
         """
-        result = parsed.get("result")
-        result_status = (
-            str(result.get("status", "")).lower()
-            if isinstance(result, dict)
-            else ""
-        )
-        unresolved = result.get("unresolved") if isinstance(result, dict) else None
-        materially_incomplete = (
-            result_status in {"blocked", "incomplete", "partial"}
-            or bool(unresolved)
-        )
-        peer_tools = {"ask_capability", "ask_peer"}
-        available_peer_tools = {
-            tool for tool in peer_tools if self._tool_is_actionable(tool, state)
-        }
-        peer_attempted = any(
-            item.tool_name in peer_tools
-            and (
-                item.succeeded
-                or (
-                    isinstance(item.tool_output, dict)
-                    and item.tool_output.get("peer_request_attempted") is True
-                )
+        return (True, "")
+
+    @staticmethod
+    def _ground_completion(
+        state: KernelState,
+        parsed: Dict[str, Any],
+    ) -> tuple:
+        """Bind tool evidence before any product-owned completion hook runs."""
+        try:
+            parsed["result"] = state.hydrate_tool_receipts(
+                parsed.get("result"),
+                require_command_receipts=True,
             )
-            for item in state.tool_history
-        )
-        fulfilling_peer_request = bool(
-            state.context.get("peer_requester_agent_id")
-        )
-        if (
-            materially_incomplete
-            and available_peer_tools
-            and not peer_attempted
-            and not fulfilling_peer_request
-        ):
+        except ToolReceiptError as exc:
             return (
                 False,
                 GateEvidence(
-                    check="peer_resolution_review",
+                    check="tool_receipt_grounding",
                     requirement=(
-                        "one actual attempt using an available peer capability "
-                        "before accepting a blocked or incomplete result"
+                        "command and workspace mutation observations must reference "
+                        "authoritative tool receipts"
                     ),
-                    observed={
-                        "peer_tool_calls": 0,
-                        "unresolved_facts": (
-                            len(unresolved) if isinstance(unresolved, list) else 0
-                        ),
-                        "available_peer_tools": sorted(available_peer_tools),
-                    },
+                    observed={"error": str(exc)},
                 ),
             )
         return (True, "")
@@ -1650,7 +1648,6 @@ class BaseSubAgent(ABC):
         # (line 592), don't unpack them as kwargs — the tool won't accept a
         # 'raw' argument and will crash with "unexpected keyword argument".
         if "raw" in params and len(params) == 1:
-            import inspect
             try:
                 sig = inspect.signature(tool.func)
                 expected = [p for p in sig.parameters if p != "self"]
@@ -1672,10 +1669,12 @@ class BaseSubAgent(ABC):
             }
 
         try:
-            result = tool.func(**params)
-            # Handle coroutines
-            if hasattr(result, "__await__"):
-                result = await result
+            if inspect.iscoroutinefunction(tool.func):
+                result = await tool.func(**params)
+            else:
+                result = await asyncio.to_thread(tool.func, **params)
+                if inspect.isawaitable(result):
+                    result = await result
             # Normalize to dict
             if not isinstance(result, dict):
                 return {"status": "success", "output": result}

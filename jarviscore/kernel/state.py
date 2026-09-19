@@ -14,10 +14,57 @@ Design decisions:
   - belief_state tracks constraints and hypotheses
 """
 
+import copy
+import shlex
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ToolReceiptError(ValueError):
+    """A final artifact references missing or incompatible tool evidence."""
+
+
+class ArtifactReferenceError(ValueError):
+    """A composed artifact references missing or incompatible dependency output."""
+
+
+class ArtifactReference(BaseModel):
+    """Exact location of an artifact supplied by one direct dependency."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(min_length=1)
+    path: List[str | int] = Field(default_factory=list)
+
+
+class CommandObservation(BaseModel):
+    """Authoritative command evidence hydrated from one tool receipt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_receipt_id: str = Field(min_length=1)
+    command: List[str] = Field(min_length=1)
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+    duration_ms: int = Field(ge=0)
+    observed_at: datetime
+
+
+class WorkspaceMutation(BaseModel):
+    """Authoritative file mutation evidence hydrated from workspace_write."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_receipt_id: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    sha256: str = Field(min_length=1)
+    bytes: int = Field(ge=0)
+    executable: bool = False
+    observed_at: datetime
 
 
 class ToolResult(BaseModel):
@@ -29,10 +76,66 @@ class ToolResult(BaseModel):
     error: Optional[str] = None
     status: Literal["success", "failure", "blocked"] = "success"
     timestamp: float = Field(default_factory=time.time)
+    duration_ms: int = Field(default=0, ge=0)
+    receipt_id: str = ""
 
     @property
     def succeeded(self) -> bool:
         return self.status == "success" and self.error is None
+
+    @property
+    def observed_at(self) -> datetime:
+        return datetime.fromtimestamp(self.timestamp, tz=timezone.utc)
+
+    def command_observation(self) -> CommandObservation:
+        """Project a workspace command result into immutable evidence."""
+        if self.tool_name != "workspace_run" or not isinstance(self.tool_output, dict):
+            raise ToolReceiptError(
+                f"Tool receipt {self.receipt_id!r} is not command evidence"
+            )
+        raw_command = self.tool_input.get("command")
+        command = (
+            [str(value) for value in raw_command]
+            if isinstance(raw_command, list)
+            else shlex.split(str(raw_command or ""))
+        )
+        if not command or "returncode" not in self.tool_output:
+            raise ToolReceiptError(
+                f"Tool receipt {self.receipt_id!r} has no complete command result"
+            )
+        return CommandObservation(
+            tool_receipt_id=self.receipt_id,
+            command=command,
+            exit_code=int(self.tool_output["returncode"]),
+            stdout=str(self.tool_output.get("stdout") or ""),
+            stderr=str(self.tool_output.get("stderr") or ""),
+            duration_ms=self.duration_ms,
+            observed_at=self.observed_at,
+        )
+
+    def workspace_mutation(self) -> WorkspaceMutation:
+        """Project a workspace write result into immutable evidence."""
+        if self.tool_name not in {"workspace_write", "workspace_edit"} or not isinstance(
+            self.tool_output, dict
+        ):
+            raise ToolReceiptError(
+                f"Tool receipt {self.receipt_id!r} is not workspace mutation evidence"
+            )
+        required = {"path", "sha256", "bytes"}
+        if self.tool_output.get("status") != "success" or not required <= set(
+            self.tool_output
+        ):
+            raise ToolReceiptError(
+                f"Tool receipt {self.receipt_id!r} has no complete workspace mutation"
+            )
+        return WorkspaceMutation(
+            tool_receipt_id=self.receipt_id,
+            path=str(self.tool_output["path"]),
+            sha256=str(self.tool_output["sha256"]),
+            bytes=int(self.tool_output["bytes"]),
+            executable=bool(self.tool_output.get("executable", False)),
+            observed_at=self.observed_at,
+        )
 
 
 class KernelState(BaseModel):
@@ -113,6 +216,9 @@ class KernelState(BaseModel):
         tool_input: Dict[str, Any],
         tool_output: Any,
         error: Optional[str] = None,
+        *,
+        timestamp: Optional[float] = None,
+        duration_ms: int = 0,
     ) -> ToolResult:
         """Record a tool invocation result.
 
@@ -134,12 +240,138 @@ class KernelState(BaseModel):
             tool_output=tool_output,
             error=str(error) if error else None,
             status=status,
+            timestamp=time.time() if timestamp is None else timestamp,
+            duration_ms=max(0, int(duration_ms)),
+            receipt_id=(
+                f"tool:{self.workflow_id or f'local-{self.agent_id}-{int(self.started_at * 1_000_000)}'}:"
+                f"{self.step_id or self.agent_id}:{len(self.tool_history) + 1}"
+            ),
         )
         self.tool_history.append(result)
 
         if error:
             self.last_error = str(error)[:500]
         return result
+
+    def hydrate_tool_receipts(
+        self,
+        value: Any,
+        *,
+        require_command_receipts: bool = False,
+    ) -> Any:
+        """Replace command claims with the authoritative referenced tool result."""
+        receipts = {
+            receipt.receipt_id: receipt
+            for receipt in self.tool_history
+            if receipt.receipt_id
+        }
+        prior_observations: Dict[str, CommandObservation] = {}
+        prior_mutations: Dict[str, WorkspaceMutation] = {}
+        workflow_prefix = (
+            f"tool:{self.workflow_id}:"
+            if self.workflow_id and self.workflow_id != "unknown"
+            else ""
+        )
+
+        def collect_prior(candidate: Any) -> None:
+            if isinstance(candidate, list):
+                for item in candidate:
+                    collect_prior(item)
+                return
+            if not isinstance(candidate, dict):
+                return
+            receipt_id = str(candidate.get("tool_receipt_id") or "").strip()
+            if receipt_id:
+                if workflow_prefix and not receipt_id.startswith(workflow_prefix):
+                    return
+                try:
+                    prior_observations[receipt_id] = CommandObservation.model_validate(
+                        candidate
+                    )
+                except Exception:
+                    try:
+                        prior_mutations[receipt_id] = WorkspaceMutation.model_validate(
+                            candidate
+                        )
+                    except Exception:
+                        pass
+            for item in candidate.values():
+                collect_prior(item)
+
+        collect_prior((self.context or {}).get("previous_step_results") or {})
+
+        def hydrate(candidate: Any) -> Any:
+            if isinstance(candidate, list):
+                return [hydrate(item) for item in candidate]
+            if not isinstance(candidate, dict):
+                return candidate
+            receipt_id = str(candidate.get("tool_receipt_id") or "").strip()
+            command_claim = "command" in candidate and any(
+                field in candidate
+                for field in ("exit_code", "stdout", "stderr", "duration_ms", "observed_at")
+            )
+            if receipt_id:
+                if workflow_prefix and not receipt_id.startswith(workflow_prefix):
+                    raise ToolReceiptError(
+                        f"Tool receipt {receipt_id!r} belongs to another workflow"
+                    )
+                receipt = receipts.get(receipt_id)
+                mutation_claim = "path" in candidate and any(
+                    field in candidate
+                    for field in ("sha256", "bytes", "executable")
+                )
+                if mutation_claim and receipt is not None:
+                    evidence: BaseModel = receipt.workspace_mutation()
+                elif mutation_claim:
+                    evidence = prior_mutations.get(receipt_id)
+                elif receipt is not None:
+                    evidence = receipt.command_observation()
+                else:
+                    evidence = prior_observations.get(receipt_id)
+                if evidence is None:
+                    raise ToolReceiptError(f"Unknown tool receipt {receipt_id!r}")
+                return evidence.model_dump(mode="json")
+            if require_command_receipts and command_claim:
+                raise ToolReceiptError(
+                    "Command observations require a tool_receipt_id from workspace_run"
+                )
+            return {key: hydrate(item) for key, item in candidate.items()}
+
+        return hydrate(value)
+
+    def receipt_evidence(self, value: Any = None) -> List[Dict[str, Any]]:
+        """Canonical evidence cited by one output, safe for final validation."""
+        cited = set()
+
+        def collect(candidate: Any) -> None:
+            if isinstance(candidate, list):
+                for item in candidate:
+                    collect(item)
+                return
+            if not isinstance(candidate, dict):
+                return
+            receipt_id = str(candidate.get("tool_receipt_id") or "").strip()
+            if receipt_id:
+                cited.add(receipt_id)
+            for item in candidate.values():
+                collect(item)
+
+        collect(self.output if value is None else value)
+        evidence = []
+        for receipt in self.tool_history:
+            if receipt.receipt_id not in cited:
+                continue
+            try:
+                if receipt.tool_name == "workspace_run":
+                    item = receipt.command_observation()
+                elif receipt.tool_name in {"workspace_write", "workspace_edit"}:
+                    item = receipt.workspace_mutation()
+                else:
+                    continue
+            except ToolReceiptError:
+                continue
+            evidence.append(item.model_dump(mode="json"))
+        return evidence
 
     def add_thought(self, thought: str) -> None:
         """Record an internal thought / meta-cognition note."""
@@ -183,3 +415,158 @@ class KernelState(BaseModel):
                 parts.append(f"Last tool: {tr.tool_name}")
                 break
         return " | ".join(parts) or None
+
+
+def hydrate_receipt_evidence(
+    value: Any,
+    *,
+    receipt_evidence: List[Dict[str, Any]],
+    previous_step_results: Optional[Dict[str, Any]] = None,
+    require_receipts: bool = True,
+    workflow_id: str = "",
+) -> Any:
+    """Ground receipt-bearing output after all product normalization hooks."""
+    commands: Dict[str, CommandObservation] = {}
+    mutations: Dict[str, WorkspaceMutation] = {}
+    workflow_prefix = f"tool:{workflow_id}:" if workflow_id else ""
+
+    def collect(candidate: Any) -> None:
+        if isinstance(candidate, list):
+            for item in candidate:
+                collect(item)
+            return
+        if not isinstance(candidate, dict):
+            return
+        receipt_id = str(candidate.get("tool_receipt_id") or "").strip()
+        if receipt_id:
+            if workflow_prefix and not receipt_id.startswith(workflow_prefix):
+                return
+            try:
+                commands[receipt_id] = CommandObservation.model_validate(candidate)
+            except Exception:
+                try:
+                    mutations[receipt_id] = WorkspaceMutation.model_validate(candidate)
+                except Exception:
+                    pass
+        for item in candidate.values():
+            collect(item)
+
+    collect(receipt_evidence)
+    collect(previous_step_results or {})
+
+    def hydrate(candidate: Any) -> Any:
+        if isinstance(candidate, list):
+            return [hydrate(item) for item in candidate]
+        if not isinstance(candidate, dict):
+            return candidate
+        receipt_id = str(candidate.get("tool_receipt_id") or "").strip()
+        command_claim = "command" in candidate and any(
+            field in candidate
+            for field in ("exit_code", "stdout", "stderr", "duration_ms", "observed_at")
+        )
+        mutation_claim = "path" in candidate and any(
+            field in candidate for field in ("sha256", "bytes", "executable")
+        )
+        if receipt_id:
+            if workflow_prefix and not receipt_id.startswith(workflow_prefix):
+                raise ToolReceiptError(
+                    f"Tool receipt {receipt_id!r} belongs to another workflow"
+                )
+            evidence: Optional[BaseModel]
+            if mutation_claim:
+                evidence = mutations.get(receipt_id)
+            else:
+                evidence = commands.get(receipt_id)
+            if evidence is None:
+                raise ToolReceiptError(f"Unknown tool receipt {receipt_id!r}")
+            return evidence.model_dump(mode="json")
+        if require_receipts and command_claim:
+            raise ToolReceiptError(
+                "Command observations require an authoritative tool_receipt_id"
+            )
+        if require_receipts and mutation_claim:
+            raise ToolReceiptError(
+                "Workspace mutations require an authoritative tool_receipt_id"
+            )
+        return {key: hydrate(item) for key, item in candidate.items()}
+
+    return hydrate(value)
+
+
+def hydrate_artifact_references(
+    value: Any,
+    *,
+    previous_step_results: Dict[str, Any],
+    required_reference_paths: tuple[tuple[str, ...], ...] = (),
+) -> Any:
+    """Replace explicit artifact references with exact direct-dependency values."""
+
+    def is_reference(candidate: Any) -> bool:
+        return (
+            isinstance(candidate, dict)
+            and set(candidate) == {"artifact_ref"}
+            and isinstance(candidate["artifact_ref"], dict)
+        )
+
+    def targets(candidate: Any, path: tuple[str, ...]) -> List[Any]:
+        if not path:
+            return [candidate]
+        segment, *remaining = path
+        tail = tuple(remaining)
+        if segment == "*":
+            if not isinstance(candidate, list):
+                return []
+            return [item for value in candidate for item in targets(value, tail)]
+        if not isinstance(candidate, dict) or segment not in candidate:
+            return []
+        return targets(candidate[segment], tail)
+
+    for path in required_reference_paths:
+        for target in targets(value, path):
+            if target is not None and not is_reference(target):
+                raise ArtifactReferenceError(
+                    f"Composed artifact field {'.'.join(path)!r} must use an "
+                    "exact artifact_ref"
+                )
+
+    def hydrate(candidate: Any, active: tuple[tuple[str, tuple[str | int, ...]], ...]) -> Any:
+        if isinstance(candidate, list):
+            return [hydrate(item, active) for item in candidate]
+        if not isinstance(candidate, dict):
+            return candidate
+        if not is_reference(candidate):
+            return {key: hydrate(item, active) for key, item in candidate.items()}
+
+        try:
+            reference = ArtifactReference.model_validate(candidate["artifact_ref"])
+        except Exception as exc:
+            raise ArtifactReferenceError(f"Invalid artifact reference: {exc}") from exc
+        if reference.step_id not in previous_step_results:
+            raise ArtifactReferenceError(
+                f"Artifact reference names unavailable direct dependency "
+                f"{reference.step_id!r}"
+            )
+        identity = (reference.step_id, tuple(reference.path))
+        if identity in active:
+            raise ArtifactReferenceError(f"Cyclic artifact reference {identity!r}")
+        selected = previous_step_results[reference.step_id]
+        for segment in reference.path:
+            if isinstance(segment, int):
+                if segment < 0:
+                    raise ArtifactReferenceError(
+                        f"Artifact reference {identity!r} has negative list position {segment}"
+                    )
+                if not isinstance(selected, list) or not -len(selected) <= segment < len(selected):
+                    raise ArtifactReferenceError(
+                        f"Artifact reference {identity!r} has invalid list position {segment}"
+                    )
+                selected = selected[segment]
+            else:
+                if not isinstance(selected, dict) or segment not in selected:
+                    raise ArtifactReferenceError(
+                        f"Artifact reference {identity!r} has missing field {segment!r}"
+                    )
+                selected = selected[segment]
+        return hydrate(copy.deepcopy(selected), (*active, identity))
+
+    return hydrate(value, ())

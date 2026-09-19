@@ -1,3 +1,4 @@
+import hashlib
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -228,9 +229,82 @@ async def test_mesh_binds_and_restores_agent_sandbox_with_dependency_delta(tmp_p
     assert "workspace_binding" not in task["context"]
 
 
+@pytest.mark.asyncio
+async def test_mesh_materializes_maximal_cumulative_delta_lineage(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    snapshot = await store.capture(
+        SourceRef("fixture", "project", "main"),
+        "commit-1",
+        {"value.txt": "before\n"},
+    )
+    async with __import__(
+        "jarviscore.execution.workspace", fromlist=["SandboxBinding"]
+    ).SandboxBinding(store, snapshot) as ancestor:
+        (ancestor.workspace / "value.txt").write_text("ancestor\n")
+        ancestor_delta = await ancestor.export_delta(
+            "workflows/wf-lineage/workspace_deltas/ancestor"
+        )
+    async with __import__(
+        "jarviscore.execution.workspace", fromlist=["SandboxBinding"]
+    ).SandboxBinding(store, snapshot) as descendant:
+        await descendant.apply_delta(ancestor_delta)
+        (descendant.workspace / "value.txt").write_text("descendant\n")
+        descendant_delta = await descendant.export_delta(
+            "workflows/wf-lineage/workspace_deltas/descendant"
+        )
+
+    original = create_coder_sandbox(workspace_dir=tmp_path / "original")
+    agent = SimpleNamespace(
+        sandbox=original,
+        _kernel=SimpleNamespace(sandbox=original, _subagent_cache={}),
+    )
+    outputs = {
+        "ancestor": {
+            "output": {
+                "status": "success",
+                "workspace_delta": {
+                    "manifest_blob_path": ancestor_delta.manifest_blob_path,
+                },
+            },
+        },
+        "descendant": {
+            "output": {
+                "status": "success",
+                "workspace_delta": {
+                    "manifest_blob_path": descendant_delta.manifest_blob_path,
+                },
+            },
+        },
+    }
+    mesh = Mesh()
+    mesh._blob_storage = blobs
+    mesh._redis_store = SimpleNamespace(
+        get_step_output=lambda workflow_id, step_id: outputs[step_id],
+    )
+    task = {
+        "context": {
+            "source_snapshot": {"manifest_blob_path": snapshot.manifest_blob_path},
+            "workflow_id": "wf-lineage",
+            "step_id": "verify",
+            "workflow_plan": {
+                "steps": [
+                    {"id": "ancestor", "depends_on": []},
+                    {"id": "descendant", "depends_on": ["ancestor"]},
+                    {"id": "verify", "depends_on": ["ancestor", "descendant"]},
+                ],
+            },
+        },
+    }
+
+    async with mesh._bound_step_workspace(agent, task) as binding:
+        assert (binding.workspace / "value.txt").read_text() == "descendant\n"
+
+
 def test_node_local_snapshot_is_claimed_only_by_materializer_node():
     mesh = Mesh()
     mesh._node_id = "node-a"
+    mesh._blob_storage = SimpleNamespace(has_local_path=lambda _: False)
     mesh._redis_store = SimpleNamespace(
         get_workflow_definition=lambda _: {
             "context": {
@@ -243,6 +317,17 @@ def test_node_local_snapshot_is_claimed_only_by_materializer_node():
     )
 
     assert mesh._node_can_access_workspace("wf-1") is False
+    mesh._blob_storage = SimpleNamespace(has_local_path=lambda path: path == "snapshots/a.json")
+    mesh._redis_store.get_workflow_definition = lambda _: {
+        "context": {
+            "source_snapshot": {
+                "storage_scope": "node",
+                "materializer_node_id": "node-b",
+                "manifest_blob_path": "snapshots/a.json",
+            }
+        }
+    }
+    assert mesh._node_can_access_workspace("wf-1") is True
     mesh._redis_store.get_workflow_definition = lambda _: {
         "context": {"source_snapshot": {"storage_scope": "shared"}}
     }
@@ -300,6 +385,89 @@ async def test_mesh_terminalizes_step_at_execution_epoch_limit():
     assert redis.get_step_status("wf-epoch-limit", "step-1") == "failed"
     output = redis.get_step_output("wf-epoch-limit", "step-1")["output"]
     assert output["typed_outcome"] == "EXECUTION_EPOCH_LIMIT_REACHED"
+
+
+@pytest.mark.asyncio
+async def test_mesh_preserves_workspace_mutation_across_execution_epochs(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    snapshot = await BlobSnapshotStore(blobs).capture(
+        SourceRef("fixture", "project", "main"),
+        "commit-1",
+        {"service.py": "broken\n"},
+    )
+    authoritative = {
+        "tool_receipt_id": "tool:wf-epoch-workspace:repair:1",
+        "path": "service.py",
+        "sha256": hashlib.sha256(b"fixed\n").hexdigest(),
+        "bytes": len(b"fixed\n"),
+        "executable": False,
+        "observed_at": "2026-09-19T00:00:00Z",
+    }
+
+    class RepairPeer(Agent):
+        role = "repair"
+        capabilities: ClassVar[list[str]] = ["repair"]
+        attempts = 0
+
+        async def execute_task(self, task):
+            self.attempts += 1
+            path = self.sandbox.workspace / "service.py"
+            if self.attempts == 1:
+                path.write_text("fixed\n")
+                return {"status": "epoch_exhausted", "output": None}
+            assert path.read_text() == "fixed\n"
+            return {
+                "status": "success",
+                "output": {"status": "applied", "mutations": [authoritative]},
+                "_tool_receipts": [authoritative],
+            }
+
+    redis = __import__(
+        "jarviscore.testing", fromlist=["MockRedisContextStore"]
+    ).MockRedisContextStore()
+    mesh = Mesh(config={"p2p_enabled": False})
+    mesh._redis_store = redis
+    mesh._blob_storage = blobs
+    peer = mesh.add(RepairPeer)
+    peer.sandbox = create_coder_sandbox(workspace_dir=tmp_path / "repair-base")
+    redis.publish_workflow(
+        "wf-epoch-workspace",
+        goal="Repair",
+        context={"source_snapshot": {
+            "manifest_blob_path": snapshot.manifest_blob_path,
+            "storage_scope": "node",
+            "materializer_node_id": mesh._node_id,
+        }},
+        obligations=[],
+        steps=[{
+            "id": "repair", "capability": "repair", "effect": "propose",
+            "task": "Repair", "depends_on": [],
+        }],
+        budget={"max_epochs_per_step": 2},
+    )
+
+    await mesh._execute_distributed_step(
+        peer,
+        "wf-epoch-workspace",
+        "repair",
+        redis.get_step_definition("wf-epoch-workspace", "repair"),
+    )
+    continued = redis.get_step_definition("wf-epoch-workspace", "repair")
+    assert continued["continuation_workspace_delta"]["modified"][0]["path"] == (
+        "service.py"
+    )
+
+    await mesh._execute_distributed_step(
+        peer,
+        "wf-epoch-workspace",
+        "repair",
+        redis.get_step_definition("wf-epoch-workspace", "repair"),
+    )
+
+    saved = redis.get_step_output("wf-epoch-workspace", "repair")["output"]
+    assert redis.get_step_status("wf-epoch-workspace", "repair") == "completed"
+    assert saved["output"]["mutations"] == [authoritative]
+    assert saved["workspace_delta"]["modified"][0]["path"] == "service.py"
 
 
 @pytest.mark.asyncio
@@ -498,3 +666,197 @@ async def test_repair_delta_reaches_independent_verifier_without_mutating_snapsh
     assert await blobs.read(snapshot.entries[0].blob_path) == "def value():\n    return 'broken'\n"
     assert repair.sandbox is original_repair_sandbox
     assert verifier.sandbox is original_verify_sandbox
+
+
+@pytest.mark.asyncio
+async def test_mesh_rejects_fabricated_workspace_mutation_before_delta_export(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    snapshot = await BlobSnapshotStore(blobs).capture(
+        SourceRef("fixture", "project", "main"),
+        "commit-1",
+        {"service.py": "broken\n"},
+    )
+
+    class RepairPeer(Agent):
+        role = "repair"
+        capabilities: ClassVar[list[str]] = ["repair"]
+
+        async def execute_task(self, task):
+            return {
+                "status": "success",
+                "output": {
+                    "status": "applied",
+                    "mutations": [{
+                        "tool_receipt_id": "tool:wf-fake:repair:missing",
+                        "path": "service.py",
+                        "sha256": "invented",
+                        "bytes": 1,
+                        "executable": False,
+                        "observed_at": "2026-09-17T00:00:00Z",
+                    }],
+                },
+                "_tool_receipts": [],
+            }
+
+    redis = __import__(
+        "jarviscore.testing", fromlist=["MockRedisContextStore"]
+    ).MockRedisContextStore()
+    mesh = Mesh(config={"p2p_enabled": False})
+    mesh._redis_store = redis
+    mesh._blob_storage = blobs
+    peer = mesh.add(RepairPeer)
+    redis.publish_workflow(
+        "wf-fake",
+        goal="Repair",
+        context={"source_snapshot": {
+            "manifest_blob_path": snapshot.manifest_blob_path,
+            "storage_scope": "node",
+            "materializer_node_id": mesh._node_id,
+        }},
+        obligations=[],
+        steps=[{
+            "id": "repair", "capability": "repair", "effect": "propose",
+            "task": "Repair", "depends_on": [],
+        }],
+    )
+
+    await mesh._execute_distributed_step(
+        peer, "wf-fake", "repair",
+        redis.get_step_definition("wf-fake", "repair"),
+    )
+
+    saved = redis.get_step_output("wf-fake", "repair")["output"]
+    assert redis.get_step_status("wf-fake", "repair") == "failed"
+    assert "Unknown tool receipt" in saved["error"]
+    assert "workspace_delta" not in saved
+
+
+@pytest.mark.asyncio
+async def test_mesh_grounds_workspace_mutation_before_delta_export(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    snapshot = await BlobSnapshotStore(blobs).capture(
+        SourceRef("fixture", "project", "main"),
+        "commit-1",
+        {"service.py": "broken\n"},
+    )
+    receipt = {
+        "tool_receipt_id": "tool:wf-grounded:repair:1",
+        "path": "service.py",
+        "sha256": "ignored-model-value",
+        "bytes": 1,
+        "executable": False,
+        "observed_at": "2026-09-17T00:00:00Z",
+    }
+    authoritative = {
+        **receipt,
+        "sha256": hashlib.sha256(b"fixed\n").hexdigest(),
+        "bytes": 6,
+    }
+
+    class RepairPeer(Agent):
+        role = "repair"
+        capabilities: ClassVar[list[str]] = ["repair"]
+
+        async def execute_task(self, task):
+            (self.sandbox.workspace / "service.py").write_text("fixed\n")
+            return {
+                "status": "success",
+                "output": {"status": "applied", "mutations": [receipt]},
+                "_tool_receipts": [authoritative],
+            }
+
+    redis = __import__(
+        "jarviscore.testing", fromlist=["MockRedisContextStore"]
+    ).MockRedisContextStore()
+    mesh = Mesh(config={"p2p_enabled": False})
+    mesh._redis_store = redis
+    mesh._blob_storage = blobs
+    peer = mesh.add(RepairPeer)
+    peer.sandbox = create_coder_sandbox(workspace_dir=tmp_path / "repair-base")
+    redis.publish_workflow(
+        "wf-grounded",
+        goal="Repair",
+        context={"source_snapshot": {
+            "manifest_blob_path": snapshot.manifest_blob_path,
+            "storage_scope": "node",
+            "materializer_node_id": mesh._node_id,
+        }},
+        obligations=[],
+        steps=[{
+            "id": "repair", "capability": "repair", "effect": "propose",
+            "task": "Repair", "depends_on": [],
+        }],
+    )
+
+    await mesh._execute_distributed_step(
+        peer, "wf-grounded", "repair",
+        redis.get_step_definition("wf-grounded", "repair"),
+    )
+
+    saved = redis.get_step_output("wf-grounded", "repair")["output"]
+    assert redis.get_step_status("wf-grounded", "repair") == "completed"
+    assert saved["output"]["mutations"] == [authoritative]
+    assert saved["workspace_delta"]["modified"][0]["path"] == "service.py"
+
+
+@pytest.mark.asyncio
+async def test_mesh_rejects_mutation_receipt_without_final_workspace_change(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    snapshot = await BlobSnapshotStore(blobs).capture(
+        SourceRef("fixture", "project", "main"),
+        "commit-1",
+        {"service.py": "unchanged\n"},
+    )
+    receipt = {
+        "tool_receipt_id": "tool:wf-no-change:repair:1",
+        "path": "service.py",
+        "sha256": hashlib.sha256(b"unchanged\n").hexdigest(),
+        "bytes": len(b"unchanged\n"),
+        "executable": False,
+        "observed_at": "2026-09-17T00:00:00Z",
+    }
+
+    class RepairPeer(Agent):
+        role = "repair"
+        capabilities: ClassVar[list[str]] = ["repair"]
+
+        async def execute_task(self, task):
+            (self.sandbox.workspace / "service.py").write_text("unchanged\n")
+            return {
+                "status": "success",
+                "output": {"status": "applied", "mutations": [receipt]},
+                "_tool_receipts": [receipt],
+            }
+
+    redis = __import__(
+        "jarviscore.testing", fromlist=["MockRedisContextStore"]
+    ).MockRedisContextStore()
+    mesh = Mesh(config={"p2p_enabled": False})
+    mesh._redis_store = redis
+    mesh._blob_storage = blobs
+    peer = mesh.add(RepairPeer)
+    peer.sandbox = create_coder_sandbox(workspace_dir=tmp_path / "repair-base")
+    redis.publish_workflow(
+        "wf-no-change",
+        goal="Repair",
+        context={"source_snapshot": {
+            "manifest_blob_path": snapshot.manifest_blob_path,
+            "storage_scope": "node",
+            "materializer_node_id": mesh._node_id,
+        }},
+        obligations=[],
+        steps=[{
+            "id": "repair", "capability": "repair", "effect": "propose",
+            "task": "Repair", "depends_on": [],
+        }],
+    )
+
+    await mesh._execute_distributed_step(
+        peer, "wf-no-change", "repair",
+        redis.get_step_definition("wf-no-change", "repair"),
+    )
+
+    saved = redis.get_step_output("wf-no-change", "repair")["output"]
+    assert redis.get_step_status("wf-no-change", "repair") == "failed"
+    assert "Unknown tool receipt" in saved["error"]
+    assert "workspace_delta" not in saved

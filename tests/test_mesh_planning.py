@@ -16,7 +16,7 @@ def responses(*, obligations=None, steps=None, audit=None):
     obligations = obligations or [{
             "id": "o1",
             "description": "Find evidence",
-            "source_quote": "Find evidence",
+            "source_ref": "source-1",
         }]
     steps = steps or [{
             "step_id": "research",
@@ -60,10 +60,190 @@ async def test_mesh_planner_builds_capability_dag_with_complete_obligation_cover
     assert "naming an entity does not supply its provider identifiers" in dag_prompt
     assert "provider-readback evidence of usable content" in dag_prompt
     assert "umbrella obligation" in obligation_prompt
-    assert "source goal or an ancestor step" in audit_prompt
+    assert "directly listed in `depends_on`" in dag_prompt
+    assert "Transitive ancestry establishes ordering only" in dag_prompt
+    assert "direct dependency supplies only the artifact promised" in dag_prompt
+    assert "both original evidence and a transformed decision" in dag_prompt
+    assert "directly listed in `depends_on`" in audit_prompt
+    assert "Transitive ancestry establishes ordering only" in audit_prompt
+    assert "direct dependency as supplying only the artifact promised" in audit_prompt
     assert "independently verifiable success criterion" in audit_prompt
     assert "Resource existence, title, identifier, link or MIME type" in audit_prompt
+    assert "operation=`add_dependencies`" in audit_prompt
+    assert "producer_step_ids" in audit_prompt
     assert all("json" in prompt for prompt in (obligation_prompt, dag_prompt, audit_prompt))
+
+
+def test_mesh_planner_renders_declared_capability_artifact():
+    planner = MeshPlanner(
+        MockLLMClient(),
+        capabilities={
+            "prioritize": {
+                "description": "Rank a finding",
+                "effects": ["propose"],
+                "systems": [],
+                "produces": "DecisionRecord(subject_id, decision, rank)",
+                "artifact_types": ["DecisionRecord"],
+                "requires_artifact_types": ["FindingRecord"],
+            },
+        },
+    )
+
+    catalog = planner._render_capability_catalog()
+
+    assert "produces: DecisionRecord(subject_id, decision, rank)" in catalog
+    assert "artifact types: DecisionRecord" in catalog
+    assert "requires artifact types: FindingRecord" in catalog
+
+
+def test_declared_artifact_requirements_close_direct_dependencies():
+    planner = MeshPlanner(
+        MockLLMClient(),
+        capabilities={
+            "discover": {
+                "description": "Discover findings",
+                "effects": ["read"],
+                "systems": [],
+                "artifact_types": ["CandidateFinding"],
+            },
+            "repair": {
+                "description": "Repair findings",
+                "effects": ["propose"],
+                "systems": [],
+                "artifact_types": ["PatchArtifact"],
+            },
+            "synthesize": {
+                "description": "Join exact evidence",
+                "effects": ["propose"],
+                "systems": [],
+                "requires_artifact_types": ["CandidateFinding", "PatchArtifact"],
+            },
+        },
+    )
+    steps = [
+        MeshPlannedStep(
+            "find", "discover", "read", [], "Find", "Found", [], [], []
+        ),
+        MeshPlannedStep(
+            "fix", "repair", "propose", [], "Fix", "Fixed", [], ["find"], []
+        ),
+        MeshPlannedStep(
+            "brief", "synthesize", "propose", [], "Brief", "Briefed", [],
+            ["fix"], [],
+        ),
+    ]
+
+    closed = planner._ensure_declared_artifact_dependencies(steps)
+
+    assert closed[-1].depends_on == ["fix", "find"]
+
+    amended = planner._ensure_declared_artifact_dependencies(
+        [MeshPlannedStep(
+            "brief_v2", "synthesize", "propose", [], "Brief", "Briefed", [],
+            [], [],
+        )],
+        external_steps=[
+            {"id": "find", "capability": "discover"},
+            {"id": "fix", "capability": "repair"},
+        ],
+    )
+
+    assert amended[0].depends_on == ["find", "fix"]
+
+
+@pytest.mark.asyncio
+async def test_mesh_planning_brief_informs_dag_audit_and_repair_not_obligations():
+    brief = "Use the target Mesh method, including independent verification when applicable."
+    initial_steps = responses()[1]
+    repaired_steps = responses(steps=[{
+        "step_id": "research", "capability": "research", "effect": "read",
+        "systems": [], "task": "Find and independently verify evidence",
+        "success_criterion": "Evidence and verification are cited",
+        "expected_findings": ["evidence", "verification"],
+        "depends_on": [], "covers": ["o1"],
+    }])[1]
+    llm = MockLLMClient(responses=[
+        responses()[0],
+        initial_steps,
+        {"content": json.dumps({
+            "complete": False,
+            "missing": [{
+                "description": "Independent verification is missing",
+                "source_ref": "source-1",
+            }],
+        })},
+        repaired_steps,
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(
+        llm,
+        capabilities={"research": "Research and verify evidence"},
+        planning_brief=brief,
+    )
+
+    await planner.plan("Find evidence")
+
+    prompts = [call["messages"][0]["content"] for call in llm.calls]
+    assert brief not in prompts[0]
+    assert all(brief in prompt for prompt in prompts[1:])
+    for prompt in prompts[1:]:
+        assert "Explicit source scope, prohibitions and approval boundaries override" in prompt
+        assert "Never derive source obligations from this brief" in prompt
+        assert "decision-capable outcome" in prompt
+        assert "verified no-op" in prompt
+    assert "Never derive\nsource provenance from TARGET MESH PLANNING BRIEF" in prompts[2]
+
+
+def test_mesh_planning_brief_reaches_amendment_and_reconciliation_prompts():
+    brief = "Preserve the product method while resolving unfinished work."
+    planner = MeshPlanner(
+        MockLLMClient(),
+        capabilities={"research": "Research evidence"},
+        planning_brief=brief,
+    )
+    obligation = GoalObligation("o1", "Find evidence", "Find evidence")
+    plan = MeshPlan(
+        goal="Find evidence",
+        obligations=[obligation],
+        steps=[MeshPlannedStep(
+            step_id="research", capability="research", effect="read", systems=[],
+            task="Find evidence", success_criterion="Evidence found", covers=["o1"],
+        )],
+    )
+
+    prompts = [
+        planner._amendment_prompt(
+            plan.goal, plan.obligations, {"o1"}, [], "Evidence missing", {},
+        ),
+        planner._reconciliation_prompt(plan.goal, [], [], 1),
+        planner._amendment_audit_prompt(
+            plan, current_steps=[], reason="Evidence missing", planning_brief=brief,
+        ),
+        planner._amendment_repair_prompt(
+            plan, audit={"complete": False}, current_steps=[],
+            reason="Evidence missing", planning_brief=brief,
+        ),
+        planner._invalid_amendment_repair_prompt(
+            plan.goal, plan.obligations, current_steps=[], rejected={"steps": []},
+            reason="Evidence missing", validation_error="Invalid dependency",
+        ),
+    ]
+
+    assert all(brief in prompt for prompt in prompts)
+    step_prompts = [
+        prompt
+        for prompt in prompts
+        if "Return one valid json object" in prompt or "Audit one reconciled" in prompt
+    ]
+    assert all("directly listed in `depends_on`" in prompt for prompt in step_prompts)
+    assert all(
+        "Transitive ancestry establishes ordering only" in prompt
+        for prompt in step_prompts
+    )
+    assert all(
+        "direct dependency supplies only its own declared artifact" in prompt
+        for prompt in step_prompts
+    )
 
 
 @pytest.mark.asyncio
@@ -72,15 +252,15 @@ async def test_mesh_planner_audit_removes_redundant_umbrella_obligation():
     initial_obligations = [
         {
             "id": "umbrella", "description": "Execute the launch playbook",
-            "source_quote": "Execute the launch playbook",
+            "source_ref": "source-1",
         },
         {
             "id": "find", "description": "Find the account",
-            "source_quote": "find the account",
+            "source_ref": "source-1",
         },
         {
             "id": "draft", "description": "Draft the email",
-            "source_quote": "draft the email",
+            "source_ref": "source-1",
         },
     ]
     initial_step = {
@@ -133,6 +313,8 @@ async def test_mesh_planner_adds_configured_user_response_as_the_terminal_step()
     assert response_step.capability == "action_briefing"
     assert response_step.depends_on == ["research"]
     assert response_step.covers == []
+    assert "source goal's requested format" in response_step.task
+    assert "source goal's output constraints" in response_step.success_criterion
 
 
 @pytest.mark.asyncio
@@ -234,28 +416,103 @@ async def test_mesh_planner_rejects_unexecutable_or_lossy_dags(steps, error):
 
 
 @pytest.mark.asyncio
-async def test_mesh_planner_requires_each_obligation_quote_to_exist_in_source_goal():
+async def test_mesh_planner_rejects_unknown_obligation_source_reference():
     llm = MockLLMClient(responses=responses(obligations=[{
-        "id": "o1", "description": "Invented requirement", "source_quote": "send an email",
+        "id": "o1", "description": "Invented requirement", "source_ref": "source-missing",
     }]))
     planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
 
-    with pytest.raises(MeshPlanError, match="source_quote"):
+    with pytest.raises(MeshPlanError, match="source_ref"):
         await planner.plan("Find evidence")
 
 
 @pytest.mark.asyncio
-async def test_mesh_planner_repairs_invalid_obligation_quotes_before_dag_compilation():
+async def test_mesh_planner_hydrates_source_quote_from_compiler_owned_reference():
+    valid = responses()
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"obligations": [{
+            "id": "o1",
+            "description": "Run the requested deep reliability scan",
+            "source_ref": "source-1",
+        }]})},
+        valid[1],
+        valid[2],
+    ])
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    plan = await planner.plan("Run a deep reliability scan of https://example.com/repo.")
+
+    assert plan.obligations[0].source_quote == (
+        "Run a deep reliability scan of https://example.com/repo."
+    )
+    obligation_prompt = llm.calls[0]["messages"][0]["content"]
+    assert '"id": "source-1"' in obligation_prompt
+    assert "source_ref" in obligation_prompt
+    assert "source_quote" not in obligation_prompt
+
+
+@pytest.mark.asyncio
+async def test_mesh_planner_preserves_selected_multiline_source_block_exactly():
+    goal = "Run the reliability scan.\n  Do not publish changes."
+    valid = responses(steps=[{
+        "step_id": "respect_boundary",
+        "capability": "research",
+        "effect": "read",
+        "systems": [],
+        "task": "Inspect without publishing",
+        "success_criterion": "No publication occurs",
+        "expected_findings": [],
+        "depends_on": [],
+        "covers": ["approval"],
+    }])
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"obligations": [{
+            "id": "approval",
+            "description": "Do not publish changes",
+            "source_ref": "source-2",
+        }]})},
+        valid[1],
+        valid[2],
+    ])
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    plan = await planner.plan(goal)
+
+    assert plan.obligations[0].source_quote == "  Do not publish changes."
+    prompt = llm.calls[0]["messages"][0]["content"]
+    assert '"id": "source-2", "text": "  Do not publish changes."' in prompt
+    assert '"id": "source-all"' in prompt
+
+
+@pytest.mark.asyncio
+async def test_mesh_planner_requires_source_reference_from_model_output():
+    invalid_quote = {"content": json.dumps({"obligations": [{
+        "id": "o1",
+        "description": "Find evidence",
+        "source_quote": "Find evidence",
+    }]})}
+    valid = responses()
+    llm = MockLLMClient(responses=[invalid_quote, valid[0], valid[1], valid[2]])
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    plan = await planner.plan("Find evidence")
+
+    assert plan.obligations[0].source_quote == "Find evidence"
+    assert "has no source_ref" in llm.calls[1]["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_mesh_planner_repairs_invalid_source_reference_before_dag_compilation():
     invalid = {
         "content": json.dumps({"obligations": [{
             "id": "o1", "description": "Find evidence",
-            "source_quote": "Find the evidence",
+            "source_ref": "source-missing",
         }]})
     }
     repaired = {
         "content": json.dumps({"obligations": [{
             "id": "o1", "description": "Find evidence",
-            "source_quote": "Find evidence",
+            "source_ref": "source-1",
         }]})
     }
     valid = responses()
@@ -266,8 +523,9 @@ async def test_mesh_planner_repairs_invalid_obligation_quotes_before_dag_compila
 
     assert plan.obligations[0].source_quote == "Find evidence"
     repair_prompt = llm.calls[1]["messages"][0]["content"]
-    assert "Find the evidence" in repair_prompt
-    assert "not present in the source goal" in repair_prompt
+    assert "source-missing" in repair_prompt
+    assert "unknown source_ref" in repair_prompt
+    assert '"id": "source-1"' in repair_prompt
     assert "Do not add, remove, merge or split obligations" in repair_prompt
 
 
@@ -275,7 +533,7 @@ async def test_mesh_planner_repairs_invalid_obligation_quotes_before_dag_compila
 async def test_mesh_planner_rejects_a_dag_when_independent_audit_finds_an_omission():
     llm = MockLLMClient(responses=responses(audit={
         "complete": False,
-        "missing": [{"description": "Preserve approval boundary", "source_quote": "Find evidence"}],
+        "missing": [{"description": "Preserve approval boundary", "source_ref": "source-1"}],
     }))
     planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
 
@@ -319,6 +577,154 @@ async def test_mesh_planner_repairs_one_failed_coverage_audit_before_publication
     repair_prompt = llm.calls[3]["messages"][0]["content"]
     assert "The evidence path is incomplete" in repair_prompt
     assert "Find evidence" in repair_prompt
+
+
+@pytest.mark.asyncio
+async def test_mesh_planner_applies_typed_audit_dependency_correction():
+    initial_steps = responses(steps=[
+        {
+            "step_id": "candidate", "capability": "research", "effect": "read",
+            "systems": [], "task": "Find candidate evidence",
+            "success_criterion": "Candidate evidence returned",
+            "expected_findings": ["candidate evidence"], "depends_on": [],
+            "covers": ["o1"],
+        },
+        {
+            "step_id": "ranking", "capability": "research", "effect": "read",
+            "systems": [], "task": "Rank candidate evidence",
+            "success_criterion": "Evidence-backed ranking returned",
+            "expected_findings": ["ranking"], "depends_on": [], "covers": [],
+        },
+    ])[1]
+    audit_failure = {
+        "content": json.dumps({
+            "complete": False,
+            "missing": [{
+                "description": "Ranking needs the original candidate evidence",
+                "source_ref": "source-1",
+            }],
+            "corrections": [{
+                "operation": "add_dependencies",
+                "step_id": "ranking",
+                "producer_step_ids": ["candidate"],
+            }],
+        }),
+    }
+    audit_success = {
+        "content": json.dumps({"complete": True, "missing": []}),
+    }
+    llm = MockLLMClient(responses=[
+        responses()[0], initial_steps, audit_failure, audit_success,
+    ])
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    plan = await planner.plan("Find evidence")
+
+    assert plan.steps[1].depends_on == ["candidate"]
+    assert len(llm.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_mesh_planner_repair_can_return_typed_dependency_correction():
+    initial_steps = responses(steps=[
+        {
+            "step_id": "mapping", "capability": "research", "effect": "read",
+            "systems": [], "task": "Map the repository",
+            "success_criterion": "Repository map returned",
+            "expected_findings": ["repository map"], "depends_on": [],
+            "covers": [],
+        },
+        {
+            "step_id": "candidate", "capability": "research", "effect": "read",
+            "systems": [], "task": "Find candidate evidence",
+            "success_criterion": "Candidate evidence returned",
+            "expected_findings": ["candidate evidence"], "depends_on": ["mapping"],
+            "covers": ["o1"],
+        },
+        {
+            "step_id": "repair", "capability": "research", "effect": "propose",
+            "systems": [], "task": "Repair the reproduced defect",
+            "success_criterion": "Repair returned",
+            "expected_findings": ["repair"], "depends_on": ["candidate"],
+            "covers": [],
+        },
+    ])[1]
+    audit_failure = {
+        "content": json.dumps({
+            "complete": False,
+            "missing": [{
+                "description": "Repair also needs the repository map",
+                "source_ref": "source-1",
+            }],
+        }),
+    }
+    typed_repair = {
+        "content": json.dumps({
+            "corrections": [{
+                "operation": "add_dependencies",
+                "step_id": "repair",
+                "producer_step_ids": ["mapping"],
+            }],
+        }),
+    }
+    audit_success = {
+        "content": json.dumps({"complete": True, "missing": []}),
+    }
+    llm = MockLLMClient(responses=[
+        responses()[0], initial_steps, audit_failure, typed_repair, audit_success,
+    ])
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    plan = await planner.plan("Find evidence")
+
+    assert plan.steps[2].depends_on == ["candidate", "mapping"]
+    repair_prompt = llm.calls[3]["messages"][0]["content"]
+    assert "return only `corrections`" in repair_prompt
+
+
+@pytest.mark.parametrize(
+    ("correction", "error"),
+    [
+        (
+            {
+                "operation": "add_dependencies",
+                "step_id": "ranking",
+                "producer_step_ids": ["missing"],
+            },
+            "invalid producer 'missing'",
+        ),
+        (
+            {
+                "operation": "add_dependencies",
+                "step_id": "candidate",
+                "producer_step_ids": ["ranking"],
+            },
+            "dependency cycle",
+        ),
+    ],
+)
+def test_mesh_planner_rejects_invalid_typed_audit_correction(correction, error):
+    plan = MeshPlan(
+        goal="Find evidence",
+        obligations=[GoalObligation("o1", "Find evidence", "Find evidence")],
+        steps=[
+            MeshPlannedStep(
+                step_id="candidate", capability="research", effect="read",
+                systems=[], task="Find candidate evidence",
+                success_criterion="Candidate evidence returned",
+                depends_on=[], covers=["o1"],
+            ),
+            MeshPlannedStep(
+                step_id="ranking", capability="research", effect="read",
+                systems=[], task="Rank candidate evidence",
+                success_criterion="Evidence-backed ranking returned",
+                depends_on=["candidate"], covers=[],
+            ),
+        ],
+    )
+
+    with pytest.raises(MeshPlanError, match=error):
+        MeshPlanner._apply_audit_corrections(plan, {"corrections": [correction]})
 
 
 @pytest.mark.asyncio
@@ -453,6 +859,43 @@ async def test_mesh_amendment_repairs_unknown_capability_before_audit():
     assert "invented_reconciliation" in repair_prompt
 
 
+@pytest.mark.asyncio
+async def test_mesh_amendment_repair_receives_authoritative_step_invariants():
+    obligations = [{
+        "id": "o1", "description": "Verify evidence", "source_quote": "Verify evidence",
+    }]
+    valid_step = {
+        "id": "verify", "capability": "verification", "effect": "read",
+        "systems": [], "task": "Verify evidence", "success_criterion": "Verified",
+        "expected_findings": [], "depends_on": [], "covers": ["o1"],
+        "dependency_policy": "terminal_evidence",
+    }
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"steps": [{
+            **valid_step, "dependency_policy": "all_must_succeed",
+        }]})},
+        {"content": json.dumps({"steps": [valid_step]})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(
+        llm,
+        capabilities={
+            "verification": {"description": "Verify", "effects": ["read"], "systems": []},
+        },
+    )
+
+    await planner.amend(
+        "Verify evidence", obligations=obligations, current_steps=[],
+        reason="A new verification path is available", revision=1,
+    )
+
+    amendment_prompt = llm.calls[0]["messages"][0]["content"]
+    repair_prompt = llm.calls[1]["messages"][0]["content"]
+    for prompt in (amendment_prompt, repair_prompt):
+        assert "dependency_policy must be exactly `satisfied` or `terminal_evidence`" in prompt
+        assert "cover every UNRESOLVED OBLIGATION ID" in prompt
+
+
 def test_amendment_audit_distinguishes_attempt_completion_from_effect_execution():
     plan = MeshPlan(
         goal="Draft an invitation",
@@ -479,8 +922,38 @@ def test_amendment_audit_distinguishes_attempt_completion_from_effect_execution(
 
     assert '"execution_state": "not_executed"' in prompt
     assert "attempt ended; it does not prove its provider" in prompt
-    assert "must not repeat an already executed" in prompt
+    assert "must not repeat an already\nexecuted provider outcome" in prompt
     assert "may advance only the blocked obligations named" in prompt
+
+
+def test_amendment_audit_allows_corrective_work_after_rejected_evidence_attempts():
+    plan = MeshPlan(
+        goal="Repair and verify",
+        obligations=[GoalObligation("o1", "Repair defect", "Repair defect")],
+        steps=[MeshPlannedStep(
+            step_id="repair_followup", capability="repair", effect="propose",
+            systems=[], task="Complete caller migration",
+            success_criterion="Patch compiles", depends_on=["repair_first"],
+            covers=["o1"], dependency_policy="terminal_evidence",
+        )],
+        revision=2,
+    )
+    prompt = MeshPlanner._amendment_audit_prompt(
+        plan,
+        current_steps=[{
+            "id": "repair_first", "capability": "repair", "effect": "propose",
+            "systems": [], "task": "Repair constructor",
+            "success_criterion": "Patch compiles", "expected_findings": [],
+            "depends_on": [], "covers": ["o1"], "status": "completed",
+            "semantic_decision": "reject",
+            "output": {"output": {"status": "applied"}},
+        }],
+        reason="The applied patch did not update callers.",
+    )
+
+    assert "semantically rejected read or propose attempts" in prompt
+    assert "distinct corrective successors" in prompt
+    assert "no new write, notify or destructive step repeats" in prompt
 
 
 @pytest.mark.asyncio

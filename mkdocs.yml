@@ -98,6 +98,7 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 nav:
+  - Home: index.md
   - Getting Started: getting-started.md
   - Compare:
     - Overview: compare/index.md
@@ -165,6 +166,7 @@ nav:
       - Overview: reference/index.md
       - Configuration: reference/configuration.md
       - Agent API: reference/agent-api.md
+      - Execution and Evidence API: reference/execution-api.md
       - Chat API: reference/chat-api.md
       - CLI Reference: reference/cli.md
       - Troubleshooting: TROUBLESHOOTING.md
@@ -172,7 +174,7 @@ nav:
   - Enterprise: infrastructure/enterprise.md
 
 extra:
-  version: "1.12.0"
+  version: "1.13.0"
   social:
     - icon: material/web
       link: https://developers.prescottdata.io

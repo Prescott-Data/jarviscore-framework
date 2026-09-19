@@ -114,13 +114,7 @@ class NexusCallProxy:
         Raises RuntimeError only on internal proxy failure (no connection, no Nexus).
         """
         from jarviscore.nexus.client import NexusClient
-        from jarviscore.nexus.store import get_store
-
-        store = get_store()
         provider = self._provider_for(connection_id)
-        # Before a credential is placed, not after: the destination is chosen by
-        # generated code, so it is the least trustworthy part of the request.
-        ensure_host_allowed(provider, url, store.get(provider))
 
         strategy = None
         request_kwargs = None
@@ -128,18 +122,27 @@ class NexusCallProxy:
         # ── Try auth_manager (gateway mode) first ─────────────────────────────
         try:
             strategy = await self._auth.resolve_strategy(connection_id)
-            request_kwargs = NexusClient.apply_strategy_to_request(
-                strategy, method, url, headers=headers, **kwargs
-            )
         except Exception as gateway_exc:
             logger.debug(
                 "NexusCallProxy: gateway resolve failed for %r (%s) — "
                 "falling back to local credential store",
                 connection_id, gateway_exc,
             )
+        if strategy is not None:
+            # Resolve inside the credential boundary, then bind the destination
+            # before placing that credential. Policy or placement failures must
+            # fail closed rather than selecting a different credential source.
+            ensure_host_allowed(provider, url, strategy.config)
+            request_kwargs = NexusClient.apply_strategy_to_request(
+                strategy, method, url, headers=headers, **kwargs
+            )
 
         # ── Local store fallback (zero-dep mode) ──────────────────────────────
         if request_kwargs is None:
+            from jarviscore.nexus.store import get_store
+
+            store = get_store()
+            ensure_host_allowed(provider, url, store.get(provider))
             strategy = store.build_strategy(provider)
             if strategy is None:
                 raise RuntimeError(

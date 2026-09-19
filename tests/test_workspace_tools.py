@@ -50,6 +50,32 @@ def test_workspace_write_creates_bounded_fixture_without_shell(tmp_path):
     }
 
 
+def test_workspace_edit_replaces_only_hash_guarded_line_range(tmp_path):
+    path = tmp_path / "src/main.rs"
+    path.parent.mkdir()
+    path.write_text("first\nold one\nold two\nlast\n")
+    sandbox = create_coder_sandbox(workspace_dir=tmp_path)
+    source = sandbox.read_workspace("src/main.rs", start_line=2, end_line=3)
+
+    result = sandbox.edit_workspace(
+        "src/main.rs",
+        2,
+        3,
+        "new one\nnew two",
+        source["sha256"],
+    )
+
+    assert result["status"] == "success"
+    assert path.read_text() == "first\nnew one\nnew two\nlast\n"
+    assert sandbox.edit_workspace(
+        "src/main.rs",
+        2,
+        3,
+        "stale",
+        source["sha256"],
+    )["status"] == "conflict"
+
+
 def test_workspace_run_uses_existing_bash_allow_list(tmp_path):
     (tmp_path / "value.txt").write_text("42\n")
     sandbox = create_coder_sandbox(workspace_dir=tmp_path)

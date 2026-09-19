@@ -35,10 +35,11 @@ behavior.
 |---|---|---|---|
 | `description` | `str` | `""` when absent | Human-readable role purpose used as fallback routing context. |
 | `capability_descriptions` | `Dict[str, str]` | `{}` | Routing description for each capability. Distributed planning uses these descriptions instead of inferring intent from tags alone. |
-| `capability_contracts` | `Dict[str, dict]` | `{}` when absent | Authorized `effects` and provider `systems` for each capability. Mesh planning and peer execution propagate this authority into task context. |
+| `capability_contracts` | `Dict[str, dict]` | `{}` when absent | Authorized `effects`, provider `systems`, and planner-visible artifact production and consumption declarations. |
+| `artifact_reference_paths` | `tuple[tuple[str, ...], ...]` | `()` | Output paths whose non-null artifacts must be exact `artifact_ref` values hydrated from dependency outputs before validation. Use `"*"` for list members. |
 | `output_schema` | `type[BaseModel]` | `None` | Optional Pydantic model enforced on CoderSubAgent execution output. Other role outputs require application validation. |
 | `goal_oriented` | `bool` | `False` | When `True`, tasks are classified first: complex work uses `Plan → Execute → Evaluate`; bounded work can run as one direct Kernel turn. See [Planning](../concepts/planning.md). |
-| `default_kernel_role` | `str` | `None` | Fallback sub-agent role when the Planner emits `subagent_hint: null`. Valid values: `"coder"`, `"researcher"`, `"communicator"`, `"browser"`. Leave `None` for generalist agents. |
+| `default_kernel_role` | `str` | `None` | Fallback sub-agent role when the Planner emits `subagent_hint: null`. Built-in values are `"coder"`, `"researcher"`, `"communicator"`, and `"browser"`; products may register custom roles through an extended Kernel. Leave `None` for generalist agents. |
 | `requires_auth` | `bool` | `False` | Opts into post-`setup()` `AuthenticationManager` injection when connected-app authentication is configured. Connected-app calls require a reachable Nexus Gateway. |
 
 `capability_contracts` uses this shape:
@@ -48,12 +49,19 @@ capability_contracts = {
     "code_review": {
         "effects": ["read", "propose"],
         "systems": ["github"],
+        "produces": "ReviewReport(findings, inspected_revision)",
+        "artifact_types": ["ReviewReport"],
+        "requires_artifact_types": ["RepositorySnapshot"],
     },
 }
 ```
 
-Effects are `read`, `propose`, `write`, `notify`, or `destructive`. A contract
-describes authority; it does not grant credentials or bypass provider policy.
+Effects are `read`, `propose`, `write`, `notify`, or `destructive`. `effects`
+and `systems` describe authority; they do not grant credentials or bypass
+provider policy. `produces` is descriptive planning metadata.
+`artifact_types` and `requires_artifact_types` are optional stable names used by
+the DAG compiler to guarantee direct artifact-delivery dependencies. They grant
+no authority and perform no domain validation.
 
 ### Optional environment overrides
 

@@ -9,7 +9,11 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-from jarviscore.kernel.defaults import CoderSubAgent, ResearcherSubAgent, CommunicatorSubAgent
+from jarviscore.kernel.defaults import (
+    CoderSubAgent,
+    CommunicatorSubAgent,
+    ResearcherSubAgent,
+)
 from jarviscore.kernel.defaults.coder import classify_access_failure
 from jarviscore.testing import MockLLMClient, MockSandboxExecutor
 
