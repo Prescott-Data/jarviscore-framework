@@ -510,10 +510,15 @@ class MeshPlanner:
         obligations: list[dict[str, Any]],
         current_steps: list[dict[str, Any]],
         revision: int,
+        reconciliation_history: list[dict[str, Any]] | None = None,
     ) -> dict[str, str]:
         """Decide whether semantic gaps require another bounded DAG revision."""
         raw = await self._call_json(self._reconciliation_prompt(
-            goal, obligations, current_steps, revision,
+            goal,
+            obligations,
+            current_steps,
+            revision,
+            reconciliation_history or [],
         ))
         unknown = set(raw) - {"decision", "reason"}
         decision = str(raw.get("decision") or "").strip().lower()
@@ -936,6 +941,7 @@ Do not assign peers, execute work, change completed work or add requirements."""
         obligations: list[dict[str, Any]],
         current_steps: list[dict[str, Any]],
         revision: int,
+        reconciliation_history: list[dict[str, Any]] | None = None,
     ) -> str:
         return f"""Reconcile one terminal mesh DAG against its source obligations.
 
@@ -950,6 +956,9 @@ TERMINAL STEP LEDGER (authoritative artifacts and semantic interpretations):
 
 CURRENT REVISION: {revision}
 
+PRIOR RECONCILIATION HISTORY (chronological durable decisions and amendments):
+{json.dumps(reconciliation_history or [], ensure_ascii=False, default=str)}
+
 LIVE CAPABILITY CATALOG:
 {self._render_capability_catalog()}
 
@@ -958,6 +967,9 @@ LIVE CAPABILITY CATALOG:
 Return exactly one json object with `decision` and `reason`.
 - decision=`amend` only when an unmet or partially met source obligation can be
   advanced by concrete new work authorized by the live capability catalog.
+- compare the current gaps and evidence with PRIOR RECONCILIATION HISTORY. An
+    amendment must identify what materially changed or what new information the
+    proposed revision can obtain; do not assume another revision is progress.
 - decision=`settle_blocked` only when the remaining gaps require unavailable
     authority, missing human input, or facts no available capability can obtain.
 - this decision is invoked only while obligation gaps exist; never claim all source

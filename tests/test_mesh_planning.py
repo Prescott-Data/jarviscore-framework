@@ -215,7 +215,19 @@ def test_mesh_planning_brief_reaches_amendment_and_reconciliation_prompts():
         planner._amendment_prompt(
             plan.goal, plan.obligations, {"o1"}, [], "Evidence missing", {},
         ),
-        planner._reconciliation_prompt(plan.goal, [], [], 1),
+        planner._reconciliation_prompt(
+            plan.goal,
+            [],
+            [],
+            2,
+            [{
+                "event": "semantic_reconciliation_requested",
+                "revision": 1,
+                "decision": "amend",
+                "reason": "Evidence missing",
+                "target_obligation_ids": ["o1"],
+            }],
+        ),
         planner._amendment_audit_prompt(
             plan, current_steps=[], reason="Evidence missing", planning_brief=brief,
         ),
@@ -230,6 +242,9 @@ def test_mesh_planning_brief_reaches_amendment_and_reconciliation_prompts():
     ]
 
     assert all(brief in prompt for prompt in prompts)
+    assert "PRIOR RECONCILIATION HISTORY" in prompts[1]
+    assert '"target_obligation_ids": ["o1"]' in prompts[1]
+    assert "do not assume another revision is progress" in prompts[1]
     step_prompts = [
         prompt
         for prompt in prompts

@@ -1110,12 +1110,21 @@ class Mesh:
                                     obligations=semantic_gaps,
                                     current_steps=steps,
                                     revision=revision,
+                                    reconciliation_history=(
+                                        self._redis_store
+                                        .get_workflow_reconciliation_history(workflow_id)
+                                    ),
                                 )
                             self._redis_store.append_ledger_entry(workflow_id, {
                                 "event": "semantic_reconciliation_requested",
                                 "revision": revision,
                                 "decision": decision["decision"],
                                 "reason": decision["reason"],
+                                "target_obligation_ids": sorted(
+                                    str(item.get("id") or "")
+                                    for item in semantic_gaps
+                                    if item.get("id")
+                                ),
                             })
                             if decision["decision"] == "amend":
                                 remaining = (
@@ -1130,6 +1139,12 @@ class Mesh:
                                         "semantic_reconciliation": {
                                             "revision": revision,
                                             "obligations": semantic_gaps,
+                                            "history": (
+                                                self._redis_store
+                                                .get_workflow_reconciliation_history(
+                                                    workflow_id
+                                                )
+                                            ),
                                         },
                                     },
                                     timeout=remaining,

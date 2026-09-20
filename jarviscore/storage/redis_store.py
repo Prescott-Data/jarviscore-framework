@@ -1016,6 +1016,21 @@ class RedisContextStore:
         except (json.JSONDecodeError, TypeError):
             return None
 
+    def get_workflow_reconciliation_history(
+        self, workflow_id: str
+    ) -> List[Dict[str, Any]]:
+        """Return durable reconciliation decisions and amendment transitions."""
+        relevant = {
+            "semantic_reconciliation_requested",
+            "semantic_reconciliation_settled",
+            "dag_amended",
+        }
+        return [
+            entry
+            for entry in self.get_ledger_full(workflow_id)
+            if entry.get("event") in relevant
+        ]
+
     def unregister_active_workflow(self, workflow_id: str) -> None:
         self._redis.srem("jarviscore:active_workflows", workflow_id)
 

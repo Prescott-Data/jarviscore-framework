@@ -551,6 +551,19 @@ class TestWorkflowDAG:
         assert store.claim_step("wf-amend", "analyse", "stale:claim", 30) is False
         assert store.get_step_status("wf-amend", "analyse_v2") == "pending"
         assert store.get_ledger_tail("wf-amend")[-1]["event"] == "dag_amended"
+        store.append_ledger_entry("wf-amend", {
+            "event": "semantic_reconciliation_requested",
+            "revision": 2,
+            "decision": "amend",
+            "reason": "More evidence is available",
+            "target_obligation_ids": ["o2"],
+        })
+        history = store.get_workflow_reconciliation_history("wf-amend")
+        assert [entry["event"] for entry in history] == [
+            "dag_amended",
+            "semantic_reconciliation_requested",
+        ]
+        assert history[-1]["target_obligation_ids"] == ["o2"]
 
         with pytest.raises(ValueError, match="revision changed"):
             store.amend_workflow(
