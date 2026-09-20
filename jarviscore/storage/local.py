@@ -51,13 +51,12 @@ class LocalBlobStorage(BlobStorage):
         if not os.path.exists(full_path):
             return None
 
-        # Try text first, fall back to binary
+        with open(full_path, "rb") as f:
+            content = f.read()
         try:
-            with open(full_path, "r", encoding="utf-8") as f:
-                return f.read()
+            return content.decode("utf-8")
         except UnicodeDecodeError:
-            with open(full_path, "rb") as f:
-                return f.read()
+            return content
 
     async def list(self, prefix: str) -> List[str]:
         full_prefix = self._full_path(prefix)

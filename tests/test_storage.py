@@ -80,6 +80,17 @@ class TestLocalBlobStorage:
         assert content == "Hello World"
 
     @pytest.mark.asyncio
+    async def test_binary_saved_utf8_preserves_crlf_bytes(self, storage):
+        """UTF-8 source blobs retain byte-exact CRLF content after persistence."""
+        data = b"<svg>\r\n<path/>\r\n</svg>\r\n"
+        await storage.save("source/logo.svg", data)
+
+        content = await storage.read("source/logo.svg")
+
+        assert isinstance(content, str)
+        assert content.encode("utf-8") == data
+
+    @pytest.mark.asyncio
     async def test_save_and_read_binary(self, storage):
         """Binary content (images, compiled code) survives roundtrip."""
         data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
