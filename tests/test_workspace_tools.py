@@ -300,6 +300,9 @@ def test_coder_offers_workspace_tools_without_codegen(tmp_path):
     assert "workspace_list" in prompt
     assert "workspace_read" in prompt
     assert "workspace_write" in prompt
+    assert coder._tools["write_code"].phase == "thinking"
+    assert coder._tools["validate_code"].phase == "thinking"
+    assert coder._tools["execute_code"].phase == "action"
 
 
 def test_coder_completion_observes_product_declared_tool_evidence(tmp_path):

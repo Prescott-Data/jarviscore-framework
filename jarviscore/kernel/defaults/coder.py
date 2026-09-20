@@ -600,72 +600,6 @@ atom.
             ),
             phase="thinking",
         )
-
-    def _tool_workspace_list(
-        self, path: str = ".", recursive: bool = False, limit: int = 500, **kwargs
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.list_workspace(path, recursive=recursive, limit=limit)
-
-    def _tool_workspace_read(
-        self, path: str, start_line: int = 1, end_line: int = 400, **kwargs
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.read_workspace(path, start_line=start_line, end_line=end_line)
-
-    def _tool_workspace_search(
-        self,
-        query: str,
-        path: str = ".",
-        glob: str = "*",
-        regex: bool = False,
-        limit: int = 100,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.search_workspace(
-            query, path=path, glob=glob, regex=regex, limit=limit
-        )
-
-    def _tool_workspace_write(
-        self,
-        path: str,
-        content: str,
-        executable: bool = False,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.write_workspace(path, content, executable=executable)
-
-    def _tool_workspace_edit(
-        self,
-        path: str,
-        start_line: int,
-        end_line: int,
-        replacement: str,
-        expected_sha256: str,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.edit_workspace(
-            path,
-            start_line,
-            end_line,
-            replacement,
-            expected_sha256,
-        )
-
-    def _tool_workspace_run(
-        self, command: str, cwd: str = ".", **kwargs
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.run_workspace(command, cwd=cwd)
         self.register_tool(
             "write_code",
             self._tool_write_code,
@@ -761,6 +695,72 @@ atom.
             ),
             phase="thinking",
         )
+
+    def _tool_workspace_list(
+        self, path: str = ".", recursive: bool = False, limit: int = 500, **kwargs
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.list_workspace(path, recursive=recursive, limit=limit)
+
+    def _tool_workspace_read(
+        self, path: str, start_line: int = 1, end_line: int = 400, **kwargs
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.read_workspace(path, start_line=start_line, end_line=end_line)
+
+    def _tool_workspace_search(
+        self,
+        query: str,
+        path: str = ".",
+        glob: str = "*",
+        regex: bool = False,
+        limit: int = 100,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.search_workspace(
+            query, path=path, glob=glob, regex=regex, limit=limit
+        )
+
+    def _tool_workspace_write(
+        self,
+        path: str,
+        content: str,
+        executable: bool = False,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.write_workspace(path, content, executable=executable)
+
+    def _tool_workspace_edit(
+        self,
+        path: str,
+        start_line: int,
+        end_line: int,
+        replacement: str,
+        expected_sha256: str,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.edit_workspace(
+            path,
+            start_line,
+            end_line,
+            replacement,
+            expected_sha256,
+        )
+
+    def _tool_workspace_run(
+        self, command: str, cwd: str = ".", **kwargs
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.run_workspace(command, cwd=cwd)
 
     async def _execute_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
         """Execute tools, auto-running validated code when runtime proof is required."""
