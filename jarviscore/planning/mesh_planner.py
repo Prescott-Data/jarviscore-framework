@@ -943,6 +943,7 @@ Do not assign peers, execute work, change completed work or add requirements."""
         revision: int,
         reconciliation_history: list[dict[str, Any]] | None = None,
     ) -> str:
+        ledger = self._amendment_ledger_view(current_steps)
         return f"""Reconcile one terminal mesh DAG against its source obligations.
 
 SOURCE GOAL (immutable):
@@ -951,8 +952,11 @@ SOURCE GOAL (immutable):
 OBLIGATION LEDGER (immutable):
 {json.dumps(obligations, ensure_ascii=False, default=str)}
 
-TERMINAL STEP LEDGER (authoritative artifacts and semantic interpretations):
-{json.dumps(current_steps, ensure_ascii=False, default=str)}
+TERMINAL STEP DEFINITIONS (immutable historical facts):
+{json.dumps(ledger["definitions"], ensure_ascii=False, default=str)}
+
+TERMINAL STEP OUTCOMES (authoritative compact evidence and semantic interpretations):
+{json.dumps(ledger["outcomes"], ensure_ascii=False, default=str)}
 
 CURRENT REVISION: {revision}
 
@@ -1169,9 +1173,54 @@ or copy runtime fields."""
                 "status": step.get("status"),
                 "semantic_outcome": step.get("semantic_outcome"),
                 "semantic_decision": step.get("semantic_decision"),
-                "output": step.get("output"),
+                "output": MeshPlanner._planning_artifact_view(
+                    step.get("output"), step_id=step_id, path=[]
+                ),
             })
         return {"definitions": definitions, "outcomes": outcomes}
+
+    @staticmethod
+    def _planning_artifact_view(
+        value: Any,
+        *,
+        step_id: str,
+        path: list[str],
+        inline_limit: int = 4096,
+    ) -> Any:
+        """Keep decision evidence inline while referencing bulky durable values."""
+        encoded = json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
+        if len(encoded) <= inline_limit:
+            return value
+
+        reference = {"artifact_ref": {"step_id": step_id, "path": path}}
+        if not isinstance(value, dict):
+            return {
+                **reference,
+                "kind": "list" if isinstance(value, list) else type(value).__name__,
+                "size": len(value) if isinstance(value, (list, str, bytes)) else None,
+                "bytes": len(encoded),
+            }
+
+        preview = {}
+        for key, child in value.items():
+            child_path = [*path, str(key)]
+            if key == "payload" and child == value.get("output"):
+                child_encoded = json.dumps(
+                    child, ensure_ascii=False, default=str
+                ).encode("utf-8")
+                preview[key] = {
+                    "artifact_ref": {"step_id": step_id, "path": child_path},
+                    "kind": "duplicate_of_output",
+                    "bytes": len(child_encoded),
+                }
+                continue
+            preview[key] = MeshPlanner._planning_artifact_view(
+                child,
+                step_id=step_id,
+                path=child_path,
+                inline_limit=min(inline_limit, 2048),
+            )
+        return {**reference, "bytes": len(encoded), "preview": preview}
 
     def _render_capability_catalog(self) -> str:
         lines = []

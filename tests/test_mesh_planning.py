@@ -261,6 +261,42 @@ def test_mesh_planning_brief_reaches_amendment_and_reconciliation_prompts():
     )
 
 
+def test_reconciliation_compacts_bulk_artifacts_with_exact_references():
+    planner = MeshPlanner(
+        MockLLMClient(),
+        capabilities={"verification": "Verify evidence"},
+    )
+    raw_receipt = "command output that must stay durable, not in planning context" * 500
+    artifact = {
+        "status": "passed",
+        "commit_sha": "abc123",
+        "runs": [{"stdout": raw_receipt, "exit_code": 0}],
+        "execution_state": "executed",
+    }
+    prompt = planner._reconciliation_prompt(
+        "Verify evidence",
+        [{"id": "o1", "state": "unresolved"}],
+        [{
+            "id": "verify", "capability": "verification", "effect": "read",
+            "systems": [], "task": "Run checks", "success_criterion": "Checks run",
+            "expected_findings": [], "depends_on": [], "covers": ["o1"],
+            "status": "completed", "semantic_decision": "proceed",
+            "output": {
+                "status": "success", "output": artifact, "payload": artifact,
+                "result_summary": "Checks ran.",
+                "interpretation": {"verdict": "partial", "unmet_requirements": ["o1"]},
+            },
+        }],
+        revision=1,
+    )
+
+    assert raw_receipt not in prompt
+    assert '"execution_state": "executed"' in prompt
+    assert '"artifact_ref": {"step_id": "verify", "path": ["output", "runs"]}' in prompt
+    assert '"kind": "duplicate_of_output"' in prompt
+    assert '"verdict": "partial"' in prompt
+
+
 @pytest.mark.asyncio
 async def test_mesh_planner_audit_removes_redundant_umbrella_obligation():
     goal = "Execute the launch playbook: find the account and draft the email."
