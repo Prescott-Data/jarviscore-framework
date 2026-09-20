@@ -979,9 +979,8 @@ Do not choose tools, name atoms, execute work, alter completed artifacts, or add
         reason: str,
         planning_brief: str = "",
     ) -> str:
-        completed = [step for step in current_steps if step.get("status") == "completed"]
-        ledger = MeshPlanner._amendment_ledger_view(completed)
-        return f"""Audit one reconciled mesh DAG against immutable completed history.
+        ledger = MeshPlanner._amendment_ledger_view(current_steps)
+        return f"""Audit one reconciled mesh DAG against immutable terminal history.
 
 SOURCE GOAL:
 {plan.goal}
@@ -989,7 +988,7 @@ SOURCE GOAL:
 OBLIGATIONS:
 {json.dumps([item.to_dict() for item in plan.obligations], ensure_ascii=False)}
 
-COMPLETED ATTEMPT DEFINITIONS (immutable historical facts):
+TERMINAL ATTEMPT DEFINITIONS (immutable historical facts):
 {json.dumps(ledger["definitions"], ensure_ascii=False, default=str)}
 
 AUTHORITATIVE ATTEMPT OUTCOMES:
@@ -1004,7 +1003,7 @@ PROPOSED NEW-STEP DELTA:
 {json.dumps([step.to_dict() for step in plan.steps], ensure_ascii=False)}
 
 Return exactly one json object: {{"complete": true, "missing": []}} only when:
-- every proposed step is new and completed history is left untouched;
+- every proposed step is new and terminal history is left untouched;
 - new work can advance the reconciliation reason using artifacts from producers directly listed in `depends_on`;
     runtime context contains direct dependency artifacts only, while
     Transitive ancestry establishes ordering only and does not deliver artifacts;
@@ -1038,10 +1037,7 @@ Otherwise return complete=false with `missing` entries describing the amendment 
         reason: str,
         planning_brief: str = "",
     ) -> str:
-        completed = [
-            step for step in current_steps if step.get("status") == "completed"
-        ]
-        ledger = MeshPlanner._amendment_ledger_view(completed)
+        ledger = MeshPlanner._amendment_ledger_view(current_steps)
         return f"""Repair one rejected reconciliation amendment.
 
 SOURCE GOAL (immutable):
@@ -1050,7 +1046,7 @@ SOURCE GOAL (immutable):
 OBLIGATION LEDGER (immutable):
 {json.dumps([item.to_dict() for item in plan.obligations], ensure_ascii=False)}
 
-COMPLETED STEP DEFINITIONS (reproduce each exactly using the normal step schema):
+TERMINAL STEP DEFINITIONS (immutable historical facts):
 {json.dumps(ledger["definitions"], ensure_ascii=False, default=str)}
 
 COMPLETED OUTCOMES (reason from these; do not copy runtime fields):
@@ -1071,7 +1067,7 @@ AUDIT FINDINGS:
 
 Return one valid json object containing only NEW `steps` using the normal step
 schema. Current step ids may appear only in depends_on. Add remediation work after
-completed history and a distinct final response after its sinks when configured.
+terminal history and a distinct final response after its sinks when configured.
 Every artifact required by a new step must come from its producer directly listed in `depends_on`;
 Transitive ancestry establishes ordering only and does not deliver artifacts.
 Each direct dependency supplies only its own declared artifact; add original evidence producers

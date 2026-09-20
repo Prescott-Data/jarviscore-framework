@@ -1127,6 +1127,38 @@ async def test_mesh_amendment_returns_only_new_work():
     assert [step.step_id for step in plan.steps] == ["verify_again"]
 
 
+def test_amendment_audit_and_repair_include_failed_terminal_evidence():
+    obligations = [GoalObligation("o1", "Verify evidence", "Verify evidence")]
+    failed = {
+        "id": "verify_failed", "capability": "verification", "effect": "read",
+        "systems": [], "task": "Verify evidence", "success_criterion": "Verified",
+        "expected_findings": [], "depends_on": [], "covers": ["o1"],
+        "status": "failed", "output": {"error": "selector was incomplete"},
+    }
+    remediation = MeshPlannedStep(
+        step_id="verify_again", capability="verification", effect="read", systems=[],
+        task="Verify from failed evidence", success_criterion="Verified",
+        depends_on=["verify_failed"], covers=["o1"],
+        dependency_policy="terminal_evidence",
+    )
+    plan = MeshPlan("Verify evidence", obligations, [remediation], revision=2)
+
+    audit_prompt = MeshPlanner._amendment_audit_prompt(
+        plan, current_steps=[failed], reason="Correct the failed verification",
+    )
+    repair_prompt = MeshPlanner._amendment_repair_prompt(
+        plan, audit={"complete": False, "missing": ["repair"]},
+        current_steps=[failed], reason="Correct the failed verification",
+    )
+
+    assert "verify_failed" in audit_prompt
+    assert '"status": "failed"' in audit_prompt
+    assert "TERMINAL ATTEMPT DEFINITIONS" in audit_prompt
+    assert "verify_failed" in repair_prompt
+    assert '"status": "failed"' in repair_prompt
+    assert "TERMINAL STEP DEFINITIONS" in repair_prompt
+
+
 @pytest.mark.asyncio
 async def test_mesh_amendment_cannot_supersede_satisfied_obligations():
     obligations = [
