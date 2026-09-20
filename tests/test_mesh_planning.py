@@ -416,6 +416,42 @@ async def test_mesh_planner_rejects_unexecutable_or_lossy_dags(steps, error):
 
 
 @pytest.mark.asyncio
+async def test_mesh_planner_repairs_initially_uncovered_prohibitions():
+    obligations = [
+        {"id": "o1", "description": "Inspect the repository", "source_ref": "source-1"},
+        {"id": "o2", "description": "Do not publish", "source_ref": "source-1"},
+        {"id": "o3", "description": "Do not push", "source_ref": "source-1"},
+        {"id": "o4", "description": "Do not merge", "source_ref": "source-1"},
+    ]
+    invalid_steps = [{
+        "step_id": "inspect", "capability": "research", "effect": "read",
+        "systems": [], "task": "Inspect the repository",
+        "success_criterion": "Repository evidence is collected",
+        "expected_findings": ["evidence"], "depends_on": [], "covers": ["o1"],
+        "dependency_policy": "satisfied",
+    }]
+    repaired_steps = [{
+        **invalid_steps[0],
+        "success_criterion": "Repository evidence is collected without publication",
+        "covers": ["o1", "o2", "o3", "o4"],
+    }]
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"obligations": obligations})},
+        {"content": json.dumps({"steps": invalid_steps})},
+        {"content": json.dumps({"steps": repaired_steps})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    plan = await planner.plan("Inspect the repository. Do not publish, push, or merge.")
+
+    assert plan.steps[0].covers == ["o1", "o2", "o3", "o4"]
+    repair_prompt = llm.calls[2]["messages"][0]["content"]
+    assert "uncovered obligation" in repair_prompt
+    assert "constraints, prohibitions and approval boundaries" in repair_prompt
+
+
+@pytest.mark.asyncio
 async def test_mesh_planner_rejects_unknown_obligation_source_reference():
     llm = MockLLMClient(responses=responses(obligations=[{
         "id": "o1", "description": "Invented requirement", "source_ref": "source-missing",

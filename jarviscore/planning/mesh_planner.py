@@ -168,9 +168,30 @@ class MeshPlanner:
         step_raw = await self._call_json(
             self._step_prompt(source, obligations, context or {})
         )
-        steps = self._ensure_declared_artifact_dependencies(
-            self._ensure_response_step(self._parse_steps(step_raw, obligations))
-        )
+        try:
+            steps = self._ensure_declared_artifact_dependencies(
+                self._ensure_response_step(self._parse_steps(step_raw, obligations))
+            )
+        except MeshPlanError as first_error:
+            try:
+                repaired_raw = await self._call_json(
+                    self._step_validation_repair_prompt(
+                        source,
+                        obligations,
+                        step_raw,
+                        str(first_error),
+                        context or {},
+                    )
+                )
+                steps = self._ensure_declared_artifact_dependencies(
+                    self._ensure_response_step(
+                        self._parse_steps(repaired_raw, obligations)
+                    )
+                )
+            except Exception as repair_error:
+                raise MeshPlanError(
+                    f"{first_error}; step repair failed: {repair_error}"
+                ) from repair_error
         plan = MeshPlan(goal=source, obligations=obligations, steps=steps)
         audit = await self._call_json(self._audit_prompt(plan))
         first_failure = audit.get("missing") or audit
@@ -788,6 +809,51 @@ Return one valid json object using exactly one repair shape:
 - preserve real data dependencies and allow independent outcomes to run in parallel.
 
 Do not execute work or add requirements."""
+
+    def _step_validation_repair_prompt(
+        self,
+        goal: str,
+        obligations: list[GoalObligation],
+        invalid: dict[str, Any],
+        validation_error: str,
+        context: dict[str, Any],
+    ) -> str:
+        public_context = {
+            key: value for key, value in context.items() if not str(key).startswith("_")
+        }
+        return f"""Repair one invalid peer-executable DAG before publication.
+
+SOURCE GOAL (immutable):
+{goal}
+
+OBLIGATION LEDGER (immutable):
+{json.dumps([item.to_dict() for item in obligations], ensure_ascii=False)}
+
+INVALID DAG RESPONSE:
+{json.dumps(invalid, ensure_ascii=False)}
+
+VALIDATION ERROR:
+{validation_error}
+
+LIVE CAPABILITY CATALOG:
+{self._render_capability_catalog()}
+
+{self._planning_brief_section()}
+
+PUBLIC CONTEXT:
+{json.dumps(public_context, ensure_ascii=False, default=str)}
+
+Return one valid json object containing a complete replacement `steps` list.
+Each step has exactly: step_id, capability, effect, systems, task,
+success_criterion, expected_findings, depends_on, covers, dependency_policy.
+- preserve every obligation exactly; do not add, remove, merge or split obligations.
+- every obligation must be covered by at least one non-final-response domain step.
+- constraints, prohibitions and approval boundaries are outcomes to enforce and verify;
+    assign them to the terminal domain step whose artifact proves compliance.
+- preserve real data dependencies and use only capabilities and effect authority from
+    LIVE CAPABILITY CATALOG.
+- resolve the stated validation error without executing work or adding requirements.
+"""
 
     def _amendment_prompt(
         self,

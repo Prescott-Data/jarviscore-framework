@@ -667,6 +667,42 @@ class TestWorkflowDAG:
         assert current["revision"] == 2
         assert current["attempt_states"] == {"verify_retry": "satisfied"}
 
+    def test_obligation_projection_resolves_not_applicable_condition(self, store):
+        obligations = [{
+            "id": "o1",
+            "description": "Verify fail-before for any repaired issue",
+            "source_quote": "Verify fail-before for any repaired issue",
+        }]
+        step = {
+            "id": "verify", "capability": "verification", "effect": "read",
+            "task": "Verify the repair transition when a repair exists",
+            "depends_on": [], "covers": ["o1"],
+        }
+        store.publish_workflow(
+            "wf-not-applicable", goal=obligations[0]["source_quote"],
+            obligations=obligations, steps=[step],
+        )
+        assert store.claim_step("wf-not-applicable", "verify", "peer:verify", 30)
+
+        assert store.finish_claimed_step(
+            "wf-not-applicable", "verify", "peer:verify", {
+                "status": "success",
+                "output": {"status": "no_verified_findings"},
+                "interpretation": {
+                    "verdict": "satisfied", "decision": "proceed",
+                    "satisfied_requirements": [],
+                    "not_applicable_requirements": ["o1"],
+                    "unmet_requirements": [],
+                    "evidence_refs": ["reproduction.status:no_candidates"],
+                },
+            },
+        )
+
+        current = store.get_obligation_projection("wf-not-applicable")["o1"]
+        assert current["state"] == "satisfied"
+        assert current["resolution"] == "not_applicable"
+        assert current["attempt_states"] == {"verify": "not_applicable"}
+
     def test_cancelled_workflow_rejects_an_inflight_amendment(self, store):
         obligations = [{"id": "o1", "description": "Work", "source_quote": "Work"}]
         steps = [{

@@ -115,6 +115,26 @@ class HoldingPeer(Agent):
         }
 
 
+class NotApplicablePeer(Agent):
+    role = "not_applicable_peer"
+    capabilities = ["verification"]
+
+    async def execute_task(self, task):
+        return {
+            "status": "success",
+            "output": {"status": "no_verified_findings"},
+            "interpretation": {
+                "verdict": "satisfied",
+                "decision": "proceed",
+                "meaning": "No reproduced defect triggered repair verification.",
+                "satisfied_requirements": [],
+                "not_applicable_requirements": ["o1"],
+                "unmet_requirements": [],
+                "evidence_refs": ["reproduction.status:no_candidates"],
+            },
+        }
+
+
 class RemediatingPeer(Agent):
     role = "remediating_peer"
     capabilities = ["verification"]
@@ -865,6 +885,48 @@ async def test_failed_final_response_does_not_erase_satisfied_obligations(monkey
     assert result["obligation_status"] == "satisfied"
     assert result["response_status"] == "failed"
     assert result["result_summary"] == ""
+
+
+@pytest.mark.asyncio
+async def test_not_applicable_conditional_obligation_completes_as_satisfied(monkeypatch):
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    mesh.add(NotApplicablePeer, agent_id="verifier")
+    mesh.add(ResponsePeer, agent_id="responder")
+    goal = "Verify fail-before for any repaired issue"
+
+    await mesh.start()
+    store.publish_workflow(
+        "wf-not-applicable-goal",
+        goal=goal,
+        obligations=[{"id": "o1", "description": goal, "source_quote": goal}],
+        steps=[
+            {
+                "id": "verify", "capability": "verification", "effect": "read",
+                "systems": [], "task": goal, "depends_on": [], "covers": ["o1"],
+            },
+            {
+                "id": "respond", "capability": "final_response",
+                "effect": "final_response", "systems": [], "task": "Report outcome",
+                "depends_on": ["verify"], "covers": [],
+            },
+        ],
+    )
+    try:
+        result = await mesh.execute_goal(
+            goal, workflow_id="wf-not-applicable-goal", timeout=1,
+        )
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "completed"
+    assert result["obligation_status"] == "satisfied"
+    obligation = store.get_obligation_projection("wf-not-applicable-goal")["o1"]
+    assert obligation["resolution"] == "not_applicable"
 
 
 @pytest.mark.asyncio

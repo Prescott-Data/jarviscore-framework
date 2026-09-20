@@ -1940,13 +1940,18 @@ class RedisContextStore:
                     satisfied = set(map(str, interpretation.get(
                         "satisfied_requirements", []
                     ))) if isinstance(interpretation, dict) else set()
+                    not_applicable = set(map(str, interpretation.get(
+                        "not_applicable_requirements", []
+                    ))) if isinstance(interpretation, dict) else set()
                     unmet = set(map(str, interpretation.get(
                         "unmet_requirements", []
                     ))) if isinstance(interpretation, dict) else set()
                     verdict = str(interpretation.get("verdict") or "") if isinstance(
                         interpretation, dict
                     ) else ""
-                    if obligation_id in satisfied or verdict == "satisfied":
+                    if obligation_id in not_applicable:
+                        attempt_state = "not_applicable"
+                    elif obligation_id in satisfied or verdict == "satisfied":
                         attempt_state = "satisfied"
                     elif terminal == "waiting":
                         attempt_state = "pending"
@@ -1967,13 +1972,19 @@ class RedisContextStore:
                         attempt_interpretations[step_id] = interpretation
                     states = list(attempt_states.values())
                     state = (
-                        "satisfied" if "satisfied" in states
+                        "satisfied" if {"satisfied", "not_applicable"}.intersection(states)
                         else "pending" if "pending" in states
                         else "unresolved"
                     )
                     projection[obligation_id] = {
                         **record,
                         "state": state,
+                        "resolution": (
+                            "not_applicable"
+                            if states and all(item == "not_applicable" for item in states)
+                            else "satisfied" if state == "satisfied"
+                            else state
+                        ),
                         "attempt_states": attempt_states,
                         "attempt_interpretations": attempt_interpretations,
                     }
