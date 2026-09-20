@@ -277,14 +277,16 @@ class BashExecutor:
                 if (found := shutil.which(allowed)) is not None
             }
             command_dirs.add(str(Path(sys.executable).parent))
+            temporary_root = self.workspace / ".tmp"
             safe_env = {
                 "PATH": os.pathsep.join(sorted(command_dirs)),
-                "HOME": str(self.workspace),
-                "TMPDIR": str(self.workspace / ".tmp"),
+                "HOME": str(temporary_root / "home"),
+                "TMPDIR": str(temporary_root),
                 "LANG": "C.UTF-8",
             }
             safe_env.update(self.command_environment)
             Path(safe_env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+            Path(safe_env["HOME"]).mkdir(parents=True, exist_ok=True)
             for name, value in self.command_environment.items():
                 if name.endswith(("_HOME", "_DIR", "CACHE")):
                     Path(value).expanduser().mkdir(parents=True, exist_ok=True)

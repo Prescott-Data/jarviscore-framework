@@ -123,6 +123,23 @@ def test_workspace_run_does_not_inherit_parent_secrets(tmp_path, monkeypatch):
     assert result["stdout"] == "missing"
 
 
+def test_workspace_run_keeps_tool_home_state_out_of_source_root(tmp_path):
+    sandbox = create_coder_sandbox(workspace_dir=tmp_path)
+    command = (
+        "python -c \"import os; from pathlib import Path; "
+        "home = Path(os.environ['HOME']); "
+        "(home / 'tool-state').write_text('state'); print(home)\""
+    )
+
+    result = sandbox.run_workspace(command)
+
+    expected_home = tmp_path / ".tmp" / "home"
+    assert result["success"] is True
+    assert result["stdout"] == str(expected_home)
+    assert (expected_home / "tool-state").read_text() == "state"
+    assert not (tmp_path / "tool-state").exists()
+
+
 def test_workspace_run_receives_only_trusted_build_environment(tmp_path, monkeypatch):
     cache = tmp_path / "shared-cargo"
     monkeypatch.setenv("WORKSPACE_SECRET", "must-not-leak")
