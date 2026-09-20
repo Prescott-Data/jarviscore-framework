@@ -452,6 +452,47 @@ async def test_mesh_planner_repairs_initially_uncovered_prohibitions():
 
 
 @pytest.mark.asyncio
+async def test_mesh_planner_repairs_a_cycle_introduced_by_first_step_repair():
+    obligations = [
+        {"id": "o1", "description": "Inspect", "source_ref": "source-1"},
+        {"id": "o2", "description": "Do not publish", "source_ref": "source-1"},
+    ]
+    invalid_steps = [{
+        "step_id": "inspect", "capability": "research", "effect": "read",
+        "systems": [], "task": "Inspect", "success_criterion": "Inspected",
+        "expected_findings": [], "depends_on": [], "covers": ["o1"],
+        "dependency_policy": "satisfied",
+    }]
+    cyclic_repair = [
+        {**invalid_steps[0], "depends_on": ["guard"]},
+        {
+            "step_id": "guard", "capability": "research", "effect": "read",
+            "systems": [], "task": "Verify no publication",
+            "success_criterion": "No publication occurred", "expected_findings": [],
+            "depends_on": ["inspect"], "covers": ["o2"],
+            "dependency_policy": "satisfied",
+        },
+    ]
+    valid_repair = [
+        invalid_steps[0],
+        {**cyclic_repair[1], "depends_on": ["inspect"]},
+    ]
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"obligations": obligations})},
+        {"content": json.dumps({"steps": invalid_steps})},
+        {"content": json.dumps({"steps": cyclic_repair})},
+        {"content": json.dumps({"steps": valid_repair})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    plan = await planner.plan("Inspect. Do not publish.")
+
+    assert [step.step_id for step in plan.steps] == ["inspect", "guard"]
+    assert "dependency cycle" in llm.calls[3]["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
 async def test_mesh_planner_rejects_unknown_obligation_source_reference():
     llm = MockLLMClient(responses=responses(obligations=[{
         "id": "o1", "description": "Invented requirement", "source_ref": "source-missing",

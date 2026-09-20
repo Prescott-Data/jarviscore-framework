@@ -168,29 +168,38 @@ class MeshPlanner:
         step_raw = await self._call_json(
             self._step_prompt(source, obligations, context or {})
         )
-        try:
-            steps = self._ensure_declared_artifact_dependencies(
-                self._ensure_response_step(self._parse_steps(step_raw, obligations))
-            )
-        except MeshPlanError as first_error:
+        candidate_raw = step_raw
+        validation_errors = []
+        for repair_attempt in range(3):
             try:
-                repaired_raw = await self._call_json(
-                    self._step_validation_repair_prompt(
-                        source,
-                        obligations,
-                        step_raw,
-                        str(first_error),
-                        context or {},
-                    )
-                )
                 steps = self._ensure_declared_artifact_dependencies(
                     self._ensure_response_step(
-                        self._parse_steps(repaired_raw, obligations)
+                        self._parse_steps(candidate_raw, obligations)
                     )
                 )
+                break
+            except MeshPlanError as validation_error:
+                validation_errors.append(str(validation_error))
+                if repair_attempt == 2:
+                    raise MeshPlanError(
+                        "Initial Mesh DAG remained invalid after two repairs: "
+                        + "; ".join(validation_errors)
+                    ) from validation_error
+                try:
+                    candidate_raw = await self._call_json(
+                        self._step_validation_repair_prompt(
+                            source, obligations, candidate_raw,
+                            str(validation_error), context or {},
+                        )
+                    )
+                except Exception as repair_error:
+                    raise MeshPlanError(
+                        f"{'; '.join(validation_errors)}; "
+                        f"step repair failed: {repair_error}"
+                    ) from repair_error
             except Exception as repair_error:
                 raise MeshPlanError(
-                    f"{first_error}; step repair failed: {repair_error}"
+                    f"Initial Mesh DAG repair failed: {repair_error}"
                 ) from repair_error
         plan = MeshPlan(goal=source, obligations=obligations, steps=steps)
         audit = await self._call_json(self._audit_prompt(plan))
