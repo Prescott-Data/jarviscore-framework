@@ -33,6 +33,7 @@ from typing import List, Dict, Any, Optional, Set
 import asyncio
 import json
 import logging
+import time
 import warnings
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -883,9 +884,16 @@ class Mesh:
                             workflow_id,
                             epoch_id=f"planning:{self._node_id}",
                         ):
+                            _planning_started = time.monotonic()
                             plan = await planner.plan(
                                 str(source.get("goal") or ""),
                                 context=source.get("context") or {},
+                            )
+                            logger.info(
+                                "Workflow %s planned %d step(s) in %.1fs",
+                                workflow_id,
+                                len(plan.steps),
+                                time.monotonic() - _planning_started,
                             )
                         self._redis_store.publish_workflow(
                             workflow_id,
