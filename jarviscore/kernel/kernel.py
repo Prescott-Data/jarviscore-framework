@@ -907,7 +907,26 @@ class Kernel:
         self._attach_mesh_tools(subagent)
         return subagent
 
-    def _create_memory(self, workflow_id: str, step_id: str, agent_id: str):
+    def _memory_scope(self, context: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Which tenant this step's memory belongs to.
+
+        A mesh names the trusted context field that separates its tenants via
+        ``memory_scope_field``. Without one, every workflow an agent serves
+        shares a single pool of recollections.
+        """
+        field = self.config.get("memory_scope_field")
+        if not field or not context:
+            return None
+        value = str(context.get(field) or "").strip()
+        return value or None
+
+    def _create_memory(
+        self,
+        workflow_id: str,
+        step_id: str,
+        agent_id: str,
+        context: Optional[Dict[str, Any]] = None,
+    ):
         """Create a UnifiedMemory instance for the current step.
 
         Includes Athena as Tier 4 when ATHENA_URL is configured in settings.
@@ -943,6 +962,7 @@ class Kernel:
                     redis_store=self.redis_store,
                     blob_storage=self.blob_storage,
                     athena_client=athena_client,
+                    memory_scope=self._memory_scope(context),
                 )
         except ImportError:
             logger.debug("[Kernel] UnifiedMemory not available — running without memory")
@@ -1197,7 +1217,7 @@ class Kernel:
             )
 
             # Create memory (graceful degradation if no Redis/blob)
-            memory = self._create_memory(workflow_id, step_id, agent_id)
+            memory = self._create_memory(workflow_id, step_id, agent_id, context)
 
             # ── Recall what earlier sessions hold about this task ─────────────
             # A question scored by relevance, not the last fifteen things the
