@@ -228,6 +228,32 @@ async def test_generate_settles_exact_usage_into_the_workflow_budget():
 
 
 @pytest.mark.asyncio
+async def test_generate_reserves_input_in_tokens_not_utf8_bytes():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-llm-token-reservation",
+        "Admit a token-bounded prompt",
+        budget={"max_tokens": 1000},
+    )
+    llm = _budget_test_client({
+        "content": "done",
+        "tokens": {"input": 400, "output": 5, "total": 405},
+        "cost_usd": 0.004,
+    })
+    prompt = "evidence " * 600
+    assert len(prompt.encode("utf-8")) > 1000
+
+    with workflow_budget_scope(store, "wf-llm-token-reservation"):
+        result = await llm.generate(prompt=prompt, max_tokens=20)
+
+    assert result["content"] == "done"
+    assert store.get_workflow_budget_usage(
+        "wf-llm-token-reservation", "default"
+    )["used_tokens"] == 405
+    llm._generate_inner.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_generate_never_dispatches_without_global_capacity():
     store = MockRedisContextStore()
     store.register_workflow_goal(

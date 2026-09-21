@@ -12,6 +12,7 @@ import json
 from typing import Optional, Dict, List, Any
 from enum import Enum
 
+from jarviscore.context.context_manager import ContextManager
 from jarviscore.promo import PROMO_MODEL
 from jarviscore.orchestration.budget import current_workflow_budget
 
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 # back-reference to its own client, or synthesise attributes on access. Traversal
 # is bounded so serializing the evidence can never outlive the call it describes.
 _METADATA_MAX_DEPTH = 6
+_TOKEN_COUNTER = ContextManager()
 
 
 def _model_dump(value: Any) -> Optional[Dict[str, Any]]:
@@ -393,10 +395,8 @@ class UnifiedLLMClient:
         budget_account = current_workflow_budget()
         reservation_id = None
         if budget_account is not None:
-            input_reservation = len(
-                json.dumps(
-                    messages, ensure_ascii=False, default=str
-                ).encode("utf-8")
+            input_reservation = _TOKEN_COUNTER.count_tokens(
+                json.dumps(messages, ensure_ascii=False, default=str)
             )
             reservation_id = budget_account.reserve(input_reservation + max_tokens)
 
