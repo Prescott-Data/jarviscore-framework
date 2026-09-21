@@ -70,6 +70,52 @@ class TestTierAvailability:
         assert mem_bare.ltm is None
 
 
+class TestMemoryScope:
+    @pytest.mark.asyncio
+    async def test_athena_session_is_opened_under_the_declared_scope(self, monkeypatch):
+        """Two matters served by one agent must not share a pool of recollections."""
+        opened = []
+
+        class StubAthenaMemory:
+            @classmethod
+            async def create(cls, agent_id, client, redis_store=None, **kwargs):
+                opened.append((agent_id, kwargs.get("user_id")))
+                return cls()
+
+        import jarviscore.memory.athena_memory as athena_memory
+
+        monkeypatch.setattr(athena_memory, "AthenaMemory", StubAthenaMemory)
+
+        for matter in ("matter-a", "matter-b"):
+            mem = UnifiedMemory(
+                "wf-1", "step1", "analyst", None, None,
+                athena_client=object(),
+                memory_scope=matter,
+            )
+            await mem._get_athena_memory()
+
+        assert opened == [("analyst", "matter-a"), ("analyst", "matter-b")]
+
+    @pytest.mark.asyncio
+    async def test_scope_is_absent_when_undeclared(self, monkeypatch):
+        opened = []
+
+        class StubAthenaMemory:
+            @classmethod
+            async def create(cls, agent_id, client, redis_store=None, **kwargs):
+                opened.append(kwargs.get("user_id"))
+                return cls()
+
+        import jarviscore.memory.athena_memory as athena_memory
+
+        monkeypatch.setattr(athena_memory, "AthenaMemory", StubAthenaMemory)
+
+        mem = UnifiedMemory("wf-1", "step1", "analyst", None, None, athena_client=object())
+        await mem._get_athena_memory()
+
+        assert opened == [None]
+
+
 # ======================================================================
 # log_turn()
 # ======================================================================

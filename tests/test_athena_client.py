@@ -303,7 +303,6 @@ async def test_session_cache_key_isolates_tenant_user_and_agent():
     assert session_id == "session-1"
     assert redis._redis.get.call_args_list == [
         call("athena_session:tenant-1:owner:analyst"),
-        call("athena_session:analyst"),
     ]
     redis._redis.set.assert_called_once_with(
         "athena_session:tenant-1:owner:analyst", "session-1", ex=30 * 86400
@@ -320,20 +319,38 @@ async def test_session_cache_promotes_legacy_agent_key():
     redis._redis.get.side_effect = [None, "legacy-session"]
     redis._redis.set = MagicMock()
 
-    session_id = await client.get_or_create_session(
-        "analyst", redis_store=redis, user_id="owner"
-    )
+    session_id = await client.get_or_create_session("analyst", redis_store=redis)
 
     assert session_id == "legacy-session"
     assert redis._redis.get.call_args_list == [
-        call("athena_session:tenant-1:owner:analyst"),
+        call("athena_session:tenant-1:analyst:analyst"),
         call("athena_session:analyst"),
     ]
     redis._redis.set.assert_called_once_with(
-        "athena_session:tenant-1:owner:analyst",
+        "athena_session:tenant-1:analyst:analyst",
         "legacy-session",
         ex=30 * 86400,
     )
+
+
+@pytest.mark.asyncio
+async def test_scoped_session_refuses_the_unscoped_legacy_session():
+    """The legacy key belongs to no scope, so no scope may inherit it."""
+    client = AthenaClient("http://athena.test", tenant_id="tenant-1")
+    cache = {"athena_session:analyst": "legacy-session"}
+    redis = MagicMock()
+    redis._redis.get.side_effect = cache.get
+    redis._redis.set = MagicMock()
+    client.create_session = AsyncMock(return_value="session-for-matter-a")
+
+    session_id = await client.get_or_create_session(
+        "analyst", redis_store=redis, user_id="matter-a"
+    )
+
+    assert session_id == "session-for-matter-a"
+    assert redis._redis.get.call_args_list == [
+        call("athena_session:tenant-1:matter-a:analyst"),
+    ]
 
 
 def test_public_factory_uses_environment_auth_fallback(monkeypatch):

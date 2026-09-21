@@ -241,14 +241,17 @@ class AthenaClient:
         """
         resolved_user_id = user_id or agent_id
         redis_key = f"athena_session:{self._tenant_id}:{resolved_user_id}:{agent_id}"
-        legacy_redis_key = f"athena_session:{agent_id}"
+        # The legacy key predates user scoping, so it belongs to no scope in
+        # particular. Adopting it under an explicit scope would hand one
+        # tenant's session to another.
+        legacy_redis_key = None if user_id else f"athena_session:{agent_id}"
         session_ttl = self._session_ttl_seconds
 
         # 1. Try Redis cache
         if redis_store:
             try:
                 cached = redis_store._redis.get(redis_key)
-                if not cached:
+                if not cached and legacy_redis_key:
                     cached = redis_store._redis.get(legacy_redis_key)
                     if cached:
                         redis_store._redis.set(redis_key, cached, ex=session_ttl)
