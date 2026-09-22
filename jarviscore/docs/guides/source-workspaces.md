@@ -1,7 +1,7 @@
 ---
 icon: material/file-tree
-title: Source Workspaces
-description: Bind immutable, blob-backed source snapshots to isolated AutoAgent execution.
+title: Source Workspaces for Agents
+description: Bind immutable, blob-backed source snapshots to isolated agent execution with durable provenance and copy-on-write workspace deltas.
 ---
 
 # Source workspaces
