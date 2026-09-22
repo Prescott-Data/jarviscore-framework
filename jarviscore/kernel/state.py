@@ -485,6 +485,8 @@ def hydrate_receipt_evidence(
                 evidence = mutations.get(receipt_id)
             else:
                 evidence = commands.get(receipt_id)
+                if evidence is None:
+                    evidence = mutations.get(receipt_id)
             if evidence is None:
                 raise ToolReceiptError(f"Unknown tool receipt {receipt_id!r}")
             return evidence.model_dump(mode="json")

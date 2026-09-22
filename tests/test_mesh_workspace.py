@@ -897,6 +897,7 @@ async def test_mesh_rejects_mutation_receipt_without_final_workspace_change(tmp_
                 "status": "success",
                 "output": {"status": "applied", "mutations": [receipt]},
                 "_tool_receipts": [receipt],
+                "workspace_delta": {"manifest_blob_path": "forged/delta.json"},
             }
 
     redis = __import__(

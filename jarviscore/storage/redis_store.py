@@ -2027,7 +2027,9 @@ class RedisContextStore:
                         attempt_interpretations[step_id] = interpretation
                     states = list(attempt_states.values())
                     state = (
-                        "satisfied" if {"satisfied", "not_applicable"}.intersection(states)
+                        "satisfied"
+                        if "satisfied" in states
+                        or (states and all(item == "not_applicable" for item in states))
                         else "pending" if "pending" in states
                         else "unresolved"
                     )

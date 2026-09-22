@@ -212,6 +212,34 @@ class TestAutoAgentInitialization:
 
 class TestAutoAgentSetup:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("config", "expected"),
+        [({}, True), ({"allow_unsafe_local_execution": False}, False)],
+    )
+    async def test_local_execution_setting_honors_config_precedence(
+        self, monkeypatch, config, expected
+    ):
+        from types import SimpleNamespace
+
+        captured = {}
+
+        def create_sandbox(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace()
+
+        monkeypatch.setattr("jarviscore.execution.create_coder_sandbox", create_sandbox)
+        monkeypatch.setattr(AutoAgent, "_load_agent_profile", lambda self: None)
+        agent = CustomKernelAutoAgent()
+        agent._mesh = SimpleNamespace(
+            config=config,
+            _settings=SimpleNamespace(allow_unsafe_local_execution=True),
+        )
+
+        await agent.setup()
+
+        assert captured["allow_unsafe_local_execution"] is expected
+
+    @pytest.mark.asyncio
     async def test_typesafe_features_require_injected_decision_client(self):
         from types import SimpleNamespace
 

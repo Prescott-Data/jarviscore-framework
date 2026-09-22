@@ -488,6 +488,11 @@ def test_workspace_mutation_receipt_overrides_model_authored_file_facts():
         "observed_at": receipt.workspace_mutation().model_dump(mode="json")["observed_at"],
     }
 
+    cited = state.hydrate_tool_receipts({
+        "mutation": {"tool_receipt_id": receipt.receipt_id},
+    })
+    assert cited["mutation"] == hydrated["mutation"]
+
 
 def test_workspace_edit_receipt_is_authoritative_mutation_evidence():
     state = KernelState(
@@ -584,6 +589,13 @@ def test_post_normalization_hydrator_binds_workspace_mutation():
     )
 
     assert hydrated["mutations"] == [evidence]
+
+    cited = hydrate_receipt_evidence(
+        {"mutations": [{"tool_receipt_id": evidence["tool_receipt_id"]}]},
+        receipt_evidence=[evidence],
+        workflow_id="wf-1",
+    )
+    assert cited["mutations"] == [evidence]
 
 
 def test_post_normalization_hydrator_rejects_cross_workflow_receipt():

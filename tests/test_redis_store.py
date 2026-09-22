@@ -783,6 +783,59 @@ class TestWorkflowDAG:
         assert current["resolution"] == "not_applicable"
         assert current["attempt_states"] == {"verify": "not_applicable"}
 
+    def test_not_applicable_attempt_does_not_hide_unresolved_attempt(self, store):
+        obligations = [{
+            "id": "o1", "description": "Verify stage", "source_quote": "Verify stage",
+        }]
+        steps = [
+            {
+                "id": "verify_unresolved", "capability": "verification", "effect": "read",
+                "task": "Verify stage", "depends_on": [], "covers": ["o1"],
+            },
+            {
+                "id": "verify_not_applicable", "capability": "verification", "effect": "read",
+                "task": "Check applicability", "depends_on": [], "covers": ["o1"],
+            },
+        ]
+        store.publish_workflow(
+            "wf-mixed-not-applicable", goal="Verify stage",
+            obligations=obligations, steps=steps,
+        )
+        assert store.claim_step(
+            "wf-mixed-not-applicable", "verify_unresolved", "peer:first", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-mixed-not-applicable", "verify_unresolved", "peer:first", {
+                "status": "success",
+                "interpretation": {
+                    "verdict": "unsatisfied", "decision": "reject",
+                    "satisfied_requirements": [], "unmet_requirements": ["o1"],
+                },
+            },
+        )
+        assert store.claim_step(
+            "wf-mixed-not-applicable", "verify_not_applicable", "peer:second", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-mixed-not-applicable", "verify_not_applicable", "peer:second", {
+                "status": "success",
+                "interpretation": {
+                    "verdict": "satisfied", "decision": "proceed",
+                    "satisfied_requirements": [],
+                    "not_applicable_requirements": ["o1"],
+                    "unmet_requirements": [],
+                },
+            },
+        )
+
+        current = store.get_obligation_projection("wf-mixed-not-applicable")["o1"]
+        assert current["state"] == "unresolved"
+        assert current["resolution"] == "unresolved"
+        assert current["attempt_states"] == {
+            "verify_unresolved": "unresolved",
+            "verify_not_applicable": "not_applicable",
+        }
+
     def test_cancelled_workflow_rejects_an_inflight_amendment(self, store):
         obligations = [{"id": "o1", "description": "Work", "source_quote": "Work"}]
         steps = [{

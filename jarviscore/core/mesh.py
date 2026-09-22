@@ -1893,6 +1893,7 @@ class Mesh:
                                     receipt_evidence = bound_result.pop(
                                         "_tool_receipts", []
                                     )
+                                    bound_result.pop("workspace_delta", None)
                                     if bound_result.get("status") == "success":
                                         try:
                                             bound_result["output"] = hydrate_receipt_evidence(
