@@ -107,6 +107,39 @@ class TestStepOutputs:
         saved = store.get_step_output("wf-large-claim", "step-1")["output"]
         assert saved["typed_outcome"] == "STEP_OUTPUT_TOO_LARGE"
 
+    def test_circular_step_output_is_replaced_by_bounded_failure(self, store):
+        circular = []
+        circular.append(circular)
+
+        store.save_step_output("wf-circular", "step-1", output=circular)
+
+        saved = store.get_step_output("wf-circular", "step-1")["output"]
+        assert saved["status"] == "failure"
+        assert saved["typed_outcome"] == "STEP_OUTPUT_SERIALIZATION_FAILED"
+
+    def test_circular_claimed_step_fails_and_releases_claim(self, store):
+        store.init_workflow_graph(
+            "wf-circular-claim",
+            [{"id": "step-1", "capability": "analysis", "task": "work", "depends_on": []}],
+        )
+        claim_id = "agent-a:claim-a"
+        assert store.claim_step(
+            "wf-circular-claim", "step-1", claim_id, lease_seconds=30
+        )
+        circular = []
+        circular.append(circular)
+
+        assert store.finish_claimed_step(
+            "wf-circular-claim", "step-1", claim_id, circular
+        )
+
+        assert store.get_step_status("wf-circular-claim", "step-1") == "failed"
+        saved = store.get_step_output("wf-circular-claim", "step-1")["output"]
+        assert saved["typed_outcome"] == "STEP_OUTPUT_SERIALIZATION_FAILED"
+        assert not store._store._redis.exists(
+            "step_lock:wf-circular-claim:step-1"
+        )
+
     def test_context_vars(self, store):
         """Context variables are stored alongside output."""
         store.save_step_output("wf-1", "step-1",

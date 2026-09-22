@@ -106,20 +106,31 @@ class RedisContextStore:
         encoder = json.JSONEncoder(default=str)
         chunks = []
         byte_count = 0
-        for chunk in encoder.iterencode(output):
-            chunks.append(chunk)
-            byte_count += len(chunk.encode("utf-8"))
-            if byte_count > self._max_step_output_bytes:
-                failure = {
-                    "status": "failure",
-                    "typed_outcome": "STEP_OUTPUT_TOO_LARGE",
-                    "error": (
-                        "Step output exceeded the durable Redis limit of "
-                        f"{self._max_step_output_bytes} bytes"
-                    ),
-                    "observed_bytes_at_least": byte_count,
-                }
-                return failure, json.dumps(failure), True
+        try:
+            for chunk in encoder.iterencode(output):
+                chunks.append(chunk)
+                byte_count += len(chunk.encode("utf-8"))
+                if byte_count > self._max_step_output_bytes:
+                    failure = {
+                        "status": "failure",
+                        "typed_outcome": "STEP_OUTPUT_TOO_LARGE",
+                        "error": (
+                            "Step output exceeded the durable Redis limit of "
+                            f"{self._max_step_output_bytes} bytes"
+                        ),
+                        "observed_bytes_at_least": byte_count,
+                    }
+                    return failure, json.dumps(failure), True
+        except Exception as exc:
+            failure = {
+                "status": "failure",
+                "typed_outcome": "STEP_OUTPUT_SERIALIZATION_FAILED",
+                "error": (
+                    "Step output could not be serialized for durable persistence: "
+                    f"{type(exc).__name__}"
+                ),
+            }
+            return failure, json.dumps(failure), True
         return output, "".join(chunks), False
 
     def save_step_output(self, workflow_id: str, step_id: str,
