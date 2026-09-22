@@ -369,7 +369,14 @@ class AutoAgent(Profile):
             blob_storage=getattr(self, '_blob_storage', None),
             artifact_prefix=f"artifacts/{self.role}",
             allow_unsafe_local_execution=bool(
-                config.get("allow_unsafe_local_execution", False)
+                config.get(
+                    "allow_unsafe_local_execution",
+                    getattr(
+                        getattr(self._mesh, "_settings", None),
+                        "allow_unsafe_local_execution",
+                        False,
+                    ),
+                )
             ),
         )
 
