@@ -695,7 +695,11 @@ class CoderSandbox:
         matches = []
         bounded_limit = max(1, min(int(limit), 1_000))
         for candidate in sorted(candidates):
-            if not candidate.is_file() or candidate.stat().st_size > 2 * 1024 * 1024:
+            if (
+                candidate.is_symlink()
+                or not candidate.is_file()
+                or candidate.stat().st_size > 2 * 1024 * 1024
+            ):
                 continue
             try:
                 lines = candidate.read_text(encoding="utf-8").splitlines()

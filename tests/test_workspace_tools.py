@@ -36,6 +36,24 @@ def test_workspace_tools_reject_path_escape(tmp_path):
         sandbox.write_workspace("../outside.txt", "blocked")
 
 
+def test_workspace_search_skips_symlinks_to_files_outside_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private needle\n")
+    (workspace / "outside-link.txt").symlink_to(outside)
+    (workspace / "inside.txt").write_text("public needle\n")
+    sandbox = create_coder_sandbox(workspace_dir=workspace)
+
+    result = sandbox.search_workspace("needle", glob="*.txt")
+
+    assert result == {
+        "status": "success",
+        "matches": [{"path": "inside.txt", "line": 1, "text": "public needle"}],
+        "truncated": False,
+    }
+
+
 def test_workspace_write_creates_bounded_fixture_without_shell(tmp_path):
     sandbox = create_coder_sandbox(workspace_dir=tmp_path)
     content = '{"value": "line one\\nline two"}\n'
