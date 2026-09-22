@@ -7,6 +7,7 @@ import pytest
 
 from jarviscore.execution import BashPermissionError
 from jarviscore.execution import create_coder_sandbox as _create_coder_sandbox
+from jarviscore.execution.coder_sandbox import CoderSandbox
 from jarviscore.kernel.defaults.coder import CoderSubAgent
 from jarviscore.kernel.state import KernelState
 
@@ -326,6 +327,46 @@ async def test_sandbox_timeout_kills_grandchildren(tmp_path):
 
     assert result["error_type"] == "ExecutionTimeout"
     assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_windows_sandbox_timeout_uses_taskkill_for_process_tree(monkeypatch):
+    class Process:
+        pid = 1234
+        returncode = None
+        killed = False
+        waited = False
+
+        def kill(self):
+            self.killed = True
+
+        async def wait(self):
+            self.waited = True
+
+    class Terminator:
+        returncode = 0
+
+        async def wait(self):
+            return None
+
+    calls = []
+
+    async def create_subprocess_exec(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Terminator()
+
+    process = Process()
+    monkeypatch.setattr("jarviscore.execution.coder_sandbox.os.name", "nt")
+    monkeypatch.setattr(
+        "jarviscore.execution.coder_sandbox.asyncio.create_subprocess_exec",
+        create_subprocess_exec,
+    )
+
+    await CoderSandbox._terminate_process_tree(process)
+
+    assert calls[0][0] == ("taskkill", "/PID", "1234", "/T", "/F")
+    assert process.killed is False
+    assert process.waited is True
 
 
 @pytest.mark.asyncio

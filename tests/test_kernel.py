@@ -384,6 +384,38 @@ async def test_coder_hydrates_command_receipt_before_returning_output(kernel, mo
     assert "tool:wf-1:reproduce:1" in mock_llm.calls[1]["messages"][-2]["content"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_result", "expected_status"),
+    [
+        (
+            {"success": False, "stdout": "", "stderr": "failed", "returncode": 1},
+            "error",
+        ),
+        (
+            {
+                "success": False,
+                "stdout": "",
+                "stderr": "timed out",
+                "returncode": -1,
+                "status": "timeout",
+            },
+            "timeout",
+        ),
+    ],
+)
+async def test_unsuccessful_tool_result_has_error_without_losing_timeout_marker(
+    kernel, tool_result, expected_status
+):
+    coder = kernel._create_subagent("coder", "test-coder")
+    coder.register_tool("workspace_run", lambda: dict(tool_result), "Run command")
+
+    result = await coder._execute_tool("workspace_run", {})
+
+    assert result["status"] == expected_status
+    assert result["error"] == tool_result["stderr"]
+
+
 def test_downstream_output_can_cite_grounded_dependency_receipt():
     observation = {
         "tool_receipt_id": "tool:wf-1:reproduce:1",

@@ -139,17 +139,22 @@ class BlobSnapshotStore:
         files: AsyncIterable[tuple[str, str | bytes, bool]],
     ) -> SourceSnapshot:
         entries = []
-        seen_paths: set[str] = set()
+        seen_paths: dict[str, str] = {}
         async for raw_path, content, executable in files:
             path = _safe_relative_path(raw_path).as_posix()
-            if path in seen_paths:
+            folded_path = path.casefold()
+            if folded_path in seen_paths:
                 raise ValueError(f"Duplicate workspace path: {path!r}")
-            parents = set(PurePosixPath(path).parents) - {PurePosixPath(".")}
-            if any(parent.as_posix() in seen_paths for parent in parents):
+            parents = {
+                parent.as_posix().casefold()
+                for parent in PurePosixPath(path).parents
+                if parent != PurePosixPath(".")
+            }
+            if any(parent in seen_paths for parent in parents):
                 raise ValueError(f"Workspace path conflicts with a file parent: {path!r}")
-            if any(existing.startswith(f"{path}/") for existing in seen_paths):
+            if any(existing.startswith(f"{folded_path}/") for existing in seen_paths):
                 raise ValueError(f"Workspace file conflicts with an existing directory: {path!r}")
-            seen_paths.add(path)
+            seen_paths[folded_path] = path
             payload = _bytes(content)
             digest = hashlib.sha256(payload).hexdigest()
             blob_path = f"{self.prefix}/objects/{digest}"
@@ -448,8 +453,10 @@ class SandboxBinding:
             previous = baseline.get(path)
             if previous is not None and previous.sha256 == digest:
                 continue
-            blob_path = f"{delta_prefix}/files/{path}"
-            await self.store.blob_storage.save(blob_path, payload)
+            blob_path = f"{delta_prefix}/objects/{digest}"
+            existing = await self.store.blob_storage.read(blob_path)
+            if existing is None or _bytes(existing) != payload:
+                await self.store.blob_storage.save(blob_path, payload)
             entry = SnapshotEntry(
                 path=path,
                 blob_path=blob_path,

@@ -110,6 +110,27 @@ async def test_snapshot_rejects_paths_that_escape_workspace(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"Foo.txt": "first", "foo.txt": "second"},
+        {"Src": "file", "src/main.py": "content"},
+    ],
+)
+async def test_snapshot_rejects_case_insensitive_host_path_collisions(
+    tmp_path, files
+):
+    store = BlobSnapshotStore(LocalBlobStorage(str(tmp_path / "blobs")))
+
+    with pytest.raises(ValueError, match="Duplicate|conflicts"):
+        await store.capture(
+            SourceRef(provider="archive", locator="fixture", revision="main"),
+            "commit-1",
+            files,
+        )
+
+
+@pytest.mark.asyncio
 async def test_materialization_rejects_corrupted_blob(tmp_path):
     blobs = LocalBlobStorage(str(tmp_path / "blobs"))
     store = BlobSnapshotStore(blobs)
@@ -239,6 +260,31 @@ async def test_binding_applies_a_prior_delta_to_a_fresh_projection(tmp_path):
 
         assert (second.workspace / "value.txt").read_text() == "after\n"
         assert (second.workspace / "new.txt").read_text() == "new\n"
+
+
+@pytest.mark.asyncio
+async def test_repeated_export_keeps_prior_delta_file_blobs_immutable(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    snapshot = await store.capture(
+        SourceRef(provider="archive", locator="fixture", revision="main"),
+        "commit-1",
+        {"value.txt": "before\n"},
+    )
+    prefix = "workflows/wf-1/workspace_deltas/step-1"
+
+    async with SandboxBinding(store, snapshot) as first:
+        (first.workspace / "value.txt").write_text("first\n")
+        first_delta = await first.export_delta(prefix)
+    async with SandboxBinding(store, snapshot) as second:
+        (second.workspace / "value.txt").write_text("second\n")
+        second_delta = await second.export_delta(prefix)
+
+    assert first_delta.modified[0].blob_path != second_delta.modified[0].blob_path
+    restored = await store.load_delta(first_delta.manifest_blob_path)
+    async with SandboxBinding(store, snapshot) as projection:
+        await projection.apply_delta(restored)
+        assert (projection.workspace / "value.txt").read_text() == "first\n"
 
 
 @pytest.mark.asyncio

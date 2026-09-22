@@ -2072,18 +2072,34 @@ class Mesh:
         )
 
     @staticmethod
-    def _workspace_delta_manifests(value: Any) -> list[str]:
-        manifests = []
-        if isinstance(value, dict):
-            delta = value.get("workspace_delta")
-            if isinstance(delta, dict) and isinstance(delta.get("manifest_blob_path"), str):
-                manifests.append(delta["manifest_blob_path"])
-            for child in value.values():
-                manifests.extend(Mesh._workspace_delta_manifests(child))
-        elif isinstance(value, list):
-            for child in value:
-                manifests.extend(Mesh._workspace_delta_manifests(child))
-        return list(dict.fromkeys(manifests))
+    def _workspace_delta_manifest(
+        step_result: Any, *, workflow_id: str, step_id: str
+    ) -> Optional[str]:
+        if not isinstance(step_result, dict):
+            return None
+        result = step_result.get("output")
+        if not isinstance(result, dict):
+            return None
+        delta = result.get("workspace_delta")
+        if not isinstance(delta, dict):
+            return None
+        manifest_path = delta.get("manifest_blob_path")
+        if not isinstance(manifest_path, str) or not manifest_path:
+            return None
+        expected_prefix = (
+            f"workflows/{workflow_id}/workspace_deltas/{step_id}/manifests/"
+        )
+        filename = manifest_path.removeprefix(expected_prefix)
+        if (
+            not manifest_path.startswith(expected_prefix)
+            or not filename.endswith(".json")
+            or "/" in filename
+            or "\\" in filename
+        ):
+            raise ValueError(
+                "Workspace delta manifest does not belong to its workflow step"
+            )
+        return manifest_path
 
     @staticmethod
     def _maximal_workspace_dependency_ids(
@@ -2175,9 +2191,22 @@ class Mesh:
                 )
                 for dependency_id in dependency_ids
             }
+            manifest_paths = [
+                manifest_path
+                for dependency_id, dependency_result in dependency_results.items()
+                if (
+                    manifest_path := self._workspace_delta_manifest(
+                        dependency_result,
+                        workflow_id=str(
+                            task["context"].get("workflow_id") or ""
+                        ),
+                        step_id=dependency_id,
+                    )
+                )
+            ]
             deltas = [
                 await store.load_delta(manifest_path)
-                for manifest_path in self._workspace_delta_manifests(dependency_results)
+                for manifest_path in manifest_paths
             ]
             await binding.apply_deltas(deltas)
             get_step_definition = getattr(

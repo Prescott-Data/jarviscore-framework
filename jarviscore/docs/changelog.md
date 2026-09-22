@@ -26,7 +26,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## 1.13.0 <span class="changelog-date">2026-09-19</span>
+## 1.13.0 <span class="changelog-date">2026-09-22</span>
 
 ### Added
 
@@ -58,6 +58,19 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Fixed
 
+- Local generated-code and process execution now fails closed unless a trusted
+  deployment explicitly enables `ALLOW_UNSAFE_LOCAL_EXECUTION`. Timeout cleanup
+  terminates descendant processes on POSIX and Windows, and unsuccessful command
+  results are retained as failure evidence.
+- Snapshot and delta persistence now rejects traversal, symlink, case-folded,
+  identity, and mutable-blob collisions. Dependency deltas are accepted only
+  from the framework-owned result field for the exact workflow step.
+- Redis step output is bounded before persistence, including circular and
+  unserializable values, while continuation state cannot retain a stale
+  workspace delta from an earlier epoch.
+- Cached source snapshots are bound to the requested source identity and commit,
+  decoded GitHub payloads obey file and aggregate limits, and refreshed Nexus
+  credentials are rechecked against destination policy.
 - Prevented successful commands that execute zero tests from being treated as
   reproduction or verification evidence by product contracts.
 - Prevented workspace writes from being lost between execution epochs and fixed

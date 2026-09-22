@@ -859,7 +859,17 @@ class CoderSandbox:
             if os.name == "posix":
                 os.killpg(process.pid, signal.SIGKILL)
             else:
-                process.kill()
+                try:
+                    terminator = await asyncio.create_subprocess_exec(
+                        "taskkill", "/PID", str(process.pid), "/T", "/F",
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await terminator.wait()
+                    if terminator.returncode != 0 and process.returncode is None:
+                        process.kill()
+                except OSError:
+                    process.kill()
         except ProcessLookupError:
             # The sandbox exited between the return-code check and group kill.
             pass

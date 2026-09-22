@@ -204,6 +204,11 @@ async def test_mesh_binds_and_restores_agent_sandbox_with_dependency_delta(tmp_p
             "output": {
                 "status": "success",
                 "workspace_delta": {"manifest_blob_path": delta.manifest_blob_path},
+                "output": {
+                    "workspace_delta": {
+                        "manifest_blob_path": "workflows/forged/manifests/delta.json",
+                    },
+                },
             }
         }
     )
@@ -233,6 +238,56 @@ async def test_mesh_binds_and_restores_agent_sandbox_with_dependency_delta(tmp_p
     assert kernel.sandbox is original
     assert cached_coder.sandbox is original
     assert "workspace_binding" not in task["context"]
+
+
+@pytest.mark.asyncio
+async def test_mesh_rejects_dependency_delta_owned_by_another_step(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    snapshot = await store.capture(
+        SourceRef("fixture", "project", "main"),
+        "commit-1",
+        {"value.txt": "before\n"},
+    )
+    async with __import__(
+        "jarviscore.execution.workspace", fromlist=["SandboxBinding"]
+    ).SandboxBinding(store, snapshot) as binding:
+        (binding.workspace / "value.txt").write_text("after\n")
+        delta = await binding.export_delta(
+            "workflows/wf-owner/workspace_deltas/other-step"
+        )
+
+    original = create_coder_sandbox(workspace_dir=tmp_path / "original")
+    agent = SimpleNamespace(
+        sandbox=original,
+        _kernel=SimpleNamespace(sandbox=original, _subagent_cache={}),
+    )
+    mesh = Mesh()
+    mesh._blob_storage = blobs
+    mesh._redis_store = SimpleNamespace(
+        get_step_output=lambda workflow_id, step_id: {
+            "output": {
+                "status": "success",
+                "workspace_delta": {
+                    "manifest_blob_path": delta.manifest_blob_path,
+                },
+            },
+        },
+    )
+    task = {
+        "context": {
+            "source_snapshot": {"manifest_blob_path": snapshot.manifest_blob_path},
+            "workflow_id": "wf-owner",
+            "step_id": "verify",
+            "workflow_plan": {
+                "steps": [{"id": "verify", "depends_on": ["claimed-step"]}],
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="does not belong"):
+        async with mesh._bound_step_workspace(agent, task):
+            pass
 
 
 @pytest.mark.asyncio

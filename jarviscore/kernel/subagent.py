@@ -53,7 +53,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional, cast
 
 from jarviscore.context.truth import AgentOutput
-from jarviscore.kernel.cognition import AgentCognitionManager, ConvergenceGovernor, FailureLedger
+from jarviscore.kernel.cognition import AgentCognitionManager
 from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 from jarviscore.kernel.epistemic import EpistemicLedger
 from jarviscore.kernel.gate import GateEvidence, as_evidence, record_attempt
@@ -1678,9 +1678,15 @@ class BaseSubAgent(ABC):
             # Normalize to dict
             if not isinstance(result, dict):
                 return {"status": "success", "output": result}
+            if result.get("success") is False and not result.get("error"):
+                result["error"] = (
+                    result.get("stderr") or "Tool reported unsuccessful execution."
+                )
             # Ensure status field exists
             if "status" not in result:
-                result["status"] = "success"
+                result["status"] = (
+                    "error" if result.get("success") is False else "success"
+                )
             return result
         except WorkflowBudgetExceeded:
             raise
