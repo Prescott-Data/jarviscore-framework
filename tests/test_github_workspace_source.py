@@ -118,6 +118,61 @@ async def test_github_source_rejects_corrupted_cached_snapshot(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_github_source_rejects_cached_snapshot_for_another_source(tmp_path):
+    github = GitHubFixture()
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    source = GitHubRepositorySource(github, store)
+    requested = SourceRef("github", "acme/project", "main")
+    await source.capture(requested)
+    foreign = await store.capture(
+        SourceRef("github", "other/project", "main"),
+        "other-commit",
+        {"README.md": "foreign\n"},
+    )
+    reference_path = store._reference_path(requested, "commit-1")
+    await blobs.save(
+        reference_path,
+        __import__("json").dumps({"manifest_blob_path": foreign.manifest_blob_path}),
+    )
+
+    with pytest.raises(SourceIntegrityError, match="identity"):
+        await source.capture(requested)
+
+
+@pytest.mark.asyncio
+async def test_github_source_requires_nonnegative_integer_tree_sizes(tmp_path):
+    for invalid in (None, "6", -1, True):
+        tree = [{
+            "path": "README.md", "type": "blob", "sha": "blob-1",
+            "size": invalid, "mode": "100644",
+        }]
+        source = GitHubRepositorySource(
+            GitHubFixture(tree),
+            BlobSnapshotStore(LocalBlobStorage(str(tmp_path / str(invalid)))),
+        )
+
+        with pytest.raises(SourceIntegrityError, match="invalid size"):
+            await source.capture(SourceRef("github", "acme/project", "main"))
+
+
+@pytest.mark.asyncio
+async def test_github_source_enforces_limit_against_decoded_blob_size(tmp_path):
+    tree = [{
+        "path": "README.md", "type": "blob", "sha": "blob-1",
+        "size": 4, "mode": "100644",
+    }]
+    source = GitHubRepositorySource(
+        GitHubFixture(tree),
+        BlobSnapshotStore(LocalBlobStorage(str(tmp_path / "blobs"))),
+        limits=SnapshotLimits(max_file_bytes=5),
+    )
+
+    with pytest.raises(SnapshotLimitExceeded, match="per-file"):
+        await source.capture(SourceRef("github", "acme/project", "main"))
+
+
+@pytest.mark.asyncio
 async def test_github_source_rejects_invalid_locator(tmp_path):
     source = GitHubRepositorySource(
         GitHubFixture(),

@@ -127,6 +127,65 @@ async def test_gateway_call_does_not_read_the_local_vault(monkeypatch):
     assert result["ok"] is True
 
 
+@pytest.mark.asyncio
+async def test_refreshed_strategy_is_rechecked_against_requested_host(monkeypatch):
+    initial = DynamicStrategy(
+        type="oauth2",
+        credentials={"access_token": "expired"},
+        config={"instance_url": "https://acme.my.salesforce.com"},
+    )
+    refreshed = DynamicStrategy(
+        type="oauth2",
+        credentials={"access_token": "fresh"},
+        config={"instance_url": "https://evil.example.com"},
+    )
+    nexus_client = SimpleNamespace(refresh_connection=AsyncMock())
+    auth = SimpleNamespace(
+        _connections={"salesforce": "connection-1"},
+        _strategy_cache={"connection-1": initial},
+        nexus_client=nexus_client,
+        resolve_strategy=AsyncMock(side_effect=[initial, refreshed]),
+    )
+
+    class Response:
+        status_code = 401
+        text = "unauthorized"
+        content = b"unauthorized"
+        headers = {}
+
+        @staticmethod
+        def json():
+            return None
+
+    class Client:
+        calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def request(self, **kwargs):
+            self.calls += 1
+            return Response()
+
+    client = Client()
+    monkeypatch.setattr(
+        "jarviscore.nexus.call_proxy.httpx.AsyncClient", lambda: client
+    )
+
+    with pytest.raises(HostNotAllowed):
+        await NexusCallProxy(auth).call(
+            "connection-1",
+            "GET",
+            "https://acme.my.salesforce.com/services/data",
+        )
+
+    assert client.calls == 1
+    nexus_client.refresh_connection.assert_awaited_once_with("connection-1")
+
+
 # ── Subdomain patterns ───────────────────────────────────────────────────────
 
 def test_a_tenant_subdomain_matches_its_pattern():

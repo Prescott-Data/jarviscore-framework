@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from .strategy import apply_strategy
-from .hosts import ensure_host_allowed
+from .hosts import HostNotAllowed, ensure_host_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,7 @@ class NexusCallProxy:
                         await self._auth.nexus_client.refresh_connection(connection_id)
                     self._auth._strategy_cache.pop(connection_id, None)
                     strategy = await self._auth.resolve_strategy(connection_id)
+                    ensure_host_allowed(provider, url, strategy.config)
                     request_kwargs = NexusClient.apply_strategy_to_request(
                         strategy, method, url, headers=headers, **kwargs
                     )
@@ -178,6 +179,8 @@ class NexusCallProxy:
                             "connection %s may need re-consent (ATTENTION)",
                             connection_id,
                         )
+                except HostNotAllowed:
+                    raise
                 except Exception as refresh_exc:
                     logger.warning(
                         "NexusCallProxy: refresh failed for %s: %s",

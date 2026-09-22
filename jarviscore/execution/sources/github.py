@@ -97,6 +97,13 @@ class GitHubRepositorySource:
         )
         cached = await self.snapshot_store.find(snapshot_source, resolved_revision)
         if cached is not None:
+            if (
+                cached.source != snapshot_source
+                or cached.resolved_revision != resolved_revision
+            ):
+                raise SourceIntegrityError(
+                    "Cached GitHub snapshot identity does not match the requested source"
+                )
             self._check_limits(cached.entries)
             try:
                 await self.snapshot_store.validate(cached)
@@ -134,16 +141,26 @@ class GitHubRepositorySource:
                 raise SourceIntegrityError(
                     f"GitHub returned invalid base64 for {entry['path']}"
                 ) from exc
-            if len(payload) != int(entry.get("size") or len(payload)):
+            if len(payload) > self.limits.max_file_bytes:
+                raise SnapshotLimitExceeded(
+                    f"GitHub blob exceeds the per-file limit: {entry['path']}"
+                )
+            if len(payload) != entry["size"]:
                 raise SourceIntegrityError(
                     f"GitHub blob size mismatch for {entry['path']}"
                 )
             return entry["path"], payload, entry.get("mode") == "100755"
 
         async def files():
+            actual_total = 0
             for offset in range(0, len(blobs), self.limits.concurrency):
                 batch = blobs[offset:offset + self.limits.concurrency]
                 for item in await asyncio.gather(*(fetch(entry) for entry in batch)):
+                    actual_total += len(item[1])
+                    if actual_total > self.limits.max_total_bytes:
+                        raise SnapshotLimitExceeded(
+                            "Decoded repository content exceeds the total byte limit"
+                        )
                     yield item
 
         return await self.snapshot_store.capture_entries(
@@ -156,7 +173,15 @@ class GitHubRepositorySource:
         def value(entry, name):
             return getattr(entry, name) if hasattr(entry, name) else entry.get(name)
 
-        total_bytes = sum(int(value(entry, "size") or 0) for entry in entries)
+        sizes = []
+        for entry in entries:
+            size = value(entry, "size")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                raise SourceIntegrityError(
+                    f"GitHub tree entry has invalid size for {value(entry, 'path')}"
+                )
+            sizes.append(size)
+        total_bytes = sum(sizes)
         if len(entries) > self.limits.max_files:
             raise SnapshotLimitExceeded(
                 f"Repository has {len(entries)} files; limit is {self.limits.max_files}"
@@ -166,8 +191,8 @@ class GitHubRepositorySource:
                 f"Repository has {total_bytes} bytes; limit is {self.limits.max_total_bytes}"
             )
         oversized = [
-            value(entry, "path") for entry in entries
-            if int(value(entry, "size") or 0) > self.limits.max_file_bytes
+            value(entry, "path") for entry, size in zip(entries, sizes, strict=True)
+            if size > self.limits.max_file_bytes
         ]
         if oversized:
             raise SnapshotLimitExceeded(
