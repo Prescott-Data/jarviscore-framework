@@ -326,9 +326,15 @@ class KernelState(BaseModel):
                 elif mutation_claim:
                     evidence = prior_mutations.get(receipt_id)
                 elif receipt is not None:
-                    evidence = receipt.command_observation()
+                    evidence = (
+                        receipt.workspace_mutation()
+                        if receipt.tool_name in {"workspace_write", "workspace_edit"}
+                        else receipt.command_observation()
+                    )
                 else:
-                    evidence = prior_observations.get(receipt_id)
+                    evidence = prior_mutations.get(receipt_id) or prior_observations.get(
+                        receipt_id
+                    )
                 if evidence is None:
                     raise ToolReceiptError(f"Unknown tool receipt {receipt_id!r}")
                 return evidence.model_dump(mode="json")
