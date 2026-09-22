@@ -760,6 +760,10 @@ class AutoAgent(Profile):
                     kernel_ctx = dict(kernel_ctx)
                 if getattr(self, "output_schema", None):
                     kernel_ctx["output_schema"] = self.output_schema
+                if getattr(self, "artifact_reference_paths", ()):
+                    kernel_ctx["artifact_reference_paths"] = (
+                        self.artifact_reference_paths
+                    )
                 if getattr(self, "_trace_sink", None):
                     kernel_ctx["_trace_sink"] = self._trace_sink
                 if getattr(self, "_direct_kernel_turn", False):

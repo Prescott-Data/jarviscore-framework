@@ -215,6 +215,8 @@ class BlobSnapshotStore:
         if raw is None:
             raise FileNotFoundError(manifest_blob_path)
         data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        if data.get("manifest_blob_path") != manifest_blob_path:
+            raise ValueError("Snapshot manifest redirected to another path")
         return SourceSnapshot(
             snapshot_id=data["snapshot_id"],
             source=SourceRef(**data["source"]),

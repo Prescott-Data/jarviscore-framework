@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import BaseModel
 from jarviscore.kernel import Kernel
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
 from jarviscore.execution.decisions import DecisionResult
@@ -583,6 +584,28 @@ def test_workspace_mutation_receipt_rejects_non_write_receipt():
         })
 
 
+def test_workspace_mutation_claim_requires_receipt_at_completion_gate():
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="repair",
+        agent_id="coder-1",
+        task="Repair the defect",
+    )
+
+    with pytest.raises(ToolReceiptError, match="Workspace mutations require"):
+        state.hydrate_tool_receipts(
+            {
+                "mutation": {
+                    "path": "src/store.rs",
+                    "sha256": "invented",
+                    "bytes": 5,
+                    "executable": False,
+                }
+            },
+            require_command_receipts=True,
+        )
+
+
 def test_post_normalization_hydrator_rejects_fabricated_mutation():
     with pytest.raises(ToolReceiptError, match="Unknown tool receipt"):
         hydrate_receipt_evidence(
@@ -679,6 +702,30 @@ def test_artifact_reference_hydrator_preserves_exact_dependency_evidence():
     assert hydrated["findings"][0]["patch"] == dependencies["repair"]
     assert hydrated["findings"][0]["patch"]["mutations"] == [mutation]
     assert hydrated["findings"][0]["verification"] == dependencies["verify"]
+
+
+@pytest.mark.asyncio
+async def test_coder_hydrates_artifact_reference_before_schema_validation(kernel):
+    class Output(BaseModel):
+        patch: dict[str, str]
+
+    coder = kernel._create_subagent("coder", "test-coder")
+    coder.sandbox = SimpleNamespace(execute=AsyncMock(return_value={
+        "status": "success",
+        "output": {
+            "data": {"patch": {"artifact_ref": {"step_id": "repair"}}}
+        },
+    }))
+    coder._run_context = {
+        "output_schema": Output,
+        "artifact_reference_paths": (("patch",),),
+        "previous_step_results": {"repair": {"status": "applied"}},
+    }
+
+    result = await coder._tool_execute_code(code="result = {}")
+
+    assert result["status"] == "success"
+    assert result["output"]["data"]["patch"] == {"status": "applied"}
 
 
 def test_artifact_reference_hydrator_rejects_copied_required_artifact():

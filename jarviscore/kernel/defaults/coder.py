@@ -1256,6 +1256,47 @@ atom.
                     result["error"] = output.get("error", output.get("reason", "Semantic failure: Task executed but returned a failure status."))
                     result["semantic_success"] = False
 
+        # Resolve exact dependency artifacts before product schema validation.
+        required_reference_paths = tuple(
+            (getattr(self, "_run_context", {}) or {}).get(
+                "artifact_reference_paths", ()
+            )
+        )
+        if result.get("status") == "success" and required_reference_paths:
+            from jarviscore.kernel.state import (
+                ArtifactReferenceError,
+                hydrate_artifact_references,
+            )
+
+            try:
+                output_data = result.get("output", {})
+                if isinstance(output_data, dict) and "data" in output_data:
+                    output_data = dict(output_data)
+                    output_data["data"] = hydrate_artifact_references(
+                        output_data["data"],
+                        previous_step_results=(
+                            (getattr(self, "_run_context", {}) or {}).get(
+                                "previous_step_results", {}
+                            )
+                        ),
+                        required_reference_paths=required_reference_paths,
+                    )
+                    result["output"] = output_data
+                else:
+                    result["output"] = hydrate_artifact_references(
+                        output_data,
+                        previous_step_results=(
+                            (getattr(self, "_run_context", {}) or {}).get(
+                                "previous_step_results", {}
+                            )
+                        ),
+                        required_reference_paths=required_reference_paths,
+                    )
+            except ArtifactReferenceError as exc:
+                result["status"] = "failure"
+                result["error"] = f"Artifact composition failed: {exc}"
+                result["semantic_success"] = False
+
         # Pydantic schema validation
         output_schema = (getattr(self, '_run_context', {}) or {}).get("output_schema")
         if result.get("status") == "success" and output_schema:

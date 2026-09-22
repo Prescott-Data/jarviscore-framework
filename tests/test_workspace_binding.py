@@ -50,6 +50,24 @@ async def test_snapshot_round_trips_through_blob_storage(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_snapshot_load_rejects_manifest_path_redirection(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    snapshot = await store.capture(
+        SourceRef(provider="archive", locator="fixture", revision="main"),
+        "commit-1",
+        {"README.md": "hello\n"},
+    )
+    raw = await blobs.read(snapshot.manifest_blob_path)
+    data = json.loads(raw)
+    data["manifest_blob_path"] = "source_snapshots/manifests/redirected.json"
+    await blobs.save(snapshot.manifest_blob_path, json.dumps(data))
+
+    with pytest.raises(ValueError, match="redirected"):
+        await store.load(snapshot.manifest_blob_path)
+
+
+@pytest.mark.asyncio
 async def test_binding_materializes_snapshot_and_exports_copy_on_write_delta(tmp_path):
     blobs = LocalBlobStorage(str(tmp_path / "blobs"))
     store = BlobSnapshotStore(blobs)

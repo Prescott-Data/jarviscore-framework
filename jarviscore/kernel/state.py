@@ -311,16 +311,16 @@ class KernelState(BaseModel):
                 field in candidate
                 for field in ("exit_code", "stdout", "stderr", "duration_ms", "observed_at")
             )
+            mutation_claim = "path" in candidate and any(
+                field in candidate
+                for field in ("sha256", "bytes", "executable")
+            )
             if receipt_id:
                 if workflow_prefix and not receipt_id.startswith(workflow_prefix):
                     raise ToolReceiptError(
                         f"Tool receipt {receipt_id!r} belongs to another workflow"
                     )
                 receipt = receipts.get(receipt_id)
-                mutation_claim = "path" in candidate and any(
-                    field in candidate
-                    for field in ("sha256", "bytes", "executable")
-                )
                 if mutation_claim and receipt is not None:
                     evidence: BaseModel = receipt.workspace_mutation()
                 elif mutation_claim:
@@ -341,6 +341,11 @@ class KernelState(BaseModel):
             if require_command_receipts and command_claim:
                 raise ToolReceiptError(
                     "Command observations require a tool_receipt_id from workspace_run"
+                )
+            if require_command_receipts and mutation_claim:
+                raise ToolReceiptError(
+                    "Workspace mutations require a tool_receipt_id from "
+                    "workspace_write or workspace_edit"
                 )
             return {key: hydrate(item) for key, item in candidate.items()}
 
