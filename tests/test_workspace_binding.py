@@ -8,6 +8,7 @@ from jarviscore.execution.workspace import (
     BlobSnapshotStore,
     SandboxBinding,
     SourceRef,
+    WorkspaceDelta,
     WorkspaceDeltaConflict,
     cleanup_stale_bindings,
 )
@@ -128,6 +129,68 @@ async def test_snapshot_rejects_case_insensitive_host_path_collisions(
             "commit-1",
             files,
         )
+
+
+@pytest.mark.asyncio
+async def test_snapshot_validation_rejects_persisted_casefold_collision(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    source = SourceRef(provider="archive", locator="fixture", revision="main")
+    snapshot = await store.capture(source, "commit-1", {"Foo.txt": "content"})
+    duplicate = replace(snapshot.entries[0], path="foo.txt")
+    entries = (*snapshot.entries, duplicate)
+    identity = json.dumps(
+        {
+            "source": {"provider": source.provider, "locator": source.locator, "revision": source.revision},
+            "resolved_revision": snapshot.resolved_revision,
+            "entries": [entry.__dict__ for entry in entries],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    forged = replace(
+        snapshot,
+        snapshot_id=__import__("hashlib").sha256(identity.encode()).hexdigest(),
+        entries=entries,
+        manifest_blob_path=(
+            f"source_snapshots/manifests/"
+            f"{__import__('hashlib').sha256(identity.encode()).hexdigest()}.json"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Duplicate workspace path"):
+        await store.validate(forged)
+
+
+@pytest.mark.asyncio
+async def test_delta_rejects_casefold_collision_with_snapshot(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    snapshot = await store.capture(
+        SourceRef(provider="archive", locator="fixture", revision="main"),
+        "commit-1",
+        {"Foo.txt": "before"},
+    )
+    entry = replace(snapshot.entries[0], path="foo.txt")
+    provisional = WorkspaceDelta(
+        snapshot_id=snapshot.snapshot_id,
+        added=(entry,),
+        modified=(),
+        deleted=(),
+        manifest_blob_path="",
+    )
+    delta_id = store._delta_id(provisional)
+    delta = replace(
+        provisional,
+        delta_id=delta_id,
+        manifest_blob_path=(
+            f"workflows/wf-1/workspace_deltas/step-1/manifests/{delta_id}.json"
+        ),
+    )
+
+    async with SandboxBinding(store, snapshot) as target:
+        with pytest.raises(ValueError, match="collides with snapshot"):
+            await target.apply_delta(delta)
 
 
 @pytest.mark.asyncio

@@ -342,7 +342,7 @@ class BashExecutor:
                 if os.name == "posix":
                     os.killpg(proc.pid, signal.SIGKILL)
                 else:
-                    proc.kill()
+                    self._terminate_process_tree(proc)
             except ProcessLookupError:
                 # The command exited between the timeout and termination attempt.
                 pass
@@ -363,6 +363,21 @@ class BashExecutor:
                 "stderr": str(e),
                 "returncode": -1,
             }
+
+    @staticmethod
+    def _terminate_process_tree(proc) -> None:
+        """Terminate a Windows command shell and every descendant process."""
+        try:
+            terminator = subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if terminator.returncode != 0 and proc.poll() is None:
+                proc.kill()
+        except OSError:
+            proc.kill()
 
 
 # ─────────────────────────────────────────────────────────────────

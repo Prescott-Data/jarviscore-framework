@@ -33,6 +33,31 @@ def _bytes(content: str | bytes) -> bytes:
     return content.encode("utf-8") if isinstance(content, str) else content
 
 
+def _register_workspace_path(
+    raw_path: str,
+    seen_paths: dict[str, str],
+    *,
+    label: str = "workspace",
+) -> str:
+    path = _safe_relative_path(raw_path).as_posix()
+    folded_path = path.casefold()
+    if folded_path in seen_paths:
+        raise ValueError(f"Duplicate {label} path: {path!r}")
+    parents = {
+        parent.as_posix().casefold()
+        for parent in PurePosixPath(path).parents
+        if parent != PurePosixPath(".")
+    }
+    if any(parent in seen_paths for parent in parents):
+        raise ValueError(f"{label.title()} path conflicts with a file parent: {path!r}")
+    if any(existing.startswith(f"{folded_path}/") for existing in seen_paths):
+        raise ValueError(
+            f"{label.title()} file conflicts with an existing directory: {path!r}"
+        )
+    seen_paths[folded_path] = path
+    return path
+
+
 @dataclass(frozen=True)
 class SourceRef:
     """Identity of source material before it is projected into a workspace."""
@@ -141,20 +166,7 @@ class BlobSnapshotStore:
         entries = []
         seen_paths: dict[str, str] = {}
         async for raw_path, content, executable in files:
-            path = _safe_relative_path(raw_path).as_posix()
-            folded_path = path.casefold()
-            if folded_path in seen_paths:
-                raise ValueError(f"Duplicate workspace path: {path!r}")
-            parents = {
-                parent.as_posix().casefold()
-                for parent in PurePosixPath(path).parents
-                if parent != PurePosixPath(".")
-            }
-            if any(parent in seen_paths for parent in parents):
-                raise ValueError(f"Workspace path conflicts with a file parent: {path!r}")
-            if any(existing.startswith(f"{folded_path}/") for existing in seen_paths):
-                raise ValueError(f"Workspace file conflicts with an existing directory: {path!r}")
-            seen_paths[folded_path] = path
+            path = _register_workspace_path(raw_path, seen_paths)
             payload = _bytes(content)
             digest = hashlib.sha256(payload).hexdigest()
             blob_path = f"{self.prefix}/objects/{digest}"
@@ -245,17 +257,20 @@ class BlobSnapshotStore:
             and delta.manifest_blob_path != requested_manifest_path
         ):
             raise ValueError("Workspace delta manifest redirected to another path")
-        seen_paths: set[str] = set()
+        seen_paths: dict[str, str] = {}
         for entry in (*delta.added, *delta.modified):
-            path = _safe_relative_path(entry.path).as_posix()
-            if path in seen_paths:
-                raise ValueError(f"Duplicate workspace delta path: {path!r}")
-            seen_paths.add(path)
+            _register_workspace_path(
+                entry.path, seen_paths, label="workspace delta"
+            )
         for raw_path in delta.deleted:
-            path = _safe_relative_path(raw_path).as_posix()
-            if path in seen_paths:
-                raise ValueError(f"Conflicting workspace delta path: {path!r}")
-            seen_paths.add(path)
+            try:
+                _register_workspace_path(
+                    raw_path, seen_paths, label="workspace delta"
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Conflicting workspace delta path: {raw_path!r}"
+                ) from exc
 
     async def validate(self, snapshot: SourceSnapshot) -> None:
         """Verify every persisted blob against the immutable manifest."""
@@ -270,12 +285,9 @@ class BlobSnapshotStore:
         expected_manifest = f"{self.prefix}/manifests/{expected_id}.json"
         if snapshot.manifest_blob_path != expected_manifest:
             raise ValueError("Snapshot manifest path does not match its identity")
-        seen_paths: set[str] = set()
+        seen_paths: dict[str, str] = {}
         for entry in snapshot.entries:
-            path = _safe_relative_path(entry.path).as_posix()
-            if path in seen_paths:
-                raise ValueError(f"Duplicate workspace path: {path!r}")
-            seen_paths.add(path)
+            _register_workspace_path(entry.path, seen_paths)
             payload = await self.blob_storage.read(entry.blob_path)
             if payload is None:
                 raise FileNotFoundError(entry.blob_path)
@@ -373,6 +385,34 @@ class SandboxBinding:
         self.store.validate_delta(delta)
         if delta.snapshot_id != self.snapshot.snapshot_id:
             raise ValueError("Workspace delta belongs to a different source snapshot")
+        baseline_paths = {entry.path.casefold(): entry.path for entry in self.snapshot.entries}
+        for raw_path in delta.deleted:
+            baseline_path = baseline_paths.get(raw_path.casefold())
+            if baseline_path is not None and baseline_path != raw_path:
+                raise ValueError(
+                    f"Workspace delta path collides with snapshot path: {raw_path!r}"
+                )
+        for entry in (*delta.added, *delta.modified):
+            path = entry.path
+            folded_path = path.casefold()
+            baseline_path = baseline_paths.get(folded_path)
+            if baseline_path is not None and baseline_path != path:
+                raise ValueError(
+                    f"Workspace delta path collides with snapshot path: {path!r}"
+                )
+            parents = {
+                parent.as_posix().casefold()
+                for parent in PurePosixPath(path).parents
+                if parent != PurePosixPath(".")
+            }
+            if any(parent in baseline_paths for parent in parents):
+                raise ValueError(
+                    f"Workspace delta path conflicts with a snapshot file: {path!r}"
+                )
+            if any(existing.startswith(f"{folded_path}/") for existing in baseline_paths):
+                raise ValueError(
+                    f"Workspace delta file conflicts with a snapshot directory: {path!r}"
+                )
         for path in delta.deleted:
             target = self.workspace.joinpath(*_safe_relative_path(path).parts)
             if target.exists():
@@ -392,22 +432,24 @@ class SandboxBinding:
 
     async def apply_deltas(self, deltas: list[WorkspaceDelta]) -> None:
         """Apply compatible dependency deltas and reject ambiguous merges."""
-        decisions: dict[str, tuple[str, str | None]] = {}
+        decisions: dict[str, tuple[str, str, str | None]] = {}
         for delta in deltas:
             if delta.snapshot_id != self.snapshot.snapshot_id:
                 raise ValueError("Workspace delta belongs to a different source snapshot")
             for path in delta.deleted:
-                decision = ("deleted", None)
-                if path in decisions and decisions[path] != decision:
+                key = path.casefold()
+                decision = (path, "deleted", None)
+                if key in decisions and decisions[key] != decision:
                     raise WorkspaceDeltaConflict(f"Conflicting workspace deltas for {path!r}")
-                decisions[path] = decision
+                decisions[key] = decision
             for entry in (*delta.added, *delta.modified):
-                decision = ("content", entry.sha256)
-                if entry.path in decisions and decisions[entry.path] != decision:
+                key = entry.path.casefold()
+                decision = (entry.path, "content", entry.sha256)
+                if key in decisions and decisions[key] != decision:
                     raise WorkspaceDeltaConflict(
                         f"Conflicting workspace deltas for {entry.path!r}"
                     )
-                decisions[entry.path] = decision
+                decisions[key] = decision
         for delta in deltas:
             await self.apply_delta(delta)
 
