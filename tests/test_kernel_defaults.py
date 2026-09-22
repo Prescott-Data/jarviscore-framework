@@ -9,7 +9,11 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-from jarviscore.kernel.defaults import CoderSubAgent, ResearcherSubAgent, CommunicatorSubAgent
+from jarviscore.kernel.defaults import (
+    CoderSubAgent,
+    CommunicatorSubAgent,
+    ResearcherSubAgent,
+)
 from jarviscore.kernel.defaults.coder import classify_access_failure
 from jarviscore.testing import MockLLMClient, MockSandboxExecutor
 
@@ -95,6 +99,109 @@ class TestCoderSubAgent:
             task="Continue durable work",
             context={"workflow_id": "wf-long", "step_id": "step-1"},
             max_turns=1,
+            memory=memory,
+        )
+
+        assert result.status == "epoch_exhausted"
+        assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+        assert result.metadata["checkpointed"] is True
+        memory.save_checkpoint.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_oversized_request_fails_instead_of_restarting_forever(self):
+        from jarviscore.orchestration.budget import WorkflowBudgetExceeded
+
+        class OversizedLLM:
+            async def generate(self, **kwargs):
+                raise WorkflowBudgetExceeded(
+                    "request exceeds epoch capacity",
+                    recoverable=False,
+                )
+
+        memory = AsyncMock()
+        memory.load_checkpoint.return_value = None
+        coder = CoderSubAgent(agent_id="c1", llm_client=OversizedLLM())
+
+        result = await coder.run(
+            task="Return a bounded final response",
+            context={"workflow_id": "wf-long", "step_id": "step-1"},
+            max_turns=1,
+            memory=memory,
+        )
+
+        assert result.status == "failure"
+        assert result.metadata["typed_outcome"] == "CONTEXT_EXCEEDS_EPOCH_CAPACITY"
+
+    @pytest.mark.asyncio
+    async def test_landing_turn_cannot_bypass_completion_gate(self):
+        class LandingLLM:
+            async def generate(self, **kwargs):
+                return {
+                    "content": 'DONE: Finished\nRESULT: {"status": "incomplete"}',
+                    "tokens": {"input": 10, "output": 5, "total": 15},
+                }
+
+        class EvidenceCoder(CoderSubAgent):
+            def _can_complete(self, state, parsed):
+                from jarviscore.kernel.gate import GateEvidence
+
+                return False, GateEvidence(
+                    check="verified_action",
+                    requirement="execute one repository command",
+                    observed={"commands": 0},
+                )
+
+        memory = AsyncMock()
+        coder = EvidenceCoder(agent_id="c1", llm_client=LandingLLM())
+        state = __import__(
+            "jarviscore.kernel.state", fromlist=["KernelState"]
+        ).KernelState(
+            task="Verify the repository",
+            workflow_id="wf-landing",
+            step_id="step-1",
+            agent_id="c1",
+        )
+
+        result = await coder._landing_turn(
+            state,
+            "system",
+            [{"assistant": "I should run a test", "observation": "No test ran"}],
+            None,
+            {"input": 0, "output": 0, "total": 0},
+            0.0,
+            "action(108000/108000)",
+        )
+
+        assert result is None
+        assert state.status != "completed"
+        assert "verified_action" in state.last_error
+        memory.save_checkpoint.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_actionable_lease_exhaustion_checkpoints_for_continuation(self):
+        from jarviscore.kernel.cognition import AgentCognitionManager
+        from jarviscore.kernel.lease import ExecutionLease
+
+        class ContinueLLM:
+            async def generate(self, **kwargs):
+                return {
+                    "content": "THOUGHT: I still need to inspect the repository",
+                    "tokens": {"input": 4, "output": 4, "total": 8},
+                }
+
+        lease = ExecutionLease.for_role("coder")
+        lease.action_budget = 1
+        lease.action_used = 1
+        cognition = AgentCognitionManager(lease=lease, agent_id="c1")
+        memory = AsyncMock()
+        memory.load_checkpoint.return_value = None
+        coder = CoderSubAgent(agent_id="c1", llm_client=ContinueLLM())
+
+        result = await coder.run(
+            task="Inspect the repository",
+            context={"workflow_id": "wf-continue", "step_id": "step-1"},
+            max_turns=2,
+            cognition=cognition,
             memory=memory,
         )
 

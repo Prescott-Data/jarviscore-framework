@@ -7,7 +7,6 @@ workflow DAG, episodic ledger, checkpoints, trace events, and HITL requests.
 
 import json
 import logging
-import os
 import time
 from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
@@ -69,6 +68,10 @@ class RedisContextStore:
             ))
 
         self._ttl_seconds = getattr(settings, "redis_context_ttl_days", 7) * 86400
+        self._max_step_output_bytes = max(
+            1,
+            int(getattr(settings, "redis_max_step_output_bytes", 10 * 1024 * 1024)),
+        )
         self.enabled = True
 
         try:
@@ -97,16 +100,38 @@ class RedisContextStore:
     # Step Outputs
     # ------------------------------------------------------------------
 
-    # Env-tunable size caps (bytes of serialised JSON).
-    # Outputs above STEP_OUTPUT_MAX_BYTES are stored as a truncated preview
-    # with an _overflow flag so downstream steps know to retrieve the full
-    # result from blob storage rather than expect it inline.
-    _STEP_OUTPUT_MAX_BYTES: int = int(
-        os.getenv("STEP_OUTPUT_MAX_BYTES", str(200_000))
-    )  # 200 KB default
-    _STEP_OUTPUT_PREVIEW_BYTES: int = int(
-        os.getenv("STEP_OUTPUT_PREVIEW_BYTES", str(20_000))
-    )  # 20 KB preview
+    def _bounded_step_output(self, output: Any) -> tuple[Any, Optional[str], bool]:
+        if output is None:
+            return output, None, False
+        encoder = json.JSONEncoder(default=str)
+        chunks = []
+        byte_count = 0
+        try:
+            for chunk in encoder.iterencode(output):
+                chunks.append(chunk)
+                byte_count += len(chunk.encode("utf-8"))
+                if byte_count > self._max_step_output_bytes:
+                    failure = {
+                        "status": "failure",
+                        "typed_outcome": "STEP_OUTPUT_TOO_LARGE",
+                        "error": (
+                            "Step output exceeded the durable Redis limit of "
+                            f"{self._max_step_output_bytes} bytes"
+                        ),
+                        "observed_bytes_at_least": byte_count,
+                    }
+                    return failure, json.dumps(failure), True
+        except Exception as exc:
+            failure = {
+                "status": "failure",
+                "typed_outcome": "STEP_OUTPUT_SERIALIZATION_FAILED",
+                "error": (
+                    "Step output could not be serialized for durable persistence: "
+                    f"{type(exc).__name__}"
+                ),
+            }
+            return failure, json.dumps(failure), True
+        return output, "".join(chunks), False
 
     def save_step_output(self, workflow_id: str, step_id: str,
                          output: Any = None, summary: Optional[str] = None,
@@ -119,11 +144,8 @@ class RedisContextStore:
         re-execution) will not overwrite it. This prevents the last-write-wins
         race condition that poisons downstream context with stale error data.
 
-        Payload size guard: outputs larger than STEP_OUTPUT_MAX_BYTES are
-        stored as a truncated preview with an _overflow marker. The full
-        payload should be written to blob storage by the caller; downstream
-        steps receive the preview in their context window and can retrieve the
-        full artifact via blob storage if they need the complete data.
+        Durable outputs remain lossless. ContextManager, not persistence,
+        controls how much dependency evidence enters an LLM prompt.
         """
         key = f"step_output:{workflow_id}:{step_id}"
 
@@ -162,35 +184,16 @@ class RedisContextStore:
                     exc,
                 )
 
-        # ── Payload size guard ───────────────────────────────────────────────
-        # Serialise first so we know the exact byte cost before pushing to Redis.
-        try:
-            output_serialised = json.dumps(output) if output is not None else None
-        except Exception:
-            output_serialised = str(output)
-
-        output_to_store = output_serialised
-        if output_serialised and len(output_serialised) > self._STEP_OUTPUT_MAX_BYTES:
-            preview = output_serialised[: self._STEP_OUTPUT_PREVIEW_BYTES]
-            output_to_store = json.dumps({
-                "_overflow": True,
-                "_size_bytes": len(output_serialised),
-                "_preview": preview,
-                "_note": (
-                    "Output exceeded STEP_OUTPUT_MAX_BYTES. "
-                    "Retrieve full result from blob storage using "
-                    f"workflow_id={workflow_id}, step_id={step_id}."
-                ),
-            })
-            logger.warning(
-                "Step output for %s:%s exceeds %d bytes (%d bytes). "
-                "Storing preview only — write full output to blob storage.",
-                workflow_id, step_id,
-                self._STEP_OUTPUT_MAX_BYTES, len(output_serialised),
+        _persisted_output, output_serialised, exceeded = self._bounded_step_output(output)
+        if exceeded:
+            logger.error(
+                "Step output exceeded Redis persistence limit for %s:%s",
+                workflow_id,
+                step_id,
             )
 
         data = {
-            "output": output_to_store,
+            "output": output_serialised,
             "summary": summary or "",
             "context_vars": json.dumps(context_vars or {}),
             "timestamp": time.time(),
@@ -855,7 +858,6 @@ class RedisContextStore:
         reservation_id: str,
     ) -> bool:
         """Release capacity when dispatch fails before reporting usage."""
-        budget_key = f"workflow_budget:{workflow_id}"
         epoch_key = f"workflow_budget_epoch:{workflow_id}:{epoch_id}"
         reservations_key = f"workflow_budget_reservations:{workflow_id}:{epoch_id}"
         pipe = self._redis.pipeline()
@@ -1054,6 +1056,21 @@ class RedisContextStore:
         except (json.JSONDecodeError, TypeError):
             return None
 
+    def get_workflow_reconciliation_history(
+        self, workflow_id: str
+    ) -> List[Dict[str, Any]]:
+        """Return durable reconciliation decisions and amendment transitions."""
+        relevant = {
+            "semantic_reconciliation_requested",
+            "semantic_reconciliation_settled",
+            "dag_amended",
+        }
+        return [
+            entry
+            for entry in self.get_ledger_full(workflow_id)
+            if entry.get("event") in relevant
+        ]
+
     def unregister_active_workflow(self, workflow_id: str) -> None:
         self._redis.srem("jarviscore:active_workflows", workflow_id)
 
@@ -1226,6 +1243,7 @@ class RedisContextStore:
             current_step_ids = [
                 str(step.get("id") or step.get("step_id"))
                 for step in steps
+                if step.get("effect") != "final_response"
                 if obligation_id in map(str, step.get("covers", []))
             ]
             projection[obligation_id] = {
@@ -1386,10 +1404,21 @@ class RedisContextStore:
                         "attempt_interpretations": {},
                     }
                 superseded_ids = []
+                replaces_final_response = any(
+                    step.get("effect") == "final_response" for step in proposed
+                )
                 for step_id, record in live.items():
                     if (
                         record.get("status") in {"pending", "waiting", "blocked"}
-                        and covered_by_delta.intersection(map(str, record.get("covers", [])))
+                        and (
+                            covered_by_delta.intersection(
+                                map(str, record.get("covers", []))
+                            )
+                            or (
+                                replaces_final_response
+                                and record.get("effect") == "final_response"
+                            )
+                        )
                     ):
                         record = {
                             **record,
@@ -1600,7 +1629,27 @@ class RedisContextStore:
             str(dependency_id): json.loads(value)
             for dependency_id, value in self._redis.hgetall(key).items()
         }
-        return self._dependencies_authorize(step_data, graph)
+        if not self._dependencies_authorize(step_data, graph):
+            return False
+        if str(step_data.get("effect") or "") != "final_response":
+            return True
+        revision = int(step_data.get("plan_revision", 1))
+        projection = self.get_obligation_projection(workflow_id)
+        semantic_gaps = self._semantic_reconciliation_gaps(projection)
+        return not semantic_gaps or self.get_workflow_reconciliation_settlement(
+            workflow_id, revision
+        ) is not None
+
+    @staticmethod
+    def _semantic_reconciliation_gaps(
+        projection: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        return [
+            obligation
+            for obligation in projection.values()
+            if obligation.get("state") == "unresolved"
+            and obligation.get("attempt_interpretations")
+        ]
 
     @staticmethod
     def _dependencies_authorize(step: Dict, graph: Dict[str, Dict]) -> bool:
@@ -1609,7 +1658,8 @@ class RedisContextStore:
             return True
         records = [graph.get(dependency_id, {}) for dependency_id in dependencies]
         effect = str(step.get("effect") or "read")
-        if effect == "final_response":
+        dependency_policy = str(step.get("dependency_policy") or "satisfied")
+        if effect == "final_response" or dependency_policy == "terminal_evidence":
             return all(
                 record.get("status") in {
                     "completed", "failed", "waiting", "blocked", "cancelled"
@@ -1636,7 +1686,8 @@ class RedisContextStore:
         }
         step = graph.get(str(step_id), {})
         effect = str(step.get("effect") or "read")
-        if effect == "final_response":
+        dependency_policy = str(step.get("dependency_policy") or "satisfied")
+        if effect == "final_response" or dependency_policy == "terminal_evidence":
             return {}
         blockers = {}
         for dependency_id in map(str, step.get("depends_on", [])):
@@ -1644,7 +1695,6 @@ class RedisContextStore:
             status = dependency.get("status")
             if status in {"failed", "waiting", "blocked", "cancelled"}:
                 blockers[dependency_id] = f"execution:{status}"
-                continue
         return blockers
 
     def block_step(
@@ -1712,11 +1762,12 @@ class RedisContextStore:
         cancelled_key = f"workflow_cancelled:{workflow_id}"
         lease_seconds = max(1, int(lease_seconds))
         graph_key = f"workflow_graph:{workflow_id}"
+        projection_key = f"workflow_obligations:{workflow_id}"
         owner_id = agent_id.split(":", 1)[0]
         pipe = self._redis.pipeline()
         while True:
             try:
-                pipe.watch(lock_key, graph_key, cancelled_key)
+                pipe.watch(lock_key, graph_key, projection_key, cancelled_key)
                 if pipe.exists(cancelled_key) or pipe.exists(lock_key):
                     pipe.unwatch()
                     return False
@@ -1735,6 +1786,20 @@ class RedisContextStore:
                 if not self._dependencies_authorize(data, graph):
                     pipe.unwatch()
                     return False
+                if str(data.get("effect") or "") == "final_response":
+                    revision = int(data.get("plan_revision", 1))
+                    settlement_key = (
+                        f"workflow_reconciliation_settlement:{workflow_id}:{revision}"
+                    )
+                    pipe.watch(settlement_key)
+                    raw_projection = pipe.get(projection_key)
+                    projection = json.loads(raw_projection) if raw_projection else {}
+                    if (
+                        self._semantic_reconciliation_gaps(projection)
+                        and not pipe.exists(settlement_key)
+                    ):
+                        pipe.unwatch()
+                        return False
                 now = time.time()
                 data.update({
                     "status": "in_progress",
@@ -1888,24 +1953,14 @@ class RedisContextStore:
         graph_key = f"workflow_graph:{workflow_id}"
         output_key = f"step_output:{workflow_id}:{step_id}"
         projection_key = f"workflow_obligations:{workflow_id}"
+        output, serialized, output_exceeded = self._bounded_step_output(output)
         result_status = output.get("status") if isinstance(output, dict) else None
-        terminal = status or terminal_step_status(result_status)
+        terminal = (
+            "failed" if output_exceeded
+            else status or terminal_step_status(result_status)
+        )
         if terminal not in {"completed", "failed", "waiting", "blocked"}:
             raise ValueError(f"Invalid terminal step status: {terminal}")
-        try:
-            serialized = json.dumps(output) if output is not None else None
-        except Exception:
-            serialized = str(output)
-        if serialized and len(serialized) > self._STEP_OUTPUT_MAX_BYTES:
-            serialized = json.dumps({
-                "_overflow": True,
-                "_size_bytes": len(serialized),
-                "_preview": serialized[: self._STEP_OUTPUT_PREVIEW_BYTES],
-                "_note": (
-                    "Output exceeded STEP_OUTPUT_MAX_BYTES. Retrieve full result "
-                    f"from blob storage using workflow_id={workflow_id}, step_id={step_id}."
-                ),
-            })
         pipe = self._redis.pipeline()
         while True:
             try:
@@ -1940,13 +1995,18 @@ class RedisContextStore:
                     satisfied = set(map(str, interpretation.get(
                         "satisfied_requirements", []
                     ))) if isinstance(interpretation, dict) else set()
+                    not_applicable = set(map(str, interpretation.get(
+                        "not_applicable_requirements", []
+                    ))) if isinstance(interpretation, dict) else set()
                     unmet = set(map(str, interpretation.get(
                         "unmet_requirements", []
                     ))) if isinstance(interpretation, dict) else set()
                     verdict = str(interpretation.get("verdict") or "") if isinstance(
                         interpretation, dict
                     ) else ""
-                    if obligation_id in satisfied or verdict == "satisfied":
+                    if obligation_id in not_applicable:
+                        attempt_state = "not_applicable"
+                    elif obligation_id in satisfied or verdict == "satisfied":
                         attempt_state = "satisfied"
                     elif terminal == "waiting":
                         attempt_state = "pending"
@@ -1967,13 +2027,21 @@ class RedisContextStore:
                         attempt_interpretations[step_id] = interpretation
                     states = list(attempt_states.values())
                     state = (
-                        "satisfied" if "satisfied" in states
+                        "satisfied"
+                        if "satisfied" in states
+                        or (states and all(item == "not_applicable" for item in states))
                         else "pending" if "pending" in states
                         else "unresolved"
                     )
                     projection[obligation_id] = {
                         **record,
                         "state": state,
+                        "resolution": (
+                            "not_applicable"
+                            if states and all(item == "not_applicable" for item in states)
+                            else "satisfied" if state == "satisfied"
+                            else state
+                        ),
                         "attempt_states": attempt_states,
                         "attempt_interpretations": attempt_interpretations,
                     }
@@ -2014,6 +2082,7 @@ class RedisContextStore:
         claim_id: str,
         *,
         resume_agent_id: str,
+        continuation_workspace_delta: Optional[Dict] = None,
     ) -> bool:
         """Release an exhausted epoch without terminalizing its durable step."""
         lock_key = f"step_lock:{workflow_id}:{step_id}"
@@ -2042,6 +2111,9 @@ class RedisContextStore:
                     "updated_at": now,
                     "execution_epochs": int(data.get("execution_epochs") or 1) + 1,
                 })
+                data.pop("continuation_workspace_delta", None)
+                if continuation_workspace_delta:
+                    data["continuation_workspace_delta"] = continuation_workspace_delta
                 data.pop("claim_expires_at", None)
                 pipe.multi()
                 pipe.hset(graph_key, mapping={step_id: json.dumps(data, default=str)})

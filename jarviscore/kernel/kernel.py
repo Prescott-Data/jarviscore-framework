@@ -31,7 +31,6 @@ from jarviscore.kernel.lease import ExecutionLease, ROLE_LEASE_PROFILES
 from jarviscore.orchestration.envelopes import ExecutionBudget, neutral_context
 from jarviscore.kernel.cognition import AgentCognitionManager
 from jarviscore.context.fidelity import Record, select_whole
-from jarviscore.kernel.state import KernelState
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
 from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 from jarviscore.promo import PROMO_MODEL
@@ -695,6 +694,11 @@ class Kernel:
         explicit_role = None
         if context:
             explicit_role = context.get("_agent_default_kernel_role")
+            execution_contract = context.get("execution_contract") or {}
+            if isinstance(execution_contract, dict) and execution_contract.get(
+                "kernel_role"
+            ):
+                explicit_role = execution_contract["kernel_role"]
         if agent_default_role and not use_default_role_as_fallback:
             explicit_role = agent_default_role
 
@@ -1353,6 +1357,7 @@ class Kernel:
                         "dispatches": dispatches,
                         "elapsed_ms": (time.time() - start_time) * 1000,
                         "distilled_facts": output.metadata.get("distilled_facts", {}),
+                        "tool_receipts": output.metadata.get("tool_receipts", []),
                     },
                 )
 

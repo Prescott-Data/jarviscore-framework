@@ -142,6 +142,35 @@ class TestP2PCapabilities:
     """Test P2P capability announcement"""
 
     @pytest.mark.asyncio
+    async def test_capability_announcement_preserves_contracts(self):
+        from jarviscore.p2p.coordinator import P2PCoordinator
+
+        class ArtifactAgent(CustomAgent):
+            role = "artifact_agent"
+            capabilities = ["artifact_work"]
+            capability_descriptions = {"artifact_work": "Produce typed evidence"}
+            capability_contracts = {
+                "artifact_work": {
+                    "effects": ["read"],
+                    "systems": [],
+                    "produces": "EvidenceRecord(id, observations)",
+                },
+            }
+
+        coordinator = P2PCoordinator([ArtifactAgent("artifact-agent")], {})
+        coordinator._started = True
+        coordinator._wait_for_zmq_connections = AsyncMock()
+        coordinator._broadcast_p2p_message = AsyncMock(return_value=1)
+
+        await coordinator.announce_capabilities()
+
+        payload = coordinator._broadcast_p2p_message.await_args.args[1]
+        announced = payload["agents"]["artifact-agent"]
+        assert announced["capability_contracts"]["artifact_work"]["produces"] == (
+            "EvidenceRecord(id, observations)"
+        )
+
+    @pytest.mark.asyncio
     async def test_capabilities_announced(self):
         """Test that agent capabilities are announced to mesh"""
         config = {

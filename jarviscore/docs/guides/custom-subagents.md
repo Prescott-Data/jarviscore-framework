@@ -162,6 +162,37 @@ The harness watches for attempts that carry no new information — the same chec
 
 A plain string is still accepted, and is passed through as a verdict with no observations behind it.
 
+## Product-owned Kernel roles
+
+An application can add a domain-specific Kernel role without replacing
+AutoAgent orchestration. Extend `Kernel`, construct only the additional role, and
+delegate every built-in role to `super()`:
+
+```python
+from jarviscore.kernel.kernel import Kernel
+
+
+class ProductKernel(Kernel):
+    def _create_subagent(self, role: str, agent_id: str):
+        if role == "domain_reasoner":
+            subagent = DomainReasoner(
+                agent_id=agent_id,
+                llm_client=self.llm_client,
+                redis_store=self.redis_store,
+                blob_storage=self.blob_storage,
+            )
+            self._attach_mesh_tools(subagent)
+            return subagent
+        return super()._create_subagent(role, agent_id)
+```
+
+The product's shared `AutoAgent` subclass overrides `_create_kernel()` and
+returns `ProductKernel` with the framework clients and current Mesh config. Add
+the role to `kernel_role_profiles` and `kernel_role_catalog`; capabilities select
+it through `execution_contract.kernel_role`. Product roles own domain completion
+semantics, while JarvisCore continues to own routing, leases, checkpoints,
+receipts, tools, and distributed execution.
+
 ### `_pre_execute_hook(tool_name, params, state) -> Optional[dict]`
 
 Called before each tool execution. Return `None` to allow, or a result dict to substitute (tool does not run):
@@ -216,13 +247,16 @@ class DatabaseAgent(AutoAgent):
     default_kernel_role = "database"
 
     def _create_kernel(self):
-        from jarviscore.execution.llm import UnifiedLLMClient
-        from jarviscore.config.settings import get_settings
-        settings = get_settings()
+        config = self._mesh.config if self._mesh else {}
         return ExtendedKernel(
-            llm_client=UnifiedLLMClient(settings),
+            llm_client=self.llm,
+            sandbox=self.sandbox,
+            code_registry=self.code_registry,
+            search_client=self.search,
+            redis_store=getattr(self, "_redis_store", None),
+            blob_storage=getattr(self, "_blob_storage", None),
             config={
-                **settings.model_dump(),
+                **config,
                 "kernel_role_profiles": {
                     "database": {
                         "thinking_budget": 80_000,
@@ -238,9 +272,7 @@ class DatabaseAgent(AutoAgent):
                     "database": "Read-only SQL/database analysis and query execution role.",
                 },
             },
-            db_dsn=settings.db_dsn,
-            redis_store=self._redis_store,
-            blob_storage=self._blob_storage,
+            db_dsn=config["database_dsn"],
         )
 ```
 
@@ -248,6 +280,11 @@ class DatabaseAgent(AutoAgent):
 selection, context budgets, and tracing must remain explicit. `kernel_role_catalog`
 is optional but recommended when the structured router may infer the custom role
 instead of receiving it through `default_kernel_role`.
+
+`AutoAgent.setup()` initializes the shared LLM, sandbox, registry, search client,
+and storage handles before calling `_create_kernel()`. An override should reuse
+those initialized components, as above, rather than constructing a parallel
+execution stack.
 
 ---
 

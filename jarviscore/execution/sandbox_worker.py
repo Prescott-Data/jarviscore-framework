@@ -88,7 +88,13 @@ async def execute(request: dict) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     rpc = ParentRPC(int(request["rpc_fd"]))
     mesh = MeshFacade(rpc)
-    bash = BashExecutor(workspace, timeout=int(request.get("bash_timeout", 120)))
+    bash = BashExecutor(
+        workspace,
+        timeout=int(request.get("bash_timeout", 120)),
+        allow_unsafe_local_execution=bool(
+            request.get("allow_unsafe_local_execution", False)
+        ),
+    )
     git = GitHelper(bash, workspace)
 
     def blob_path(filename: str) -> Path:

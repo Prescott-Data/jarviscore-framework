@@ -19,7 +19,7 @@ not interchangeable.
 | Boundary | Framework surface | What it controls |
 |---|---|---|
 | Agent identity | `role`, `capabilities`, `capability_descriptions` | How peers and planners discover the agent |
-| Capability authority | `capability_contracts` | Which effects and provider systems a capability may request |
+| Capability authority and artifact declaration | `capability_contracts` | Which effects and provider systems a capability may request, plus typed artifacts it produces or requires |
 | Task execution | `context["execution_contract"]` | Whether work is a direct response, one artifact, or normal agentic execution |
 | Kernel completion | `DONE` plus `RESULT` | Human-facing completion prose and machine-usable result data |
 | Output validation | `output_schema` or an application-owned validator | Whether structured output matches the required schema |
@@ -45,6 +45,9 @@ class RepositoryReviewer(AutoAgent):
         "code_review": {
             "effects": ["read", "propose"],
             "systems": ["github"],
+            "produces": "ReviewReport(findings, inspected_revision)",
+            "artifact_types": ["ReviewReport"],
+            "requires_artifact_types": ["RepositorySnapshot"],
         },
     }
 ```
@@ -52,7 +55,32 @@ class RepositoryReviewer(AutoAgent):
 Distributed planning uses this catalog to create executable steps. Peer
 execution derives `capability`, `effect`, and `systems` from the published step;
 caller context cannot grant itself that authority. Credentials and provider
-policy remain separate enforcement boundaries.
+policy remain separate enforcement boundaries. Optional `produces` metadata is
+human-readable. `artifact_types` and `requires_artifact_types` are stable type
+names: the compiler closes direct dependency edges to declared producers and
+rejects plans with no producer. They do not authorize effects or replace output
+validation.
+
+When a composed work product must retain an upstream artifact exactly, declare
+`artifact_reference_paths` on the `AutoAgent` subclass and return an
+`artifact_ref` at each declared path. JarvisCore resolves the reference from
+direct dependency outputs before product validation. A copied or reconstructed
+artifact at a required path fails closed.
+
+```python
+class ReliabilityStrategist(AutoAgent):
+    artifact_reference_paths = (
+        ("findings", "*", "candidate"),
+        ("findings", "*", "verification"),
+    )
+
+# In RESULT:
+{"artifact_ref": {"step_id": "verify", "path": ["reports", 0]}}
+```
+
+References can target an entire direct-dependency output or one nested path.
+They preserve the validated value exactly; they are not string interpolation or
+an instruction to the model to copy evidence.
 
 ## Execution contracts
 
@@ -122,6 +150,12 @@ This division is deliberate:
 - JarvisCore enforces execution, authority, lifecycle, and durable-state shapes.
 - The application enforces domain evidence and work-product validity.
 - The prompt explains how to reason toward a valid result.
+
+Framework-owned evidence models are the exception to application-owned domain
+truth. `CommandObservation` and `WorkspaceMutation` bind claims to immutable tool
+receipts. Applications cite `tool_receipt_id`; JarvisCore replaces all execution
+or mutation fields with authoritative runtime values and fails closed on missing,
+foreign, stale, or incompatible receipts. See [Execution and Evidence API](../reference/execution-api.md).
 
 ## Durable goal contracts
 

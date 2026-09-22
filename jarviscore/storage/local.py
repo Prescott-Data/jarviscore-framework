@@ -17,16 +17,24 @@ class LocalBlobStorage(BlobStorage):
     """Blob storage backed by local filesystem."""
 
     def __init__(self, base_path: str = "./blob_storage"):
-        self.base_path = os.path.abspath(base_path)
+        self.base_path = os.path.realpath(os.path.abspath(base_path))
         os.makedirs(self.base_path, exist_ok=True)
         logger.info(f"LocalBlobStorage initialized: {self.base_path}")
 
     def _full_path(self, path: str) -> str:
         """Resolve relative path to absolute, preventing directory traversal."""
-        full = os.path.normpath(os.path.join(self.base_path, path))
-        if not full.startswith(self.base_path):
+        full = os.path.realpath(os.path.join(self.base_path, path))
+        try:
+            contained = os.path.commonpath((self.base_path, full)) == self.base_path
+        except ValueError:
+            contained = False
+        if not contained:
             raise ValueError(f"Path traversal detected: {path}")
         return full
+
+    def has_local_path(self, path: str) -> bool:
+        """Whether this process can access a persisted local blob path."""
+        return os.path.isfile(self._full_path(path))
 
     async def save(self, path: str, content: Union[str, bytes]) -> str:
         full_path = self._full_path(path)
@@ -47,13 +55,12 @@ class LocalBlobStorage(BlobStorage):
         if not os.path.exists(full_path):
             return None
 
-        # Try text first, fall back to binary
+        with open(full_path, "rb") as f:
+            content = f.read()
         try:
-            with open(full_path, "r", encoding="utf-8") as f:
-                return f.read()
+            return content.decode("utf-8")
         except UnicodeDecodeError:
-            with open(full_path, "rb") as f:
-                return f.read()
+            return content
 
     async def list(self, prefix: str) -> List[str]:
         full_prefix = self._full_path(prefix)

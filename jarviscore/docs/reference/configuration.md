@@ -166,7 +166,17 @@ These values are `Mesh(config={...})` keys, not environment variables:
 | `mesh_planning_lease_seconds` | `300` | Initial planning and amendment lease duration |
 | `mesh_max_reconciliation_revisions` | `3` | Bounded automatic semantic revisions |
 | `mesh_response_capability` | `None` | Capability authorized for the optional final response |
-| `execution_budget` | framework defaults | Shared `max_seconds`, `max_steps`, `max_replans`, `max_tokens`, `max_peer_depth` and `peer_timeout_seconds` |
+| `mesh_planning_brief` | `None` | Trusted product mandate, operating method and negative-result evidence standard used for DAG draft, audit, repair and reconciliation; never used to extract source obligations |
+| `execution_budget` | framework defaults | Shared `max_seconds`, `max_steps`, `max_replans`, `max_tokens`, `max_epochs_per_step`, `max_peer_depth` and `peer_timeout_seconds` |
+| `workspace_required` | `false` | Fail before planning unless a trusted source adapter produces a verified snapshot |
+| `workspace_source_adapters` | `{}` | Provider names mapped to `SourceAdapter` implementations |
+| `workspace_source_catalog` | built-in provider descriptions | Trusted provider descriptions used to resolve explicit source identity from a goal |
+| `workspace_source_resolver` | planning-model resolver | Optional trusted callable that returns source identity before adapter capture |
+| `workspace_snapshot_limits` | framework defaults | Trusted `max_files`, `max_total_bytes`, `max_file_bytes`, and acquisition `concurrency` limits enforced before planning |
+| `workspace_allowed_commands` | `[]` | Additional trusted executable names available to `workspace_run`; caller context cannot expand this list |
+| `workspace_command_timeout_seconds` | `120` | Trusted per-command workspace limit; a timeout is evidence and does not stop the DAG |
+| `workspace_command_environment` | `{}` | Trusted recognized package-manager cache paths passed without inheriting parent secrets |
+| `workspace_delta_ignored_names` | runtime/build defaults | Directory names excluded from persisted deltas, including `.git`, `.venv`, `node_modules`, `output`, and `target` |
 
 Caller task context cannot override execution authority or the workflow budget.
 All nodes sharing one distributed DAG should run the same JarvisCore minor
@@ -352,6 +362,7 @@ Advanced execution parameters for the OODA loop Kernel. The defaults are appropr
 |---|---|---|
 | `KERNEL_MAX_TURNS` | `30` | Maximum OODA loop turns per task execution. |
 | `SANDBOX_MODE` | `local` | `local` (in-process execution) or `remote` (external sandboxed execution). |
+| `ALLOW_UNSAFE_LOCAL_EXECUTION` | `false` | Explicitly allow generated Python and shell/build commands to run as host subprocesses. Local mode does not isolate the host filesystem or network; keep this disabled for untrusted agent input and use a remote/container sandbox. |
 | `EXECUTION_TIMEOUT` | `300` | Seconds before sandbox code execution is forcibly terminated. |
 | `MAX_REPAIR_ATTEMPTS` | `3` | Autonomous repair retries when generated code fails. |
 | `HITL_ENABLED` | `false` | Enable Human-in-the-Loop escalation. |

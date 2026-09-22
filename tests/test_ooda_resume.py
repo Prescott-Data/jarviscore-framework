@@ -1,11 +1,11 @@
 """A human wait resumes the same OODA state without replaying earlier actions."""
 
-import json
-
 import pytest
 
 from jarviscore.kernel.state import KernelState
+from jarviscore.kernel.defaults.coder import CoderSubAgent
 from jarviscore.kernel.subagent import BaseSubAgent
+from jarviscore.execution import create_coder_sandbox
 
 
 class QueueLLM:
@@ -91,3 +91,60 @@ async def test_resume_starts_after_the_waiting_turn():
     assert resumed.payload == {"processed": True}
     assert resumed.trajectory[0]["turn"] == 1
     assert WaitingAgent.calls == 1, "the consent tool must not replay"
+
+
+@pytest.mark.asyncio
+async def test_new_execution_epoch_preserves_action_evidence_and_closes_gap(tmp_path):
+    memory = CheckpointMemory()
+    state = KernelState(
+        workflow_id="wf-epoch",
+        step_id="build",
+        agent_id="coder-1",
+        task="Verify the build",
+        context={},
+        turn=7,
+        action_tokens_used=108_000,
+    )
+    state.add_tool_result(
+        "workspace_read",
+        {"path": "Cargo.toml"},
+        {"status": "success", "content": "[package]"},
+    )
+    await memory.save_checkpoint(state.model_dump_json())
+    coder = CoderSubAgent(
+        agent_id="coder-1",
+        llm_client=QueueLLM([
+            'THOUGHT: Execute the missing check\nTOOL: workspace_run\nPARAMS: '
+            + '{"command": "pwd", "cwd": "."}',
+            'DONE: Build command executed.\nRESULT: {"status": "verified"}',
+        ]),
+        sandbox=create_coder_sandbox(
+            workspace_dir=tmp_path,
+            allow_unsafe_local_execution=True,
+        ),
+    )
+
+    result = await coder.run(
+        "Verify the build",
+        context={
+            "workflow_id": "wf-epoch",
+            "step_id": "build",
+            "_resume": True,
+            "_new_execution_epoch": True,
+            "execution_contract": {
+                "required_tool_groups": [
+                    ["workspace_read"],
+                    ["workspace_run"],
+                ]
+            },
+        },
+        memory=memory,
+        max_turns=3,
+    )
+
+    assert result.status == "success"
+    restored = KernelState.model_validate_json(memory.checkpoint)
+    assert [item.tool_name for item in restored.tool_history] == [
+        "workspace_read",
+        "workspace_run",
+    ]

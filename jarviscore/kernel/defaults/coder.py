@@ -348,7 +348,9 @@ atom.
             offered_atoms = sorted(getattr(self, "_atom_tools", ()))
             useful = offered_atoms + [
                 name for name in (
-                    "ask_capability", "ask_peer", "inspect_workflow", "write_code"
+                    "workspace_list", "workspace_read", "workspace_search",
+                    "workspace_write", "workspace_run", "ask_capability", "ask_peer",
+                    "inspect_workflow", "write_code",
                 )
                 if name in self._tools
             ]
@@ -365,7 +367,11 @@ atom.
             "evidence. If a meaningful action fails, inspect the error, ask a capable "
             "peer when useful, and try a relevant alternative. If no reasonable path "
             "remains, finish with the honest blocker and the evidence gathered. Never "
-            "run unrelated code merely to demonstrate that execution works."
+            "run unrelated code merely to demonstrate that execution works. A workspace "
+            "command timeout is a bounded observation, not evidence that the task is "
+            "impossible; inspect progress and use a narrower or preparatory command before "
+            "declaring an environment blocker. Create fixtures with workspace_write rather "
+            "than shell redirection, heredocs, or generated writer commands."
             f"{first_attempt}"
         )
 
@@ -379,6 +385,30 @@ atom.
         parsed: Dict[str, Any],
     ) -> tuple:
         """Require investigation and one bounded peer review of blocked work."""
+        contract = state.context.get("execution_contract") or {}
+        raw_groups = contract.get("required_tool_groups") or []
+        groups = [
+            {str(tool) for tool in group if str(tool)}
+            for group in raw_groups
+            if isinstance(group, (list, tuple, set))
+        ]
+        tools_used = {item.tool_name for item in state.tool_history}
+        missing = [sorted(group) for group in groups if not (group & tools_used)]
+        if missing:
+            return (
+                False,
+                GateEvidence(
+                    check="declared_action_evidence",
+                    requirement=(
+                        "each product-declared tool group must have at least one "
+                        "durable invocation"
+                    ),
+                    observed={
+                        "tools_used": sorted(tools_used),
+                        "missing_tool_groups": missing,
+                    },
+                ),
+            )
         if not state.tool_history:
             return (
                 False,
@@ -499,6 +529,69 @@ atom.
 
     def setup_tools(self) -> None:
         self.register_tool(
+            "workspace_list",
+            self._tool_workspace_list,
+            (
+                "List files or directories in the current bound workspace. "
+                "Params: {\"path\": \".\", \"recursive\": false, \"limit\": 500}"
+            ),
+            phase="thinking",
+        )
+        self.register_tool(
+            "workspace_read",
+            self._tool_workspace_read,
+            (
+                "Read a bounded UTF-8 line range from a workspace file. "
+                "Params: {\"path\": \"README.md\", \"start_line\": 1, \"end_line\": 400}"
+            ),
+            phase="thinking",
+        )
+        self.register_tool(
+            "workspace_search",
+            self._tool_workspace_search,
+            (
+                "Search workspace text with literal matching by default and return file/line evidence. "
+                "Params: {\"query\": \"TODO\", \"path\": \".\", \"glob\": \"*.py\", "
+                "\"regex\": false, \"limit\": 100}"
+            ),
+            phase="thinking",
+        )
+        self.register_tool(
+            "workspace_write",
+            self._tool_workspace_write,
+            (
+                "Create or fully replace one bounded UTF-8 file inside the copy-on-write "
+                "workspace. content must contain the complete final file; never use this "
+                "for a partial edit. Use workspace_edit for existing source files. "
+                "Use this for new tests and fixtures instead of shell redirection, heredocs, "
+                "or generated writer scripts. Params: {\"path\": \"tests/case.json\", "
+                "\"content\": \"<exact file content>\", \"executable\": false}"
+            ),
+            phase="action",
+        )
+        self.register_tool(
+            "workspace_edit",
+            self._tool_workspace_edit,
+            (
+                "Replace an inclusive line range in an existing UTF-8 file while preserving "
+                "all other content. First call workspace_read and pass its sha256 as "
+                "expected_sha256; stale source fails closed. Params: {\"path\": "
+                "\"src/store.rs\", \"start_line\": 43, \"end_line\": 49, "
+                "\"replacement\": \"<complete replacement lines>\", "
+                "\"expected_sha256\": \"<sha256 from workspace_read>\"}"
+            ),
+            phase="action",
+        )
+        self.register_tool(
+            "workspace_run",
+            self._tool_workspace_run,
+            (
+                "Run an allow-listed command in a workspace directory and return exit code/stdout/stderr. "
+                "Params: {\"command\": \"python -m pytest -q\", \"cwd\": \".\"}"
+            ),
+            phase="action",
+        )
+        self.register_tool(
             "check_registry",
             self._tool_check_registry,
             (
@@ -602,6 +695,72 @@ atom.
             ),
             phase="thinking",
         )
+
+    def _tool_workspace_list(
+        self, path: str = ".", recursive: bool = False, limit: int = 500, **kwargs
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.list_workspace(path, recursive=recursive, limit=limit)
+
+    def _tool_workspace_read(
+        self, path: str, start_line: int = 1, end_line: int = 400, **kwargs
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.read_workspace(path, start_line=start_line, end_line=end_line)
+
+    def _tool_workspace_search(
+        self,
+        query: str,
+        path: str = ".",
+        glob: str = "*",
+        regex: bool = False,
+        limit: int = 100,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.search_workspace(
+            query, path=path, glob=glob, regex=regex, limit=limit
+        )
+
+    def _tool_workspace_write(
+        self,
+        path: str,
+        content: str,
+        executable: bool = False,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.write_workspace(path, content, executable=executable)
+
+    def _tool_workspace_edit(
+        self,
+        path: str,
+        start_line: int,
+        end_line: int,
+        replacement: str,
+        expected_sha256: str,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.edit_workspace(
+            path,
+            start_line,
+            end_line,
+            replacement,
+            expected_sha256,
+        )
+
+    def _tool_workspace_run(
+        self, command: str, cwd: str = ".", **kwargs
+    ) -> Dict[str, Any]:
+        if self.sandbox is None:
+            return {"status": "error", "error": "No workspace sandbox is attached."}
+        return self.sandbox.run_workspace(command, cwd=cwd)
 
     async def _execute_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
         """Execute tools, auto-running validated code when runtime proof is required."""
@@ -1096,6 +1255,47 @@ atom.
                     result["status"] = "failure"
                     result["error"] = output.get("error", output.get("reason", "Semantic failure: Task executed but returned a failure status."))
                     result["semantic_success"] = False
+
+        # Resolve exact dependency artifacts before product schema validation.
+        required_reference_paths = tuple(
+            (getattr(self, "_run_context", {}) or {}).get(
+                "artifact_reference_paths", ()
+            )
+        )
+        if result.get("status") == "success" and required_reference_paths:
+            from jarviscore.kernel.state import (
+                ArtifactReferenceError,
+                hydrate_artifact_references,
+            )
+
+            try:
+                output_data = result.get("output", {})
+                if isinstance(output_data, dict) and "data" in output_data:
+                    output_data = dict(output_data)
+                    output_data["data"] = hydrate_artifact_references(
+                        output_data["data"],
+                        previous_step_results=(
+                            (getattr(self, "_run_context", {}) or {}).get(
+                                "previous_step_results", {}
+                            )
+                        ),
+                        required_reference_paths=required_reference_paths,
+                    )
+                    result["output"] = output_data
+                else:
+                    result["output"] = hydrate_artifact_references(
+                        output_data,
+                        previous_step_results=(
+                            (getattr(self, "_run_context", {}) or {}).get(
+                                "previous_step_results", {}
+                            )
+                        ),
+                        required_reference_paths=required_reference_paths,
+                    )
+            except ArtifactReferenceError as exc:
+                result["status"] = "failure"
+                result["error"] = f"Artifact composition failed: {exc}"
+                result["semantic_success"] = False
 
         # Pydantic schema validation
         output_schema = (getattr(self, '_run_context', {}) or {}).get("output_schema")

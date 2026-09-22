@@ -64,6 +64,21 @@ from jarviscore.core.mesh import Mesh, MeshMode
 # Execution profiles
 from jarviscore.profiles.autoagent import AutoAgent
 from jarviscore.profiles.customagent import CustomAgent
+from jarviscore.execution.workspace import (
+    BlobSnapshotStore,
+    SandboxBinding,
+    SnapshotEntry,
+    SourceRef,
+    SourceSnapshot,
+    WorkspaceDelta,
+    WorkspaceDeltaConflict,
+)
+from jarviscore.execution.sources import (
+    SourceAdapter,
+    SourceAdapterError,
+    SourceContractError,
+    SourceIntegrityError,
+)
 
 # Custom Profile: Decorator, Wrapper, and Context
 from jarviscore.adapter import jarvis_agent, wrap
@@ -72,6 +87,14 @@ from jarviscore.execution.decisions import (
     DecisionClientError,
     DecisionResult,
     JevDecisionClient,
+)
+from jarviscore.kernel.state import (
+    ArtifactReference,
+    ArtifactReferenceError,
+    CommandObservation,
+    WorkspaceMutation,
+    hydrate_artifact_references,
+    hydrate_receipt_evidence,
 )
 
 # Long-horizon planning (lazy import — requires no extra dependencies)
@@ -119,12 +142,31 @@ __all__ = [
     "AutoAgent",
     "CustomAgent",
 
+    # Durable source snapshots and ephemeral execution bindings
+    "SourceRef",
+    "SnapshotEntry",
+    "SourceSnapshot",
+    "WorkspaceDelta",
+    "WorkspaceDeltaConflict",
+    "BlobSnapshotStore",
+    "SandboxBinding",
+    "SourceAdapter",
+    "SourceAdapterError",
+    "SourceContractError",
+    "SourceIntegrityError",
+
     # Custom Profile (decorator and wrapper)
     "jarvis_agent",
     "wrap",
     "JarvisContext",
     "MemoryAccessor",
     "DependencyAccessor",
+    "ArtifactReference",
+    "ArtifactReferenceError",
+    "CommandObservation",
+    "WorkspaceMutation",
+    "hydrate_artifact_references",
+    "hydrate_receipt_evidence",
 
     # Decision models
     "DecisionClientError",

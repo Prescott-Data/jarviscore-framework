@@ -9,7 +9,15 @@ happen to use a key named `data`.
 
 import pytest
 
-from jarviscore.execution.coder_sandbox import CoderSandbox, create_coder_sandbox
+from jarviscore.execution.coder_sandbox import (
+    CoderSandbox,
+    create_coder_sandbox as _create_coder_sandbox,
+)
+
+
+def create_coder_sandbox(*args, **kwargs):
+    kwargs.setdefault("allow_unsafe_local_execution", True)
+    return _create_coder_sandbox(*args, **kwargs)
 
 
 @pytest.fixture

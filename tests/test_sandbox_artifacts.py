@@ -2,8 +2,13 @@
 
 import pytest
 
-from jarviscore.execution.coder_sandbox import create_coder_sandbox
+from jarviscore.execution.coder_sandbox import create_coder_sandbox as _create_coder_sandbox
 from jarviscore.storage.local import LocalBlobStorage
+
+
+def create_coder_sandbox(*args, **kwargs):
+    kwargs.setdefault("allow_unsafe_local_execution", True)
+    return _create_coder_sandbox(*args, **kwargs)
 
 
 @pytest.fixture

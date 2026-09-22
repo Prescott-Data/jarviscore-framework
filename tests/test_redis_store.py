@@ -73,6 +73,73 @@ class TestStepOutputs:
         result = store.get_step_output("wf-1", "step-1")
         assert result["output"] == "second"
 
+    def test_large_step_output_is_replaced_by_bounded_failure(self, store):
+        store._store._max_step_output_bytes = 100
+
+        store.save_step_output(
+            "wf-large-output",
+            "step-1",
+            output={"content": "x" * 10_000},
+        )
+
+        saved = store.get_step_output("wf-large-output", "step-1")["output"]
+        assert saved["status"] == "failure"
+        assert saved["typed_outcome"] == "STEP_OUTPUT_TOO_LARGE"
+        assert len(json.dumps(saved).encode("utf-8")) < 1_000
+
+    def test_oversized_claimed_step_fails_atomically(self, store):
+        store._store._max_step_output_bytes = 100
+        store.init_workflow_graph(
+            "wf-large-claim",
+            [{"id": "step-1", "capability": "analysis", "task": "work", "depends_on": []}],
+        )
+        claim_id = "agent-a:claim-a"
+        assert store.claim_step("wf-large-claim", "step-1", claim_id, lease_seconds=30)
+
+        assert store.finish_claimed_step(
+            "wf-large-claim",
+            "step-1",
+            claim_id,
+            {"status": "success", "output": "x" * 10_000},
+        )
+
+        assert store.get_step_status("wf-large-claim", "step-1") == "failed"
+        saved = store.get_step_output("wf-large-claim", "step-1")["output"]
+        assert saved["typed_outcome"] == "STEP_OUTPUT_TOO_LARGE"
+
+    def test_circular_step_output_is_replaced_by_bounded_failure(self, store):
+        circular = []
+        circular.append(circular)
+
+        store.save_step_output("wf-circular", "step-1", output=circular)
+
+        saved = store.get_step_output("wf-circular", "step-1")["output"]
+        assert saved["status"] == "failure"
+        assert saved["typed_outcome"] == "STEP_OUTPUT_SERIALIZATION_FAILED"
+
+    def test_circular_claimed_step_fails_and_releases_claim(self, store):
+        store.init_workflow_graph(
+            "wf-circular-claim",
+            [{"id": "step-1", "capability": "analysis", "task": "work", "depends_on": []}],
+        )
+        claim_id = "agent-a:claim-a"
+        assert store.claim_step(
+            "wf-circular-claim", "step-1", claim_id, lease_seconds=30
+        )
+        circular = []
+        circular.append(circular)
+
+        assert store.finish_claimed_step(
+            "wf-circular-claim", "step-1", claim_id, circular
+        )
+
+        assert store.get_step_status("wf-circular-claim", "step-1") == "failed"
+        saved = store.get_step_output("wf-circular-claim", "step-1")["output"]
+        assert saved["typed_outcome"] == "STEP_OUTPUT_SERIALIZATION_FAILED"
+        assert not store._store._redis.exists(
+            "step_lock:wf-circular-claim:step-1"
+        )
+
     def test_context_vars(self, store):
         """Context variables are stored alongside output."""
         store.save_step_output("wf-1", "step-1",
@@ -451,13 +518,19 @@ class TestWorkflowDAG:
             steps=[
                 {"id": "research", "capability": "research", "task": "Research", "depends_on": []},
                 {"id": "analyse", "capability": "analysis", "task": "Analyse", "depends_on": ["research"]},
+                {"id": "report", "capability": "reporting", "task": "Report", "depends_on": ["analyse"]},
             ],
         )
         store.save_step_output("wf-context", "research", output={"evidence": ["source-1"]})
         store.update_step_status("wf-context", "research", "completed")
+        store.save_step_output("wf-context", "analyse", output={"conclusion": "supported"})
+        store.update_step_status("wf-context", "analyse", "completed")
 
         assert store.get_dependency_outputs("wf-context", "analyse") == {
             "research": {"evidence": ["source-1"]},
+        }
+        assert store.get_dependency_outputs("wf-context", "report") == {
+            "analyse": {"conclusion": "supported"},
         }
 
     def test_dependency_interpretations_are_preserved_separately_from_artifacts(self, store):
@@ -545,6 +618,19 @@ class TestWorkflowDAG:
         assert store.claim_step("wf-amend", "analyse", "stale:claim", 30) is False
         assert store.get_step_status("wf-amend", "analyse_v2") == "pending"
         assert store.get_ledger_tail("wf-amend")[-1]["event"] == "dag_amended"
+        store.append_ledger_entry("wf-amend", {
+            "event": "semantic_reconciliation_requested",
+            "revision": 2,
+            "decision": "amend",
+            "reason": "More evidence is available",
+            "target_obligation_ids": ["o2"],
+        })
+        history = store.get_workflow_reconciliation_history("wf-amend")
+        assert [entry["event"] for entry in history] == [
+            "dag_amended",
+            "semantic_reconciliation_requested",
+        ]
+        assert history[-1]["target_obligation_ids"] == ["o2"]
 
         with pytest.raises(ValueError, match="revision changed"):
             store.amend_workflow(
@@ -576,7 +662,6 @@ class TestWorkflowDAG:
             "wf-amend", "analyse_v2", "analyst:claim",
             {"status": "success", "output": {"analysis": "complete"}},
         )
-        terminal_definition = store.get_workflow_definition("wf-amend")
         with pytest.raises(ValueError, match="at least one new step"):
             store.amend_workflow(
                 "wf-amend",
@@ -638,7 +723,7 @@ class TestWorkflowDAG:
             steps=[{
                 "id": "verify_retry", "capability": "verification", "effect": "read",
                 "task": "Verify stage from fresh evidence", "depends_on": ["verify_first"],
-                "covers": ["o1"],
+                "covers": ["o1"], "dependency_policy": "terminal_evidence",
             }],
             reason="Fresh evidence is available",
         )
@@ -661,6 +746,95 @@ class TestWorkflowDAG:
         assert current["state"] == "satisfied"
         assert current["revision"] == 2
         assert current["attempt_states"] == {"verify_retry": "satisfied"}
+
+    def test_obligation_projection_resolves_not_applicable_condition(self, store):
+        obligations = [{
+            "id": "o1",
+            "description": "Verify fail-before for any repaired issue",
+            "source_quote": "Verify fail-before for any repaired issue",
+        }]
+        step = {
+            "id": "verify", "capability": "verification", "effect": "read",
+            "task": "Verify the repair transition when a repair exists",
+            "depends_on": [], "covers": ["o1"],
+        }
+        store.publish_workflow(
+            "wf-not-applicable", goal=obligations[0]["source_quote"],
+            obligations=obligations, steps=[step],
+        )
+        assert store.claim_step("wf-not-applicable", "verify", "peer:verify", 30)
+
+        assert store.finish_claimed_step(
+            "wf-not-applicable", "verify", "peer:verify", {
+                "status": "success",
+                "output": {"status": "no_verified_findings"},
+                "interpretation": {
+                    "verdict": "satisfied", "decision": "proceed",
+                    "satisfied_requirements": [],
+                    "not_applicable_requirements": ["o1"],
+                    "unmet_requirements": [],
+                    "evidence_refs": ["reproduction.status:no_candidates"],
+                },
+            },
+        )
+
+        current = store.get_obligation_projection("wf-not-applicable")["o1"]
+        assert current["state"] == "satisfied"
+        assert current["resolution"] == "not_applicable"
+        assert current["attempt_states"] == {"verify": "not_applicable"}
+
+    def test_not_applicable_attempt_does_not_hide_unresolved_attempt(self, store):
+        obligations = [{
+            "id": "o1", "description": "Verify stage", "source_quote": "Verify stage",
+        }]
+        steps = [
+            {
+                "id": "verify_unresolved", "capability": "verification", "effect": "read",
+                "task": "Verify stage", "depends_on": [], "covers": ["o1"],
+            },
+            {
+                "id": "verify_not_applicable", "capability": "verification", "effect": "read",
+                "task": "Check applicability", "depends_on": [], "covers": ["o1"],
+            },
+        ]
+        store.publish_workflow(
+            "wf-mixed-not-applicable", goal="Verify stage",
+            obligations=obligations, steps=steps,
+        )
+        assert store.claim_step(
+            "wf-mixed-not-applicable", "verify_unresolved", "peer:first", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-mixed-not-applicable", "verify_unresolved", "peer:first", {
+                "status": "success",
+                "interpretation": {
+                    "verdict": "unsatisfied", "decision": "reject",
+                    "satisfied_requirements": [], "unmet_requirements": ["o1"],
+                },
+            },
+        )
+        assert store.claim_step(
+            "wf-mixed-not-applicable", "verify_not_applicable", "peer:second", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-mixed-not-applicable", "verify_not_applicable", "peer:second", {
+                "status": "success",
+                "interpretation": {
+                    "verdict": "satisfied", "decision": "proceed",
+                    "satisfied_requirements": [],
+                    "not_applicable_requirements": ["o1"],
+                    "unmet_requirements": [],
+                },
+            },
+        )
+
+        current = store.get_obligation_projection("wf-mixed-not-applicable")["o1"]
+        assert current["state"] == "unresolved"
+        assert current["resolution"] == "unresolved"
+        assert current["attempt_states"] == {
+            "verify_unresolved": "unresolved",
+            "verify_not_applicable": "not_applicable",
+        }
 
     def test_cancelled_workflow_rejects_an_inflight_amendment(self, store):
         obligations = [{"id": "o1", "description": "Work", "source_quote": "Work"}]
@@ -777,7 +951,39 @@ class TestAtomicStepClaiming:
             resume_agent_id="agent-a",
         )
 
-    def test_partial_semantics_are_preserved_for_recipient_authorization(self, store):
+    def test_empty_epoch_delta_clears_prior_continuation_workspace(self, store):
+        store.init_workflow_graph(
+            "wf-clear-delta",
+            [{"id": "step-1", "capability": "analysis", "task": "work", "depends_on": []}],
+        )
+        first_claim = "agent-a:epoch-1"
+        assert store.claim_step("wf-clear-delta", "step-1", first_claim, lease_seconds=30)
+        assert store.continue_claimed_step(
+            "wf-clear-delta",
+            "step-1",
+            first_claim,
+            resume_agent_id="agent-a",
+            continuation_workspace_delta={"manifest_blob_path": "delta-1.json"},
+        )
+        assert store.get_step_definition("wf-clear-delta", "step-1")[
+            "continuation_workspace_delta"
+        ]["manifest_blob_path"] == "delta-1.json"
+
+        second_claim = "agent-a:epoch-2"
+        assert store.claim_step("wf-clear-delta", "step-1", second_claim, lease_seconds=30)
+        assert store.continue_claimed_step(
+            "wf-clear-delta",
+            "step-1",
+            second_claim,
+            resume_agent_id="agent-a",
+            continuation_workspace_delta=None,
+        )
+
+        assert "continuation_workspace_delta" not in store.get_step_definition(
+            "wf-clear-delta", "step-1"
+        )
+
+    def test_partial_semantics_are_available_for_recipient_authorization(self, store):
         store.publish_workflow(
             "wf-semantic-gate",
             goal="Verify then act",
@@ -819,10 +1025,167 @@ class TestAtomicStepClaiming:
         verify = store.get_step_definition("wf-semantic-gate", "verify")
         assert verify["semantic_outcome"] == "partial"
         assert verify["semantic_decision"] == "hold"
+        assert store.are_dependencies_met("wf-semantic-gate", "write") is True
         assert store.get_dependency_blockers("wf-semantic-gate", "write") == {}
-        assert store.claim_step("wf-semantic-gate", "write", "peer:write", 30) is True
         assert store.get_dependency_blockers("wf-semantic-gate", "respond") == {}
+        assert store.are_dependencies_met("wf-semantic-gate", "respond") is True
         assert store.claim_step("wf-semantic-gate", "respond", "peer:respond", 30) is True
+
+    def test_final_response_waits_for_semantic_reconciliation_settlement(self, store):
+        store.publish_workflow(
+            "wf-response-reconciliation",
+            goal="Verify then report",
+            obligations=[{
+                "id": "o1", "description": "Verify", "source_quote": "Verify",
+            }],
+            steps=[
+                {
+                    "id": "verify", "capability": "verification", "effect": "read",
+                    "task": "Verify", "depends_on": [], "covers": ["o1"],
+                    "plan_revision": 1,
+                },
+                {
+                    "id": "respond", "capability": "response",
+                    "effect": "final_response", "task": "Respond",
+                    "depends_on": ["verify"], "plan_revision": 1,
+                },
+            ],
+        )
+        assert store.claim_step(
+            "wf-response-reconciliation", "verify", "peer:verify", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-response-reconciliation",
+            "verify",
+            "peer:verify",
+            {
+                "status": "success",
+                "output": {"verified": False},
+                "interpretation": {
+                    "verdict": "unsatisfied",
+                    "decision": "reject",
+                    "meaning": "Verification is incomplete.",
+                    "satisfied_requirements": [],
+                    "unmet_requirements": ["o1"],
+                    "evidence_refs": [],
+                },
+            },
+        )
+
+        assert not store.are_dependencies_met(
+            "wf-response-reconciliation", "respond"
+        )
+        assert not store.claim_step(
+            "wf-response-reconciliation", "respond", "peer:respond", 30
+        )
+        assert store.save_workflow_reconciliation_settlement(
+            "wf-response-reconciliation",
+            1,
+            {
+                "event": "semantic_reconciliation_settled",
+                "obligation_status": "blocked",
+                "reason": "No executable remediation remains.",
+            },
+        )
+        assert store.are_dependencies_met(
+            "wf-response-reconciliation", "respond"
+        )
+        assert store.claim_step(
+            "wf-response-reconciliation", "respond", "peer:respond", 30
+        )
+
+    def test_final_response_cannot_satisfy_source_obligations(self, store):
+        store.publish_workflow(
+            "wf-response-projection",
+            goal="Verify and report",
+            obligations=[{
+                "id": "o1", "description": "Verify", "source_quote": "Verify",
+            }],
+            steps=[{
+                "id": "respond", "capability": "response", "effect": "final_response",
+                "task": "Report", "depends_on": [], "covers": ["o1"],
+            }],
+        )
+        assert store.claim_step(
+            "wf-response-projection", "respond", "peer:respond", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-response-projection", "respond", "peer:respond",
+            {"status": "success", "result_summary": "Verification is incomplete."},
+        )
+
+        obligation = store.get_obligation_projection("wf-response-projection")["o1"]
+        assert obligation["state"] == "pending"
+        assert obligation["current_step_ids"] == []
+        assert obligation["attempt_states"] == {}
+
+    def test_large_step_output_round_trips_without_losing_artifact_evidence(self, store):
+        store.publish_workflow(
+            "wf-large-artifact",
+            goal="Preserve evidence",
+            obligations=[],
+            steps=[{
+                "id": "evidence", "capability": "research", "effect": "read",
+                "task": "Return evidence", "depends_on": [],
+            }],
+        )
+        large_evidence = {
+            "status": "verified",
+            "observations": ["evidence"] * 100_000,
+        }
+        assert store.claim_step(
+            "wf-large-artifact", "evidence", "peer:evidence", 30
+        )
+        assert store.finish_claimed_step(
+            "wf-large-artifact",
+            "evidence",
+            "peer:evidence",
+            {"status": "success", "output": large_evidence},
+        )
+
+        assert store.get_dependency_outputs(
+            "wf-large-artifact", "missing-consumer"
+        ) == {}
+        saved = store.get_step_output("wf-large-artifact", "evidence")
+        assert saved["output"]["output"] == large_evidence
+
+    def test_semantic_proceed_authorizes_ordinary_dependency(self, store):
+        store.publish_workflow(
+            "wf-semantic-proceed",
+            goal="Verify then write",
+            obligations=[],
+            steps=[
+                {
+                    "id": "verify", "capability": "verification", "effect": "read",
+                    "task": "Verify", "depends_on": [],
+                },
+                {
+                    "id": "write", "capability": "writer", "effect": "write",
+                    "task": "Write", "depends_on": ["verify"],
+                },
+            ],
+        )
+        assert store.claim_step("wf-semantic-proceed", "verify", "peer:verify", 30)
+        assert store.finish_claimed_step(
+            "wf-semantic-proceed",
+            "verify",
+            "peer:verify",
+            {
+                "status": "success",
+                "output": {"verified": True},
+                "interpretation": {
+                    "verdict": "satisfied",
+                    "decision": "proceed",
+                    "meaning": "Verification succeeded.",
+                    "satisfied_requirements": ["Verified identity"],
+                    "unmet_requirements": [],
+                    "evidence_refs": ["verified"],
+                },
+            },
+        )
+
+        assert store.are_dependencies_met("wf-semantic-proceed", "write") is True
+        assert store.get_dependency_blockers("wf-semantic-proceed", "write") == {}
 
     def test_recipient_terminal_block_is_not_requeued(self, store):
         store.publish_workflow(
@@ -1115,7 +1478,6 @@ class TestTraceEvents:
         })
 
         # The List key stores all published events
-        import fakeredis
         # Access the internal redis client to verify List
         raw = store._store._redis.lrange("trace_log:trace_events:wf-1", 0, -1)
         assert len(raw) == 1

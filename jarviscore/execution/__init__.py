@@ -68,6 +68,28 @@ from .coder_sandbox import (
     create_coder_sandbox,
 )
 
+from .workspace import (
+    BlobSnapshotStore,
+    SandboxBinding,
+    SnapshotEntry,
+    SourceRef,
+    SourceSnapshot,
+    WorkspaceDelta,
+    WorkspaceDeltaConflict,
+    cleanup_stale_bindings,
+)
+from .sources import (
+    GitHubRepositorySource,
+    GitHubSourceRequestError,
+    SnapshotLimitExceeded,
+    SnapshotLimits,
+    SourceAdapter,
+    SourceAdapterError,
+    SourceContractError,
+    SourceIntegrityError,
+    capture_source,
+)
+
 # Autonomous Repair
 from .repair import (
     AutonomousRepair,
@@ -136,6 +158,25 @@ __all__ = [
     'BashPermissionError',
     'CODER_GENERATION_SYSTEM_PROMPT',
     'create_coder_sandbox',
+
+    # Blob-backed ephemeral workspaces
+    'SourceRef',
+    'SnapshotEntry',
+    'SourceSnapshot',
+    'WorkspaceDelta',
+    'WorkspaceDeltaConflict',
+    'cleanup_stale_bindings',
+    'BlobSnapshotStore',
+    'SandboxBinding',
+    'SnapshotLimits',
+    'SnapshotLimitExceeded',
+    'GitHubRepositorySource',
+    'GitHubSourceRequestError',
+    'SourceAdapter',
+    'SourceAdapterError',
+    'SourceContractError',
+    'SourceIntegrityError',
+    'capture_source',
 
     # Repair
     'AutonomousRepair',

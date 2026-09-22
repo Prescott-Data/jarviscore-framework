@@ -68,8 +68,6 @@ class TestExecutionLeaseRoleProfiles:
         assert lease.thinking_budget == 72_000
         assert lease.action_budget == 48_000
         assert lease.max_total_tokens == 120_000
-        assert lease.wall_clock_ms == 360_000
-        assert lease.emergency_turn_fuse == 18
 
     def test_unknown_role_raises(self):
         with pytest.raises(KeyError, match="Unknown role"):

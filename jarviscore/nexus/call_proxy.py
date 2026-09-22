@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from .strategy import apply_strategy
-from .hosts import ensure_host_allowed
+from .hosts import HostNotAllowed, ensure_host_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -114,13 +114,7 @@ class NexusCallProxy:
         Raises RuntimeError only on internal proxy failure (no connection, no Nexus).
         """
         from jarviscore.nexus.client import NexusClient
-        from jarviscore.nexus.store import get_store
-
-        store = get_store()
         provider = self._provider_for(connection_id)
-        # Before a credential is placed, not after: the destination is chosen by
-        # generated code, so it is the least trustworthy part of the request.
-        ensure_host_allowed(provider, url, store.get(provider))
 
         strategy = None
         request_kwargs = None
@@ -128,18 +122,27 @@ class NexusCallProxy:
         # ── Try auth_manager (gateway mode) first ─────────────────────────────
         try:
             strategy = await self._auth.resolve_strategy(connection_id)
-            request_kwargs = NexusClient.apply_strategy_to_request(
-                strategy, method, url, headers=headers, **kwargs
-            )
         except Exception as gateway_exc:
             logger.debug(
                 "NexusCallProxy: gateway resolve failed for %r (%s) — "
                 "falling back to local credential store",
                 connection_id, gateway_exc,
             )
+        if strategy is not None:
+            # Resolve inside the credential boundary, then bind the destination
+            # before placing that credential. Policy or placement failures must
+            # fail closed rather than selecting a different credential source.
+            ensure_host_allowed(provider, url, strategy.config)
+            request_kwargs = NexusClient.apply_strategy_to_request(
+                strategy, method, url, headers=headers, **kwargs
+            )
 
         # ── Local store fallback (zero-dep mode) ──────────────────────────────
         if request_kwargs is None:
+            from jarviscore.nexus.store import get_store
+
+            store = get_store()
+            ensure_host_allowed(provider, url, store.get(provider))
             strategy = store.build_strategy(provider)
             if strategy is None:
                 raise RuntimeError(
@@ -164,6 +167,7 @@ class NexusCallProxy:
                         await self._auth.nexus_client.refresh_connection(connection_id)
                     self._auth._strategy_cache.pop(connection_id, None)
                     strategy = await self._auth.resolve_strategy(connection_id)
+                    ensure_host_allowed(provider, url, strategy.config)
                     request_kwargs = NexusClient.apply_strategy_to_request(
                         strategy, method, url, headers=headers, **kwargs
                     )
@@ -175,6 +179,8 @@ class NexusCallProxy:
                             "connection %s may need re-consent (ATTENTION)",
                             connection_id,
                         )
+                except HostNotAllowed:
+                    raise
                 except Exception as refresh_exc:
                     logger.warning(
                         "NexusCallProxy: refresh failed for %s: %s",

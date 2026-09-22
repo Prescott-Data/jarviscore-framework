@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     # === Sandbox Settings ===
     sandbox_mode: str = "local"  # "local" or "remote"
     sandbox_service_url: Optional[str] = None  # URL for remote sandbox
+    allow_unsafe_local_execution: bool = False
 
     # === Storage Settings ===
     log_directory: str = "./logs"
@@ -142,6 +143,7 @@ class Settings(BaseSettings):
     redis_password: Optional[str] = None
     redis_db: int = 0
     redis_context_ttl_days: int = 7
+    redis_max_step_output_bytes: int = 10 * 1024 * 1024
 
     # === Blob Storage ===
     storage_backend: str = "local"  # "local" or "azure"

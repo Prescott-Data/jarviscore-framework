@@ -14,7 +14,6 @@ These tests mock AuthenticationManager and RedisContextStore so they
 don't require live network or Redis.
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Any, Dict
 
@@ -88,6 +87,25 @@ class TestNoAuthConfig:
 # ======================================================================
 
 class TestAuthInjection:
+    @pytest.mark.asyncio
+    async def test_gateway_auth_does_not_require_local_vault(self, monkeypatch):
+        mock_auth = MagicMock()
+        mock_auth.close = AsyncMock()
+        monkeypatch.setenv("NEXUS_GATEWAY_URL", "https://gateway.test")
+
+        with patch(
+            "jarviscore.auth.manager.AuthenticationManager",
+            return_value=mock_auth,
+        ):
+            mesh = Mesh(mode="autonomous", config={"p2p_enabled": False})
+            mesh.add(PlainAgent)
+            mesh._nexus_store = None
+            await mesh.start()
+            try:
+                assert mesh._auth_manager is mock_auth
+            finally:
+                await mesh.stop()
+
     @pytest.mark.asyncio
     async def test_auth_manager_created_with_auth_mode(self):
         mock_auth = MagicMock()

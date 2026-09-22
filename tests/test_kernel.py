@@ -5,15 +5,31 @@ Tests task classification, subagent dispatch, model routing,
 multi-dispatch retry, HITL escalation, and cost aggregation.
 """
 
+import asyncio
 import json
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import BaseModel
 from jarviscore.kernel import Kernel
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
 from jarviscore.execution.decisions import DecisionResult
-from jarviscore.orchestration.budget import WorkflowBudgetExceeded
+from jarviscore.kernel.state import (
+    ArtifactReferenceError,
+    KernelState,
+    ToolReceiptError,
+    hydrate_artifact_references,
+    hydrate_receipt_evidence,
+)
+from jarviscore.context.context_manager import BudgetConfig, ContextManager
+from jarviscore.orchestration.budget import (
+    WorkflowBudgetExceeded,
+    current_workflow_budget,
+    workflow_budget_scope,
+)
 from jarviscore.testing import MockLLMClient, MockSandboxExecutor
 
 
@@ -65,6 +81,676 @@ def kernel(mock_llm, mock_sandbox):
             "kernel_max_turns": 10,
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_sync_tool_execution_does_not_block_event_loop(kernel):
+    subagent = kernel._create_subagent("researcher", "test_researcher")
+    loop_thread_id = threading.get_ident()
+    ticker_ran = asyncio.Event()
+
+    def blocking_tool():
+        time.sleep(0.05)
+        budget = current_workflow_budget()
+        return {
+            "status": "success",
+            "thread_id": threading.get_ident(),
+            "workflow_id": budget.workflow_id if budget else None,
+            "epoch_id": budget.epoch_id if budget else None,
+        }
+
+    async def tick():
+        await asyncio.sleep(0.01)
+        ticker_ran.set()
+
+    subagent.register_tool("blocking_tool", blocking_tool, "Block briefly")
+    ticker = asyncio.create_task(tick())
+
+    with workflow_budget_scope(object(), "wf-1", epoch_id="step:claim-1"):
+        result = await subagent._execute_tool("blocking_tool", {})
+
+    assert ticker_ran.is_set()
+    assert result["thread_id"] != loop_thread_id
+    assert result["workflow_id"] == "wf-1"
+    assert result["epoch_id"] == "step:claim-1"
+    await ticker
+
+
+@pytest.mark.asyncio
+async def test_async_tool_execution_stays_on_event_loop(kernel):
+    subagent = kernel._create_subagent("researcher", "test_researcher")
+    loop_thread_id = threading.get_ident()
+
+    async def async_tool():
+        await asyncio.sleep(0)
+        return {"status": "success", "thread_id": threading.get_ident()}
+
+    subagent.register_tool("async_tool", async_tool, "Yield once")
+
+    result = await subagent._execute_tool("async_tool", {})
+
+    assert result["thread_id"] == loop_thread_id
+
+
+def test_command_receipt_overrides_model_authored_execution_facts():
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="reproduce",
+        agent_id="coder-1",
+        task="Reproduce the defect",
+    )
+    receipt = state.add_tool_result(
+        "workspace_run",
+        {"command": "cargo test --test focused", "cwd": "."},
+        {
+            "success": True,
+            "stdout": "1 passed",
+            "stderr": "",
+            "returncode": 0,
+        },
+        duration_ms=1250,
+    )
+
+    hydrated = state.hydrate_tool_receipts({
+        "observation": {
+            "tool_receipt_id": receipt.receipt_id,
+            "command": ["cargo", "test", "--test", "focused"],
+            "exit_code": 101,
+            "stdout": "invented failure",
+            "stderr": "invented panic",
+            "duration_ms": 9999,
+            "observed_at": "2000-01-01T00:00:00Z",
+        },
+    }, require_command_receipts=True)
+
+    assert hydrated["observation"] == {
+        "tool_receipt_id": receipt.receipt_id,
+        "command": ["cargo", "test", "--test", "focused"],
+        "exit_code": 0,
+        "stdout": "1 passed",
+        "stderr": "",
+        "duration_ms": 1250,
+        "observed_at": receipt.command_observation().model_dump(mode="json")["observed_at"],
+    }
+
+
+@pytest.mark.parametrize(
+    "observation",
+    [
+        {
+            "command": ["cargo", "test"],
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "failed",
+            "duration_ms": 1,
+            "observed_at": "2000-01-01T00:00:00Z",
+        },
+        {
+            "tool_receipt_id": "tool:wf-1:reproduce:missing",
+            "command": ["cargo", "test"],
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "failed",
+            "duration_ms": 1,
+            "observed_at": "2000-01-01T00:00:00Z",
+        },
+    ],
+)
+def test_command_receipt_validation_fails_closed(observation):
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="reproduce",
+        agent_id="coder-1",
+        task="Reproduce the defect",
+    )
+
+    with pytest.raises(ToolReceiptError):
+        state.hydrate_tool_receipts(
+            {"observation": observation},
+            require_command_receipts=True,
+        )
+
+
+def test_coder_done_gate_binds_authoritative_command_receipt(kernel):
+    coder = kernel._create_subagent("coder", "test-coder")
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="reproduce",
+        agent_id="test-coder",
+        task="Reproduce the defect",
+        context={
+            "execution_contract": {
+                "required_tool_groups": [["workspace_run"]],
+            },
+        },
+    )
+    receipt = state.add_tool_result(
+        "workspace_run",
+        {"command": "cargo test --test focused", "cwd": "."},
+        {"success": True, "stdout": "1 passed", "stderr": "", "returncode": 0},
+        duration_ms=10,
+    )
+    parsed = {
+        "result": {
+            "observation": {
+                "tool_receipt_id": receipt.receipt_id,
+                "command": ["cargo", "test", "--test", "focused"],
+                "exit_code": 101,
+                "stdout": "invented failure",
+                "stderr": "invented panic",
+                "duration_ms": 9999,
+                "observed_at": "2000-01-01T00:00:00Z",
+            },
+        },
+    }
+
+    allowed, _ = coder._ground_completion(state, parsed)
+
+    assert allowed is True
+    assert parsed["result"]["observation"]["exit_code"] == 0
+    assert parsed["result"]["observation"]["stdout"] == "1 passed"
+
+
+def test_coder_done_gate_rejects_unreceipted_command_observation(kernel):
+    coder = kernel._create_subagent("coder", "test-coder")
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="reproduce",
+        agent_id="test-coder",
+        task="Reproduce the defect",
+        context={
+            "execution_contract": {
+                "required_tool_groups": [["workspace_run"]],
+            },
+        },
+    )
+    state.add_tool_result(
+        "workspace_run",
+        {"command": "cargo test", "cwd": "."},
+        {"success": True, "stdout": "passed", "stderr": "", "returncode": 0},
+    )
+    parsed = {
+        "result": {
+            "observation": {
+                "command": ["cargo", "test"],
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "failed",
+                "duration_ms": 1,
+                "observed_at": "2000-01-01T00:00:00Z",
+            },
+        },
+    }
+
+    allowed, evidence = coder._ground_completion(state, parsed)
+
+    assert allowed is False
+    assert evidence.check == "tool_receipt_grounding"
+
+
+def test_command_receipt_is_visible_after_checkpoint_resume():
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="reproduce",
+        agent_id="coder-1",
+        task="Reproduce the defect",
+    )
+    receipt = state.add_tool_result(
+        "workspace_run",
+        {"command": "cargo test", "cwd": "."},
+        {"success": True, "stdout": "passed", "stderr": "", "returncode": 0},
+    )
+    restored = KernelState.model_validate_json(state.model_dump_json())
+
+    context = ContextManager().build_context(restored)
+
+    assert f"Receipt: {receipt.receipt_id}" in context
+
+
+def test_command_receipt_survives_context_recovery_pressure():
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="reproduce",
+        agent_id="coder-1",
+        task="x " * 1_000,
+    )
+    receipt = state.add_tool_result(
+        "workspace_run",
+        {"command": "cargo test", "cwd": "."},
+        {"success": True, "stdout": "y " * 1_000, "stderr": "", "returncode": 0},
+    )
+
+    context = ContextManager(BudgetConfig(
+        total_tokens=300,
+        output_reserve=50,
+        system_reserve=50,
+    )).build_context(state)
+
+    assert "Tier: **recovery**" in context
+    assert f"`{receipt.receipt_id}`: workspace_run" in context
+    assert "y y y" not in context
+
+
+@pytest.mark.asyncio
+async def test_coder_hydrates_command_receipt_before_returning_output(kernel, mock_llm):
+    coder = kernel._create_subagent("coder", "test-coder")
+    coder.register_tool(
+        "workspace_run",
+        lambda command, cwd=".": {
+            "success": True,
+            "stdout": "1 passed",
+            "stderr": "",
+            "returncode": 0,
+        },
+        "Run a workspace command",
+    )
+    mock_llm.responses = [
+        _llm_response(
+            "THOUGHT: Execute the check\n"
+            "TOOL: workspace_run\n"
+            'PARAMS: {"command": "cargo test --test focused", "cwd": "."}'
+        ),
+        _llm_response(
+            "THOUGHT: Report the observed command\n"
+            "DONE: Check complete\n"
+            "RESULT: " + json.dumps({
+                "observation": {
+                    "tool_receipt_id": "tool:wf-1:reproduce:1",
+                    "command": ["cargo", "test", "--test", "focused"],
+                    "exit_code": 101,
+                    "stdout": "invented failure",
+                    "stderr": "invented panic",
+                    "duration_ms": 9999,
+                    "observed_at": "2000-01-01T00:00:00Z",
+                },
+            })
+        ),
+    ]
+
+    output = await coder.run(
+        "Run the focused test",
+        context={
+            "workflow_id": "wf-1",
+            "step_id": "reproduce",
+            "execution_contract": {
+                "required_tool_groups": [["workspace_run"]],
+            },
+        },
+        max_turns=2,
+    )
+
+    assert output.status == "success"
+    assert output.payload["observation"]["exit_code"] == 0
+    assert output.payload["observation"]["stdout"] == "1 passed"
+    assert "tool:wf-1:reproduce:1" in mock_llm.calls[1]["messages"][-2]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_result", "expected_status"),
+    [
+        (
+            {"success": False, "stdout": "", "stderr": "failed", "returncode": 1},
+            "error",
+        ),
+        (
+            {
+                "success": False,
+                "stdout": "",
+                "stderr": "timed out",
+                "returncode": -1,
+                "status": "timeout",
+            },
+            "timeout",
+        ),
+    ],
+)
+async def test_unsuccessful_tool_result_has_error_without_losing_timeout_marker(
+    kernel, tool_result, expected_status
+):
+    coder = kernel._create_subagent("coder", "test-coder")
+    coder.register_tool("workspace_run", lambda: dict(tool_result), "Run command")
+
+    result = await coder._execute_tool("workspace_run", {})
+
+    assert result["status"] == expected_status
+    assert result["error"] == tool_result["stderr"]
+
+
+def test_downstream_output_can_cite_grounded_dependency_receipt():
+    observation = {
+        "tool_receipt_id": "tool:wf-1:reproduce:1",
+        "command": ["cargo", "test"],
+        "exit_code": 1,
+        "stdout": "",
+        "stderr": "failed",
+        "duration_ms": 10,
+        "observed_at": "2026-09-17T00:00:00Z",
+    }
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="synthesize",
+        agent_id="strategist",
+        task="Synthesize evidence",
+        context={
+            "previous_step_results": {
+                "reproduce": {"output": {"vulnerable_run": observation}},
+            },
+        },
+    )
+
+    hydrated = state.hydrate_tool_receipts(
+        {"finding": {"reproduction": {"vulnerable_run": observation}}},
+        require_command_receipts=True,
+    )
+
+    assert hydrated["finding"]["reproduction"]["vulnerable_run"] == observation
+
+
+def test_receipt_catalog_contains_only_evidence_cited_by_output():
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="analyse",
+        agent_id="coder-1",
+        task="Analyse",
+    )
+    cited = state.add_tool_result(
+        "workspace_run",
+        {"command": "cargo test"},
+        {"success": True, "stdout": "passed", "stderr": "", "returncode": 0},
+    )
+    state.add_tool_result(
+        "workspace_run",
+        {"command": "echo secret"},
+        {"success": True, "stdout": "not cited", "stderr": "", "returncode": 0},
+    )
+
+    evidence = state.receipt_evidence({
+        "run": {"tool_receipt_id": cited.receipt_id},
+    })
+
+    assert [item["tool_receipt_id"] for item in evidence] == [cited.receipt_id]
+    assert "not cited" not in json.dumps(evidence)
+
+
+def test_standalone_receipt_scopes_do_not_collide():
+    first = KernelState(agent_id="coder", task="first", started_at=1.0)
+    second = KernelState(agent_id="coder", task="second", started_at=2.0)
+
+    first_receipt = first.add_tool_result("workspace_read", {}, {"status": "success"})
+    second_receipt = second.add_tool_result("workspace_read", {}, {"status": "success"})
+
+    assert first_receipt.receipt_id != second_receipt.receipt_id
+
+
+def test_workspace_mutation_receipt_overrides_model_authored_file_facts():
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="repair",
+        agent_id="coder-1",
+        task="Repair the defect",
+    )
+    receipt = state.add_tool_result(
+        "workspace_write",
+        {"path": "src/store.rs", "content": "fixed", "executable": False},
+        {
+            "status": "success",
+            "path": "src/store.rs",
+            "bytes": 5,
+            "sha256": "0123456789abcdef",
+            "executable": False,
+        },
+    )
+
+    hydrated = state.hydrate_tool_receipts({
+        "mutation": {
+            "tool_receipt_id": receipt.receipt_id,
+            "path": "invented.py",
+            "sha256": "invented",
+            "bytes": 999,
+            "executable": True,
+        },
+    })
+
+    assert hydrated["mutation"] == {
+        "tool_receipt_id": receipt.receipt_id,
+        "path": "src/store.rs",
+        "sha256": "0123456789abcdef",
+        "bytes": 5,
+        "executable": False,
+        "observed_at": receipt.workspace_mutation().model_dump(mode="json")["observed_at"],
+    }
+
+    cited = state.hydrate_tool_receipts({
+        "mutation": {"tool_receipt_id": receipt.receipt_id},
+    })
+    assert cited["mutation"] == hydrated["mutation"]
+
+
+def test_workspace_edit_receipt_is_authoritative_mutation_evidence():
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="repair",
+        agent_id="coder-1",
+        task="Repair the defect",
+    )
+    receipt = state.add_tool_result(
+        "workspace_edit",
+        {
+            "path": "src/store.rs",
+            "start_line": 3,
+            "end_line": 3,
+            "replacement": "fixed",
+            "expected_sha256": "before",
+        },
+        {
+            "status": "success",
+            "path": "src/store.rs",
+            "bytes": 5,
+            "sha256": "after",
+            "executable": False,
+        },
+    )
+
+    mutation = receipt.workspace_mutation()
+
+    assert mutation.path == "src/store.rs"
+    assert mutation.sha256 == "after"
+
+
+def test_workspace_mutation_receipt_rejects_non_write_receipt():
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="repair",
+        agent_id="coder-1",
+        task="Repair the defect",
+    )
+    receipt = state.add_tool_result(
+        "workspace_read",
+        {"path": "src/store.rs"},
+        {"status": "success", "path": "src/store.rs", "content": "old"},
+    )
+
+    with pytest.raises(ToolReceiptError, match="not workspace mutation evidence"):
+        state.hydrate_tool_receipts({
+            "mutation": {
+                "tool_receipt_id": receipt.receipt_id,
+                "path": "src/store.rs",
+                "sha256": "invented",
+                "bytes": 1,
+                "executable": False,
+                "observed_at": "2000-01-01T00:00:00Z",
+            },
+        })
+
+
+def test_workspace_mutation_claim_requires_receipt_at_completion_gate():
+    state = KernelState(
+        workflow_id="wf-1",
+        step_id="repair",
+        agent_id="coder-1",
+        task="Repair the defect",
+    )
+
+    with pytest.raises(ToolReceiptError, match="Workspace mutations require"):
+        state.hydrate_tool_receipts(
+            {
+                "mutation": {
+                    "path": "src/store.rs",
+                    "sha256": "invented",
+                    "bytes": 5,
+                    "executable": False,
+                }
+            },
+            require_command_receipts=True,
+        )
+
+
+def test_post_normalization_hydrator_rejects_fabricated_mutation():
+    with pytest.raises(ToolReceiptError, match="Unknown tool receipt"):
+        hydrate_receipt_evidence(
+            {
+                "status": "applied",
+                "mutations": [{
+                    "tool_receipt_id": "tool:wf-1:repair:missing",
+                    "path": "src/store.rs",
+                    "sha256": "invented",
+                    "bytes": 1,
+                    "executable": False,
+                    "observed_at": "2000-01-01T00:00:00Z",
+                }],
+            },
+            receipt_evidence=[],
+        )
+
+
+def test_post_normalization_hydrator_binds_workspace_mutation():
+    evidence = {
+        "tool_receipt_id": "tool:wf-1:repair:1",
+        "path": "src/store.rs",
+        "sha256": "0123456789abcdef",
+        "bytes": 5,
+        "executable": False,
+        "observed_at": "2026-09-17T00:00:00Z",
+    }
+
+    hydrated = hydrate_receipt_evidence(
+        {
+            "status": "applied",
+            "mutations": [{**evidence, "path": "invented.py"}],
+        },
+        receipt_evidence=[evidence],
+        workflow_id="wf-1",
+    )
+
+    assert hydrated["mutations"] == [evidence]
+
+    cited = hydrate_receipt_evidence(
+        {"mutations": [{"tool_receipt_id": evidence["tool_receipt_id"]}]},
+        receipt_evidence=[evidence],
+        workflow_id="wf-1",
+    )
+    assert cited["mutations"] == [evidence]
+
+
+def test_post_normalization_hydrator_rejects_cross_workflow_receipt():
+    evidence = {
+        "tool_receipt_id": "tool:other-workflow:repair:1",
+        "path": "src/store.rs",
+        "sha256": "0123456789abcdef",
+        "bytes": 5,
+        "executable": False,
+        "observed_at": "2026-09-17T00:00:00Z",
+    }
+
+    with pytest.raises(ToolReceiptError, match="another workflow"):
+        hydrate_receipt_evidence(
+            {"mutations": [evidence]},
+            receipt_evidence=[evidence],
+            workflow_id="wf-1",
+        )
+
+
+def test_artifact_reference_hydrator_preserves_exact_dependency_evidence():
+    mutation = {
+        "tool_receipt_id": "tool:wf-1:repair:1",
+        "path": "src/store.rs",
+        "sha256": "0123456789abcdef",
+        "bytes": 5,
+        "executable": False,
+        "observed_at": "2026-09-17T00:00:00Z",
+    }
+    dependencies = {
+        "repair": {"status": "applied", "mutations": [mutation]},
+        "verify": {"status": "verified", "regression_runs": []},
+    }
+
+    hydrated = hydrate_artifact_references(
+        {
+            "findings": [{
+                "patch": {"artifact_ref": {"step_id": "repair"}},
+                "verification": {"artifact_ref": {"step_id": "verify"}},
+            }]
+        },
+        previous_step_results=dependencies,
+        required_reference_paths=(
+            ("findings", "*", "patch"),
+            ("findings", "*", "verification"),
+        ),
+    )
+
+    assert hydrated["findings"][0]["patch"] == dependencies["repair"]
+    assert hydrated["findings"][0]["patch"]["mutations"] == [mutation]
+    assert hydrated["findings"][0]["verification"] == dependencies["verify"]
+
+
+@pytest.mark.asyncio
+async def test_coder_hydrates_artifact_reference_before_schema_validation(kernel):
+    class Output(BaseModel):
+        patch: dict[str, str]
+
+    coder = kernel._create_subagent("coder", "test-coder")
+    coder.sandbox = SimpleNamespace(execute=AsyncMock(return_value={
+        "status": "success",
+        "output": {
+            "data": {"patch": {"artifact_ref": {"step_id": "repair"}}}
+        },
+    }))
+    coder._run_context = {
+        "output_schema": Output,
+        "artifact_reference_paths": (("patch",),),
+        "previous_step_results": {"repair": {"status": "applied"}},
+    }
+
+    result = await coder._tool_execute_code(code="result = {}")
+
+    assert result["status"] == "success"
+    assert result["output"]["data"]["patch"] == {"status": "applied"}
+
+
+def test_artifact_reference_hydrator_rejects_copied_required_artifact():
+    with pytest.raises(ArtifactReferenceError, match="must use an exact artifact_ref"):
+        hydrate_artifact_references(
+            {"findings": [{"patch": {"status": "applied"}}]},
+            previous_step_results={"repair": {"status": "applied"}},
+            required_reference_paths=(("findings", "*", "patch"),),
+        )
+
+
+def test_artifact_reference_hydrator_rejects_non_dependency_step():
+    with pytest.raises(ArtifactReferenceError, match="unavailable direct dependency"):
+        hydrate_artifact_references(
+            {"patch": {"artifact_ref": {"step_id": "unrelated"}}},
+            previous_step_results={"repair": {"status": "applied"}},
+        )
+
+
+def test_artifact_reference_hydrator_rejects_malformed_reference():
+    with pytest.raises(ArtifactReferenceError, match="Invalid artifact reference"):
+        hydrate_artifact_references(
+            {"patch": {"artifact_ref": {"path": ["patch"]}}},
+            previous_step_results={"repair": {"status": "applied"}},
+        )
 
 
 # ── Task Classification ──────────────────────────────────────────────
@@ -584,6 +1270,9 @@ class TestKernelExecuteSuccess:
         # The harness still ships in full: role prompt, tools and protocol.
         assert "COMMUNICATION SPECIALIST" in system.upper()
         assert "Available tools:" in system and "Protocol:" in system
+        assert "one action per turn, not one action per task" in system
+        assert "continue calling tools until the task" in system
+        assert "Never use DONE merely because additional tool calls are needed" in system
 
     @pytest.mark.asyncio
     async def test_callers_passing_no_identity_are_unchanged(self, kernel, mock_llm):
@@ -770,6 +1459,20 @@ class TestDeclaredSystemCredentials:
 
         assert decision.role == "coder"
         assert decision.reason == "Provider mutation requires the credentialed Coder harness."
+
+    @pytest.mark.asyncio
+    async def test_execution_contract_role_precedes_classifier_and_profile_default(
+        self, kernel, mock_llm
+    ):
+        decision = await kernel._route_task(
+            "Inspect and execute repository tests",
+            {"execution_contract": {"kernel_role": "coder"}},
+            agent_default_role="researcher",
+            use_default_role_as_fallback=True,
+        )
+
+        assert decision.role == "coder"
+        assert decision.reason == "Explicit planner/profile role."
         assert mock_llm.calls == []
 
     @pytest.mark.asyncio

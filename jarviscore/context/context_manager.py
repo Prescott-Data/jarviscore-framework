@@ -25,7 +25,7 @@ Two responsibilities:
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from jarviscore.context.pressure import (
@@ -410,6 +410,19 @@ class ContextManager:
             add("long_term_memory", ltm_block)
 
         if state.tool_history:
+            receipt_lines = [
+                f"- `{turn.receipt_id}`: {turn.tool_name}"
+                for turn in state.tool_history[-20:]
+                if getattr(turn, "receipt_id", "")
+            ]
+            if receipt_lines:
+                add(
+                    "tool_receipts",
+                    "## AUTHORITATIVE TOOL RECEIPTS\n"
+                    "Use these IDs when final JSON cites tool evidence. Full results "
+                    "remain in durable action history.\n"
+                    + "\n".join(receipt_lines),
+                )
             history_block, _ = self._format_tool_history(
                 state.tool_history, self.config.history_limit
             )
@@ -496,6 +509,7 @@ class ContextManager:
                 # KernelState.ToolResult model
                 entry = (
                     f"**{turn.tool_name}** [{turn.status}]\n"
+                    f"  Receipt: {turn.receipt_id or 'legacy-unreceipted'}\n"
                     f"  Input: {json.dumps(turn.tool_input, default=str)}\n"
                     f"  Output: {turn.tool_output}"
                 )

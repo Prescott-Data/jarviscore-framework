@@ -7,14 +7,18 @@ wrong or influenced, so the destination is checked rather than trusted.
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+from jarviscore.nexus.call_proxy import NexusCallProxy
 from jarviscore.nexus.hosts import (
     HostNotAllowed,
     allowed_hosts,
     ensure_host_allowed,
 )
+from jarviscore.nexus.models import DynamicStrategy
 
 
 # ── The refusal itself ───────────────────────────────────────────────────────
@@ -77,6 +81,109 @@ def test_a_tenant_provider_without_a_recorded_domain_is_refused():
     with pytest.raises(HostNotAllowed) as exc:
         ensure_host_allowed("salesforce", "https://acme.my.salesforce.com/x")
     assert "record it on the connection" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_gateway_call_does_not_read_the_local_vault(monkeypatch):
+    auth = SimpleNamespace(
+        _connections={"github": "resolved:github"},
+        resolve_strategy=AsyncMock(return_value=DynamicStrategy(
+            type="oauth2",
+            credentials={"access_token": "secret"},
+        )),
+    )
+
+    def local_store_is_forbidden():
+        raise AssertionError("gateway mode must not open the local vault")
+
+    class Response:
+        status_code = 200
+        text = "{}"
+        content = b"{}"
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def request(self, **kwargs):
+            assert kwargs["headers"]["Authorization"] == "Bearer secret"
+            return Response()
+
+    monkeypatch.setattr("jarviscore.nexus.store.get_store", local_store_is_forbidden)
+    monkeypatch.setattr("jarviscore.nexus.call_proxy.httpx.AsyncClient", Client)
+
+    result = await NexusCallProxy(auth).call(
+        "resolved:github", "GET", "https://api.github.com/repos/example/project"
+    )
+
+    assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_refreshed_strategy_is_rechecked_against_requested_host(monkeypatch):
+    initial = DynamicStrategy(
+        type="oauth2",
+        credentials={"access_token": "expired"},
+        config={"instance_url": "https://acme.my.salesforce.com"},
+    )
+    refreshed = DynamicStrategy(
+        type="oauth2",
+        credentials={"access_token": "fresh"},
+        config={"instance_url": "https://evil.example.com"},
+    )
+    nexus_client = SimpleNamespace(refresh_connection=AsyncMock())
+    auth = SimpleNamespace(
+        _connections={"salesforce": "connection-1"},
+        _strategy_cache={"connection-1": initial},
+        nexus_client=nexus_client,
+        resolve_strategy=AsyncMock(side_effect=[initial, refreshed]),
+    )
+
+    class Response:
+        status_code = 401
+        text = "unauthorized"
+        content = b"unauthorized"
+        headers = {}
+
+        @staticmethod
+        def json():
+            return None
+
+    class Client:
+        calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def request(self, **kwargs):
+            self.calls += 1
+            return Response()
+
+    client = Client()
+    monkeypatch.setattr(
+        "jarviscore.nexus.call_proxy.httpx.AsyncClient", lambda: client
+    )
+
+    with pytest.raises(HostNotAllowed):
+        await NexusCallProxy(auth).call(
+            "connection-1",
+            "GET",
+            "https://acme.my.salesforce.com/services/data",
+        )
+
+    assert client.calls == 1
+    nexus_client.refresh_connection.assert_awaited_once_with("connection-1")
 
 
 # ── Subdomain patterns ───────────────────────────────────────────────────────

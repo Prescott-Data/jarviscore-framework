@@ -101,5 +101,6 @@ class TestWorkflowTimeoutConfig:
 
 
 class TestProviderDefaults:
-    def test_azure_uses_current_dated_ga_api(self):
+    def test_azure_uses_current_dated_ga_api(self, monkeypatch):
+        monkeypatch.delenv("AZURE_API_VERSION", raising=False)
         assert Settings(_env_file=None).azure_api_version == "2024-10-21"

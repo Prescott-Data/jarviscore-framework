@@ -26,6 +26,65 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 1.13.0 <span class="changelog-date">2026-09-22</span>
+
+### Added
+
+- Durable source workspaces now resolve GitHub repositories to immutable
+  snapshots, materialize isolated copy-on-write sandboxes, compose dependency
+  deltas, and preserve exact source provenance through distributed Mesh runs.
+- Public typed artifact references and artifact-type dependencies let planners
+  deliver exact upstream work products without copying or reconstructing
+  evidence in prompts.
+- Authoritative command and workspace-mutation receipts bind final artifacts to
+  the tool executions and file contents that produced them.
+- Coder workspace tools now include bounded listing, reading, searching,
+  execution, complete-file writes, and hash-guarded line-range edits for safe
+  modification of existing source files.
+
+### Changed
+
+- Bounded execution epochs now preserve both cognitive state and cumulative
+  workspace deltas. A later epoch can continue an earlier mutation and cite its
+  original receipt without losing or fabricating evidence.
+- Mesh final responses wait for semantic reconciliation. Rejected or partial
+  evidence can produce a bounded corrective revision, while stale response steps
+  are superseded before they can answer the user.
+- Gateway-backed Nexus calls no longer require the local encrypted credential
+  vault when a remote strategy is configured. Local fallback remains explicit
+  and destination policy failures continue to fail closed.
+- Same-store process restarts can resume node-local work when the persisted
+  snapshot manifest is available; remote nodes still require shared storage.
+
+### Fixed
+
+- Local generated-code and process execution now fails closed unless a trusted
+  deployment explicitly enables `ALLOW_UNSAFE_LOCAL_EXECUTION`. Timeout cleanup
+  terminates descendant processes on POSIX and Windows, and unsuccessful command
+  results are retained as failure evidence.
+- Snapshot and delta persistence now rejects traversal, symlink, case-folded,
+  identity, and mutable-blob collisions. Dependency deltas are accepted only
+  from the framework-owned result field for the exact workflow step.
+- Redis step output is bounded before persistence, including circular and
+  unserializable values, while continuation state cannot retain a stale
+  workspace delta from an earlier epoch.
+- Cached source snapshots are bound to the requested source identity and commit,
+  decoded GitHub payloads obey file and aggregate limits, and refreshed Nexus
+  credentials are rechecked against destination policy.
+- Prevented successful commands that execute zero tests from being treated as
+  reproduction or verification evidence by product contracts.
+- Prevented workspace writes from being lost between execution epochs and fixed
+  final receipt hydration for mutations created before the terminal epoch.
+- Prevented full-file replacement from masquerading as a targeted source edit by
+  adding an optimistic-concurrency edit contract with source-hash validation.
+- Fixed final-response races, stale revision responses, circular artifact
+  dependencies, and resume-versus-amend lifecycle errors exposed by live Agent
+  Desk execution.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.12.0 <span class="changelog-date">2026-09-19</span>
 
 ### Added

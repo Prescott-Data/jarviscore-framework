@@ -80,6 +80,17 @@ class TestLocalBlobStorage:
         assert content == "Hello World"
 
     @pytest.mark.asyncio
+    async def test_binary_saved_utf8_preserves_crlf_bytes(self, storage):
+        """UTF-8 source blobs retain byte-exact CRLF content after persistence."""
+        data = b"<svg>\r\n<path/>\r\n</svg>\r\n"
+        await storage.save("source/logo.svg", data)
+
+        content = await storage.read("source/logo.svg")
+
+        assert isinstance(content, str)
+        assert content.encode("utf-8") == data
+
+    @pytest.mark.asyncio
     async def test_save_and_read_binary(self, storage):
         """Binary content (images, compiled code) survives roundtrip."""
         data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
@@ -161,12 +172,27 @@ class TestLocalBlobStorage:
         with pytest.raises(ValueError, match="Path traversal"):
             storage._full_path("workflows/../../etc/shadow")
 
+    def test_path_traversal_cannot_escape_to_sibling_with_shared_prefix(self, tmp_path):
+        storage = LocalBlobStorage(base_path=str(tmp_path / "blobs"))
+
+        with pytest.raises(ValueError, match="Path traversal"):
+            storage._full_path("../blobs-attacker/manifest.json")
+
+    def test_path_traversal_cannot_escape_through_symlink(self, tmp_path):
+        storage = LocalBlobStorage(base_path=str(tmp_path / "blobs"))
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (tmp_path / "blobs" / "alias").symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="Path traversal"):
+            storage._full_path("alias/secret.txt")
+
     @pytest.mark.asyncio
     async def test_creates_base_path_on_init(self):
         """LocalBlobStorage creates the base directory if it doesn't exist."""
         with tempfile.TemporaryDirectory() as tmp:
             new_path = os.path.join(tmp, "new", "storage", "dir")
-            storage = LocalBlobStorage(base_path=new_path)
+            LocalBlobStorage(base_path=new_path)
             assert os.path.isdir(new_path)
 
     @pytest.mark.asyncio
