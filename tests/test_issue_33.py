@@ -26,7 +26,7 @@ async def test_coder_system_prompt_manifest_injection_standard_sandbox():
 
 @pytest.mark.asyncio
 async def test_coder_system_prompt_manifest_injection_coder_sandbox():
-    sandbox = create_coder_sandbox()
+    sandbox = create_coder_sandbox(allow_unsafe_local_execution=True)
 
     class DummyLLM:
         pass

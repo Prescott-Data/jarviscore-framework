@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     # === Sandbox Settings ===
     sandbox_mode: str = "local"  # "local" or "remote"
     sandbox_service_url: Optional[str] = None  # URL for remote sandbox
+    allow_unsafe_local_execution: bool = False
 
     # === Storage Settings ===
     log_directory: str = "./logs"

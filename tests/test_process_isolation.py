@@ -4,8 +4,13 @@ from typing import ClassVar
 import pytest
 
 from jarviscore import Mesh
-from jarviscore.execution.coder_sandbox import create_coder_sandbox
+from jarviscore.execution.coder_sandbox import create_coder_sandbox as _create_coder_sandbox
 from jarviscore.profiles.autoagent import AutoAgent, _AutoAgentMeshProxy
+
+
+def create_coder_sandbox(*args, **kwargs):
+    kwargs.setdefault("allow_unsafe_local_execution", True)
+    return _create_coder_sandbox(*args, **kwargs)
 
 
 class RecordingProxy:

@@ -192,9 +192,11 @@ class BashExecutor:
         timeout: int = 120,
         allowed_commands: Optional[set[str]] = None,
         command_environment: Optional[Dict[str, str]] = None,
+        allow_unsafe_local_execution: bool = False,
     ):
         self.workspace = workspace_dir
         self.timeout = timeout
+        self.allow_unsafe_local_execution = bool(allow_unsafe_local_execution)
         self.allowed_commands = _BASH_ALLOW_LIST | set(allowed_commands or ())
         allowed_environment = {
             "CARGO_HOME",
@@ -223,6 +225,13 @@ class BashExecutor:
         Returns:
             {"success": bool, "stdout": str, "stderr": str, "returncode": int}
         """
+        if not self.allow_unsafe_local_execution:
+            raise BashPermissionError(
+                "Local process execution is disabled because cwd and command allow-lists "
+                "do not isolate the host filesystem or network. Configure a remote/container "
+                "sandbox, or explicitly set allow_unsafe_local_execution=True only for "
+                "trusted code."
+            )
         return self._run(command, cwd)
 
     def _run(self, command: str, cwd: Optional[str] = None) -> Dict[str, Any]:
@@ -465,6 +474,7 @@ class CoderSandbox:
         artifact_prefix: str = "artifacts",
         allowed_commands: Optional[set[str]] = None,
         command_environment: Optional[Dict[str, str]] = None,
+        allow_unsafe_local_execution: bool = False,
     ):
         self.workspace = Path(workspace_dir) if workspace_dir else Path.cwd()
         self.timeout = timeout
@@ -474,12 +484,14 @@ class CoderSandbox:
         # backend, local or remote. The sandbox only decides that they leave.
         self.blob_storage = blob_storage
         self.artifact_prefix = artifact_prefix
+        self.allow_unsafe_local_execution = bool(allow_unsafe_local_execution)
 
         self._bash = BashExecutor(
             self.workspace,
             timeout=bash_timeout,
             allowed_commands=allowed_commands,
             command_environment=command_environment,
+            allow_unsafe_local_execution=self.allow_unsafe_local_execution,
         )
         self._git = GitHelper(self._bash, self.workspace)
         self._nexus_call_proxy = nexus_call_proxy  # NexusCallProxy | None
@@ -513,6 +525,7 @@ class CoderSandbox:
                 **self._bash.command_environment,
                 **dict(command_environment or {}),
             },
+            allow_unsafe_local_execution=self.allow_unsafe_local_execution,
         )
 
     def _workspace_path(self, relative: str = ".") -> Path:
@@ -744,6 +757,13 @@ class CoderSandbox:
         timeout: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Execute generated code in a child process with no parent secrets."""
+        if not self.allow_unsafe_local_execution:
+            raise BashPermissionError(
+                "Local generated-code execution is disabled because a subprocess does not "
+                "isolate the host filesystem or network. Configure a remote/container "
+                "sandbox, or explicitly set allow_unsafe_local_execution=True only for "
+                "trusted code."
+            )
         return await self._execute_subprocess(code, context, timeout or self.timeout)
 
     async def _execute_subprocess(
@@ -761,6 +781,7 @@ class CoderSandbox:
             "code": code, "context": safe_context,
             "workspace": str(self.workspace), "output_dir": str(self.output_dir),
             "bash_timeout": self._bash.timeout, "rpc_fd": child_socket.fileno(),
+            "allow_unsafe_local_execution": self.allow_unsafe_local_execution,
         }
         command_dirs = {
             str(Path(found).parent)
@@ -1489,6 +1510,7 @@ def create_coder_sandbox(
     artifact_prefix: str = "artifacts",
     allowed_commands: Optional[set[str]] = None,
     command_environment: Optional[Dict[str, str]] = None,
+    allow_unsafe_local_execution: bool = False,
 ) -> CoderSandbox:
     """
     Create a CoderSandbox scoped to the given workspace directory.
@@ -1515,4 +1537,5 @@ def create_coder_sandbox(
         artifact_prefix=artifact_prefix,
         allowed_commands=allowed_commands,
         command_environment=command_environment,
+        allow_unsafe_local_execution=allow_unsafe_local_execution,
     )

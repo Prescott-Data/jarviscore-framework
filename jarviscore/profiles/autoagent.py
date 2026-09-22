@@ -368,6 +368,9 @@ class AutoAgent(Profile):
             mesh_proxy=_AutoAgentMeshProxy(self),
             blob_storage=getattr(self, '_blob_storage', None),
             artifact_prefix=f"artifacts/{self.role}",
+            allow_unsafe_local_execution=bool(
+                config.get("allow_unsafe_local_execution", False)
+            ),
         )
 
         # 5. Initialize autonomous repair

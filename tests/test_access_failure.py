@@ -6,11 +6,14 @@ by matching substrings of the message, and why "Created 401 contacts
 successfully" was read as an authentication failure.
 """
 
-import pytest
-
-from jarviscore.execution.coder_sandbox import create_coder_sandbox
+from jarviscore.execution.coder_sandbox import create_coder_sandbox as _create_coder_sandbox
 from jarviscore.nexus.hosts import HostNotAllowed
 from jarviscore.nexus.strategy import StrategyError
+
+
+def create_coder_sandbox(*args, **kwargs):
+    kwargs.setdefault("allow_unsafe_local_execution", True)
+    return _create_coder_sandbox(*args, **kwargs)
 
 
 SWALLOWS_EVERYTHING = """

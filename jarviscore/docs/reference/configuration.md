@@ -362,6 +362,7 @@ Advanced execution parameters for the OODA loop Kernel. The defaults are appropr
 |---|---|---|
 | `KERNEL_MAX_TURNS` | `30` | Maximum OODA loop turns per task execution. |
 | `SANDBOX_MODE` | `local` | `local` (in-process execution) or `remote` (external sandboxed execution). |
+| `ALLOW_UNSAFE_LOCAL_EXECUTION` | `false` | Explicitly allow generated Python and shell/build commands to run as host subprocesses. Local mode does not isolate the host filesystem or network; keep this disabled for untrusted agent input and use a remote/container sandbox. |
 | `EXECUTION_TIMEOUT` | `300` | Seconds before sandbox code execution is forcibly terminated. |
 | `MAX_REPAIR_ATTEMPTS` | `3` | Autonomous repair retries when generated code fails. |
 | `HITL_ENABLED` | `false` | Enable Human-in-the-Loop escalation. |

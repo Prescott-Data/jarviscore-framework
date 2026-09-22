@@ -118,7 +118,10 @@ async def test_new_execution_epoch_preserves_action_evidence_and_closes_gap(tmp_
             + '{"command": "pwd", "cwd": "."}',
             'DONE: Build command executed.\nRESULT: {"status": "verified"}',
         ]),
-        sandbox=create_coder_sandbox(workspace_dir=tmp_path),
+        sandbox=create_coder_sandbox(
+            workspace_dir=tmp_path,
+            allow_unsafe_local_execution=True,
+        ),
     )
 
     result = await coder.run(

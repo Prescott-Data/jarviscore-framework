@@ -8,8 +8,14 @@ import pytest
 
 from jarviscore.core.mesh import Mesh
 from jarviscore.core.agent import Agent
-from jarviscore.execution import BlobSnapshotStore, SourceRef, create_coder_sandbox
+from jarviscore.execution import BlobSnapshotStore, SourceRef
+from jarviscore.execution import create_coder_sandbox as _create_coder_sandbox
 from jarviscore.storage import LocalBlobStorage
+
+
+def create_coder_sandbox(*args, **kwargs):
+    kwargs.setdefault("allow_unsafe_local_execution", True)
+    return _create_coder_sandbox(*args, **kwargs)
 
 
 @pytest.mark.asyncio

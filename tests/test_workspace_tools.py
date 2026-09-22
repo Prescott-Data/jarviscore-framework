@@ -5,9 +5,32 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from jarviscore.execution import BashPermissionError, create_coder_sandbox
+from jarviscore.execution import BashPermissionError
+from jarviscore.execution import create_coder_sandbox as _create_coder_sandbox
 from jarviscore.kernel.defaults.coder import CoderSubAgent
 from jarviscore.kernel.state import KernelState
+
+
+def create_coder_sandbox(*args, **kwargs):
+    kwargs.setdefault("allow_unsafe_local_execution", True)
+    return _create_coder_sandbox(*args, **kwargs)
+
+
+def test_local_process_execution_fails_closed_by_default(tmp_path):
+    sandbox = _create_coder_sandbox(workspace_dir=tmp_path)
+
+    with pytest.raises(BashPermissionError, match="Local process execution is disabled"):
+        sandbox.run_workspace("cat /etc/passwd")
+
+
+@pytest.mark.asyncio
+async def test_local_generated_code_execution_fails_closed_by_default(tmp_path):
+    sandbox = _create_coder_sandbox(workspace_dir=tmp_path)
+
+    with pytest.raises(
+        BashPermissionError, match="Local generated-code execution is disabled"
+    ):
+        await sandbox.execute("result = open('/etc/passwd').read()")
 
 
 def test_workspace_tools_list_read_and_search_bound_files(tmp_path):
