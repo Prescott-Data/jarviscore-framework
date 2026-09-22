@@ -9,7 +9,7 @@ import tempfile
 import time
 from collections.abc import AsyncIterable
 from dataclasses import asdict, dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Mapping
 
 from jarviscore.storage import BlobStorage
@@ -17,7 +17,14 @@ from jarviscore.storage import BlobStorage
 
 def _safe_relative_path(value: str) -> PurePosixPath:
     path = PurePosixPath(value)
-    if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
+    windows_path = PureWindowsPath(value)
+    if (
+        "\\" in value
+        or windows_path.drive
+        or path.is_absolute()
+        or not path.parts
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
         raise ValueError(f"Workspace paths must be safe relative paths: {value!r}")
     return path
 

@@ -94,6 +94,20 @@ async def test_snapshot_rejects_paths_that_escape_workspace(tmp_path):
             {"../outside.txt": "no"},
         )
 
+    with pytest.raises(ValueError, match="safe relative"):
+        await store.capture(
+            SourceRef(provider="archive", locator="fixture", revision="main"),
+            "commit-1",
+            {"..\\outside.txt": "no"},
+        )
+
+    with pytest.raises(ValueError, match="safe relative"):
+        await store.capture(
+            SourceRef(provider="archive", locator="fixture", revision="main"),
+            "commit-1",
+            {"C:\\outside.txt": "no"},
+        )
+
 
 @pytest.mark.asyncio
 async def test_materialization_rejects_corrupted_blob(tmp_path):
