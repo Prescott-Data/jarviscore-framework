@@ -17,14 +17,18 @@ class LocalBlobStorage(BlobStorage):
     """Blob storage backed by local filesystem."""
 
     def __init__(self, base_path: str = "./blob_storage"):
-        self.base_path = os.path.abspath(base_path)
+        self.base_path = os.path.realpath(os.path.abspath(base_path))
         os.makedirs(self.base_path, exist_ok=True)
         logger.info(f"LocalBlobStorage initialized: {self.base_path}")
 
     def _full_path(self, path: str) -> str:
         """Resolve relative path to absolute, preventing directory traversal."""
-        full = os.path.normpath(os.path.join(self.base_path, path))
-        if not full.startswith(self.base_path):
+        full = os.path.realpath(os.path.join(self.base_path, path))
+        try:
+            contained = os.path.commonpath((self.base_path, full)) == self.base_path
+        except ValueError:
+            contained = False
+        if not contained:
             raise ValueError(f"Path traversal detected: {path}")
         return full
 

@@ -105,6 +105,19 @@ async def test_github_source_reuses_cached_snapshot_without_refetching_blobs(tmp
 
 
 @pytest.mark.asyncio
+async def test_github_source_rejects_corrupted_cached_snapshot(tmp_path):
+    github = GitHubFixture()
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    source = GitHubRepositorySource(github, store)
+    snapshot = await source.capture(SourceRef("github", "acme/project", "main"))
+    await blobs.save(snapshot.entries[0].blob_path, b"tampered")
+
+    with pytest.raises(SourceIntegrityError, match="Cached GitHub snapshot"):
+        await source.capture(SourceRef("github", "acme/project", "main"))
+
+
+@pytest.mark.asyncio
 async def test_github_source_rejects_invalid_locator(tmp_path):
     source = GitHubRepositorySource(
         GitHubFixture(),

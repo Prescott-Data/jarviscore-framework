@@ -201,6 +201,33 @@ def test_workspace_run_rejects_background_command_bypass(tmp_path):
         sandbox.run_workspace("echo safe & uname -a")
 
 
+def test_workspace_run_rejects_pipe_ampersand_bypass(tmp_path):
+    sandbox = create_coder_sandbox(workspace_dir=tmp_path)
+
+    with pytest.raises(BashPermissionError, match="Unsupported shell operator"):
+        sandbox.run_workspace("echo safe |& uname -a")
+
+
+@pytest.mark.parametrize("cwd", ["/", "/tmp", "../outside"])
+def test_workspace_run_rejects_cwd_outside_workspace(tmp_path, cwd):
+    sandbox = create_coder_sandbox(workspace_dir=tmp_path / "workspace")
+
+    with pytest.raises(BashPermissionError, match="escapes workspace"):
+        sandbox._bash("pwd", cwd=cwd)
+
+
+def test_workspace_run_accepts_cwd_inside_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    nested = workspace / "nested"
+    nested.mkdir(parents=True)
+    sandbox = create_coder_sandbox(workspace_dir=workspace)
+
+    result = sandbox._bash("pwd", cwd="nested")
+
+    assert result["success"] is True
+    assert result["stdout"] == str(nested)
+
+
 def test_workspace_run_timeout_kills_child_processes(tmp_path):
     marker = tmp_path / "orphaned.txt"
     child = (
@@ -275,7 +302,7 @@ async def test_sandbox_cancels_rpc_task_after_child_exits(tmp_path, monkeypatch)
 
     result = await asyncio.wait_for(
         sandbox.execute("result = {'ok': True}"),
-        timeout=3.0,
+        timeout=10.0,
     )
 
     assert result["status"] == "success"

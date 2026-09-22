@@ -73,6 +73,40 @@ class TestStepOutputs:
         result = store.get_step_output("wf-1", "step-1")
         assert result["output"] == "second"
 
+    def test_large_step_output_is_replaced_by_bounded_failure(self, store):
+        store._store._max_step_output_bytes = 100
+
+        store.save_step_output(
+            "wf-large-output",
+            "step-1",
+            output={"content": "x" * 10_000},
+        )
+
+        saved = store.get_step_output("wf-large-output", "step-1")["output"]
+        assert saved["status"] == "failure"
+        assert saved["typed_outcome"] == "STEP_OUTPUT_TOO_LARGE"
+        assert len(json.dumps(saved).encode("utf-8")) < 1_000
+
+    def test_oversized_claimed_step_fails_atomically(self, store):
+        store._store._max_step_output_bytes = 100
+        store.init_workflow_graph(
+            "wf-large-claim",
+            [{"id": "step-1", "capability": "analysis", "task": "work", "depends_on": []}],
+        )
+        claim_id = "agent-a:claim-a"
+        assert store.claim_step("wf-large-claim", "step-1", claim_id, lease_seconds=30)
+
+        assert store.finish_claimed_step(
+            "wf-large-claim",
+            "step-1",
+            claim_id,
+            {"status": "success", "output": "x" * 10_000},
+        )
+
+        assert store.get_step_status("wf-large-claim", "step-1") == "failed"
+        saved = store.get_step_output("wf-large-claim", "step-1")["output"]
+        assert saved["typed_outcome"] == "STEP_OUTPUT_TOO_LARGE"
+
     def test_context_vars(self, store):
         """Context variables are stored alongside output."""
         store.save_step_output("wf-1", "step-1",
@@ -829,6 +863,38 @@ class TestAtomicStepClaiming:
             "step-1",
             claim_id,
             resume_agent_id="agent-a",
+        )
+
+    def test_empty_epoch_delta_clears_prior_continuation_workspace(self, store):
+        store.init_workflow_graph(
+            "wf-clear-delta",
+            [{"id": "step-1", "capability": "analysis", "task": "work", "depends_on": []}],
+        )
+        first_claim = "agent-a:epoch-1"
+        assert store.claim_step("wf-clear-delta", "step-1", first_claim, lease_seconds=30)
+        assert store.continue_claimed_step(
+            "wf-clear-delta",
+            "step-1",
+            first_claim,
+            resume_agent_id="agent-a",
+            continuation_workspace_delta={"manifest_blob_path": "delta-1.json"},
+        )
+        assert store.get_step_definition("wf-clear-delta", "step-1")[
+            "continuation_workspace_delta"
+        ]["manifest_blob_path"] == "delta-1.json"
+
+        second_claim = "agent-a:epoch-2"
+        assert store.claim_step("wf-clear-delta", "step-1", second_claim, lease_seconds=30)
+        assert store.continue_claimed_step(
+            "wf-clear-delta",
+            "step-1",
+            second_claim,
+            resume_agent_id="agent-a",
+            continuation_workspace_delta=None,
+        )
+
+        assert "continuation_workspace_delta" not in store.get_step_definition(
+            "wf-clear-delta", "step-1"
         )
 
     def test_partial_semantics_are_available_for_recipient_authorization(self, store):

@@ -1,7 +1,5 @@
 """A human wait resumes the same OODA state without replaying earlier actions."""
 
-import json
-
 import pytest
 
 from jarviscore.kernel.state import KernelState
@@ -116,8 +114,8 @@ async def test_new_execution_epoch_preserves_action_evidence_and_closes_gap(tmp_
     coder = CoderSubAgent(
         agent_id="coder-1",
         llm_client=QueueLLM([
-            'THOUGHT: Execute the missing check\nTOOL: workspace_run\n'
-            'PARAMS: {"command": "pwd", "cwd": "."}',
+            'THOUGHT: Execute the missing check\nTOOL: workspace_run\nPARAMS: '
+            + '{"command": "pwd", "cwd": "."}',
             'DONE: Build command executed.\nRESULT: {"status": "verified"}',
         ]),
         sandbox=create_coder_sandbox(workspace_dir=tmp_path),

@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,22 @@ async def test_materialization_rejects_corrupted_blob(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_materialization_rejects_forged_snapshot_identity(tmp_path):
+    store = BlobSnapshotStore(LocalBlobStorage(str(tmp_path / "blobs")))
+    snapshot = await store.capture(
+        SourceRef(provider="archive", locator="fixture", revision="main"),
+        "commit-1",
+        {"value.txt": "expected\n"},
+    )
+    forged = replace(snapshot, snapshot_id="0" * 64)
+
+    with pytest.raises(ValueError, match="identity"):
+        await store.materialize(forged, tmp_path / "forged")
+
+    assert not (tmp_path / "forged").exists()
+
+
+@pytest.mark.asyncio
 async def test_binding_rejects_existing_or_symlinked_cleanup_root(tmp_path):
     store = BlobSnapshotStore(LocalBlobStorage(str(tmp_path / "blobs")))
     snapshot = await store.capture(
@@ -131,6 +148,28 @@ async def test_binding_rejects_existing_or_symlinked_cleanup_root(tmp_path):
             pass
 
     assert (real / "keep.txt").read_text() == "safe\n"
+
+
+@pytest.mark.asyncio
+async def test_binding_rejects_cleanup_root_below_symlinked_parent(tmp_path):
+    store = BlobSnapshotStore(LocalBlobStorage(str(tmp_path / "blobs")))
+    snapshot = await store.capture(
+        SourceRef(provider="archive", locator="fixture", revision="main"),
+        "commit-1",
+        {"value.txt": "safe\n"},
+    )
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlinked parent"):
+        async with SandboxBinding(
+            store, snapshot, temporary_root=alias / "binding"
+        ):
+            pass
+
+    assert not (real / "binding").exists()
 
 
 def test_stale_binding_cleanup_removes_only_marked_dead_processes(tmp_path):
@@ -186,6 +225,28 @@ async def test_binding_applies_a_prior_delta_to_a_fresh_projection(tmp_path):
 
         assert (second.workspace / "value.txt").read_text() == "after\n"
         assert (second.workspace / "new.txt").read_text() == "new\n"
+
+
+@pytest.mark.asyncio
+async def test_delta_manifest_tampering_is_rejected(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    snapshot = await store.capture(
+        SourceRef(provider="archive", locator="fixture", revision="main"),
+        "commit-1",
+        {"value.txt": "before\n"},
+    )
+    async with SandboxBinding(store, snapshot) as binding:
+        (binding.workspace / "value.txt").write_text("after\n")
+        delta = await binding.export_delta("workflows/wf-1/workspace_deltas/step-1")
+
+    raw = await blobs.read(delta.manifest_blob_path)
+    manifest = json.loads(raw)
+    manifest["modified"][0]["path"] = "injected.txt"
+    await blobs.save(delta.manifest_blob_path, json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="identity"):
+        await store.load_delta(delta.manifest_blob_path)
 
 
 @pytest.mark.asyncio

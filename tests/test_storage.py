@@ -172,12 +172,27 @@ class TestLocalBlobStorage:
         with pytest.raises(ValueError, match="Path traversal"):
             storage._full_path("workflows/../../etc/shadow")
 
+    def test_path_traversal_cannot_escape_to_sibling_with_shared_prefix(self, tmp_path):
+        storage = LocalBlobStorage(base_path=str(tmp_path / "blobs"))
+
+        with pytest.raises(ValueError, match="Path traversal"):
+            storage._full_path("../blobs-attacker/manifest.json")
+
+    def test_path_traversal_cannot_escape_through_symlink(self, tmp_path):
+        storage = LocalBlobStorage(base_path=str(tmp_path / "blobs"))
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (tmp_path / "blobs" / "alias").symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="Path traversal"):
+            storage._full_path("alias/secret.txt")
+
     @pytest.mark.asyncio
     async def test_creates_base_path_on_init(self):
         """LocalBlobStorage creates the base directory if it doesn't exist."""
         with tempfile.TemporaryDirectory() as tmp:
             new_path = os.path.join(tmp, "new", "storage", "dir")
-            storage = LocalBlobStorage(base_path=new_path)
+            LocalBlobStorage(base_path=new_path)
             assert os.path.isdir(new_path)
 
     @pytest.mark.asyncio

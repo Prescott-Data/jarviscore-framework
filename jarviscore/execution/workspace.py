@@ -66,6 +66,7 @@ class WorkspaceDelta:
     modified: tuple[SnapshotEntry, ...]
     deleted: tuple[str, ...]
     manifest_blob_path: str
+    delta_id: str = ""
 
 
 class WorkspaceDeltaConflict(RuntimeError):
@@ -87,6 +88,16 @@ class BlobSnapshotStore:
         )
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         return f"{self.prefix}/references/{digest}.json"
+
+    @staticmethod
+    def _delta_id(delta: WorkspaceDelta) -> str:
+        identity = json.dumps({
+            "snapshot_id": delta.snapshot_id,
+            "added": [asdict(entry) for entry in delta.added],
+            "modified": [asdict(entry) for entry in delta.modified],
+            "deleted": list(delta.deleted),
+        }, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     async def find(
         self, source: SourceRef, resolved_revision: str
@@ -193,13 +204,46 @@ class BlobSnapshotStore:
         if raw is None:
             raise FileNotFoundError(manifest_blob_path)
         data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
-        return WorkspaceDelta(
+        delta = WorkspaceDelta(
             snapshot_id=data["snapshot_id"],
             added=tuple(SnapshotEntry(**entry) for entry in data["added"]),
             modified=tuple(SnapshotEntry(**entry) for entry in data["modified"]),
             deleted=tuple(data["deleted"]),
             manifest_blob_path=data["manifest_blob_path"],
+            delta_id=data.get("delta_id", ""),
         )
+        self.validate_delta(delta, requested_manifest_path=manifest_blob_path)
+        return delta
+
+    def validate_delta(
+        self,
+        delta: WorkspaceDelta,
+        *,
+        requested_manifest_path: str | None = None,
+    ) -> None:
+        """Verify a delta's canonical identity is bound to its manifest path."""
+        expected_id = self._delta_id(delta)
+        if delta.delta_id != expected_id:
+            raise ValueError("Workspace delta identity does not match its manifest")
+        expected_suffix = f"/manifests/{expected_id}.json"
+        if not delta.manifest_blob_path.endswith(expected_suffix):
+            raise ValueError("Workspace delta manifest path does not match its identity")
+        if (
+            requested_manifest_path is not None
+            and delta.manifest_blob_path != requested_manifest_path
+        ):
+            raise ValueError("Workspace delta manifest redirected to another path")
+        seen_paths: set[str] = set()
+        for entry in (*delta.added, *delta.modified):
+            path = _safe_relative_path(entry.path).as_posix()
+            if path in seen_paths:
+                raise ValueError(f"Duplicate workspace delta path: {path!r}")
+            seen_paths.add(path)
+        for raw_path in delta.deleted:
+            path = _safe_relative_path(raw_path).as_posix()
+            if path in seen_paths:
+                raise ValueError(f"Conflicting workspace delta path: {path!r}")
+            seen_paths.add(path)
 
     async def validate(self, snapshot: SourceSnapshot) -> None:
         """Verify every persisted blob against the immutable manifest."""
@@ -225,11 +269,16 @@ class BlobSnapshotStore:
                 raise FileNotFoundError(entry.blob_path)
             payload = _bytes(payload)
             if len(payload) != entry.size:
-                raise ValueError(f"Snapshot blob size mismatch: {entry.path}")
+                raise ValueError(
+                    f"Snapshot blob failed integrity validation (size): {entry.path}"
+                )
             if hashlib.sha256(payload).hexdigest() != entry.sha256:
-                raise ValueError(f"Snapshot blob hash mismatch: {entry.path}")
+                raise ValueError(
+                    f"Snapshot blob failed integrity validation (hash): {entry.path}"
+                )
 
     async def materialize(self, snapshot: SourceSnapshot, destination: Path) -> None:
+        await self.validate(snapshot)
         destination.mkdir(parents=True, exist_ok=False)
         for entry in snapshot.entries:
             relative = _safe_relative_path(entry.path)
@@ -271,6 +320,12 @@ class SandboxBinding:
             raise FileExistsError(
                 f"Workspace binding root must not already exist: {self._requested_root}"
             )
+        if self._requested_root is not None:
+            requested = self._requested_root.expanduser().absolute()
+            if any(parent.is_symlink() for parent in requested.parents):
+                raise ValueError(
+                    f"Workspace binding root has a symlinked parent: {self._requested_root}"
+                )
         self.root = self._requested_root or Path(
             tempfile.mkdtemp(prefix="jarviscore-workspace-")
         )
@@ -303,6 +358,7 @@ class SandboxBinding:
     async def apply_delta(self, delta: WorkspaceDelta) -> None:
         if self.workspace is None:
             raise RuntimeError("Enter the SandboxBinding before applying a delta")
+        self.store.validate_delta(delta)
         if delta.snapshot_id != self.snapshot.snapshot_id:
             raise ValueError("Workspace delta belongs to a different source snapshot")
         for path in delta.deleted:
@@ -400,13 +456,24 @@ class SandboxBinding:
             path for path in set(baseline) - set(current) if not is_ignored(path)
         ))
         has_changes = bool(added or modified or deleted)
-        manifest_path = f"{delta_prefix}/manifest.json" if has_changes else ""
-        delta = WorkspaceDelta(
+        provisional = WorkspaceDelta(
             snapshot_id=self.snapshot.snapshot_id,
             added=tuple(added),
             modified=tuple(modified),
             deleted=deleted,
+            manifest_blob_path="",
+        )
+        delta_id = self.store._delta_id(provisional) if has_changes else ""
+        manifest_path = (
+            f"{delta_prefix}/manifests/{delta_id}.json" if has_changes else ""
+        )
+        delta = WorkspaceDelta(
+            snapshot_id=provisional.snapshot_id,
+            added=provisional.added,
+            modified=provisional.modified,
+            deleted=provisional.deleted,
             manifest_blob_path=manifest_path,
+            delta_id=delta_id,
         )
         if has_changes:
             await self.store.blob_storage.save(manifest_path, json.dumps(

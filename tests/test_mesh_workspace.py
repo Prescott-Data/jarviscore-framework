@@ -471,6 +471,71 @@ async def test_mesh_preserves_workspace_mutation_across_execution_epochs(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_mesh_clears_continuation_delta_after_epoch_reverts_to_source(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    snapshot = await BlobSnapshotStore(blobs).capture(
+        SourceRef("fixture", "project", "main"),
+        "commit-1",
+        {"service.py": "broken\n"},
+    )
+
+    class RepairPeer(Agent):
+        role = "repair"
+        capabilities: ClassVar[list[str]] = ["repair"]
+        attempts = 0
+
+        async def execute_task(self, task):
+            self.attempts += 1
+            path = self.sandbox.workspace / "service.py"
+            if self.attempts == 1:
+                path.write_text("fixed\n")
+                return {"status": "epoch_exhausted", "output": None}
+            if self.attempts == 2:
+                assert path.read_text() == "fixed\n"
+                path.write_text("broken\n")
+                return {"status": "epoch_exhausted", "output": None}
+            assert path.read_text() == "broken\n"
+            return {"status": "success", "output": {"status": "not_applied"}}
+
+    redis = __import__(
+        "jarviscore.testing", fromlist=["MockRedisContextStore"]
+    ).MockRedisContextStore()
+    mesh = Mesh(config={"p2p_enabled": False})
+    mesh._redis_store = redis
+    mesh._blob_storage = blobs
+    peer = mesh.add(RepairPeer)
+    peer.sandbox = create_coder_sandbox(workspace_dir=tmp_path / "repair-base")
+    redis.publish_workflow(
+        "wf-clear-epoch-delta",
+        goal="Repair",
+        context={"source_snapshot": {
+            "manifest_blob_path": snapshot.manifest_blob_path,
+            "storage_scope": "node",
+            "materializer_node_id": mesh._node_id,
+        }},
+        obligations=[],
+        steps=[{
+            "id": "repair", "capability": "repair", "effect": "propose",
+            "task": "Repair", "depends_on": [],
+        }],
+        budget={"max_epochs_per_step": 3},
+    )
+
+    for _ in range(3):
+        await mesh._execute_distributed_step(
+            peer,
+            "wf-clear-epoch-delta",
+            "repair",
+            redis.get_step_definition("wf-clear-epoch-delta", "repair"),
+        )
+
+    assert redis.get_step_status("wf-clear-epoch-delta", "repair") == "completed"
+    assert "continuation_workspace_delta" not in redis.get_step_definition(
+        "wf-clear-epoch-delta", "repair"
+    )
+
+
+@pytest.mark.asyncio
 async def test_capability_request_receives_isolated_workflow_workspace(tmp_path):
     blobs = LocalBlobStorage(str(tmp_path / "blobs"))
     store = BlobSnapshotStore(blobs)
@@ -860,3 +925,69 @@ async def test_mesh_rejects_mutation_receipt_without_final_workspace_change(tmp_
     assert redis.get_step_status("wf-no-change", "repair") == "failed"
     assert "Unknown tool receipt" in saved["error"]
     assert "workspace_delta" not in saved
+
+
+@pytest.mark.asyncio
+async def test_mesh_rejects_receipt_overwritten_before_final_delta(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    snapshot = await BlobSnapshotStore(blobs).capture(
+        SourceRef("fixture", "project", "main"),
+        "commit-1",
+        {"service.py": "broken\n"},
+    )
+    receipt = {
+        "tool_receipt_id": "tool:wf-overwritten:repair:1",
+        "path": "service.py",
+        "sha256": hashlib.sha256(b"first repair\n").hexdigest(),
+        "bytes": len(b"first repair\n"),
+        "executable": False,
+        "observed_at": "2026-09-22T00:00:00Z",
+    }
+
+    class RepairPeer(Agent):
+        role = "repair"
+        capabilities: ClassVar[list[str]] = ["repair"]
+
+        async def execute_task(self, task):
+            path = self.sandbox.workspace / "service.py"
+            path.write_text("first repair\n")
+            path.write_text("overwritten\n")
+            return {
+                "status": "success",
+                "output": {"status": "applied", "mutations": [receipt]},
+                "_tool_receipts": [receipt],
+            }
+
+    redis = __import__(
+        "jarviscore.testing", fromlist=["MockRedisContextStore"]
+    ).MockRedisContextStore()
+    mesh = Mesh(config={"p2p_enabled": False})
+    mesh._redis_store = redis
+    mesh._blob_storage = blobs
+    peer = mesh.add(RepairPeer)
+    peer.sandbox = create_coder_sandbox(workspace_dir=tmp_path / "repair-base")
+    redis.publish_workflow(
+        "wf-overwritten",
+        goal="Repair",
+        context={"source_snapshot": {
+            "manifest_blob_path": snapshot.manifest_blob_path,
+            "storage_scope": "node",
+            "materializer_node_id": mesh._node_id,
+        }},
+        obligations=[],
+        steps=[{
+            "id": "repair", "capability": "repair", "effect": "propose",
+            "task": "Repair", "depends_on": [],
+        }],
+    )
+
+    await mesh._execute_distributed_step(
+        peer,
+        "wf-overwritten",
+        "repair",
+        redis.get_step_definition("wf-overwritten", "repair"),
+    )
+
+    saved = redis.get_step_output("wf-overwritten", "repair")["output"]
+    assert redis.get_step_status("wf-overwritten", "repair") == "failed"
+    assert "Unknown tool receipt" in saved["error"]

@@ -1955,13 +1955,16 @@ class Mesh:
                                         entry = delta_entries.get(str(evidence.get("path") or ""))
                                         if entry is None:
                                             continue
-                                        final_receipts.append({
-                                            **evidence,
-                                            "path": entry.path,
-                                            "sha256": entry.sha256,
-                                            "bytes": entry.size,
-                                            "executable": entry.executable,
-                                        })
+                                        if (
+                                            str(evidence.get("sha256") or "")
+                                            != entry.sha256
+                                            or int(evidence.get("bytes") or -1)
+                                            != entry.size
+                                            or bool(evidence.get("executable", False))
+                                            != entry.executable
+                                        ):
+                                            continue
+                                        final_receipts.append(evidence)
                                     try:
                                         bound_result["output"] = hydrate_receipt_evidence(
                                             bound_result.get("output"),

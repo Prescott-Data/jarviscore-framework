@@ -68,6 +68,10 @@ class RedisContextStore:
             ))
 
         self._ttl_seconds = getattr(settings, "redis_context_ttl_days", 7) * 86400
+        self._max_step_output_bytes = max(
+            1,
+            int(getattr(settings, "redis_max_step_output_bytes", 10 * 1024 * 1024)),
+        )
         self.enabled = True
 
         try:
@@ -95,6 +99,28 @@ class RedisContextStore:
     # ------------------------------------------------------------------
     # Step Outputs
     # ------------------------------------------------------------------
+
+    def _bounded_step_output(self, output: Any) -> tuple[Any, Optional[str], bool]:
+        if output is None:
+            return output, None, False
+        encoder = json.JSONEncoder(default=str)
+        chunks = []
+        byte_count = 0
+        for chunk in encoder.iterencode(output):
+            chunks.append(chunk)
+            byte_count += len(chunk.encode("utf-8"))
+            if byte_count > self._max_step_output_bytes:
+                failure = {
+                    "status": "failure",
+                    "typed_outcome": "STEP_OUTPUT_TOO_LARGE",
+                    "error": (
+                        "Step output exceeded the durable Redis limit of "
+                        f"{self._max_step_output_bytes} bytes"
+                    ),
+                    "observed_bytes_at_least": byte_count,
+                }
+                return failure, json.dumps(failure), True
+        return output, "".join(chunks), False
 
     def save_step_output(self, workflow_id: str, step_id: str,
                          output: Any = None, summary: Optional[str] = None,
@@ -147,10 +173,13 @@ class RedisContextStore:
                     exc,
                 )
 
-        try:
-            output_serialised = json.dumps(output) if output is not None else None
-        except Exception:
-            output_serialised = str(output)
+        _persisted_output, output_serialised, exceeded = self._bounded_step_output(output)
+        if exceeded:
+            logger.error(
+                "Step output exceeded Redis persistence limit for %s:%s",
+                workflow_id,
+                step_id,
+            )
 
         data = {
             "output": output_serialised,
@@ -1913,14 +1942,14 @@ class RedisContextStore:
         graph_key = f"workflow_graph:{workflow_id}"
         output_key = f"step_output:{workflow_id}:{step_id}"
         projection_key = f"workflow_obligations:{workflow_id}"
+        output, serialized, output_exceeded = self._bounded_step_output(output)
         result_status = output.get("status") if isinstance(output, dict) else None
-        terminal = status or terminal_step_status(result_status)
+        terminal = (
+            "failed" if output_exceeded
+            else status or terminal_step_status(result_status)
+        )
         if terminal not in {"completed", "failed", "waiting", "blocked"}:
             raise ValueError(f"Invalid terminal step status: {terminal}")
-        try:
-            serialized = json.dumps(output) if output is not None else None
-        except Exception:
-            serialized = str(output)
         pipe = self._redis.pipeline()
         while True:
             try:
@@ -2069,6 +2098,7 @@ class RedisContextStore:
                     "updated_at": now,
                     "execution_epochs": int(data.get("execution_epochs") or 1) + 1,
                 })
+                data.pop("continuation_workspace_delta", None)
                 if continuation_workspace_delta:
                     data["continuation_workspace_delta"] = continuation_workspace_delta
                 data.pop("claim_expires_at", None)

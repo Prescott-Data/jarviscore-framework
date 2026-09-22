@@ -98,6 +98,12 @@ class GitHubRepositorySource:
         cached = await self.snapshot_store.find(snapshot_source, resolved_revision)
         if cached is not None:
             self._check_limits(cached.entries)
+            try:
+                await self.snapshot_store.validate(cached)
+            except Exception as exc:
+                raise SourceIntegrityError(
+                    f"Cached GitHub snapshot failed integrity validation: {exc}"
+                ) from exc
             return cached
         tree = await self._get(
             f"/repos/{quote(owner)}/{quote(repo)}/git/trees/{resolved_revision}",

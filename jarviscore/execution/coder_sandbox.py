@@ -248,10 +248,23 @@ class BashExecutor:
         lexer.whitespace_split = True
         lexer.commenters = ""
         shell_tokens = list(lexer)
-        if any(token in {"<", ">", "<<", ">>"} for token in shell_tokens):
+        punctuation = set(";&|<>")
+        operator_tokens = [
+            token for token in shell_tokens
+            if token and set(token) <= punctuation
+        ]
+        if any("<" in token or ">" in token for token in operator_tokens):
             raise BashPermissionError("Shell redirection is not allowed")
-        if "&" in shell_tokens:
+        if "&" in operator_tokens:
             raise BashPermissionError("Background shell commands are not allowed")
+        allowed_operators = {";", "&&", "||", "|"}
+        unsupported = [
+            token for token in operator_tokens if token not in allowed_operators
+        ]
+        if unsupported:
+            raise BashPermissionError(
+                f"Unsupported shell operator: {unsupported[0]!r}"
+            )
         command_indexes = [0]
         command_indexes.extend(
             index + 1
@@ -266,7 +279,15 @@ class BashExecutor:
                     f"Allowed: {sorted(self.allowed_commands)}"
                 )
 
-        work_dir = Path(cwd) if cwd else self.workspace
+        workspace = self.workspace.resolve()
+        requested = Path(cwd).expanduser() if cwd else workspace
+        work_dir = (
+            requested.resolve()
+            if requested.is_absolute()
+            else (workspace / requested).resolve()
+        )
+        if work_dir != workspace and workspace not in work_dir.parents:
+            raise BashPermissionError(f"Working directory escapes workspace: {cwd!r}")
         if not work_dir.exists():
             work_dir.mkdir(parents=True, exist_ok=True)
 
