@@ -4,10 +4,11 @@ Browser action dispatcher (in-process routing).
 from typing import Dict, Any, Optional, List
 import json
 import hashlib
+import os
 import time
 
 from .controller import BrowserController, ActionResult
-from .protocol import BrowserAction, BrowserActionResult, normalize_action, validate_action
+from .protocol import BrowserActionResult, normalize_action, validate_action
 from .profiles import BrowserProfileRegistry, BrowserProfile
 from .controller import BrowserConfig
 from .trace import BrowserTraceRecorder
@@ -256,7 +257,7 @@ class BrowserDispatcher:
 
         return BrowserActionResult(
             success=bool(result.success),
-            data=result.data,
+            data=data,
             error=result.error,
             kind=action.kind,
             ref=getattr(result, "ref", None),
