@@ -3,10 +3,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from jarviscore.browser.controller import BrowserConfig
-from jarviscore.browser.dispatcher import BrowserDispatcher
 from jarviscore.browser.profile_decoration import decorate_profile
-from jarviscore.browser.profiles import BrowserProfile, BrowserProfileRegistry
+
+
+def browser_types():
+    pytest.importorskip("playwright")
+    from jarviscore.browser.controller import BrowserConfig
+    from jarviscore.browser.dispatcher import BrowserDispatcher
+    from jarviscore.browser.profiles import BrowserProfile, BrowserProfileRegistry
+
+    return BrowserConfig, BrowserDispatcher, BrowserProfile, BrowserProfileRegistry
 
 
 def test_profile_decoration_is_idempotent_and_preserves_unknown_metadata(tmp_path):
@@ -25,6 +31,9 @@ def test_profile_decoration_is_idempotent_and_preserves_unknown_metadata(tmp_pat
 
 @pytest.mark.asyncio
 async def test_dispatcher_environment_path_does_not_raise_name_error(monkeypatch):
+    BrowserConfig, BrowserDispatcher, BrowserProfile, BrowserProfileRegistry = (
+        browser_types()
+    )
     monkeypatch.setenv("BROWSER_TRACE_SCREENSHOTS", "false")
     registry = BrowserProfileRegistry(default_profile="test")
     registry.register(BrowserProfile("test", BrowserConfig()))
@@ -55,6 +64,9 @@ async def test_dispatcher_environment_path_does_not_raise_name_error(monkeypatch
 
 @pytest.mark.asyncio
 async def test_dispatcher_redacts_screenshot_bytes_from_result(monkeypatch):
+    BrowserConfig, BrowserDispatcher, BrowserProfile, BrowserProfileRegistry = (
+        browser_types()
+    )
     registry = BrowserProfileRegistry(default_profile="test")
     registry.register(BrowserProfile("test", BrowserConfig()))
     dispatcher = BrowserDispatcher(registry)
