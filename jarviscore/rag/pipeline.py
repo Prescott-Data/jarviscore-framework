@@ -52,6 +52,14 @@ _PASSAGE_QUESTIONS = {
 
 
 class RagPipeline:
+    """RAG pipeline with batch retrieval and concurrent-safe vector reads.
+
+    ``retrieve_many`` encodes a batch once and delegates to the vector store's
+    batch search. The FAISS backend gives each reader a private immutable index
+    snapshot, so concurrent retrievals do not share mutable FAISS state or
+    require an application-wide read lock.
+    """
+
     def __init__(self, decision_client=None, decision_config: Optional[Dict[str, Any]] = None):
         from jarviscore.rag.embedding import EmbeddingModel
 
@@ -125,11 +133,14 @@ class RagPipeline:
             "chunks": len(all_chunks),
         }
 
-    def retrieve(self, query: str, top_k: Optional[int] = None) -> Dict[str, Any]:
-        top_k = top_k or int(os.environ.get("RAG_TOP_K", str(_DEFAULT_TOP_K)))
-        q_vec = self.embedding.embed([query])[0]
-        results = self.store.search(q_vec, top_k=top_k)
+    @staticmethod
+    def _resolve_top_k(top_k: Optional[int]) -> int:
+        return top_k or int(os.environ.get("RAG_TOP_K", str(_DEFAULT_TOP_K)))
 
+    @staticmethod
+    def _build_retrieval(
+        query: str, top_k: int, results: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         evidence = []
         for r in results:
             quote = r.get("text", "")
@@ -153,6 +164,40 @@ class RagPipeline:
             "results": results,
             "evidence": evidence,
         }
+
+    def retrieve_many(
+        self, queries: List[str], top_k: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve one result object per query using one encode and one search.
+
+        Results preserve input order. An empty batch returns immediately. Query
+        values must be strings so malformed requests fail before touching the
+        embedding model or vector store.
+        """
+        if isinstance(queries, str):
+            raise TypeError("queries must be a list of strings")
+        queries = list(queries)
+        if not all(isinstance(query, str) for query in queries):
+            raise TypeError("queries must contain only strings")
+        if not queries:
+            return []
+
+        resolved_top_k = self._resolve_top_k(top_k)
+        query_vectors = self.embedding.embed(queries)
+        result_batches = self.store.search_many(query_vectors, top_k=resolved_top_k)
+        if len(result_batches) != len(queries):
+            raise RuntimeError(
+                "RAG batch search returned misaligned results: "
+                f"{len(queries)} queries, {len(result_batches)} result sets."
+            )
+        return [
+            self._build_retrieval(query, resolved_top_k, results)
+            for query, results in zip(queries, result_batches)
+        ]
+
+    def retrieve(self, query: str, top_k: Optional[int] = None) -> Dict[str, Any]:
+        """Retrieve a single query while using the batch-safe read path."""
+        return self.retrieve_many([query], top_k=top_k)[0]
 
     async def retrieve_with_decisions(
         self,

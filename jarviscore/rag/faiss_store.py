@@ -2,13 +2,25 @@
 FAISS-backed vector store for RAG.
 Stores vectors + metadata locally.
 
+Reads use a per-thread immutable snapshot. A writer updates the live index and
+metadata while holding the state lock, then advances a generation counter.
+Readers clone a new snapshot only after that counter changes and perform the
+potentially expensive FAISS search without holding the lock. This allows
+concurrent retrieval without sharing a mutable FAISS index between threads.
+
 Optional dependency — install with: pip install jarviscore[rag]
 """
-import os
+import copy
 import json
 import logging
-import numpy as np
-from typing import List, Dict, Any
+import os
+import threading
+from typing import Any, Dict, List, Tuple
+
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +33,16 @@ except ImportError:
 
 
 class FaissVectorStore:
+    """Persistent FAISS store with concurrent read snapshots.
+
+    ``add`` is serialized with a short state lock. ``search`` and
+    ``search_many`` clone the current index once per thread and run outside
+    that lock, so concurrent readers do not race on FAISS's mutable index
+    object or block each other for the duration of a search.
+    """
+
     def __init__(self, index_path: str, meta_path: str, dim: int):
-        if not _HAS_FAISS:
+        if not _HAS_FAISS or np is None:
             raise ImportError(
                 "faiss-cpu is required for vector storage. "
                 "Install with: pip install jarviscore[rag]"
@@ -32,6 +52,10 @@ class FaissVectorStore:
         self.dim = dim
         self._index = self._load_or_create_index()
         self._metadata = self._load_metadata()
+        self._metadata_snapshot = tuple(copy.deepcopy(metadata) for metadata in self._metadata)
+        self._state_lock = threading.RLock()
+        self._generation = 0
+        self._read_state = threading.local()
 
     def _load_or_create_index(self):
         if os.path.exists(self.index_path):
@@ -54,29 +78,72 @@ class FaissVectorStore:
         if not vectors:
             return
         faiss_vectors = np.array(vectors, dtype="float32")
-        self._index.add(faiss_vectors)
-        self._metadata.extend(metadatas)
-        self._persist()
+        with self._state_lock:
+            self._index.add(faiss_vectors)
+            self._metadata.extend(metadatas)
+            self._metadata_snapshot = tuple(
+                copy.deepcopy(metadata) for metadata in self._metadata
+            )
+            self._generation += 1
+            self._persist()
 
-    def search(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
-        if self._index.ntotal == 0:
-            return []
-        q = np.array([query_vector], dtype="float32")
-        scores, indices = self._index.search(q, top_k)
-        results: List[Dict[str, Any]] = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx < 0 or idx >= len(self._metadata):
-                continue
-            meta = self._metadata[idx].copy()
-            meta["score"] = float(score)
-            results.append(meta)
+    def _read_snapshot(self) -> Tuple[Any, Tuple[Dict[str, Any], ...]]:
+        """Return a thread-local snapshot matching the current generation."""
+        with self._state_lock:
+            generation = self._generation
+            cached_generation = getattr(self._read_state, "generation", None)
+            if cached_generation != generation:
+                self._read_state.index = faiss.clone_index(self._index)
+                self._read_state.metadata = self._metadata_snapshot
+                self._read_state.generation = generation
+            return self._read_state.index, self._read_state.metadata
+
+    @staticmethod
+    def _search_results(
+        scores: Any,
+        indices: Any,
+        metadata: Tuple[Dict[str, Any], ...],
+    ) -> List[List[Dict[str, Any]]]:
+        results: List[List[Dict[str, Any]]] = []
+        for score_row, index_row in zip(scores, indices):
+            query_results: List[Dict[str, Any]] = []
+            for score, idx in zip(score_row, index_row):
+                idx = int(idx)
+                if idx < 0 or idx >= len(metadata):
+                    continue
+                meta = metadata[idx].copy()
+                meta["score"] = float(score)
+                query_results.append(meta)
+            results.append(query_results)
         return results
 
+    def search_many(
+        self, query_vectors: List[List[float]], top_k: int = 5
+    ) -> List[List[Dict[str, Any]]]:
+        """Search all query vectors in one FAISS call.
+
+        The returned outer list always follows the input query order. Empty
+        stores and empty query batches return the corresponding number of
+        empty result lists without invoking FAISS.
+        """
+        if not query_vectors:
+            return []
+        index, metadata = self._read_snapshot()
+        if index.ntotal == 0:
+            return [[] for _ in query_vectors]
+        queries = np.array(query_vectors, dtype="float32")
+        scores, indices = index.search(queries, top_k)
+        return self._search_results(scores, indices, metadata)
+
+    def search(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+        return self.search_many([query_vector], top_k=top_k)[0]
+
     def stats(self) -> Dict[str, Any]:
-        return {
-            "index_path": self.index_path,
-            "meta_path": self.meta_path,
-            "vector_count": int(self._index.ntotal),
-            "metadata_count": len(self._metadata),
-            "dim": self.dim,
-        }
+        with self._state_lock:
+            return {
+                "index_path": self.index_path,
+                "meta_path": self.meta_path,
+                "vector_count": int(self._index.ntotal),
+                "metadata_count": len(self._metadata),
+                "dim": self.dim,
+            }

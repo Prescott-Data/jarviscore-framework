@@ -103,6 +103,19 @@ for chunk in result["results"]:
 
 The `result["evidence"]` key contains a list of `Evidence` records, each with a confidence score derived from the cosine similarity, ready to be passed to a `TruthContext` or logged to the episodic ledger.
 
+For several queries, use the batch API to encode and search them in one call:
+
+```python
+results = rag.retrieve_many(
+    ["How does attention work in transformers?", "What is the context window?"],
+    top_k=5,
+)
+```
+
+The returned list follows the input query order. FAISS reads use a private
+read-only index snapshot per thread, while ingestion updates are serialized;
+concurrent retrievals therefore do not need an application-wide read lock.
+
 ### TypeSafe passage classification
 
 With the `rag` and `typesafe` extras installed, add an async decision stage
