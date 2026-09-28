@@ -575,6 +575,14 @@ class TestWorkflowDAG:
             steps=steps,
             context={"tenant_id": "tenant-1"},
         )
+        store._redis.delete("workflow_initial_plan:wf-template")
+        assert not store.register_planned_workflow(
+            "wf-template",
+            goal,
+            obligations=obligations,
+            steps=steps,
+            context={"tenant_id": "tenant-1"},
+        )
         changed = [{**steps[0], "task": "Different work"}]
         with pytest.raises(ValueError, match="another plan"):
             store.register_planned_workflow(

@@ -787,10 +787,33 @@ class RedisContextStore:
                     if existing_initial_plan is not None:
                         bound_definition = json.loads(existing_initial_plan)
                     else:
-                        bound_definition = WorkflowEnvelope.from_record(
-                            json.loads(existing_definition)
-                        ).to_record()
-                        bound_definition.pop("published_at", None)
+                        current = json.loads(existing_definition)
+                        current_steps = {
+                            str(step.get("id") or ""): step
+                            for step in current.get("steps", [])
+                            if int(step.get("plan_revision", 1)) == revision
+                        }
+                        initial_steps = []
+                        for expected_step in definition["steps"]:
+                            live_step = current_steps.get(expected_step["id"], {})
+                            initial_steps.append({
+                                key: (
+                                    "pending" if key == "status"
+                                    else live_step.get(key)
+                                )
+                                for key in expected_step
+                            })
+                        bound_definition = {
+                            "workflow_id": current.get("workflow_id"),
+                            "goal": current.get("goal"),
+                            "context": current.get("context", {}),
+                            "obligations": current.get("obligations", []),
+                            "steps": initial_steps,
+                            "budget": current.get("budget", {}),
+                            "revision": revision,
+                        }
+                        if len(current_steps) != len(initial_steps):
+                            bound_definition["steps"] = []
                     if bound_definition != definition:
                         pipe.unwatch()
                         raise ValueError(
