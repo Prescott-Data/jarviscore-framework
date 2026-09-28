@@ -611,40 +611,59 @@ class Mesh:
         if timeout is not None:
             budget_options.setdefault("max_seconds", timeout)
         budget = ExecutionBudget.from_record(budget_options)
-        template_error = None
-        if plan_template is not None:
-            from jarviscore.planning.mesh_planner import MeshPlanError, MeshPlanner
-
-            planner = MeshPlanner(
-                None,
-                capabilities=self._mesh_capability_catalog(),
-                response_capability=self.config.get("mesh_response_capability"),
-                planning_brief=self.config.get("mesh_planning_brief"),
+        definition = self._redis_store.get_workflow_definition(identity)
+        if definition is not None:
+            existing_goal = self._redis_store.get_workflow_goal(identity)
+            expected_goal = {
+                "workflow_id": identity,
+                "goal": source,
+                "context": public_context,
+                "budget": budget.to_record(),
+            }
+            legacy_published = (
+                existing_goal is None
+                and plan_template is None
+                and definition.get("goal") == source
             )
-            try:
-                plan = planner.validate_template(source, plan_template)
-            except MeshPlanError as error:
-                template_error = f"{type(error).__name__}: {error}"
-            else:
-                self._redis_store.register_planned_workflow(
-                    identity,
-                    source,
-                    context=public_context,
-                    budget=budget.to_record(),
-                    obligations=[item.to_dict() for item in plan.obligations],
-                    steps=[step.to_dict() for step in plan.steps],
-                    revision=plan.revision,
+            if not legacy_published and existing_goal != expected_goal:
+                raise ValueError(
+                    f"Workflow {identity!r} is already bound to another goal"
                 )
-        if plan_template is None or template_error is not None:
-            self._redis_store.register_workflow_goal(
-                identity, source, public_context, budget=budget.to_record()
-            )
-            if template_error is not None:
-                self._redis_store.append_ledger_entry(identity, {
-                    "event": "plan_template_rejected",
-                    "error": template_error,
-                    "timestamp": time.time(),
-                })
+        else:
+            template_error = None
+            if plan_template is not None:
+                from jarviscore.planning.mesh_planner import MeshPlanError, MeshPlanner
+
+                planner = MeshPlanner(
+                    None,
+                    capabilities=self._mesh_capability_catalog(),
+                    response_capability=self.config.get("mesh_response_capability"),
+                    planning_brief=self.config.get("mesh_planning_brief"),
+                )
+                try:
+                    plan = planner.validate_template(source, plan_template)
+                except MeshPlanError as error:
+                    template_error = f"{type(error).__name__}: {error}"
+                else:
+                    self._redis_store.register_planned_workflow(
+                        identity,
+                        source,
+                        context=public_context,
+                        budget=budget.to_record(),
+                        obligations=[item.to_dict() for item in plan.obligations],
+                        steps=[step.to_dict() for step in plan.steps],
+                        revision=plan.revision,
+                    )
+            if plan_template is None or template_error is not None:
+                self._redis_store.register_workflow_goal(
+                    identity, source, public_context, budget=budget.to_record()
+                )
+                if template_error is not None:
+                    self._redis_store.append_ledger_entry(identity, {
+                        "event": "plan_template_rejected",
+                        "error": template_error,
+                        "timestamp": time.time(),
+                    })
         try:
             definition = self._redis_store.get_workflow_definition(identity)
             if definition is None:

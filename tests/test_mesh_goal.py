@@ -447,10 +447,24 @@ async def test_execute_goal_uses_validated_template_without_planner_calls(monkey
             plan_template=template,
             timeout=2,
         )
+        resumed = await mesh.execute_goal(
+            goal,
+            workflow_id="wf-template",
+            plan_template={"invalid_after_publication": True},
+            timeout=2,
+        )
+        with pytest.raises(ValueError, match="another goal"):
+            await mesh.execute_goal(
+                "A different source goal",
+                workflow_id="wf-template",
+                plan_template=template,
+                timeout=2,
+            )
     finally:
         await mesh.stop()
 
     assert result["status"] == "completed"
+    assert resumed["status"] == "completed"
     assert llm.calls == []
     assert len(researcher.received) == 1
     assert len(analyst.received) == 1
