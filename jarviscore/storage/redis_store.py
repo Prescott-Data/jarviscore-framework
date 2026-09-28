@@ -735,6 +735,7 @@ class RedisContextStore:
         goal_key = f"workflow_goal:{workflow_id}"
         graph_key = f"workflow_graph:{workflow_id}"
         definition_key = f"workflow_definition:{workflow_id}"
+        initial_plan_key = f"workflow_initial_plan:{workflow_id}"
         projection_key = f"workflow_obligations:{workflow_id}"
         budget_key = f"workflow_budget:{workflow_id}"
         ledger_key = f"ledgers:{workflow_id}"
@@ -773,20 +774,24 @@ class RedisContextStore:
         pipe = self._redis.pipeline()
         while True:
             try:
-                pipe.watch(goal_key, definition_key)
+                pipe.watch(goal_key, definition_key, initial_plan_key)
                 existing_goal = pipe.get(goal_key)
                 existing_definition = pipe.get(definition_key)
+                existing_initial_plan = pipe.get(initial_plan_key)
                 if existing_goal is not None and json.loads(existing_goal) != goal_record:
                     pipe.unwatch()
                     raise ValueError(
                         f"Workflow {workflow_id!r} is already bound to another goal"
                     )
                 if existing_definition is not None:
-                    current = WorkflowEnvelope.from_record(
-                        json.loads(existing_definition)
-                    ).to_record()
-                    current.pop("published_at", None)
-                    if current != definition:
+                    if existing_initial_plan is not None:
+                        bound_definition = json.loads(existing_initial_plan)
+                    else:
+                        bound_definition = WorkflowEnvelope.from_record(
+                            json.loads(existing_definition)
+                        ).to_record()
+                        bound_definition.pop("published_at", None)
+                    if bound_definition != definition:
                         pipe.unwatch()
                         raise ValueError(
                             f"Workflow {workflow_id!r} is already bound to another plan"
@@ -819,6 +824,11 @@ class RedisContextStore:
                 pipe.set(
                     definition_key,
                     json.dumps({**definition, "published_at": now}, default=str),
+                    ex=self._ttl_seconds,
+                )
+                pipe.set(
+                    initial_plan_key,
+                    json.dumps(definition, default=str),
                     ex=self._ttl_seconds,
                 )
                 pipe.set(

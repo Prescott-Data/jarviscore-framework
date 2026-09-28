@@ -557,6 +557,24 @@ class TestWorkflowDAG:
             steps=steps,
             context={"tenant_id": "tenant-1"},
         )
+        store.amend_workflow(
+            "wf-template",
+            expected_revision=1,
+            obligations=obligations,
+            steps=[{
+                **steps[0],
+                "id": "research_revision",
+                "depends_on": ["research"],
+            }],
+            reason="Correct incomplete evidence",
+        )
+        assert not store.register_planned_workflow(
+            "wf-template",
+            goal,
+            obligations=obligations,
+            steps=steps,
+            context={"tenant_id": "tenant-1"},
+        )
         changed = [{**steps[0], "task": "Different work"}]
         with pytest.raises(ValueError, match="another plan"):
             store.register_planned_workflow(
