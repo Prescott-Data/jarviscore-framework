@@ -937,6 +937,12 @@ PROVIDER_META: Dict[str, Dict[str, Any]] = {
         "status": "verified",
         "capabilities": ["agents", "chats", "records"],
     },
+    "zendesk_support": {
+        "category": "support",
+        "auth_type": "oauth2",
+        "status": "candidate",
+        "capabilities": ["tickets", "users", "organizations", "search"],
+    },
     "zoho_crm": {
         "category": "crm",
         "auth_type": "oauth2",
