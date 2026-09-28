@@ -12,6 +12,7 @@ import os
 from typing import List, Dict, Any, Optional
 
 from jarviscore.rag.chunking import chunk_text
+from jarviscore.rag.citations import citation_atoms_for_chunk, validate_citation_atoms
 from jarviscore.rag.evidence import build_evidence_record
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,9 @@ class RagPipeline:
             content = doc.get("content") or ""
             source = doc.get("source") or "unknown"
             meta = doc.get("metadata") or {}
+            citation_atoms = validate_citation_atoms(
+                content, doc.get("citation_atoms")
+            )
             chunks = chunk_text(content, chunk_size=chunk_size, overlap=overlap)
             for idx, c in enumerate(chunks):
                 all_chunks.append(c)
@@ -112,6 +116,7 @@ class RagPipeline:
                     "chunk_index": idx,
                     "text": c,
                     "metadata": meta,
+                    "citation_atoms": citation_atoms_for_chunk(c, citation_atoms),
                 })
 
         if not all_chunks:
@@ -137,8 +142,9 @@ class RagPipeline:
             pointer = f"{source}#chunk_{r.get('chunk_index')}"
             evidence.append(build_evidence_record(
                 source=source,
-                quote=quote[:500],
+                quote=quote,
                 pointer=pointer,
+                citation_atoms=r.get("citation_atoms") or [],
                 source_reliability=0.7,
                 specificity=0.7,
                 corroboration=0.5,
