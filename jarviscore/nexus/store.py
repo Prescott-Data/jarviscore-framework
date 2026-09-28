@@ -70,6 +70,7 @@ class ConnectionState(str, Enum):
 _STORE_DIR  = Path.home() / ".jarviscore"
 _STORE_FILE = _STORE_DIR / "nexus.enc"
 _SALT_FILE  = _STORE_DIR / ".salt"
+_PROVIDER_METADATA_KEY = "_provider_metadata"
 
 _PBKDF2_ITERATIONS = 260_000   # OWASP 2024 recommendation for PBKDF2-HMAC-SHA256
 _KEY_LEN           = 32        # 256-bit AES key
@@ -280,7 +281,42 @@ class NexusLocalStore:
 
     def list(self) -> List[str]:
         """Return a list of registered provider names."""
-        return sorted(self._read_all().keys())
+        return sorted(
+            provider
+            for provider in self._read_all()
+            if provider != _PROVIDER_METADATA_KEY
+        )
+
+    def set_provider_metadata(self, provider: str, metadata: Dict[str, str]) -> None:
+        """Store non-secret tenant metadata separately from provider credentials."""
+        normalized_provider = provider.lower().strip()
+        if not normalized_provider:
+            raise ValueError("provider is required")
+        if normalized_provider != "zendesk_support":
+            raise ValueError("provider metadata is currently supported only for Zendesk Support")
+        allowed_fields = {"subdomain", "api_base_url"}
+        if not isinstance(metadata, dict) or any(
+            key not in allowed_fields
+            or not isinstance(value, str)
+            or not value.strip()
+            for key, value in metadata.items()
+        ):
+            raise ValueError("provider metadata may contain only non-empty Zendesk tenant fields")
+
+        data = self._read_all()
+        profiles = data.setdefault(_PROVIDER_METADATA_KEY, {})
+        if not isinstance(profiles, dict):
+            raise ValueError("provider metadata store is malformed")
+        profiles[normalized_provider] = dict(metadata)
+        self._write_all(data)
+
+    def get_provider_metadata(self, provider: str) -> Dict[str, str]:
+        """Return non-secret tenant metadata without exposing credentials."""
+        profiles = self._read_all().get(_PROVIDER_METADATA_KEY) or {}
+        if not isinstance(profiles, dict):
+            return {}
+        metadata = profiles.get(provider.lower().strip()) or {}
+        return dict(metadata) if isinstance(metadata, dict) else {}
 
     def connection_state(self, provider: str) -> "ConnectionState":
         """Whether this provider can actually authenticate a call right now.
@@ -311,9 +347,17 @@ class NexusLocalStore:
         """Remove a provider's credentials. Returns True if it existed."""
         data = self._read_all()
         key = provider.lower()
-        if key not in data:
+        existed = key in data
+        if existed:
+            del data[key]
+        profiles = data.get(_PROVIDER_METADATA_KEY)
+        if isinstance(profiles, dict) and key in profiles:
+            del profiles[key]
+            existed = True
+            if not profiles:
+                del data[_PROVIDER_METADATA_KEY]
+        if not existed:
             return False
-        del data[key]
         self._write_all(data)
         logger.info("[NexusStore] Deleted provider=%s", provider)
         return True
@@ -382,6 +426,8 @@ class NexusLocalStore:
         data = self._read_all()
         summary = []
         for provider, entry in sorted(data.items()):
+            if provider == _PROVIDER_METADATA_KEY:
+                continue
             auth_type = entry.get("auth_type", "?")
             registered_at = entry.get("registered_at", "?")
             # Show partial client_id for verification, never the secret

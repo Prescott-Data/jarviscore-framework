@@ -264,6 +264,7 @@ def cmd_register(args):
         get_auth_type,
         get_provider,
     )
+    from jarviscore.nexus._data import provider_urls_for
     from jarviscore.nexus.store import get_store
 
     provider = args.provider.lower()
@@ -276,6 +277,15 @@ def cmd_register(args):
         print(_info("  api_key also needs where the key goes: --header-name=X-API-KEY"))
         print(_info("  (optionally --value-prefix='Bearer ') or --param-name=api_key"))
         sys.exit(1)
+    if provider == "zendesk_support" and auth_type != "oauth2":
+        print(_err("Zendesk Support requires OAuth2 so Nexus can keep the tenant token."))
+        sys.exit(1)
+    try:
+        provider_urls = provider_urls_for(provider, getattr(args, "subdomain", None))
+    except ValueError as exc:
+        print(_err(str(exc)))
+        sys.exit(1)
+
     label = catalog_entry.get("label", provider)
 
     # Flags win over catalog defaults — the person connecting the app is reading
@@ -294,6 +304,8 @@ def cmd_register(args):
             "client_secret": args.client_secret,
             "scopes":        catalog_entry.get("scopes", []),
         }
+        if provider == "zendesk_support":
+            credentials["subdomain"] = args.subdomain.strip().lower()
     elif auth_type == "api_key":
         api_key = args.api_key or args.client_id
         if not api_key:
@@ -344,12 +356,14 @@ def cmd_register(args):
                 profile["client_id"]     = credentials["client_id"]
                 profile["client_secret"] = credentials["client_secret"]
                 profile["scopes"]        = credentials.get("scopes", [])
-                # auth_url / token_url / user_info_endpoint come from _data.PROVIDER_URLS
-                from jarviscore.nexus._data import PROVIDER_URLS
-                urls = PROVIDER_URLS.get(provider, {})
+                # OAuth and API endpoints come from the provider catalog.
+                urls = provider_urls
                 if urls.get("auth_url"):     profile["auth_url"]            = urls["auth_url"]
                 if urls.get("token_url"):    profile["token_url"]           = urls["token_url"]
-                if urls.get("user_info"):    profile["user_info_endpoint"]  = urls["user_info"]
+                if urls.get("user_info_endpoint"):
+                    profile["user_info_endpoint"] = urls["user_info_endpoint"]
+                if urls.get("api_base_url"):
+                    profile["api_base_url"] = urls["api_base_url"]
             elif auth_type == "api_key":
                 profile["params"] = {
                     "credential_schema": {
@@ -377,16 +391,36 @@ def cmd_register(args):
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            resp = urllib.request.urlopen(req, timeout=10)
+            try:
+                resp = urllib.request.urlopen(req, timeout=10)
+            except urllib.error.HTTPError as e:
+                # Never print the response body: a gateway may echo submitted
+                # provider fields, including the OAuth client secret.
+                print(_err(f"Gateway registration failed (HTTP {e.code})."))
+                sys.exit(1)
+            except urllib.error.URLError as e:
+                print(_warn(f"Gateway unreachable ({e}) — falling back to local store"))
+                _register_local(get_store(), provider, label, auth_type, credentials)
+                return
+
             body = json.loads(resp.read())
+            if provider == "zendesk_support":
+                # Nexus keeps OAuth credentials; JarvisCore stores only the
+                # tenant locator needed to bind Support API calls.
+                get_store().set_provider_metadata(
+                    provider,
+                    {
+                        "subdomain": credentials["subdomain"],
+                        "api_base_url": provider_urls["api_base_url"],
+                    },
+                )
             print(_ok(f"{label} registered with gateway"))
             print(_info(f"  Provider ID: {body.get('id', body.get('provider_id', provider))}"))
-        except urllib.error.HTTPError as e:
-            print(_err(f"Gateway registration failed (HTTP {e.code}): {e.read().decode()}"))
-            sys.exit(1)
         except Exception as e:
-            print(_warn(f"Gateway unreachable ({e}) — falling back to local store"))
-            _register_local(get_store(), provider, label, auth_type, credentials)
+            # Do not fall back to saving secrets locally after an accepted
+            # Gateway request or a malformed Gateway response.
+            print(_err(f"Gateway registration could not be completed ({type(e).__name__})."))
+            sys.exit(1)
     else:
         # ── Local store mode: zero-dep encrypted file ─────────────────────────
         _register_local(get_store(), provider, label, auth_type, credentials)
@@ -404,14 +438,14 @@ def _seed_broker_db(provider: str, credentials: dict, workspace_id: str) -> bool
         return False  # psycopg2 optional — local store is the source of truth
 
     from jarviscore.nexus.store import NexusLocalStore
-    from jarviscore.nexus._data import PROVIDER_URLS
+    from jarviscore.nexus._data import provider_urls_for
     from jarviscore.nexus.providers import broker_name
 
     db_url = os.environ.get(
         "NEXUS_DB_URL",
         os.environ.get("DATABASE_URL", "postgresql://nexus:nexus@localhost:5432/nexus?sslmode=disable"),
     )
-    urls = PROVIDER_URLS.get(provider, {})
+    urls = provider_urls_for(provider, credentials.get("subdomain"))
 
     try:
         conn = psycopg2.connect(db_url)
@@ -624,6 +658,11 @@ def build_parser() -> argparse.ArgumentParser:
     # register
     reg = sub.add_parser("register", help="Register a provider's credentials")
     reg.add_argument("provider", help="Provider name (github, slack, stripe, ...)")
+    reg.add_argument(
+        "--subdomain",
+        default=None,
+        help="Zendesk tenant subdomain (for zendesk_support OAuth registration)",
+    )
     reg.add_argument("--client-id",     default=None, help="OAuth client ID (or username for basic_auth)")
     reg.add_argument("--client-secret", default=None, help="OAuth client secret (or password for basic_auth)")
     reg.add_argument("--api-key",       default=None, help="API key (for api_key providers)")

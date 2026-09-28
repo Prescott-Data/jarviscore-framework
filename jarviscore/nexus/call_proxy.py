@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from .strategy import apply_strategy
-from .hosts import HostNotAllowed, ensure_host_allowed
+from .hosts import HostNotAllowed, ensure_host_allowed, resolve_provider_url
 
 logger = logging.getLogger(__name__)
 
@@ -70,15 +70,31 @@ class NexusCallProxy:
         connections = getattr(self._auth, "_connections", None) or {}
         for provider, cid in connections.items():
             if cid == connection_id:
-                return str(provider).lower()
+                name = str(provider).lower()
+                return "zendesk_support" if name == "zendesk-support" else name
         # Local-vault mode: the handle is the provider name ("github:user123").
-        return connection_id.split(":")[0].lower()
+        name = connection_id.split(":")[0].lower()
+        return "zendesk_support" if name == "zendesk-support" else name
 
     def connection_handle(self, provider: str) -> str:
         """Resolve a provider name to its opaque active handle when available."""
         lookup = getattr(self._auth, "connection_handle", None)
         handle = lookup(provider) if callable(lookup) else None
         return handle if isinstance(handle, str) and handle else provider
+
+    @staticmethod
+    def _provider_config(provider, strategy_config=None, entry=None):
+        """Combine provider metadata needed to bind tenant-hosted API calls."""
+        config = {}
+        if provider == "zendesk_support" and not (strategy_config or {}).get("api_base_url"):
+            from jarviscore.nexus.store import get_store
+
+            config.update(get_store().get_provider_metadata(provider))
+        if entry:
+            config.update(entry)
+        if strategy_config:
+            config.update(strategy_config)
+        return config
 
     async def call(
         self,
@@ -95,7 +111,9 @@ class NexusCallProxy:
         Args:
             connection_id: Opaque Nexus connection handle (from context).
             method:         HTTP method ("GET", "POST", "PUT", "PATCH", "DELETE").
-            url:            Full URL of the provider API endpoint.
+            url:            Full URL of the provider API endpoint. Zendesk Support
+                            atoms may pass an API-relative path under /api/v2; the
+                            proxy resolves it against the connected tenant profile.
             headers:        Optional additional headers (merged with auth headers).
             timeout:        Request timeout in seconds (default 30s).
             **kwargs:       Passed directly to httpx (json=, params=, data=, etc.)
@@ -114,7 +132,12 @@ class NexusCallProxy:
         Raises RuntimeError only on internal proxy failure (no connection, no Nexus).
         """
         from jarviscore.nexus.client import NexusClient
+
         provider = self._provider_for(connection_id)
+        if provider == "zendesk_support":
+            # A redirect can move a credentialed request outside the checked
+            # host boundary. Zendesk calls always return the redirect response.
+            kwargs.pop("follow_redirects", None)
 
         strategy = None
         request_kwargs = None
@@ -126,23 +149,31 @@ class NexusCallProxy:
             logger.debug(
                 "NexusCallProxy: gateway resolve failed for %r (%s) — "
                 "falling back to local credential store",
-                connection_id, gateway_exc,
+                connection_id,
+                gateway_exc,
             )
         if strategy is not None:
             # Resolve inside the credential boundary, then bind the destination
             # before placing that credential. Policy or placement failures must
             # fail closed rather than selecting a different credential source.
-            ensure_host_allowed(provider, url, strategy.config)
+            provider_config = self._provider_config(provider, strategy.config)
+            url = resolve_provider_url(provider, url, provider_config)
+            ensure_host_allowed(provider, url, provider_config)
             request_kwargs = NexusClient.apply_strategy_to_request(
                 strategy, method, url, headers=headers, **kwargs
             )
+            if provider == "zendesk_support":
+                request_kwargs["follow_redirects"] = False
 
         # ── Local store fallback (zero-dep mode) ──────────────────────────────
         if request_kwargs is None:
             from jarviscore.nexus.store import get_store
 
             store = get_store()
-            ensure_host_allowed(provider, url, store.get(provider))
+            entry = store.get(provider)
+            provider_config = self._provider_config(provider, entry=entry)
+            url = resolve_provider_url(provider, url, provider_config)
+            ensure_host_allowed(provider, url, provider_config)
             strategy = store.build_strategy(provider)
             if strategy is None:
                 raise RuntimeError(
@@ -151,6 +182,8 @@ class NexusCallProxy:
                 )
             request_kwargs = apply_strategy(strategy, method, url, headers=headers, **kwargs)
             url = request_kwargs["url"]
+            if provider == "zendesk_support":
+                request_kwargs["follow_redirects"] = False
         request_kwargs.setdefault("timeout", timeout)
 
         async with httpx.AsyncClient() as client:
@@ -167,10 +200,13 @@ class NexusCallProxy:
                         await self._auth.nexus_client.refresh_connection(connection_id)
                     self._auth._strategy_cache.pop(connection_id, None)
                     strategy = await self._auth.resolve_strategy(connection_id)
-                    ensure_host_allowed(provider, url, strategy.config)
+                    provider_config = self._provider_config(provider, strategy.config)
+                    ensure_host_allowed(provider, url, provider_config)
                     request_kwargs = NexusClient.apply_strategy_to_request(
                         strategy, method, url, headers=headers, **kwargs
                     )
+                    if provider == "zendesk_support":
+                        request_kwargs["follow_redirects"] = False
                     request_kwargs.setdefault("timeout", timeout)
                     response = await client.request(**request_kwargs)
                     if response.status_code == 401:
@@ -184,7 +220,8 @@ class NexusCallProxy:
                 except Exception as refresh_exc:
                     logger.warning(
                         "NexusCallProxy: refresh failed for %s: %s",
-                        connection_id, refresh_exc,
+                        connection_id,
+                        refresh_exc,
                     )
 
             # Parse JSON response if possible
@@ -221,6 +258,7 @@ class NexusCallProxy:
         Returns:
             Async callable suitable for injection into a sandbox namespace.
         """
+
         async def nexus_call(
             method: str, url: str, provider: Optional[str] = None, **kwargs
         ) -> Dict[str, Any]:
@@ -232,7 +270,9 @@ class NexusCallProxy:
 
             Args:
                 method: HTTP method (GET, POST, PUT, PATCH, DELETE)
-                url:    Full provider API endpoint URL
+                url:    Full provider API endpoint URL. For zendesk_support, this
+                        may be a path under /api/v2 so the tenant host stays bound
+                        to the connected Nexus profile.
                 **kwargs: httpx kwargs (json=, params=, data=, headers=, etc.)
 
             Returns:

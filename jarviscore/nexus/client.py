@@ -63,15 +63,20 @@ class NexusClient:
     async def ensure_provider(self, profile: Dict[str, Any]) -> None:
         """Create a provider profile through the public Gateway API if absent."""
         name = str(profile.get("name") or "")
-        response = await self.client.get("/v1/providers")
-        response.raise_for_status()
-        grouped = response.json()
-        present = any(name in providers for providers in grouped.values() if isinstance(providers, dict))
-        if present:
+        if await self.provider_exists(name):
             return
         created = await self.client.post("/v1/providers", json={"profile": profile})
         if created.status_code not in (200, 201, 409):
             created.raise_for_status()
+
+    async def provider_exists(self, name: str) -> bool:
+        """Return whether a provider profile is present in the Nexus Gateway."""
+        response = await self.client.get("/v1/providers")
+        response.raise_for_status()
+        grouped = response.json()
+        return any(
+            name in providers for providers in grouped.values() if isinstance(providers, dict)
+        )
 
     async def capture_schema(self, state: str) -> Dict[str, Any]:
         """Schema for a non-OAuth credential form; contains no credential values."""

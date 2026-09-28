@@ -10,6 +10,8 @@ broker DB with the correct auth/token endpoints without needing the
 broker binary's catalog.
 """
 
+import re
+
 # Google issues a refresh token only when the authorization request says the
 # app will work while the user is away. Without these two, every token dies at
 # sixty minutes and the only way back is another consent screen.
@@ -91,4 +93,33 @@ PROVIDER_URLS: dict = {
         "token_url":         "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
         "user_info_endpoint":"https://accounts.platform.intuit.com/v1/openid_connect/userinfo",
     },
+    "zendesk_support": {
+        "auth_url": "https://{subdomain}.zendesk.com/oauth/authorizations/new",
+        "token_url": "https://{subdomain}.zendesk.com/oauth/tokens",
+        "api_base_url": "https://{subdomain}.zendesk.com/api/v2",
+    },
 }
+
+
+_ZENDESK_SUBDOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def provider_urls_for(provider_name: str, subdomain: str | None = None) -> dict:
+    """Return a provider's OAuth/API URLs, resolving its tenant label."""
+    urls = dict(PROVIDER_URLS.get(provider_name.lower().strip(), {}))
+    needs_subdomain = any(
+        isinstance(value, str) and "{subdomain}" in value for value in urls.values()
+    )
+    if not needs_subdomain:
+        return urls
+
+    normalized = str(subdomain or "").strip().lower()
+    if not _ZENDESK_SUBDOMAIN.fullmatch(normalized):
+        raise ValueError(
+            "Zendesk Support requires --subdomain with one DNS label, "
+            "for example 'acme' (without a scheme or .zendesk.com suffix)."
+        )
+    return {
+        key: value.replace("{subdomain}", normalized) if isinstance(value, str) else value
+        for key, value in urls.items()
+    }
