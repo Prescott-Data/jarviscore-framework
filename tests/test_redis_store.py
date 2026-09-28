@@ -510,6 +510,63 @@ class TestWorkflowDAG:
         }
         assert "wf-lossless" in store.get_active_workflows()
 
+    def test_register_planned_workflow_is_atomic_idempotent_and_immutable(self, store):
+        goal = "Research Acme"
+        obligations = [{
+            "id": "o1",
+            "description": "Research Acme",
+            "source_quote": goal,
+        }]
+        steps = [{
+            "id": "research",
+            "capability": "research",
+            "effect": "read",
+            "systems": [],
+            "task": "Research Acme",
+            "success_criterion": "Evidence is cited",
+            "expected_findings": ["evidence"],
+            "depends_on": [],
+            "covers": ["o1"],
+            "dependency_policy": "satisfied",
+        }]
+
+        assert store.register_planned_workflow(
+            "wf-template",
+            goal,
+            obligations=obligations,
+            steps=steps,
+            context={"tenant_id": "tenant-1"},
+        )
+
+        assert store.get_pending_workflow_goals() == []
+        assert store.get_workflow_definition("wf-template")["steps"][0]["id"] == (
+            "research"
+        )
+        assert store.get_workflow_planning_status("wf-template")["source"] == (
+            "template"
+        )
+        events = store.get_ledger_full("wf-template")
+        assert [event["event"] for event in events] == [
+            "goal_registered", "dag_published",
+        ]
+        assert events[-1]["source"] == "template"
+        assert not store.register_planned_workflow(
+            "wf-template",
+            goal,
+            obligations=obligations,
+            steps=steps,
+            context={"tenant_id": "tenant-1"},
+        )
+        changed = [{**steps[0], "task": "Different work"}]
+        with pytest.raises(ValueError, match="another plan"):
+            store.register_planned_workflow(
+                "wf-template",
+                goal,
+                obligations=obligations,
+                steps=changed,
+                context={"tenant_id": "tenant-1"},
+            )
+
     def test_dependency_outputs_are_read_from_the_shared_ledger(self, store):
         store.publish_workflow(
             "wf-context",

@@ -409,6 +409,97 @@ async def test_execute_goal_compiles_publishes_and_peers_claim_by_capability(mon
 
 
 @pytest.mark.asyncio
+async def test_execute_goal_uses_validated_template_without_planner_calls(monkeypatch):
+    llm = MockLLMClient()
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    researcher = mesh.add(ResearchPeer(llm, agent_id="researcher-1"))
+    analyst = mesh.add(AnalysisPeer(agent_id="analyst-1"))
+    goal = "Find evidence and analyse it"
+    template = {
+        "obligations": [{
+            "id": "o1", "description": "Answer from evidence",
+            "source_quote": goal,
+        }],
+        "steps": [{
+            "id": "research", "capability": "research", "effect": "read",
+            "systems": [], "task": "Find evidence",
+            "success_criterion": "Evidence exists", "expected_findings": ["evidence"],
+            "depends_on": [], "covers": [],
+        }, {
+            "id": "analyse", "capability": "analysis", "effect": "read",
+            "systems": [], "task": "Analyse the evidence",
+            "success_criterion": "Analysis uses evidence",
+            "expected_findings": ["analysis"], "depends_on": ["research"],
+            "covers": ["o1"],
+        }],
+    }
+
+    await mesh.start()
+    try:
+        result = await mesh.execute_goal(
+            goal,
+            workflow_id="wf-template",
+            plan_template=template,
+            timeout=2,
+        )
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "completed"
+    assert llm.calls == []
+    assert len(researcher.received) == 1
+    assert len(analyst.received) == 1
+    assert store.get_pending_workflow_goals() == []
+    assert store.get_workflow_planning_status("wf-template")["source"] == "template"
+
+
+@pytest.mark.asyncio
+async def test_execute_goal_falls_back_to_generated_plan_when_template_mismatches(monkeypatch):
+    llm = MockLLMClient(responses=goal_responses())
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    mesh.add(ResearchPeer(llm, agent_id="researcher-1"))
+    mesh.add(AnalysisPeer(agent_id="analyst-1"))
+    goal = "Find evidence and analyse it"
+
+    await mesh.start()
+    try:
+        result = await mesh.execute_goal(
+            goal,
+            workflow_id="wf-template-fallback",
+            plan_template={
+                "obligations": [{
+                    "id": "o1", "description": "Answer from evidence",
+                    "source_quote": goal,
+                }],
+                "steps": [{
+                    "id": "unknown", "capability": "unavailable",
+                    "effect": "read", "task": "Impossible",
+                    "success_criterion": "Impossible", "covers": ["o1"],
+                }],
+            },
+            timeout=2,
+        )
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "completed"
+    assert len(llm.calls) == 3
+    assert "plan_template_rejected" in [
+        event["event"] for event in store.get_ledger_full("wf-template-fallback")
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("peer_class", "expected_status", "upstream_status"),
     [

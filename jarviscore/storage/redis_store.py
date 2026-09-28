@@ -720,6 +720,139 @@ class RedisContextStore:
             except redis.WatchError:
                 continue
 
+    def register_planned_workflow(
+        self,
+        workflow_id: str,
+        goal: str,
+        *,
+        obligations: List[Dict],
+        steps: List[Dict],
+        context: Optional[Dict[str, Any]] = None,
+        budget: Optional[Dict[str, Any]] = None,
+        revision: int = 1,
+    ) -> bool:
+        """Atomically bind a source goal and publish its validated initial DAG."""
+        goal_key = f"workflow_goal:{workflow_id}"
+        graph_key = f"workflow_graph:{workflow_id}"
+        definition_key = f"workflow_definition:{workflow_id}"
+        projection_key = f"workflow_obligations:{workflow_id}"
+        budget_key = f"workflow_budget:{workflow_id}"
+        ledger_key = f"ledgers:{workflow_id}"
+        normalized_budget = ExecutionBudget.from_record(budget).to_record()
+        public_context = neutral_context(context)
+        goal_record = {
+            "workflow_id": workflow_id,
+            "goal": goal,
+            "context": public_context,
+            "budget": normalized_budget,
+        }
+        normalized_steps = []
+        graph = {}
+        for step in steps:
+            step_id = str(step.get("id") or step.get("step_id") or "")
+            if not step_id:
+                raise ValueError("Every workflow step requires an id")
+            record = dict(step)
+            record["id"] = step_id
+            record["status"] = "pending"
+            record["plan_revision"] = revision
+            normalized_steps.append(record)
+            graph[step_id] = json.dumps(record, default=str)
+        definition = WorkflowEnvelope(
+            workflow_id=workflow_id,
+            goal=goal,
+            context=public_context,
+            obligations=obligations,
+            steps=normalized_steps,
+            budget=ExecutionBudget.from_record(normalized_budget),
+            revision=revision,
+        ).to_record()
+        projection = self._initial_obligation_projection(
+            obligations, normalized_steps, revision
+        )
+        pipe = self._redis.pipeline()
+        while True:
+            try:
+                pipe.watch(goal_key, definition_key)
+                existing_goal = pipe.get(goal_key)
+                existing_definition = pipe.get(definition_key)
+                if existing_goal is not None and json.loads(existing_goal) != goal_record:
+                    pipe.unwatch()
+                    raise ValueError(
+                        f"Workflow {workflow_id!r} is already bound to another goal"
+                    )
+                if existing_definition is not None:
+                    current = WorkflowEnvelope.from_record(
+                        json.loads(existing_definition)
+                    ).to_record()
+                    current.pop("published_at", None)
+                    if current != definition:
+                        pipe.unwatch()
+                        raise ValueError(
+                            f"Workflow {workflow_id!r} is already bound to another plan"
+                        )
+                    pipe.unwatch()
+                    return False
+                now = time.time()
+                pipe.multi()
+                if existing_goal is None:
+                    pipe.set(
+                        goal_key,
+                        json.dumps(goal_record, default=str),
+                        ex=self._ttl_seconds,
+                    )
+                    pipe.hset(budget_key, mapping={
+                        "max_tokens_per_epoch": normalized_budget["max_tokens"],
+                        "used_tokens": 0,
+                        "cost_usd": 0.0,
+                        "call_count": 0,
+                        "epoch_count": 0,
+                    })
+                    pipe.expire(budget_key, self._ttl_seconds)
+                    pipe.xadd(ledger_key, {
+                        "event": "goal_registered",
+                        "timestamp": str(now),
+                    })
+                pipe.delete(graph_key)
+                if graph:
+                    pipe.hset(graph_key, mapping=graph)
+                pipe.set(
+                    definition_key,
+                    json.dumps({**definition, "published_at": now}, default=str),
+                    ex=self._ttl_seconds,
+                )
+                pipe.set(
+                    projection_key,
+                    json.dumps(projection, default=str),
+                    ex=self._ttl_seconds,
+                )
+                pipe.sadd("jarviscore:active_workflows", workflow_id)
+                pipe.srem("jarviscore:pending_goal_plans", workflow_id)
+                pipe.xadd(ledger_key, {
+                    "event": "dag_published",
+                    "revision": str(revision),
+                    "step_count": str(len(normalized_steps)),
+                    "source": "template",
+                    "timestamp": str(now),
+                })
+                pipe.set(
+                    f"workflow_planning_status:{workflow_id}",
+                    json.dumps({
+                        "status": "published",
+                        "planner_id": "",
+                        "error": "",
+                        "source": "template",
+                        "updated_at": now,
+                    }),
+                    ex=self._ttl_seconds,
+                )
+                pipe.expire(graph_key, self._ttl_seconds)
+                pipe.expire(ledger_key, self._ttl_seconds)
+                pipe.execute()
+                return True
+            except redis.WatchError:
+                continue
+
     def reserve_workflow_tokens(
         self,
         workflow_id: str,
