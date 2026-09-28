@@ -96,6 +96,80 @@ def test_mesh_planner_renders_declared_capability_artifact():
     assert "requires artifact types: FindingRecord" in catalog
 
 
+def test_plan_template_validates_without_calling_llm_and_adds_response_step():
+    llm = MockLLMClient()
+    planner = MeshPlanner(
+        llm,
+        capabilities={
+            "research": {
+                "effects": ["read"],
+                "artifact_types": ["EvidenceResearch"],
+            },
+            "answer": {
+                "effects": ["propose"],
+                "requires_artifact_types": ["EvidenceResearch"],
+            },
+            "respond": {"effects": ["final_response"]},
+        },
+        response_capability="respond",
+    )
+    goal = "Find evidence and answer"
+
+    plan = planner.validate_template(goal, {
+        "obligations": [{
+            "id": "answer-goal",
+            "description": "Answer from evidence",
+            "source_quote": goal,
+        }],
+        "steps": [{
+            "id": "research",
+            "capability": "research",
+            "effect": "read",
+            "task": "Find evidence",
+            "success_criterion": "Evidence is cited",
+            "covers": [],
+        }, {
+            "id": "answer",
+            "capability": "answer",
+            "effect": "propose",
+            "task": "Answer from evidence",
+            "success_criterion": "Answer is supported",
+            "depends_on": ["research"],
+            "covers": ["answer-goal"],
+        }],
+    })
+
+    assert llm.calls == []
+    assert [step.step_id for step in plan.steps] == [
+        "research", "answer", "final_response",
+    ]
+    assert plan.steps[1].depends_on == ["research"]
+    assert plan.steps[2].depends_on == ["answer"]
+
+
+def test_plan_template_rejects_capability_mismatch_without_calling_llm():
+    llm = MockLLMClient()
+    planner = MeshPlanner(
+        llm,
+        capabilities={"research": {"effects": ["read"]}},
+    )
+
+    with pytest.raises(MeshPlanError, match="unknown capability 'write' ".strip()):
+        planner.validate_template("Find evidence", {
+            "obligations": [{
+                "id": "o1", "description": "Find evidence",
+                "source_quote": "Find evidence",
+            }],
+            "steps": [{
+                "id": "write", "capability": "write", "effect": "write",
+                "systems": ["crm"], "task": "Write", "success_criterion": "Written",
+                "covers": ["o1"],
+            }],
+        })
+
+    assert llm.calls == []
+
+
 def test_declared_artifact_requirements_close_direct_dependencies():
     planner = MeshPlanner(
         MockLLMClient(),
