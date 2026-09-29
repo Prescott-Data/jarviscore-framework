@@ -91,7 +91,18 @@ class RagPipeline:
             or os.environ.get("RAG_RERANK_CANDIDATES", str(_DEFAULT_RERANK_CANDIDATES))
         )
         self.dim = self._infer_dim()
-        self.store = self._init_store()
+        self._store = None
+
+    @property
+    def store(self):
+        # Callers that bind their own store (one index per tenant) never open the default.
+        if self._store is None:
+            self._store = self._init_store()
+        return self._store
+
+    @store.setter
+    def store(self, value):
+        self._store = value
 
     def _init_store(self):
         """Pick vector store backend from RAG_VECTOR_STORE env var."""
