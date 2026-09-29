@@ -529,6 +529,18 @@ class BaseSubAgent(ABC):
         ]
         return "\n".join(parts)
 
+    @staticmethod
+    def _epochs_remain(context: Optional[Dict]) -> bool:
+        """True while the workflow budget grants this step another execution epoch."""
+        if not isinstance(context, dict):
+            return False
+        budget = context.get("execution_budget")
+        if not isinstance(budget, dict):
+            return False
+        max_epochs = int(budget.get("max_epochs_per_step") or 1)
+        current = int(context.get("execution_epoch") or 1)
+        return current < max_epochs
+
     async def _landing_turn(
         self,
         state,
@@ -757,11 +769,15 @@ class BaseSubAgent(ABC):
                 exhausted = ", ".join(self._cognition.lease.expired_dimensions()) or "unknown"
                 self._log.warning(f"Lease expired: {exhausted}")
                 # Landing turn (issue #139): one tools-disabled synthesis attempt
-                # so exhaustion yields a partial result instead of dead air.
-                landing = await self._landing_turn(
-                    state, system_prompt, conversation_history, model,
-                    total_tokens, total_cost, exhausted,
-                )
+                # so exhaustion yields a partial result instead of dead air. It is
+                # the last resort: while the workflow still grants this step
+                # another execution epoch, unfinished work continues there.
+                landing = None
+                if memory is None or not self._epochs_remain(state.context):
+                    landing = await self._landing_turn(
+                        state, system_prompt, conversation_history, model,
+                        total_tokens, total_cost, exhausted,
+                    )
                 if landing is not None:
                     return landing
                 if memory is not None:

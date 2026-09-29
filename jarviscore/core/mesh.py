@@ -1883,6 +1883,7 @@ class Mesh:
                 "workflow_id": workflow_id,
                 "step_id": step_id,
                 "execution_epoch_id": claim_id,
+                "execution_epoch": int(step_def.get("execution_epochs") or 1),
                 "capability": str(
                     step_def.get("capability")
                     or step_def.get("agent")
