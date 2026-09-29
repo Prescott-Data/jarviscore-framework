@@ -56,6 +56,54 @@ async def test_azure_chat_preserves_completion(reason, content):
     json.dumps(result)
 
 
+async def test_azure_chat_forwards_and_preserves_native_tool_calls():
+    llm = client("azure")
+    native_call = NS(
+        id="call-1",
+        type="function",
+        function=NS(name="lookup", arguments='{"query":"revenue"}'),
+    )
+    response = NS(
+        choices=[NS(
+            finish_reason="tool_calls",
+            message=NS(content=None, refusal=None, tool_calls=[native_call]),
+            content_filter_results=None,
+        )],
+        usage=NS(prompt_tokens=12, completion_tokens=4, total_tokens=16),
+    )
+    create = AsyncMock(return_value=response)
+    llm.azure_client = NS(chat=NS(completions=NS(create=create)))
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "Look up evidence",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    }]
+
+    result = await llm.generate(
+        "find revenue",
+        tools=tools,
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
+
+    call = create.await_args.kwargs
+    assert call["tools"] == tools
+    assert call["tool_choice"] == "required"
+    assert call["parallel_tool_calls"] is False
+    assert result["content"] is None
+    assert result["provider_metadata"]["tool_calls"][0]["function"] == {
+        "name": "lookup",
+        "arguments": '{"query":"revenue"}',
+    }
+
+
 @pytest.mark.parametrize("status,reason", [("completed", None), ("incomplete", "max_output_tokens"), ("incomplete", "content_filter"), ("failed", None)])
 async def test_azure_responses_preserves_status_and_details(status, reason):
     llm = client("azure")

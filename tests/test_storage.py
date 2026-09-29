@@ -313,6 +313,109 @@ class TestMockBlobStorage:
 
 
 class TestRagDecisionStage:
+    def test_rag_preserves_only_exact_citation_atoms_for_each_chunk(self):
+        pipeline = RagPipeline.__new__(RagPipeline)
+        pipeline.embedding = MagicMock()
+        pipeline.embedding.embed.return_value = [[0.1, 0.2]]
+        pipeline.store = MagicMock()
+        atoms = [
+            {
+                "quote": "Revenue | FY26 revenue (GBPm) 412.6",
+                "locator": {"segment_id": "table-1", "row": 2},
+            },
+            {
+                "quote": "Employees | FY26 total 128",
+                "locator": {"segment_id": "table-2", "row": 4},
+            },
+        ]
+
+        result = pipeline.ingest_documents(
+            [{
+                "source": "annual-report",
+                "content": "Revenue | FY26 revenue (GBPm) 412.6\n\nEmployees | FY26 total 128",
+                "citation_atoms": atoms,
+            }],
+            chunk_size=42,
+            overlap=0,
+        )
+
+        assert result == {"status": "success", "documents": 1, "chunks": 2}
+        stored = pipeline.store.add.call_args.args[1]
+        assert stored[0]["citation_atoms"] == [atoms[0]]
+        assert stored[1]["citation_atoms"] == [atoms[1]]
+        pipeline.store.search.return_value = [
+            {**stored[0], "score": 0.9}
+        ]
+
+        retrieved = pipeline.retrieve("revenue", top_k=1)
+
+        assert retrieved["results"][0]["citation_atoms"] == [atoms[0]]
+        assert retrieved["evidence"][0]["citation_atoms"] == [atoms[0]]
+        assert retrieved["evidence"][0]["quote"] == stored[0]["text"]
+
+    def test_rag_rejects_a_citation_atom_not_present_in_content(self):
+        pipeline = RagPipeline.__new__(RagPipeline)
+        pipeline.embedding = MagicMock()
+        pipeline.store = MagicMock()
+
+        with pytest.raises(ValueError, match="quote must appear"):
+            pipeline.ingest_documents([{
+                "source": "annual-report",
+                "content": "Revenue was 412.6.",
+                "citation_atoms": [{
+                    "quote": "Revenue was 500.",
+                    "locator": {"segment_id": "table-1", "row": 2},
+                }],
+            }])
+
+    def test_rag_indexes_declared_units_with_context_but_returns_only_the_span(self):
+        pipeline = RagPipeline.__new__(RagPipeline)
+        pipeline.embedding = MagicMock()
+        pipeline.embedding.embed.return_value = [[0.1], [0.2]]
+        pipeline.store = MagicMock()
+        rows = ["Total revenues | Q2 2025 $ 407,344", "Net loss | Q2 2025 $ (3,300)"]
+
+        pipeline.ingest_documents([{
+            "source": "q2-10q:table",
+            "content": "Header\n" + "\n".join(rows),
+            "units": rows,
+            "context": "Informatica Q2 2025 10-Q",
+        }])
+
+        assert pipeline.embedding.embed.call_args.args[0] == [
+            f"Informatica Q2 2025 10-Q\n{row}" for row in rows
+        ]
+        stored = pipeline.store.add.call_args.args[1]
+        assert [item["text"] for item in stored] == rows
+        with pytest.raises(ValueError, match="span of document content"):
+            pipeline.ingest_documents([{
+                "source": "q2-10q:table", "content": "Header", "units": ["Invented row"],
+            }])
+
+    def test_rag_returns_one_result_per_source_reranked_by_the_cross_encoder(self):
+        pipeline = RagPipeline.__new__(RagPipeline)
+        pipeline.embedding = MagicMock()
+        pipeline.embedding.embed_query.return_value = [0.1]
+        pipeline.store = MagicMock()
+        pipeline.store.search.return_value = [
+            {"source": "merger", "text": "Offer of $25.00 per share", "context": "Merger", "score": 0.9},
+            {"source": "merger", "text": "Board discussion", "context": "Merger", "score": 0.8},
+            {"source": "10q", "text": "Total revenues $ 407,344", "context": "Q2 10-Q", "score": 0.7},
+        ]
+        pipeline.reranker = MagicMock()
+        pipeline.reranker.score.side_effect = lambda q, passages: [
+            5.0 if "407,344" in p else -1.0 for p in passages
+        ]
+        pipeline.rerank_candidates = 50
+
+        result = pipeline.retrieve("How much revenue?", top_k=2)
+
+        assert [r["source"] for r in result["results"]] == ["10q", "merger"]
+        assert pipeline.reranker.score.call_args.args[1] == [
+            "Merger\nOffer of $25.00 per share", "Q2 10-Q\nTotal revenues $ 407,344",
+        ]
+        assert pipeline.store.search.call_args.kwargs["top_k"] >= 50
+
     @pytest.mark.asyncio
     async def test_typesafe_routes_shortlist_without_discarding_audit_records(self):
         scores = {

@@ -50,7 +50,7 @@ import os
 import re
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, cast, get_args, get_origin
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.kernel.cognition import AgentCognitionManager
@@ -281,6 +281,7 @@ class BaseSubAgent(ABC):
     #: values, the agent submitted an identical result, and no tool ran in between
     #: — so an agent that is still working is never cut off, however long it takes.
     max_identical_done_attempts: int = 3
+    native_first_tool_call: bool = False
 
     def __init__(
         self,
@@ -414,6 +415,73 @@ class BaseSubAgent(ABC):
             lines.append(f"  - {tool.name}: {tool.description} [{tool.phase}]")
         return "\n".join(lines)
 
+    @staticmethod
+    def _tool_parameter_schema(annotation: Any) -> Dict[str, Any]:
+        origin = get_origin(annotation)
+        if origin in (list, List):
+            args = get_args(annotation)
+            return {
+                "type": "array",
+                "items": BaseSubAgent._tool_parameter_schema(args[0]) if args else {},
+            }
+        if origin in (dict, Dict) or annotation is dict:
+            return {"type": "object"}
+        return {
+            str: {"type": "string"},
+            int: {"type": "integer"},
+            float: {"type": "number"},
+            bool: {"type": "boolean"},
+        }.get(annotation, {})
+
+    def _native_tool_schemas(self) -> List[Dict[str, Any]]:
+        schemas = []
+        for tool in self._tools.values():
+            signature = inspect.signature(tool.func)
+            properties = {}
+            required = []
+            for name, parameter in signature.parameters.items():
+                if parameter.kind in {
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                }:
+                    continue
+                properties[name] = self._tool_parameter_schema(parameter.annotation)
+                if parameter.default is inspect.Parameter.empty:
+                    required.append(name)
+            schemas.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                        "additionalProperties": False,
+                    },
+                },
+            })
+        return schemas
+
+    @staticmethod
+    def _native_tool_action(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        metadata = result.get("provider_metadata") or {}
+        calls = result.get("tool_calls") or metadata.get("tool_calls") or []
+        if not calls:
+            return None
+        call = calls[0]
+        function = call.get("function") or call
+        name = str(function.get("name") or "").strip()
+        arguments = function.get("arguments", function.get("args", {}))
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {"raw": arguments}
+        if not name or not isinstance(arguments, dict):
+            return None
+        return {"type": "tool", "thought": "", "tool": name, "params": arguments}
+
     @abstractmethod
     def get_system_prompt(self) -> str:
         """Return the system prompt for this subagent."""
@@ -528,6 +596,18 @@ class BaseSubAgent(ABC):
             "  available to downstream agents.",
         ]
         return "\n".join(parts)
+
+    @staticmethod
+    def _epochs_remain(context: Optional[Dict]) -> bool:
+        """True while the workflow budget grants this step another execution epoch."""
+        if not isinstance(context, dict):
+            return False
+        budget = context.get("execution_budget")
+        if not isinstance(budget, dict):
+            return False
+        max_epochs = int(budget.get("max_epochs_per_step") or 1)
+        current = int(context.get("execution_epoch") or 1)
+        return current < max_epochs
 
     async def _landing_turn(
         self,
@@ -757,11 +837,15 @@ class BaseSubAgent(ABC):
                 exhausted = ", ".join(self._cognition.lease.expired_dimensions()) or "unknown"
                 self._log.warning(f"Lease expired: {exhausted}")
                 # Landing turn (issue #139): one tools-disabled synthesis attempt
-                # so exhaustion yields a partial result instead of dead air.
-                landing = await self._landing_turn(
-                    state, system_prompt, conversation_history, model,
-                    total_tokens, total_cost, exhausted,
-                )
+                # so exhaustion yields a partial result instead of dead air. It is
+                # the last resort: while the workflow still grants this step
+                # another execution epoch, unfinished work continues there.
+                landing = None
+                if memory is None or not self._epochs_remain(state.context):
+                    landing = await self._landing_turn(
+                        state, system_prompt, conversation_history, model,
+                        total_tokens, total_cost, exhausted,
+                    )
                 if landing is not None:
                     return landing
                 if memory is not None:
@@ -842,6 +926,12 @@ class BaseSubAgent(ABC):
             kwargs = {}
             if model:
                 kwargs["model"] = model
+            if self.native_first_tool_call and turn == 0 and not state.tool_history:
+                kwargs.update({
+                    "tools": self._native_tool_schemas(),
+                    "tool_choice": "required",
+                    "parallel_tool_calls": False,
+                })
 
             _llm_t0 = __import__('time').monotonic()
             try:
@@ -911,7 +1001,7 @@ class BaseSubAgent(ABC):
                     )
                 continue
 
-            content = llm_result.get("content", "")
+            content = llm_result.get("content") or ""
             tokens = llm_result.get("tokens", {})
             total_tokens["input"] += tokens.get("input", 0)
             total_tokens["output"] += tokens.get("output", 0)
@@ -927,7 +1017,9 @@ class BaseSubAgent(ABC):
             state.tokens_used = total_tokens["total"]
 
             # Parse response
-            parsed = self._parse_response_for_contract(content, context)
+            parsed = self._native_tool_action(llm_result) or self._parse_response_for_contract(
+                content, context
+            )
 
             # ── Auto-summarize if context is getting large ──
             try:

@@ -37,6 +37,7 @@ behavior.
 | `capability_descriptions` | `Dict[str, str]` | `{}` | Routing description for each capability. Distributed planning uses these descriptions instead of inferring intent from tags alone. |
 | `capability_contracts` | `Dict[str, dict]` | `{}` when absent | Authorized `effects`, provider `systems`, and planner-visible artifact production and consumption declarations. |
 | `artifact_reference_paths` | `tuple[tuple[str, ...], ...]` | `()` | Output paths whose non-null artifacts must be exact `artifact_ref` values hydrated from dependency outputs before validation. Use `"*"` for list members. |
+| `final_response_passthrough` | `bool` | `False` | For a `final_response` capability with exactly one direct dependency, persist that validated artifact unchanged instead of invoking the response agent again. Multi-input responses still execute normally. |
 | `output_schema` | `type[BaseModel]` | `None` | Optional Pydantic model enforced on CoderSubAgent execution output. Other role outputs require application validation. |
 | `goal_oriented` | `bool` | `False` | When `True`, tasks are classified first: complex work uses `Plan → Execute → Evaluate`; bounded work can run as one direct Kernel turn. See [Planning](../concepts/planning.md). |
 | `default_kernel_role` | `str` | `None` | Fallback sub-agent role when the Planner emits `subagent_hint: null`. Built-in values are `"coder"`, `"researcher"`, `"communicator"`, and `"browser"`; products may register custom roles through an extended Kernel. Leave `None` for generalist agents. |

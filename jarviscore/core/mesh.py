@@ -31,14 +31,17 @@ Usage:
 """
 from typing import List, Dict, Any, Optional, Set
 import asyncio
+import copy
 import json
 import logging
+import time
 import warnings
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from uuid import uuid4
 
 from .agent import Agent
+from .envelope import attach_result_summary
 from jarviscore.orchestration.envelopes import (
     ExecutionBudget,
     neutral_context,
@@ -591,8 +594,9 @@ class Mesh:
         workflow_id: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
+        plan_template: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Compile one source goal, publish its DAG, and observe peer claims."""
+        """Publish a validated template or compile one source goal into a peer DAG."""
         if not self._started:
             raise RuntimeError("Mesh not started. Call await mesh.start() first.")
         if self._redis_store is None:
@@ -609,9 +613,59 @@ class Mesh:
         if timeout is not None:
             budget_options.setdefault("max_seconds", timeout)
         budget = ExecutionBudget.from_record(budget_options)
-        self._redis_store.register_workflow_goal(
-            identity, source, public_context, budget=budget.to_record()
-        )
+        definition = self._redis_store.get_workflow_definition(identity)
+        if definition is not None:
+            existing_goal = self._redis_store.get_workflow_goal(identity)
+            expected_goal = {
+                "workflow_id": identity,
+                "goal": source,
+                "context": public_context,
+                "budget": budget.to_record(),
+            }
+            legacy_published = (
+                existing_goal is None
+                and plan_template is None
+                and definition.get("goal") == source
+            )
+            if not legacy_published and existing_goal != expected_goal:
+                raise ValueError(
+                    f"Workflow {identity!r} is already bound to another goal"
+                )
+        else:
+            template_error = None
+            if plan_template is not None:
+                from jarviscore.planning.mesh_planner import MeshPlanError, MeshPlanner
+
+                planner = MeshPlanner(
+                    None,
+                    capabilities=self._mesh_capability_catalog(),
+                    response_capability=self.config.get("mesh_response_capability"),
+                    planning_brief=self.config.get("mesh_planning_brief"),
+                )
+                try:
+                    plan = planner.validate_template(source, plan_template)
+                except MeshPlanError as error:
+                    template_error = f"{type(error).__name__}: {error}"
+                else:
+                    self._redis_store.register_planned_workflow(
+                        identity,
+                        source,
+                        context=public_context,
+                        budget=budget.to_record(),
+                        obligations=[item.to_dict() for item in plan.obligations],
+                        steps=[step.to_dict() for step in plan.steps],
+                        revision=plan.revision,
+                    )
+            if plan_template is None or template_error is not None:
+                self._redis_store.register_workflow_goal(
+                    identity, source, public_context, budget=budget.to_record()
+                )
+                if template_error is not None:
+                    self._redis_store.append_ledger_entry(identity, {
+                        "event": "plan_template_rejected",
+                        "error": template_error,
+                        "timestamp": time.time(),
+                    })
         try:
             definition = self._redis_store.get_workflow_definition(identity)
             if definition is None:
@@ -1804,6 +1858,7 @@ class Mesh:
         previous_step_results = self._redis_store.get_dependency_outputs(
             workflow_id, step_id
         )
+        direct_dependency_results = previous_step_results
         workflow_evidence = None
         if effect == "final_response":
             workflow_evidence = self._redis_store.get_workflow_evidence(
@@ -1831,6 +1886,7 @@ class Mesh:
                 "workflow_id": workflow_id,
                 "step_id": step_id,
                 "execution_epoch_id": claim_id,
+                "execution_epoch": int(step_def.get("execution_epochs") or 1),
                 "capability": str(
                     step_def.get("capability")
                     or step_def.get("agent")
@@ -1887,6 +1943,19 @@ class Mesh:
                         }
                     else:
                         async def execute_bound_task():
+                            if (
+                                effect == "final_response"
+                                and getattr(agent, "final_response_passthrough", False)
+                                and len(step_def.get("depends_on", [])) == 1
+                                and len(direct_dependency_results) == 1
+                            ):
+                                artifact = copy.deepcopy(
+                                    next(iter(direct_dependency_results.values()))
+                                )
+                                return attach_result_summary({
+                                    "status": "success",
+                                    "output": artifact,
+                                })
                             async with self._bound_step_workspace(agent, task) as binding:
                                 bound_result = await agent.execute_task(task)
                                 if isinstance(bound_result, dict):

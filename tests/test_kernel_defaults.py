@@ -210,6 +210,60 @@ class TestCoderSubAgent:
         assert result.metadata["checkpointed"] is True
         memory.save_checkpoint.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("execution_epoch", "landing_attempted"),
+        [(1, False), (8, True)],
+    )
+    async def test_partial_landing_waits_for_the_last_epoch(
+        self, execution_epoch, landing_attempted
+    ):
+        from jarviscore.kernel.cognition import AgentCognitionManager
+        from jarviscore.kernel.lease import ExecutionLease
+
+        class PartialLLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def generate(self, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "content": "still reading the statements",
+                        "tokens": {"input": 4, "output": 4, "total": 8},
+                    }
+                return {
+                    "content": 'DONE: Partial\nRESULT: {"status": "incomplete", "evidence": []}',
+                    "tokens": {"input": 4, "output": 4, "total": 8},
+                }
+
+        lease = ExecutionLease.for_role("coder")
+        lease.action_budget = 1
+        cognition = AgentCognitionManager(lease=lease, agent_id="r1")
+        memory = AsyncMock()
+        memory.load_checkpoint.return_value = None
+        llm = PartialLLM()
+        coder = CoderSubAgent(agent_id="r1", llm_client=llm)
+
+        result = await coder.run(
+            task="Find the revenue row",
+            context={
+                "workflow_id": "wf-epochs",
+                "step_id": "step-1",
+                "execution_budget": {"max_epochs_per_step": 8},
+                "execution_epoch": execution_epoch,
+            },
+            max_turns=3,
+            cognition=cognition,
+            memory=memory,
+        )
+
+        # The gate rejects an evidence-free landing either way; precedence is what differs.
+        assert result.status == "epoch_exhausted"
+        assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+        assert llm.calls == (2 if landing_attempted else 1)
+        memory.save_checkpoint.assert_awaited_once()
+
     """Tests for CoderSubAgent."""
 
     def test_registers_expected_tools(self, mock_llm):
@@ -597,6 +651,43 @@ class TestCommunicatorSubAgent:
         output = await comm.run("draft status update", max_turns=1)
         assert output.status == "success"
         assert output.payload == {"message": "Status update: all systems go."}
+
+    @pytest.mark.asyncio
+    async def test_native_first_tool_call_uses_provider_structure(self, mock_llm):
+        mock_llm.responses = [
+            _llm_response("", tokens={"input": 10, "output": 2, "total": 12})
+            | {"provider_metadata": {"tool_calls": [{
+                "function": {
+                    "name": "draft_message",
+                    "arguments": json.dumps({
+                        "content": "Status update: all systems go.",
+                        "audience": "non-technical",
+                    }),
+                },
+            }]}},
+            _llm_response(
+                'THOUGHT: Done\nDONE: Message drafted\n'
+                'RESULT: {"message": "Status update: all systems go."}'
+            ),
+        ]
+        comm = CommunicatorSubAgent(agent_id="m1", llm_client=mock_llm)
+        comm.native_first_tool_call = True
+
+        output = await comm.run("draft status update", max_turns=2)
+
+        assert output.status == "success"
+        assert len(comm.drafts) == 1
+        first_call = mock_llm.calls[0]
+        assert first_call["tool_choice"] == "required"
+        assert first_call["parallel_tool_calls"] is False
+        draft = next(
+            tool for tool in first_call["tools"]
+            if tool["function"]["name"] == "draft_message"
+        )
+        assert set(draft["function"]["parameters"]["properties"]) == {
+            "content", "audience", "format",
+        }
+        assert "kwargs" not in draft["function"]["parameters"]["properties"]
 
     @pytest.mark.asyncio
     async def test_full_run_repairs_protocol_violation(self, mock_llm):

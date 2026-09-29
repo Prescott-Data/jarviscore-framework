@@ -433,6 +433,72 @@ class TestP2PIntegrationWithAgents:
         assert "_nexus_connection_id" not in context
 
     @pytest.mark.asyncio
+    async def test_capability_mandates_exclude_the_requesters_own_capabilities(
+        self, monkeypatch
+    ):
+        class Researcher(AutoAgent):
+            role = "researcher"
+            capabilities = ["evidence_research"]
+            system_prompt = "Research evidence."
+
+            async def setup(self):
+                pass
+
+            async def execute_task(self, task):
+                return {"status": "success", "output": "researched"}
+
+        class Analyst(AutoAgent):
+            role = "analyst"
+            capabilities = ["answer_synthesis"]
+            system_prompt = "Write answers."
+
+            async def setup(self):
+                pass
+
+        monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+        monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+        monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+        mesh = Mesh(config={"p2p_enabled": False})
+        researcher = mesh.add(Researcher, agent_id="researcher-1")
+        mesh.add(Researcher, agent_id="researcher-2")
+        analyst = mesh.add(Analyst, agent_id="analyst-1")
+
+        await mesh.start()
+        try:
+            def askable(agent):
+                schema = next(
+                    item for item in agent.peers.as_tool().schema
+                    if item["name"] == "ask_capability"
+                )
+                return schema["input_schema"]["properties"]["capability"]["enum"]
+
+            assert "evidence_research" not in askable(researcher)
+            assert "evidence_research" in askable(analyst)
+            roles = next(
+                item for item in researcher.peers.as_tool().schema
+                if item["name"] == "ask_peer"
+            )["input_schema"]["properties"]["role"]["enum"]
+            assert "researcher" not in roles and "analyst" in roles
+            sibling = await researcher.peers.as_tool().execute_result(
+                "ask_peer", {"role": "researcher", "question": "Do my job for me."}
+            )
+            assert sibling["semantic_error"] == "PEER_REQUEST_TO_OWN_ROLE"
+            refused = await researcher.peers.as_tool().execute_result(
+                "ask_capability",
+                {"capability": "evidence_research", "question": "Do my job for me."},
+            )
+            assert refused["status"] == "error"
+            assert "owns capability" in refused["error"]
+            delegated = await analyst.peers.as_tool().execute_result(
+                "ask_capability",
+                {"capability": "evidence_research", "question": "Find the revenue row."},
+            )
+            assert delegated["status"] == "success"
+        finally:
+            await mesh.stop()
+
+    @pytest.mark.asyncio
     async def test_peer_tool_schema_error_is_typed_and_never_dispatched(self):
         peers = MagicMock()
         peers.my_id = "requester-1"
