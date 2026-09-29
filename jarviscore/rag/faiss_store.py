@@ -35,7 +35,13 @@ class FaissVectorStore:
 
     def _load_or_create_index(self):
         if os.path.exists(self.index_path):
-            return faiss.read_index(self.index_path)
+            index = faiss.read_index(self.index_path)
+            if index.d != self.dim:
+                raise ValueError(
+                    f"Index at {self.index_path} holds {index.d}-dimensional vectors but the "
+                    f"embedding model produces {self.dim}; rebuild the index for this model."
+                )
+            return index
         return faiss.IndexFlatIP(self.dim)
 
     def _load_metadata(self) -> List[Dict[str, Any]]:

@@ -22,6 +22,9 @@ _DEFAULT_EMBED_MODEL = "all-MiniLM-L6-v2"
 _DEFAULT_CHUNK_SIZE = 1200
 _DEFAULT_CHUNK_OVERLAP = 200
 _DEFAULT_TOP_K = 5
+_DEFAULT_RERANK_CANDIDATES = 50
+# Several units of one source can outrank the next source; search deep enough to fill the pool.
+_UNITS_PER_SOURCE_DEPTH = 6
 _DEFAULT_INDEX_PATH = os.path.join(os.path.expanduser("~"), ".jarviscore", "rag", "faiss.index")
 _DEFAULT_META_PATH = os.path.join(os.path.expanduser("~"), ".jarviscore", "rag", "faiss_meta.json")
 
@@ -53,12 +56,21 @@ _PASSAGE_QUESTIONS = {
 
 
 class RagPipeline:
-    def __init__(self, decision_client=None, decision_config: Optional[Dict[str, Any]] = None):
-        from jarviscore.rag.embedding import EmbeddingModel
+    def __init__(
+        self,
+        decision_client=None,
+        decision_config: Optional[Dict[str, Any]] = None,
+        *,
+        embed_model: Optional[str] = None,
+        query_instruction: Optional[str] = None,
+        rerank_model: Optional[str] = None,
+        rerank_candidates: Optional[int] = None,
+    ):
+        from jarviscore.rag.embedding import EmbeddingModel, Reranker
 
         self.decision_client = decision_client
         self.decision_config = dict(decision_config or {})
-        model_name = os.environ.get("RAG_EMBED_MODEL", _DEFAULT_EMBED_MODEL)
+        model_name = embed_model or os.environ.get("RAG_EMBED_MODEL", _DEFAULT_EMBED_MODEL)
         model_path = os.environ.get("RAG_EMBED_MODEL_PATH")
         cache_dir = os.environ.get("RAG_EMBED_CACHE_DIR")
 
@@ -66,6 +78,17 @@ class RagPipeline:
             model_name,
             model_path=model_path,
             cache_dir=cache_dir,
+            query_instruction=(
+                query_instruction
+                if query_instruction is not None
+                else os.environ.get("RAG_QUERY_INSTRUCTION", "")
+            ),
+        )
+        rerank_name = rerank_model or os.environ.get("RAG_RERANK_MODEL")
+        self.reranker = Reranker(rerank_name, cache_dir=cache_dir) if rerank_name else None
+        self.rerank_candidates = int(
+            rerank_candidates
+            or os.environ.get("RAG_RERANK_CANDIDATES", str(_DEFAULT_RERANK_CANDIDATES))
         )
         self.dim = self._infer_dim()
         self.store = self._init_store()
@@ -94,7 +117,11 @@ class RagPipeline:
         overlap: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        documents: list of {source, content, metadata?}
+        documents: list of {source, content, metadata?, citation_atoms?, units?, context?}
+
+        ``units`` names the exact spans of ``content`` to index (a table row, a clause);
+        without them ``content`` is chunked. ``context`` situates each unit in its
+        document for retrieval only; it is never returned as quoted text.
         """
         chunk_size = chunk_size or int(os.environ.get("RAG_CHUNK_SIZE", str(_DEFAULT_CHUNK_SIZE)))
         overlap = overlap or int(os.environ.get("RAG_CHUNK_OVERLAP", str(_DEFAULT_CHUNK_OVERLAP)))
@@ -105,16 +132,24 @@ class RagPipeline:
             content = doc.get("content") or ""
             source = doc.get("source") or "unknown"
             meta = doc.get("metadata") or {}
+            context = str(doc.get("context") or "").strip()
             citation_atoms = validate_citation_atoms(
                 content, doc.get("citation_atoms")
             )
-            chunks = chunk_text(content, chunk_size=chunk_size, overlap=overlap)
+            units = doc.get("units")
+            if units:
+                if any(not isinstance(u, str) or not u.strip() or u not in content for u in units):
+                    raise ValueError("each index unit must be a nonempty span of document content")
+                chunks = list(units)
+            else:
+                chunks = chunk_text(content, chunk_size=chunk_size, overlap=overlap)
             for idx, c in enumerate(chunks):
-                all_chunks.append(c)
+                all_chunks.append(f"{context}\n{c}" if context else c)
                 all_meta.append({
                     "source": source,
                     "chunk_index": idx,
                     "text": c,
+                    "context": context,
                     "metadata": meta,
                     "citation_atoms": citation_atoms_for_chunk(c, citation_atoms),
                 })
@@ -132,8 +167,37 @@ class RagPipeline:
 
     def retrieve(self, query: str, top_k: Optional[int] = None) -> Dict[str, Any]:
         top_k = top_k or int(os.environ.get("RAG_TOP_K", str(_DEFAULT_TOP_K)))
-        q_vec = self.embedding.embed([query])[0]
-        results = self.store.search(q_vec, top_k=top_k)
+        embedding = self.embedding
+        q_vec = (
+            embedding.embed_query(query)
+            if hasattr(embedding, "embed_query")
+            else embedding.embed([query])[0]
+        )
+        reranker = getattr(self, "reranker", None)
+        pool_size = max(top_k, getattr(self, "rerank_candidates", 0)) if reranker else top_k
+        candidates = self.store.search(q_vec, top_k=pool_size * _UNITS_PER_SOURCE_DEPTH)
+        results: List[Dict[str, Any]] = []
+        seen_sources = set()
+        for candidate in candidates:
+            source = candidate.get("source")
+            if source in seen_sources:
+                continue
+            seen_sources.add(source)
+            results.append(candidate)
+            if len(results) >= pool_size:
+                break
+        if reranker and results:
+            scores = reranker.score(
+                query,
+                [
+                    f"{r['context']}\n{r.get('text', '')}" if r.get("context") else r.get("text", "")
+                    for r in results
+                ],
+            )
+            for r, s in zip(results, scores):
+                r["rerank_score"] = s
+            results.sort(key=lambda r: r["rerank_score"], reverse=True)
+        results = results[:top_k]
 
         evidence = []
         for r in results:
