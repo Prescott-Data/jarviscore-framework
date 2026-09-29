@@ -82,8 +82,13 @@ class PeerTool:
             List of tool schema dicts (Anthropic tool_use format)
         """
         # Get live peer info
-        active_roles = self._peers.list_roles()
-        peers_info = self._peers.list_peers()
+        own_role = getattr(self._peers, "my_role", None)
+        active_roles = [
+            role for role in self._peers.list_roles() if role != own_role
+        ]
+        peers_info = [
+            peer for peer in self._peers.list_peers() if peer.get("role") != own_role
+        ]
         own_capabilities = set(getattr(self._peers, "my_capabilities", []) or [])
         active_capabilities = sorted({
             capability
@@ -286,6 +291,16 @@ class PeerTool:
                 "error": f"Missing required peer arguments: {', '.join(missing)}",
                 "semantic_error": "INVALID_PEER_TOOL_ARGUMENTS",
                 "missing_fields": missing,
+                "peer_request_attempted": False,
+            }
+        if role == self._peers.my_role:
+            return {
+                "status": "error",
+                "error": (
+                    f"{role!r} is your own role; a peer request is for capabilities "
+                    "you lack, not for handing your assignment to a sibling."
+                ),
+                "semantic_error": "PEER_REQUEST_TO_OWN_ROLE",
                 "peer_request_attempted": False,
             }
         response = await self._peers.request(

@@ -475,6 +475,15 @@ class TestP2PIntegrationWithAgents:
 
             assert "evidence_research" not in askable(researcher)
             assert "evidence_research" in askable(analyst)
+            roles = next(
+                item for item in researcher.peers.as_tool().schema
+                if item["name"] == "ask_peer"
+            )["input_schema"]["properties"]["role"]["enum"]
+            assert "researcher" not in roles and "analyst" in roles
+            sibling = await researcher.peers.as_tool().execute_result(
+                "ask_peer", {"role": "researcher", "question": "Do my job for me."}
+            )
+            assert sibling["semantic_error"] == "PEER_REQUEST_TO_OWN_ROLE"
             refused = await researcher.peers.as_tool().execute_result(
                 "ask_capability",
                 {"capability": "evidence_research", "question": "Do my job for me."},
