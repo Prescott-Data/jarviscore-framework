@@ -171,7 +171,7 @@ class P2PCoordinator:
         task.add_done_callback(self._introductions.discard)
 
     async def _introduce_to(self, peer_addr: str, timeout: float = 30.0) -> bool:
-        """Send our capabilities to one member once its ZMQ link can carry them."""
+        """Send our capabilities to one member, retrying until a send succeeds."""
         conn_mgr = self.swim_manager.zmq_agent.connection_manager
         deadline = asyncio.get_running_loop().time() + timeout
         while self._started:
@@ -180,10 +180,11 @@ class P2PCoordinator:
                 sent = await self._send_p2p_message(
                     peer_addr, 'CAPABILITY_ANNOUNCEMENT', self._capability_payload()
                 )
-                logger.info(f"Introduced capabilities to {peer_addr}: sent={sent}")
-                return sent
+                if sent:
+                    logger.info(f"Introduced capabilities to {peer_addr}")
+                    return True
             if asyncio.get_running_loop().time() >= deadline:
-                logger.warning(f"No ZMQ link to {peer_addr} after {timeout}s; capabilities not introduced")
+                logger.warning(f"Could not introduce capabilities to {peer_addr} within {timeout}s")
                 return False
             await asyncio.sleep(0.2)
         return False
@@ -516,13 +517,31 @@ class P2PCoordinator:
 
             import json
             payload_json = json.dumps(payload)
-            success = await self.swim_manager.zmq_agent.send_message_base(
+            send = self.swim_manager.zmq_agent.send_message_base(
                 target,
                 msg_type,
                 "payload",
                 payload_json,
                 f"p2p_{msg_type}"
             )
+            # The ZMQ agent's sockets and locks belong to the SWIM thread's loop.
+            swim_loop = getattr(self.swim_manager, "swim_loop", None)
+            if (
+                isinstance(swim_loop, asyncio.AbstractEventLoop)
+                and swim_loop is not asyncio.get_running_loop()
+            ):
+                if swim_loop.is_closed():
+                    send.close()
+                    return False
+                handoff = asyncio.run_coroutine_threadsafe(send, swim_loop)
+                try:
+                    success = await asyncio.wait_for(asyncio.wrap_future(handoff), timeout=30)
+                except asyncio.TimeoutError:
+                    handoff.cancel()
+                    logger.warning(f"P2P send to {target} timed out on the SWIM loop")
+                    return False
+            else:
+                success = await send
 
             # Record activity for keepalive suppression
             if self.keepalive_manager:

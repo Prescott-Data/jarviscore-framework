@@ -302,3 +302,35 @@ class TestGetRunningLoopInRequest:
             "_deliver_message() must use call_soon_threadsafe for cross-loop "
             "Future resolution — direct set_result() raises RuntimeError from SWIM thread"
         )
+
+
+class TestCoordinatorSendsOnSwimLoop:
+    """The ZMQ agent is owned by the SWIM thread's loop; sends must run there."""
+
+    @pytest.mark.asyncio
+    async def test_send_from_another_loop_runs_on_swim_loop(self):
+        from types import SimpleNamespace
+
+        from jarviscore.p2p.coordinator import P2PCoordinator
+
+        swim_loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=swim_loop.run_forever, daemon=True)
+        thread.start()
+        seen = {}
+
+        class Agent:
+            async def send_message_base(self, target, msg_type, key, value, reason):
+                seen["loop"] = asyncio.get_running_loop()
+                return True
+
+        coordinator = P2PCoordinator([], {})
+        coordinator.swim_manager = SimpleNamespace(zmq_agent=Agent(), swim_loop=swim_loop)
+        try:
+            sent = await coordinator._send_p2p_message("127.0.0.1:7946", "CAPABILITY_ANNOUNCEMENT", {})
+        finally:
+            swim_loop.call_soon_threadsafe(swim_loop.stop)
+            thread.join(timeout=5)
+            swim_loop.close()
+
+        assert sent is True
+        assert seen["loop"] is swim_loop
