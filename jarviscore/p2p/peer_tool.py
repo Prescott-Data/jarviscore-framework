@@ -84,10 +84,12 @@ class PeerTool:
         # Get live peer info
         active_roles = self._peers.list_roles()
         peers_info = self._peers.list_peers()
+        own_capabilities = set(getattr(self._peers, "my_capabilities", []) or [])
         active_capabilities = sorted({
             capability
             for peer in peers_info
             for capability in peer.get("capabilities", [])
+            if capability not in own_capabilities
         })
         capability_descriptions = {
             capability: description
