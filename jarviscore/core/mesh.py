@@ -31,6 +31,7 @@ Usage:
 """
 from typing import List, Dict, Any, Optional, Set
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -40,6 +41,7 @@ from dataclasses import asdict
 from uuid import uuid4
 
 from .agent import Agent
+from .envelope import attach_result_summary
 from jarviscore.orchestration.envelopes import (
     ExecutionBudget,
     neutral_context,
@@ -1856,6 +1858,7 @@ class Mesh:
         previous_step_results = self._redis_store.get_dependency_outputs(
             workflow_id, step_id
         )
+        direct_dependency_results = previous_step_results
         workflow_evidence = None
         if effect == "final_response":
             workflow_evidence = self._redis_store.get_workflow_evidence(
@@ -1940,6 +1943,19 @@ class Mesh:
                         }
                     else:
                         async def execute_bound_task():
+                            if (
+                                effect == "final_response"
+                                and getattr(agent, "final_response_passthrough", False)
+                                and len(step_def.get("depends_on", [])) == 1
+                                and len(direct_dependency_results) == 1
+                            ):
+                                artifact = copy.deepcopy(
+                                    next(iter(direct_dependency_results.values()))
+                                )
+                                return attach_result_summary({
+                                    "status": "success",
+                                    "output": artifact,
+                                })
                             async with self._bound_step_workspace(agent, task) as binding:
                                 bound_result = await agent.execute_task(task)
                                 if isinstance(bound_result, dict):

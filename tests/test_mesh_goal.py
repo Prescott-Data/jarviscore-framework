@@ -237,6 +237,10 @@ class FailingResponsePeer(ResponsePeer):
         return {"status": "failure", "error": "response synthesis failed"}
 
 
+class PassthroughResponsePeer(ResponsePeer):
+    final_response_passthrough = True
+
+
 class RevisionResponsePeer(ResponsePeer):
     async def execute_task(self, task):
         self.received.append(task)
@@ -872,7 +876,7 @@ async def test_hold_blocks_multi_system_effects_but_final_response_still_runs(mo
     mesh.add(CollateralPeer, agent_id="collateral")
     writer = mesh.add(WritePeer, agent_id="writer")
     notifier = mesh.add(NotifyPeer, agent_id="notifier")
-    responder = mesh.add(ResponsePeer, agent_id="responder")
+    responder = mesh.add(PassthroughResponsePeer, agent_id="responder")
 
     await mesh.start()
     store.publish_workflow(
@@ -946,6 +950,51 @@ async def test_hold_blocks_multi_system_effects_but_final_response_still_runs(mo
         ("final_response", "final_response", []),
     ]
     assert all("agent" not in step and "atom" not in step for step in persisted["steps"])
+
+
+@pytest.mark.asyncio
+async def test_final_response_can_pass_through_one_validated_dependency(monkeypatch):
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    mesh.add(CollateralPeer, agent_id="worker")
+    responder = mesh.add(PassthroughResponsePeer, agent_id="responder")
+    artifact = {"document_id": "deck-1", "status": "existing"}
+
+    await mesh.start()
+    store.publish_workflow(
+        "wf-response-passthrough",
+        goal="Find and return collateral",
+        obligations=[],
+        steps=[
+            {
+                "id": "find", "capability": "sales_collateral", "effect": "read",
+                "systems": [], "task": "Find collateral", "depends_on": [],
+            },
+            {
+                "id": "respond", "capability": "final_response",
+                "effect": "final_response", "systems": [], "task": "Return collateral",
+                "depends_on": ["find"],
+            },
+        ],
+    )
+    try:
+        result = await mesh.execute_goal(
+            "Find and return collateral",
+            workflow_id="wf-response-passthrough",
+            timeout=1,
+        )
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "completed"
+    assert responder.received == []
+    persisted = store.get_step_output("wf-response-passthrough", "respond")
+    assert persisted["output"]["output"] == artifact
+    assert persisted["output"]["result_summary"] == "Task completed."
 
 
 @pytest.mark.asyncio
