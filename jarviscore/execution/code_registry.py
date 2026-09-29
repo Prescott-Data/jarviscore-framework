@@ -1594,9 +1594,9 @@ def _seed_shipped_atoms(registry: FunctionRegistry) -> None:
     )
     if failed:
         logger.warning("%d atom(s) in the catalogue could not be loaded", len(failed))
-    if not registered:
-        # A silent no-op here is what made an empty registry look like normal
-        # operation for as long as it did.
+    if not registered and not registry.function_metadata:
+        # A silent no-op on a genuinely empty registry made missing atoms look
+        # like normal operation. An existing registry needs no new seed rows.
         logger.warning(
             "Atom catalogue produced no functions; agents will write every "
             "integration from scratch"

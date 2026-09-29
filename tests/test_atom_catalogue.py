@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from jarviscore.execution.code_registry import create_function_registry
+from jarviscore.execution.code_registry import _seed_shipped_atoms, create_function_registry
 from jarviscore.execution.atom_contract import read_contract
 from jarviscore.integrations.seed_registry import seed_registry
 from jarviscore.kernel.defaults.coder import CoderSubAgent
@@ -53,6 +53,23 @@ class TestCatalogueIsLoaded:
         with tempfile.TemporaryDirectory() as directory:
             registry = create_function_registry(directory, seed=False)
             assert registry.function_metadata == {}
+
+    def test_existing_atoms_do_not_claim_code_generation_is_needed(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            "jarviscore.integrations.seed_registry.seed_registry",
+            lambda registry, **kwargs: {"registered": [], "failed": []},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            registry = create_function_registry(directory, seed=False)
+            registry.register_function(
+                "existing_read_atom",
+                "def existing_read_atom():\n    return {}\n",
+                metadata={"system": "test", "description": "read"},
+            )
+            with caplog.at_level("WARNING"):
+                _seed_shipped_atoms(registry)
+
+        assert "agents will write every integration from scratch" not in caplog.text
 
     def test_a_registry_with_history_receives_only_missing_shipped_atoms(self, monkeypatch):
         calls = []
