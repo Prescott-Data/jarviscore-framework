@@ -197,6 +197,65 @@ class TestDeliverMessageCrossLoop:
         assert future.result() == {"already": "set"}
 
 
+class TestInboundMessagesCrossLoop:
+    """Requests and notifications from the SWIM thread run on the client's own loop."""
+
+    @staticmethod
+    def _notify(data: dict) -> IncomingMessage:
+        return IncomingMessage(
+            sender="risk-1",
+            sender_node="127.0.0.1:7970",
+            type=MessageType.NOTIFY,
+            data=data,
+        )
+
+    @pytest.mark.asyncio
+    async def test_cross_loop_notify_wakes_waiting_receiver(self):
+        client = _make_client()
+        main_loop = asyncio.get_running_loop()
+        waiter = asyncio.create_task(client.receive(timeout=5))
+        await asyncio.sleep(0)
+
+        started = main_loop.time()
+        thread_result = {}
+        # A bare thread, so nothing but the delivery itself can wake the idle loop.
+        sender = threading.Thread(
+            target=lambda: thread_result.update(
+                _run_deliver_in_new_thread_loop(client, self._notify({"event": "trade_blocked"}))
+            )
+        )
+        sender.start()
+        received = await waiter
+        elapsed = main_loop.time() - started
+        sender.join()
+
+        assert "error" not in thread_result, thread_result.get("error")
+        assert received is not None
+        assert received.data == {"event": "trade_blocked"}
+        assert elapsed < 1.0
+
+    @pytest.mark.asyncio
+    async def test_cross_loop_notification_handler_runs_on_owner_loop(self):
+        client = _make_client()
+        main_loop = asyncio.get_running_loop()
+        seen = {}
+
+        async def handler(message):
+            seen["loop"] = asyncio.get_running_loop()
+            seen["data"] = message.data
+
+        client.set_notification_handler(handler)
+        thread_result = await main_loop.run_in_executor(
+            None,
+            _run_deliver_in_new_thread_loop,
+            client,
+            self._notify({"event": "trade_blocked"}),
+        )
+
+        assert "error" not in thread_result, thread_result.get("error")
+        assert seen == {"loop": main_loop, "data": {"event": "trade_blocked"}}
+
+
 class TestGetRunningLoopInRequest:
     """Verify request() and ask_async() use get_running_loop(), not get_event_loop()."""
 
@@ -243,3 +302,35 @@ class TestGetRunningLoopInRequest:
             "_deliver_message() must use call_soon_threadsafe for cross-loop "
             "Future resolution — direct set_result() raises RuntimeError from SWIM thread"
         )
+
+
+class TestCoordinatorSendsOnSwimLoop:
+    """The ZMQ agent is owned by the SWIM thread's loop; sends must run there."""
+
+    @pytest.mark.asyncio
+    async def test_send_from_another_loop_runs_on_swim_loop(self):
+        from types import SimpleNamespace
+
+        from jarviscore.p2p.coordinator import P2PCoordinator
+
+        swim_loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=swim_loop.run_forever, daemon=True)
+        thread.start()
+        seen = {}
+
+        class Agent:
+            async def send_message_base(self, target, msg_type, key, value, reason):
+                seen["loop"] = asyncio.get_running_loop()
+                return True
+
+        coordinator = P2PCoordinator([], {})
+        coordinator.swim_manager = SimpleNamespace(zmq_agent=Agent(), swim_loop=swim_loop)
+        try:
+            sent = await coordinator._send_p2p_message("127.0.0.1:7946", "CAPABILITY_ANNOUNCEMENT", {})
+        finally:
+            swim_loop.call_soon_threadsafe(swim_loop.stop)
+            thread.join(timeout=5)
+            swim_loop.close()
+
+        assert sent is True
+        assert seen["loop"] is swim_loop

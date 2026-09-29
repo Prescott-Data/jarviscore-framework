@@ -99,6 +99,10 @@ class PeerClient:
 
         # Message queue for incoming messages
         self._message_queue: asyncio.Queue[IncomingMessage] = asyncio.Queue()
+        try:
+            self._owner_loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+        except RuntimeError:
+            self._owner_loop = None
 
         # Pending requests waiting for responses (correlation_id -> Future)
         self._pending_requests: Dict[str, asyncio.Future] = {}
@@ -1367,6 +1371,22 @@ class PeerClient:
 
         Called by other PeerClients (local) or coordinator (remote).
         """
+        owner = self._owner_loop
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if (
+            owner is not None
+            and running_loop is not owner
+            and owner.is_running()
+        ):
+            # asyncio primitives are not thread-safe; the SWIM thread must hand off.
+            await asyncio.wrap_future(
+                asyncio.run_coroutine_threadsafe(self._deliver_message(message), owner)
+            )
+            return
+
         # Check if this is a response to a pending request
         if message.type == MessageType.RESPONSE and message.correlation_id:
             future = self._pending_requests.get(message.correlation_id)
