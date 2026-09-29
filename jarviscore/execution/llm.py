@@ -675,6 +675,9 @@ class UnifiedLLMClient:
         # Previously this was silently dropped — now forwarded to the API
         # enabling real JSON mode enforcement for Planner and Evaluator calls.
         response_format = kwargs.pop('response_format', None)
+        tools = kwargs.pop('tools', None)
+        tool_choice = kwargs.pop('tool_choice', None)
+        parallel_tool_calls = kwargs.pop('parallel_tool_calls', None)
 
         logger.debug("_call_azure: deployment=%s, response_format=%s", deployment, response_format)
 
@@ -698,6 +701,12 @@ class UnifiedLLMClient:
             # Forward response_format when specified (JSON mode, structured output)
             if response_format is not None:
                 call_kwargs["response_format"] = response_format
+            if tools is not None:
+                call_kwargs["tools"] = tools
+            if tool_choice is not None:
+                call_kwargs["tool_choice"] = tool_choice
+            if parallel_tool_calls is not None:
+                call_kwargs["parallel_tool_calls"] = parallel_tool_calls
 
             # Codex deployments (gpt-5.x-codex) are Responses-API-only on Azure:
             # chat.completions returns 400 "The requested operation is unsupported".
