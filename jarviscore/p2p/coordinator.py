@@ -7,6 +7,7 @@ Provides agent discovery, capability announcement, and message routing.
 Adapted from an earlier internal agent codebase P2P infrastructure
 """
 import asyncio
+import json
 import logging
 from typing import List, Dict, Any, Optional
 
@@ -14,6 +15,16 @@ from .swim_manager import SWIMThreadManager
 from .keepalive import P2PKeepaliveManager
 from .broadcaster import StepOutputBroadcaster
 from .messages import IncomingMessage, MessageType
+
+
+def _peer_payload(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a peer message payload; the ZMQ transport delivers it JSON-encoded."""
+    payload = message.get('payload', {})
+    if isinstance(payload, (str, bytes)):
+        payload = json.loads(payload)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Peer payload must be an object, got {type(payload).__name__}")
+    return payload
 
 logger = logging.getLogger(__name__)
 
@@ -700,7 +711,7 @@ class P2PCoordinator:
     async def _handle_peer_notify(self, sender, message):
         """Handle peer notification message."""
         try:
-            payload = message.get('payload', {})
+            payload = _peer_payload(message)
             target = payload.get('target')
 
             # Find target agent's PeerClient
@@ -730,20 +741,7 @@ class P2PCoordinator:
         """Handle peer request message (expects response)."""
         try:
             logger.info(f"[COORDINATOR] Received PEER_REQUEST from {sender}")
-            
-            # Parse payload - it comes as JSON string in message['payload']
-            import json
-            payload_raw = message.get('payload', {})
-            if isinstance(payload_raw, str):
-                try:
-                    payload = json.loads(payload_raw)
-                    logger.info(f"[COORDINATOR] Parsed JSON payload")
-                except json.JSONDecodeError as e:
-                    logger.error(f"[COORDINATOR] Failed to parse payload JSON: {e}")
-                    return
-            else:
-                payload = payload_raw
-            
+            payload = _peer_payload(message)
             target = payload.get('target')
             logger.info(f"[COORDINATOR] Target: {target}, Payload keys: {list(payload.keys())}")
 
@@ -777,14 +775,7 @@ class P2PCoordinator:
     async def _handle_peer_response(self, sender, message):
         """Handle peer response message."""
         try:
-            # Parse payload - it comes as JSON string
-            import json
-            payload_raw = message.get('payload', {})
-            if isinstance(payload_raw, str):
-                payload = json.loads(payload_raw)
-            else:
-                payload = payload_raw
-                
+            payload = _peer_payload(message)
             target = payload.get('target')
 
             # Find target agent's PeerClient
