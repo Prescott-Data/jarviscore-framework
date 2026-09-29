@@ -296,6 +296,58 @@ async def test_gateway_zendesk_call_uses_saved_tenant_metadata(monkeypatch):
     assert client.calls[0]["url"] == "https://acme.zendesk.com/api/v2/tickets/123.json"
 
 
+@pytest.mark.asyncio
+async def test_gateway_zendesk_call_uses_explicit_tenant_metadata_without_local_store(monkeypatch):
+    auth = SimpleNamespace(
+        _connections={"zendesk_support": "connection-1"},
+        resolve_strategy=AsyncMock(
+            return_value=DynamicStrategy(
+                type="oauth2",
+                credentials={"access_token": "secret"},
+                config={},
+            )
+        ),
+    )
+
+    class Response:
+        status_code = 200
+        text = "{}"
+        content = b"{}"
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {}
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def request(self, **kwargs):
+            self.calls.append(kwargs)
+            return Response()
+
+    client = Client()
+    monkeypatch.setattr("jarviscore.nexus.call_proxy.httpx.AsyncClient", lambda: client)
+    monkeypatch.setattr(
+        "jarviscore.nexus.store.get_store",
+        lambda: (_ for _ in ()).throw(AssertionError("local store was opened")),
+    )
+
+    await NexusCallProxy(
+        auth,
+        provider_metadata={"zendesk_support": {"subdomain": "acme"}},
+    ).call("connection-1", "GET", "/api/v2/tickets/123.json")
+
+    assert client.calls[0]["url"] == "https://acme.zendesk.com/api/v2/tickets/123.json"
+
+
 # ── Subdomain patterns ───────────────────────────────────────────────────────
 
 

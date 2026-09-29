@@ -358,7 +358,8 @@ class AutoAgent(Profile):
             # a connection table that consent never wrote to.
             fallback = AuthenticationManager(config)
             nexus_proxy = NexusCallProxy(
-                lambda: getattr(self, "_auth_manager", None) or fallback
+                lambda: getattr(self, "_auth_manager", None) or fallback,
+                provider_metadata=config.get("nexus_provider_metadata") or {},
             )
         except Exception as _nexus_exc:
             self._logger.debug("Nexus call proxy unavailable: %s", _nexus_exc)

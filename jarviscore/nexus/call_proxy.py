@@ -49,7 +49,7 @@ class NexusCallProxy:
       with 401, returns the error response as-is and logs ATTENTION.
     """
 
-    def __init__(self, auth_manager):
+    def __init__(self, auth_manager, *, provider_metadata: Optional[Dict[str, Dict[str, Any]]] = None):
         """
         Args:
             auth_manager: an AuthenticationManager, or a zero-argument callable
@@ -59,6 +59,7 @@ class NexusCallProxy:
                 connection table the consent flow never wrote to.
         """
         self._auth_source = auth_manager
+        self._provider_metadata = dict(provider_metadata or {})
 
     @property
     def _auth(self):
@@ -82,18 +83,20 @@ class NexusCallProxy:
         handle = lookup(provider) if callable(lookup) else None
         return handle if isinstance(handle, str) and handle else provider
 
-    @staticmethod
-    def _provider_config(provider, strategy_config=None, entry=None):
+    def _provider_config(self, provider, strategy_config=None, entry=None):
         """Combine provider metadata needed to bind tenant-hosted API calls."""
-        config = {}
-        if provider == "zendesk_support" and not (strategy_config or {}).get("api_base_url"):
+        config = dict(self._provider_metadata.get(provider) or {})
+        config.update(strategy_config or {})
+        if (
+            provider == "zendesk_support"
+            and not config.get("api_base_url")
+            and not config.get("subdomain")
+        ):
             from jarviscore.nexus.store import get_store
 
             config.update(get_store().get_provider_metadata(provider))
         if entry:
             config.update(entry)
-        if strategy_config:
-            config.update(strategy_config)
         return config
 
     async def call(
