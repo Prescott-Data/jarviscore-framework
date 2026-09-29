@@ -75,6 +75,8 @@ class P2PCoordinator:
         self._capability_map: Dict[str, List[str]] = {}  # capability -> [agent_ids]
         self._agent_peer_clients: Dict[str, Any] = {}  # agent_id -> PeerClient
         self._remote_agent_registry: Dict[str, Dict[str, Any]] = {}  # agent_id -> agent info
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._introductions: set = set()
 
     async def start(self):
         """
@@ -135,7 +137,82 @@ class P2PCoordinator:
         logger.info("✓ Message handlers registered")
 
         self._started = True
+        self._subscribe_membership()
         logger.info("P2P coordinator started successfully")
+
+    def _subscribe_membership(self):
+        """Introduce this node's agents to every member SWIM reports, whenever it arrives."""
+        from swim.events.types import MemberAliveEvent, MemberJoinedEvent
+
+        self._loop = asyncio.get_running_loop()
+        dispatcher = self.swim_manager.event_dispatcher
+        # Bound methods die immediately under the dispatcher's default weak references.
+        dispatcher.subscribe(MemberJoinedEvent, self._on_member_seen, weak=False)
+        dispatcher.subscribe(MemberAliveEvent, self._on_member_seen, weak=False)
+        for member in self.swim_manager.swim_node.members.get_alive_members(exclude_self=True):
+            self._schedule_introduction(member.address)
+
+    def _unsubscribe_membership(self):
+        from swim.events.types import MemberAliveEvent, MemberJoinedEvent
+
+        dispatcher = self.swim_manager.event_dispatcher if self.swim_manager else None
+        if dispatcher:
+            dispatcher.unsubscribe(MemberJoinedEvent, self._on_member_seen)
+            dispatcher.unsubscribe(MemberAliveEvent, self._on_member_seen)
+
+    def _on_member_seen(self, event):
+        """SWIM-thread callback; the introduction itself runs on the coordinator loop."""
+        if self._started and self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._schedule_introduction, event.member.address)
+
+    def _schedule_introduction(self, peer_addr: str):
+        task = asyncio.ensure_future(self._introduce_to(peer_addr))
+        self._introductions.add(task)
+        task.add_done_callback(self._introductions.discard)
+
+    async def _introduce_to(self, peer_addr: str, timeout: float = 30.0) -> bool:
+        """Send our capabilities to one member once its ZMQ link can carry them."""
+        conn_mgr = self.swim_manager.zmq_agent.connection_manager
+        deadline = asyncio.get_running_loop().time() + timeout
+        while self._started:
+            zmq_addr = conn_mgr.get_zmq_address_for_swim(peer_addr)
+            if zmq_addr and conn_mgr.can_send_to_node(zmq_addr):
+                sent = await self._send_p2p_message(
+                    peer_addr, 'CAPABILITY_ANNOUNCEMENT', self._capability_payload()
+                )
+                logger.info(f"Introduced capabilities to {peer_addr}: sent={sent}")
+                return sent
+            if asyncio.get_running_loop().time() >= deadline:
+                logger.warning(f"No ZMQ link to {peer_addr} after {timeout}s; capabilities not introduced")
+                return False
+            await asyncio.sleep(0.2)
+        return False
+
+    def _capability_payload(self) -> Dict[str, Any]:
+        """This node's capability announcement: capability index plus full agent info."""
+        capabilities: Dict[str, List[str]] = {}
+        agents_info = {}
+        for agent in self.agents:
+            for cap in agent.capabilities:
+                capabilities.setdefault(cap, []).append(agent.agent_id)
+            agents_info[agent.agent_id] = {
+                'agent_id': agent.agent_id,
+                'role': agent.role,
+                'capabilities': list(agent.capabilities),
+                'capability_descriptions': dict(
+                    getattr(agent, 'capability_descriptions', {}) or {}
+                ),
+                'capability_contracts': dict(
+                    getattr(agent, 'capability_contracts', {}) or {}
+                ),
+                'description': getattr(agent, 'description', ''),
+                'node_id': self._get_node_id()
+            }
+        return {
+            'node_id': self._get_node_id(),
+            'capabilities': capabilities,
+            'agents': agents_info
+        }
 
     def _register_handlers(self):
         """Register framework message handlers with ZMQ router."""
@@ -242,29 +319,8 @@ class P2PCoordinator:
         # Wait for ZMQ connections to be ready before announcing
         await self._wait_for_zmq_connections(timeout=5.0)
 
-        capabilities = {}
-        agents_info = {}  # Full agent info for remote registry
-
-        for agent in self.agents:
-            for cap in agent.capabilities:
-                if cap not in capabilities:
-                    capabilities[cap] = []
-                capabilities[cap].append(agent.agent_id)
-
-            # Collect full agent info for remote visibility
-            agents_info[agent.agent_id] = {
-                'agent_id': agent.agent_id,
-                'role': agent.role,
-                'capabilities': list(agent.capabilities),
-                'capability_descriptions': dict(
-                    getattr(agent, 'capability_descriptions', {}) or {}
-                ),
-                'capability_contracts': dict(
-                    getattr(agent, 'capability_contracts', {}) or {}
-                ),
-                'description': getattr(agent, 'description', ''),
-                'node_id': self._get_node_id()
-            }
+        payload = self._capability_payload()
+        capabilities = payload['capabilities']
 
         # Merge local capabilities into the map (preserve remote agents)
         for cap, agent_ids in capabilities.items():
@@ -273,12 +329,6 @@ class P2PCoordinator:
             for agent_id in agent_ids:
                 if agent_id not in self._capability_map[cap]:
                     self._capability_map[cap].append(agent_id)
-
-        payload = {
-            'node_id': self._get_node_id(),
-            'capabilities': capabilities,
-            'agents': agents_info  # Include for remote agent registry
-        }
 
         # Broadcast directly using CAPABILITY_ANNOUNCEMENT message type
         # This ensures the handler updates the capability map
@@ -340,35 +390,7 @@ class P2PCoordinator:
                 logger.warning(f"Capability request missing from_node, cannot respond")
                 return
 
-            # Re-announce our capabilities to this specific peer
-            capabilities = {}
-            agents_info = {}
-
-            for agent in self.agents:
-                for cap in agent.capabilities:
-                    if cap not in capabilities:
-                        capabilities[cap] = []
-                    capabilities[cap].append(agent.agent_id)
-
-                agents_info[agent.agent_id] = {
-                    'agent_id': agent.agent_id,
-                    'role': agent.role,
-                    'capabilities': list(agent.capabilities),
-                    'capability_descriptions': dict(
-                        getattr(agent, 'capability_descriptions', {}) or {}
-                    ),
-                    'capability_contracts': dict(
-                        getattr(agent, 'capability_contracts', {}) or {}
-                    ),
-                    'description': getattr(agent, 'description', ''),
-                    'node_id': self._get_node_id()
-                }
-
-            response = {
-                'node_id': self._get_node_id(),
-                'capabilities': capabilities,
-                'agents': agents_info
-            }
+            response = self._capability_payload()
 
             # Send to the SWIM address (from_node), not the ZMQ identity (sender)
             await self._send_p2p_message(sender_swim_id, 'CAPABILITY_ANNOUNCEMENT', response)
@@ -448,6 +470,10 @@ class P2PCoordinator:
             return
 
         logger.info("Stopping P2P coordinator...")
+        self._started = False
+        self._unsubscribe_membership()
+        for task in list(self._introductions):
+            task.cancel()
 
         # Stop keepalive manager
         if self.keepalive_manager:
