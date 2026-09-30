@@ -275,6 +275,54 @@ async def test_generate_never_dispatches_without_global_capacity():
     llm._generate_inner.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_declared_model_ceiling_replaces_the_default_allowance():
+    llm = _budget_test_client({"content": "done", "tokens": {"total": 3}})
+    llm.provider_order = [LLMProvider.AZURE]
+    llm.config.update({
+        "azure_deployment": "reasoning-deployment",
+        "llm_model_output_limits": {"reasoning-deployment": 128000},
+    })
+
+    await llm.generate(prompt="plan")
+    assert llm._generate_inner.call_args.args[2] == 128000
+
+    await llm.generate(prompt="plan", model="undeclared-deployment")
+    assert llm._generate_inner.call_args.args[2] == 20
+
+    await llm.generate(prompt="plan", max_tokens=700)
+    assert llm._generate_inner.call_args.args[2] == 700
+
+
+@pytest.mark.asyncio
+async def test_declared_ceiling_is_bounded_by_remaining_workflow_budget():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-llm-headroom",
+        "Bound a large declared ceiling",
+        budget={"max_tokens": 1000},
+    )
+    llm = _budget_test_client({
+        "content": "done",
+        "tokens": {"input": 5, "output": 5, "total": 10},
+        "cost_usd": 0.0,
+    })
+    llm.provider_order = [LLMProvider.AZURE]
+    llm.config.update({
+        "azure_deployment": "reasoning-deployment",
+        "llm_model_output_limits": {"reasoning-deployment": 128000},
+    })
+
+    with workflow_budget_scope(store, "wf-llm-headroom"):
+        await llm.generate(prompt="plan")
+
+    allowance = llm._generate_inner.call_args.args[2]
+    assert 900 < allowance < 1000
+    usage = store.get_workflow_budget_usage("wf-llm-headroom", "default")
+    assert usage["used_tokens"] == 10
+    assert usage["epoch_reserved_tokens"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Provider detection
 # ---------------------------------------------------------------------------

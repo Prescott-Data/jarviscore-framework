@@ -339,6 +339,21 @@ class UnifiedLLMClient:
             or None
         )
 
+    def _declared_output_allowance(self, model: Optional[str]) -> int:
+        """Declared completion ceiling of the model serving this call."""
+        if model is None:
+            primary = (getattr(self, "provider_order", None) or [None])[0]
+            model = {
+                LLMProvider.PROMO: PROMO_MODEL,
+                LLMProvider.AZURE: self.config.get("azure_deployment"),
+                LLMProvider.CLAUDE: self.config.get("claude_model"),
+                LLMProvider.GEMINI: self.config.get("gemini_model"),
+                LLMProvider.VERTEX_AI: self.config.get("vertex_ai_model"),
+                LLMProvider.VLLM: self.config.get("llm_model"),
+            }.get(primary)
+        declared = (self.config.get("llm_model_output_limits") or {}).get(model)
+        return int(declared or self.config.get("llm_default_max_tokens", 4000))
+
     async def generate(
         self,
         prompt: Optional[str] = None,
@@ -381,12 +396,12 @@ class UnifiedLLMClient:
         if "max_completion_tokens" in kwargs:
             max_tokens = kwargs.pop("max_completion_tokens")
 
-        # Default output cap is config-driven. Reasoning models (gpt-5.x) bill
-        # internal reasoning against max_completion_tokens, so the legacy 4000
-        # default truncates answers mid-JSON — set llm_default_max_tokens
-        # accordingly (e.g. 16000) when using reasoning deployments.
+        # An explicit max_tokens is the caller's contract. Otherwise the
+        # allowance is the model's declared ceiling (reasoning models bill
+        # hidden reasoning against it), bounded below by the workflow budget.
+        explicit_allowance = max_tokens is not None
         if max_tokens is None:
-            max_tokens = int(self.config.get("llm_default_max_tokens", 4000))
+            max_tokens = self._declared_output_allowance(kwargs.get("model"))
 
         # Convert prompt to messages if needed
         if not messages:
@@ -398,6 +413,10 @@ class UnifiedLLMClient:
             input_reservation = _TOKEN_COUNTER.count_tokens(
                 json.dumps(messages, ensure_ascii=False, default=str)
             )
+            if not explicit_allowance:
+                max_tokens = max(
+                    1, min(max_tokens, budget_account.headroom() - input_reservation)
+                )
             reservation_id = budget_account.reserve(input_reservation + max_tokens)
 
         try:
