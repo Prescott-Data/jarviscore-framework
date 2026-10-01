@@ -47,6 +47,31 @@ class TestToolClassification:
     def test_unknown_tool_defaults_to_action(self, cognition):
         assert cognition.classify_tool("unknown_tool") == "action"
 
+    def test_a_declared_phase_wins_over_the_name_sets(self, cognition):
+        from jarviscore.kernel.cognition import AgentPhase
+
+        assert cognition.classify_tool("read_web_content", AgentPhase.DISCOVERY) == "thinking"
+        assert cognition.classify_tool("search_internet_batch", "thinking") == "thinking"
+        assert cognition.classify_tool("web_search", "action") == "action"
+        assert cognition.classify_tool("publish_research_findings", AgentPhase.COMPLETION) == "action"
+
+    def test_researcher_reads_draw_on_the_research_budget(self):
+        from jarviscore.kernel.cognition import AgentPhase
+
+        cognition = AgentCognitionManager(ExecutionLease.for_role("researcher"))
+        cognition.track_usage("read_web_content", tokens=50_000, declared_phase=AgentPhase.DISCOVERY)
+
+        assert cognition.lease.thinking_used == 50_000
+        assert cognition.lease.action_used == 0
+
+    def test_every_default_researcher_reader_is_declared_as_discovery(self):
+        from jarviscore.kernel.cognition import AgentPhase
+        from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
+
+        tools = ResearcherSubAgent(agent_id="r", llm_client=None)._tools
+        for name in ("search_internet", "search_internet_batch", "read_web_content", "rag_query"):
+            assert getattr(tools[name].phase, "value", tools[name].phase) == AgentPhase.DISCOVERY.value
+
 
 class TestBudgetTracking:
 

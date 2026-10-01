@@ -1248,9 +1248,11 @@ class BaseSubAgent(ABC):
                     state.add_thought(f"[EPISTEMIC] {_plateau_signal}")
 
                 # ── Track usage + convergence ──
+                registered = self._tools.get(tool_name)
                 self._cognition.track_usage(
                     tool_name, tokens=llm_tokens_this_turn, tool_output=tool_result,
                     params=tool_params,
+                    declared_phase=getattr(registered, "phase", None),
                 )
 
                 # ── Record failure if tool errored ──
