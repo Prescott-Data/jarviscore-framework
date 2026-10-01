@@ -73,6 +73,55 @@ class TestToolClassification:
             assert getattr(tools[name].phase, "value", tools[name].phase) == AgentPhase.DISCOVERY.value
 
 
+class TestRegisteredPhaseThroughRun:
+    """BaseSubAgent.run hands the registered phase to the lease."""
+
+    @staticmethod
+    def _run_one_tool_call(tool_name, phase=None):
+        import asyncio
+        import json
+
+        from jarviscore.kernel.subagent import BaseSubAgent
+
+        replies = [
+            f"THOUGHT: look\nTOOL: {tool_name}\nPARAMS: {json.dumps({})}",
+            "THOUGHT: done\nDONE: done\nRESULT: {}",
+        ]
+
+        class _LLM:
+            async def generate(self, messages=None, **kwargs):
+                reply = replies.pop(0) if replies else replies_last
+                return {"content": reply, "tokens": {"input": 100, "output": 100, "total": 200}, "cost_usd": 0.0}
+
+        replies_last = "THOUGHT: done\nDONE: done\nRESULT: {}"
+
+        class _Agent(BaseSubAgent):
+            def get_system_prompt(self, *args, **kwargs):
+                return "system"
+
+            def setup_tools(self):
+                declared = {"phase": phase} if phase else {}
+                self.register_tool(
+                    tool_name, lambda: {"status": "success", "content": "page"}, "read", **declared
+                )
+
+        agent = _Agent(agent_id="phase", role="researcher", llm_client=_LLM())
+        asyncio.run(agent.run(task="t", max_turns=3))
+        return agent._cognition.lease
+
+    # Each turn bills 200 tokens; the closing DONE turn is always action.
+    def test_a_declared_discovery_tool_draws_on_the_thinking_budget(self):
+        lease = self._run_one_tool_call("fetch_page", phase="discovery")
+        assert (lease.thinking_used, lease.action_used) == (200, 200)
+
+    def test_an_undeclared_tool_keeps_its_name_classification(self):
+        thinking = self._run_one_tool_call("read_turn_result")
+        assert (thinking.thinking_used, thinking.action_used) == (200, 200)
+
+        action = self._run_one_tool_call("fetch_page")
+        assert (action.thinking_used, action.action_used) == (0, 400)
+
+
 class TestBudgetTracking:
 
     def test_thinking_tool_charges_thinking(self, cognition):

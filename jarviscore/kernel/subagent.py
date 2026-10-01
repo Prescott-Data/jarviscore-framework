@@ -253,11 +253,16 @@ def _repair_json_strings(text: str) -> str:
 class ToolDefinition:
     """A registered tool available to a subagent."""
 
-    def __init__(self, name: str, func: Callable, description: str, phase: str = "action"):
+    def __init__(
+        self, name: str, func: Callable, description: str, phase: Optional[str] = None
+    ):
         self.name = name
         self.func = func
         self.description = description
-        self.phase = phase  # "thinking" or "action"
+        # The phase the registrant declared, if any. Only a declared phase
+        # overrides the cognition name sets when budgeting the tool.
+        self.declared_phase = phase
+        self.phase = phase or "action"
 
 
 class BaseSubAgent(ABC):
@@ -321,7 +326,7 @@ class BaseSubAgent(ABC):
         self._autodiscover_tools()
 
     def register_tool(
-        self, name: str, func: Callable, description: str, phase: str = "action"
+        self, name: str, func: Callable, description: str, phase: Optional[str] = None
     ) -> None:
         """Register a tool available to this subagent."""
         self._tools[name] = ToolDefinition(name, func, description, phase)
@@ -1252,7 +1257,7 @@ class BaseSubAgent(ABC):
                 self._cognition.track_usage(
                     tool_name, tokens=llm_tokens_this_turn, tool_output=tool_result,
                     params=tool_params,
-                    declared_phase=getattr(registered, "phase", None),
+                    declared_phase=getattr(registered, "declared_phase", None),
                 )
 
                 # ── Record failure if tool errored ──
