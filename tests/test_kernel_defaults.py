@@ -649,6 +649,23 @@ class TestCommunicatorSubAgent:
         assert len(output.trajectory) == 2
 
     @pytest.mark.asyncio
+    async def test_a_repaired_violation_does_not_count_against_later_work(self, mock_llm):
+        """Separate slips in a long session are each repairable."""
+        mock_llm.responses = [
+            _llm_response("First slip into prose."),
+            _llm_response('THOUGHT: Draft\nTOOL: draft_message\nPARAMS: {"content": "draft"}'),
+            _llm_response("Second slip into prose."),
+            _llm_response(
+                'THOUGHT: Repair protocol\nDONE: Message drafted\n'
+                'RESULT: {"message": "Status update: all systems go."}'
+            ),
+        ]
+        comm = CommunicatorSubAgent(agent_id="m1", llm_client=mock_llm)
+        output = await comm.run("draft status update", max_turns=4)
+        assert output.status == "success"
+        assert output.payload == {"message": "Status update: all systems go."}
+
+    @pytest.mark.asyncio
     async def test_run_resets_drafts(self, mock_llm):
         """Each run() starts with fresh drafts."""
         mock_llm.responses = [
