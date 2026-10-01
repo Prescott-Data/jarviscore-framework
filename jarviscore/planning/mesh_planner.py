@@ -393,6 +393,7 @@ class MeshPlanner:
             str(step.get("id") or step.get("step_id"))
             for step in current_steps
         }
+        settled = self._settled_obligation_producers(current_steps, targets)
         try:
             steps = self._ensure_declared_artifact_dependencies(
                 self._ensure_response_step(
@@ -404,6 +405,7 @@ class MeshPlanner:
                         allowed_cover_ids=targets,
                     ),
                     reserved_ids=current_ids,
+                    settled_producer_ids=settled,
                 ),
                 external_steps=current_steps,
             )
@@ -432,6 +434,7 @@ class MeshPlanner:
                                 allowed_cover_ids=targets,
                             ),
                             reserved_ids=current_ids,
+                            settled_producer_ids=settled,
                         ),
                         external_steps=current_steps,
                     )
@@ -475,6 +478,7 @@ class MeshPlanner:
                             allowed_cover_ids=targets,
                         ),
                         reserved_ids=current_ids,
+                        settled_producer_ids=settled,
                     ),
                     external_steps=current_steps,
                 )
@@ -532,10 +536,31 @@ class MeshPlanner:
             )
         return {"decision": decision, "reason": reason}
 
+    def _settled_obligation_producers(
+        self,
+        current_steps: list[dict[str, Any]],
+        targets: set[str],
+    ) -> list[str]:
+        """Latest current step settling each obligation the amendment keeps."""
+        latest: dict[str, str] = {}
+        for step in current_steps:
+            if (
+                step.get("effect") == "final_response"
+                or (self.response_capability
+                    and step.get("capability") == self.response_capability)
+            ):
+                continue
+            step_id = str(step.get("id") or step.get("step_id") or "")
+            for obligation_id in map(str, step.get("covers") or []):
+                if step_id and obligation_id not in targets:
+                    latest[obligation_id] = step_id
+        return list(dict.fromkeys(latest.values()))
+
     def _ensure_response_step(
         self,
         steps: list[MeshPlannedStep],
         reserved_ids: set[str] | None = None,
+        settled_producer_ids: list[str] | None = None,
     ) -> list[MeshPlannedStep]:
         capability = self.response_capability
         if not capability:
@@ -557,6 +582,11 @@ class MeshPlanner:
             dependency for step in steps for dependency in step.depends_on
         }
         sinks = [step.step_id for step in steps if step.step_id not in depended_on]
+        sinks += [
+            producer_id
+            for producer_id in settled_producer_ids or []
+            if producer_id not in sinks
+        ]
         existing_ids = {step.step_id for step in steps} | (reserved_ids or set())
         step_id = "final_response"
         suffix = 2

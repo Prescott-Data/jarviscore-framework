@@ -1236,6 +1236,55 @@ def test_amendment_audit_and_repair_include_failed_terminal_evidence():
 
 
 @pytest.mark.asyncio
+async def test_amendment_response_receives_the_artifacts_of_settled_obligations():
+    """A list correction must not cut the final answer off from settled outreach."""
+    obligations = [
+        {"id": "o_list", "description": "Curate the list", "source_quote": "list"},
+        {"id": "o_outreach", "description": "Write outreach as CSV", "source_quote": "CSV"},
+    ]
+    step = {
+        "capability": "prospecting", "effect": "read", "systems": [],
+        "success_criterion": "Done", "expected_findings": [],
+    }
+    current_steps = [
+        {**step, "id": "step-1", "task": "Curate", "depends_on": [], "covers": ["o_list"],
+         "status": "completed"},
+        {**step, "id": "step-2", "task": "Outreach", "depends_on": ["step-1"],
+         "covers": ["o_outreach"], "status": "completed"},
+        {**step, "id": "final_response", "capability": "respond",
+         "effect": "final_response", "task": "Answer", "depends_on": ["step-2"],
+         "covers": [], "status": "completed"},
+    ]
+    correction = {
+        **step, "id": "step-3", "task": "Correct the list", "depends_on": ["step-1"],
+        "covers": ["o_list"],
+    }
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"steps": [correction]})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(
+        llm,
+        capabilities={"prospecting": "Prospect", "respond": "Respond"},
+        response_capability="respond",
+    )
+
+    plan = await planner.amend(
+        "Curate a list and write outreach as CSV",
+        obligations=obligations,
+        target_obligation_ids={"o_list"},
+        current_steps=current_steps,
+        reason="One firm did not qualify",
+        revision=1,
+    )
+
+    response = plan.steps[-1]
+    assert response.effect == "final_response"
+    assert response.step_id == "final_response_2"
+    assert response.depends_on == ["step-3", "step-2"]
+
+
+@pytest.mark.asyncio
 async def test_mesh_amendment_cannot_supersede_satisfied_obligations():
     obligations = [
         {"id": "satisfied", "description": "Keep verified evidence", "source_quote": "verified evidence"},
