@@ -463,6 +463,37 @@ class TestResearcherGate:
 
         assert ok is True, reason
 
+    def test_a_search_that_found_nothing_is_research(self, monkeypatch):
+        """A negative result backed by a search must be able to complete."""
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state(tool_history=[
+            ToolResult(
+                tool_name="search_internet",
+                status="success",
+                tool_output={"status": "success", "results": []},
+            ),
+        ])
+        parsed = {"result": {
+            "summary": "No current match exists.",
+            "evidence": [{"pointer": "search_internet: no results"}],
+        }}
+
+        ok, reason = self._researcher()._can_complete(state, parsed)
+
+        assert ok is True, reason
+
+    def test_a_failed_search_is_not_research(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state(tool_history=[
+            ToolResult(tool_name="search_internet", status="failure", error="blocked"),
+        ])
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "x"}]}}
+
+        ok, evidence = self._researcher()._can_complete(state, parsed)
+
+        assert ok is False
+        assert evidence.check == "research_performed"
+
     @pytest.mark.parametrize("tool_name", ["rag_query", "read_file"])
     def test_a_read_that_found_nothing_is_not_research(self, monkeypatch, tool_name):
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")

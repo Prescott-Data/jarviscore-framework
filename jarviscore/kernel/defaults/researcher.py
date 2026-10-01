@@ -574,6 +574,8 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         "rag_query", "read_file", "extract_api_details",
     })
 
+    _SEARCH_TOOLS = frozenset({"search_internet", "search_internet_batch"})
+
     def _can_complete(self, state, parsed: Dict[str, Any]) -> Tuple[bool, Any]:
         """Reject premature DONE, reporting what the result actually contains."""
         base_ok, base_reason = super()._can_complete(state, parsed)
@@ -588,25 +590,33 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             1 for t in state.tool_history
             if t.status == "success" and t.tool_name in self._CONTENT_TOOLS
             and not (
-                isinstance(t.tool_output, dict)
+                isinstance(getattr(t, "tool_output", None), dict)
                 and t.tool_output.get("content_found") is False
             )
+        )
+        # A search that ran is a receipt even when it found nothing: a
+        # negative result is research, a summary with no search behind it is not.
+        search_successes = sum(
+            1 for t in state.tool_history
+            if t.status == "success" and t.tool_name in self._SEARCH_TOOLS
         )
         findings = (getattr(state, "internal_variables", None) or {}).get("research_findings")
         recorded_findings = len(findings) if isinstance(findings, list) else 0
         upstream_results = bool((getattr(state, "context", None) or {}).get("previous_step_results"))
         # A summary or evidence list is a claim about research, not proof of it.
-        if not content_successes and not recorded_findings and not upstream_results:
+        if not (content_successes or search_successes or recorded_findings or upstream_results):
             return False, GateEvidence(
                 check="research_performed",
                 requirement=(
-                    "one successful content tool read, or upstream step results "
-                    "to work from"
+                    "one successful search or content read, or upstream step "
+                    "results to work from"
                 ),
                 observed={
                     "tool_calls": len(state.tool_history),
                     "content_tool_successes": 0,
+                    "search_successes": 0,
                     "content_tools": sorted(self._CONTENT_TOOLS),
+                    "search_tools": sorted(self._SEARCH_TOOLS),
                     "recorded_findings": 0,
                     "upstream_results": False,
                     "result_summary": bool(params.get("summary")),
