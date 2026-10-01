@@ -422,7 +422,7 @@ class InternetSearch:
                                 })
                             unresponsive = data.get("unresponsive_engines") or []
                             if not results and unresponsive:
-                                # Engines that refused (CAPTCHA, rate limit) did not answer.
+                                # An empty answer with refusing engines is an incomplete search, not a negative.
                                 self.circuit_breaker.record_failure("searxng")
                                 raise SearchProviderError(
                                     f"searxng engines did not answer: {unresponsive}"
