@@ -670,6 +670,31 @@ async def test_mesh_planner_rejects_a_dag_when_independent_audit_finds_an_omissi
 
 
 @pytest.mark.asyncio
+async def test_mesh_planner_reports_an_unfinished_completion_by_its_stop_reason():
+    obligations, _, _ = responses()
+    exhausted = {
+        "content": "",
+        "finish_reason": "length",
+        "model": "reasoning-model",
+        "tokens": {"input": 3327, "output": 4000, "total": 7327},
+        "provider_metadata": {"usage": {
+            "completion_tokens_details": {"reasoning_tokens": 4000},
+        }},
+    }
+    llm = MockLLMClient(responses=[obligations, exhausted])
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    with pytest.raises(MeshPlanError) as error:
+        await planner.plan("Find evidence")
+
+    message = str(error.value)
+    assert "finish_reason=length" in message
+    assert "reasoning_tokens=4000" in message
+    assert "answer_chars=0" in message
+    assert "not valid JSON" not in message
+
+
+@pytest.mark.asyncio
 async def test_mesh_planner_repairs_one_failed_coverage_audit_before_publication():
     initial_steps = responses()[1]
     audit_failure = {

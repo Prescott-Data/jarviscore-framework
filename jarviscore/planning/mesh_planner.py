@@ -8,6 +8,8 @@ from typing import Any
 
 
 DEPENDENCY_POLICIES = frozenset({"satisfied", "terminal_evidence"})
+# Provider stop reasons that certify a finished answer (Azure, Claude, Responses API).
+_COMPLETED_REASONS = frozenset({"stop", "end_turn", "stop_sequence", "completed"})
 
 
 class MeshPlanError(ValueError):
@@ -635,7 +637,19 @@ class MeshPlanner:
                 temperature=0.0,
             )
         content = response.get("content", "") if isinstance(response, dict) else str(response)
-        text = content.strip()
+        if isinstance(response, dict):
+            reason = response.get("finish_reason")
+            if reason is not None and str(reason).lower() not in _COMPLETED_REASONS:
+                usage = (response.get("provider_metadata") or {}).get("usage") or {}
+                details = usage.get("completion_tokens_details") or {}
+                raise MeshPlanError(
+                    "Mesh planner completion did not finish: "
+                    f"finish_reason={reason}, model={response.get('model')}, "
+                    f"output_tokens={(response.get('tokens') or {}).get('output')}, "
+                    f"reasoning_tokens={details.get('reasoning_tokens')}, "
+                    f"answer_chars={len(content or '')}"
+                )
+        text = (content or "").strip()
         if text.startswith("```"):
             text = "\n".join(
                 line for line in text.splitlines()
