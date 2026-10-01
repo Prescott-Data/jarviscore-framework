@@ -268,3 +268,26 @@ async def test_gemini_answering_without_searching_is_not_a_search(monkeypatch):
 
     with pytest.raises(SearchProviderError, match="without running Google Search"):
         await search._search_google_grounded("any firm")
+    assert search.circuit_breaker.failures.get("google_grounded") == 1
+
+
+@pytest.mark.asyncio
+async def test_searxng_connection_failure_reports_the_connection_error(monkeypatch):
+    import aiohttp
+
+    search = _web_only_search(monkeypatch)
+
+    class Session:
+        def get(self, *args, **kwargs):
+            raise aiohttp.ClientConnectionError("connection refused")
+
+    async def no_sleep(seconds):
+        return None
+
+    search.session = Session()
+    monkeypatch.setattr("jarviscore.search.internet_search.asyncio.sleep", no_sleep)
+
+    with pytest.raises(SearchProviderError) as error:
+        await search._search_searxng("any firm")
+    assert "connection refused" in str(error.value)
+    assert "status 0" not in str(error.value)

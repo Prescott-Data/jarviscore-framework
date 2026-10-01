@@ -400,7 +400,7 @@ class InternetSearch:
 
             logger.info("Searching SearXNG: %s", query)
 
-            last_status = 0
+            last_failure = "no response"
             for attempt in range(2):
                 try:
                     async with self._session.get(
@@ -408,7 +408,7 @@ class InternetSearch:
                         params=params,
                         timeout=aiohttp.ClientTimeout(total=10),
                     ) as response:
-                        last_status = response.status
+                        last_failure = f"HTTP status {response.status}"
                         if response.status == 200:
                             data = await response.json()
                             results = []
@@ -435,11 +435,12 @@ class InternetSearch:
                             continue
                 except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
                     logger.warning("SearXNG connection attempt %d failed: %s", attempt + 1, e)
+                    last_failure = f"connection failed: {type(e).__name__}: {e}"
                     await asyncio.sleep(1.0 * (2 ** attempt))
 
-            logger.warning("SearXNG search failed with status: %d", last_status)
+            logger.warning("SearXNG search failed: %s", last_failure)
             self.circuit_breaker.record_failure("searxng")
-            raise SearchProviderError(f"searxng failed with HTTP status {last_status}")
+            raise SearchProviderError(f"searxng {last_failure}")
         except SearchProviderError:
             raise
         except Exception as e:
@@ -728,6 +729,7 @@ class InternetSearch:
                 or getattr(grounding, "grounding_chunks", None)
             ))
             if not searched:
+                self.circuit_breaker.record_failure("google_grounded")
                 raise SearchProviderError(
                     "google_grounded answered without running Google Search"
                 )
