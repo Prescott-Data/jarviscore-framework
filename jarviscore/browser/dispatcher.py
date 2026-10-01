@@ -4,6 +4,7 @@ Browser action dispatcher (in-process routing).
 from typing import Dict, Any, Optional, List
 import json
 import hashlib
+import os
 import time
 
 from .controller import BrowserController, ActionResult
