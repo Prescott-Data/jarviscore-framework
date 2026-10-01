@@ -588,17 +588,23 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             1 for t in state.tool_history
             if t.status == "success" and t.tool_name in self._CONTENT_TOOLS
         )
-        if not content_successes and not (evidence_items or params.get("summary")):
+        findings = (getattr(state, "internal_variables", None) or {}).get("research_findings")
+        recorded_findings = len(findings) if isinstance(findings, list) else 0
+        upstream_results = bool((getattr(state, "context", None) or {}).get("previous_step_results"))
+        # A summary or evidence list is a claim about research, not proof of it.
+        if not content_successes and not recorded_findings and not upstream_results:
             return False, GateEvidence(
                 check="research_performed",
                 requirement=(
-                    "one successful content tool call, or a summary or evidence "
-                    "in the submitted result"
+                    "one successful content tool read, or upstream step results "
+                    "to work from"
                 ),
                 observed={
                     "tool_calls": len(state.tool_history),
                     "content_tool_successes": 0,
                     "content_tools": sorted(self._CONTENT_TOOLS),
+                    "recorded_findings": 0,
+                    "upstream_results": False,
                     "result_summary": bool(params.get("summary")),
                     "result_evidence": (
                         len(evidence_items) if isinstance(evidence_items, list) else 0

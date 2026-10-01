@@ -469,7 +469,11 @@ class TestResearcherSubAgent:
             ),
         ]
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
-        output = await researcher.run("research topic X", max_turns=5)
+        output = await researcher.run(
+            "research topic X",
+            context={"previous_step_results": {"survey": {"url": "https://example.com"}}},
+            max_turns=5,
+        )
         assert output.status == "success"
 
     @pytest.mark.asyncio
@@ -483,7 +487,11 @@ class TestResearcherSubAgent:
             ),
         ]
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
-        output = await researcher.run("task", max_turns=5)
+        output = await researcher.run(
+            "task",
+            context={"previous_step_results": {"survey": {"url": "https://x.com"}}},
+            max_turns=5,
+        )
         assert output.status == "success"
 
 

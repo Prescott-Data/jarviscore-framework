@@ -430,6 +430,38 @@ class TestResearcherGate:
         assert evidence.observed["tool_calls"] == 0
         assert evidence.observed["content_tool_successes"] == 0
 
+    def test_a_claimed_summary_and_evidence_are_not_research(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        parsed = {"result": {
+            "summary": "Searches were attempted but returned nothing.",
+            "evidence": [{"pointer": "https://example.com/team"}],
+        }}
+
+        ok, evidence = self._researcher()._can_complete(_state(), parsed)
+
+        assert ok is False
+        assert evidence.check == "research_performed"
+        assert evidence.observed["result_summary"] is True
+        assert evidence.observed["result_evidence"] == 1
+
+    def test_upstream_step_results_are_material_to_work_from(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state(context={"previous_step_results": {"step-1": {"summary": "x"}}})
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "step-1"}]}}
+
+        ok, reason = self._researcher()._can_complete(state, parsed)
+
+        assert ok is True, reason
+
+    def test_findings_recorded_in_an_earlier_epoch_count(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state()
+        state.internal_variables["research_findings"] = [{"url": "https://example.com"}]
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "https://example.com"}]}}
+
+        ok, reason = self._researcher()._can_complete(state, parsed)
+
+        assert ok is True, reason
     def test_no_evidence_at_all_is_counted(self, monkeypatch):
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
         state = _state(tool_history=[

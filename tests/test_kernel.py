@@ -1214,7 +1214,10 @@ class TestKernelExecuteSuccess:
                 'RESULT: {"answer": "FastAPI", "summary": "FastAPI is the best Python web framework"}'
             )
         ]
-        output = await kernel.execute(task="Research the best Python web framework")
+        output = await kernel.execute(
+            task="Research the best Python web framework",
+            context={"previous_step_results": {"survey": {"frameworks": ["FastAPI"]}}},
+        )
         assert output.status == "success"
         assert output.metadata["dispatches"][0]["role"] == "researcher"
 
