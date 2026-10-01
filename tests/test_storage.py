@@ -23,14 +23,15 @@ import shutil
 import tempfile
 from unittest.mock import AsyncMock, MagicMock
 
+import numpy as np
 import pytest
 
 from jarviscore.execution.decisions import DecisionResult
+from jarviscore.rag.faiss_store import FaissVectorStore
 from jarviscore.rag.pipeline import RagPipeline
 from jarviscore.storage.base import BlobStorage
 from jarviscore.storage.local import LocalBlobStorage
 from jarviscore.testing import MockBlobStorage
-
 
 # ======================================================================
 # BlobStorage ABC Contract
@@ -313,6 +314,30 @@ class TestMockBlobStorage:
 
 
 class TestRagDecisionStage:
+    def test_faiss_metadata_filter_prevents_scope_crowding(self):
+        store = FaissVectorStore.__new__(FaissVectorStore)
+        store._index = MagicMock()
+        store._index.ntotal = 3
+        store._index.search.return_value = (
+            np.array([[0.99, 0.90, 0.80]], dtype="float32"),
+            np.array([[0, 1, 2]]),
+        )
+        store._metadata = [
+            {"source": "outside", "upload_id": "outside-v1"},
+            {"source": "accounts", "upload_id": "accounts-v1"},
+            {"source": "filing", "upload_id": "filing-v1"},
+        ]
+
+        results = store.search(
+            [0.1],
+            top_k=1,
+            where={"upload_id": ("accounts-v1", "filing-v1")},
+        )
+
+        assert [result["source"] for result in results] == ["accounts"]
+        store._index.search.assert_called_once()
+        assert store._index.search.call_args.args[1] == 3
+
     def test_rag_preserves_only_exact_citation_atoms_for_each_chunk(self):
         pipeline = RagPipeline.__new__(RagPipeline)
         pipeline.embedding = MagicMock()
@@ -398,9 +423,15 @@ class TestRagDecisionStage:
         pipeline.embedding.embed_query.return_value = [0.1]
         pipeline.store = MagicMock()
         pipeline.store.search.return_value = [
-            {"source": "merger", "text": "Offer of $25.00 per share", "context": "Merger", "score": 0.9},
+            {
+                "source": "merger", "text": "Offer of $25.00 per share",
+                "context": "Merger", "score": 0.9,
+            },
             {"source": "merger", "text": "Board discussion", "context": "Merger", "score": 0.8},
-            {"source": "10q", "text": "Total revenues $ 407,344", "context": "Q2 10-Q", "score": 0.7},
+            {
+                "source": "10q", "text": "Total revenues $ 407,344",
+                "context": "Q2 10-Q", "score": 0.7,
+            },
         ]
         pipeline.reranker = MagicMock()
         pipeline.reranker.score.side_effect = lambda q, passages: [
@@ -415,6 +446,28 @@ class TestRagDecisionStage:
             "Merger\nOffer of $25.00 per share", "Q2 10-Q\nTotal revenues $ 407,344",
         ]
         assert pipeline.store.search.call_args.kwargs["top_k"] >= 50
+
+    def test_rag_filters_vector_candidates_before_reranking(self):
+        pipeline = RagPipeline.__new__(RagPipeline)
+        pipeline.embedding = MagicMock()
+        pipeline.embedding.embed_query.return_value = [0.1]
+        pipeline.store = MagicMock()
+        pipeline.store.search.return_value = [
+            {"source": "accounts", "text": "Revenue 42", "score": 0.9}
+        ]
+        pipeline.reranker = None
+        pipeline.rerank_candidates = 0
+
+        result = pipeline.retrieve(
+            "revenue",
+            top_k=2,
+            where={"upload_id": ("accounts-v1", "filing-v1")},
+        )
+
+        assert result["results"][0]["source"] == "accounts"
+        assert pipeline.store.search.call_args.kwargs["where"] == {
+            "upload_id": ("accounts-v1", "filing-v1")
+        }
 
     @pytest.mark.asyncio
     async def test_typesafe_routes_shortlist_without_discarding_audit_records(self):

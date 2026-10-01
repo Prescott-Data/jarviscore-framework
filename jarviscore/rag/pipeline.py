@@ -9,7 +9,7 @@ Install: pip install jarviscore[rag]
 import asyncio
 import logging
 import os
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from jarviscore.rag.chunking import chunk_text
 from jarviscore.rag.citations import citation_atoms_for_chunk, validate_citation_atoms
@@ -176,7 +176,12 @@ class RagPipeline:
             "chunks": len(all_chunks),
         }
 
-    def retrieve(self, query: str, top_k: Optional[int] = None) -> Dict[str, Any]:
+    def retrieve(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        where: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         top_k = top_k or int(os.environ.get("RAG_TOP_K", str(_DEFAULT_TOP_K)))
         embedding = self.embedding
         q_vec = (
@@ -186,7 +191,11 @@ class RagPipeline:
         )
         reranker = getattr(self, "reranker", None)
         pool_size = max(top_k, getattr(self, "rerank_candidates", 0)) if reranker else top_k
-        candidates = self.store.search(q_vec, top_k=pool_size * _UNITS_PER_SOURCE_DEPTH)
+        candidates = self.store.search(
+            q_vec,
+            top_k=pool_size * _UNITS_PER_SOURCE_DEPTH,
+            where=where,
+        )
         results: List[Dict[str, Any]] = []
         seen_sources = set()
         for candidate in candidates:
@@ -201,7 +210,9 @@ class RagPipeline:
             scores = reranker.score(
                 query,
                 [
-                    f"{r['context']}\n{r.get('text', '')}" if r.get("context") else r.get("text", "")
+                    f"{r['context']}\n{r.get('text', '')}"
+                    if r.get("context")
+                    else r.get("text", "")
                     for r in results
                 ],
             )
@@ -240,6 +251,7 @@ class RagPipeline:
         query: str,
         top_k: Optional[int] = None,
         *,
+        where: Optional[Dict[str, Any]] = None,
         thresholds: Optional[Dict[str, float]] = None,
         max_concurrent: Optional[int] = None,
     ) -> Dict[str, Any]:
@@ -248,7 +260,7 @@ class RagPipeline:
             raise RuntimeError(
                 "TypeSafe RAG decisions require a configured Jev decision client."
             )
-        retrieval = self.retrieve(query, top_k=top_k)
+        retrieval = self.retrieve(query, top_k=top_k, where=where)
         passages = [dict(item) for item in retrieval.get("results", [])]
         policy = dict(_DEFAULT_DECISION_THRESHOLDS)
         policy.update(self.decision_config.get("thresholds") or {})

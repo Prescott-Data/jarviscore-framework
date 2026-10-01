@@ -4,11 +4,12 @@ Stores vectors + metadata locally.
 
 Optional dependency — install with: pip install jarviscore[rag]
 """
-import os
 import json
 import logging
+import os
+from typing import Any, Dict, List, Optional
+
 import numpy as np
-from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -64,18 +65,35 @@ class FaissVectorStore:
         self._metadata.extend(metadatas)
         self._persist()
 
-    def search(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query_vector: List[float],
+        top_k: int = 5,
+        where: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
         if self._index.ntotal == 0:
             return []
         q = np.array([query_vector], dtype="float32")
-        scores, indices = self._index.search(q, top_k)
+        search_depth = int(self._index.ntotal) if where else top_k
+        scores, indices = self._index.search(q, search_depth)
         results: List[Dict[str, Any]] = []
         for score, idx in zip(scores[0], indices[0]):
             if idx < 0 or idx >= len(self._metadata):
                 continue
             meta = self._metadata[idx].copy()
+            if where and any(
+                (
+                    meta.get(field) not in expected
+                    if isinstance(expected, (list, tuple, set, frozenset))
+                    else meta.get(field) != expected
+                )
+                for field, expected in where.items()
+            ):
+                continue
             meta["score"] = float(score)
             results.append(meta)
+            if len(results) >= top_k:
+                break
         return results
 
     def stats(self) -> Dict[str, Any]:
