@@ -47,6 +47,80 @@ class TestToolClassification:
     def test_unknown_tool_defaults_to_action(self, cognition):
         assert cognition.classify_tool("unknown_tool") == "action"
 
+    def test_a_declared_phase_wins_over_the_name_sets(self, cognition):
+        from jarviscore.kernel.cognition import AgentPhase
+
+        assert cognition.classify_tool("read_web_content", AgentPhase.DISCOVERY) == "thinking"
+        assert cognition.classify_tool("search_internet_batch", "thinking") == "thinking"
+        assert cognition.classify_tool("web_search", "action") == "action"
+        assert cognition.classify_tool("publish_research_findings", AgentPhase.COMPLETION) == "action"
+
+    def test_researcher_reads_draw_on_the_research_budget(self):
+        from jarviscore.kernel.cognition import AgentPhase
+
+        cognition = AgentCognitionManager(ExecutionLease.for_role("researcher"))
+        cognition.track_usage("read_web_content", tokens=50_000, declared_phase=AgentPhase.DISCOVERY)
+
+        assert cognition.lease.thinking_used == 50_000
+        assert cognition.lease.action_used == 0
+
+    def test_every_default_researcher_reader_is_declared_as_discovery(self):
+        from jarviscore.kernel.cognition import AgentPhase
+        from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
+
+        tools = ResearcherSubAgent(agent_id="r", llm_client=None)._tools
+        for name in ("search_internet", "search_internet_batch", "read_web_content", "rag_query"):
+            assert getattr(tools[name].phase, "value", tools[name].phase) == AgentPhase.DISCOVERY.value
+
+
+class TestRegisteredPhaseThroughRun:
+    """BaseSubAgent.run hands the registered phase to the lease."""
+
+    @staticmethod
+    def _run_one_tool_call(tool_name, phase=None):
+        import asyncio
+        import json
+
+        from jarviscore.kernel.subagent import BaseSubAgent
+
+        replies = [
+            f"THOUGHT: look\nTOOL: {tool_name}\nPARAMS: {json.dumps({})}",
+            "THOUGHT: done\nDONE: done\nRESULT: {}",
+        ]
+
+        class _LLM:
+            async def generate(self, messages=None, **kwargs):
+                reply = replies.pop(0) if replies else replies_last
+                return {"content": reply, "tokens": {"input": 100, "output": 100, "total": 200}, "cost_usd": 0.0}
+
+        replies_last = "THOUGHT: done\nDONE: done\nRESULT: {}"
+
+        class _Agent(BaseSubAgent):
+            def get_system_prompt(self, *args, **kwargs):
+                return "system"
+
+            def setup_tools(self):
+                declared = {"phase": phase} if phase else {}
+                self.register_tool(
+                    tool_name, lambda: {"status": "success", "content": "page"}, "read", **declared
+                )
+
+        agent = _Agent(agent_id="phase", role="researcher", llm_client=_LLM())
+        asyncio.run(agent.run(task="t", max_turns=3))
+        return agent._cognition.lease
+
+    # Each turn bills 200 tokens; the closing DONE turn is always action.
+    def test_a_declared_discovery_tool_draws_on_the_thinking_budget(self):
+        lease = self._run_one_tool_call("fetch_page", phase="discovery")
+        assert (lease.thinking_used, lease.action_used) == (200, 200)
+
+    def test_an_undeclared_tool_keeps_its_name_classification(self):
+        thinking = self._run_one_tool_call("read_turn_result")
+        assert (thinking.thinking_used, thinking.action_used) == (200, 200)
+
+        action = self._run_one_tool_call("fetch_page")
+        assert (action.thinking_used, action.action_used) == (0, 400)
+
 
 class TestBudgetTracking:
 
