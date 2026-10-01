@@ -928,6 +928,9 @@ class BaseSubAgent(ABC):
 
             # Parse response
             parsed = self._parse_response_for_contract(content, context)
+            if parsed["type"] != "raw":
+                # Repairs bound a run of malformed replies, not a session's lifetime.
+                state.internal_variables["_protocol_violation_count"] = 0
 
             # ── Auto-summarize if context is getting large ──
             try:
