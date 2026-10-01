@@ -40,6 +40,24 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_WEB_TIERS = frozenset({"grounded", "general_web"})
+
+
+class SearchProviderError(RuntimeError):
+    """A search provider did not answer the query."""
+
+
+class SearchUnavailable(RuntimeError):
+    """No web search provider answered, so an empty result proves nothing."""
+
+    def __init__(self, failures: Dict[str, str]):
+        self.failures = dict(failures)
+        detail = "; ".join(f"{name}: {error}" for name, error in failures.items())
+        super().__init__(
+            f"No web search provider answered ({detail})" if detail
+            else "No web search provider is configured"
+        )
+
 class CircuitBreaker:
     """
     Simple Circuit Breaker implementation.
@@ -191,8 +209,39 @@ class InternetSearch:
         Returns:
             A list of search results with title, snippet, and URL
         """
+        results, _answered, _failures = await self._search_outcome(
+            query, max_results, exclude_providers
+        )
+        return results
+
+    async def search_answered(
+        self,
+        query: str,
+        max_results: int = 10,
+        exclude_providers: Optional[set] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search, raising SearchUnavailable unless a web provider answered.
+
+        An empty list is returned only when a web provider answered the query
+        with nothing, so callers can treat it as a genuine negative result.
+        """
+        results, answered, failures = await self._search_outcome(
+            query, max_results, exclude_providers
+        )
+        if results or answered:
+            return results
+        raise SearchUnavailable(failures)
+
+    async def _search_outcome(
+        self,
+        query: str,
+        max_results: int,
+        exclude_providers: Optional[set],
+    ) -> Tuple[List[Dict[str, Any]], bool, Dict[str, str]]:
         await self.initialize()
         skip = set(exclude_providers or ())
+        web_answered = False
+        failures: Dict[str, str] = {}
 
         provider_tiers = self._provider_tiers(skip)
         for tier_name, providers in provider_tiers:
@@ -221,13 +270,16 @@ class InternetSearch:
                         "Search provider=%s tier=%s failed error_type=%s deadline_seconds=%s",
                         provider, tier_name, type(batch).__name__, self._provider_timeout(provider),
                     )
+                    failures[provider] = str(batch) or type(batch).__name__
                     continue
                 if isinstance(batch, list):
+                    if tier_name in _WEB_TIERS:
+                        web_answered = True
                     results.extend(batch)
             ranked = self._rank_results(query, results)
             if ranked:
-                return ranked[:max_results]
-        return []
+                return ranked[:max_results], web_answered, failures
+        return [], web_answered, failures
 
     def _provider_timeout(self, provider: str) -> float:
         return (
@@ -334,7 +386,7 @@ class InternetSearch:
         """
         if self.circuit_breaker.is_open("searxng"):
             logger.warning("Skipping SearXNG search (Circuit Breaker OPEN)")
-            return []
+            raise SearchProviderError("searxng circuit breaker open")
 
         try:
             url = f"{self.searxng_url.rstrip('/')}/search"
@@ -359,7 +411,6 @@ class InternetSearch:
                         last_status = response.status
                         if response.status == 200:
                             data = await response.json()
-                            self.circuit_breaker.record_success("searxng")
                             results = []
                             for item in data.get("results", [])[:max_results]:
                                 results.append({
@@ -369,6 +420,14 @@ class InternetSearch:
                                     "source": "searxng",
                                     "engine": item.get("engine", ""),
                                 })
+                            unresponsive = data.get("unresponsive_engines") or []
+                            if not results and unresponsive:
+                                # Engines that refused (CAPTCHA, rate limit) did not answer.
+                                self.circuit_breaker.record_failure("searxng")
+                                raise SearchProviderError(
+                                    f"searxng engines did not answer: {unresponsive}"
+                                )
+                            self.circuit_breaker.record_success("searxng")
                             logger.info("SearXNG: %d results", len(results))
                             return results
                         if response.status in (429, 503, 504):
@@ -380,12 +439,14 @@ class InternetSearch:
 
             logger.warning("SearXNG search failed with status: %d", last_status)
             self.circuit_breaker.record_failure("searxng")
+            raise SearchProviderError(f"searxng failed with HTTP status {last_status}")
+        except SearchProviderError:
+            raise
         except Exception as e:
             logger.error("SearXNG search error: %s", e)
             logger.debug(traceback.format_exc())
             self.circuit_breaker.record_failure("searxng")
-
-        return []
+            raise SearchProviderError(f"searxng error: {e}") from e
 
     async def _search_serper(self, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
         """Search using Serper (Google Search API)."""
@@ -394,7 +455,7 @@ class InternetSearch:
             
         if self.circuit_breaker.is_open("serper"):
             logger.warning("Skipping Serper search (Circuit Breaker OPEN)")
-            return []
+            raise SearchProviderError("serper circuit breaker open")
             
         try:
             url = "https://google.serper.dev/search"
@@ -418,7 +479,9 @@ class InternetSearch:
                                 continue
                             logger.warning(f"Serper search failed with status code: {response.status}")
                             self.circuit_breaker.record_failure("serper")
-                            return []
+                            raise SearchProviderError(
+                                f"serper failed with HTTP status {response.status}"
+                            )
                         
                         self.circuit_breaker.record_success("serper")
                         data = await response.json()
@@ -432,15 +495,21 @@ class InternetSearch:
                             })
                         logger.info(f"Found {len(results)} results from Serper")
                         return results
+                except SearchProviderError:
+                    raise
                 except Exception as e:
                     if attempt == 2:
                         raise e
                     await asyncio.sleep(1.0 * (2 ** attempt))
+            self.circuit_breaker.record_failure("serper")
+            raise SearchProviderError("serper was rate limited or unavailable after retries")
+        except SearchProviderError:
+            raise
         except Exception as e:
             logger.error(f"Error in Serper search: {str(e)}")
             logger.debug(traceback.format_exc())
             self.circuit_breaker.record_failure("serper")
-        return []
+            raise SearchProviderError(f"serper error: {e}") from e
 
     async def _search_wikipedia(self, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
         """Fallback search using Wikipedia API."""
@@ -617,11 +686,11 @@ class InternetSearch:
         """
         if self.circuit_breaker.is_open("google_grounded"):
             logger.warning("Skipping Google Grounded Search (Circuit Breaker OPEN)")
-            return []
+            raise SearchProviderError("google_grounded circuit breaker open")
 
         client = self._get_gemini_client()
         if client is None:
-            return []
+            raise SearchProviderError("google_grounded client is unavailable")
 
         try:
             from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
@@ -703,7 +772,7 @@ class InternetSearch:
             logger.error("Google Grounded Search failed: %s", exc)
             logger.debug(traceback.format_exc())
             self.circuit_breaker.record_failure("google_grounded")
-            return []
+            raise SearchProviderError(f"google_grounded error: {exc}") from exc
 
     async def _request_with_retries(
         self,

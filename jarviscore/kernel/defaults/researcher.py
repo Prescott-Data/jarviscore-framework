@@ -1784,9 +1784,14 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             "next_offset": next_offset,
         }
 
+    async def _answered_search(self, query: str, **kwargs) -> List[Dict[str, Any]]:
+        # Injected clients without search_answered cannot tell failure from no results.
+        search = getattr(self.internet_search, "search_answered", None) or self.internet_search.search
+        return await search(query, **kwargs)
+
     async def _tool_search_internet(
         self, query: str, preferred_domains: Optional[List[str]] = None
-    ) -> str:
+    ) -> Any:
         """
         Search the internet.
         Args:
@@ -1814,7 +1819,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
 
         try:
             await self.internet_search.initialize()
-            results = await self.internet_search.search(effective_query, max_results=5)
+            results = await self._answered_search(effective_query, max_results=5)
             results = self._filter_search_results(results)
             results = self._compact_search_results(results, limit=5)
             # Register URLs to prevent hallucination
@@ -1834,7 +1839,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             return json.dumps(results, indent=2)
         except Exception as e:
             self.tracer.log_tool_result("search_internet", None, error=str(e))
-            return json.dumps({"error": str(e)})
+            return {"status": "error", "error": str(e)}
 
     async def _tool_search_internet_batch(
         self,
@@ -1888,7 +1893,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         # wasted parallel network slots and latency on every batch search.
         _academic_skip = set(self._ACADEMIC_PROVIDERS) if not self._get_provider_allowlist() else set()
         tasks = [
-            self.internet_search.search(
+            self._answered_search(
                 q,
                 max_results=max_results_per_query,
                 exclude_providers=_academic_skip,
@@ -1910,6 +1915,13 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                         self._add_known_url(r["url"])
             else:
                 out["by_query"][q] = {"error": "Unexpected search result type", "results": []}
+
+        if all("error" in data for data in out["by_query"].values()):
+            error = "; ".join(
+                f"{q}: {data['error']}" for q, data in out["by_query"].items()
+            )
+            self.tracer.log_tool_result("search_internet_batch", None, error=error)
+            return {"status": "error", "error": error, "by_query": out["by_query"]}
                         
         # Flatten for easy consumption: all_results = list of {query, title, snippet, url}
         all_results = []
