@@ -181,6 +181,24 @@ async def test_search_answered_raises_when_no_web_provider_answered(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_fallback_rows_are_not_a_web_answer(monkeypatch):
+    search = _web_only_search(monkeypatch)
+
+    async def blocked(query, max_results=10):
+        raise SearchProviderError("searxng failed with HTTP status 503")
+
+    async def scholarly(query, max_results=10):
+        return [{"title": "Paper", "snippet": "", "url": "https://arxiv.org/abs/1", "source": "arxiv"}]
+
+    search._search_searxng = blocked
+    search._search_arxiv = scholarly
+
+    with pytest.raises(SearchUnavailable):
+        await search.search_answered("any firm")
+    assert [row["source"] for row in await search.search("any firm")] == ["arxiv"]
+
+
+@pytest.mark.asyncio
 async def test_searxng_reports_engines_that_refused_instead_of_an_empty_answer(monkeypatch):
     search = _web_only_search(monkeypatch)
 

@@ -228,7 +228,7 @@ class InternetSearch:
         results, answered, failures = await self._search_outcome(
             query, max_results, exclude_providers
         )
-        if results or answered:
+        if answered:
             return results
         raise SearchUnavailable(failures)
 
