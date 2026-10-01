@@ -339,10 +339,17 @@ class UnifiedLLMClient:
             or None
         )
 
-    def _declared_output_allowance(self, model: Optional[str]) -> int:
-        """Declared completion ceiling of the model serving this call."""
+    def _declared_output_allowance(
+        self, model: Optional[str], provider: Optional["LLMProvider"] = None
+    ) -> int:
+        """Declared completion ceiling of the model a provider serves this call with.
+
+        An explicit ``model`` applies to every provider. Otherwise the model is
+        the provider's configured one (the primary provider when none is given).
+        """
         if model is None:
-            primary = (getattr(self, "provider_order", None) or [None])[0]
+            if provider is None:
+                provider = (getattr(self, "provider_order", None) or [None])[0]
             model = {
                 LLMProvider.PROMO: PROMO_MODEL,
                 LLMProvider.AZURE: self.config.get("azure_deployment"),
@@ -350,7 +357,7 @@ class UnifiedLLMClient:
                 LLMProvider.GEMINI: self.config.get("gemini_model"),
                 LLMProvider.VERTEX_AI: self.config.get("vertex_ai_model"),
                 LLMProvider.VLLM: self.config.get("llm_model"),
-            }.get(primary)
+            }.get(provider)
         declared = (self.config.get("llm_model_output_limits") or {}).get(model)
         return int(declared or self.config.get("llm_default_max_tokens", 4000))
 
@@ -396,12 +403,17 @@ class UnifiedLLMClient:
         if "max_completion_tokens" in kwargs:
             max_tokens = kwargs.pop("max_completion_tokens")
 
-        # An explicit max_tokens is the caller's contract. Otherwise the
-        # allowance is the model's declared ceiling (reasoning models bill
-        # hidden reasoning against it), bounded below by the workflow budget.
+        # An explicit max_tokens is the caller's contract. Otherwise each
+        # provider receives its own model's declared ceiling (reasoning models
+        # bill hidden reasoning against it), capped by the remaining workflow
+        # budget. The reservation covers the largest ceiling in the chain.
         explicit_allowance = max_tokens is not None
         if max_tokens is None:
-            max_tokens = self._declared_output_allowance(kwargs.get("model"))
+            providers = getattr(self, "provider_order", None) or [None]
+            max_tokens = max(
+                self._declared_output_allowance(kwargs.get("model"), provider)
+                for provider in providers
+            )
 
         # Convert prompt to messages if needed
         if not messages:
@@ -425,11 +437,13 @@ class UnifiedLLMClient:
             if self._semaphore:
                 async with self._semaphore:
                     result = await self._generate_inner(
-                        messages, temperature, max_tokens, **kwargs
+                        messages, temperature, max_tokens,
+                        implicit_allowance=not explicit_allowance, **kwargs
                     )
             else:
                 result = await self._generate_inner(
-                    messages, temperature, max_tokens, **kwargs
+                    messages, temperature, max_tokens,
+                    implicit_allowance=not explicit_allowance, **kwargs
                 )
         except Exception:
             if budget_account is not None and reservation_id is not None:
@@ -451,6 +465,7 @@ class UnifiedLLMClient:
         messages: List[Dict],
         temperature: float,
         max_tokens: int,
+        implicit_allowance: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """Inner generate — actual provider dispatch, called under semaphore.
@@ -458,12 +473,22 @@ class UnifiedLLMClient:
         On 429 rate-limit responses, retries the same provider with exponential
         backoff (2 * 2^attempt seconds, capped at 60s) up to LLM_MAX_RETRIES_429
         attempts before moving to the next provider.
+
+        With ``implicit_allowance`` ``max_tokens`` is the reserved ceiling, and
+        each provider is sent no more than its own model's declared ceiling.
         """
         max_429_retries = int(self.config.get("llm_max_retries_429", 4))
         base_delay = float(self.config.get("llm_429_base_delay", 2.0))
         last_error = None
+        reserved_allowance = max_tokens
 
         for provider in self.provider_order:
+            max_tokens = reserved_allowance
+            if implicit_allowance:
+                max_tokens = min(
+                    reserved_allowance,
+                    self._declared_output_allowance(kwargs.get("model"), provider),
+                )
             for attempt in range(max_429_retries + 1):
                 try:
                     logger.debug(f"Trying provider: {provider.value} (attempt {attempt})")

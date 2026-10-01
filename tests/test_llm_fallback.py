@@ -295,6 +295,37 @@ async def test_declared_model_ceiling_replaces_the_default_allowance():
 
 
 @pytest.mark.asyncio
+async def test_each_fallback_provider_receives_its_own_declared_ceiling():
+    llm = UnifiedLLMClient.__new__(UnifiedLLMClient)
+    llm.config = {
+        "llm_default_max_tokens": 4000,
+        "llm_max_retries_429": 0,
+        "azure_deployment": "reasoning-deployment",
+        "claude_model": "smaller-model",
+        "llm_model_output_limits": {
+            "reasoning-deployment": 128000,
+            "smaller-model": 32000,
+        },
+    }
+    llm._semaphore = None
+    llm.provider_order = [LLMProvider.AZURE, LLMProvider.CLAUDE]
+    llm._call_azure = AsyncMock(side_effect=RuntimeError("azure unavailable"))
+    llm._call_claude = AsyncMock(
+        return_value={"content": "done", "tokens": {"total": 3}}
+    )
+
+    await llm.generate(prompt="plan")
+    assert llm._call_azure.call_args.args[2] == 128000
+    assert llm._call_claude.call_args.args[2] == 32000
+
+    llm._call_azure.reset_mock()
+    llm._call_claude.reset_mock()
+    await llm.generate(prompt="plan", max_tokens=700)
+    assert llm._call_azure.call_args.args[2] == 700
+    assert llm._call_claude.call_args.args[2] == 700
+
+
+@pytest.mark.asyncio
 async def test_declared_ceiling_is_bounded_by_remaining_workflow_budget():
     store = MockRedisContextStore()
     store.register_workflow_goal(
