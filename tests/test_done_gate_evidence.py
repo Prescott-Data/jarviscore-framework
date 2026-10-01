@@ -430,6 +430,81 @@ class TestResearcherGate:
         assert evidence.observed["tool_calls"] == 0
         assert evidence.observed["content_tool_successes"] == 0
 
+    def test_a_claimed_summary_and_evidence_are_not_research(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        parsed = {"result": {
+            "summary": "Searches were attempted but returned nothing.",
+            "evidence": [{"pointer": "https://example.com/team"}],
+        }}
+
+        ok, evidence = self._researcher()._can_complete(_state(), parsed)
+
+        assert ok is False
+        assert evidence.check == "research_performed"
+        assert evidence.observed["result_summary"] is True
+        assert evidence.observed["result_evidence"] == 1
+
+    def test_upstream_step_results_are_material_to_work_from(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state(context={"previous_step_results": {"step-1": {"summary": "x"}}})
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "step-1"}]}}
+
+        ok, reason = self._researcher()._can_complete(state, parsed)
+
+        assert ok is True, reason
+
+    def test_findings_recorded_in_an_earlier_epoch_count(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state()
+        state.internal_variables["research_findings"] = [{"url": "https://example.com"}]
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "https://example.com"}]}}
+
+        ok, reason = self._researcher()._can_complete(state, parsed)
+
+        assert ok is True, reason
+
+    @pytest.mark.parametrize("tool_name", ["rag_query", "read_file"])
+    def test_a_read_that_found_nothing_is_not_research(self, monkeypatch, tool_name):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state(tool_history=[
+            ToolResult(
+                tool_name=tool_name,
+                status="success",
+                tool_output={"status": "success", "results": [], "content_found": False},
+            ),
+        ])
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "index"}]}}
+
+        ok, evidence = self._researcher()._can_complete(state, parsed)
+
+        assert ok is False
+        assert evidence.check == "research_performed"
+
+    def test_an_empty_index_and_an_empty_file_record_no_finding(self, tmp_path):
+        from types import SimpleNamespace
+
+        researcher = self._researcher()
+        researcher.current_state = _state()
+        researcher.tracer = SimpleNamespace(
+            log_tool_start=lambda *a, **k: None, log_tool_result=lambda *a, **k: None
+        )
+        researcher.rag_decision_provider = "vector"
+        researcher._get_rag_pipeline = lambda: SimpleNamespace(
+            retrieve=lambda query, top_k=5: {"status": "success", "results": []}
+        )
+        async def _no_cost(*a, **k):
+            return None
+        researcher._track_content_cost = _no_cost
+        empty = tmp_path / "empty.md"
+        empty.write_text("")
+
+        rag = asyncio.run(researcher._tool_rag_query("anything"))
+        read = asyncio.run(researcher._tool_read_file(file_path=str(empty)))
+
+        assert rag["content_found"] is False
+        assert read["content_found"] is False
+        assert researcher.current_state.internal_variables.get("research_findings", []) == []
+
     def test_no_evidence_at_all_is_counted(self, monkeypatch):
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
         state = _state(tool_history=[
