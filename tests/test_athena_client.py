@@ -302,10 +302,10 @@ async def test_session_cache_key_isolates_tenant_user_and_agent():
 
     assert session_id == "session-1"
     assert redis._redis.get.call_args_list == [
-        call("athena_session:tenant-1:owner:analyst"),
+        call("athena_session:scoped:tenant-1:owner:analyst"),
     ]
     redis._redis.set.assert_called_once_with(
-        "athena_session:tenant-1:owner:analyst", "session-1", ex=30 * 86400
+        "athena_session:scoped:tenant-1:owner:analyst", "session-1", ex=30 * 86400
     )
     client.create_session.assert_awaited_once_with(
         "analyst", None, user_id="owner"
@@ -349,7 +349,35 @@ async def test_scoped_session_refuses_the_unscoped_legacy_session():
 
     assert session_id == "session-for-matter-a"
     assert redis._redis.get.call_args_list == [
-        call("athena_session:tenant-1:matter-a:analyst"),
+        call("athena_session:scoped:tenant-1:matter-a:analyst"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scoped_session_never_resolves_to_a_default_or_pre_scoping_key():
+    """A scope equal to the agent id, or a scope containing the separator,
+    must not land on a key the unscoped path (or older code) wrote."""
+    client = AthenaClient("http://athena.test", tenant_id="tenant-1")
+    cache = {
+        "athena_session:tenant-1:analyst:analyst": "default-session",
+        "athena_session:tenant-1:a:b:analyst": "pre-scoping-session",
+    }
+    redis = MagicMock()
+    redis._redis.get.side_effect = cache.get
+    redis._redis.set = MagicMock()
+    client.create_session = AsyncMock(side_effect=["scoped-1", "scoped-2"])
+
+    same_as_agent = await client.get_or_create_session(
+        "analyst", redis_store=redis, user_id="analyst"
+    )
+    with_separator = await client.get_or_create_session(
+        "analyst", redis_store=redis, user_id="a:b"
+    )
+
+    assert (same_as_agent, with_separator) == ("scoped-1", "scoped-2")
+    assert redis._redis.get.call_args_list == [
+        call("athena_session:scoped:tenant-1:analyst:analyst"),
+        call("athena_session:scoped:tenant-1:a%3Ab:analyst"),
     ]
 
 

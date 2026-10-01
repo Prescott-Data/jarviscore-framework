@@ -1562,3 +1562,68 @@ class TestDispatchRecords:
         dispatches = output.metadata["dispatches"]
         # Researcher uses task tier
         assert dispatches[0]["model"] == "gpt-4o"
+
+
+class TestTenantMemoryScope:
+    """The Kernel is the entry point that opens memory under a mesh's tenant."""
+
+    @staticmethod
+    def _kernel(scope_field="matter_id"):
+        from jarviscore.testing import MockRedisContextStore
+
+        config = {"task_model": "gpt-4o", "kernel_max_turns": 2}
+        if scope_field:
+            config["memory_scope_field"] = scope_field
+        return Kernel(
+            llm_client=MockLLMClient(),
+            sandbox=MockSandboxExecutor(),
+            redis_store=MockRedisContextStore(),
+            config=config,
+        )
+
+    def test_each_tenant_opens_its_own_cross_session_memory(self, monkeypatch):
+        monkeypatch.setenv("ATHENA_URL", "http://athena.test")
+        kernel = self._kernel()
+
+        a = kernel._create_memory("wf-1", "s1", "analyst", {"matter_id": "matter-a"})
+        b = kernel._create_memory("wf-2", "s1", "analyst", {"matter_id": "matter-b"})
+
+        assert a._athena_client is not None and a._memory_scope == "matter-a"
+        assert b._athena_client is not None and b._memory_scope == "matter-b"
+
+    @pytest.mark.parametrize("context", [None, {}, {"matter_id": "  "}])
+    def test_a_step_without_its_tenant_gets_no_cross_session_memory(
+        self, monkeypatch, context
+    ):
+        monkeypatch.setenv("ATHENA_URL", "http://athena.test")
+        memory = self._kernel()._create_memory("wf-1", "s1", "analyst", context)
+
+        assert memory is not None
+        assert memory._athena_client is None
+        assert memory._memory_scope is None
+
+    def test_a_mesh_without_a_scope_field_keeps_the_agent_session(self, monkeypatch):
+        monkeypatch.setenv("ATHENA_URL", "http://athena.test")
+        memory = self._kernel(scope_field=None)._create_memory(
+            "wf-1", "s1", "analyst", {"matter_id": "matter-a"}
+        )
+
+        assert memory._athena_client is not None
+        assert memory._memory_scope is None
+
+    @pytest.mark.asyncio
+    async def test_execute_opens_memory_with_the_step_context(self):
+        kernel = self._kernel()
+        seen = []
+        kernel._create_memory = lambda wf, step, agent, context=None: seen.append(
+            dict(context or {})
+        )
+
+        await kernel.execute(
+            task="Summarise the matter",
+            context={"matter_id": "matter-a", "workflow_id": "wf-1", "step_id": "s1"},
+            agent_default_role="researcher",
+            max_dispatches=1,
+        )
+
+        assert seen and seen[0]["matter_id"] == "matter-a"

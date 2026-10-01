@@ -955,6 +955,19 @@ class Kernel:
                     else:
                         logger.debug("[Kernel] Athena memory tier not configured: %s", exc)
 
+                memory_scope = self._memory_scope(context)
+                scope_field = self.config.get("memory_scope_field")
+                if athena_client is not None and scope_field and memory_scope is None:
+                    # The mesh separates tenants by this field and the step
+                    # names none. Cross-session memory stays closed rather than
+                    # fall back to the pool every tenant would share.
+                    logger.warning(
+                        "[Kernel] Step %s/%s carries no '%s'; cross-session "
+                        "memory is closed for it",
+                        workflow_id, step_id, scope_field,
+                    )
+                    athena_client = None
+
                 return UnifiedMemory(
                     workflow_id=workflow_id,
                     step_id=step_id,
@@ -962,7 +975,7 @@ class Kernel:
                     redis_store=self.redis_store,
                     blob_storage=self.blob_storage,
                     athena_client=athena_client,
-                    memory_scope=self._memory_scope(context),
+                    memory_scope=memory_scope,
                 )
         except ImportError:
             logger.debug("[Kernel] UnifiedMemory not available — running without memory")
