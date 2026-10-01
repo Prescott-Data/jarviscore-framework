@@ -222,3 +222,49 @@ async def test_searxng_reports_engines_that_refused_instead_of_an_empty_answer(m
 
     with pytest.raises(SearchProviderError, match="CAPTCHA"):
         await search._search_searxng("any firm")
+
+
+def _grounded(monkeypatch, grounding):
+    from types import SimpleNamespace
+
+    search = _web_only_search(monkeypatch)
+    response = SimpleNamespace(
+        candidates=[SimpleNamespace(grounding_metadata=grounding)],
+        text="Model prose.",
+    )
+    client = SimpleNamespace(models=SimpleNamespace(generate_content=lambda **kwargs: response))
+    search._get_gemini_client = lambda: client
+    return search
+
+
+@pytest.mark.asyncio
+async def test_grounded_search_returns_the_sources_it_read(monkeypatch):
+    from types import SimpleNamespace
+
+    chunk = SimpleNamespace(web=SimpleNamespace(uri="https://firm.example/team", title="Team"))
+    search = _grounded(monkeypatch, SimpleNamespace(
+        web_search_queries=["firm team"], grounding_chunks=[chunk], grounding_supports=[],
+    ))
+
+    rows = await search._search_google_grounded("firm team")
+
+    assert [row["url"] for row in rows] == ["https://firm.example/team"]
+
+
+@pytest.mark.asyncio
+async def test_grounded_search_that_found_nothing_is_an_empty_answer(monkeypatch):
+    from types import SimpleNamespace
+
+    search = _grounded(monkeypatch, SimpleNamespace(
+        web_search_queries=["no such firm"], grounding_chunks=[], grounding_supports=[],
+    ))
+
+    assert await search._search_google_grounded("no such firm") == []
+
+
+@pytest.mark.asyncio
+async def test_gemini_answering_without_searching_is_not_a_search(monkeypatch):
+    search = _grounded(monkeypatch, None)
+
+    with pytest.raises(SearchProviderError, match="without running Google Search"):
+        await search._search_google_grounded("any firm")

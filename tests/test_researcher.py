@@ -415,8 +415,32 @@ class _AnsweredEmptySearch(MockInternetSearch):
         return []
 
 
+class _MixedSearch(MockInternetSearch):
+    async def search_answered(self, query, max_results=5, **kwargs):
+        from jarviscore.search.internet_search import SearchUnavailable
+        if query == "blocked":
+            raise SearchUnavailable({"searxng": "engines did not answer: CAPTCHA"})
+        return []
+
+
 class TestSearchReceipts:
     """A search that did not run must not be recorded as research."""
+
+    @pytest.mark.asyncio
+    async def test_a_partly_answered_batch_succeeds_and_keeps_each_query_error(self, llm):
+        r = ResearcherSubAgent(agent_id="receipts", llm_client=llm, internet_search=_MixedSearch())
+        r.current_state = KernelState(workflow_id="w", step_id="s", agent_id="receipts", task="t")
+
+        result = await r._execute_tool(
+            "search_internet_batch", {"queries": ["answered", "blocked"]}
+        )
+        receipt = r.current_state.add_tool_result(
+            "search_internet_batch", {"queries": ["answered", "blocked"]}, result
+        )
+
+        assert receipt.status == "success"
+        assert result["by_query"]["answered"] == {"results": []}
+        assert "CAPTCHA" in result["by_query"]["blocked"]["error"]
 
     def _researcher(self, llm, search):
         r = ResearcherSubAgent(agent_id="receipts", llm_client=llm, internet_search=search)

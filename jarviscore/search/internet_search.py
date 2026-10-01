@@ -723,6 +723,14 @@ class InternetSearch:
 
             candidate = response.candidates[0] if response.candidates else None
             grounding = getattr(candidate, "grounding_metadata", None) if candidate else None
+            searched = bool(grounding and (
+                getattr(grounding, "web_search_queries", None)
+                or getattr(grounding, "grounding_chunks", None)
+            ))
+            if not searched:
+                raise SearchProviderError(
+                    "google_grounded answered without running Google Search"
+                )
 
             if grounding:
                 chunks = getattr(grounding, "grounding_chunks", None) or []
@@ -755,19 +763,12 @@ class InternetSearch:
                     if len(results) >= max_results:
                         break
 
-            summary_text = (response.text or "").strip()
-            if summary_text and not results:
-                results.append({
-                    "title": "Gemini Grounded Summary",
-                    "snippet": summary_text[:500],
-                    "url": "",
-                    "source": "google_grounded",
-                })
-
             self.circuit_breaker.record_success("google_grounded")
             logger.info("Found %d results from Google Grounded Search", len(results))
             return results
 
+        except SearchProviderError:
+            raise
         except Exception as exc:
             logger.error("Google Grounded Search failed: %s", exc)
             logger.debug(traceback.format_exc())
