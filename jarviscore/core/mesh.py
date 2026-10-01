@@ -1334,6 +1334,7 @@ class Mesh:
                         for key, value in (context or {}).items()
                         if not str(key).startswith("_")
                     },
+                    obligation_projection=projection,
                 )
             self._redis_store.amend_workflow(
                 workflow_id,

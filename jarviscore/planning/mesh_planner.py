@@ -365,6 +365,7 @@ class MeshPlanner:
         reason: str,
         revision: int,
         context: dict[str, Any] | None = None,
+        obligation_projection: dict[str, dict[str, Any]] | None = None,
     ) -> MeshPlan:
         """Plan only new work against immutable workflow history."""
         source = (goal or "").strip()
@@ -393,7 +394,9 @@ class MeshPlanner:
             str(step.get("id") or step.get("step_id"))
             for step in current_steps
         }
-        settled = self._settled_obligation_producers(current_steps, targets)
+        settled = self._settled_obligation_producers(
+            current_steps, targets, obligation_projection
+        )
         try:
             steps = self._ensure_declared_artifact_dependencies(
                 self._ensure_response_step(
@@ -540,21 +543,36 @@ class MeshPlanner:
         self,
         current_steps: list[dict[str, Any]],
         targets: set[str],
+        obligation_projection: dict[str, dict[str, Any]] | None = None,
     ) -> list[str]:
-        """Latest current step settling each obligation the amendment keeps."""
-        latest: dict[str, str] = {}
-        for step in current_steps:
-            if (
-                step.get("effect") == "final_response"
-                or (self.response_capability
-                    and step.get("capability") == self.response_capability)
-            ):
+        """Attempts that settled each obligation the amendment keeps."""
+        domain_steps = {
+            str(step.get("id") or step.get("step_id") or ""): step
+            for step in current_steps
+            if step.get("effect") != "final_response"
+            and not (
+                self.response_capability
+                and step.get("capability") == self.response_capability
+            )
+        }
+        producers: list[str] = []
+        if obligation_projection is not None:
+            for obligation_id, record in obligation_projection.items():
+                if str(obligation_id) in targets:
+                    continue
+                for step_id, state in (record.get("attempt_states") or {}).items():
+                    if state in {"satisfied", "not_applicable"} and step_id in domain_steps:
+                        producers.append(step_id)
+            return list(dict.fromkeys(producers))
+        for step_id, step in domain_steps.items():
+            if step.get("status") != "completed":
                 continue
-            step_id = str(step.get("id") or step.get("step_id") or "")
-            for obligation_id in map(str, step.get("covers") or []):
-                if step_id and obligation_id not in targets:
-                    latest[obligation_id] = step_id
-        return list(dict.fromkeys(latest.values()))
+            if any(
+                obligation_id not in targets
+                for obligation_id in map(str, step.get("covers") or [])
+            ):
+                producers.append(step_id)
+        return producers
 
     def _ensure_response_step(
         self,
