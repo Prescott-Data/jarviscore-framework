@@ -42,6 +42,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -226,8 +227,10 @@ class AthenaClient:
         """
         Return the existing Athena session for this agent, or create one.
 
-        If redis_store is provided, the session_id is cached in Redis at
-        key `athena_session:{agent_id}` so it survives process restarts.
+        If redis_store is provided, the session_id is cached in Redis so it
+        survives process restarts: ``athena_session:{tenant}:{agent}:{agent}``
+        for the agent's own session, ``athena_session:scoped:{tenant}:{user}:{agent}``
+        (parts URL-encoded) for an explicit scope.
         This is critical for Athena heat scoring continuity.
 
         Args:
@@ -240,15 +243,25 @@ class AthenaClient:
             session_id string, or None if creation fails.
         """
         resolved_user_id = user_id or agent_id
-        redis_key = f"athena_session:{self._tenant_id}:{resolved_user_id}:{agent_id}"
-        legacy_redis_key = f"athena_session:{agent_id}"
+        if user_id:
+            # An explicit scope lives in its own namespace, with each part
+            # encoded: it can never resolve to an agent's default session, to
+            # the legacy key (which belongs to no scope), or to a mapping
+            # written before scoping existed.
+            redis_key = "athena_session:scoped:" + ":".join(
+                quote(part, safe="") for part in (self._tenant_id, user_id, agent_id)
+            )
+            legacy_redis_key = None
+        else:
+            redis_key = f"athena_session:{self._tenant_id}:{agent_id}:{agent_id}"
+            legacy_redis_key = f"athena_session:{agent_id}"
         session_ttl = self._session_ttl_seconds
 
         # 1. Try Redis cache
         if redis_store:
             try:
                 cached = redis_store._redis.get(redis_key)
-                if not cached:
+                if not cached and legacy_redis_key:
                     cached = redis_store._redis.get(legacy_redis_key)
                     if cached:
                         redis_store._redis.set(redis_key, cached, ex=session_ttl)

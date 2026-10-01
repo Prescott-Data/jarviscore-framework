@@ -907,7 +907,26 @@ class Kernel:
         self._attach_mesh_tools(subagent)
         return subagent
 
-    def _create_memory(self, workflow_id: str, step_id: str, agent_id: str):
+    def _memory_scope(self, context: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Which tenant this step's memory belongs to.
+
+        A mesh names the trusted context field that separates its tenants via
+        ``memory_scope_field``. Without one, every workflow an agent serves
+        shares a single pool of recollections.
+        """
+        field = self.config.get("memory_scope_field")
+        if not field or not context:
+            return None
+        value = str(context.get(field) or "").strip()
+        return value or None
+
+    def _create_memory(
+        self,
+        workflow_id: str,
+        step_id: str,
+        agent_id: str,
+        context: Optional[Dict[str, Any]] = None,
+    ):
         """Create a UnifiedMemory instance for the current step.
 
         Includes Athena as Tier 4 when ATHENA_URL is configured in settings.
@@ -936,6 +955,19 @@ class Kernel:
                     else:
                         logger.debug("[Kernel] Athena memory tier not configured: %s", exc)
 
+                memory_scope = self._memory_scope(context)
+                scope_field = self.config.get("memory_scope_field")
+                if athena_client is not None and scope_field and memory_scope is None:
+                    # The mesh separates tenants by this field and the step
+                    # names none. Cross-session memory stays closed rather than
+                    # fall back to the pool every tenant would share.
+                    logger.warning(
+                        "[Kernel] Step %s/%s carries no '%s'; cross-session "
+                        "memory is closed for it",
+                        workflow_id, step_id, scope_field,
+                    )
+                    athena_client = None
+
                 return UnifiedMemory(
                     workflow_id=workflow_id,
                     step_id=step_id,
@@ -943,6 +975,7 @@ class Kernel:
                     redis_store=self.redis_store,
                     blob_storage=self.blob_storage,
                     athena_client=athena_client,
+                    memory_scope=memory_scope,
                 )
         except ImportError:
             logger.debug("[Kernel] UnifiedMemory not available — running without memory")
@@ -1197,7 +1230,7 @@ class Kernel:
             )
 
             # Create memory (graceful degradation if no Redis/blob)
-            memory = self._create_memory(workflow_id, step_id, agent_id)
+            memory = self._create_memory(workflow_id, step_id, agent_id, context)
 
             # ── Recall what earlier sessions hold about this task ─────────────
             # A question scored by relevance, not the last fifteen things the
