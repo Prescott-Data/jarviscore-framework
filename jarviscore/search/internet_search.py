@@ -943,6 +943,7 @@ class InternetSearch:
                 timeout=aiohttp.ClientTimeout(total=20),
             ) as response:
                 if response.status == 200:
+                    final_url = str(response.url)
                     # Get response metadata
                     content_type = response.headers.get("Content-Type", "").lower()
                     
@@ -1025,7 +1026,7 @@ class InternetSearch:
                         href = str(a.get("href") or "").strip()
                         if not href or href.startswith(("#", "javascript:", "mailto:")):
                             continue
-                        absolute = urljoin(clean_url, href)
+                        absolute = urljoin(final_url, href)
                         if absolute.startswith(("http://", "https://")):
                             links.append(absolute)
                     # Deduplicate and cap
@@ -1042,7 +1043,7 @@ class InternetSearch:
                     logger.info(f"Successfully extracted markdown content ({len(markdown_content)} characters)")
                     
                     return {
-                        "url": clean_url,
+                        "url": final_url,
                         "title": title,
                         "content": markdown_content, # Primary content is now Markdown
                         "main_content": markdown_content,
