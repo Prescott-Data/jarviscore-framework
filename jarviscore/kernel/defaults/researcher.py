@@ -587,6 +587,10 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         content_successes = sum(
             1 for t in state.tool_history
             if t.status == "success" and t.tool_name in self._CONTENT_TOOLS
+            and not (
+                isinstance(t.tool_output, dict)
+                and t.tool_output.get("content_found") is False
+            )
         )
         findings = (getattr(state, "internal_variables", None) or {}).get("research_findings")
         recorded_findings = len(findings) if isinstance(findings, list) else 0
@@ -1733,7 +1737,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         has_more = (offset + limit) < total_chars
         next_offset = offset + limit if has_more else None
 
-        if self.current_state:
+        if self.current_state and content:
             self.current_state.internal_variables["research_source"] = path
             self._add_research_finding({
                 "source": path,
@@ -1762,6 +1766,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         return {
             "status": "success",
             "content": page,
+            "content_found": bool(page),
             "source": path,
             "total_chars": total_chars,
             "offset": offset,
@@ -2380,7 +2385,13 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 if isinstance(item, dict)
             ]
 
-        if result and self.current_state:
+        result_count = len(result.get("results", [])) if isinstance(result, dict) else 0
+        if isinstance(result, dict):
+            # An empty index answers successfully with nothing in it. Say so,
+            # so the read is not mistaken for research performed.
+            result = dict(result)
+            result["content_found"] = result_count > 0
+        if result_count and self.current_state:
             self._add_research_finding({
                 "query": query,
                 "rag_result_preview": str(result)[:500],
@@ -2388,7 +2399,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 "timestamp": asyncio.get_event_loop().time(),
             })
 
-        result_count = len(result.get("results", [])) if isinstance(result, dict) else 0
         if extracted_count:
             logger.info("[RESEARCHER] rag_query: extracted %d api_spec(s) from %d passages", extracted_count, result_count)
         self.tracer.log_tool_result("rag_query", {"count": result_count, "specs_extracted": extracted_count})
