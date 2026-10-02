@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from jarviscore.execution.decisions import DecisionResult
+from jarviscore.rag.embedding import Reranker
 from jarviscore.rag.faiss_store import FaissVectorStore
 from jarviscore.rag.pipeline import RagPipeline
 from jarviscore.storage.base import BlobStorage
@@ -348,6 +349,19 @@ class TestRagDecisionStage:
         assert [r["source"] for r in store.search([1.0, 0.0], 1, {"source": "filing"})] == [
             "filing"
         ]
+
+    def test_reranker_scores_pairs_from_many_queries_in_one_pass(self):
+        reranker = Reranker.__new__(Reranker)
+        reranker.model = MagicMock()
+        reranker.model.predict.return_value = [0.5, 1.5]
+
+        scores = reranker.score_pairs([("revenue", "a"), ("closing", "b")])
+
+        assert scores == [0.5, 1.5]
+        reranker.model.predict.assert_called_once_with(
+            [("revenue", "a"), ("closing", "b")], batch_size=128
+        )
+        assert reranker.score_pairs([]) == []
 
     def test_faiss_delete_keeps_remaining_vectors_without_reembedding(self, tmp_path):
         paths = (str(tmp_path / "index.faiss"), str(tmp_path / "meta.json"))

@@ -4,9 +4,9 @@ Embedding model wrapper for RAG.
 Uses sentence-transformers for local embedding generation.
 Optional dependency — install with: pip install jarviscore[rag]
 """
-from typing import List, Optional
-import os
 import logging
+import os
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,10 @@ class Reranker:
         self.model = CrossEncoder(model_name, **kwargs)
 
     def score(self, query: str, passages: List[str]) -> List[float]:
-        if not passages:
+        return self.score_pairs([(query, p) for p in passages])
+
+    def score_pairs(self, pairs: List[Tuple[str, str]]) -> List[float]:
+        """Score many (query, passage) pairs in one batched pass."""
+        if not pairs:
             return []
-        return [float(s) for s in self.model.predict([(query, p) for p in passages])]
+        return [float(s) for s in self.model.predict(pairs, batch_size=128)]
