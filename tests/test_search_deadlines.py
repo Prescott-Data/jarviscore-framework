@@ -16,6 +16,7 @@ def search_class(request, monkeypatch):
         "GOOGLE_CLOUD_PROJECT", "GEMINI_API_KEY", "GEMINI_GROUNDING_API_KEY",
         "GOOGLE_GENAI_API_KEY", "SERPER_API_KEY", "RESEARCH_SEARCH_TIMEOUT_SECONDS",
         "RESEARCH_GROUNDED_TIMEOUT_SECONDS", "RESEARCH_ALLOW_WIKIPEDIA_FALLBACK",
+        "RESEARCH_USER_AGENT",
     ):
         monkeypatch.delenv(key, raising=False)
     return request.param
@@ -23,6 +24,46 @@ def search_class(request, monkeypatch):
 
 def result(provider):
     return [{"title": "Example", "url": "https://example.org", "source": provider}]
+
+
+def test_declared_identity_from_environment_and_constructor(search_class, monkeypatch):
+    monkeypatch.setenv("RESEARCH_USER_AGENT", "Example Research ops@example.org")
+    assert search_class().user_agent == "Example Research ops@example.org"
+    assert search_class(user_agent="Explicit ops@example.org").user_agent == (
+        "Explicit ops@example.org"
+    )
+
+
+async def test_page_extraction_sends_the_declared_identity_without_a_forged_referer(
+    monkeypatch,
+):
+    monkeypatch.setenv("RESEARCH_USER_AGENT", "Example Research ops@example.org")
+    search = InternetSearch()
+    sent = {}
+
+    class Refused:
+        status = 403
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+    class Session:
+        closed = False
+
+        def get(self, url, headers=None, **_):
+            sent.update(headers or {})
+            return Refused()
+
+    search.session = Session()
+    search.initialize = AsyncMock()
+    outcome = await search.extract_content("https://www.sec.gov/Archives/edgar/data/1/x.htm")
+
+    assert sent["User-Agent"] == "Example Research ops@example.org"
+    assert "Referer" not in sent
+    assert outcome["error"] == "HTTP error: 403"
 
 
 @pytest.mark.parametrize("duration", [6.47, 7.86])

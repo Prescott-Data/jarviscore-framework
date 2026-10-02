@@ -104,7 +104,13 @@ class InternetSearch:
         self.grounded_timeout_seconds = search_deadline(
             grounded_timeout_seconds, "RESEARCH_GROUNDED_TIMEOUT_SECONDS", 45.0,
         )
-        self.user_agent = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        # Public registers such as SEC EDGAR admit only automated clients that declare
+        # who they are ("Organisation contact@domain"), so operators set this identity.
+        self.user_agent = (
+            user_agent
+            or os.environ.get("RESEARCH_USER_AGENT", "").strip()
+            or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        )
         self.pdf_timeout_seconds = pdf_timeout_seconds or int(
             os.environ.get("RESEARCH_PDF_TIMEOUT_SECONDS", "90")
         )
@@ -929,10 +935,9 @@ class InternetSearch:
             
             # Use a more robust approach with custom headers and timeout
             headers = {
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": self.user_agent,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://www.google.com/",
                 "Upgrade-Insecure-Requests": "1"
             }
             
