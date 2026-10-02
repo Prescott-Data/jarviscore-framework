@@ -23,7 +23,6 @@ import shutil
 import tempfile
 from unittest.mock import AsyncMock, MagicMock
 
-import numpy as np
 import pytest
 
 from jarviscore.execution.decisions import DecisionResult
@@ -314,29 +313,65 @@ class TestMockBlobStorage:
 
 
 class TestRagDecisionStage:
-    def test_faiss_metadata_filter_prevents_scope_crowding(self):
-        store = FaissVectorStore.__new__(FaissVectorStore)
-        store._index = MagicMock()
-        store._index.ntotal = 3
-        store._index.search.return_value = (
-            np.array([[0.99, 0.90, 0.80]], dtype="float32"),
-            np.array([[0, 1, 2]]),
+    @staticmethod
+    def _entry(source, upload_id):
+        # The shape RagPipeline.ingest_documents writes: caller fields nest under metadata.
+        return {
+            "source": source,
+            "chunk_index": 0,
+            "text": source,
+            "context": "",
+            "metadata": {"upload_id": upload_id},
+            "citation_atoms": [],
+        }
+
+    def test_faiss_metadata_filter_prevents_scope_crowding(self, tmp_path):
+        store = FaissVectorStore(
+            str(tmp_path / "index.faiss"), str(tmp_path / "meta.json"), 2
         )
-        store._metadata = [
-            {"source": "outside", "upload_id": "outside-v1"},
-            {"source": "accounts", "upload_id": "accounts-v1"},
-            {"source": "filing", "upload_id": "filing-v1"},
-        ]
+        store.add(
+            [[1.0, 0.0], [0.9, 0.1], [0.8, 0.2]],
+            [
+                self._entry("outside", "outside-v1"),
+                self._entry("accounts", "accounts-v1"),
+                self._entry("filing", "filing-v1"),
+            ],
+        )
 
         results = store.search(
-            [0.1],
+            [1.0, 0.0],
             top_k=1,
             where={"upload_id": ("accounts-v1", "filing-v1")},
         )
 
         assert [result["source"] for result in results] == ["accounts"]
-        store._index.search.assert_called_once()
-        assert store._index.search.call_args.args[1] == 3
+        assert [r["source"] for r in store.search([1.0, 0.0], 1, {"source": "filing"})] == [
+            "filing"
+        ]
+
+    def test_faiss_delete_keeps_remaining_vectors_without_reembedding(self, tmp_path):
+        paths = (str(tmp_path / "index.faiss"), str(tmp_path / "meta.json"))
+        store = FaissVectorStore(*paths, 2)
+        store.add(
+            [[1.0, 0.0], [0.0, 1.0], [0.6, 0.8]],
+            [
+                self._entry("keep-a", "keep-v1"),
+                self._entry("drop", "drop-v1"),
+                self._entry("keep-b", "keep-v1"),
+            ],
+        )
+
+        assert store.delete({"upload_id": "drop-v1"}) == 1
+        assert store.delete({"upload_id": "drop-v1"}) == 0
+        reopened = FaissVectorStore(*paths, 2)
+
+        assert reopened.stats()["vector_count"] == 2
+        assert [r["source"] for r in reopened.search([0.0, 1.0], top_k=2)] == [
+            "keep-b",
+            "keep-a",
+        ]
+        with pytest.raises(ValueError):
+            reopened.delete({})
 
     def test_rag_preserves_only_exact_citation_atoms_for_each_chunk(self):
         pipeline = RagPipeline.__new__(RagPipeline)

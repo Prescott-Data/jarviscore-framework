@@ -80,21 +80,47 @@ class FaissVectorStore:
         for score, idx in zip(scores[0], indices[0]):
             if idx < 0 or idx >= len(self._metadata):
                 continue
-            meta = self._metadata[idx].copy()
-            if where and any(
-                (
-                    meta.get(field) not in expected
-                    if isinstance(expected, (list, tuple, set, frozenset))
-                    else meta.get(field) != expected
-                )
-                for field, expected in where.items()
-            ):
+            if where and not self._matches(self._metadata[idx], where):
                 continue
+            meta = self._metadata[idx].copy()
             meta["score"] = float(score)
             results.append(meta)
             if len(results) >= top_k:
                 break
         return results
+
+    @staticmethod
+    def _matches(entry: Dict[str, Any], where: Dict[str, Any]) -> bool:
+        """Filter fields live in the caller's metadata; entry fields such as source also apply."""
+        caller = entry.get("metadata") or {}
+        for field, expected in where.items():
+            value = caller[field] if field in caller else entry.get(field)
+            if isinstance(expected, (list, tuple, set, frozenset)):
+                if value not in expected:
+                    return False
+            elif value != expected:
+                return False
+        return True
+
+    def delete(self, where: Dict[str, Any]) -> int:
+        """Remove matching entries, keeping every other stored vector without re-embedding."""
+        if not where:
+            raise ValueError("delete requires a filter")
+        keep = [
+            position for position, entry in enumerate(self._metadata)
+            if not self._matches(entry, where)
+        ]
+        removed = len(self._metadata) - len(keep)
+        if not removed:
+            return 0
+        index = faiss.IndexFlatIP(self.dim)
+        if keep:
+            vectors = self._index.reconstruct_n(0, int(self._index.ntotal))
+            index.add(np.ascontiguousarray(vectors[keep], dtype="float32"))
+        self._index = index
+        self._metadata = [self._metadata[position] for position in keep]
+        self._persist()
+        return removed
 
     def stats(self) -> Dict[str, Any]:
         return {
