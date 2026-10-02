@@ -14,6 +14,11 @@
   <a href="https://jarviscore.developers.prescottdata.io/"><img src="https://img.shields.io/badge/docs-jarviscore-blue?style=flat-square" alt="Docs" /></a>
 </p>
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=4IOpKZgjXIw"><img src="https://img.youtube.com/vi/4IOpKZgjXIw/maxresdefault.jpg" alt="Watch the JarvisCore Agents launch film" width="820" /></a><br/>
+  <strong><a href="https://www.youtube.com/watch?v=4IOpKZgjXIw">Watch the JarvisCore Agents launch film</a></strong>
+</p>
+
 ```bash
 pip install jarviscore-framework
 ```
