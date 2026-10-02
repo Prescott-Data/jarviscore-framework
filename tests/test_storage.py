@@ -469,6 +469,22 @@ class TestRagDecisionStage:
             "upload_id": ("accounts-v1", "filing-v1")
         }
 
+    def test_rag_can_return_native_dense_ranks_without_cross_encoder(self):
+        pipeline = RagPipeline.__new__(RagPipeline)
+        pipeline.embedding = MagicMock()
+        pipeline.embedding.embed_query.return_value = [0.1]
+        pipeline.store = MagicMock()
+        pipeline.store.search.return_value = [
+            {"source": "accounts", "text": "Revenue 42", "score": 0.9}
+        ]
+        pipeline.reranker = MagicMock()
+        pipeline.rerank_candidates = 50
+
+        result = pipeline.retrieve("revenue", top_k=1, apply_reranker=False)
+
+        assert result["results"][0]["score"] == 0.9
+        pipeline.reranker.score.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_typesafe_routes_shortlist_without_discarding_audit_records(self):
         scores = {

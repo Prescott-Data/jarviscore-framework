@@ -181,6 +181,7 @@ class RagPipeline:
         query: str,
         top_k: Optional[int] = None,
         where: Optional[Dict[str, Any]] = None,
+        apply_reranker: bool = True,
     ) -> Dict[str, Any]:
         top_k = top_k or int(os.environ.get("RAG_TOP_K", str(_DEFAULT_TOP_K)))
         embedding = self.embedding
@@ -189,7 +190,7 @@ class RagPipeline:
             if hasattr(embedding, "embed_query")
             else embedding.embed([query])[0]
         )
-        reranker = getattr(self, "reranker", None)
+        reranker = getattr(self, "reranker", None) if apply_reranker else None
         pool_size = max(top_k, getattr(self, "rerank_candidates", 0)) if reranker else top_k
         candidates = self.store.search(
             q_vec,
