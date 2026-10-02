@@ -1424,6 +1424,28 @@ class TestCapabilityNeeds:
         assert need["status"] == "failed"
         assert need["error"] == "Provider unavailable"
 
+    def test_peer_that_produced_no_completed_result_fails_the_mandate(self, store):
+        need_id = store.publish_capability_need(
+            "wf-needs-exhausted",
+            requester_agent_id="requester",
+            requester_step_id="step",
+            capability="research",
+            question="Find evidence.",
+        )
+        assert store.claim_capability_need(
+            "wf-needs-exhausted", need_id, "peer-a:claim", {"research"}, 30
+        )
+
+        assert store.fulfill_capability_need(
+            "wf-needs-exhausted",
+            need_id,
+            "peer-a:claim",
+            {"status": "epoch_exhausted", "output": None, "error": "Gate unsatisfied"},
+        )
+        need = store.get_capability_need("wf-needs-exhausted", need_id)
+        assert need["status"] == "failed"
+        assert need["error"] == "Gate unsatisfied"
+
     def test_requester_can_fail_and_unclaim_a_timed_out_mandate(self, store):
         need_id = store.publish_capability_need(
             "wf-needs-timeout",

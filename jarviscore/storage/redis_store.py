@@ -512,12 +512,15 @@ class RedisContextStore:
                     pipe.unwatch()
                     return False
                 now = time.time()
-                failed = str(result.get("status") or "").lower() in {
-                    "error", "failed", "failure"
-                }
-                if failed:
+                status = str(result.get("status") or "").lower()
+                if status not in {"success", "completed"}:
                     record = mandate.failed(
-                        str(result.get("error") or "Peer execution failed"), now
+                        str(
+                            result.get("error")
+                            or result.get("result_summary")
+                            or f"Peer returned no completed result (status={status or 'none'})"
+                        ),
+                        now,
                     ).to_record()
                     event = "capability_need_failed"
                 else:
