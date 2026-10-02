@@ -1152,6 +1152,27 @@ class TestSubagentCreation:
         assert not ({"system", "systems", "effect", "capability", "step_id"} & set(context))
         assert all(not key.startswith("_") for key in context)
 
+    def test_peer_tools_declare_their_parameter_names_to_the_model(self, kernel):
+        from jarviscore.p2p.peer_tool import PeerTool
+
+        peers = SimpleNamespace(
+            my_id="requester",
+            list_peers=lambda: [],
+            list_roles=lambda: [],
+            get_cognitive_context=lambda: "",
+        )
+
+        class FakePeers:
+            def as_tool(self):
+                return PeerTool(peers)
+
+        kernel.attach_mesh_capabilities(peers=FakePeers())
+        description = kernel._create_subagent("coder", "requester")._tools[
+            "ask_capability"
+        ].description
+        assert "capability (required)" in description
+        assert "question (required)" in description
+
     @pytest.mark.asyncio
     async def test_every_subagent_can_inspect_its_workflow_and_read_step_output(
         self, kernel
