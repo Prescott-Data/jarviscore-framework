@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Prescott-Data/jarviscore-framework/security/advisories/new
+    about: Submit security vulnerabilities privately. Do not open a public issue.
   - name: Developer Office Hours (Discord)
     url: https://discord.gg/jbRBAsMgM
     about: Live agent debugging every other week. Bring a broken agent.
