@@ -491,7 +491,7 @@ python committee.py --mode full --ticker NVDA --amount 1500000
 
 ## Version
 
-**1.12.0**
+**1.14.1**
 
 ## License
 
