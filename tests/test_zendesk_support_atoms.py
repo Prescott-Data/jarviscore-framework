@@ -14,6 +14,8 @@ from jarviscore.nexus.store import NexusLocalStore
 
 ATOM_DIR = Path(__file__).resolve().parents[1] / "jarviscore/integrations/atoms/zendesk_support"
 EXPECTED_EFFECTS = {
+    "zendesk_support_create_ticket": "write",
+    "zendesk_support_route_ticket": "write",
     "zendesk_support_get_ticket": "read",
     "zendesk_support_get_ticket_comments": "read",
     "zendesk_support_get_requester": "read",
@@ -43,6 +45,30 @@ class MemoryRegistry:
 
     def update_function_metadata(self, function_name, metadata):
         self.functions[function_name]["metadata"].update(metadata)
+
+
+@pytest.mark.asyncio
+async def test_chat_ticket_preserves_full_transcript_and_routes_privately():
+    call = AsyncMock(return_value={"status_code": 201, "json": {"ticket": {"id": 42}}})
+    _, create = load_atom("zendesk_support_create_ticket", call)
+    body = "conversation evidence " * 20000 + "tail: customer requested specialist"
+    result = await create("Shipping", body, "Customer", "customer@example.com", "session-1", 123)
+    assert result["ok"]
+    payload = call.await_args.kwargs["json"]["ticket"]
+    assert payload["comment"] == {"body": body, "public": False}
+    assert payload["external_id"] == "session-1"
+    assert payload["group_id"] == 123
+    assert payload["requester"]["email"] == "customer@example.com"
+
+
+@pytest.mark.asyncio
+async def test_routing_does_not_post_a_customer_comment():
+    call = AsyncMock(return_value={"status_code": 200, "json": {"ticket": {"id": 42}}})
+    _, route = load_atom("zendesk_support_route_ticket", call)
+    assert (await route(42, 123, "high"))["ok"]
+    assert call.await_args.kwargs["json"] == {"ticket": {"group_id": 123, "priority": "high"}}
+    assert not (await route(42, True))["ok"]
+    assert call.await_count == 1
 
 
 class ExecutionStore:
