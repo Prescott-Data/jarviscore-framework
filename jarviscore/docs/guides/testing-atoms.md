@@ -30,7 +30,7 @@ What it checks:
 | Contract | Async function uses `nexus_call` and has no credential parameter |
 | Naming | Function follows `system_verb_object` and starts with the bundle name |
 | Docstring | Function documents its action and API reference |
-| Policy | Destructive calls declare approval, consequence and idempotency identity |
+| Policy | Atoms that `POST`, `PUT`, `PATCH` or `DELETE` declare `ATOM_POLICY`; mutations declare approval, consequence and idempotency identity |
 | Return statement | At least one `return` statement with a value |
 | Forbidden imports | No `subprocess`, `pickle`, `ctypes`, `eval`, `exec`, or `__import__` |
 

@@ -339,12 +339,21 @@ mandates all debit that same account.
 
 ### Atom repair lifecycle
 
-Coder exposes `inspect_atom_for_repair` and `repair_atom` only after an atom has
-failed during the current run. A repair candidate is bound to the atom's name,
-provider, version and failed invocation. `register_function` rejects candidates
-without successful execution evidence and rejects stale or renamed repairs. A
-successful repair becomes the next immutable FunctionRegistry version while the
-superseded source remains available for audit.
+Coder exposes `inspect_atom_for_repair` and `repair_atom` after an atom has
+failed during the current run, or after it ran and Coder states a `gap` it cannot
+cover. A repair candidate is bound to the atom's name, provider, version and
+failed invocation. An extension is additionally limited to read atoms, must keep
+the policy and every existing parameter, and gives new parameters defaults.
+`write_code(code, system, atom=..., call=...)` proposes a new read atom for an
+operation no registered atom covers, proven by the stated call.
+`register_function` rejects candidates without successful execution evidence and
+rejects stale or renamed repairs. A successful change becomes the next immutable
+FunctionRegistry version while the superseded source remains available for audit.
+
+Generated code runs only under OS confinement or an explicit
+`ALLOW_UNSAFE_LOCAL_EXECUTION` opt-in. Where neither is available, `execute_code`
+returns `semantic_error: CODE_EXECUTION_UNAVAILABLE` with the reason, and Coder
+continues with registered atoms and its other tools.
 
 ### Distributed execution envelopes
 
