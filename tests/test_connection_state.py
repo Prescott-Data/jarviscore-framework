@@ -16,6 +16,7 @@ from jarviscore.nexus.strategy import unmet_requirement
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setenv("JARVISCORE_MASTER_KEY", "test-key-for-vault-state")
+    monkeypatch.setattr("jarviscore.nexus.store._SALT_FILE", tmp_path / ".salt")
     return NexusLocalStore(path=tmp_path / "nexus.enc")
 
 

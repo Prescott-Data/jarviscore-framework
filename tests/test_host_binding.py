@@ -17,11 +17,12 @@ from jarviscore.nexus.hosts import (
     HostNotAllowed,
     allowed_hosts,
     ensure_host_allowed,
+    resolve_provider_url,
 )
 from jarviscore.nexus.models import DynamicStrategy
 
-
 # ── The refusal itself ───────────────────────────────────────────────────────
+
 
 def test_a_credential_may_not_cross_to_another_provider():
     with pytest.raises(HostNotAllowed) as exc:
@@ -61,6 +62,7 @@ def test_an_unknown_provider_is_refused_not_waved_through():
 
 # ── Tenant-hosted providers ──────────────────────────────────────────────────
 
+
 def test_a_tenant_domain_on_the_connection_is_allowed():
     entry = {"instance_url": "https://acme.my.salesforce.com"}
     ensure_host_allowed("salesforce", "https://acme.my.salesforce.com/services/data", entry)
@@ -87,10 +89,12 @@ def test_a_tenant_provider_without_a_recorded_domain_is_refused():
 async def test_gateway_call_does_not_read_the_local_vault(monkeypatch):
     auth = SimpleNamespace(
         _connections={"github": "resolved:github"},
-        resolve_strategy=AsyncMock(return_value=DynamicStrategy(
-            type="oauth2",
-            credentials={"access_token": "secret"},
-        )),
+        resolve_strategy=AsyncMock(
+            return_value=DynamicStrategy(
+                type="oauth2",
+                credentials={"access_token": "secret"},
+            )
+        ),
     )
 
     def local_store_is_forbidden():
@@ -171,9 +175,7 @@ async def test_refreshed_strategy_is_rechecked_against_requested_host(monkeypatc
             return Response()
 
     client = Client()
-    monkeypatch.setattr(
-        "jarviscore.nexus.call_proxy.httpx.AsyncClient", lambda: client
-    )
+    monkeypatch.setattr("jarviscore.nexus.call_proxy.httpx.AsyncClient", lambda: client)
 
     with pytest.raises(HostNotAllowed):
         await NexusCallProxy(auth).call(
@@ -186,7 +188,168 @@ async def test_refreshed_strategy_is_rechecked_against_requested_host(monkeypatc
     nexus_client.refresh_connection.assert_awaited_once_with("connection-1")
 
 
+@pytest.mark.asyncio
+async def test_zendesk_call_never_follows_redirects(monkeypatch):
+    auth = SimpleNamespace(
+        _connections={"zendesk_support": "connection-1"},
+        resolve_strategy=AsyncMock(
+            return_value=DynamicStrategy(
+                type="oauth2",
+                credentials={"access_token": "secret"},
+                config={"api_base_url": "https://acme.zendesk.com/api/v2"},
+            )
+        ),
+    )
+
+    class Response:
+        status_code = 302
+        text = "redirect"
+        content = b"redirect"
+        headers = {"Location": "https://attacker.example/collect"}
+
+        @staticmethod
+        def json():
+            return None
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def request(self, **kwargs):
+            self.calls.append(kwargs)
+            return Response()
+
+    client = Client()
+    monkeypatch.setattr("jarviscore.nexus.call_proxy.httpx.AsyncClient", lambda: client)
+    result = await NexusCallProxy(auth).call(
+        "connection-1",
+        "GET",
+        "/api/v2/tickets/123.json",
+        follow_redirects=True,
+    )
+
+    assert result["status_code"] == 302
+    assert len(client.calls) == 1
+    assert client.calls[0]["url"] == "https://acme.zendesk.com/api/v2/tickets/123.json"
+    assert client.calls[0]["follow_redirects"] is False
+
+
+@pytest.mark.asyncio
+async def test_gateway_zendesk_call_uses_saved_tenant_metadata(monkeypatch):
+    auth = SimpleNamespace(
+        _connections={"zendesk_support": "connection-1"},
+        resolve_strategy=AsyncMock(
+            return_value=DynamicStrategy(
+                type="oauth2",
+                credentials={"access_token": "secret"},
+                config={},
+            )
+        ),
+    )
+
+    class Response:
+        status_code = 200
+        text = "{}"
+        content = b"{}"
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {}
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def request(self, **kwargs):
+            self.calls.append(kwargs)
+            return Response()
+
+    client = Client()
+    monkeypatch.setattr("jarviscore.nexus.call_proxy.httpx.AsyncClient", lambda: client)
+    monkeypatch.setattr(
+        "jarviscore.nexus.store.get_store",
+        lambda: SimpleNamespace(
+            get_provider_metadata=lambda provider: {
+                "subdomain": "acme",
+                "api_base_url": "https://acme.zendesk.com/api/v2",
+            }
+        ),
+    )
+
+    await NexusCallProxy(auth).call(
+        "connection-1", "GET", "/api/v2/tickets/123.json"
+    )
+
+    assert client.calls[0]["url"] == "https://acme.zendesk.com/api/v2/tickets/123.json"
+
+
+@pytest.mark.asyncio
+async def test_gateway_zendesk_call_uses_explicit_tenant_metadata_without_local_store(monkeypatch):
+    auth = SimpleNamespace(
+        _connections={"zendesk_support": "connection-1"},
+        resolve_strategy=AsyncMock(
+            return_value=DynamicStrategy(
+                type="oauth2",
+                credentials={"access_token": "secret"},
+                config={},
+            )
+        ),
+    )
+
+    class Response:
+        status_code = 200
+        text = "{}"
+        content = b"{}"
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {}
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def request(self, **kwargs):
+            self.calls.append(kwargs)
+            return Response()
+
+    client = Client()
+    monkeypatch.setattr("jarviscore.nexus.call_proxy.httpx.AsyncClient", lambda: client)
+    monkeypatch.setattr(
+        "jarviscore.nexus.store.get_store",
+        lambda: (_ for _ in ()).throw(AssertionError("local store was opened")),
+    )
+
+    await NexusCallProxy(
+        auth,
+        provider_metadata={"zendesk_support": {"subdomain": "acme"}},
+    ).call("connection-1", "GET", "/api/v2/tickets/123.json")
+
+    assert client.calls[0]["url"] == "https://acme.zendesk.com/api/v2/tickets/123.json"
+
+
 # ── Subdomain patterns ───────────────────────────────────────────────────────
+
 
 def test_a_tenant_subdomain_matches_its_pattern():
     ensure_host_allowed("agilecrm", "https://acme.agilecrm.com/dev/api/contacts")
@@ -203,11 +366,77 @@ def test_the_bare_pattern_domain_is_not_silently_allowed():
         ensure_host_allowed("agilecrm", "https://agilecrm.com/")
 
 
+def test_zendesk_support_uses_only_the_exact_connected_tenant():
+    entry = {"api_base_url": "https://acme.zendesk.com/api/v2"}
+
+    assert allowed_hosts("zendesk_support", entry) == ("acme.zendesk.com",)
+    ensure_host_allowed(
+        "zendesk_support",
+        "https://acme.zendesk.com/api/v2/tickets/123.json",
+        entry,
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://other.zendesk.com/api/v2/tickets/123.json",
+        "https://acme.zendesk.com.evil.example/api/v2/tickets/123.json",
+        "http://acme.zendesk.com/api/v2/tickets/123.json",
+        "https://acme.zendesk.com:8443/api/v2/tickets/123.json",
+        "https://acme.zendesk.com/oauth/tokens",
+        "https://user@acme.zendesk.com/api/v2/tickets/123.json",
+    ],
+)
+def test_zendesk_support_rejects_other_hosts_transports_and_paths(url):
+    entry = {"api_base_url": "https://acme.zendesk.com/api/v2"}
+    with pytest.raises(HostNotAllowed):
+        ensure_host_allowed("zendesk_support", url, entry)
+
+
+@pytest.mark.parametrize(
+    "api_base_url",
+    [
+        "https://zendesk.com/api/v2",
+        "https://acme.zendesk.com.evil.example/api/v2",
+        "http://acme.zendesk.com/api/v2",
+        "https://acme.zendesk.com:8443/api/v2",
+        "https://acme.zendesk.com/other",
+    ],
+)
+def test_zendesk_support_rejects_invalid_connection_tenant_urls(api_base_url):
+    assert allowed_hosts("zendesk_support", {"api_base_url": api_base_url}) == ()
+
+
+def test_zendesk_relative_api_path_is_resolved_from_connection_profile():
+    entry = {"api_base_url": "https://acme.zendesk.com/api/v2"}
+    assert (
+        resolve_provider_url("zendesk_support", "/api/v2/tickets/123.json", entry)
+        == "https://acme.zendesk.com/api/v2/tickets/123.json"
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "//evil.example/api/v2/tickets/123.json",
+        "/api/v2/../oauth/tokens",
+        "/api/v2/%2e%2e/oauth/tokens",
+        "/api/v1/tickets/123.json",
+    ],
+)
+def test_zendesk_relative_api_path_rejects_unsafe_paths(path):
+    entry = {"api_base_url": "https://acme.zendesk.com/api/v2"}
+    with pytest.raises(HostNotAllowed):
+        resolve_provider_url("zendesk_support", path, entry)
+
+
 # ── The derived data stays honest ────────────────────────────────────────────
+
 
 def test_every_provider_with_atoms_has_hosts_or_is_tenant_hosted():
     """New atoms must not quietly arrive for a provider nothing can bind."""
-    tenant_hosted = {"dynamics", "odoo", "oracle_cx", "oracle_erp", "salesforce"}
+    tenant_hosted = {"dynamics", "odoo", "oracle_cx", "oracle_erp", "salesforce", "zendesk_support"}
     atoms = Path("jarviscore/integrations/atoms")
     if not atoms.exists():
         pytest.skip("atom corpus not present in this checkout")
@@ -215,9 +444,7 @@ def test_every_provider_with_atoms_has_hosts_or_is_tenant_hosted():
     unbound = [
         d.name
         for d in atoms.iterdir()
-        if d.is_dir()
-        and not allowed_hosts(d.name)
-        and d.name not in tenant_hosted
+        if d.is_dir() and not allowed_hosts(d.name) and d.name not in tenant_hosted
     ]
     assert unbound == [], (
         f"providers with atoms but no known hosts: {unbound}. "

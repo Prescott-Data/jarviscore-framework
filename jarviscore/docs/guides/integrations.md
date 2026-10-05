@@ -75,6 +75,52 @@ provider-specific flags. Run `jarviscore nexus register --help` and
 `jarviscore nexus register <provider> --help` for the installed CLI contract.
 See [Nexus Credentials](nexus.md) for local and gateway deployment.
 
+### Zendesk Support tickets
+
+Use `zendesk_support` for the Ticketing API. The separate `zendesk_chat`
+bundle targets legacy Live Chat and does not provide Support ticket operations.
+
+Create an OAuth client in Zendesk Admin Center and add the Nexus callback URL
+as its redirect URL. The Nexus authorization flow uses PKCE. Set the client's
+allowed scopes to the capabilities the integration needs, then register the
+tenant and client with Nexus:
+
+```bash
+jarviscore nexus register zendesk_support \
+  --subdomain=YOUR_SUBDOMAIN \
+  --client-id=YOUR_CLIENT_ID \
+  --client-secret=YOUR_CLIENT_SECRET
+jarviscore nexus test zendesk_support
+```
+
+The profile requests `tickets:read`, `tickets:write`, `users:read`, and
+`organizations:read`. On the tested Zendesk tenant, the Search API also
+returned `403` unless the OAuth token included Zendesk's generic `read` scope.
+Zendesk defines that scope as GET access across all resources, so the default
+profile does not request it. Individual ticket, comment, requester, and
+organization reads work with the resource-specific scopes above. The subdomain
+is one DNS label, without a scheme or the
+`.zendesk.com` suffix. Nexus uses it to construct the tenant-specific OAuth
+authorization and token endpoints and the `/api/v2` base URL. Store the OAuth
+secret in Nexus. The CLI keeps only the non-secret tenant locator in the local
+encrypted store because Nexus token strategies do not include API profile
+metadata; atoms accept no token or caller-selected host.
+
+`AutoAgent` discovers the ticket, comment, requester, organization, and search
+atoms through the function registry. The Zendesk call proxy binds relative API
+paths to the tenant metadata saved during registration, requires HTTPS, and
+does not follow redirects. Zendesk Search returns at most 1,000 results per
+query; the search atom sets `complete` to `false` and explains the cap when a
+query exceeds it. Ticket comments are fetched through cursor pagination.
+
+Public replies and internal notes are separate atoms. Both declare required
+human approval, and the public reply is classified as a notification. Zendesk
+creates both comment types through the [ticket update endpoint](https://developer.zendesk.com/api-reference/ticketing/tickets/tickets/):
+public replies set `comment.public` to `true`; internal notes set it to
+`false`. See the [ticket comments reference](https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_comments/)
+and [Zendesk OAuth scopes](https://developer.zendesk.com/api-reference/ticketing/oauth/grant_type_tokens/)
+for provider behavior and token scopes.
+
 ## Installed catalog
 
 <!-- GENERATED_ATOM_CATALOG -->

@@ -289,13 +289,29 @@ class AuthenticationManager:
 
     async def _ensure_provider(self, provider: str) -> None:
         """Seed the Broker from the registered provider through its public API."""
-        from jarviscore.nexus._data import PROVIDER_URLS
+        from jarviscore.nexus._data import PROVIDER_URLS, provider_urls_for
         from jarviscore.nexus.providers import broker_name, get_provider
         from jarviscore.nexus.store import get_store
 
-        entry = get_store().get(provider) or {}
+        store = get_store()
+        entry = store.get(provider) or {}
+        metadata = store.get_provider_metadata(provider)
         known = get_provider(provider) or {}
-        urls = PROVIDER_URLS.get(provider, {})
+        url_template = PROVIDER_URLS.get(provider, {})
+        needs_subdomain = any(
+            isinstance(value, str) and "{subdomain}" in value
+            for value in url_template.values()
+        )
+        subdomain = entry.get("subdomain") or metadata.get("subdomain")
+        if needs_subdomain and not subdomain:
+            if await self.nexus_client.provider_exists(broker_name(provider)):
+                return
+            raise RuntimeError(
+                "Zendesk Support has not been registered with Nexus for a tenant. "
+                "Register it with: jarviscore nexus register zendesk_support "
+                "--subdomain=YOUR_SUBDOMAIN --client-id=... --client-secret=..."
+            )
+        urls = provider_urls_for(provider, subdomain)
         auth_type = str(entry.get("auth_type") or known.get("auth_type") or "oauth2")
         params = dict(urls.get("params") or {})
         if auth_type in {"api_key", "header", "query_param"}:

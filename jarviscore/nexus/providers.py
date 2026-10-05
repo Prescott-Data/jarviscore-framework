@@ -195,6 +195,17 @@ PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
         "category": "crm",
         "scopes": ["api", "refresh_token", "offline_access"],
     },
+    "zendesk_support": {
+        "auth_type": "oauth2",
+        "label": "Zendesk Support",
+        "category": "support",
+        "scopes": [
+            "tickets:read",
+            "tickets:write",
+            "users:read",
+            "organizations:read",
+        ],
+    },
     "apollo": {
         "auth_type": "api_key",
         "label": "Apollo.io",
