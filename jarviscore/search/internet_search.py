@@ -28,6 +28,12 @@ except ImportError:
     _HAS_BS4 = False
     BeautifulSoup = None  # type: ignore[assignment,misc]
 
+_BLOCK_TAGS = [
+    "address", "article", "blockquote", "br", "dd", "div", "dl", "dt", "figcaption",
+    "figure", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li", "main", "ol", "p",
+    "section", "table", "td", "th", "tr", "ul",
+]
+
 # Browser automation — optional, for SPA content escalation.
 # Only needed if HTTP extraction returns empty content.
 _HAS_BROWSER = False
@@ -754,31 +760,42 @@ class InternetSearch:
                          "iframe", "noscript", "svg", "form", "dialog"]):
             tag.decompose()
 
+        # Blocks render on their own lines. Without a break between them, adjacent
+        # fields fuse into words no page shows ("Granting Status" + "Granted").
+        for block in soup.find_all(_BLOCK_TAGS):
+            block.insert_before("\n")
+            block.insert_after("\n")
+
+        def text_of(element) -> str:
+            # get_text(strip=True) strips every fragment and joins them with nothing,
+            # which also fuses inline runs ("The <b>HSR</b> period" -> "TheHSRperiod").
+            return " ".join(element.get_text().split())
+
         # Process headings
         for i in range(1, 7):
             for h in soup.find_all(f"h{i}"):
-                text = h.get_text(strip=True)
+                text = text_of(h)
                 if text:
                     h.replace_with(f"\n\n{'#' * i} {text}\n\n")
 
         # Process lists
         for ul in soup.find_all("ul"):
             for li in ul.find_all("li", recursive=False):
-                text = li.get_text(strip=True)
+                text = text_of(li)
                 if text:
                     li.replace_with(f"* {text}\n")
             ul.replace_with(f"\n{ul.get_text()}\n")
             
         for ol in soup.find_all("ol"):
             for i, li in enumerate(ol.find_all("li", recursive=False), 1):
-                text = li.get_text(strip=True)
+                text = text_of(li)
                 if text:
                     li.replace_with(f"{i}. {text}\n")
             ol.replace_with(f"\n{ol.get_text()}\n")
 
         # Process links
         for a in soup.find_all("a", href=True):
-            text = a.get_text(strip=True)
+            text = text_of(a)
             href = str(a.get("href") or "")
             if text and href and not href.startswith("#"):
                 a.replace_with(f"[{text}]({href})")
@@ -810,7 +827,7 @@ class InternetSearch:
                 cells = tr.find_all(["th", "td"])
                 if not cells:
                     continue
-                cell_texts = [c.get_text(strip=True) for c in cells]
+                cell_texts = [text_of(c) for c in cells]
                 col_count = max(col_count, len(cell_texts))
                 # Mark header rows (all cells are <th>) with separator
                 is_header = all(c.name == "th" for c in cells)
@@ -835,7 +852,7 @@ class InternetSearch:
 
         # Process paragraphs and divs
         for p in soup.find_all(["p", "div", "section", "article"]):
-            text = p.get_text(strip=True)
+            text = text_of(p)
             if text:
                 p.replace_with(f"\n{text}\n")
 
