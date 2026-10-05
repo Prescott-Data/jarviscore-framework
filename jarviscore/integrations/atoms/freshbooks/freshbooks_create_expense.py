@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["amount", "currency_code", "date", "staff_id", "category_id", "notes", "client_id"],
+    "consequence": "Creates one expense record in FreshBooks for the specified staff member and category.",
+}
+
+
 async def _get_account_id() -> str:
     if True .get('account_id'):
         return None

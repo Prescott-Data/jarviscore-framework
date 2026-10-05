@@ -2,6 +2,12 @@ from typing import Any, Dict, List, Optional
 JUMIA_SC_API = 'http://sellerapi.sellercenter.jumia.com'
 SC_VERSION = '1.0'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def jumia_seller_center_list_orders(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List orders via GetOrders. Official: http://sellerapi.sellercenter.jumia.com/v2.7.11/sales-order-endpoints/getorders/"""
     try:

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one task in a ProofHub todolist.",
+}
+
+
 async def proofhub_create_task(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a task in a todolist. Official: https://github.com/ProofHub/api_v3/blob/master/README.md"""
     try:

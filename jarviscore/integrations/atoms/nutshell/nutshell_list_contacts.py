@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 NUTSHELL_RPC = 'https://app.nutshell.com/api/v1/json'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def nutshell_list_contacts(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Contacts via Nutshell JSON-RPC. Official: https://developers-rpc.nutshell.com/detail/class_core.html#findContacts"""
     try:

@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["dropbox_path"],
+    "consequence": "Creates or retrieves a public Dropbox shared link for one file or folder, making it accessible to anyone with the link.",
+}
+
+
 async def dropbox_get_shared_link(dropbox_path: str) -> dict:
     """Get shared link. POST https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings"""
     try:

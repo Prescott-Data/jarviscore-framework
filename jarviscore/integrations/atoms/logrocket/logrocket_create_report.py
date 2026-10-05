@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 LOGROCKET_API = 'https://api.logrocket.com/v1'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def logrocket_create_report(org_id: str, app_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Request Galileo Highlights summary. Official: https://docs.logrocket.com/docs/session-highlights-api"""
     try:

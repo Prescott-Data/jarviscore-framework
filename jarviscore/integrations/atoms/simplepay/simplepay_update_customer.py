@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _SP_API_ROOT = 'https://api.payroll.simplepay.cloud/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["customer_id", "payload"],
+    "consequence": "Updates one employee record in the connected SimplePay account.",
+}
+
+
 async def simplepay_update_customer(customer_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """SimplePay: update employee (customer). Official: https://www.simplepay.co.za/api-docs/"""
     try:

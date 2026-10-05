@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 NIFTY_API = 'https://openapi.niftypm.com/api/v1.0'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one task in Nifty using the provided task data.",
+}
+
+
 async def nifty_create_task(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create task via JSON body. Official: https://developers.niftypm.com/operation/operation-taskapicontroller_createtask"""
     try:

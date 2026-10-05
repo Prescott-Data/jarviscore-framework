@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 INSIGHTLY_API = 'https://api.na1.insightly.com/v3.1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["contact_id", "payload"],
+    "consequence": "Updates one Insightly contact record.",
+}
+
+
 async def insightly_update_contact(contact_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update Insightly contact. Official: https://api.na1.insightly.com/v3.1/Help"""
     try:

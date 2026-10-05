@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload", "account"],
+    "consequence": "Creates one Beanstalk repository in the selected account.",
+}
+
+
 async def beanstalk_create_project(payload: Dict[str, Any], account: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create repository. POST /api/repositories.json. Official: https://api.beanstalkapp.com/repository"""
     try:

@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def pendo_get_report(report_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Run saved report and return results (auth_info.format=json|csv). Official: https://support.pendo.io/hc/en-us/articles/17925657119131-Export-and-automate-visitor-and-account-reports-in-Google-Sheets"""
     try:

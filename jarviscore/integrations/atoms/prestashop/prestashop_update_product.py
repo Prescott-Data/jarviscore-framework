@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["product_id", "payload"],
+    "consequence": "Updates fields on one PrestaShop product.",
+}
+
+
 async def prestashop_update_product(product_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Partially update a product (XML body). Official: https://devdocs.prestashop-project.org/9/webservice/getting-started/"""
     try:

@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["parent_id", "title", "parent_type"],
+    "consequence": "Creates one Notion page under the specified parent page or database.",
+}
+
+
 async def notion_create_page(parent_id: str, title: str, parent_type: str='page') -> dict:
     """Create page. POST https://api.notion.com/v1/pages"""
     try:

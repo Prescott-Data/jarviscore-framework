@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def dropbox_download_file(dropbox_path: str, destination_path: str) -> dict:
     """Download file. POST https://content.dropboxapi.com/2/files/download"""
     import os

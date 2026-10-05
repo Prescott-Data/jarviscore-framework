@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["email", "organization", "first_name", "last_name", "phone"],
+    "consequence": "Creates one FreshBooks client record.",
+}
+
+
 async def _get_account_id() -> str:
     if True .get('account_id'):
         return None

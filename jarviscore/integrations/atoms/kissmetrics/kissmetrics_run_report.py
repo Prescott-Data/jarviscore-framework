@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 KM_API = 'https://query.kissmetrics.io/v3'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def kissmetrics_run_report(report_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Run report in kissmetrics. Official: https://www.kissmetrics.io/product/workflows/api"""
     try:

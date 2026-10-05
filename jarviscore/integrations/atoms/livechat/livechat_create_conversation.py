@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 LIVECHAT_AGENT_API = 'https://api.livechatinc.com/v3.6/agent'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one LiveChat conversation/chat.",
+}
+
+
 async def livechat_create_conversation(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Start a chat via start_chat action. Official: https://platform.text.com/docs/messaging/agent-chat-api#start-chat"""
     try:

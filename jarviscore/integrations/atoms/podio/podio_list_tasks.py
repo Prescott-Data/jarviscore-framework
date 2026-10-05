@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def podio_list_tasks(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List tasks with required org/space/app/responsible/reference filter. Official: https://developers.podio.com/doc/tasks/get-tasks-77949"""
     try:

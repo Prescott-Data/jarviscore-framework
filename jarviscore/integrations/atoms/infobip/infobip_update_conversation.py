@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 INFOBIP_API = 'https://api.infobip.com'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["conversation_id", "payload"],
+    "consequence": "Updates one Infobip conversation with the provided fields.",
+}
+
+
 async def infobip_update_conversation(conversation_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update an Infobip conversation. Official: https://www.infobip.com/docs/conversations/conversations-over-api/manage-conversations-over-api"""
     try:

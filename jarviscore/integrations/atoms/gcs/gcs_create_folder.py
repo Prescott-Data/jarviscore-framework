@@ -2,6 +2,14 @@ from typing import Any, Dict, List, Optional
 _GCS_API_ROOT = 'https://storage.googleapis.com/storage/v1'
 _GCS_UPLOAD_ROOT = 'https://storage.googleapis.com/upload/storage/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["bucket_name", "folder_path"],
+    "consequence": "Creates one zero-byte folder placeholder object in the Google Cloud Storage bucket.",
+}
+
+
 async def gcs_create_folder(bucket_name: str, folder_path: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create folder placeholder object (zero-byte object with trailing / name). OAuth Bearer token (cloud-platform or devstorage scope). JSON API root required. Official: https://cloud.google.com/storage/docs/json_api/v1"""
     try:

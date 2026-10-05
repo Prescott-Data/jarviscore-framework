@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 CODA_API = 'https://coda.io/apis/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["task_id", "payload"],
+    "consequence": "Updates one Coda table row with the provided cell values.",
+}
+
+
 async def coda_update_task(task_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a table row (catalog task) via PUT ./rows/{rowIdOrName}. Bearer API token in Authorization header. Official: https://coda.io/apis/v1"""
     try:

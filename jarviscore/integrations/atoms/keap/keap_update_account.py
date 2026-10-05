@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 KEAP_API = 'https://api.infusionsoft.com/crm/rest/v2'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["record_id", "payload"],
+    "consequence": "Updates one Keap company account record.",
+}
+
+
 async def keap_update_account(record_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update Keap account. Official: https://developer.keap.com/docs/restv2/"""
     try:

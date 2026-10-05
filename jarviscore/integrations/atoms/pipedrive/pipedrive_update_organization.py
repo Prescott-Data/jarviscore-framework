@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["organization_id", "payload"],
+    "consequence": "Updates one Pipedrive organization record.",
+}
+
+
 async def pipedrive_update_organization(organization_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update organization. Official: https://developers.pipedrive.com/docs/api/v1/Organizations"""
     try:

@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 XERO_API = 'https://api.xero.com/api.xro/2.0'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["contact_id", "name", "email"],
+    "consequence": "Updates the specified Xero contact's name and/or email address.",
+}
+
+
 async def xero_update_contact(contact_id: str, tenant_id: str='', name: str='', email: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """xero REST: update contact. Official: https://developer.xero.com/documentation/api/accounting/overview"""
     try:

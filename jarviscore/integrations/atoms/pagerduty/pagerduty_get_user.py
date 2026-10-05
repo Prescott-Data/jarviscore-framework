@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def pagerduty_get_user(user_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get user by id. Official: https://developer.pagerduty.com/api-reference/operations/getUser"""
     try:

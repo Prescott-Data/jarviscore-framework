@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["conversation_id", "payload"],
+    "consequence": "Updates one Mattermost channel's settings or metadata.",
+}
+
+
 async def mattermost_update_conversation(conversation_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a channel via PUT /channels/{channel_id}. Official: https://api.mattermost.com/#tag/channels"""
     try:

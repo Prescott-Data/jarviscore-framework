@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Initializes one Paystack payment transaction and generates a payment authorization reference for the specified customer and amount.",
+}
+
+
 async def paystack_create_transaction(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Initialize transaction (email + amount required). Official: https://paystack.com/docs/api/transaction/#initialize-transaction"""
     try:

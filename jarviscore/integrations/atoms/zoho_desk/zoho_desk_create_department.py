@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 ZD_API = 'https://desk.zoho.com/api/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["name", "description", "org_id"],
+    "consequence": "Creates one Zoho Desk department in the selected organization.",
+}
+
+
 async def zoho_desk_create_department(name: str, description: str='', org_id: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """zoho_desk API: create department. Official: https://desk.zoho.com/DeskAPIDocument"""
     try:

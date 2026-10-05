@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Reddit Ads campaign in the connected ad account, which may activate advertising spend or delivery settings.",
+}
+
+
 async def reddit_ads_create_campaign(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a campaign. Official: https://ads-api.reddit.com/docs/v3/"""
     try:

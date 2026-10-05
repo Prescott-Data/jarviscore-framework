@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["task_id", "comment_text"],
+    "consequence": "Creates one comment on a ClickUp task.",
+}
+
+
 async def clickup_create_comment(task_id: str, comment_text: str) -> dict:
     """Create comment via the clickup API."""
     try:

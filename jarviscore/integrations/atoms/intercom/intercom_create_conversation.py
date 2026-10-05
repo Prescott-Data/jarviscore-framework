@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 INTERCOM_API = 'https://api.intercom.io'
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates and sends one Intercom conversation to the specified recipient(s) or contact.",
+}
+
+
 async def intercom_create_conversation(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create Intercom conversation. Official: https://developers.intercom.com/docs/references/rest-api/api.intercom.io/conversations"""
     try:

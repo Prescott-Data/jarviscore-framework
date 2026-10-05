@@ -1,6 +1,14 @@
 import uuid
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Square order record.",
+}
+
+
 async def square_create_order(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Square API v2: create order. Official: https://developer.squareup.com/reference/square/orders-api/create-order"""
     try:

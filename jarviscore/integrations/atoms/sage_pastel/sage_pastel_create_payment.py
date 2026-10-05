@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one customer receipt payment record in Sage Pastel Accounting.",
+}
+
+
 async def sage_pastel_create_payment(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create customer receipt. Official: https://accounting.sageone.co.za/api/2.0.0/Help"""
     try:

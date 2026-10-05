@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["to", "from_number", "body"],
+    "consequence": "Sends one SMS from the connected Twilio number; carrier charges may apply.",
+}
+
+
 async def twilio_create_message(to: str, from_number: str, body: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Twilio REST: create message. Official: https://www.twilio.com/docs/usage/api"""
     try:

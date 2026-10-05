@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def paystack_get_transaction(transaction_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Fetch transaction by numeric id. Official: https://paystack.com/docs/api/transaction/#fetch-transaction"""
     try:

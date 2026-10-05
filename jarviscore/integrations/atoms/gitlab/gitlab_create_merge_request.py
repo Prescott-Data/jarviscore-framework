@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _GL_API_ROOT = 'https://gitlab.com/api/v4'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Creates one GitLab merge request in the specified project, which can be reviewed, merged, and shared with collaborators.",
+}
+
+
 async def gitlab_create_merge_request(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a merge request. Official: https://docs.gitlab.com/api/merge_requests/#create-mr"""
     try:

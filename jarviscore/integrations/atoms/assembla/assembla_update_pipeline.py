@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _ASSEMBLA_V1_SUFFIX = '/v1'
 
+ATOM_POLICY = {
+    "effect": "destructive",
+    "approval": "required",
+    "idempotency_fields": ["pipeline_id", "payload", "space_id", "space_tool_id"],
+    "consequence": "Applies an Assembla merge request action to merge and close or ignore the merge request.",
+}
+
+
 async def assembla_update_pipeline(pipeline_id: str, payload: Dict[str, Any], space_id: Optional[str]=None, space_tool_id: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Apply merge request action merge_and_close or ignore (PUT). Official: https://api-docs.assembla.cc/content/ref/merge_requests_merge_and_close.html"""
     try:

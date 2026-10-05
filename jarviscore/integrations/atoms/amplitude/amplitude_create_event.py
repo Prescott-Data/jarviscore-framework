@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one or more analytics events in Amplitude.",
+}
+
+
 async def amplitude_create_event(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Ingest analytics events (POST https://api2.amplitude.com/2/httpapi). Official: https://www.docs.developers.amplitude.com/analytics/apis/http-v2-api/"""
     try:

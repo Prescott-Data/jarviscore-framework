@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def google_ads_search_records(customer_id: str, query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Run arbitrary GAQL query via googleAds:search. Official: https://developers.google.com/google-ads/api/docs/rest/common/search"""
     try:

@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _FOLK_API_HOST = 'https://api.folk.app'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["group_id", "payload", "object_type"],
+    "consequence": "Creates one deal record in the specified Folk group.",
+}
+
+
 async def folk_create_deal(group_id: str, payload: Dict[str, Any], object_type: str='Deals', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create deal (POST /v1/groups/{groupId}/Deals JSON body). Bearer API key in Authorization header per Folk External API. Official: https://developer.folk.app/"""
     try:

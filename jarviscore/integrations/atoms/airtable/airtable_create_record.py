@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["base_id", "table_name", "fields"],
+    "consequence": "Creates one record in the specified Airtable table.",
+}
+
+
 async def airtable_create_record(base_id: str, table_name: str, fields: dict) -> dict:
     """Create record via the airtable API."""
     _base = 'https://api.airtable.com/v0'

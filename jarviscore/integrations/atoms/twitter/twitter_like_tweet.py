@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["tweet_id"],
+    "consequence": "Likes one post on X from the connected account.",
+}
+
+
 async def _get_twitter_user_id() -> str:
     resp = await nexus_call('GET', 'https://api.twitter.com/2/users/me')
     if not resp['ok']:

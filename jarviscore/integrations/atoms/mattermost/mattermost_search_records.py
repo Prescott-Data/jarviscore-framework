@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def mattermost_search_records(query: str, team_id: str='', limit: int=25, page: int=0, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search posts via POST /posts/search or POST /teams/{team_id}/posts/search. Official: https://api.mattermost.com/#tag/posts"""
     try:

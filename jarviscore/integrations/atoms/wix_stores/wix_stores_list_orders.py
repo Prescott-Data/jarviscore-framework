@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 WIX_API = 'https://www.wixapis.com'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def wix_stores_list_orders(site_id: str='', limit: int=100, cursor: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """wix_stores API: list orders. Official: https://dev.wix.com/docs/rest/business-solutions/stores"""
     try:

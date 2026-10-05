@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["folder_id", "payload"],
+    "consequence": "Updates metadata or settings for one Box folder.",
+}
+
+
 async def box_update_folder(folder_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update folder metadata (PUT /folders/{folder_id}). Official: https://developer.box.com/reference/put-folders-id/"""
     try:

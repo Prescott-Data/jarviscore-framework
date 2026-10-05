@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["spreadsheet_id", "range_notation", "values"],
+    "consequence": "Appends rows to a Google Sheets spreadsheet.",
+}
+
+
 async def google_sheets_append_rows(spreadsheet_id: str, range_notation: str, values: list) -> dict:
     """Sheets append rows via the google_sheets API."""
     import urllib.parse

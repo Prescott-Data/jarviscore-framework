@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "title"],
+    "consequence": "Creates one Wrike task in the specified project or folder.",
+}
+
+
 async def wrike_create_task(project_id: str, title: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """wrike REST: create task. Official: https://developers.wrike.com/api/v4/"""
     try:

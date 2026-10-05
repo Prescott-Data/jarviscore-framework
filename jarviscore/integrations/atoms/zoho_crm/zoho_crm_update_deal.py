@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["deal_id", "payload"],
+    "consequence": "Updates one Zoho CRM deal record.",
+}
+
+
 async def zoho_crm_update_deal(deal_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """zoho_crm REST: update deal. Official: https://www.zoho.com/crm/developer/docs/api/v2/"""
     try:

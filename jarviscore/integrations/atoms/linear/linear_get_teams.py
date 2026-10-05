@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def linear_get_teams() -> dict:
     """Get teams. POST https://api.linear.app/graphql"""
     query = '\n    query {\n        teams {\n            nodes {\n                id\n                name\n                key\n                description\n                issueCount\n                createdAt\n            }\n        }\n    }\n    '

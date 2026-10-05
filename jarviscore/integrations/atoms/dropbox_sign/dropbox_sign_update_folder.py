@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 SIGN_API = 'https://api.hellosign.com/v3'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["folder_id", "payload"],
+    "consequence": "Updates files in one Dropbox Sign template overlay folder.",
+}
+
+
 async def dropbox_sign_update_folder(folder_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update template files overlay. Official: https://developers.hellosign.com/api/template/update-files"""
     try:

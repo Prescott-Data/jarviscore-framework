@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["account_id", "record_type", "fields"],
+    "consequence": "Creates one NetSuite record of the specified type in the connected account.",
+}
+
+
 async def netsuite_create_record(account_id: str, record_type: str, fields: dict) -> dict:
     """Create record via the netsuite API."""
     _base = f'https://{account_id}.suitetalk.api.netsuite.com/services/rest/record/v1'

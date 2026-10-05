@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["box_key", "payload"],
+    "consequence": "Updates one Streak deal record.",
+}
+
+
 async def streak_update_deal(box_key: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Streak API: update deal. Official: https://streak.com/api#update_a_box"""
     try:

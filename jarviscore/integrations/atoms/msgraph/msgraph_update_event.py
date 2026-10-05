@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["event_id", "subject", "start_datetime", "end_datetime", "timezone", "body", "location"],
+    "consequence": "Updates one Microsoft Outlook calendar event.",
+}
+
+
 async def msgraph_update_event(event_id: str, subject: str=None, start_datetime: str=None, end_datetime: str=None, timezone: str='UTC', body: str=None, location: str=None) -> dict:
     """Update event via the msgraph API."""
     try:

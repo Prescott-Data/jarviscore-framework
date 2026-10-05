@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["message_sid", "body"],
+    "consequence": "Updates the body of one Twilio message.",
+}
+
+
 async def twilio_update_message(message_sid: str, body: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Twilio REST: update message. Official: https://www.twilio.com/docs/usage/api"""
     try:

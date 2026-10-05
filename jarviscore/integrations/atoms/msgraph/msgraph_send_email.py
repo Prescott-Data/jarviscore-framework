@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["to", "subject", "body"],
+    "consequence": "Sends one email from the connected Microsoft account. A sent email cannot be recalled.",
+}
+
+
 async def msgraph_send_email(to: list, subject: str, body: str, body_type: str='Text', cc: list=None) -> dict:
     """Send email. POST https://graph.microsoft.com/v1.0/me/sendMail"""
     try:

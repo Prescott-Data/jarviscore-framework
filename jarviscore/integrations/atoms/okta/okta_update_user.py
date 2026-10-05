@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["user_id", "payload"],
+    "consequence": "Updates properties of one Okta user account.",
+}
+
+
 async def okta_update_user(domain: str, user_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Partial user update (POST not PUT). Official: https://developer.okta.com/docs/reference/api/overview/"""
     try:

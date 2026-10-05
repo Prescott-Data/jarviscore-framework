@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Records one Plausible analytics event or pageview for the specified site.",
+}
+
+
 async def plausible_create_event(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Record pageview/custom event via Events API. Official: https://plausible.io/docs/events-api"""
     try:

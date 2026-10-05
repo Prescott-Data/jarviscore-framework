@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["service_id", "payload"],
+    "consequence": "Updates one PagerDuty service configuration.",
+}
+
+
 async def pagerduty_update_service(service_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update service via PUT. Official: https://developer.pagerduty.com/api-reference/operations/updateService"""
     try:

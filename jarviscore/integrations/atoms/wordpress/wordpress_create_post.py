@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one WordPress post, which may be published publicly depending on the payload status.",
+}
+
+
 async def wordpress_create_post(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """wordpress REST: create post. Official: https://developer.wordpress.org/rest-api/"""
     try:
