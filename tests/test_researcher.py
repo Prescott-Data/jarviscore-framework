@@ -447,6 +447,41 @@ class TestSearchInternet:
 class TestContentReading:
 
     @pytest.mark.asyncio
+    async def test_blocked_fetch_escalates_to_a_browser_render(self, researcher, monkeypatch):
+        """A regulator that refuses plain fetches is read through the browser."""
+        url = "https://www.sec.gov/Archives/edgar/data/1/filing.htm"
+
+        async def refused(target, *args, **kwargs):
+            return {"success": False, "content": "", "error": "HTTP error: 403", "url": target}
+
+        class Rendered:
+            success = True
+            error = None
+            data = {"snapshot": "", "url": url}
+
+        async def dispatch(kind, **payload):
+            return Rendered()
+
+        async def page_text():
+            return {"status": "success", "content": "The waiting period expired."}
+
+        async def no_wait(seconds):
+            return None
+
+        monkeypatch.setattr(researcher.internet_search, "extract_content", refused)
+        monkeypatch.setattr(researcher, "_ensure_dispatcher", AsyncMock())
+        monkeypatch.setattr(researcher, "_bdispatch", dispatch)
+        monkeypatch.setattr(researcher, "_tool_browser_get_page_text", page_text)
+        monkeypatch.setattr("jarviscore.kernel.defaults.researcher.asyncio.sleep", no_wait)
+
+        result = await researcher._tool_read_web_content(urls=[url])
+
+        page = next(item for item in result["pages"] if item["url"] == url)
+        assert page["status"] == "success", page
+        assert page["method"] == "browser_render"
+        assert "The waiting period expired." in page["content"]
+
+    @pytest.mark.asyncio
     async def test_read_web_content_returns_content(self, researcher):
         result = await researcher._tool_read_web_content(
             urls=["https://docs.stripe.com/api"]

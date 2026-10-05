@@ -2152,8 +2152,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                             "method": "browser_pdf_fetch",
                             "content": final_content,
                             "api_specs_found": len(api_specs),
-                            "relevance_score": self._calculate_relevance_score(final_content, len(api_specs)),
-                            "ooda_hint": "HIGH RELEVANCE: Extract" if self._calculate_relevance_score(final_content, len(api_specs)) > 0.7 else "LOW RELEVANCE: Discard"
                         })
                     else:
                         results.append({
@@ -2235,8 +2233,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                             "method": "browser_render",
                             "content": final_content,
                             "api_specs_found": len(api_specs),
-                            "relevance_score": self._calculate_relevance_score(final_content, len(api_specs)),
-                            "ooda_hint": "HIGH RELEVANCE: Extract" if self._calculate_relevance_score(final_content, len(api_specs)) > 0.7 else "LOW RELEVANCE: Discard"
                         })
                     else:
                         results.append({
