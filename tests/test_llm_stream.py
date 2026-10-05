@@ -46,8 +46,8 @@ async def test_stream_delivers_native_chunks_and_complete_large_tail():
     events = [
         e async for e in value.generate_stream(messages=[{"role": "user", "content": "Hello"}])
     ]
-    assert events[0]["text"] == "evidence " * 30000
-    assert events[1]["raw"]["tail_metadata"] == "preserved"
+    assert events[1]["text"] == "evidence " * 30000
+    assert events[2]["raw"]["tail_metadata"] == "preserved"
     assert events[-1]["result"]["content"] == "evidence " * 30000 + "TAIL connected_to"
     assert events[-1]["result"]["finish_reason"] == "stop"
     assert events[-1]["result"]["tokens"] is None
@@ -58,6 +58,7 @@ async def test_stream_delivers_native_chunks_and_complete_large_tail():
 async def test_missing_completion_reason_raises_after_delivering_partial_evidence():
     stream = Stream([Chunk("Partial reply")])
     iterator = client(stream).generate_stream(messages=[])
+    assert (await anext(iterator))["type"] == "request"
     assert (await anext(iterator))["text"] == "Partial reply"
     with pytest.raises(RuntimeError, match="completion reason"):
         await anext(iterator)

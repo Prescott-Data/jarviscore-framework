@@ -365,6 +365,7 @@ class UnifiedLLMClient:
         started = time.time()
         stream = None
         try:
+            yield {"type": "request", "arguments": arguments}
             stream = await self.azure_client.chat.completions.create(**arguments)
             content, reason, usage = "", None, None
             async for chunk in stream:
