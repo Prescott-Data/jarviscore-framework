@@ -339,6 +339,70 @@ class UnifiedLLMClient:
             or None
         )
 
+    async def generate_stream(self, *, messages: List[Dict], max_tokens=None):
+        """Stream Azure chat deltas and a final result without provider retry.
+
+        Each chunk includes its complete native SDK payload. Consumers must
+        preserve these chunks, including partial output if iteration fails.
+        This direct-call interface requires Azure as the selected provider;
+        workflow-budgeted calls and Responses-only deployments are unsupported.
+        """
+        if not self.provider_order or self.provider_order[0] != LLMProvider.AZURE:
+            raise RuntimeError("Streaming requires Azure as the selected provider")
+        if current_workflow_budget() is not None:
+            raise RuntimeError("Streaming does not support workflow-budgeted calls")
+        deployment = self.config.get("azure_deployment", "gpt-4o")
+        if "codex" in deployment.lower():
+            raise RuntimeError("Streaming requires an Azure chat-completions deployment")
+        arguments = {
+            "model": deployment, "messages": messages, "stream": True,
+            "stream_options": {"include_usage": True},
+            "max_completion_tokens": max_tokens if max_tokens is not None else
+                int(self.config.get("llm_default_max_tokens", 4000)),
+        }
+        if self._semaphore:
+            await self._semaphore.acquire()
+        started = time.time()
+        stream = None
+        try:
+            stream = await self.azure_client.chat.completions.create(**arguments)
+            content, reason, usage = "", None, None
+            async for chunk in stream:
+                raw = chunk.model_dump(mode="json")
+                text = ""
+                if chunk.usage is not None:
+                    usage = chunk.usage.model_dump(mode="json")
+                for choice in chunk.choices:
+                    if choice.index != 0:
+                        raise RuntimeError("Streaming received an unexpected additional choice")
+                    text += choice.delta.content or ""
+                    if choice.finish_reason is not None:
+                        reason = choice.finish_reason
+                content += text
+                yield {"type": "delta", "text": text, "raw": raw}
+            if reason is None:
+                raise RuntimeError("Provider stream ended without a completion reason")
+            pricing = TOKEN_PRICING.get(deployment, {"input": 3.0, "output": 15.0})
+            tokens = None if usage is None else {
+                "input": usage["prompt_tokens"], "output": usage["completion_tokens"],
+                "total": usage["total_tokens"],
+            }
+            cost = None if tokens is None else (
+                tokens["input"] * pricing["input"] + tokens["output"] * pricing["output"]
+            ) / 1_000_000
+            yield {"type": "result", "result": {
+                "content": content, "provider": "azure", "model": deployment,
+                "finish_reason": reason, "provider_metadata": {"usage": usage},
+                "tokens": tokens, "cost_usd": cost, "duration_seconds": time.time() - started,
+            }}
+        finally:
+            try:
+                if stream is not None:
+                    await stream.close()
+            finally:
+                if self._semaphore:
+                    self._semaphore.release()
+
     async def generate(
         self,
         prompt: Optional[str] = None,
