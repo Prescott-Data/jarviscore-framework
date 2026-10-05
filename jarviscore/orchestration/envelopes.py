@@ -20,6 +20,38 @@ AUTHORITY_KEYS = frozenset({
     "mesh_workflow_id",
 })
 
+EFFECT_ORDER = ("read", "propose", "write", "notify", "destructive")
+CONSEQUENTIAL_EFFECTS = frozenset({"write", "notify", "destructive"})
+
+
+def delegated_authority(
+    contract: Dict[str, Any], requester: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Authority for peer work: the capability's own, capped by what the requesting step holds.
+
+    Returns ``{"effect", "systems"}`` or ``{"error"}`` when the capability can only act
+    consequentially and the requester does not hold that effect on those systems.
+    """
+    effects = [effect for effect in EFFECT_ORDER if effect in (contract.get("effects") or [])]
+    systems = [str(value) for value in contract.get("systems") or []]
+    if requester is None:
+        return {"effect": effects[0] if effects else None, "systems": systems}
+    held = str(requester.get("effect") or "read")
+    held_rank = EFFECT_ORDER.index(held) if held in EFFECT_ORDER else 0
+    held_systems = {str(value) for value in requester.get("systems") or []}
+    for effect in effects:
+        if effect not in CONSEQUENTIAL_EFFECTS:
+            return {"effect": effect, "systems": systems}
+        if EFFECT_ORDER.index(effect) <= held_rank and set(systems) <= held_systems:
+            return {"effect": effect, "systems": systems}
+    return {
+        "error": (
+            f"This capability acts with a {effects[0] if effects else 'consequential'} "
+            f"effect that the requesting step (effect={held}) does not hold. "
+            "Consequential work must be its own planned step."
+        )
+    }
+
 
 def neutral_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Copy caller context while removing execution authority and private state."""

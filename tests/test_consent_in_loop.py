@@ -10,6 +10,14 @@ from jarviscore.kernel.defaults.coder import CoderSubAgent
 
 
 ATOM_SOURCE = '''\
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["channel", "text"],
+    "consequence": "Posts a message to a Slack channel.",
+}
+
+
 async def slack_send_message(channel: str, text: str) -> dict:
     """Post a message to a Slack channel."""
     response = await nexus_call(

@@ -1750,6 +1750,24 @@ class RedisContextStore:
         pipe.execute()
         return True
 
+    @staticmethod
+    def _consequential_writer_active(
+        step_id: str, step: Dict[str, Any], graph: Dict[str, Dict[str, Any]]
+    ) -> bool:
+        """Whether another live step already holds a consequential effect on this step's systems."""
+        from jarviscore.orchestration.envelopes import CONSEQUENTIAL_EFFECTS
+
+        if str(step.get("effect") or "") not in CONSEQUENTIAL_EFFECTS:
+            return False
+        systems = {str(value) for value in step.get("systems") or []}
+        return any(
+            other_id != step_id
+            and other.get("status") in {"in_progress", "waiting"}
+            and str(other.get("effect") or "") in CONSEQUENTIAL_EFFECTS
+            and systems & {str(value) for value in other.get("systems") or []}
+            for other_id, other in graph.items()
+        )
+
     def claim_step(
         self,
         workflow_id: str,
@@ -1784,6 +1802,9 @@ class RedisContextStore:
                     for dependency_id, value in pipe.hgetall(graph_key).items()
                 }
                 if not self._dependencies_authorize(data, graph):
+                    pipe.unwatch()
+                    return False
+                if self._consequential_writer_active(step_id, data, graph):
                     pipe.unwatch()
                     return False
                 if str(data.get("effect") or "") == "final_response":
@@ -1848,7 +1869,11 @@ class RedisContextStore:
                 data.update({
                     "status": "pending",
                     "resume_agent_id": owner,
-                    "resume_context": dict(context or {}),
+                    "resume_context": {
+                        **dict(context or {}),
+                        "_resume": True,
+                        "_new_execution_epoch": True,
+                    },
                     "updated_at": time.time(),
                 })
                 data.pop("blocked_by", None)

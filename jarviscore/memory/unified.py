@@ -180,10 +180,13 @@ class UnifiedMemory:
         if not am:
             return False
         try:
+            dropped = am.delivery_stats.get("dropped", 0)
             await am.record_observation(
                 fact, metadata={"event": "remembered", "kind": kind, **metadata}
             )
-            return True
+            # Kept means delivered: a queued write dies with the process that queued it.
+            delivered = await am.flush(timeout=10.0)
+            return delivered and am.delivery_stats.get("dropped", 0) == dropped
         except Exception as exc:
             logger.debug("[UnifiedMemory] remember failed (non-fatal): %s", exc)
             return False
@@ -198,10 +201,24 @@ class UnifiedMemory:
         if not am:
             return []
         try:
-            return await am.search(query, limit=limit)
+            found = await am.search(query, limit=limit)
+            recent = (await am.get_memory_context(limit=50)).get("stm_events") or []
         except Exception as exc:
             logger.debug("[UnifiedMemory] recall failed (non-fatal): %s", exc)
             return []
+        # Search covers consolidated memory only; a fact the agent kept stays
+        # short-term until Athena consolidates it, and must still be recallable.
+        seen = {str(item.get("content")) for item in found if isinstance(item, dict)}
+        for event in recent:
+            if not isinstance(event, dict):
+                continue
+            if (event.get("metadata") or {}).get("event") != "remembered":
+                continue
+            content = str(event.get("content") or "")
+            if content and content not in seen:
+                seen.add(content)
+                found.append(event)
+        return found
 
 
     async def save_checkpoint(self, state_json: str) -> None:

@@ -271,6 +271,12 @@ class Settings(BaseSettings):
     #   Fallback:   any multimodal model (gpt-4o, gemini-2.5-flash) — vision required
     # Falls back to task_model_standard when not set (which may not be CUA-capable).
     browser_model: Optional[str] = None  # BROWSER_MODEL
+    # Root for persistent browser profiles. Each tenant named by the mesh's
+    # memory_scope_field keeps its own logins here across runs; unset = fresh
+    # browser every run.
+    browser_profile_dir: Optional[str] = None  # BROWSER_PROFILE_DIR
+    # CDP endpoint of a browser the person already has open (shared browser).
+    browser_control_url: Optional[str] = None  # BROWSER_CONTROL_URL
 
     # === Search Providers ===
     # Gemini Grounded Search (primary): set GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT

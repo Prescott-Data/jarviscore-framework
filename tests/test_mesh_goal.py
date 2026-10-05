@@ -570,6 +570,45 @@ async def test_replan_goal_resumes_unfinished_current_revision_without_amending(
 
 
 @pytest.mark.asyncio
+async def test_a_workflow_waiting_on_the_person_is_paused_not_reconciled():
+    store = MockRedisContextStore()
+    store.publish_workflow(
+        "wf-approval",
+        goal="Order the weekly shop",
+        obligations=[{"id": "o1", "description": "The order is placed"}],
+        steps=[
+            {"id": "order", "capability": "commerce", "effect": "write",
+             "task": "Place the order", "depends_on": []},
+            {"id": "record", "capability": "ledger", "effect": "write",
+             "task": "Record the order", "depends_on": ["order"]},
+            {"id": "final_response", "capability": "final_response",
+             "effect": "final_response", "task": "Tell the person",
+             "depends_on": ["order", "record"]},
+        ],
+    )
+    store.update_step_status("wf-approval", "order", "waiting")
+    store.block_step("wf-approval", "record", {"order": "execution:waiting"})
+    # Until the person answers, "the order is placed" is still open.
+    store.get_obligation_projection = lambda workflow_id: {"o1": {
+        "id": "o1", "state": "unresolved",
+        "attempt_interpretations": [{"step_id": "order", "meaning": "awaiting approval"}],
+    }}
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    mesh._redis_store = store
+    mesh._has_planning_llm = lambda: True
+    mesh._planning_llm = lambda: pytest.fail("a paused workflow must not be replanned")
+
+    result = await mesh._wait_for_workflow_terminal(
+        "wf-approval", store.get_workflow_definition("wf-approval"), timeout=1
+    )
+
+    assert result["status"] == "waiting"
+    assert result["response_status"] == "waiting"
+    assert store.get_step_status("wf-approval", "order") == "waiting"
+    assert store.get_workflow_reconciliation_settlement("wf-approval", 1) is None
+
+
+@pytest.mark.asyncio
 async def test_execute_goal_reconciles_actionable_semantic_hold(monkeypatch):
     initial_steps = [{
         "step_id": "locate", "capability": "verification", "effect": "read",

@@ -752,3 +752,67 @@ class TestPlannerCompatibility:
         assert len(steps) == 1
         assert steps[0].step_id == "step_02d_value_fit_mapping_matrix"
         assert steps[0].task == "Map each validated expectation to product constraints."
+
+
+class CommerceAutoAgent(AutoAgent):
+    """Owns a consequential browser capability and a read-only one."""
+    role = "commerce"
+    capabilities = ["grocery_order_submission", "order_tracking"]
+    capability_contracts = {
+        "grocery_order_submission": {"effects": ["write"], "systems": ["browser"]},
+        "order_tracking": {"effects": ["read"], "systems": ["browser"]},
+    }
+    system_prompt = "You operate the shop."
+
+
+@pytest.mark.parametrize("requester, contract, expected", [
+    (None, {"effects": ["write"], "systems": ["browser"]}, "write"),
+    ({"effect": "write", "systems": ["browser"]}, {"effects": ["write"], "systems": ["browser"]}, "write"),
+    ({"effect": "destructive", "systems": ["browser"]}, {"effects": ["write"], "systems": ["browser"]}, "write"),
+    ({"effect": "propose", "systems": []}, {"effects": ["read", "write"], "systems": ["browser"]}, "read"),
+    ({"effect": "propose", "systems": []}, {"effects": ["write"], "systems": ["browser"]}, None),
+    ({"effect": "write", "systems": ["gmail"]}, {"effects": ["write"], "systems": ["browser"]}, None),
+])
+def test_delegated_work_cannot_exceed_the_requesting_steps_authority(requester, contract, expected):
+    from jarviscore.orchestration.envelopes import delegated_authority
+
+    authority = delegated_authority(contract, requester)
+
+    assert authority.get("effect") == expected
+    assert ("error" in authority) is (expected is None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["mandate", "direct"])
+async def test_a_propose_step_cannot_place_an_order_through_a_peer(path):
+    from types import SimpleNamespace
+
+    agent = CommerceAutoAgent()
+    seen = []
+
+    async def execute_task(task):
+        seen.append(task["context"])
+        return {"status": "success"}
+
+    agent.execute_task = execute_task
+    propose = {"peer_requester_authority": {"effect": "propose", "systems": []}}
+
+    async def ask(capability, context):
+        if path == "mandate":
+            return await agent.execute_capability_request(capability, "Place the order", context)
+        message = SimpleNamespace(
+            data={"query": "Place the order", "capability": capability},
+            context=context, sender="household", correlation_id="c1",
+        )
+        return await agent._handle_peer_request(message)
+
+    refused = await ask("grocery_order_submission", propose)
+    tracked = await ask("order_tracking", propose)
+    placed = await ask("grocery_order_submission", {
+        "peer_requester_authority": {"effect": "write", "systems": ["browser"]},
+    })
+
+    assert refused["status"] == "failure"
+    assert "must be its own planned step" in refused["error"]
+    assert tracked["status"] == "success" and placed["status"] == "success"
+    assert [context["effect"] for context in seen] == ["read", "write"]
