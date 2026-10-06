@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 XERO_API = 'https://api.xero.com/api.xro/2.0'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["name", "tenant_id", "email"],
+    "consequence": "Creates one contact in the selected Xero tenant.",
+}
+
+
 async def xero_create_contact(name: str, tenant_id: str='', email: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """xero REST: create contact. Official: https://developer.xero.com/documentation/api/accounting/overview"""
     try:

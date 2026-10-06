@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 CRISP_API = 'https://api.crisp.chat/v1'
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Sends one message into a Crisp conversation session, making it visible to the conversation participants.",
+}
+
+
 async def crisp_create_message(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a message in crisp. HTTP Basic site_id:api_key. Official: https://docs.crisp.chat/references/rest-api/v1/"""
     try:

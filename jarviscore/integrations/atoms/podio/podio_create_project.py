@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Podio app/project in a workspace.",
+}
+
+
 async def podio_create_project(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create app on a space. Official: https://developers.podio.com/doc/applications/add-new-app-22351"""
     try:

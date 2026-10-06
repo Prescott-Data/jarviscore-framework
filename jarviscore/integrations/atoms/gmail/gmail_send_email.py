@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["to", "subject", "body"],
+    "consequence": "Sends one email from the connected Gmail account. A sent email cannot be recalled.",
+}
+
+
 async def gmail_send_email(to: str, subject: str, body: str, body_type: str='text/plain') -> dict:
     """Send email via the gmail API."""
     import base64, json

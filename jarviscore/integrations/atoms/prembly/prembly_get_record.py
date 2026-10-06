@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def prembly_get_record(record_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get verification status by verification_id. Official: https://docs.prembly.com/docs/get-verification-status"""
     try:

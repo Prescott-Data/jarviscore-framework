@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def prestashop_get_customer(customer_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get a customer by ID. Official: https://devdocs.prestashop-project.org/9/webservice/getting-started/"""
     try:

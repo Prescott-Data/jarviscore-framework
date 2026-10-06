@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "destructive",
+    "approval": "required",
+    "idempotency_fields": ["call_sid", "status"],
+    "consequence": "Updates the Twilio call status for one call, which can terminate or cancel the call when set to a final state such as completed.",
+}
+
+
 async def twilio_update_call(call_sid: str, status: str='completed', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Twilio REST: update call. Official: https://www.twilio.com/docs/usage/api"""
     try:

@@ -3,6 +3,12 @@ MP_INGEST = 'https://api.mixpanel.com'
 MP_QUERY = 'https://mixpanel.com/api/query'
 MP_EXPORT = 'https://data.mixpanel.com/api/2.0'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def mixpanel_get_profile(profile_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get user profile via Query API engage. Official: https://developer.mixpanel.com/reference/engage-query"""
     try:

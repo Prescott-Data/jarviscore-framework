@@ -17,7 +17,7 @@ This guide covers what changes when you move JarvisCore from a local development
 
 | Concern | Development | Production |
 |---|---|---|
-| Sandbox execution | `SANDBOX_MODE=local` (in-process `exec()`) | `SANDBOX_MODE=remote` (isolated HTTP service) |
+| Sandbox execution | Shipped atoms run in a scrubbed child process; model-written code runs only under OS confinement (macOS sandbox-exec, Linux bubblewrap) | Keep `ALLOW_UNSAFE_LOCAL_EXECUTION` off; on Linux containers allow user namespaces; see [Sandbox Execution](#sandbox-execution) |
 | Nexus credentials | `~/.jarviscore/nexus.enc` keyed to machine UUID | `NEXUS_GATEWAY_URL` pointing to a deployed gateway |
 | `NEXUS_SECRET` | Falls back to machine UUID and prints a warning | Must be set to a long random secret |
 | Redis | Optional, connects to localhost | Required for state persistence, mailbox, and crash recovery |
@@ -39,7 +39,7 @@ Before deploying, confirm each item:
 - [ ] `NEXUS_GATEWAY_URL` points to your deployed Nexus Gateway and not to `localhost`
 - [ ] `REDIS_URL` is set to an external Redis instance with persistence enabled
 - [ ] `STORAGE_BACKEND` is set to `azure` or points to a volume-backed path
-- [ ] `SANDBOX_MODE=remote` and `SANDBOX_SERVICE_URL` are configured if you require isolated execution
+- [ ] `ALLOW_UNSAFE_LOCAL_EXECUTION` is off wherever agents read untrusted content
 - [ ] `PROMETHEUS_ENABLED=true` and your scrape target is registered
 - [ ] `LLM_MAX_CONCURRENT` is set to prevent cascading 429 errors
 - [ ] `LOG_LEVEL=INFO` is set to avoid token content appearing in logs
@@ -255,29 +255,28 @@ pip install "jarviscore-framework[memory-athena]"
 
 ## Sandbox Execution
 
-The sandbox is how JarvisCore executes generated code. There are two modes.
+AutoAgent runs code in a child process with a scrubbed environment: no parent secrets, a workspace home directory, and provider credentials attached outside the process by `nexus_call`. What it may run depends on where the code came from.
 
-### Local mode (default)
+- **Shipped atoms** (the provider calls packaged under `jarviscore/integrations/atoms`) always run. The source is read from the installed package, never from the model, and arguments are passed as data. Approval, idempotency and application effect guards still apply first.
+- **Model-written code** (and atoms the model wrote or repaired) runs only when the operating system confines the child: no network, no reads outside the Python runtime and the run workspace, writes only inside the workspace, and the function registry read-only. Provider calls still go through `nexus_call`. Where confinement is unavailable, execution is refused with the reason, and the agent continues with its other tools.
 
-In local mode, `exec()` runs in the same Python process as the agent. This is fast with zero overhead. It is appropriate for development and for low-risk deployments where you trust the agent's code generation output.
+| Host | Mechanism | Requirement |
+|------|-----------|-------------|
+| macOS | `sandbox-exec` | Built in |
+| Linux | `bwrap` (bubblewrap) | Install `bubblewrap`; the kernel must allow unprivileged user namespaces |
+| Linux container | `bwrap` | Docker's default seccomp profile blocks user namespaces and Docker masks `/proc`; run with `--security-opt seccomp=unconfined --security-opt systempaths=unconfined` (or an equivalent seccomp profile that permits `unshare`/`clone` with namespace flags) |
 
-```bash
-SANDBOX_MODE=local
-EXECUTION_TIMEOUT=300    # Seconds before a code block is killed
-MAX_REPAIR_ATTEMPTS=3    # How many times the Kernel retries failed code before giving up
-```
-
-### Remote mode (isolated)
-
-In remote mode, generated code is sent as an HTTP POST to an external sandbox service. The agent process is fully isolated from the executing code. The sandbox can be hardened, resource-capped, and run in a separate security boundary.
+JarvisCore proves confinement once per process by starting a confined child, so an installed but blocked `bwrap` is reported as unavailable rather than failing every run. The reason is logged at startup as `Process confinement unavailable: ...`.
 
 ```bash
-SANDBOX_MODE=remote
-SANDBOX_SERVICE_URL=https://your-sandbox-service.internal/execute
+ALLOW_UNSAFE_LOCAL_EXECUTION=false   # default; true runs model-written code unconfined, only where every agent input is trusted
+EXECUTION_TIMEOUT=300
 ```
 
-> [!NOTE]
-> If `SANDBOX_MODE=remote` is set but `SANDBOX_SERVICE_URL` is missing or unreachable, the framework logs a warning and falls back to local mode rather than crashing.
+Worker file tools (`read_file`, `write_file`, `list_files`, `grep_codebase`) resolve every path inside the run workspace and refuse anything outside it.
+
+> [!IMPORTANT]
+> AutoAgent does not use `SANDBOX_MODE=remote` today. Never set `ALLOW_UNSAFE_LOCAL_EXECUTION=true` to work around missing confinement wherever agents read untrusted content such as web pages or inbound email; enable confinement instead.
 
 ---
 
@@ -539,7 +538,7 @@ For long-running research tasks, increase `KERNEL_MAX_TURNS` and `KERNEL_WALL_CL
 
 **Set `NEXUS_SECRET`.** The machine UUID fallback logs a warning and produces unreliable key derivation in containerised environments.
 
-**Use `SANDBOX_MODE=remote`** if agents process untrusted input or if generated code must be isolated from the agent process.
+**Keep `ALLOW_UNSAFE_LOCAL_EXECUTION` off** if agents process untrusted input. Shipped atoms still run; model-written code does not.
 
 **Set `LOG_LEVEL=INFO`.** The `DEBUG` level includes LLM payloads in logs, which may contain sensitive task context.
 

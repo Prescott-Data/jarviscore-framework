@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 ZD_API = 'https://desk.zoho.com/api/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["last_name", "first_name", "email", "org_id"],
+    "consequence": "Creates one Zoho Desk contact record.",
+}
+
+
 async def zoho_desk_create_contact(last_name: str, first_name: str='', email: str='', org_id: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """zoho_desk API: create contact. Official: https://desk.zoho.com/DeskAPIDocument"""
     try:

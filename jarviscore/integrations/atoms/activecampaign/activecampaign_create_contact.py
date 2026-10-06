@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one ActiveCampaign contact record.",
+}
+
+
 async def activecampaign_create_contact(payload: Dict[str, Any], account: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create contact via POST /contacts with contact wrapper. Official: https://developers.activecampaign.com/reference/create-a-new-contact"""
     try:

@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 CLOSE_API = 'https://api.close.com/api/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["contact_id", "payload"],
+    "consequence": "Updates one Close CRM contact record.",
+}
+
+
 async def close_update_contact(contact_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a contact in Close CRM via PUT. HTTP Basic API key (username, empty password). Official: https://developer.close.com/"""
     try:

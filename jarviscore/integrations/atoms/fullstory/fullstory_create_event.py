@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _FS_API_HOST = 'https://api.fullstory.com'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["name", "timestamp", "user", "session", "properties", "context"],
+    "consequence": "Creates one custom event in FullStory with the provided event data.",
+}
+
+
 async def fullstory_create_event(name: str, properties: Optional[Dict[str, Any]]=None, timestamp: Optional[str]=None, user: Optional[Dict[str, Any]]=None, session: Optional[Dict[str, Any]]=None, context: Optional[Dict[str, Any]]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a custom server event (POST /v2/events). Requires name; optional user/session/properties. Authorization: Basic {api_key} from Settings > Integrations > API Keys (Architect for data reads). Official: https://developer.fullstory.com/"""
     try:

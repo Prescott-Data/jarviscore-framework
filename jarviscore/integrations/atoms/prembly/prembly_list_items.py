@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def prembly_list_items(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List available background check types. Official: https://docs.prembly.com/docs/get-all-available-checks-1"""
     try:

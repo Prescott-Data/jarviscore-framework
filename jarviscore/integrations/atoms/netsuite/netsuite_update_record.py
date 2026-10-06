@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["account_id", "record_type", "record_id", "fields"],
+    "consequence": "Updates fields on one NetSuite record.",
+}
+
+
 async def netsuite_update_record(account_id: str, record_type: str, record_id: str, fields: dict) -> dict:
     """Update record via the netsuite API."""
     _base = f'https://{account_id}.suitetalk.api.netsuite.com/services/rest/record/v1'

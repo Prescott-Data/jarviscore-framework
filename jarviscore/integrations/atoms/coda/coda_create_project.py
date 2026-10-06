@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 CODA_API = 'https://coda.io/apis/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Coda doc in the connected Coda workspace.",
+}
+
+
 async def coda_create_project(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a Coda doc (catalog project) via POST /docs. Bearer API token in Authorization header. Official: https://coda.io/apis/v1"""
     try:

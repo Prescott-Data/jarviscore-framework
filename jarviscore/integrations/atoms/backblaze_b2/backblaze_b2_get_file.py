@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def backblaze_b2_get_file(file_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get file metadata by fileId (b2_get_file_info). Application key auth via b2_authorize_account. Official: https://www.backblaze.com/b2/docs/b2_get_file_info.html"""
     try:

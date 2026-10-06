@@ -2,6 +2,14 @@ from typing import Any, Dict, List, Optional
 NIMBLE_V1 = 'https://api.nimble.com/api/v1'
 NIMBLE_V2 = 'https://api.nimble.com/api/v2'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["account_id", "payload"],
+    "consequence": "Updates one Nimble company contact record.",
+}
+
+
 async def nimble_update_account(account_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update company contact by id. Official: https://www.nimble.com/developers/docs/"""
     try:

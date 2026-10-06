@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["task_id", "payload"],
+    "consequence": "Updates one Podio task with the provided fields.",
+}
+
+
 async def podio_update_task(task_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update task. Official: https://developers.podio.com/doc/tasks/update-task-93188"""
     try:

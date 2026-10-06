@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _TR_ROOT = 'https://api.trello.com/1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["board_id", "name"],
+    "consequence": "Updates the name of a Trello board.",
+}
+
+
 async def trello_update_board(board_id: str, name: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Trello REST: update board. Official: https://developer.atlassian.com/cloud/trello/rest/"""
     try:

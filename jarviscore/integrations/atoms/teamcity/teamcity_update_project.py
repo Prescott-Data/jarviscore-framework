@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "name"],
+    "consequence": "Updates the name of one TeamCity project.",
+}
+
+
 async def teamcity_update_project(project_id: str, name: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """TeamCity REST: update project. Official: https://www.jetbrains.com/help/teamcity/rest/teamcity-rest.html"""
     try:

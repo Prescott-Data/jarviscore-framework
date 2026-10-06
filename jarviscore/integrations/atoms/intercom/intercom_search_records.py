@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 INTERCOM_API = 'https://api.intercom.io'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def intercom_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search Intercom contacts via POST /contacts/search. Official: https://developers.intercom.com/docs/references/rest-api/api.intercom.io/contacts/searchcontacts"""
     try:

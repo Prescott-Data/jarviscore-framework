@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["conversation_id", "fields"],
+    "consequence": "Updates one Freshchat conversation, such as resolving it, assigning it, or changing its properties.",
+}
+
+
 async def freshchat_update_conversation(conversation_id: str, fields: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a conversation (PUT .../conversations/{conversationId}). Resolve, assign, or update properties. Bearer API token from Admin > API Tokens. Base URL: https://{domain}.freshchat.com/v2. Official: https://developers.freshchat.com/api/"""
     try:

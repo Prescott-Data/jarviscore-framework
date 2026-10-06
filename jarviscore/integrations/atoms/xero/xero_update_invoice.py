@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 XERO_API = 'https://api.xero.com/api.xro/2.0'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["invoice_id", "status", "reference", "tenant_id"],
+    "consequence": "Updates a Xero invoice's status or reference in the selected tenant. Changing invoice status can affect billing workflow and customer-facing records.",
+}
+
+
 async def xero_update_invoice(invoice_id: str, tenant_id: str='', status: str='', reference: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """xero REST: update invoice. Official: https://developer.xero.com/documentation/api/accounting/overview"""
     try:

@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["cloud_id", "plan_key", "custom_revision"],
+    "consequence": "Queues one Bamboo build for the specified plan and revision.",
+}
+
+
 async def bamboo_trigger_build(cloud_id: str, plan_key: str, custom_revision: str=None) -> dict:
     """Trigger build via the bamboo API."""
     _base = f'https://api.atlassian.com/bamboo/{cloud_id}'

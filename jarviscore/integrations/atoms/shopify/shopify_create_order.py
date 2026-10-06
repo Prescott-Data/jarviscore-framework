@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["shop", "payload"],
+    "consequence": "Creates one Shopify order in the connected store, which may create a customer purchase record and trigger fulfillment or payment workflows.",
+}
+
+
 async def shopify_create_order(payload: Dict[str, Any], shop: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shopify Admin REST: create order. Official: https://shopify.dev/docs/api/admin-rest/latest/resources/order#post-orders"""
     try:

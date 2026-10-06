@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def prembly_get_item(item_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get verification services for a check by country (fallback package detail). Official: https://docs.prembly.com/docs/get-all-verification-by-country-1"""
     try:

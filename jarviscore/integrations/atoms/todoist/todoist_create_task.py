@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["content", "project_id", "due_string", "priority"],
+    "consequence": "Creates one Todoist task in the selected project.",
+}
+
+
 async def todoist_create_task(content: str, project_id: str=None, due_string: str=None, priority: int=1) -> dict:
     """Create task. POST https://api.todoist.com/api/v1/tasks"""
     try:

@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 CIRCLECI_API = 'https://circleci.com/api/v2'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one CircleCI pipeline run for the specified project.",
+}
+
+
 async def circleci_create_pipeline(timeout: int=30, verify_ssl: bool=True, payload: Optional[Dict[str, Any]]=None, base_url: str=None) -> dict:
     """Create Pipeline via CircleCI API v2. Circle-Token auth. Official: https://circleci.com/docs/api/v2/operations/triggerPipeline.md"""
     try:

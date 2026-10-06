@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def pivotal_tracker_list_tasks(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List stories (catalog tasks) for a project. Official: https://www.pivotaltracker.com/help/api/rest/v5"""
     try:

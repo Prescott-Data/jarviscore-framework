@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def dropbox_list_folder(dropbox_path: str='', recursive: bool=False) -> dict:
     """List folder. POST https://api.dropboxapi.com/2/files/list_folder"""
     try:

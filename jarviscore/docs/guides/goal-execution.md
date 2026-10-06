@@ -395,6 +395,37 @@ mesh.cancel_goal(workflow_id, reason="Request withdrawn")
 Cancelling the coroutine running `execute_goal()` also cancels the durable
 workflow before re-raising `CancelledError`.
 
+## Schedules and event triggers
+
+`submit_goal()` registers a goal and returns its workflow id without waiting.
+Schedules use it to start work later, on an interval, or when something
+happens, and to wake a waiting step:
+
+```python
+# Every morning, for one person
+mesh.schedule_goal(
+    "Tell me what in my inbox needs me today",
+    every_seconds=86_400,
+    context={"owner_id": "ada"},
+)
+
+# When the source says so
+mesh.schedule_goal("Triage this email", event="email.received", context={"owner_id": "ada"})
+await mesh.emit_event("email.received", {"message_id": "m-7"}, event_id="m-7")
+
+# Follow up in three days
+mesh.schedule_wake(workflow_id, step_id, at=time.time() + 3 * 86_400)
+```
+
+Schedules live in Redis and a scheduler task on every started Mesh fires
+them, polling every `schedule_poll_seconds` (default 5). Each occurrence has a
+deterministic workflow id, so nodes sharing Redis start it once. Give
+`emit_event()` the id the source already has and a redelivered event starts
+nothing new. A recurring schedule that missed moments while nothing ran fires
+once and continues from now. The started goal's context carries
+`schedule` (and `event` for triggers) so agents know why they are running.
+`mesh.cancel_schedule(schedule_id)` removes a schedule.
+
 ## Deployment rules
 
 - Redis is required for `Mesh.execute_goal()`, resume, replan and cancellation.

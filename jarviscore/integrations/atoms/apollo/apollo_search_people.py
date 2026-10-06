@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def apollo_search_people(job_titles: list=None, locations: list=None, organization_domains: list=None, page: int=1, per_page: int=25) -> dict:
     """Search people. POST https://api.apollo.io/v1/mixed_people/search"""
     _h = {'Content-Type': 'application/json', 'Cache-Control': 'no-cache'}

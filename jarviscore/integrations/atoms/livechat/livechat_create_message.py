@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 LIVECHAT_AGENT_API = 'https://api.livechatinc.com/v3.6/agent'
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Sends one chat event or message into a LiveChat conversation. Recipients in the chat can see the message or event.",
+}
+
+
 async def livechat_create_message(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Send chat event via send_event action. Official: https://platform.text.com/docs/messaging/agent-chat-api#send-event"""
     try:

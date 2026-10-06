@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["page_id", "blocks"],
+    "consequence": "Appends blocks to a Notion page or block.",
+}
+
+
 async def notion_append_blocks(page_id: str, blocks: list) -> dict:
     """Append blocks via the notion API."""
     try:

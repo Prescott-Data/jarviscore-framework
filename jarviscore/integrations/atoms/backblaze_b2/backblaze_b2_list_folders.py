@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def backblaze_b2_list_folders(bucket_id: Optional[str]=None, bucket_name: Optional[str]=None, prefix: str='', limit: int=100, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List folder prefixes via b2_list_file_names with delimiter=/. Official: https://www.backblaze.com/b2/docs/b2_list_file_names.html"""
     try:

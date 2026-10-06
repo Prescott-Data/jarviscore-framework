@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 MONDAY_API = 'https://api.monday.com/v2'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def monday_get_item(item_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get item by ID via GraphQL items query. Official: https://developer.monday.com/api-reference/reference/items"""
     try:

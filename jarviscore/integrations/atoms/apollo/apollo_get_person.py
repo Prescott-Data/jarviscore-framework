@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def apollo_get_person(person_id: str) -> dict:
     """Get person. POST https://api.apollo.io/v1/people/match"""
     _h = {'Content-Type': 'application/json'}

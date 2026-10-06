@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload", "base_url"],
+    "consequence": "Creates one PrestaShop product record from the provided product data.",
+}
+
+
 async def prestashop_create_product(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a product (XML body). Official: https://devdocs.prestashop-project.org/9/webservice/getting-started/"""
     try:

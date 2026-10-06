@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def plausible_get_event(event_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get stats for one event name via Stats v2 filter on event:name. Official: https://plausible.io/docs/stats-api"""
     try:

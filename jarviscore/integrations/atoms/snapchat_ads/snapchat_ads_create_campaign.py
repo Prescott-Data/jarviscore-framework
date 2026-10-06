@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _SC_API_ROOT = 'https://adsapi.snapchat.com/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["ad_account_id", "payload"],
+    "consequence": "Creates one or more Snapchat Ads campaigns in the specified ad account, which can start spending ad budget.",
+}
+
+
 async def snapchat_ads_create_campaign(ad_account_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Snapchat Marketing API: create campaign. Official: https://marketingapi.snapchat.com/docs/"""
     try:

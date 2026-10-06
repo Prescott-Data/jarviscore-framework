@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Jenkins pipeline job with the provided configuration.",
+}
+
+
 async def jenkins_create_pipeline(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create Jenkins pipeline job. Official: https://www.jenkins.io/doc/book/using/remote-access-api/"""
     try:

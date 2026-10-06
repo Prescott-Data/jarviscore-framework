@@ -277,6 +277,40 @@ class TestInfrastructureAvailableInSetup:
             await mesh.stop()
 
     @pytest.mark.asyncio
+    async def test_browser_environment_reaches_the_kernel_config(self, monkeypatch):
+        seen = {}
+
+        class SetupCheckAgent(Agent):
+            role = "browser_setup_checker"
+            capabilities = ["check"]
+
+            async def setup(self):
+                seen.update({
+                    knob: self._mesh.config.get(knob)
+                    for knob in ("browser_headless", "browser_model", "browser_profile_dir", "browser_control_url")
+                })
+
+            async def execute_task(self, task):
+                return {"status": "success", "output": "done"}
+
+        monkeypatch.setenv("BROWSER_HEADLESS", "false")
+        monkeypatch.setenv("BROWSER_MODEL", "gpt-5.6-luna")
+        monkeypatch.setenv("BROWSER_PROFILE_DIR", "/tmp/profiles")
+        monkeypatch.setenv("BROWSER_CONTROL_URL", "http://127.0.0.1:9222")
+        mesh = Mesh(mode="autonomous")
+        mesh.add(SetupCheckAgent)
+        await mesh.start()
+        try:
+            assert seen == {
+                "browser_headless": False,
+                "browser_model": "gpt-5.6-luna",
+                "browser_profile_dir": "/tmp/profiles",
+                "browser_control_url": "http://127.0.0.1:9222",
+            }
+        finally:
+            await mesh.stop()
+
+    @pytest.mark.asyncio
     async def test_blob_storage_available_in_setup(self):
         """_blob_storage is already injected when agent.setup() is called."""
         seen = {}

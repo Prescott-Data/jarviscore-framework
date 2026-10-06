@@ -26,6 +26,7 @@ import subprocess
 from typing import Dict, Any, List, Optional, Literal, cast, Set, Tuple
 from urllib.parse import urlparse
 
+from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image, with_images
 from jarviscore.kernel.subagent import BaseSubAgent
 from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.state import KernelState
@@ -224,6 +225,12 @@ class ResearcherSubAgent(BaseSubAgent):
                 "browser_snapshot",
                 self._tool_browser_snapshot,
                 "Get accessibility snapshot of current page. Returns refs (e1, e2...) for interactive elements.",
+                phase=AgentPhase.DISCOVERY
+            )
+            self.register_tool(
+                "browser_screenshot",
+                self._tool_browser_screenshot,
+                "See the current page as an image. Args: full_page=False.",
                 phase=AgentPhase.DISCOVERY
             )
             self.register_tool(
@@ -497,7 +504,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
     def _allowed_tools_for_phase(self, phase: ResearchPhase) -> Set[str]:
         """Tools allowed in each research phase."""
         shared_ui = {
-            "browser_navigate", "browser_snapshot", "ui_snapshot_with_som",
+            "browser_navigate", "browser_snapshot", "browser_screenshot", "ui_snapshot_with_som",
             "browser_click", "browser_type", "browser_click_coord",
             "browser_type_coord", "browser_get_text", "browser_get_page_text",
             "browser_wait", "browser_close",
@@ -585,6 +592,27 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         params = parsed.get("result") or {}
         if not isinstance(params, dict):
             params = {}
+        contract = (getattr(state, "context", None) or {}).get("execution_contract") or {}
+        groups = [
+            {str(tool) for tool in group if str(tool)}
+            for group in contract.get("required_tool_groups") or []
+            if isinstance(group, (list, tuple, set))
+        ]
+        tools_used = {t.tool_name for t in state.tool_history}
+        missing = [sorted(group) for group in groups if not (group & tools_used)]
+        if missing:
+            # Upstream results do not stand in for the research this step declares.
+            return False, GateEvidence(
+                check="declared_action_evidence",
+                requirement=(
+                    "each product-declared tool group must have at least one "
+                    "durable invocation"
+                ),
+                observed={
+                    "tools_used": sorted(tools_used),
+                    "missing_tool_groups": missing,
+                },
+            )
         evidence_items = params.get("evidence")
         content_successes = sum(
             1 for t in state.tool_history
@@ -851,37 +879,36 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                         "hint": "Recovered via bounded repair loop.",
                     }
 
-        if hasattr(self.llm, "query_with_vision"):
-            try:
-                import base64
-                ss = await self._bdispatch("screenshot", full_page=False, format="png")
-                ss_bytes = (ss.data or {}).get("bytes") if ss.success else None
-                if ss_bytes:
-                    img_b64 = base64.b64encode(ss_bytes).decode("ascii") if isinstance(ss_bytes, bytes) else str(ss_bytes)
-                    vision_prompt = (
-                        f'I need to {action} an element described as: "{failed_ref}". '
-                        "Find the closest matching interactive element on this page.\n"
-                        'Return JSON: {"found": true/false, "x": int, "y": int, "label": "..."}'
-                    )
-                    raw = await self.llm.query_with_vision(
-                        prompt=vision_prompt,
-                        image_base64=img_b64,
-                        system_prompt="You locate UI elements in screenshots. Return only JSON.",
-                    )
-                    parsed = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
-                    if parsed.get("found") and parsed.get("x") is not None:
-                        ok, data, err = await self._coord_action(int(parsed["x"]), int(parsed["y"]), text if action == "type" else None)
-                        if ok:
-                            return {
-                                "status": "success",
-                                "repaired": True,
-                                "repair_method": "vision_locate",
-                                "x": parsed["x"],
-                                "y": parsed["y"],
-                                "label": parsed.get("label"),
-                            }
-            except Exception as exc:
-                logger.debug("[RESEARCHER] Vision repair fallback failed: %s", exc)
+        try:
+            ss = await self._bdispatch("screenshot", full_page=False, format="png")
+            ss_bytes = (ss.data or {}).get("bytes") if ss.success else None
+            if isinstance(ss_bytes, bytes):
+                vision_prompt = (
+                    f'I need to {action} an element described as: "{failed_ref}". '
+                    "Find the closest matching interactive element on this page.\n"
+                    'Return JSON: {"found": true/false, "x": int, "y": int, "label": "..."}'
+                )
+                reply = await self.llm_client.generate(messages=[
+                    {"role": "system", "content": "You locate UI elements in screenshots. Return only JSON."},
+                    {"role": "user", "content": with_images(
+                        vision_prompt, [Image(data=ss_bytes, media_type="image/png")]
+                    )},
+                ])
+                raw = str(reply.get("content") or "")
+                parsed = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+                if parsed.get("found") and parsed.get("x") is not None:
+                    ok, data, err = await self._coord_action(int(parsed["x"]), int(parsed["y"]), text if action == "type" else None)
+                    if ok:
+                        return {
+                            "status": "success",
+                            "repaired": True,
+                            "repair_method": "vision_locate",
+                            "x": parsed["x"],
+                            "y": parsed["y"],
+                            "label": parsed.get("label"),
+                        }
+        except Exception as exc:
+            logger.warning("[RESEARCHER] Vision repair failed: %s", exc)
 
         return {
             "status": "error",
@@ -1736,6 +1763,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             self.tracer.log_tool_result("read_file", None, error=error)
             return {"status": "error", "error": error}
         try:
+            path = self._workspace_path(path)
             with open(path, "r") as f:
                 content = f.read()
         except Exception as e:
@@ -2539,6 +2567,11 @@ DOCUMENTATION TEXT:
 
         matches: List[Dict[str, Any]] = []
         source = "ripgrep"
+        try:
+            path = self._workspace_path(path)
+        except PermissionError as exc:
+            self.tracer.log_tool_result("grep_codebase", None, error=str(exc))
+            return {"status": "error", "error": str(exc)}
 
         try:
             cmd = [
@@ -2549,7 +2582,8 @@ DOCUMENTATION TEXT:
                 "-g", file_glob,
                 "-C", str(context_lines),
                 "--max-count", "5",   # max 5 hits per file to avoid any single file dominating
-                pattern,
+                "-e", pattern,
+                "--",
                 path,
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -2783,6 +2817,24 @@ DOCUMENTATION TEXT:
             result["som_ready"] = True
             result["hint"] = "SoM snapshot persisted. Prefer browser_click/browser_type with refs."
         return result
+
+    async def _tool_browser_screenshot(self, full_page: bool = False) -> Dict[str, Any]:
+        result = await self._bdispatch("screenshot", full_page=bool(full_page), format="png")
+        shot = (result.data or {}).get("bytes") if result.success else None
+        if not isinstance(shot, bytes):
+            return {"status": "error", "error": result.error or "The browser returned no screenshot."}
+        info = await self._bdispatch("evaluate", expression="() => ({url: location.href, title: document.title})")
+        page = (info.data or {}).get("result") if info.success else None
+        page = page if isinstance(page, dict) else {}
+        return {
+            "status": "success",
+            "url": page.get("url"),
+            "title": page.get("title"),
+            OBSERVED_IMAGES: [
+                Image(data=shot, media_type="image/png", label=f"Screenshot of {page.get('url') or 'the current page'}")
+            ],
+            "note": "The screenshot is attached to this observation as an image.",
+        }
     
     async def _tool_browser_click(
         self, 

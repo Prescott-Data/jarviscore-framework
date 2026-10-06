@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["subreddit", "title", "text", "url"],
+    "consequence": "Publishes one post to the specified Reddit subreddit, making it visible to other Reddit users.",
+}
+
+
 async def reddit_submit_post(subreddit: str, title: str, text: str=None, url: str=None) -> dict:
     """Submit post. POST https://oauth.reddit.com/api/submit"""
     try:

@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 CODA_API = 'https://coda.io/apis/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one or more rows in a Coda table.",
+}
+
+
 async def coda_create_task(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Insert table rows (catalog task) via POST ./rows. Bearer API token in Authorization header. Official: https://coda.io/apis/v1"""
     try:

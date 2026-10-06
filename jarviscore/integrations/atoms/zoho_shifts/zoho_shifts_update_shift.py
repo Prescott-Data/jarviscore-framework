@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["org_id", "shift_id", "start_time", "end_time", "employee_id", "notes"],
+    "consequence": "Updates one Zoho Shifts shift record.",
+}
+
+
 async def zoho_shifts_update_shift(org_id: str, shift_id: str, start_time: str=None, end_time: str=None, employee_id: str=None, notes: str=None) -> dict:
     """Shifts update shift via the zoho_shifts API."""
     try:

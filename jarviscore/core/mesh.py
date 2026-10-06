@@ -183,6 +183,7 @@ class Mesh:
         self._distributed_worker_tasks: List[asyncio.Task] = []
         self._distributed_step_tasks: Set[asyncio.Task] = set()
         self._mesh_planner_task: Optional[asyncio.Task] = None
+        self._scheduler_task: Optional[asyncio.Task] = None
         self._agent_run_tasks: List[asyncio.Task] = []
 
         # Capability set — populated at start() based on what's reachable
@@ -338,6 +339,10 @@ class Mesh:
             "rag_typesafe_contradicts_min",
             "rag_typesafe_relevant_min",
             "rag_typesafe_evidence_min",
+            "browser_headless",
+            "browser_model",
+            "browser_profile_dir",
+            "browser_control_url",
         ):
             if knob in self._settings.model_fields_set:
                 self.config.setdefault(knob, getattr(self._settings, knob))
@@ -489,6 +494,9 @@ class Mesh:
                 )
                 for agent in self.agents
             ]
+            self._scheduler_task = asyncio.create_task(
+                self._run_scheduler(), name=f"mesh-scheduler-{self._node_id}"
+            )
             self._logger.info(
                 "✓ %d distributed worker(s) started (Redis-backed step claiming)",
                 len(self._distributed_worker_tasks),
@@ -593,6 +601,35 @@ class Mesh:
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Compile one source goal, publish its DAG, and observe peer claims."""
+        identity = await self.submit_goal(
+            goal, workflow_id=workflow_id, context=context, timeout=timeout
+        )
+        try:
+            definition = self._redis_store.get_workflow_definition(identity)
+            if definition is None:
+                definition = await self._wait_for_workflow_definition(identity, timeout)
+            if definition is None:
+                raise RuntimeError(f"Workflow {identity!r} was not published before timeout")
+            return await self._wait_for_workflow_terminal(identity, definition, timeout)
+        except asyncio.CancelledError:
+            self._redis_store.cancel_workflow(
+                identity, reason="Goal execution was cancelled by its caller"
+            )
+            raise
+
+    async def submit_goal(
+        self,
+        goal: str,
+        *,
+        workflow_id: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> str:
+        """Register a goal for the mesh planner and return without waiting.
+
+        The same workflow id with the same goal and context is registered
+        once, so a retried submission never starts the work twice.
+        """
         if not self._started:
             raise RuntimeError("Mesh not started. Call await mesh.start() first.")
         if self._redis_store is None:
@@ -612,18 +649,116 @@ class Mesh:
         self._redis_store.register_workflow_goal(
             identity, source, public_context, budget=budget.to_record()
         )
+        return identity
+
+    @property
+    def schedules(self):
+        """The durable book of schedules and event triggers for this mesh."""
+        if self._redis_store is None:
+            raise RuntimeError("Schedules require Redis so they outlive this process.")
+        from jarviscore.orchestration.schedules import ScheduleBook
+
+        return ScheduleBook(self._redis_store._redis)
+
+    def schedule_goal(
+        self,
+        goal: str,
+        *,
+        at: Optional[float] = None,
+        every_seconds: Optional[float] = None,
+        event: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+        schedule_id: Optional[str] = None,
+    ) -> str:
+        """Start ``goal`` at a moment, on an interval, or whenever ``event`` is emitted."""
+        return self.schedules.add(
+            {"kind": "goal", "goal": goal, "context": dict(context or {})},
+            at=at, every_seconds=every_seconds, event=event, schedule_id=schedule_id,
+        )
+
+    def schedule_wake(
+        self,
+        workflow_id: str,
+        step_id: str,
+        *,
+        at: Optional[float] = None,
+        event: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+        schedule_id: Optional[str] = None,
+    ) -> str:
+        """Resume a waiting step at a moment or when ``event`` is emitted."""
+        return self.schedules.add(
+            {
+                "kind": "wake",
+                "workflow_id": workflow_id,
+                "step_id": step_id,
+                "context": dict(context or {}),
+            },
+            at=at, event=event, schedule_id=schedule_id,
+        )
+
+    def cancel_schedule(self, schedule_id: str) -> bool:
+        return self.schedules.cancel(schedule_id)
+
+    async def emit_event(
+        self,
+        event: str,
+        payload: Optional[Dict[str, Any]] = None,
+        *,
+        event_id: Optional[str] = None,
+    ) -> List[str]:
+        """Fire every trigger listening for ``event``; returns the workflows touched.
+
+        Give the event the id its source already has (a message id, a webhook
+        delivery id) and a redelivered event starts nothing new.
+        """
+        identity = event_id or uuid4().hex
+        touched = []
+        for firing in self.schedules.for_event(event, identity, payload):
+            workflow_id = await self._fire_schedule(firing)
+            if workflow_id:
+                touched.append(workflow_id)
+        return touched
+
+    async def _fire_schedule(self, firing) -> Optional[str]:
+        context = {
+            **firing.context,
+            "schedule": {"schedule_id": firing.schedule_id, "occurrence": firing.occurrence},
+        }
         try:
-            definition = self._redis_store.get_workflow_definition(identity)
-            if definition is None:
-                definition = await self._wait_for_workflow_definition(identity, timeout)
-            if definition is None:
-                raise RuntimeError(f"Workflow {identity!r} was not published before timeout")
-            return await self._wait_for_workflow_terminal(identity, definition, timeout)
-        except asyncio.CancelledError:
-            self._redis_store.cancel_workflow(
-                identity, reason="Goal execution was cancelled by its caller"
+            if firing.action["kind"] == "wake":
+                self._redis_store.resume_workflow_step(
+                    firing.action["workflow_id"], firing.action["step_id"], context=context
+                )
+            else:
+                await self.submit_goal(
+                    firing.action["goal"], workflow_id=firing.workflow_id, context=context
+                )
+        except (KeyError, ValueError) as exc:
+            # A step that already moved on, or a goal id already bound: the
+            # occurrence has nothing left to do.
+            self._logger.info(
+                "Schedule %s occurrence %s did nothing: %s",
+                firing.schedule_id, firing.occurrence, exc,
             )
-            raise
+            return None
+        self._logger.info(
+            "Schedule %s fired occurrence %s -> %s",
+            firing.schedule_id, firing.occurrence, firing.workflow_id,
+        )
+        return firing.workflow_id
+
+    async def _run_scheduler(self) -> None:
+        interval = float(self.config.get("schedule_poll_seconds", 5.0))
+        while True:
+            try:
+                for firing in self.schedules.claim_due():
+                    await self._fire_schedule(firing)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._logger.warning("Scheduler pass failed: %s", exc)
+            await asyncio.sleep(interval)
 
     async def _prepare_workspace_source(
         self,
@@ -1057,7 +1192,14 @@ class Mesh:
                 settlement = self._redis_store.get_workflow_reconciliation_settlement(
                     workflow_id, revision
                 )
-                if not semantic_gaps and revision > 1 and settlement is None:
+                # A step waiting on the person has not failed to deliver: the
+                # workflow is paused for their answer. Reconciling or replanning
+                # now would supersede the very action they are being asked about.
+                paused_for_person = "waiting" in current_statuses
+                if (
+                    not semantic_gaps and revision > 1 and settlement is None
+                    and not paused_for_person
+                ):
                     settlement = {
                         "event": "semantic_reconciliation_settled",
                         "revision": revision,
@@ -1067,7 +1209,10 @@ class Mesh:
                     self._redis_store.save_workflow_reconciliation_settlement(
                         workflow_id, revision, settlement
                     )
-                if semantic_gaps and settlement is None and self._has_planning_llm():
+                if (
+                    semantic_gaps and settlement is None and not paused_for_person
+                    and self._has_planning_llm()
+                ):
                     max_revisions = max(
                         1, int(self.config.get("mesh_max_reconciliation_revisions", 3))
                     )
@@ -1172,7 +1317,7 @@ class Mesh:
                         self._redis_store.save_workflow_reconciliation_settlement(
                             workflow_id, revision, settlement
                         )
-                if not all_current_terminal:
+                if not all_current_terminal and not paused_for_person:
                     await asyncio.sleep(interval)
                     continue
                 overall = (
@@ -1204,7 +1349,7 @@ class Mesh:
                     response_status = {
                         "completed": "completed",
                         "waiting": "waiting",
-                    }.get(response_state, "failed")
+                    }.get(response_state, "waiting" if paused_for_person else "failed")
                 if overall != "waiting":
                     self._redis_store.unregister_active_workflow(workflow_id)
                 return {
@@ -1547,6 +1692,8 @@ class Mesh:
         lifecycle_tasks = [*self._distributed_worker_tasks, *self._distributed_step_tasks]
         if self._mesh_planner_task is not None:
             lifecycle_tasks.append(self._mesh_planner_task)
+        if self._scheduler_task is not None:
+            lifecycle_tasks.append(self._scheduler_task)
         for task in lifecycle_tasks:
             if not task.done():
                 task.cancel()
@@ -1557,6 +1704,7 @@ class Mesh:
         self._distributed_worker_tasks.clear()
         self._distributed_step_tasks.clear()
         self._mesh_planner_task = None
+        self._scheduler_task = None
 
         if self._decision_client is not None:
             try:

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["build_type_id"],
+    "consequence": "Queues one TeamCity build for the specified build configuration.",
+}
+
+
 async def teamcity_create_build(build_type_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """TeamCity REST: queue build. Official: https://www.jetbrains.com/help/teamcity/rest/teamcity-rest.html"""
     try:

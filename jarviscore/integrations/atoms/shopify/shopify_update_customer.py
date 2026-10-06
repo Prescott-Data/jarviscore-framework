@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["customer_id", "payload", "shop", "base_url"],
+    "consequence": "Updates one Shopify customer record.",
+}
+
+
 async def shopify_update_customer(customer_id: str, payload: Dict[str, Any], shop: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shopify Admin REST: update customer. Official: https://shopify.dev/docs/api/admin-rest/latest/resources/customer#put-customers-customer-id"""
     try:

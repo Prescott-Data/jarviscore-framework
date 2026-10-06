@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["org_id", "customer_id", "line_items", "date", "notes"],
+    "consequence": "Creates one Zoho Books invoice for the specified customer and line items.",
+}
+
+
 async def zoho_books_create_invoice(org_id: str, customer_id: str, line_items: list, date: str=None, notes: str=None) -> dict:
     """Books create invoice. POST https://www.zohoapis.com/books/v3/invoices"""
     try:

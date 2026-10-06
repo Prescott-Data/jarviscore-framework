@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one WooCommerce customer account or customer record.",
+}
+
+
 async def woocommerce_create_customer(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """woocommerce REST: create customer. Official: https://woocommerce.github.io/woocommerce-rest-api-docs/"""
     try:

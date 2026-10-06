@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["app_id", "payload"],
+    "consequence": "Replaces the configuration of one Okta application.",
+}
+
+
 async def okta_update_app(domain: str, app_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Replace application (full PUT). Official: https://developer.okta.com/docs/reference/api/overview/"""
     try:

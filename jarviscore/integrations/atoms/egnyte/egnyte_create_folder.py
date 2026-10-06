@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _EGNYTE_PUBAPI_SUFFIX = '/pubapi/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one folder in the connected Egnyte file system.",
+}
+
+
 async def egnyte_create_folder(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create folder (POST /pubapi/v1/fs/{path} action=add_folder). Bearer OAuth per Egnyte Public API. Official: https://developers.egnyte.com/docs/read/File_System_Management_API_Documentation"""
     try:

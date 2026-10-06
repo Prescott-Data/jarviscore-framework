@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["source_id", "payload"],
+    "consequence": "Updates the specified Segment source configuration.",
+}
+
+
 async def segment_update_source(source_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Segment Public API: update source. Official: https://segment.com/docs/api/public-api/#tag/Sources/operation/updateSource"""
     try:

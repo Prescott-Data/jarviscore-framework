@@ -2,6 +2,12 @@ from typing import Any, Dict, List, Optional
 _ATTIO_HOST = 'https://api.attio.com'
 _OBJECT_SLUGS = {'contacts': 'people', 'contact': 'people', 'people': 'people', 'accounts': 'companies', 'account': 'companies', 'companies': 'companies', 'deals': 'deals', 'deal': 'deals'}
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def attio_search_records(query: str, object_type: str='people', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Query records with filter (POST /v2/objects/{object}/records/query). Official: https://docs.attio.com/rest-api/endpoint-reference/records/query-records"""
     try:

@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["name", "account_party_id", "revenue", "close_date", "sales_stage"],
+    "consequence": "Creates one Oracle CX opportunity record.",
+}
+
+
 async def oracle_cx_create_opportunity(instance_url: str, name: str, account_party_id: str=None, revenue: float=None, close_date: str=None, sales_stage: str=None) -> dict:
     """Cx create opportunity via the oracle_cx API."""
     _base = f"{instance_url.rstrip('/')}/crmRestApi/resources/latest"

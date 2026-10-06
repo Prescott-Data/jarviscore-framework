@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["task_id", "content", "due_string", "priority"],
+    "consequence": "Updates one Todoist task's content, due date, or priority.",
+}
+
+
 async def todoist_update_task(task_id: str, content: str=None, due_string: str=None, priority: int=None) -> dict:
     """Update task via the todoist API."""
     try:

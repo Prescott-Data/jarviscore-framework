@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["repository_id", "environment_id", "payload"],
+    "consequence": "Creates one Beanstalk release and deploys it to the specified repository environment.",
+}
+
+
 async def beanstalk_create_build(repository_id: str, environment_id: str, account: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, payload: Optional[Dict[str, Any]]=None, base_url: str=None) -> dict:
     """Create release (trigger deployment). POST /api/{repo_id}/releases.json. Official: https://api.beanstalkapp.com/release"""
     try:

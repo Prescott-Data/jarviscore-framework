@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 LIVECHAT_AGENT_API = 'https://api.livechatinc.com/v3.6/agent'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["message_id", "payload", "conversation_id", "thread_id"],
+    "consequence": "Updates properties on one LiveChat message event in the specified conversation thread.",
+}
+
+
 async def livechat_update_message(message_id: str, payload: Dict[str, Any], conversation_id: str='', thread_id: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update event properties via update_event_properties. Official: https://platform.text.com/docs/messaging/agent-chat-api#update-event-properties"""
     try:

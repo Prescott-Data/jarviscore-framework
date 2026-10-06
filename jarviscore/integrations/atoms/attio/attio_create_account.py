@@ -2,6 +2,14 @@ from typing import Any, Dict, List, Optional
 _ATTIO_HOST = 'https://api.attio.com'
 _OBJECT_SLUGS = {'contacts': 'people', 'contact': 'people', 'people': 'people', 'accounts': 'companies', 'account': 'companies', 'companies': 'companies', 'deals': 'deals', 'deal': 'deals'}
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one company record in Attio.",
+}
+
+
 async def attio_create_account(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create company record (POST /v2/objects/companies/records). Official: https://docs.attio.com/rest-api/endpoint-reference/records/create-a-record"""
     try:

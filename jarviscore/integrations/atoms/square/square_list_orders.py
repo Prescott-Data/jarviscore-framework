@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def square_list_orders(location_id: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Square API v2: list orders. Official: https://developer.squareup.com/reference/square/orders-api/search-orders"""
     try:

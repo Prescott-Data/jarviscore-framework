@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 CLOSE_API = 'https://api.close.com/api/v1'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def close_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search leads in Close CRM via POST /data/search/ advanced filter. HTTP Basic API key (username, empty password). Official: https://developer.close.com/"""
     try:

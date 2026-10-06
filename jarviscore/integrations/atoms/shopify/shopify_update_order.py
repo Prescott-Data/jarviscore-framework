@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["order_id", "payload", "shop"],
+    "consequence": "Updates one Shopify order with the provided changes, which may alter fulfillment, pricing, customer, or other order details.",
+}
+
+
 async def shopify_update_order(order_id: str, payload: Dict[str, Any], shop: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shopify Admin REST: update order. Official: https://shopify.dev/docs/api/admin-rest/latest/resources/order#put-orders-order-id"""
     try:

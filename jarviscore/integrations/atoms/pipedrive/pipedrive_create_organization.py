@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one organization record in Pipedrive.",
+}
+
+
 async def pipedrive_create_organization(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create organization. Official: https://developers.pipedrive.com/docs/api/v1/Organizations"""
     try:

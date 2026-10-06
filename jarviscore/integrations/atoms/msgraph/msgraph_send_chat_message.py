@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["chat_id", "message"],
+    "consequence": "Posts one message as the connected Microsoft user in the selected Teams chat.",
+}
+
+
 async def msgraph_send_chat_message(chat_id: str, message: str) -> dict:
     """Send chat message via the msgraph API."""
     try:

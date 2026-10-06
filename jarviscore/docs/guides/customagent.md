@@ -482,7 +482,10 @@ The [Content Pipeline example](../examples/content-pipeline.md) shows a `CustomA
 
 ## Scheduled Tasks
 
-JarvisCore does not include a built-in scheduler or cron primitive. Recurring tasks are implemented with `CustomAgent` and `asyncio`: the `run_forever()` loop is async, so you can add timed work directly inside the agent:
+Durable goals have built-in schedules and event triggers: see
+[Schedules and event triggers](./goal-execution.md#schedules-and-event-triggers).
+For timed work inside a single `CustomAgent`, the `run_forever()` loop is async,
+so you can add it directly inside the agent:
 
 ```python
 import asyncio
@@ -516,7 +519,8 @@ class DailyReportAgent(CustomAgent):
         return {"status": "active"}
 ```
 
-For production scheduling, integrate [APScheduler](https://apscheduler.readthedocs.io/) (`pip install apscheduler[asyncio]`) in `setup()`, or trigger workflows from an external cron via a FastAPI endpoint.
+Use `mesh.schedule_goal()` when the timed work is a goal that must survive
+restarts and run once across nodes.
 
 ---
 

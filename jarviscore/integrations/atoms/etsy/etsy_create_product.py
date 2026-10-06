@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _ETSY_API_SUFFIX = '/v3/application'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["shop_id", "payload"],
+    "consequence": "Creates one draft Etsy listing in the specified shop without publishing it.",
+}
+
+
 async def etsy_create_product(shop_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create draft listing (POST /v3/application/shops/{shop_id}/listings, form body). Requires x-api-key (keystring:shared_secret) and OAuth Bearer token per Etsy Open API v3. Official: https://developers.etsy.com/documentation/reference#operation/createDraftListing"""
     try:

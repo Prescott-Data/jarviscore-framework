@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def linear_get_me() -> dict:
     """Get me. POST https://api.linear.app/graphql"""
     query = '\n    query {\n        viewer {\n            id\n            name\n            email\n            displayName\n            avatarUrl\n            createdAt\n        }\n    }\n    '

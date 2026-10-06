@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def pagerduty_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Filter incidents (query maps to incident_key; optional auth_info filters: statuses, service_ids, user_ids, since, until). Official: https://developer.pagerduty.com/api-reference/operations/listIncidents"""
     try:

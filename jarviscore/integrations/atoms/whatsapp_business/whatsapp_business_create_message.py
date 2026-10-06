@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _WA_ROOT = 'https://graph.facebook.com/v19.0'
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["to", "text"],
+    "consequence": "Sends one WhatsApp message from the connected business number.",
+}
+
+
 async def whatsapp_business_create_message(to: str, text: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """WhatsApp Cloud API: Send text message. Official: https://developers.facebook.com/docs/whatsapp/cloud-api"""
     try:

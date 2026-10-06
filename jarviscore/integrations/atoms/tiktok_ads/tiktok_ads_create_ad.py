@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _TT_ROOT = 'https://business-api.tiktok.com/open_api/v1.3'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["advertiser_id", "adgroup_id", "ad_name"],
+    "consequence": "Creates one TikTok Ads ad in the specified ad group for the advertiser account.",
+}
+
+
 async def tiktok_ads_create_ad(adgroup_id: str, ad_name: str, advertiser_id: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """TikTok Marketing API: Create ad. Official: https://business-api.tiktok.com/portal/docs"""
     try:

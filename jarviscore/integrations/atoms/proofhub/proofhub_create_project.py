@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one project in the connected ProofHub workspace.",
+}
+
+
 async def proofhub_create_project(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a project. Official: https://github.com/ProofHub/api_v3/blob/master/README.md"""
     try:

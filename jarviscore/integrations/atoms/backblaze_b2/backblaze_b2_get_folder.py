@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def backblaze_b2_get_folder(folder_id: str, bucket_id: Optional[str]=None, bucket_name: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Resolve a folder prefix in a bucket via b2_list_file_names (B2 has no folder objects). Official: https://www.backblaze.com/b2/docs/b2_list_file_names.html"""
     try:

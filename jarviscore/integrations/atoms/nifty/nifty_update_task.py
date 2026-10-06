@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 NIFTY_API = 'https://openapi.niftypm.com/api/v1.0'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["task_id", "payload"],
+    "consequence": "Updates one task in Nifty.",
+}
+
+
 async def nifty_update_task(task_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update task via JSON body. Official: https://developers.niftypm.com/operation/operation-taskapicontroller_edittask"""
     try:

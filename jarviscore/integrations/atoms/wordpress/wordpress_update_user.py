@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["user_id", "title"],
+    "consequence": "Updates the specified WordPress user, which can change their role, credentials or access.",
+}
+
+
 async def wordpress_update_user(user_id: str, title: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """wordpress REST: update user. Official: https://developer.wordpress.org/rest-api/"""
     try:

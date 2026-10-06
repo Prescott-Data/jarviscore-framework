@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["email", "first_name", "last_name", "company", "phone"],
+    "consequence": "Creates one HubSpot contact record.",
+}
+
+
 async def hubspot_create_contact(email: str, first_name: str='', last_name: str='', company: str='', phone: str='') -> dict:
     """Create contact. POST https://api.hubapi.com/crm/v3/objects/contacts"""
     _h = {'Content-Type': 'application/json'}

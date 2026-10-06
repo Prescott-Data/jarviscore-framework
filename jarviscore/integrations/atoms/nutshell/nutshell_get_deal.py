@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 NUTSHELL_RPC = 'https://app.nutshell.com/api/v1/json'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def nutshell_get_deal(deal_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get Deal via Nutshell JSON-RPC. Official: https://developers-rpc.nutshell.com/detail/class_core.html#getLead"""
     try:

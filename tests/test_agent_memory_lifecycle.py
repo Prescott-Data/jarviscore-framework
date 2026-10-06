@@ -18,6 +18,13 @@ class FakeAthena:
     def __init__(self):
         self.thoughts, self.actions, self.observations = [], [], []
         self.searched = []
+        self.delivers = True
+        self.delivery_stats = {"dropped": 0}
+
+    async def flush(self, timeout=5.0):
+        if not self.delivers:
+            self.delivery_stats["dropped"] += 1
+        return True
 
     async def record_thought(self, content, metadata=None):
         self.thoughts.append(content)
@@ -31,6 +38,12 @@ class FakeAthena:
     async def search(self, query, limit=5):
         self.searched.append(query)
         return [{"content": "Drive holds 100 files", "similarity_score": 0.91}]
+
+    async def get_memory_context(self, limit=20):
+        return {"stm_events": [
+            {"content": content, "metadata": metadata}
+            for content, metadata in self.observations
+        ] + [{"content": thought, "metadata": {"event": "thought"}} for thought in self.thoughts]}
 
 
 @pytest.fixture
@@ -58,6 +71,22 @@ async def test_a_turn_is_not_a_memory(memory):
     await memory.log_turn("t1", thought="Drive is blocked by host rules", action="execute_code", result="HostNotAllowed")
     assert memory._athena.thoughts == []
     assert memory._athena.actions == []
+
+
+async def test_a_queued_write_that_never_arrives_is_not_kept(memory):
+    memory._athena.delivers = False
+
+    assert await memory.remember("Sam is vegetarian") is False
+
+
+async def test_a_fact_kept_minutes_ago_is_recalled_before_consolidation(memory):
+    await memory.remember("Sam is vegetarian", kind="preference")
+    await memory.remember("Sam is vegetarian", kind="preference")
+    memory._athena.thoughts.append("Drive looked blocked")
+
+    recalled = [item["content"] for item in await memory.recall("family dinner")]
+
+    assert recalled == ["Drive holds 100 files", "Sam is vegetarian"]
 
 
 async def test_the_agent_decides_what_persists(memory):
@@ -143,6 +172,16 @@ async def test_remember_tool_persists_a_fact(agent, memory):
 
 async def test_remember_tool_refuses_emptiness(agent):
     assert (await agent._tool_remember("   "))["status"] == "error"
+
+
+async def test_the_run_records_only_facts_that_were_actually_kept(agent):
+    agent._kept_memories = []
+    await agent._tool_remember("Sam is vegetarian", kind="preference")
+    await agent._tool_remember("   ")
+    agent._current_memory = None
+    await agent._tool_remember("Leo has a peanut allergy")
+
+    assert agent._kept_memories == [{"kind": "preference", "fact": "Sam is vegetarian"}]
 
 
 async def test_remember_tool_is_honest_without_memory(agent):

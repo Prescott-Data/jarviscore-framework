@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["org_url", "name", "email", "phone", "website"],
+    "consequence": "Creates one Microsoft Dynamics 365 account record.",
+}
+
+
 async def dynamics_create_account(org_url: str, name: str, email: str=None, phone: str=None, website: str=None) -> dict:
     """Create account via the dynamics API."""
     try:

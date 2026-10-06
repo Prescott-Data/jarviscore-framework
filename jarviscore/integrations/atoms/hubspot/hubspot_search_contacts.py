@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def hubspot_search_contacts(query: str, limit: int=50, after: int=0) -> dict:
     """Search HubSpot contacts by the provider's searchable contact properties."""
     body = {

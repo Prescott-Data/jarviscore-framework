@@ -16,7 +16,7 @@ import json
 import logging
 import os
 
-from jarviscore.orchestration.envelopes import neutral_context
+from jarviscore.orchestration.envelopes import delegated_authority, neutral_context
 
 if TYPE_CHECKING:
     from jarviscore.p2p import PeerClient
@@ -151,16 +151,18 @@ class Agent(ABC):
         contract = (
             getattr(self, "capability_contracts", {}) or {}
         ).get(capability) or {}
-        systems = [str(value) for value in contract.get("systems") or []]
-        effects = [str(value) for value in contract.get("effects") or []]
+        authority = delegated_authority(
+            contract, (context or {}).get("peer_requester_authority")
+        )
+        if "error" in authority:
+            return {"status": "failure", "error": authority["error"]}
+        systems = authority["systems"]
         if systems:
             request_context["systems"] = systems
             if len(systems) == 1:
                 request_context["system"] = systems[0]
-        for effect in ("read", "propose", "write", "notify", "destructive"):
-            if effect in effects:
-                request_context["effect"] = effect
-                break
+        if authority["effect"]:
+            request_context["effect"] = authority["effect"]
         lock = getattr(self, "_peer_execution_lock", None)
         if lock is None:
             return await self.execute_task({"task": question, "context": request_context})

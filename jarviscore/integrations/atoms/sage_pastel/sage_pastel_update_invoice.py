@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["invoice_id", "payload"],
+    "consequence": "Updates one Sage Pastel tax invoice, which can change invoice details and financial records.",
+}
+
+
 async def sage_pastel_update_invoice(invoice_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update tax invoice. Official: https://accounting.sageone.co.za/api/2.0.0/Help"""
     try:

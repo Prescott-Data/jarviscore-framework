@@ -50,6 +50,9 @@ class RoutingError(RuntimeError):
 #: only call proxy, so every other role reaches a declared system unauthenticated.
 CREDENTIALED_ROLES = frozenset({"coder"})
 
+#: A step system naming the agent's own browser rather than a connected provider.
+BROWSER_SYSTEM = "browser"
+
 _ROUTING_ESSENTIAL_KEYS = frozenset({
     "workflow_id", "step_id", "system", "system_credentials_available",
 })
@@ -506,6 +509,13 @@ class Kernel:
                     if step_id and step_id != "unknown":
                         peer_context["peer_requester_step_id"] = step_id
                     peer_context["peer_requester_role"] = subagent.role
+                    # Stamped from runtime step state so delegated work cannot exceed it.
+                    peer_context["peer_requester_authority"] = {
+                        "effect": str(source_context.get("effect") or "read"),
+                        "systems": [
+                            str(value) for value in source_context.get("systems") or []
+                        ] or ([str(source_context["system"])] if source_context.get("system") else []),
+                    }
                     execution_budget = source_context.get("execution_budget")
                     if hasattr(execution_budget, "to_record"):
                         execution_budget = execution_budget.to_record()
@@ -708,6 +718,14 @@ class Kernel:
             if str(value)
         ]
         effect = str((context or {}).get("effect") or "").strip()
+        if (system_names or ([system_name] if system_name else [])) == [BROWSER_SYSTEM]:
+            # The agent's own browser is where this work happens, not a
+            # provider someone has to connect.
+            return RoutingDecision(
+                role="browser",
+                confidence=1.0,
+                reason="The step acts in the agent's own browser.",
+            )
         if system_name and effect in {"write", "notify", "destructive"}:
             return RoutingDecision(
                 role="coder",
@@ -876,6 +894,7 @@ class Kernel:
                 redis_store=self.redis_store,
                 blob_storage=self.blob_storage,
             )
+            subagent.effect_guards = tuple(self.config.get("effect_guards") or ())
         elif role == "researcher":
             subagent = ResearcherSubAgent(
                 agent_id=agent_id,
@@ -901,9 +920,13 @@ class Kernel:
                 viewport=None,  # uses BrowserSubAgent default 1280x720
                 redis_store=self.redis_store,
                 blob_storage=self.blob_storage,
+                profile_root=self.config.get("browser_profile_dir"),
+                scope_field=self.config.get("memory_scope_field"),
+                control_url=self.config.get("browser_control_url"),
             )
         else:
             raise ValueError(f"Unknown subagent role: {role}")
+        subagent.workspace_root = getattr(self.sandbox, "workspace", None)
         self._attach_mesh_tools(subagent)
         return subagent
 
@@ -1391,6 +1414,8 @@ class Kernel:
                         "elapsed_ms": (time.time() - start_time) * 1000,
                         "distilled_facts": output.metadata.get("distilled_facts", {}),
                         "tool_receipts": output.metadata.get("tool_receipts", []),
+                        "answer": output.metadata.get("answer"),
+                        "kept_memories": output.metadata.get("kept_memories", []),
                     },
                 )
 

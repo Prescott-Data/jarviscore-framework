@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 SIGN_API = 'https://api.hellosign.com/v3'
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Sends one Dropbox Sign signature request to recipients in the payload. Recipients may receive email notifications and signing links.",
+}
+
+
 async def dropbox_sign_create_file(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Send signature request (multipart form). Basic API key or Bearer OAuth. Official: https://developers.hellosign.com/api/signature-request/send"""
     try:

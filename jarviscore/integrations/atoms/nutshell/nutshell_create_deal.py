@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 NUTSHELL_RPC = 'https://app.nutshell.com/api/v1/json'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one deal (lead) record in Nutshell.",
+}
+
+
 async def nutshell_create_deal(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create Deal via Nutshell JSON-RPC. Official: https://developers-rpc.nutshell.com/detail/class_core.html#newLead"""
     try:

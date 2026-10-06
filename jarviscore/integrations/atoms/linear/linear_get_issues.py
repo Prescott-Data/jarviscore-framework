@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def linear_get_issues(team_id: str=None, max_results: int=50) -> dict:
     """Get issues. POST https://api.linear.app/graphql"""
     filter_clause = f'filter: {{ team: {{ id: {{ eq: "{team_id}" }} }} }},' if team_id else ''

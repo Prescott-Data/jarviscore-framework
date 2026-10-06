@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 NUTSHELL_RPC = 'https://app.nutshell.com/api/v1/json'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["account_id", "payload"],
+    "consequence": "Updates one Nutshell account record.",
+}
+
+
 async def nutshell_update_account(account_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update Account via Nutshell JSON-RPC. Official: https://developers-rpc.nutshell.com/detail/class_core.html#editAccount"""
     try:

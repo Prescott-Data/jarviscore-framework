@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def tawkto_get_conversation(chat_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Tawk.to REST: get chat. Official: https://developer.tawk.to/rest-api/"""
     try:

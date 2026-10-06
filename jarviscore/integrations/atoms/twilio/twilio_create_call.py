@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["to", "from_number", "url"],
+    "consequence": "Places one outbound phone call through Twilio to the specified recipient using the provided call instructions URL.",
+}
+
+
 async def twilio_create_call(to: str, from_number: str, url: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Twilio REST: create call. Official: https://www.twilio.com/docs/usage/api"""
     try:

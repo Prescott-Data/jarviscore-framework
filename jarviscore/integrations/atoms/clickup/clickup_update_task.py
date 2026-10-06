@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["task_id", "name", "description", "status", "priority"],
+    "consequence": "Updates one ClickUp task's fields or status.",
+}
+
+
 async def clickup_update_task(task_id: str, name: str=None, description: str=None, status: str=None, priority: int=None) -> dict:
     """Update task via the clickup API."""
     try:

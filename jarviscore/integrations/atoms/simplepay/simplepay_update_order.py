@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _SP_API_ROOT = 'https://api.payroll.simplepay.cloud/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["client_id", "payload"],
+    "consequence": "Updates one or more SimplePay payslips for the specified client, changing payroll.",
+}
+
+
 async def simplepay_update_order(client_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """SimplePay: update payslip (order) via bulk_input. Official: https://www.simplepay.co.za/api-docs/"""
     try:
