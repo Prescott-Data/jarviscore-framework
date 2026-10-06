@@ -678,43 +678,6 @@ class TestCommunicatorSubAgent:
         assert output.payload == {"message": "Status update: all systems go."}
 
     @pytest.mark.asyncio
-    async def test_native_first_tool_call_uses_provider_structure(self, mock_llm):
-        mock_llm.responses = [
-            _llm_response("", tokens={"input": 10, "output": 2, "total": 12})
-            | {"provider_metadata": {"tool_calls": [{
-                "function": {
-                    "name": "draft_message",
-                    "arguments": json.dumps({
-                        "content": "Status update: all systems go.",
-                        "audience": "non-technical",
-                    }),
-                },
-            }]}},
-            _llm_response(
-                'THOUGHT: Done\nDONE: Message drafted\n'
-                'RESULT: {"message": "Status update: all systems go."}'
-            ),
-        ]
-        comm = CommunicatorSubAgent(agent_id="m1", llm_client=mock_llm)
-        comm.native_first_tool_call = True
-
-        output = await comm.run("draft status update", max_turns=2)
-
-        assert output.status == "success"
-        assert len(comm.drafts) == 1
-        first_call = mock_llm.calls[0]
-        assert first_call["tool_choice"] == "required"
-        assert first_call["parallel_tool_calls"] is False
-        draft = next(
-            tool for tool in first_call["tools"]
-            if tool["function"]["name"] == "draft_message"
-        )
-        assert set(draft["function"]["parameters"]["properties"]) == {
-            "content", "audience", "format",
-        }
-        assert "kwargs" not in draft["function"]["parameters"]["properties"]
-
-    @pytest.mark.asyncio
     async def test_full_run_repairs_protocol_violation(self, mock_llm):
         """A raw response becomes visible feedback before final failure."""
         mock_llm.responses = [

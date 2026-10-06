@@ -50,7 +50,7 @@ import os
 import re
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, cast, get_args, get_origin
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.execution import multimodal
@@ -326,7 +326,6 @@ class BaseSubAgent(ABC):
     #: values, the agent submitted an identical result, and no tool ran in between
     #: — so an agent that is still working is never cut off, however long it takes.
     max_identical_done_attempts: int = 3
-    native_first_tool_call: bool = False
 
     def __init__(
         self,
@@ -478,73 +477,6 @@ class BaseSubAgent(ABC):
         for tool in self._tools.values():
             lines.append(f"  - {tool.name}: {tool.description} [{tool.phase}]")
         return "\n".join(lines)
-
-    @staticmethod
-    def _tool_parameter_schema(annotation: Any) -> Dict[str, Any]:
-        origin = get_origin(annotation)
-        if origin in (list, List):
-            args = get_args(annotation)
-            return {
-                "type": "array",
-                "items": BaseSubAgent._tool_parameter_schema(args[0]) if args else {},
-            }
-        if origin in (dict, Dict) or annotation is dict:
-            return {"type": "object"}
-        return {
-            str: {"type": "string"},
-            int: {"type": "integer"},
-            float: {"type": "number"},
-            bool: {"type": "boolean"},
-        }.get(annotation, {})
-
-    def _native_tool_schemas(self) -> List[Dict[str, Any]]:
-        schemas = []
-        for tool in self._tools.values():
-            signature = inspect.signature(tool.func)
-            properties = {}
-            required = []
-            for name, parameter in signature.parameters.items():
-                if parameter.kind in {
-                    inspect.Parameter.VAR_POSITIONAL,
-                    inspect.Parameter.VAR_KEYWORD,
-                }:
-                    continue
-                properties[name] = self._tool_parameter_schema(parameter.annotation)
-                if parameter.default is inspect.Parameter.empty:
-                    required.append(name)
-            schemas.append({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": properties,
-                        "required": required,
-                        "additionalProperties": False,
-                    },
-                },
-            })
-        return schemas
-
-    @staticmethod
-    def _native_tool_action(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        metadata = result.get("provider_metadata") or {}
-        calls = result.get("tool_calls") or metadata.get("tool_calls") or []
-        if not calls:
-            return None
-        call = calls[0]
-        function = call.get("function") or call
-        name = str(function.get("name") or "").strip()
-        arguments = function.get("arguments", function.get("args", {}))
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                arguments = {"raw": arguments}
-        if not name or not isinstance(arguments, dict):
-            return None
-        return {"type": "tool", "thought": "", "tool": name, "params": arguments}
 
     @abstractmethod
     def get_system_prompt(self) -> str:
@@ -986,12 +918,6 @@ class BaseSubAgent(ABC):
             kwargs = {}
             if model:
                 kwargs["model"] = model
-            if self.native_first_tool_call and turn == 0 and not state.tool_history:
-                kwargs.update({
-                    "tools": self._native_tool_schemas(),
-                    "tool_choice": "required",
-                    "parallel_tool_calls": False,
-                })
 
             _llm_t0 = __import__('time').monotonic()
             try:
@@ -1077,9 +1003,7 @@ class BaseSubAgent(ABC):
             state.tokens_used = total_tokens["total"]
 
             # Parse response
-            parsed = self._native_tool_action(llm_result) or self._parse_response_for_contract(
-                content, context
-            )
+            parsed = self._parse_response_for_contract(content, context)
             if parsed["type"] != "raw":
                 # Repairs bound a run of malformed replies, not a session's lifetime.
                 state.internal_variables["_protocol_violation_count"] = 0
