@@ -177,7 +177,7 @@ nav:
   - Enterprise: infrastructure/enterprise.md
 
 extra:
-  version: "2.1.1"
+  version: "2.1.0"
   social:
     - icon: material/web
       link: https://developers.prescottdata.io

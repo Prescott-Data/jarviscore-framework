@@ -1275,7 +1275,7 @@ class Mesh:
                         1, int(self.config.get("mesh_max_reconciliation_revisions", 3))
                     )
                     if revision < max_revisions:
-                        from jarviscore.planning.mesh_planner import MeshPlanError, MeshPlanner
+                        from jarviscore.planning.mesh_planner import MeshPlanner
 
                         lease_seconds = int(self.config.get(
                             "mesh_planning_lease_seconds", 300
@@ -1335,51 +1335,32 @@ class Mesh:
                                         0.0, deadline - asyncio.get_running_loop().time()
                                     )
                                 )
-                                try:
-                                    return await self.replan_goal(
-                                        workflow_id,
-                                        reason=decision["reason"],
-                                        context={
-                                            "semantic_reconciliation": {
-                                                "revision": revision,
-                                                "obligations": semantic_gaps,
-                                                "history": (
-                                                    self._redis_store
-                                                    .get_workflow_reconciliation_history(
-                                                        workflow_id
-                                                    )
-                                                ),
-                                            },
+                                return await self.replan_goal(
+                                    workflow_id,
+                                    reason=decision["reason"],
+                                    context={
+                                        "semantic_reconciliation": {
+                                            "revision": revision,
+                                            "obligations": semantic_gaps,
+                                            "history": (
+                                                self._redis_store
+                                                .get_workflow_reconciliation_history(
+                                                    workflow_id
+                                                )
+                                            ),
                                         },
-                                        timeout=remaining,
-                                    )
-                                except MeshPlanError as error:
-                                    settlement = {
-                                        "event": "semantic_reconciliation_settled",
-                                        "revision": revision,
-                                        "obligation_status": "blocked",
-                                        "reason": decision["reason"],
-                                        "planner_error": f"{type(error).__name__}: {error}",
-                                    }
-                                    self._redis_store.append_ledger_entry(workflow_id, {
-                                        "event": "semantic_reconciliation_amendment_failed",
-                                        "revision": revision,
-                                        "reason": decision["reason"],
-                                        "error": settlement["planner_error"],
-                                    })
-                                    self._redis_store.save_workflow_reconciliation_settlement(
-                                        workflow_id, revision, settlement
-                                    )
-                            else:
-                                settlement = {
-                                    "event": "semantic_reconciliation_settled",
-                                    "revision": revision,
-                                    "obligation_status": "blocked",
-                                    "reason": decision["reason"],
-                                }
-                                self._redis_store.save_workflow_reconciliation_settlement(
-                                    workflow_id, revision, settlement
+                                    },
+                                    timeout=remaining,
                                 )
+                            settlement = {
+                                "event": "semantic_reconciliation_settled",
+                                "revision": revision,
+                                "obligation_status": "blocked",
+                                "reason": decision["reason"],
+                            }
+                            self._redis_store.save_workflow_reconciliation_settlement(
+                                workflow_id, revision, settlement
+                            )
                         finally:
                             self._redis_store.release_workflow_reconciliation(
                                 workflow_id, revision, self._node_id
