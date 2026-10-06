@@ -497,13 +497,31 @@ class TestRagDecisionStage:
         ]
         pipeline.rerank_candidates = 50
 
-        result = pipeline.retrieve("How much revenue?", top_k=2)
+        result = pipeline.retrieve("How much revenue?", top_k=2, one_per_source=True)
 
         assert [r["source"] for r in result["results"]] == ["10q", "merger"]
         assert pipeline.reranker.score.call_args.args[1] == [
             "Merger\nOffer of $25.00 per share", "Q2 10-Q\nTotal revenues $ 407,344",
         ]
         assert pipeline.store.search.call_args.kwargs["top_k"] >= 50
+
+    def test_rag_returns_several_passages_of_one_document_by_default(self):
+        pipeline = RagPipeline.__new__(RagPipeline)
+        pipeline.embedding = MagicMock()
+        pipeline.embedding.embed_query.return_value = [0.1]
+        pipeline.store = MagicMock()
+        pipeline.store.search.return_value = [
+            {"source": "handbook", "text": "Sessions expire after 30 minutes", "score": 0.9},
+            {"source": "handbook", "text": "Refresh tokens last 14 days", "score": 0.8},
+            {"source": "faq", "text": "Log in again after expiry", "score": 0.7},
+        ]
+        pipeline.reranker = None
+        pipeline.rerank_candidates = 0
+
+        result = pipeline.retrieve("How do sessions expire?", top_k=3)
+
+        assert [r["source"] for r in result["results"]] == ["handbook", "handbook", "faq"]
+        assert pipeline.store.search.call_args.kwargs["top_k"] == 3
 
     def test_rag_filters_vector_candidates_before_reranking(self):
         pipeline = RagPipeline.__new__(RagPipeline)

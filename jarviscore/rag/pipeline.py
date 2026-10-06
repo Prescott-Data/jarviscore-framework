@@ -182,7 +182,13 @@ class RagPipeline:
         top_k: Optional[int] = None,
         where: Optional[Dict[str, Any]] = None,
         apply_reranker: bool = True,
+        one_per_source: bool = False,
     ) -> Dict[str, Any]:
+        """Top passages for ``query``; ``one_per_source`` keeps only each source's best.
+
+        Use ``one_per_source`` when each source is one citable unit (a page, a
+        segment) and several units of one source should not crowd out others.
+        """
         top_k = top_k or int(os.environ.get("RAG_TOP_K", str(_DEFAULT_TOP_K)))
         embedding = self.embedding
         q_vec = (
@@ -194,14 +200,14 @@ class RagPipeline:
         pool_size = max(top_k, getattr(self, "rerank_candidates", 0)) if reranker else top_k
         candidates = self.store.search(
             q_vec,
-            top_k=pool_size * _UNITS_PER_SOURCE_DEPTH,
+            top_k=pool_size * (_UNITS_PER_SOURCE_DEPTH if one_per_source else 1),
             where=where,
         )
         results: List[Dict[str, Any]] = []
         seen_sources = set()
         for candidate in candidates:
             source = candidate.get("source")
-            if source in seen_sources:
+            if one_per_source and source in seen_sources:
                 continue
             seen_sources.add(source)
             results.append(candidate)
@@ -253,6 +259,7 @@ class RagPipeline:
         top_k: Optional[int] = None,
         *,
         where: Optional[Dict[str, Any]] = None,
+        one_per_source: bool = False,
         thresholds: Optional[Dict[str, float]] = None,
         max_concurrent: Optional[int] = None,
     ) -> Dict[str, Any]:
@@ -261,7 +268,7 @@ class RagPipeline:
             raise RuntimeError(
                 "TypeSafe RAG decisions require a configured Jev decision client."
             )
-        retrieval = self.retrieve(query, top_k=top_k, where=where)
+        retrieval = self.retrieve(query, top_k=top_k, where=where, one_per_source=one_per_source)
         passages = [dict(item) for item in retrieval.get("results", [])]
         policy = dict(_DEFAULT_DECISION_THRESHOLDS)
         policy.update(self.decision_config.get("thresholds") or {})
