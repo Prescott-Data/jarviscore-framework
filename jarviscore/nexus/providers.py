@@ -199,9 +199,7 @@ PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
         "auth_type": "api_key",
         "label": "Apollo.io",
         "category": "crm",
-        # Apollo carries the key in the JSON body, which no strategy places.
-        # Left unset deliberately: registration fails loudly instead of sending
-        # a header Apollo ignores and returning an opaque 401.
+        "auth_config": {"header_name": "x-api-key"},
     },
 
     # ── Finance & Payments ───────────────────────────────────────────────────

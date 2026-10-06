@@ -555,3 +555,97 @@ class TestProviderIdentityAndContentAtoms:
         request = calls[1][2]["json"]["requests"][0]["insertText"]
         assert request["location"]["index"] == 1
         assert request["text"] == "Introduction"
+
+
+class TestApolloAtoms:
+    """Apollo's documented API: x-api-key header, /api/v1 paths, query parameters."""
+
+    @staticmethod
+    def load(name):
+        with open(
+            f"jarviscore/integrations/atoms/apollo/{name}.py", encoding="utf-8"
+        ) as handle:
+            source = handle.read()
+        result = read_contract(source, system="apollo", expected_name=name)
+        assert result.ok, result.report()
+        return source, result.atom
+
+    @staticmethod
+    async def run(source, atom, arguments, response):
+        calls = []
+
+        async def nexus_call(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return {"ok": True, "status_code": 200, "json": response, "body": "",
+                    "headers": {}}
+
+        namespace = {"nexus_call": nexus_call}
+        exec(f"{source}\n\n{invocation(atom, arguments)}", namespace)
+        return await namespace["main"](), calls
+
+    def test_the_key_is_placed_in_the_header_apollo_documents(self):
+        from jarviscore.nexus.providers import get_auth_config
+
+        assert get_auth_config("apollo") == {"header_name": "x-api-key"}
+
+    async def test_people_search_uses_the_api_search_endpoint(self):
+        source, atom = self.load("apollo_search_people")
+        result, calls = await self.run(
+            source,
+            atom,
+            {"job_titles": ["Chief Operating Officer"], "seniorities": ["c_suite"],
+             "organization_domains": ["example.co.uk"]},
+            {"people": [{"id": "p1", "first_name": "Ada"}], "total_entries": 1},
+        )
+
+        assert result == {"success": True, "people": [{"id": "p1", "first_name": "Ada"}],
+                          "total_entries": 1, "page": 1}
+        method, url, kwargs = calls[0]
+        assert (method, url) == ("POST", "https://api.apollo.io/api/v1/mixed_people/api_search")
+        assert kwargs["provider"] == "apollo"
+        assert kwargs["params"]["person_titles[]"] == ["Chief Operating Officer"]
+        assert kwargs["params"]["person_seniorities[]"] == ["c_suite"]
+        assert kwargs["params"]["q_organization_domains_list[]"] == ["example.co.uk"]
+
+    async def test_organization_search_filters_by_keyword_tags(self):
+        source, atom = self.load("apollo_search_organizations")
+        _, calls = await self.run(
+            source,
+            atom,
+            {"locations": ["united kingdom"], "keyword_tags": ["private equity"],
+             "employee_count_min": 20, "employee_count_max": 500},
+            {"organizations": [], "pagination": {"total_entries": 0}},
+        )
+
+        method, url, kwargs = calls[0]
+        assert url == "https://api.apollo.io/api/v1/mixed_companies/search"
+        assert kwargs["params"]["organization_locations[]"] == ["united kingdom"]
+        assert kwargs["params"]["q_organization_keyword_tags[]"] == ["private equity"]
+        assert kwargs["params"]["organization_num_employees_ranges[]"] == ["20,500"]
+
+    async def test_person_enrichment_by_name_and_domain_returns_contact_details(self):
+        source, atom = self.load("apollo_get_person")
+        result, calls = await self.run(
+            source,
+            atom,
+            {"name": "Ada Lovelace", "domain": "example.co.uk"},
+            {"person": {"id": "p1", "name": "Ada Lovelace", "title": "COO",
+                        "email": "ada@example.co.uk", "email_status": "verified",
+                        "linkedin_url": "http://www.linkedin.com/in/ada",
+                        "match_confidence": "high",
+                        "organization": {"name": "Example", "primary_domain": "example.co.uk"}}},
+        )
+
+        assert calls[0][1] == "https://api.apollo.io/api/v1/people/match"
+        assert calls[0][2]["params"] == {"name": "Ada Lovelace", "domain": "example.co.uk"}
+        assert result["email"] == "ada@example.co.uk"
+        assert result["email_status"] == "verified"
+        assert result["match_confidence"] == "high"
+        assert result["organization_domain"] == "example.co.uk"
+
+    async def test_person_enrichment_needs_an_identifier(self):
+        source, atom = self.load("apollo_get_person")
+        result, calls = await self.run(source, atom, {}, {})
+
+        assert result["success"] is False
+        assert calls == []
