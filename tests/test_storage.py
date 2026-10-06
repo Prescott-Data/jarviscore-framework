@@ -27,11 +27,18 @@ import pytest
 
 from jarviscore.execution.decisions import DecisionResult
 from jarviscore.rag.embedding import Reranker
-from jarviscore.rag.faiss_store import FaissVectorStore
 from jarviscore.rag.pipeline import RagPipeline
 from jarviscore.storage.base import BlobStorage
 from jarviscore.storage.local import LocalBlobStorage
 from jarviscore.testing import MockBlobStorage
+
+
+def _faiss_store():
+    pytest.importorskip("numpy")
+    pytest.importorskip("faiss")
+    from jarviscore.rag.faiss_store import FaissVectorStore
+
+    return FaissVectorStore
 
 # ======================================================================
 # BlobStorage ABC Contract
@@ -327,6 +334,7 @@ class TestRagDecisionStage:
         }
 
     def test_faiss_metadata_filter_prevents_scope_crowding(self, tmp_path):
+        FaissVectorStore = _faiss_store()
         store = FaissVectorStore(
             str(tmp_path / "index.faiss"), str(tmp_path / "meta.json"), 2
         )
@@ -364,6 +372,7 @@ class TestRagDecisionStage:
         assert reranker.score_pairs([]) == []
 
     def test_faiss_delete_keeps_remaining_vectors_without_reembedding(self, tmp_path):
+        FaissVectorStore = _faiss_store()
         paths = (str(tmp_path / "index.faiss"), str(tmp_path / "meta.json"))
         store = FaissVectorStore(*paths, 2)
         store.add(

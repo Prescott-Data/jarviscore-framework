@@ -1,8 +1,10 @@
 import pytest
 
-from jarviscore.browser.controller import ActionResult, BrowserConfig
-from jarviscore.browser.dispatcher import BrowserDispatcher
-from jarviscore.browser.profiles import BrowserProfile, BrowserProfileRegistry
+pytest.importorskip("playwright")
+
+from jarviscore.browser.controller import ActionResult, BrowserConfig  # noqa: E402
+from jarviscore.browser.dispatcher import BrowserDispatcher  # noqa: E402
+from jarviscore.browser.profiles import BrowserProfile, BrowserProfileRegistry  # noqa: E402
 
 
 class ConnectedController:
