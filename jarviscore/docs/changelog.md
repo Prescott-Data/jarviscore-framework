@@ -26,6 +26,174 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 2.0.0 <span class="changelog-date">2026-10-06</span>
+
+JarvisCore now maintains its own atoms and runs the code its agents write
+safely. A major version because the atom contract is stricter: some atoms that
+were valid in 1.x are withheld until they declare what they do.
+
+### Breaking changes
+
+- **Atoms that send `POST`, `PUT` or `PATCH` must declare `ATOM_POLICY`.**
+  Without one, such an atom was treated as a read that needs no approval, even
+  when it created orders or sent messages. It is now withheld until it declares
+  its effect. All 1,228 shipped atoms declare one.
+- **Atom modules are declarative.** At module level they hold only imports,
+  constants and definitions; calls in decorators, defaults, annotations or base
+  classes are rejected, so reading an atom never runs provider code.
+- **Atoms are called with their declared parameters only.** Arguments are
+  passed as data and unknown parameter names are rejected.
+- **Generated code reaches a provider only through its atoms.** A direct
+  `nexus_call` to a provider that has registered atoms is refused unless the
+  code is the atom being proven.
+- **Apollo atoms use Apollo's current API.** `apollo_search_people`,
+  `apollo_get_person` and `apollo_search_organizations` take new parameters
+  (titles, seniorities, employer domains; enrichment by id, name and domain, or
+  LinkedIn URL; keyword tags), and the Apollo provider places its key in the
+  `x-api-key` header. (#243)
+
+### Added
+
+- **Self-maintaining atoms.** Coder repairs an atom that failed in the run,
+  extends a read atom that ran but cannot cover a stated gap (additive, same
+  policy), and proves a new read atom by one stated call before registering
+  it. Every change becomes a new immutable registry version.
+- **OS confinement for model-written code.** macOS `sandbox-exec` and Linux
+  `bwrap`: no network, reads limited to the runtime and workspace, writes only
+  to the workspace, the function registry read-only. Model-written code now
+  runs without `ALLOW_UNSAFE_LOCAL_EXECUTION` wherever confinement works.
+- **Browser sessions.** `BROWSER_CONTROL_URL` attaches to a browser the person
+  already has open; `BROWSER_PROFILE_DIR` keeps a persistent profile per
+  tenant. Screenshots reach the model as images on every provider.
+- **Schedules and event triggers.** `mesh.schedule_goal()`,
+  `mesh.emit_event()`, `mesh.schedule_wake()` and `mesh.cancel_schedule()`
+  start durable goals on an interval, at a time or on an event, once across
+  nodes.
+- **Tool result observation settings.** `SUBAGENT_OBSERVATION_LIMIT`,
+  `SUBAGENT_TURN_RESULT_WINDOW`, `SUBAGENT_TURN_RESULT_BUDGET` and
+  `SUBAGENT_READ_PAGE_LIMIT`.
+
+### Fixed
+
+- **Tool results are kept whole.** Retained results were cut at 16,000
+  characters, so a long listing lost its page token and agents re-listed until
+  their budget ran out. Older results are now released whole with a recorded
+  reason, and `read_turn_result` pages are shown whole.
+- **An installed but blocked `bwrap` is not confinement.** Confinement is
+  proven by starting one confined child; where a container forbids it, code
+  execution is refused with the reason instead of every run failing.
+- **The agent's answer reaches the person.** `DONE` carries the human answer,
+  memories an agent keeps flow into its result, `remember` flushes before
+  returning, and `recall` includes this session's memories.
+- **Persistent browser profiles start.** The profile metadata module was
+  missing, so a persistent profile failed on import; screenshot bytes no longer
+  flood the tool channel. (#220)
+- **Worker file tools stay inside the run workspace.**
+
+### Migration
+
+1. Check your own atoms with the contract reader. Each one that sends `POST`,
+   `PUT` or `PATCH` needs an `ATOM_POLICY`:
+
+    ```python
+    from pathlib import Path
+    from jarviscore.execution.atom_contract import read_contract
+
+    for path in Path("my_atoms").glob("*/*.py"):  # <system>/<atom>.py
+        result = read_contract(path.read_text(), system=path.parent.name,
+                               expected_name=path.stem)
+        if not result.ok:
+            print(path, result.problems)
+    ```
+
+    ```python
+    ATOM_POLICY = {
+        "effect": "write",            # read, write, notify or destructive
+        "approval": "never",          # "required" for money, access, publishing
+        "idempotency_fields": ["record_id", "fields"],
+        "consequence": "Updates one record in Acme CRM.",
+    }
+    ```
+
+    An atom that only queries through `POST` declares `{"effect": "read",
+    "approval": "never"}`.
+
+2. Move any module-level calls in your atoms into the function body.
+3. Code that called the Apollo atoms with the old parameters must use the new
+   ones above.
+4. In containers, allow user namespaces and an unmasked `/proc` for
+   confinement, or keep model-written code refused. See
+   [Sandbox Execution](guides/production.md#sandbox-execution).
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 1.14.1 <span class="changelog-date">2026-10-01</span>
+
+The first 1.14 release on PyPI. 1.14.0 was tagged but not published because
+testing against the JarvisCore Agents blueprints found a regression, fixed here.
+
+### Added
+
+- **Declared model output ceilings.** `LLM_MODEL_OUTPUT_LIMITS` (JSON, model to
+  completion ceiling) and `LLM_DEFAULT_MAX_TOKENS` set the default output
+  allowance, so reasoning deployments no longer spend the whole allowance on
+  hidden reasoning. Each fallback provider gets its own ceiling. (#242)
+- **Tenant-scoped agent memory.** `Mesh(config={"memory_scope_field": ...})`
+  names the trusted context field that separates tenants; a step without it gets
+  no cross-session memory. (#244)
+- **`InternetSearch.search_answered()`** returns results only when a search
+  provider answered, and raises `SearchUnavailable` otherwise.
+
+### Fixed
+
+- **Research must be performed.** The researcher's completion gate needs a
+  search that ran, a content read that returned something, a recorded finding
+  or upstream step results. (#239, #246)
+- **A failed search is not an empty answer.** HTTP errors, rate limits, open
+  circuit breakers and CAPTCHA-blocked engines are reported as failures, not
+  "no results".
+- **A plan revision keeps the work it doesn't redo.**
+- **Reads draw on the thinking budget**, by the tool's declared phase. (#240)
+- **A repaired protocol violation is forgiven** after a well-formed turn. (#241)
+- **The planner reports why a completion stopped.** (#242)
+
+### Compatibility
+
+Backward-compatible minor release over 1.13.1. A researcher that finishes
+without searching or reading is asked to research, and a researcher whose
+searches all fail gets a failed tool result rather than an empty list.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 1.14.0 <span class="changelog-date">2026-10-01</span>
+
+Tagged on GitHub but not published to PyPI; superseded by 1.14.1, which
+contains all of its changes.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 1.13.1 <span class="changelog-date">2026-09-29</span>
+
+### Fixed
+
+- **Cross-node notifications are delivered.** JSON-encoded `peers.notify()`
+  payloads are decoded by the receiving coordinator.
+- **Inbound peer messages are prompt.** Requests arriving on the SWIM thread
+  are handed to the agent's own event loop.
+- **Late joiners become visible.** Nodes introduce their capabilities to every
+  member that joins or recovers, not only at startup.
+- **Peer sends run on the transport's own loop**, and introductions retry.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 1.13.0 <span class="changelog-date">2026-09-22</span>
 
 ### Added
