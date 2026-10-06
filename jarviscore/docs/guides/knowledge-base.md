@@ -83,6 +83,33 @@ print(result)
 | `content` | Yes | The document text (markdown, plain text, extracted PDF, etc.) |
 | `source` | Yes | A stable identifier: used for citation and deduplication |
 | `metadata` | No | Arbitrary dict stored alongside each chunk (author, date, topic, etc.) |
+| `units` | No | Exact spans of `content` to index instead of chunking it, such as table rows or clauses. Each must appear verbatim in `content`. |
+| `context` | No | Text that situates every unit in its document, such as the document title. It is embedded and reranked with each unit but never returned as quoted text. |
+| `citation_atoms` | No | Exact quotes with source locators (`{"quote": ..., "locator": {...}}`). Each quote must appear in `content`; a result carries only the atoms whose quote is inside it. |
+
+### Index units and context
+
+Chunking splits text by length, so a table row can be cut in half or merged
+with its neighbours. Declare the units instead when the document has a natural
+grain, and situate each unit with `context` so a row from one company's filing
+cannot answer for another:
+
+```python
+rows = [
+    "Total revenues | Q2 2025 $ 407,344 | Q2 2024 $ 400,615",
+    "Net loss | Q2 2025 $ (3,300) | Q2 2024 $ (5,220)",
+]
+rag.ingest_documents([{
+    "source": "10q-2025q2:table-3",
+    "content": "Condensed statement of operations\n" + "\n".join(rows),
+    "units": rows,
+    "context": "Informatica Inc. Q2 2025 Form 10-Q",
+    "metadata": {"upload_id": "10q-v1"},
+}])
+```
+
+Each row is retrieved on its own, and the result's `text` is the row exactly as
+it appears in the document.
 
 ---
 
@@ -101,7 +128,55 @@ for chunk in result["results"]:
     print(f"Text:   {chunk['text'][:200]}\n")
 ```
 
-The `result["evidence"]` key contains a list of `Evidence` records, each with a confidence score derived from the cosine similarity, ready to be passed to a `TruthContext` or logged to the episodic ledger.
+The `result["evidence"]` key contains a list of `Evidence` records, each with a confidence score derived from the cosine similarity, ready to be passed to a `TruthContext` or logged to the episodic ledger. Evidence quotes are the complete passage and carry the passage's citation atoms.
+
+### Retrieval quality: query instructions and reranking
+
+Asymmetric retrieval models such as `BAAI/bge-base-en-v1.5` expect an
+instruction in front of queries but not passages. A cross-encoder reranker then
+reads each query and passage together and reorders the vector shortlist:
+
+```python
+rag = RagPipeline(
+    embed_model="BAAI/bge-base-en-v1.5",
+    query_instruction="Represent this sentence for searching relevant passages: ",
+    rerank_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
+    rerank_candidates=50,
+)
+result = rag.retrieve("What were total revenues in Q2 2025?", top_k=10)
+print(result["results"][0]["rerank_score"])
+```
+
+The vector store returns `rerank_candidates` passages, the reranker scores them
+in one batched pass, and the best `top_k` are returned with a `rerank_score`.
+Pass `apply_reranker=False` to get the native dense ranking. The defaults are
+unchanged: `all-MiniLM-L6-v2`, no instruction, no reranker.
+
+Index and query with the same embedding model. Changing `embed_model` changes
+the vector dimension, so rebuild the index after switching.
+
+### Filtering and scoping
+
+`where` restricts retrieval to entries whose metadata (or entry fields such as
+`source`) match. A list, tuple or set value matches any of its members:
+
+```python
+rag.retrieve("revenue", top_k=5, where={"upload_id": ("10q-v1", "10k-v2")})
+```
+
+Filtering happens before the shortlist is cut and reranked, so a scoped query is
+never starved by matches outside its scope.
+
+### One passage per source
+
+By default several passages from one document can be returned. When each
+`source` is one citable unit (a page, a segment) and you want breadth across
+sources, pass `one_per_source=True`: only each source's best passage is kept,
+and the store is searched deep enough to still fill `top_k`.
+
+```python
+rag.retrieve("How did the acquisition close?", top_k=10, one_per_source=True)
+```
 
 ### TypeSafe passage classification
 
@@ -187,14 +262,27 @@ For large wikis, split by page and ingest each page as a separate document. The 
 
 ## Keeping the Index Fresh
 
-The FAISS index accumulates documents: there is no automatic deduplication by `source`. If you re-ingest the same source, you get duplicate chunks. Manage this by deleting and rebuilding the index when your source documents change:
+Ingestion does not deduplicate: re-ingesting the same source adds its chunks
+again. Remove a document's entries first with `delete`, which takes the same
+filter as `where` and keeps every other vector without re-embedding:
+
+```python
+rag = RagPipeline()
+removed = rag.store.delete({"source": "llm-intro"})
+rag.ingest_documents([{"source": "llm-intro", "content": updated_text}])
+```
+
+To start over, delete the index files and re-ingest:
 
 ```bash
 rm ~/.jarviscore/rag/faiss.index
 rm ~/.jarviscore/rag/faiss_meta.json
-# Re-run your ingest script
 python scripts/ingest_knowledge.py
 ```
+
+The default store opens on first use, so an application that binds its own
+store (for example one index per tenant, `rag.store = FaissVectorStore(...)`)
+never opens the default index.
 
 Check index stats at any time:
 
@@ -227,6 +315,11 @@ RAG_TOP_K=5
 RAG_CHUNK_SIZE=1200
 RAG_CHUNK_OVERLAP=200
 
+# Optional asymmetric query instruction and cross-encoder reranking
+# RAG_QUERY_INSTRUCTION="Represent this sentence for searching relevant passages: "
+# RAG_RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+# RAG_RERANK_CANDIDATES=50
+
 # Optional Jev classification after vector retrieval
 # RAG_DECISION_PROVIDER=typesafe
 # RAG_TYPESAFE_MAX_CONCURRENT=4
@@ -241,6 +334,12 @@ RAG_CHUNK_OVERLAP=200
 | `RAG_TOP_K` | `5` | Number of chunks returned per query |
 | `RAG_CHUNK_SIZE` | `1200` | Max characters per chunk |
 | `RAG_CHUNK_OVERLAP` | `200` | Overlap between consecutive chunks |
+| `RAG_QUERY_INSTRUCTION` | (empty) | Text prepended to queries only, for asymmetric retrieval models |
+| `RAG_RERANK_MODEL` | (none) | Cross-encoder model that reranks the vector shortlist |
+| `RAG_RERANK_CANDIDATES` | `50` | Shortlist size the reranker scores |
+
+Constructor arguments `embed_model`, `query_instruction`, `rerank_model` and
+`rerank_candidates` override these variables for one pipeline.
 
 ---
 
