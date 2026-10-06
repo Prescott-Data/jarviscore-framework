@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 MONDAY_API = 'https://api.monday.com/v2'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["board_id", "payload"],
+    "consequence": "Updates one monday.com board attribute such as the board name or description.",
+}
+
+
 async def monday_update_board(board_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update board attribute via GraphQL update_board mutation. Official: https://developer.monday.com/api-reference/reference/boards"""
     try:

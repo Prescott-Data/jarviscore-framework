@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["customer_id", "payload"],
+    "consequence": "Creates one or more keyword targeting criteria in a Google Ads account, which can affect ad delivery and spending.",
+}
+
+
 async def google_ads_create_keyword(customer_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a keyword in google ads. Official: https://developers.google.com/google-ads/api/rest/reference/rest/v24/customers.adGroupCriteria/mutate"""
     try:

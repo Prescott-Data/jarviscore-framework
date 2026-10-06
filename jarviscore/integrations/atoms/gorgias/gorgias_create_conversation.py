@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 GORGIAS_API = 'https://your-domain.gorgias.com/api'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Gorgias ticket conversation.",
+}
+
+
 async def gorgias_create_conversation(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a Gorgias ticket. Official: https://developers.gorgias.com/reference/create-ticket"""
     try:

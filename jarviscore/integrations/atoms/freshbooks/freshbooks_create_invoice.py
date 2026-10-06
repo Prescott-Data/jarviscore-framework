@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["client_id", "lines", "create_date", "notes"],
+    "consequence": "Creates one FreshBooks invoice for the specified client.",
+}
+
+
 async def _get_account_id() -> str:
     if True .get('account_id'):
         return None

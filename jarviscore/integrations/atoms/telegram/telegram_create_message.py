@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["chat_id", "text"],
+    "consequence": "Sends one Telegram message from the connected bot to the selected chat.",
+}
+
+
 async def telegram_create_message(chat_id: str, text: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Telegram Bot API: sendMessage. Official: https://core.telegram.org/bots/api"""
     try:

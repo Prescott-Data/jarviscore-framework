@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 LACRM_API = 'https://api.lessannoyingcrm.com/v2'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Less Annoying CRM pipeline item linked to the specified contact and pipeline.",
+}
+
+
 async def less_annoying_crm_create_deal(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create pipeline item via CreatePipelineItem. Official: https://account.lessannoyingcrm.com/api_docs/v2/Core_Functions/Pipeline_Items"""
     try:

@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 MONDAY_API = 'https://api.monday.com/v2'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def monday_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search items by name via GraphQL items_page query_params contains_text. Official: https://developer.monday.com/api-reference/reference/items-page"""
     try:

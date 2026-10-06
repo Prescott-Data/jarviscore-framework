@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 CAPSULE_API = 'https://api.capsulecrm.com'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Capsule CRM account (organisation party record).",
+}
+
+
 async def capsulecrm_create_account(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create Account via Capsule CRM API. Official: https://developer.capsulecrm.com/v2/operations/Party"""
     try:

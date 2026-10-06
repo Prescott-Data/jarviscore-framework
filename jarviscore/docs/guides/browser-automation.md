@@ -83,7 +83,7 @@ The browser sub-agent registers the following tools. The LLM calls them by emitt
 | `get_attribute` | Get an attribute value from an element | `selector`, `attribute` |
 | `get_links` | Extract all `<a>` links from the page | `selector` (optional scope), `max` (default 50) |
 | `get_cookies` | Get cookies for the current page, returns name, domain, path only (httpOnly values are not exposed) |, |
-| `screenshot` | Take a PNG screenshot, returned as base64 in the LLM context | `full_page` (default false) |
+| `screenshot` | See the current page; the image is attached to the next model turn | `full_page` (default false) |
 
 ### Interaction
 
@@ -112,12 +112,26 @@ The browser sub-agent registers the following tools. The LLM calls them by emitt
 
 ## Session lifecycle
 
-One Chromium browser is launched **per `run()` call**, not per task dispatch. If the Kernel dispatches the same workflow step to `BrowserSubAgent` multiple times (e.g. two browser-classified steps in the same workflow), each dispatch gets its own browser session.
+The browser a run works in depends on configuration:
+
+| Setting | Browser |
+|---|---|
+| `BROWSER_CONTROL_URL` | The browser the person already has open, attached over CDP. The run opens its own tab and closes only that tab. |
+| `BROWSER_PROFILE_DIR` | A persistent profile per tenant, so logins and cookies survive between runs. The tenant is the Mesh's `memory_scope_field`; a step that names no tenant gets a fresh browser, never someone else's profile. Without a scope field the Mesh has one shared profile. |
+| neither | A fresh Chromium for each `run()` call. |
 
 Within a single `run()`:
 - Pages are reused, so cookies and auth state persist across tool calls
 - `close_page` opens a fresh page but keeps the same browser context (cookies survive)
-- The browser is closed unconditionally when `run()` exits via the `finally` block of `_post_run_hook()`
+- What the run opened is closed when `run()` exits; an attached browser stays open
+
+Chromium locks a profile to one process. Runs for the same tenant in one
+process take turns; if another process holds the profile, the browser tools
+report that error to the agent.
+
+Screenshots reach the model as images on every provider (Azure OpenAI,
+Claude, Gemini, Vertex AI, vLLM). The tool result keeps a receipt with the
+image's hash and size, not the pixels.
 
 The browser launch arguments disable sandbox and automation flags to reduce detection:
 ```
@@ -189,7 +203,10 @@ results = await mesh.workflow("dashboard-job", [
 
 ## Connecting to an existing browser (CDP)
 
-The `BrowserController` in `jarviscore.browser` supports connecting to an already-running Chromium instance via Chrome DevTools Protocol. This is useful for testing against a persistent browser profile or for debugging. The `BrowserSubAgent` itself always launches its own browser, CDP connection is available through `BrowserController` directly if you need it for custom tooling.
+Start Chrome with `--remote-debugging-port=9222` and set
+`BROWSER_CONTROL_URL=http://127.0.0.1:9222`. `BrowserSubAgent` and the
+Researcher both attach to it, so the person watches the agent work and can take
+over in the same window.
 
 ---
 

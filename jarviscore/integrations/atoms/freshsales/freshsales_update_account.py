@@ -3,6 +3,14 @@ _FS_API_SUFFIX = '/crm/sales/api'
 _FS_AUTH_PREFIX = 'Token '
 _FS_AUTH_KV = 'token' + '='
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["account_id", "fields"],
+    "consequence": "Updates one Freshsales account record with the provided field values.",
+}
+
+
 async def freshsales_update_account(account_id: str, fields: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update an account (PUT .../sales_accounts/{id}, body.sales_account). Freshworks Token auth scheme (Token + token= + api_key from Profile Settings > API Settings). Official: https://developers.freshworks.com/docs/api/crm/sales/"""
     try:

@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _ETSY_API_SUFFIX = '/v3/application'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["shop_id", "product_id", "payload"],
+    "consequence": "Updates one Etsy listing with the provided fields.",
+}
+
+
 async def etsy_update_product(shop_id: str, product_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update listing (PATCH /v3/application/shops/{shop_id}/listings/{listing_id}, form body). Requires x-api-key (keystring:shared_secret) and OAuth Bearer token per Etsy Open API v3. Official: https://developers.etsy.com/documentation/reference#operation/updateListing"""
     try:

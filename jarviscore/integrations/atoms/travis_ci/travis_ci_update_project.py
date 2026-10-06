@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _TR_ROOT = 'https://api.travis-ci.com'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "active"],
+    "consequence": "Activates or deactivates one Travis CI project repository.",
+}
+
+
 async def travis_ci_update_project(project_id: str, active: str='true', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Travis CI API v3: update project. Official: https://developer.travis-ci.com/resource"""
     try:

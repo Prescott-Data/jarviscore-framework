@@ -500,6 +500,7 @@ class CoderSandbox:
         self.blob_storage = blob_storage
         self.artifact_prefix = artifact_prefix
         self.allow_unsafe_local_execution = bool(allow_unsafe_local_execution)
+        self.protected_paths: tuple = ()
 
         self._bash = BashExecutor(
             self.workspace,
@@ -771,14 +772,50 @@ class CoderSandbox:
         context: Optional[Dict] = None,
         timeout: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Execute generated code in a child process with no parent secrets."""
-        if not self.allow_unsafe_local_execution:
+        """Execute generated code in a confined child process with no parent secrets.
+
+        Model-written code runs only when the OS confines the child (no network,
+        writes only to the workspace) or the deployment explicitly opted in.
+        """
+        if not self.allow_unsafe_local_execution and not self.confined:
+            from jarviscore.execution.isolation import confinement_unavailable_reason
+
             raise BashPermissionError(
-                "Local generated-code execution is disabled because a subprocess does not "
-                "isolate the host filesystem or network. Configure a remote/container "
-                "sandbox, or explicitly set allow_unsafe_local_execution=True only for "
+                "Local generated-code execution is disabled because this host cannot "
+                f"confine a child process: {confinement_unavailable_reason()}. Use macOS "
+                "sandbox-exec, or Linux bubblewrap where unprivileged user namespaces are "
+                "allowed, or explicitly set allow_unsafe_local_execution=True only for "
                 "trusted code."
             )
+        return await self._execute_subprocess(code, context, timeout or self.timeout)
+
+    @property
+    def confined(self) -> bool:
+        from jarviscore.execution.isolation import confinement_prefix
+
+        return confinement_prefix(self.workspace, self.protected_paths) is not None
+
+    async def execute_shipped_atom(
+        self,
+        atom,
+        params: Dict[str, Any],
+        context: Optional[Dict] = None,
+        timeout: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Run one atom exactly as this framework package ships it.
+
+        Needs no unsafe opt-in because nothing here is caller-written code: the
+        source is read from the installed package and the arguments are data.
+        The child still gets no shell.
+        """
+        from jarviscore.execution.atom_contract import Atom, invocation, shipped_source
+
+        source = shipped_source(atom) if isinstance(atom, Atom) else None
+        if source is None:
+            raise BashPermissionError(
+                "Only atoms shipped with JarvisCore run without an isolated sandbox."
+            )
+        code = f"{source}\n\n{invocation(atom, params)}"
         return await self._execute_subprocess(code, context, timeout or self.timeout)
 
     async def _execute_subprocess(
@@ -812,10 +849,13 @@ class CoderSandbox:
             "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
         }
         Path(safe_env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+        from jarviscore.execution.isolation import confinement_prefix
+
+        prefix = confinement_prefix(self.workspace, self.protected_paths) or []
         process = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "jarviscore.execution.sandbox_worker",
+            *prefix, sys.executable, "-m", "jarviscore.execution.sandbox_worker",
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, env=safe_env,
+            stderr=asyncio.subprocess.PIPE, env=safe_env, cwd=str(self.workspace),
             pass_fds=(child_socket.fileno(),), start_new_session=True,
         )
         child_socket.close()
@@ -917,6 +957,19 @@ class CoderSandbox:
                             or ""
                         ).strip().lower()
                         connection_id = context.get("_nexus_connection_id")
+                        catalogue = context.get("_atoms_for_system")
+                        authority = context.get("_atom_authority")
+                        atoms = catalogue(provider) if callable(catalogue) and provider else []
+                        if atoms and not (
+                            isinstance(authority, dict) and authority.get("system") == provider
+                        ):
+                            raise RuntimeError(
+                                f"{provider} has registered atoms ({', '.join(atoms)}); "
+                                "reach it through them. To extend one that falls short, call "
+                                "inspect_atom_for_repair and repair_atom with gap. For an "
+                                "operation none covers, write a new atom with write_code "
+                                f"(atom=<{provider}_verb_object>, call=<arguments>)."
+                            )
                         if requested_provider and self._nexus_call_proxy:
                             connection_id = self._nexus_call_proxy.connection_handle(provider)
                         if not self._nexus_call_proxy or not connection_id:

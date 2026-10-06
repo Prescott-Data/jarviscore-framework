@@ -3,6 +3,14 @@ _AT_LIVE_ROOT = 'https://api.africastalking.com'
 _AT_SANDBOX_ROOT = 'https://api.sandbox.africastalking.com'
 _AT_MESSAGING_PATH = '/version1/messaging'
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Sends one or more SMS messages through Africa's Talking to the specified recipients. Sent messages cannot be recalled.",
+}
+
+
 async def africas_talking_create_message(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Send bulk SMS via POST /version1/messaging (form: username, to, message, bulkSMSMode). Official: https://developers.africastalking.com/docs/sms/sending/bulk"""
     try:

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Updates one Beanstalk repository's settings or metadata.",
+}
+
+
 async def beanstalk_update_project(project_id: str, payload: Dict[str, Any], account: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update repository. PUT /api/repositories/{id}.json. Official: https://api.beanstalkapp.com/repository"""
     try:

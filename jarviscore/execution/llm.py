@@ -8,11 +8,11 @@ import logging
 import random
 import re
 import time
-import json
 from typing import Optional, Dict, List, Any
 from enum import Enum
 
 from jarviscore.context.context_manager import ContextManager
+from jarviscore.execution import multimodal
 from jarviscore.promo import PROMO_MODEL
 from jarviscore.orchestration.budget import current_workflow_budget
 
@@ -339,6 +339,28 @@ class UnifiedLLMClient:
             or None
         )
 
+    def _declared_output_allowance(
+        self, model: Optional[str], provider: Optional["LLMProvider"] = None
+    ) -> int:
+        """Declared completion ceiling of the model a provider serves this call with.
+
+        An explicit ``model`` applies to every provider. Otherwise the model is
+        the provider's configured one (the primary provider when none is given).
+        """
+        if model is None:
+            if provider is None:
+                provider = (getattr(self, "provider_order", None) or [None])[0]
+            model = {
+                LLMProvider.PROMO: PROMO_MODEL,
+                LLMProvider.AZURE: self.config.get("azure_deployment"),
+                LLMProvider.CLAUDE: self.config.get("claude_model"),
+                LLMProvider.GEMINI: self.config.get("gemini_model"),
+                LLMProvider.VERTEX_AI: self.config.get("vertex_ai_model"),
+                LLMProvider.VLLM: self.config.get("llm_model"),
+            }.get(provider)
+        declared = (self.config.get("llm_model_output_limits") or {}).get(model)
+        return int(declared or self.config.get("llm_default_max_tokens", 4000))
+
     async def generate(
         self,
         prompt: Optional[str] = None,
@@ -381,12 +403,17 @@ class UnifiedLLMClient:
         if "max_completion_tokens" in kwargs:
             max_tokens = kwargs.pop("max_completion_tokens")
 
-        # Default output cap is config-driven. Reasoning models (gpt-5.x) bill
-        # internal reasoning against max_completion_tokens, so the legacy 4000
-        # default truncates answers mid-JSON — set llm_default_max_tokens
-        # accordingly (e.g. 16000) when using reasoning deployments.
+        # An explicit max_tokens is the caller's contract. Otherwise each
+        # provider receives its own model's declared ceiling (reasoning models
+        # bill hidden reasoning against it), capped by the remaining workflow
+        # budget. The reservation covers the largest ceiling in the chain.
+        explicit_allowance = max_tokens is not None
         if max_tokens is None:
-            max_tokens = int(self.config.get("llm_default_max_tokens", 4000))
+            providers = getattr(self, "provider_order", None) or [None]
+            max_tokens = max(
+                self._declared_output_allowance(kwargs.get("model"), provider)
+                for provider in providers
+            )
 
         # Convert prompt to messages if needed
         if not messages:
@@ -395,9 +422,13 @@ class UnifiedLLMClient:
         budget_account = current_workflow_budget()
         reservation_id = None
         if budget_account is not None:
-            input_reservation = _TOKEN_COUNTER.count_tokens(
-                json.dumps(messages, ensure_ascii=False, default=str)
+            input_reservation = multimodal.count_tokens(
+                messages, _TOKEN_COUNTER.count_tokens
             )
+            if not explicit_allowance:
+                max_tokens = max(
+                    1, min(max_tokens, budget_account.headroom() - input_reservation)
+                )
             reservation_id = budget_account.reserve(input_reservation + max_tokens)
 
         try:
@@ -406,13 +437,16 @@ class UnifiedLLMClient:
             if self._semaphore:
                 async with self._semaphore:
                     result = await self._generate_inner(
-                        messages, temperature, max_tokens, **kwargs
+                        messages, temperature, max_tokens,
+                        implicit_allowance=not explicit_allowance, **kwargs
                     )
             else:
                 result = await self._generate_inner(
-                    messages, temperature, max_tokens, **kwargs
+                    messages, temperature, max_tokens,
+                    implicit_allowance=not explicit_allowance, **kwargs
                 )
-        except Exception:
+        except BaseException:
+            # Cancellation included: an abandoned call must not hold capacity.
             if budget_account is not None and reservation_id is not None:
                 budget_account.release(reservation_id)
             raise
@@ -432,6 +466,7 @@ class UnifiedLLMClient:
         messages: List[Dict],
         temperature: float,
         max_tokens: int,
+        implicit_allowance: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """Inner generate — actual provider dispatch, called under semaphore.
@@ -439,12 +474,22 @@ class UnifiedLLMClient:
         On 429 rate-limit responses, retries the same provider with exponential
         backoff (2 * 2^attempt seconds, capped at 60s) up to LLM_MAX_RETRIES_429
         attempts before moving to the next provider.
+
+        With ``implicit_allowance`` ``max_tokens`` is the reserved ceiling, and
+        each provider is sent no more than its own model's declared ceiling.
         """
         max_429_retries = int(self.config.get("llm_max_retries_429", 4))
         base_delay = float(self.config.get("llm_429_base_delay", 2.0))
         last_error = None
+        reserved_allowance = max_tokens
 
         for provider in self.provider_order:
+            max_tokens = reserved_allowance
+            if implicit_allowance:
+                max_tokens = min(
+                    reserved_allowance,
+                    self._declared_output_allowance(kwargs.get("model"), provider),
+                )
             for attempt in range(max_429_retries + 1):
                 try:
                     logger.debug(f"Trying provider: {provider.value} (attempt {attempt})")
@@ -628,6 +673,17 @@ class UnifiedLLMClient:
     ]
 
     @classmethod
+    def _repair_azure_text(cls, content: str) -> str:
+        for trigger, safe in cls._AZURE_FILTER_REPAIR_SUBSTITUTIONS:
+            lower = content.lower()
+            idx = lower.find(trigger.lower())
+            while idx != -1:
+                content = content[:idx] + safe + content[idx + len(trigger):]
+                lower = content.lower()
+                idx = lower.find(trigger.lower(), idx + len(safe))
+        return content
+
+    @classmethod
     def _sanitize_for_azure(cls, messages: List[Dict]) -> List[Dict]:
         """Apply opt-in Azure content-filter repair after a raw prompt is rejected."""
         sanitized = []
@@ -651,13 +707,14 @@ class UnifiedLLMClient:
                 })
             elif msg["role"] == "user":
                 content = msg["content"]
-                for trigger, safe in cls._AZURE_FILTER_REPAIR_SUBSTITUTIONS:
-                    lower = content.lower()
-                    idx = lower.find(trigger.lower())
-                    while idx != -1:
-                        content = content[:idx] + safe + content[idx + len(trigger):]
-                        lower = content.lower()
-                        idx = lower.find(trigger.lower(), idx + len(safe))
+                if isinstance(content, list):
+                    content = [
+                        part if multimodal.is_image_part(part)
+                        else {**part, "text": cls._repair_azure_text(str(part.get("text", "")))}
+                        for part in multimodal.parts(content)
+                    ]
+                else:
+                    content = cls._repair_azure_text(content)
                 sanitized.append({"role": "user", "content": content})
             else:
                 sanitized.append(msg)
@@ -707,7 +764,7 @@ class UnifiedLLMClient:
                 if is_responses_only:
                     resp_kwargs = {
                         "model": deployment,
-                        "input": attempt_messages,
+                        "input": [multimodal.to_responses(m) for m in attempt_messages],
                         "max_output_tokens": max_tokens,
                     }
                     if response_format is not None:
@@ -857,6 +914,7 @@ class UnifiedLLMClient:
         max_tokens: int,
         provider_label: str,
         default_pricing: Dict,
+        contents: Any = None,
         **kwargs,
     ) -> Dict:
         """Shared helper for google.genai generate_content calls (Gemini and Vertex AI)."""
@@ -864,7 +922,7 @@ class UnifiedLLMClient:
 
         gen_kwargs = {
             "model": model_name,
-            "contents": prompt,
+            "contents": prompt if contents is None else contents,
             "config": {
                 "temperature": temperature,
                 "max_output_tokens": max_tokens,
@@ -983,6 +1041,7 @@ class UnifiedLLMClient:
             client=self.gemini_client,
             model_name=self.gemini_model,
             prompt=prompt,
+            contents=multimodal.to_genai(messages) if multimodal.has_images(messages) else None,
             temperature=temperature,
             max_tokens=max_tokens,
             provider_label="gemini",
@@ -1000,6 +1059,7 @@ class UnifiedLLMClient:
             client=self.vertex_ai_client,
             model_name=self.vertex_ai_model,
             prompt=prompt,
+            contents=multimodal.to_genai(messages) if multimodal.has_images(messages) else None,
             temperature=temperature,
             max_tokens=max_tokens,
             provider_label="vertex_ai",
@@ -1019,7 +1079,7 @@ class UnifiedLLMClient:
             if msg['role'] == 'system':
                 system_msg = msg['content']
             else:
-                conv_messages.append(msg)
+                conv_messages.append({**msg, "content": multimodal.to_anthropic(msg["content"])})
 
         model = kwargs.pop('model', None) or self.config.get('claude_model', 'claude-sonnet-4')
         start_time = time.time()
@@ -1076,7 +1136,7 @@ class UnifiedLLMClient:
         parts = []
         for msg in messages:
             role = msg['role']
-            content = msg['content']
+            content = multimodal.text_of(msg['content'])
             if role == 'system':
                 parts.append(f"System: {content}")
             elif role == 'user':

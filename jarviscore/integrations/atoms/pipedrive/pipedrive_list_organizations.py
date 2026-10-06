@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def pipedrive_list_organizations(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List organizations with cursor pagination. Official: https://developers.pipedrive.com/docs/api/v1/Organizations"""
     try:

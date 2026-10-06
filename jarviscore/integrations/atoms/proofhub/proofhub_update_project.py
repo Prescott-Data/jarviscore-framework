@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Updates one ProofHub project with the provided fields.",
+}
+
+
 async def proofhub_update_project(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a project. Official: https://github.com/ProofHub/api_v3/blob/master/README.md"""
     try:

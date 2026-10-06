@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Phabricator project and sets its initial membership, which grants members access.",
+}
+
+
 async def phabricator_create_project(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a project via project.edit transactions. Official: https://secure.phabricator.com/conduit/"""
     try:

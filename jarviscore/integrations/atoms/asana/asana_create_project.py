@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Asana project in the connected workspace.",
+}
+
+
 async def asana_create_project(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create project via POST /projects (body in data wrapper). Official: https://developers.asana.com/reference/createproject"""
     try:

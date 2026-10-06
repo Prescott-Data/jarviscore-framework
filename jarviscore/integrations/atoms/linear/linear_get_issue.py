@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def linear_get_issue(issue_id: str) -> dict:
     """Get issue. POST https://api.linear.app/graphql"""
     query = '\n    query($id: String!) {\n        issue(id: $id) {\n            id\n            identifier\n            title\n            description\n            priority\n            state {\n                name\n            }\n            assignee {\n                name\n                email\n            }\n            team {\n                name\n                key\n            }\n            labels {\n                nodes {\n                    name\n                }\n            }\n            createdAt\n            updatedAt\n        }\n    }\n    '

@@ -2,6 +2,14 @@ from typing import Any, Dict, List, Optional
 JUMIA_SC_API = 'http://sellerapi.sellercenter.jumia.com'
 SC_VERSION = '1.0'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one or more product listings in the Jumia Seller Center account.",
+}
+
+
 async def jumia_seller_center_create_product(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create product feed via ProductCreate (XML body). Official: http://sellerapi.sellercenter.jumia.com/v2.7.11/product-endpoints/productcreate/"""
     try:

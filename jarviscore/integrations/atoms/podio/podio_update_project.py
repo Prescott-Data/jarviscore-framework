@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Updates the configuration of one Podio app.",
+}
+
+
 async def podio_update_project(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update app configuration. Official: https://developers.podio.com/doc/applications/update-app-22342"""
     try:

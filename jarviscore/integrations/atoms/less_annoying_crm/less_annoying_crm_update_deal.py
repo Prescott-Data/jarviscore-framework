@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 LACRM_API = 'https://api.lessannoyingcrm.com/v2'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["deal_id", "payload"],
+    "consequence": "Updates one Less Annoying CRM pipeline item record.",
+}
+
+
 async def less_annoying_crm_update_deal(deal_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update pipeline item via EditPipelineItem. Official: https://account.lessannoyingcrm.com/api_docs/v2/Core_Functions/Pipeline_Items"""
     try:

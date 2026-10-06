@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["invoice_id", "amount", "date", "payment_type", "notes"],
+    "consequence": "Records one payment against a FreshBooks invoice, affecting invoice payment status and accounting records.",
+}
+
+
 async def _get_account_id() -> str:
     if True .get('account_id'):
         return None

@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _EGNYTE_PUBAPI_SUFFIX = '/pubapi/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["folder_id", "payload"],
+    "consequence": "Moves, copies, or renames one Egnyte folder.",
+}
+
+
 async def egnyte_update_folder(folder_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Move/copy/rename folder (POST /pubapi/v1/fs/{path} with action). Not PATCH. Bearer OAuth per Egnyte Public API. Official: https://developers.egnyte.com/docs/read/File_System_Management_API_Documentation"""
     try:

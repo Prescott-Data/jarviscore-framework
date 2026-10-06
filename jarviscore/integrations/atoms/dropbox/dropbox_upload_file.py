@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["file_path", "dropbox_path", "overwrite"],
+    "consequence": "Uploads one file to Dropbox and may overwrite an existing file at the target path.",
+}
+
+
 async def dropbox_upload_file(file_path: str, dropbox_path: str, overwrite: bool=True) -> dict:
     """Upload file. POST https://content.dropboxapi.com/2/files/upload"""
     import os

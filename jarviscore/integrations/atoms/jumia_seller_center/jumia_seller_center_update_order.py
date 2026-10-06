@@ -3,6 +3,14 @@ JUMIA_SC_API = 'http://sellerapi.sellercenter.jumia.com'
 SC_VERSION = '1.0'
 _STATUS_ACTIONS = {'ready_to_ship': 'SetStatusToReadyToShip', 'shipped': 'SetStatusToShipped', 'delivered': 'SetStatusToDelivered', 'canceled': 'SetStatusToCanceled', 'cancelled': 'SetStatusToCanceled', 'failed_delivery': 'SetStatusToFailedDelivery', 'packed_by_marketplace': 'SetStatusToPackedByMarketplace'}
 
+ATOM_POLICY = {
+    "effect": "destructive",
+    "approval": "required",
+    "idempotency_fields": ["order_id", "payload"],
+    "consequence": "Updates the status of one Jumia Seller Center order, including actions such as shipping, delivery, cancellation, or failed delivery, which may be irreversible.",
+}
+
+
 async def jumia_seller_center_update_order(order_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update order status via SetStatusTo* actions (XML body). Official: http://sellerapi.sellercenter.jumia.com/categories/v2.7.11/sales-order-endpoints"""
     try:

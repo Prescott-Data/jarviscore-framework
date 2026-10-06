@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one PostHog analytics event for the specified distinct_id.",
+}
+
+
 async def posthog_create_event(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Capture event via public ingest API (project api_key). Official: https://posthog.com/docs/api/capture"""
     try:

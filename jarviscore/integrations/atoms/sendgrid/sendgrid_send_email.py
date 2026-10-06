@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["to", "subject", "body"],
+    "consequence": "Sends one email through the connected SendGrid account. A sent email cannot be recalled.",
+}
+
+
 async def sendgrid_send_email(to: str, subject: str, body: str, from_email: str='agents@example.com', body_type: str='text/plain') -> dict:
     """Send email. POST https://api.sendgrid.com/v3/mail/send"""
     _h = {'Content-Type': 'application/json'}

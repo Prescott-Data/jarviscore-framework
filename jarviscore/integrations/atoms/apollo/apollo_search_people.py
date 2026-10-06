@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def apollo_search_people(job_titles: list=None, seniorities: list=None, organization_domains: list=None, organization_ids: list=None, person_locations: list=None, organization_locations: list=None, keywords: str=None, page: int=1, per_page: int=25) -> dict:
     """Find prospects in Apollo by role, seniority, employer and location. Returns Apollo person IDs, first names and titles but no emails; enrich a person with apollo_get_person for email and LinkedIn URL."""
     params = {'page': page, 'per_page': per_page}

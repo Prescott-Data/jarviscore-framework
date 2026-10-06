@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["list_id", "name", "description", "priority", "status"],
+    "consequence": "Creates one ClickUp task in the specified list.",
+}
+
+
 async def clickup_create_task(list_id: str, name: str, description: str=None, priority: int=None, status: str=None) -> dict:
     """Create task via the clickup API."""
     try:

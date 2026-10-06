@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 WIX_API = 'https://www.wixapis.com'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["line_items", "currency", "site_id", "buyer_email"],
+    "consequence": "Creates one Wix Stores order for the specified items and buyer.",
+}
+
+
 async def wix_stores_create_order(line_items: List[Dict[str, Any]], currency: str, site_id: str='', buyer_email: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """wix_stores API: create order. Official: https://dev.wix.com/docs/rest/business-solutions/stores"""
     try:

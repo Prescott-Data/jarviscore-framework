@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def serper_news_search(query: str, num: int=10, tbs: str=None) -> dict:
     """News search. POST https://google.serper.dev/news"""
     _h = {'Content-Type': 'application/json'}

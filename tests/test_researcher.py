@@ -404,6 +404,92 @@ class TestSearchInternet:
         assert researcher._current_research_phase() == ResearchPhase.SEARCHING
 
 
+class _UnavailableSearch(MockInternetSearch):
+    async def search_answered(self, query, max_results=5, **kwargs):
+        from jarviscore.search.internet_search import SearchUnavailable
+        raise SearchUnavailable({"searxng": "engines did not answer: CAPTCHA"})
+
+
+class _AnsweredEmptySearch(MockInternetSearch):
+    async def search_answered(self, query, max_results=5, **kwargs):
+        return []
+
+
+class _MixedSearch(MockInternetSearch):
+    async def search_answered(self, query, max_results=5, **kwargs):
+        from jarviscore.search.internet_search import SearchUnavailable
+        if query == "blocked":
+            raise SearchUnavailable({"searxng": "engines did not answer: CAPTCHA"})
+        return []
+
+
+class TestSearchReceipts:
+    """A search that did not run must not be recorded as research."""
+
+    @pytest.mark.asyncio
+    async def test_a_partly_answered_batch_succeeds_and_keeps_each_query_error(self, llm):
+        r = ResearcherSubAgent(agent_id="receipts", llm_client=llm, internet_search=_MixedSearch())
+        r.current_state = KernelState(workflow_id="w", step_id="s", agent_id="receipts", task="t")
+
+        result = await r._execute_tool(
+            "search_internet_batch", {"queries": ["answered", "blocked"]}
+        )
+        receipt = r.current_state.add_tool_result(
+            "search_internet_batch", {"queries": ["answered", "blocked"]}, result
+        )
+
+        assert receipt.status == "success"
+        assert result["by_query"]["answered"] == {"results": []}
+        assert "CAPTCHA" in result["by_query"]["blocked"]["error"]
+
+    def _researcher(self, llm, search):
+        r = ResearcherSubAgent(agent_id="receipts", llm_client=llm, internet_search=search)
+        r.current_state = KernelState(
+            workflow_id="w", step_id="s", agent_id="receipts", task="t"
+        )
+        return r
+
+    async def _gate_after(self, researcher, tool_name, **params):
+        result = await researcher._execute_tool(tool_name, params)
+        researcher.current_state.add_tool_result(tool_name, params, result)
+        return researcher._can_complete(
+            researcher.current_state,
+            {"result": {"summary": "No match.", "evidence": [{"pointer": "search"}]}},
+        )
+
+    @pytest.mark.asyncio
+    async def test_unavailable_single_search_is_a_failed_receipt(self, llm, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        researcher = self._researcher(llm, _UnavailableSearch())
+
+        ok, evidence = await self._gate_after(researcher, "search_internet", query="firm")
+
+        assert researcher.current_state.tool_history[-1].status == "failure"
+        assert ok is False and evidence.check == "research_performed"
+
+    @pytest.mark.asyncio
+    async def test_unavailable_batch_search_is_a_failed_receipt(self, llm, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        researcher = self._researcher(llm, _UnavailableSearch())
+
+        ok, evidence = await self._gate_after(
+            researcher, "search_internet_batch", queries=["a", "b"]
+        )
+
+        assert researcher.current_state.tool_history[-1].status == "failure"
+        assert ok is False and evidence.check == "research_performed"
+
+    @pytest.mark.asyncio
+    async def test_an_answered_empty_search_is_a_negative_result(self, llm, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        researcher = self._researcher(llm, _AnsweredEmptySearch())
+
+        ok, reason = await self._gate_after(researcher, "search_internet", query="firm")
+
+        assert researcher.current_state.tool_history[-1].status == "success"
+        assert ok is True, reason
+
+
 # ═════════════════════════════════════════════════════════════════
 # Content Reading
 # ═════════════════════════════════════════════════════════════════
@@ -434,6 +520,7 @@ class TestContentReading:
             f.write("# Test file\nprint('hello')\n")
             f.flush()
             path = f.name
+        researcher.workspace_root = os.path.dirname(path)
         try:
             result = await researcher._tool_read_file(path)
             assert isinstance(result, (str, dict))

@@ -3,6 +3,14 @@ _FS_API_SUFFIX = '/crm/sales/api'
 _FS_AUTH_PREFIX = 'Token '
 _FS_AUTH_KV = 'token' + '='
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["fields"],
+    "consequence": "Creates one Freshsales account record.",
+}
+
+
 async def freshsales_create_account(fields: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create an account (POST /api/sales_accounts, body.sales_account). Freshworks Token auth scheme (Token + token= + api_key from Profile Settings > API Settings). Official: https://developers.freshworks.com/docs/api/crm/sales/"""
     try:

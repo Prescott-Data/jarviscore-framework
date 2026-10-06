@@ -50,6 +50,9 @@ class RoutingError(RuntimeError):
 #: only call proxy, so every other role reaches a declared system unauthenticated.
 CREDENTIALED_ROLES = frozenset({"coder"})
 
+#: A step system naming the agent's own browser rather than a connected provider.
+BROWSER_SYSTEM = "browser"
+
 _ROUTING_ESSENTIAL_KEYS = frozenset({
     "workflow_id", "step_id", "system", "system_credentials_available",
 })
@@ -506,6 +509,13 @@ class Kernel:
                     if step_id and step_id != "unknown":
                         peer_context["peer_requester_step_id"] = step_id
                     peer_context["peer_requester_role"] = subagent.role
+                    # Stamped from runtime step state so delegated work cannot exceed it.
+                    peer_context["peer_requester_authority"] = {
+                        "effect": str(source_context.get("effect") or "read"),
+                        "systems": [
+                            str(value) for value in source_context.get("systems") or []
+                        ] or ([str(source_context["system"])] if source_context.get("system") else []),
+                    }
                     execution_budget = source_context.get("execution_budget")
                     if hasattr(execution_budget, "to_record"):
                         execution_budget = execution_budget.to_record()
@@ -708,6 +718,14 @@ class Kernel:
             if str(value)
         ]
         effect = str((context or {}).get("effect") or "").strip()
+        if (system_names or ([system_name] if system_name else [])) == [BROWSER_SYSTEM]:
+            # The agent's own browser is where this work happens, not a
+            # provider someone has to connect.
+            return RoutingDecision(
+                role="browser",
+                confidence=1.0,
+                reason="The step acts in the agent's own browser.",
+            )
         if system_name and effect in {"write", "notify", "destructive"}:
             return RoutingDecision(
                 role="coder",
@@ -876,6 +894,7 @@ class Kernel:
                 redis_store=self.redis_store,
                 blob_storage=self.blob_storage,
             )
+            subagent.effect_guards = tuple(self.config.get("effect_guards") or ())
         elif role == "researcher":
             subagent = ResearcherSubAgent(
                 agent_id=agent_id,
@@ -901,13 +920,36 @@ class Kernel:
                 viewport=None,  # uses BrowserSubAgent default 1280x720
                 redis_store=self.redis_store,
                 blob_storage=self.blob_storage,
+                profile_root=self.config.get("browser_profile_dir"),
+                scope_field=self.config.get("memory_scope_field"),
+                control_url=self.config.get("browser_control_url"),
             )
         else:
             raise ValueError(f"Unknown subagent role: {role}")
+        subagent.workspace_root = getattr(self.sandbox, "workspace", None)
         self._attach_mesh_tools(subagent)
         return subagent
 
-    def _create_memory(self, workflow_id: str, step_id: str, agent_id: str):
+    def _memory_scope(self, context: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Which tenant this step's memory belongs to.
+
+        A mesh names the trusted context field that separates its tenants via
+        ``memory_scope_field``. Without one, every workflow an agent serves
+        shares a single pool of recollections.
+        """
+        field = self.config.get("memory_scope_field")
+        if not field or not context:
+            return None
+        value = str(context.get(field) or "").strip()
+        return value or None
+
+    def _create_memory(
+        self,
+        workflow_id: str,
+        step_id: str,
+        agent_id: str,
+        context: Optional[Dict[str, Any]] = None,
+    ):
         """Create a UnifiedMemory instance for the current step.
 
         Includes Athena as Tier 4 when ATHENA_URL is configured in settings.
@@ -936,6 +978,19 @@ class Kernel:
                     else:
                         logger.debug("[Kernel] Athena memory tier not configured: %s", exc)
 
+                memory_scope = self._memory_scope(context)
+                scope_field = self.config.get("memory_scope_field")
+                if athena_client is not None and scope_field and memory_scope is None:
+                    # The mesh separates tenants by this field and the step
+                    # names none. Cross-session memory stays closed rather than
+                    # fall back to the pool every tenant would share.
+                    logger.warning(
+                        "[Kernel] Step %s/%s carries no '%s'; cross-session "
+                        "memory is closed for it",
+                        workflow_id, step_id, scope_field,
+                    )
+                    athena_client = None
+
                 return UnifiedMemory(
                     workflow_id=workflow_id,
                     step_id=step_id,
@@ -943,6 +998,7 @@ class Kernel:
                     redis_store=self.redis_store,
                     blob_storage=self.blob_storage,
                     athena_client=athena_client,
+                    memory_scope=memory_scope,
                 )
         except ImportError:
             logger.debug("[Kernel] UnifiedMemory not available — running without memory")
@@ -1197,7 +1253,7 @@ class Kernel:
             )
 
             # Create memory (graceful degradation if no Redis/blob)
-            memory = self._create_memory(workflow_id, step_id, agent_id)
+            memory = self._create_memory(workflow_id, step_id, agent_id, context)
 
             # ── Recall what earlier sessions hold about this task ─────────────
             # A question scored by relevance, not the last fifteen things the
@@ -1358,6 +1414,8 @@ class Kernel:
                         "elapsed_ms": (time.time() - start_time) * 1000,
                         "distilled_facts": output.metadata.get("distilled_facts", {}),
                         "tool_receipts": output.metadata.get("tool_receipts", []),
+                        "answer": output.metadata.get("answer"),
+                        "kept_memories": output.metadata.get("kept_memories", []),
                     },
                 )
 

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["customer_id", "name"],
+    "consequence": "Updates the name of one WooCommerce customer record.",
+}
+
+
 async def woocommerce_update_customer(customer_id: str, name: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """woocommerce REST: update customer. Official: https://woocommerce.github.io/woocommerce-rest-api-docs/"""
     try:

@@ -1,6 +1,14 @@
 import hashlib
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["file_name", "bucket_id", "bucket_name", "content", "content_type"],
+    "consequence": "Uploads one file to a Backblaze B2 bucket.",
+}
+
+
 async def backblaze_b2_create_file(file_name: str, bucket_id: Optional[str]=None, bucket_name: Optional[str]=None, content: str='', content_type: str='b2/x-auto', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Upload a file via b2_get_upload_url and POST to uploadUrl. Official: https://www.backblaze.com/b2/docs/b2_get_upload_url.html"""
     try:

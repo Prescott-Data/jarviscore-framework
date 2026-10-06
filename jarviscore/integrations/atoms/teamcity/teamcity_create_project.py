@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["name", "project_id"],
+    "consequence": "Creates one TeamCity project.",
+}
+
+
 async def teamcity_create_project(name: str, project_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """TeamCity REST: create project. Official: https://www.jetbrains.com/help/teamcity/rest/teamcity-rest.html"""
     try:

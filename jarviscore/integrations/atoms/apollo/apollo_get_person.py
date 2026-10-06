@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def apollo_get_person(person_id: str=None, name: str=None, domain: str=None, linkedin_url: str=None) -> dict:
     """Enrich one person in Apollo by Apollo person ID, by full name plus employer domain, or by LinkedIn URL. Returns their work email, email status, LinkedIn URL and match confidence. Consumes Apollo credits when data is found."""
     params = {}

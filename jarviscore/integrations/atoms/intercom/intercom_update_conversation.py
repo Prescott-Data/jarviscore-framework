@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 INTERCOM_API = 'https://api.intercom.io'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["conversation_id", "payload"],
+    "consequence": "Updates one Intercom conversation with the provided fields.",
+}
+
+
 async def intercom_update_conversation(conversation_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update Intercom conversation. Official: https://developers.intercom.com/docs/references/rest-api/api.intercom.io/conversations"""
     try:

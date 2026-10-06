@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["channel", "timestamp", "emoji"],
+    "consequence": "Adds one emoji reaction to a Slack message.",
+}
+
+
 async def slack_add_reaction(channel: str, timestamp: str, emoji: str) -> dict:
     """Add reaction via the slack API."""
     _base = 'https://slack.com/api'

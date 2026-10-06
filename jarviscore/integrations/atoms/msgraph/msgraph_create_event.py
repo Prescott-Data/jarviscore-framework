@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["subject", "start_datetime", "end_datetime", "timezone", "attendees", "body", "location"],
+    "consequence": "Creates one Microsoft Outlook calendar event and invites the specified attendees.",
+}
+
+
 async def msgraph_create_event(subject: str, start_datetime: str, end_datetime: str, timezone: str='UTC', attendees: list=None, body: str=None, location: str=None) -> dict:
     """Create event. POST https://graph.microsoft.com/v1.0/me/events"""
     try:

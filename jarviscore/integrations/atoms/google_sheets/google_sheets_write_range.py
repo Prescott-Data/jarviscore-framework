@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["spreadsheet_id", "range_notation", "values", "value_input_option"],
+    "consequence": "Writes values into the specified Google Sheets cell range.",
+}
+
+
 async def google_sheets_write_range(spreadsheet_id: str, range_notation: str, values: list, value_input_option: str='USER_ENTERED') -> dict:
     """Sheets write range via the google_sheets API."""
     import urllib.parse

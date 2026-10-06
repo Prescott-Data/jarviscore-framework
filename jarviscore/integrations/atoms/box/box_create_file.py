@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["file_name", "parent_folder_id", "content"],
+    "consequence": "Uploads one file to the specified Box folder.",
+}
+
+
 async def box_create_file(file_name: str, timeout: int=30, verify_ssl: bool=True, parent_folder_id: str='0', content: str='', base_url: str=None) -> dict:
     """Upload a new file (POST upload.box.com/api/2.0/files/content). Official: https://developer.box.com/reference/post-files-content/"""
     try:

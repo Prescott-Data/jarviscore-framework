@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Updates one Phabricator project's fields, membership or hierarchy, which can change who has access.",
+}
+
+
 async def phabricator_update_project(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a project via project.edit transactions. Official: https://secure.phabricator.com/conduit/"""
     try:

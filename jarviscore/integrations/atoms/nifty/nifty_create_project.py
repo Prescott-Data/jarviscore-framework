@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 NIFTY_API = 'https://openapi.niftypm.com/api/v1.0'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Nifty project.",
+}
+
+
 async def nifty_create_project(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create project via multipart/form-data. Official: https://developers.niftypm.com/operation/operation-projectapicontroller_createproject"""
     try:

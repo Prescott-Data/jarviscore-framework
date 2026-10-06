@@ -41,6 +41,9 @@ HUBSPOT_CREATE_DEAL_ATOM = (
 DRIVE_APPEND_DOCUMENT_ATOM = (
     "jarviscore/integrations/atoms/google_drive/google_drive_append_document_text.py"
 )
+DRIVE_CREATE_DOCUMENT_ATOM = (
+    "jarviscore/integrations/atoms/google_drive/google_drive_create_document.py"
+)
 
 
 @pytest.fixture
@@ -144,6 +147,33 @@ async def google_drive_create_folder(folder_name: str) -> dict:
         assert calls[0][2]["provider"] == "google_drive"
         assert "Authorization" not in calls[0][2].get("headers", {})
         assert "_get_nexus_token" not in source
+
+
+@pytest.mark.parametrize("folder_id, parents", [("", None), ("folder-1", ["folder-1"])])
+async def test_a_drive_document_lands_in_my_drive_unless_a_folder_is_named(folder_id, parents):
+    with open(DRIVE_CREATE_DOCUMENT_ATOM, encoding="utf-8") as handle:
+        source = handle.read()
+    contract = read_contract(
+        source, system="google_drive", expected_name="google_drive_create_document"
+    )
+    assert contract.ok, contract.report()
+    calls = []
+
+    async def nexus_call(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        return {"ok": True, "status_code": 200, "body": "", "headers": {},
+                "json": {"id": "doc-1", "name": "Packing list", "webViewLink": "https://d/doc-1"}}
+
+    params = {"title": "Packing list", "content": "Tent"}
+    if folder_id:
+        params["folder_id"] = folder_id
+    namespace = {"nexus_call": nexus_call}
+    exec(f"{source}\n\n{invocation(contract.atom, params)}", namespace)
+    result = await namespace["main"]()
+
+    assert result["success"] is True
+    assert result["web_view_link"] == "https://d/doc-1"
+    assert calls[0][2]["json"].get("parents") == parents
 
 
 class TestProviderSearchAtoms:

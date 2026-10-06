@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["build_id", "repository_id"],
+    "consequence": "Retries one failed Beanstalk release build in the specified repository.",
+}
+
+
 async def beanstalk_update_build(build_id: str, repository_id: str, account: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Retry failed release. PUT /api/{repo_id}/releases/{release_id}/retry.json. Official: https://api.beanstalkapp.com/release"""
     try:

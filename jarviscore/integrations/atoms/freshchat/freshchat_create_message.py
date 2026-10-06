@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["conversation_id", "message_parts", "actor_type", "actor_id", "user_id", "message_type", "reply_parts"],
+    "consequence": "Sends one message into a Freshchat conversation, which becomes visible to conversation participants.",
+}
+
+
 async def freshchat_create_message(conversation_id: str, message_parts: List[Any], actor_type: Optional[str]=None, actor_id: Optional[str]=None, user_id: Optional[str]=None, message_type: str='normal', reply_parts: Optional[List[Any]]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Send a message to a conversation (POST .../messages). Requires message_parts. Bearer API token from Admin > API Tokens. Base URL: https://{domain}.freshchat.com/v2. Official: https://developers.freshchat.com/api/"""
     try:

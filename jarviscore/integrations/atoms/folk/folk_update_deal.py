@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _FOLK_API_HOST = 'https://api.folk.app'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["group_id", "deal_id", "payload", "object_type"],
+    "consequence": "Updates one Folk deal record with the provided fields.",
+}
+
+
 async def folk_update_deal(group_id: str, deal_id: str, payload: Dict[str, Any], object_type: str='Deals', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update deal (PATCH /v1/groups/{groupId}/{objectType}/{objectId} JSON body). Bearer API key in Authorization header per Folk External API. Official: https://developer.folk.app/"""
     try:

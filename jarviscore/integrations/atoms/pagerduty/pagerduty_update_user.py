@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["user_id", "payload"],
+    "consequence": "Updates a PagerDuty user's account settings or profile information.",
+}
+
+
 async def pagerduty_update_user(user_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update user via PUT. Official: https://developer.pagerduty.com/api-reference/operations/updateUser"""
     try:

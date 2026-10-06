@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def plausible_get_report(report_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Breakdown report via Stats v2 query; report_id as dimension when it contains ':'. Official: https://plausible.io/docs/stats-api"""
     try:

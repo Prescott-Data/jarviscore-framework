@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 _FS_API_HOST = 'https://api.fullstory.com'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def fullstory_create_report(segment_id: str, export_type: str, format: str='FORMAT_CSV', time_range: Optional[Dict[str, Any]]=None, segment_time_range: Optional[Dict[str, Any]]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Schedule a segment export job (POST /segments/v1/exports). Poll GET /operations/v1/{operationId}, then fetch results. Authorization: Basic {api_key} from Settings > Integrations > API Keys (Architect for data reads). Official: https://developer.fullstory.com/"""
     try:

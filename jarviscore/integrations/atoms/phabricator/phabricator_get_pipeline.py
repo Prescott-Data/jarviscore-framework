@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def phabricator_get_pipeline(pipeline_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get a build plan by id or PHID via harbormaster.buildplan.search. Official: https://secure.phabricator.com/conduit/"""
     try:

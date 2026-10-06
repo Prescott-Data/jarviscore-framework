@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 SIGN_API = 'https://api.hellosign.com/v3'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["file_id", "payload"],
+    "consequence": "Updates signer details on one in-flight Dropbox Sign signature request.",
+}
+
+
 async def dropbox_sign_update_file(file_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update signer name/email on in-flight signature request. Official: https://developers.hellosign.com/api/signature-request/update"""
     try:

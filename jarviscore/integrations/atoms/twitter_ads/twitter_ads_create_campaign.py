@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _XA_ROOT = 'https://ads-api.x.com/12'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["name", "funding_instrument_id", "daily_budget_amount_local_micro"],
+    "consequence": "Creates one X Ads campaign with an active status and a daily advertising budget charged to the selected funding instrument.",
+}
+
+
 async def twitter_ads_create_campaign(name: str, funding_instrument_id: str, daily_budget_amount_local_micro: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """X Ads API: create campaign. Official: https://developer.x.com/en/docs/twitter-ads-api"""
     try:

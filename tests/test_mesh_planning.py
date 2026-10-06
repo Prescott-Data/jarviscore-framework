@@ -194,6 +194,34 @@ async def test_mesh_planning_brief_informs_dag_audit_and_repair_not_obligations(
     assert "Never derive\nsource provenance from TARGET MESH PLANNING BRIEF" in prompts[2]
 
 
+@pytest.mark.asyncio
+async def test_remembering_for_later_is_agent_memory_not_a_provider_write():
+    llm = MockLLMClient(responses=[
+        responses()[0],
+        responses()[1],
+        {"content": json.dumps({"complete": False, "missing": [{
+            "description": "Keeping the preference is missing", "source_ref": "source-1",
+        }]})},
+        responses()[1],
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    await planner.plan("Remember that my partner is vegetarian")
+
+    plan_prompt, audit_prompt, repair_prompt = (
+        call["messages"][0]["content"] for call in llm.calls[1:4]
+    )
+    for prompt in (plan_prompt, repair_prompt):
+        assert "own cross-session memory" in prompt
+        assert "it is not a provider write and names no system" in prompt
+        assert "uses effect `propose` with empty systems" in prompt
+        assert "read full content only for items that evidence marks as possibly" in prompt
+        assert "estimate is not a total to reconcile against" in prompt
+    assert "every agent has its own cross-session\nmemory, so it needs no provider system" in audit_prompt
+    assert "do not require full-content readback of every item unless the goal asks for it" in audit_prompt
+
+
 def test_mesh_planning_brief_reaches_amendment_and_reconciliation_prompts():
     brief = "Preserve the product method while resolving unfinished work."
     planner = MeshPlanner(
@@ -596,6 +624,7 @@ async def test_mesh_planner_preserves_selected_multiline_source_block_exactly():
     llm = MockLLMClient(responses=[
         {"content": json.dumps({"obligations": [{
             "id": "approval",
+            "kind": "external_effect_prohibition",
             "description": "Do not publish changes",
             "source_ref": "source-2",
         }]})},
@@ -607,7 +636,9 @@ async def test_mesh_planner_preserves_selected_multiline_source_block_exactly():
     plan = await planner.plan(goal)
 
     assert plan.obligations[0].source_quote == "  Do not publish changes."
+    assert plan.obligations[0].kind == "external_effect_prohibition"
     prompt = llm.calls[0]["messages"][0]["content"]
+    assert "external_effect_prohibition" in prompt
     assert '"id": "source-2", "text": "  Do not publish changes."' in prompt
     assert '"id": "source-all"' in prompt
 
@@ -667,6 +698,31 @@ async def test_mesh_planner_rejects_a_dag_when_independent_audit_finds_an_omissi
 
     with pytest.raises(MeshPlanError, match="coverage audit"):
         await planner.plan("Find evidence")
+
+
+@pytest.mark.asyncio
+async def test_mesh_planner_reports_an_unfinished_completion_by_its_stop_reason():
+    obligations, _, _ = responses()
+    exhausted = {
+        "content": "",
+        "finish_reason": "length",
+        "model": "reasoning-model",
+        "tokens": {"input": 3327, "output": 4000, "total": 7327},
+        "provider_metadata": {"usage": {
+            "completion_tokens_details": {"reasoning_tokens": 4000},
+        }},
+    }
+    llm = MockLLMClient(responses=[obligations, exhausted])
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    with pytest.raises(MeshPlanError) as error:
+        await planner.plan("Find evidence")
+
+    message = str(error.value)
+    assert "finish_reason=length" in message
+    assert "reasoning_tokens=4000" in message
+    assert "answer_chars=0" in message
+    assert "not valid JSON" not in message
 
 
 @pytest.mark.asyncio
@@ -1208,6 +1264,153 @@ def test_amendment_audit_and_repair_include_failed_terminal_evidence():
     assert "verify_failed" in repair_prompt
     assert '"status": "failed"' in repair_prompt
     assert "TERMINAL STEP DEFINITIONS" in repair_prompt
+
+
+@pytest.mark.asyncio
+async def test_amendment_retries_authorized_purchases_but_never_adds_new_ones():
+    obligations = [
+        {"id": "o_need", "kind": "outcome", "description": "Work out what is needed", "source_quote": "Work out what we need"},
+        {"id": "o_order", "kind": "outcome", "description": "Order it", "source_quote": "order it"},
+    ]
+    base = {"systems": [], "success_criterion": "Done", "expected_findings": []}
+    current_steps = [
+        {**base, "id": "restock", "capability": "restock", "effect": "propose", "task": "Plan",
+         "depends_on": [], "covers": ["o_need"], "status": "completed"},
+        {**base, "id": "order", "capability": "shop", "effect": "write", "systems": ["browser"],
+         "task": "Order", "depends_on": ["restock"], "covers": ["o_order"], "status": "completed"},
+    ]
+    retry = {**base, "step_id": "order_again", "capability": "shop", "effect": "write",
+             "systems": ["browser"], "task": "Retry the order", "depends_on": ["restock"],
+             "covers": ["o_order"]}
+    interim = {**base, "step_id": "interim_buy", "capability": "shop", "effect": "write",
+               "systems": ["browser"], "task": "Buy essentials now", "depends_on": ["restock"],
+               "covers": ["o_need"]}
+    report = {**base, "step_id": "report_gap", "capability": "restock", "effect": "propose",
+              "task": "Report the early run-outs", "depends_on": ["restock"], "covers": ["o_need"]}
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"steps": [retry, interim]})},
+        {"content": json.dumps({"steps": [retry, report]})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(llm, capabilities={
+        "restock": {"description": "Plan", "effects": ["propose"], "systems": []},
+        "shop": {"description": "Shop", "effects": ["read", "write"], "systems": ["browser"]},
+    })
+
+    plan = await planner.amend(
+        "Work out what we need and order it", obligations=obligations,
+        target_obligation_ids={"o_need", "o_order"}, current_steps=current_steps,
+        reason="The order was not confirmed and supplies run out early", revision=1,
+    )
+
+    assert [step.step_id for step in plan.steps] == ["order_again", "report_gap"]
+    repair_prompt = llm.calls[1]["messages"][-1]["content"]
+    assert "interim_buy adds a write effect" in repair_prompt
+
+
+@pytest.mark.asyncio
+async def test_amendment_response_receives_the_artifacts_of_settled_obligations():
+    """A list correction must not cut the final answer off from settled outreach."""
+    obligations = [
+        {"id": "o_list", "description": "Curate the list", "source_quote": "list"},
+        {"id": "o_outreach", "description": "Write outreach as CSV", "source_quote": "CSV"},
+    ]
+    step = {
+        "capability": "prospecting", "effect": "read", "systems": [],
+        "success_criterion": "Done", "expected_findings": [],
+    }
+    current_steps = [
+        {**step, "id": "step-1", "task": "Curate", "depends_on": [], "covers": ["o_list"],
+         "status": "completed"},
+        {**step, "id": "step-2", "task": "Outreach", "depends_on": ["step-1"],
+         "covers": ["o_outreach"], "status": "completed"},
+        {**step, "id": "final_response", "capability": "respond",
+         "effect": "final_response", "task": "Answer", "depends_on": ["step-2"],
+         "covers": [], "status": "completed"},
+    ]
+    correction = {
+        **step, "id": "step-3", "task": "Correct the list", "depends_on": ["step-1"],
+        "covers": ["o_list"],
+    }
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"steps": [correction]})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(
+        llm,
+        capabilities={"prospecting": "Prospect", "respond": "Respond"},
+        response_capability="respond",
+    )
+
+    plan = await planner.amend(
+        "Curate a list and write outreach as CSV",
+        obligations=obligations,
+        target_obligation_ids={"o_list"},
+        current_steps=current_steps,
+        reason="One firm did not qualify",
+        revision=1,
+        obligation_projection={
+            "o_list": {"state": "unresolved", "attempt_states": {"step-1": "unresolved"}},
+            "o_outreach": {"state": "satisfied", "attempt_states": {"step-2": "satisfied"}},
+        },
+    )
+
+    response = plan.steps[-1]
+    assert response.effect == "final_response"
+    assert response.step_id == "final_response_2"
+    assert response.depends_on == ["step-3", "step-2"]
+
+
+@pytest.mark.asyncio
+async def test_amendment_response_uses_the_attempt_that_satisfied_the_obligation():
+    """A later failed attempt on a settled obligation is not its producer."""
+    obligations = [
+        {"id": "o_list", "description": "Curate the list", "source_quote": "list"},
+        {"id": "o_outreach", "description": "Write outreach as CSV", "source_quote": "CSV"},
+    ]
+    step = {
+        "capability": "prospecting", "effect": "read", "systems": [],
+        "success_criterion": "Done", "expected_findings": [],
+    }
+    current_steps = [
+        {**step, "id": "step-1", "task": "Curate", "depends_on": [], "covers": ["o_list"],
+         "status": "completed"},
+        {**step, "id": "outreach-a", "task": "Outreach", "depends_on": ["step-1"],
+         "covers": ["o_outreach"], "status": "completed"},
+        {**step, "id": "outreach-b", "task": "Outreach again", "depends_on": ["step-1"],
+         "covers": ["o_outreach"], "status": "failed"},
+    ]
+    correction = {
+        **step, "id": "step-3", "task": "Correct the list", "depends_on": ["step-1"],
+        "covers": ["o_list"],
+    }
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"steps": [correction]})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(
+        llm,
+        capabilities={"prospecting": "Prospect", "respond": "Respond"},
+        response_capability="respond",
+    )
+
+    plan = await planner.amend(
+        "Curate a list and write outreach as CSV",
+        obligations=obligations,
+        target_obligation_ids={"o_list"},
+        current_steps=current_steps,
+        reason="One firm did not qualify",
+        revision=1,
+        obligation_projection={
+            "o_list": {"state": "unresolved", "attempt_states": {"step-1": "unresolved"}},
+            "o_outreach": {
+                "state": "satisfied",
+                "attempt_states": {"outreach-a": "satisfied", "outreach-b": "unresolved"},
+            },
+        },
+    )
+
+    assert plan.steps[-1].depends_on == ["step-3", "outreach-a"]
 
 
 @pytest.mark.asyncio

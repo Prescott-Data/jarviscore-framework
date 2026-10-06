@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Posts one message to a Mattermost channel or thread, making it visible to channel participants.",
+}
+
+
 async def mattermost_create_message(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a post via POST /posts. Official: https://api.mattermost.com/#tag/posts"""
     try:

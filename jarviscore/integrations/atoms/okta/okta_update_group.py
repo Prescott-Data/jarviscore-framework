@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["group_id", "payload"],
+    "consequence": "Updates the Okta group's profile settings and attributes.",
+}
+
+
 async def okta_update_group(domain: str, group_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Replace group profile. Official: https://developer.okta.com/docs/reference/api/overview/"""
     try:

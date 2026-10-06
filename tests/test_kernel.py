@@ -963,6 +963,26 @@ class TestTaskClassification:
         assert mock_llm.calls == []
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("effect", ["read", "write"])
+    async def test_the_agents_own_browser_is_a_surface_not_a_connection(self, kernel, mock_llm, effect):
+        decision = await kernel._route_task(
+            "Add the backpack to the basket",
+            {"systems": ["browser"], "system": "browser", "effect": effect},
+            agent_default_role="browser",
+        )
+        assert decision.role == "browser"
+        assert mock_llm.calls == []
+
+    @pytest.mark.asyncio
+    async def test_a_connected_provider_still_goes_to_the_credentialed_coder(self, kernel):
+        decision = await kernel._route_task(
+            "Send the reply",
+            {"systems": ["gmail"], "system": "gmail", "effect": "notify"},
+            agent_default_role="browser",
+        )
+        assert decision.role == "coder"
+
+    @pytest.mark.asyncio
     async def test_structured_router_selects_role(self, kernel, mock_llm):
         mock_llm.responses = [_router_response("communicator", reason="request needs coordination")]
         decision = await kernel._route_task(
@@ -1151,6 +1171,17 @@ class TestSubagentCreation:
         assert context["peer_requester_step_id"] == "calendar"
         assert not ({"system", "systems", "effect", "capability", "step_id"} & set(context))
         assert all(not key.startswith("_") for key in context)
+        assert context["peer_requester_authority"] == {
+            "effect": "write", "systems": ["google_calendar"],
+        }
+
+        subagent._current_state.context = {"effect": "propose"}
+        await subagent._tools["ask_peer"].func(
+            role="commerce_operator", question="Place the order",
+            peer_requester_authority={"effect": "write", "systems": ["browser"]},
+        )
+        _, args, context = peer_tool.calls[1]
+        assert context["peer_requester_authority"] == {"effect": "propose", "systems": []}
 
     @pytest.mark.asyncio
     async def test_every_subagent_can_inspect_its_workflow_and_read_step_output(
@@ -1214,7 +1245,10 @@ class TestKernelExecuteSuccess:
                 'RESULT: {"answer": "FastAPI", "summary": "FastAPI is the best Python web framework"}'
             )
         ]
-        output = await kernel.execute(task="Research the best Python web framework")
+        output = await kernel.execute(
+            task="Research the best Python web framework",
+            context={"previous_step_results": {"survey": {"frameworks": ["FastAPI"]}}},
+        )
         assert output.status == "success"
         assert output.metadata["dispatches"][0]["role"] == "researcher"
 
@@ -1562,3 +1596,68 @@ class TestDispatchRecords:
         dispatches = output.metadata["dispatches"]
         # Researcher uses task tier
         assert dispatches[0]["model"] == "gpt-4o"
+
+
+class TestTenantMemoryScope:
+    """The Kernel is the entry point that opens memory under a mesh's tenant."""
+
+    @staticmethod
+    def _kernel(scope_field="matter_id"):
+        from jarviscore.testing import MockRedisContextStore
+
+        config = {"task_model": "gpt-4o", "kernel_max_turns": 2}
+        if scope_field:
+            config["memory_scope_field"] = scope_field
+        return Kernel(
+            llm_client=MockLLMClient(),
+            sandbox=MockSandboxExecutor(),
+            redis_store=MockRedisContextStore(),
+            config=config,
+        )
+
+    def test_each_tenant_opens_its_own_cross_session_memory(self, monkeypatch):
+        monkeypatch.setenv("ATHENA_URL", "http://athena.test")
+        kernel = self._kernel()
+
+        a = kernel._create_memory("wf-1", "s1", "analyst", {"matter_id": "matter-a"})
+        b = kernel._create_memory("wf-2", "s1", "analyst", {"matter_id": "matter-b"})
+
+        assert a._athena_client is not None and a._memory_scope == "matter-a"
+        assert b._athena_client is not None and b._memory_scope == "matter-b"
+
+    @pytest.mark.parametrize("context", [None, {}, {"matter_id": "  "}])
+    def test_a_step_without_its_tenant_gets_no_cross_session_memory(
+        self, monkeypatch, context
+    ):
+        monkeypatch.setenv("ATHENA_URL", "http://athena.test")
+        memory = self._kernel()._create_memory("wf-1", "s1", "analyst", context)
+
+        assert memory is not None
+        assert memory._athena_client is None
+        assert memory._memory_scope is None
+
+    def test_a_mesh_without_a_scope_field_keeps_the_agent_session(self, monkeypatch):
+        monkeypatch.setenv("ATHENA_URL", "http://athena.test")
+        memory = self._kernel(scope_field=None)._create_memory(
+            "wf-1", "s1", "analyst", {"matter_id": "matter-a"}
+        )
+
+        assert memory._athena_client is not None
+        assert memory._memory_scope is None
+
+    @pytest.mark.asyncio
+    async def test_execute_opens_memory_with_the_step_context(self):
+        kernel = self._kernel()
+        seen = []
+        kernel._create_memory = lambda wf, step, agent, context=None: seen.append(
+            dict(context or {})
+        )
+
+        await kernel.execute(
+            task="Summarise the matter",
+            context={"matter_id": "matter-a", "workflow_id": "wf-1", "step_id": "s1"},
+            agent_default_role="researcher",
+            max_dispatches=1,
+        )
+
+        assert seen and seen[0]["matter_id"] == "matter-a"

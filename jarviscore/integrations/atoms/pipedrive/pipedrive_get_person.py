@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def pipedrive_get_person(person_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get person by ID. Official: https://developers.pipedrive.com/docs/api/v1/Persons"""
     try:

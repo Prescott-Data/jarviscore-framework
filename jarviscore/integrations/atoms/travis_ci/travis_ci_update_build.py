@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _TR_ROOT = 'https://api.travis-ci.com'
 
+ATOM_POLICY = {
+    "effect": "destructive",
+    "approval": "required",
+    "idempotency_fields": ["build_id"],
+    "consequence": "Cancels the specified Travis CI build run.",
+}
+
+
 async def travis_ci_update_build(build_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Travis CI API v3: update build. Official: https://developer.travis-ci.com/resource"""
     try:

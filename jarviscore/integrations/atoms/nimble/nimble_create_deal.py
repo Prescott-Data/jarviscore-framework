@@ -2,6 +2,14 @@ from typing import Any, Dict, List, Optional
 NIMBLE_V1 = 'https://api.nimble.com/api/v1'
 NIMBLE_V2 = 'https://api.nimble.com/api/v2'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one deal record in Nimble.",
+}
+
+
 async def nimble_create_deal(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create deal. Official: https://www.nimble.com/developers/docs/"""
     try:

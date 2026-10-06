@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def posthog_get_report(report_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get insight by ID. Official: https://posthog.com/docs/api/product-analytics-2"""
     try:

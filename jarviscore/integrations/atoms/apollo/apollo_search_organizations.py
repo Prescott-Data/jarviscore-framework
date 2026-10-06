@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def apollo_search_organizations(q_organization_name: str=None, locations: list=None, keyword_tags: list=None, employee_count_min: int=None, employee_count_max: int=None, page: int=1, per_page: int=25) -> dict:
     """Find companies in Apollo by name, headquarters location, industry keywords and headcount. Consumes one Apollo credit per page."""
     params = {'page': page, 'per_page': per_page}
