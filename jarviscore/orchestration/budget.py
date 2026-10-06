@@ -44,6 +44,21 @@ class WorkflowBudgetAccount:
             )
         return reservation_id
 
+    def headroom(self) -> int:
+        """Tokens this epoch can still reserve; reserve() remains authoritative."""
+        usage = self.store.get_workflow_budget_usage(self.workflow_id, self.epoch_id)
+        if usage is None:
+            from jarviscore.orchestration.envelopes import ExecutionBudget
+
+            goal = self.store.get_workflow_goal(self.workflow_id) or {}
+            return ExecutionBudget.from_record(goal.get("budget")).max_tokens
+        return max(
+            0,
+            int(usage.get("max_tokens_per_epoch") or 0)
+            - int(usage.get("epoch_used_tokens") or 0)
+            - int(usage.get("epoch_reserved_tokens") or 0),
+        )
+
     def settle(self, reservation_id: str, tokens: int, cost_usd: float) -> None:
         self.store.settle_workflow_tokens(
             self.workflow_id,

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["job_name", "payload", "base_url"],
+    "consequence": "Triggers one Jenkins job build, optionally with build parameters.",
+}
+
+
 async def jenkins_create_build(job_name: str, timeout: int=30, verify_ssl: bool=True, payload: Optional[Dict[str, Any]]=None, base_url: str=None) -> dict:
     """Trigger Jenkins job build. Official: https://www.jenkins.io/doc/book/using/remote-access-api/"""
     try:

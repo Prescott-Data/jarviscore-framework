@@ -223,6 +223,54 @@ class TestP2PCapabilities:
             raise
 
 
+class TestPeerMessageDelivery:
+    """Cross-node peer messages arrive with a JSON-encoded payload."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("handler", "message_type"),
+        [
+            ("_handle_peer_notify", "notify"),
+            ("_handle_peer_request", "request"),
+            ("_handle_peer_response", "response"),
+        ],
+    )
+    async def test_json_encoded_payload_is_delivered(self, handler, message_type):
+        import json
+
+        from jarviscore.p2p.coordinator import P2PCoordinator
+        from jarviscore.p2p.messages import MessageType
+
+        class ComplianceAgent(CustomAgent):
+            role = "compliance"
+            capabilities = ["sanctions_screening"]
+
+        agent = ComplianceAgent("compliance-1")
+        coordinator = P2PCoordinator([agent], {})
+        peer_client = MagicMock()
+        peer_client._deliver_message = AsyncMock()
+        coordinator.register_peer_client(agent.agent_id, peer_client)
+
+        wire_payload = json.dumps({
+            "target": "compliance",
+            "sender": "risk-1",
+            "sender_node": "127.0.0.1:7970",
+            "data": {"event": "trade_blocked", "trade_id": "T-4103"},
+            "correlation_id": "req-abc",
+            "timestamp": 1.0,
+        })
+
+        await getattr(coordinator, handler)(
+            "127.0.0.1:7970", {"payload": wire_payload}
+        )
+
+        peer_client._deliver_message.assert_awaited_once()
+        delivered = peer_client._deliver_message.await_args.args[0]
+        assert delivered.type == MessageType(message_type)
+        assert delivered.sender == "risk-1"
+        assert delivered.data == {"event": "trade_blocked", "trade_id": "T-4103"}
+
+
 class TestP2PLifecycle:
     """Test P2P lifecycle management"""
 

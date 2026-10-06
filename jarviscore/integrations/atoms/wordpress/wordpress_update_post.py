@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["post_id", "title"],
+    "consequence": "Updates the title of one WordPress post.",
+}
+
+
 async def wordpress_update_post(post_id: str, title: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """wordpress REST: update post. Official: https://developer.wordpress.org/rest-api/"""
     try:

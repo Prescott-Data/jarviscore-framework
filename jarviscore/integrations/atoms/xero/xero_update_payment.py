@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 XERO_API = 'https://api.xero.com/api.xro/2.0'
 
+ATOM_POLICY = {
+    "effect": "destructive",
+    "approval": "required",
+    "idempotency_fields": ["payment_id", "status", "tenant_id"],
+    "consequence": "Updates the Xero payment status, which can delete or void the payment record.",
+}
+
+
 async def xero_update_payment(payment_id: str, tenant_id: str='', status: str='DELETED', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """xero REST: update payment. Official: https://developer.xero.com/documentation/api/accounting/overview"""
     try:

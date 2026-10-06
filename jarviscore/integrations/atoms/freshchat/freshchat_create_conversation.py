@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["channel_id", "messages", "users", "status", "assigned_agent_id", "assigned_group_id", "properties"],
+    "consequence": "Creates one Freshchat conversation with the provided messages and assignments.",
+}
+
+
 async def freshchat_create_conversation(channel_id: str, messages: List[Any], users: Optional[List[Any]]=None, status: str='new', assigned_agent_id: Optional[str]=None, assigned_group_id: Optional[str]=None, properties: Optional[Dict[str, Any]]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a conversation (POST /v2/conversations). Requires channel_id and messages. Bearer API token from Admin > API Tokens. Base URL: https://{domain}.freshchat.com/v2. Official: https://developers.freshchat.com/api/"""
     try:

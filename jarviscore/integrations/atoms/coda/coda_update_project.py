@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 CODA_API = 'https://coda.io/apis/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Updates one Coda doc with the provided changes.",
+}
+
+
 async def coda_update_project(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a Coda doc (catalog project) via PATCH /docs/{docId}. Bearer API token in Authorization header. Official: https://coda.io/apis/v1"""
     try:

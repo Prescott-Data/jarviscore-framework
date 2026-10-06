@@ -228,6 +228,22 @@ async def test_generate_settles_exact_usage_into_the_workflow_budget():
 
 
 @pytest.mark.asyncio
+async def test_a_cancelled_generation_releases_its_reservation():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-llm-cancelled", "Release abandoned calls", budget={"max_tokens": 1000},
+    )
+    llm = _budget_test_client({"content": "never"})
+    llm._generate_inner = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with workflow_budget_scope(store, "wf-llm-cancelled"):
+        with pytest.raises(asyncio.CancelledError):
+            await llm.generate(prompt="hello", max_tokens=20)
+
+    assert store.get_workflow_budget_usage("wf-llm-cancelled", "default")["epoch_reserved_tokens"] == 0
+
+
+@pytest.mark.asyncio
 async def test_generate_reserves_input_in_tokens_not_utf8_bytes():
     store = MockRedisContextStore()
     store.register_workflow_goal(
@@ -273,6 +289,85 @@ async def test_generate_never_dispatches_without_global_capacity():
 
     assert error.value.recoverable is False
     llm._generate_inner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_declared_model_ceiling_replaces_the_default_allowance():
+    llm = _budget_test_client({"content": "done", "tokens": {"total": 3}})
+    llm.provider_order = [LLMProvider.AZURE]
+    llm.config.update({
+        "azure_deployment": "reasoning-deployment",
+        "llm_model_output_limits": {"reasoning-deployment": 128000},
+    })
+
+    await llm.generate(prompt="plan")
+    assert llm._generate_inner.call_args.args[2] == 128000
+
+    await llm.generate(prompt="plan", model="undeclared-deployment")
+    assert llm._generate_inner.call_args.args[2] == 20
+
+    await llm.generate(prompt="plan", max_tokens=700)
+    assert llm._generate_inner.call_args.args[2] == 700
+
+
+@pytest.mark.asyncio
+async def test_each_fallback_provider_receives_its_own_declared_ceiling():
+    llm = UnifiedLLMClient.__new__(UnifiedLLMClient)
+    llm.config = {
+        "llm_default_max_tokens": 4000,
+        "llm_max_retries_429": 0,
+        "azure_deployment": "reasoning-deployment",
+        "claude_model": "smaller-model",
+        "llm_model_output_limits": {
+            "reasoning-deployment": 128000,
+            "smaller-model": 32000,
+        },
+    }
+    llm._semaphore = None
+    llm.provider_order = [LLMProvider.AZURE, LLMProvider.CLAUDE]
+    llm._call_azure = AsyncMock(side_effect=RuntimeError("azure unavailable"))
+    llm._call_claude = AsyncMock(
+        return_value={"content": "done", "tokens": {"total": 3}}
+    )
+
+    await llm.generate(prompt="plan")
+    assert llm._call_azure.call_args.args[2] == 128000
+    assert llm._call_claude.call_args.args[2] == 32000
+
+    llm._call_azure.reset_mock()
+    llm._call_claude.reset_mock()
+    await llm.generate(prompt="plan", max_tokens=700)
+    assert llm._call_azure.call_args.args[2] == 700
+    assert llm._call_claude.call_args.args[2] == 700
+
+
+@pytest.mark.asyncio
+async def test_declared_ceiling_is_bounded_by_remaining_workflow_budget():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-llm-headroom",
+        "Bound a large declared ceiling",
+        budget={"max_tokens": 1000},
+    )
+    llm = _budget_test_client({
+        "content": "done",
+        "tokens": {"input": 5, "output": 5, "total": 10},
+        "cost_usd": 0.0,
+    })
+    llm.provider_order = [LLMProvider.AZURE]
+    llm.config.update({
+        "azure_deployment": "reasoning-deployment",
+        "llm_model_output_limits": {"reasoning-deployment": 128000},
+    })
+
+    with workflow_budget_scope(store, "wf-llm-headroom"):
+        await llm.generate(prompt="plan")
+
+    allowance = llm._generate_inner.call_args.args[2]
+    assert 900 < allowance < 1000
+    usage = store.get_workflow_budget_usage("wf-llm-headroom", "default")
+    assert usage["used_tokens"] == 10
+    assert usage["epoch_reserved_tokens"] == 0
 
 
 # ---------------------------------------------------------------------------

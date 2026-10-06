@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _ETSY_API_SUFFIX = '/v3/application'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["shop_id", "order_id", "payload"],
+    "consequence": "Updates one Etsy shop order receipt with the provided fields.",
+}
+
+
 async def etsy_update_order(shop_id: str, order_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update shop receipt (PUT /v3/application/shops/{shop_id}/receipts/{receipt_id}, form body). Requires x-api-key (keystring:shared_secret) and OAuth Bearer token per Etsy Open API v3. Official: https://developers.etsy.com/documentation/reference#operation/updateShopReceipt"""
     try:

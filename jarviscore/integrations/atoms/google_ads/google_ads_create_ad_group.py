@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["customer_id", "payload"],
+    "consequence": "Creates one Google Ads ad group in the specified customer account, which can affect advertising delivery and spend.",
+}
+
+
 async def google_ads_create_ad_group(customer_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a ad group in google ads. Official: https://developers.google.com/google-ads/api/rest/reference/rest/v24/customers.adGroups/mutate"""
     try:

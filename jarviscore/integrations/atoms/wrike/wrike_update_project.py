@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "name"],
+    "consequence": "Updates the title of one Wrike project.",
+}
+
+
 async def wrike_update_project(project_id: str, name: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """wrike REST: update project. Official: https://developers.wrike.com/api/v4/"""
     try:

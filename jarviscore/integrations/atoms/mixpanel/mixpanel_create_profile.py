@@ -3,6 +3,14 @@ MP_INGEST = 'https://api.mixpanel.com'
 MP_QUERY = 'https://mixpanel.com/api/query'
 MP_EXPORT = 'https://data.mixpanel.com/api/2.0'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates or updates one Mixpanel user profile for the specified distinct_id.",
+}
+
+
 async def mixpanel_create_profile(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create/set user profile via Ingestion API profile-set. Official: https://developer.mixpanel.com/reference/profile-set"""
     try:

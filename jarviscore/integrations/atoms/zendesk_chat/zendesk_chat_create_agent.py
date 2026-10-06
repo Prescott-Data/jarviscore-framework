@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["name"],
+    "consequence": "Creates one Zendesk Chat agent account using the configured email and password credentials.",
+}
+
+
 async def zendesk_chat_create_agent(name: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """zendesk_chat REST: create agent. Official: https://developer.zendesk.com/api-reference/live-chat/introduction/"""
     try:

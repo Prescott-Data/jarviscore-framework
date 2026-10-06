@@ -53,6 +53,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional, cast, get_args, get_origin
 
 from jarviscore.context.truth import AgentOutput
+from jarviscore.execution import multimodal
 from jarviscore.kernel.cognition import AgentCognitionManager
 from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 from jarviscore.kernel.epistemic import EpistemicLedger
@@ -101,9 +102,29 @@ _THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGH
 # the cap is clipped WITH an explicit marker and remains retrievable via the
 # built-in read_turn_result tool for the lifetime of the dispatch.
 _OBSERVATION_LIMIT = int(os.getenv("SUBAGENT_OBSERVATION_LIMIT", "800"))
-# Full-result retention per turn (chars) and how many turns are kept.
-_TURN_RESULT_RETENTION = int(os.getenv("SUBAGENT_TURN_RESULT_RETENTION", "16000"))
+# Whole results of the last N tool turns are kept; older turns are released
+# whole, never cut, when the window or the total-size budget is exceeded.
 _TURN_RESULT_WINDOW = int(os.getenv("SUBAGENT_TURN_RESULT_WINDOW", "10"))
+_TURN_RESULT_BUDGET = int(os.getenv("SUBAGENT_TURN_RESULT_BUDGET", "2000000"))
+# read_turn_result pages are shown whole, so each page is sized to fit the agent's view.
+_READ_PAGE_LIMIT = int(os.getenv("SUBAGENT_READ_PAGE_LIMIT", "20000"))
+
+
+def _retain_turn_result(internal_variables: Dict[str, Any], turn: int, text: str) -> None:
+    """Keep this turn's result whole; release older turns whole, recording why."""
+    ring = internal_variables.setdefault("_turn_results", {})
+    released = internal_variables.setdefault("_released_turn_results", {})
+    ring[str(turn)] = text
+    for stale in sorted(ring, key=int)[:-_TURN_RESULT_WINDOW]:
+        del ring[stale]
+        released[stale] = f"only the last {_TURN_RESULT_WINDOW} tool turns are kept"
+    while len(ring) > 1 and sum(len(value) for value in ring.values()) > _TURN_RESULT_BUDGET:
+        oldest = min(ring, key=int)
+        del ring[oldest]
+        released[oldest] = (
+            f"retained results are kept within {_TURN_RESULT_BUDGET} chars and later "
+            "results needed the room"
+        )
 
 
 def _clip_observation(text: str, turn: int, limit: int = 0) -> str:
@@ -121,6 +142,25 @@ def _clip_observation(text: str, turn: int, limit: int = 0) -> str:
         f"…[showing {limit} of {len(text)} chars — call TOOL: read_turn_result "
         f'PARAMS: {{"turn": {turn}, "offset": {limit}}} for the rest]'
     )
+
+
+def _observe(tool_name: str, tool_result: Any, turn: int) -> str:
+    """The agent's view of a tool result; a read_turn_result page is already sized and shown whole."""
+    if tool_name == "read_turn_result":
+        return str(tool_result)
+    return _clip_observation(str(tool_result), turn)
+
+def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) -> None:
+    """Prior turns as assistant/user pairs, images included (last 10)."""
+    for hist_entry in conversation_history[-10:]:
+        messages.append({"role": "assistant", "content": hist_entry["assistant"]})
+        messages.append({
+            "role": "user",
+            "content": multimodal.with_images(
+                hist_entry["observation"], hist_entry.get("images", ())
+            ),
+        })
+
 
 def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     """Extract the first complete JSON object from *text* using brace-counting.
@@ -253,11 +293,16 @@ def _repair_json_strings(text: str) -> str:
 class ToolDefinition:
     """A registered tool available to a subagent."""
 
-    def __init__(self, name: str, func: Callable, description: str, phase: str = "action"):
+    def __init__(
+        self, name: str, func: Callable, description: str, phase: Optional[str] = None
+    ):
         self.name = name
         self.func = func
         self.description = description
-        self.phase = phase  # "thinking" or "action"
+        # The phase the registrant declared, if any. Only a declared phase
+        # overrides the cognition name sets when budgeting the tool.
+        self.declared_phase = phase
+        self.phase = phase or "action"
 
 
 class BaseSubAgent(ABC):
@@ -321,8 +366,23 @@ class BaseSubAgent(ABC):
         # Auto-discover any _tool_* methods not already registered by setup_tools()
         self._autodiscover_tools()
 
+    #: Root of the run workspace; file tools resolve every path inside it.
+    workspace_root = None
+
+    def _workspace_path(self, path: str = ".") -> str:
+        """Resolve a tool path inside the run workspace; anything else is refused."""
+        from pathlib import Path
+
+        if self.workspace_root is None:
+            raise PermissionError("No workspace is attached to this run, so files are unavailable.")
+        root = Path(self.workspace_root).resolve()
+        target = (root / str(path or ".")).resolve()
+        if target != root and root not in target.parents:
+            raise PermissionError(f"{path} is outside this run's workspace.")
+        return str(target)
+
     def register_tool(
-        self, name: str, func: Callable, description: str, phase: str = "action"
+        self, name: str, func: Callable, description: str, phase: Optional[str] = None
     ) -> None:
         """Register a tool available to this subagent."""
         self._tools[name] = ToolDefinition(name, func, description, phase)
@@ -353,6 +413,7 @@ class BaseSubAgent(ABC):
                 "error": "The memory tier did not accept this; it was not kept.",
                 "semantic_error": "NOT_KEPT",
             }
+        getattr(self, "_kept_memories", []).append({"kind": kind, "fact": text})
         return {"status": "success", "kept": text, "kind": kind}
 
     async def _tool_recall(self, query: str, limit: int = 5) -> Dict[str, Any]:
@@ -376,20 +437,23 @@ class BaseSubAgent(ABC):
         …[showing X of Y chars] marker.
         """
         state = self._current_state
-        ring = (state.internal_variables.get("_turn_results") or {}) if state is not None else {}
+        variables = state.internal_variables if state is not None else {}
+        ring = variables.get("_turn_results") or {}
         full = ring.get(str(turn))
         if full is None:
             available = sorted(ring, key=int) if ring else []
+            released = (variables.get("_released_turn_results") or {}).get(str(turn))
+            why = (
+                f"Turn {turn}'s result was released because {released}; repeat that call "
+                "if you still need it."
+                if released else f"No retained result for turn {turn}."
+            )
             return {
                 "status": "error",
-                "error": (
-                    f"No retained result for turn {turn}. "
-                    f"Retained turns: {available or 'none'} "
-                    f"(the last {_TURN_RESULT_WINDOW} tool turns are kept)."
-                ),
+                "error": f"{why} Retained turns: {available or 'none'}.",
             }
         offset = max(0, int(offset))
-        length = int(length) or _OBSERVATION_LIMIT * 4
+        length = min(int(length) or _READ_PAGE_LIMIT, _READ_PAGE_LIMIT)
         chunk = full[offset:offset + length]
         remaining = max(0, len(full) - (offset + len(chunk)))
         return {
@@ -578,7 +642,7 @@ class BaseSubAgent(ABC):
             "  To use a tool: THOUGHT: <reasoning>\\nTOOL: <name>\\nPARAMS: <json>",
             "  To finish:     THOUGHT: <reasoning>\\nDONE: <complete human answer>\\nRESULT: <json>",
             "  JSON alternative: {\"thought\": \"...\", \"tool\": \"...\", \"params\": {...}}",
-            "  JSON finish:      {\"thought\": \"...\", \"done\": \"<summary>\", \"result\": {...}}",
+            "  JSON finish:      {\"thought\": \"...\", \"done\": \"<complete human answer>\", \"result\": {...}}",
             "  This protocol is one action per turn, not one action per task. After each",
             "  tool result you receive another turn; continue calling tools until the task",
             "  is complete. Never use DONE merely because additional tool calls are needed.",
@@ -589,11 +653,9 @@ class BaseSubAgent(ABC):
             "  RESULT carries the data behind that answer, shaped for whoever will",
             "  use it next: the list, the record, the figures. It is not a place",
             "  for status flags, booleans about your own process, or a diagnosis",
-            "  of the runtime. If there is no data beyond the answer, RESULT may",
-            "  repeat the answer as a string. When the answer needs more than one",
-            "  line, put the complete prose in RESULT under an `answer` field; that",
-            "  prose becomes the human-facing result while the other fields remain",
-            "  available to downstream agents.",
+            "  of the runtime, and it is not a second copy of the answer: DONE is",
+            "  the only answer the person and downstream agents read. If there is",
+            "  no data beyond the answer, RESULT may be an empty object.",
         ]
         return "\n".join(parts)
 
@@ -629,9 +691,7 @@ class BaseSubAgent(ABC):
             return None  # nothing gathered, nothing to synthesize
         try:
             messages = [{"role": "system", "content": system_prompt}]
-            for hist_entry in conversation_history[-10:]:
-                messages.append({"role": "assistant", "content": hist_entry["assistant"]})
-                messages.append({"role": "user", "content": hist_entry["observation"]})
+            _thread_history(messages, conversation_history)
             messages.append({"role": "user", "content": (
                 f"Your execution budget is exhausted ({exhausted}). Tools are no "
                 "longer available. Produce your final answer NOW from what you "
@@ -674,7 +734,9 @@ class BaseSubAgent(ABC):
                 metadata={"tokens": total_tokens, "cost_usd": total_cost,
                           "lease_exhausted": exhausted, "landing_turn": True,
                           "typed_outcome": "SUCCESS_ON_LANDING",
-                          "tool_receipts": state.receipt_evidence(state.output)},
+                          "tool_receipts": state.receipt_evidence(state.output),
+                          "answer": parsed.get("answer"),
+                          "kept_memories": list(getattr(self, "_kept_memories", []))},
             )
         except Exception as exc:
             self._log.warning("Landing turn failed: %s", exc)
@@ -803,6 +865,7 @@ class BaseSubAgent(ABC):
         self._current_state = state
         # And the memory handle, so remember/recall reach the same tiers.
         self._current_memory = memory
+        self._kept_memories = []
 
         # Pre-run hook — subclasses can do deterministic pre-flight work
         await self._pre_run_hook(state)
@@ -915,10 +978,7 @@ class BaseSubAgent(ABC):
             # ═══ 3. DECIDE — LLM call ═══
             user_prompt = self._build_user_prompt(state, context_block)
             messages = [{"role": "system", "content": system_prompt}]
-            # Thread prior turns as assistant/user pairs (last 10 for continuity)
-            for hist_entry in conversation_history[-10:]:
-                messages.append({"role": "assistant", "content": hist_entry["assistant"]})
-                messages.append({"role": "user", "content": hist_entry["observation"]})
+            _thread_history(messages, conversation_history)
             messages.append({"role": "user", "content": user_prompt})
 
             _trace.log_llm_request(system_prompt[:300], user_prompt[:500], model=model)
@@ -1020,6 +1080,9 @@ class BaseSubAgent(ABC):
             parsed = self._native_tool_action(llm_result) or self._parse_response_for_contract(
                 content, context
             )
+            if parsed["type"] != "raw":
+                # Repairs bound a run of malformed replies, not a session's lifetime.
+                state.internal_variables["_protocol_violation_count"] = 0
 
             # ── Auto-summarize if context is getting large ──
             try:
@@ -1159,6 +1222,8 @@ class BaseSubAgent(ABC):
                         "tokens": total_tokens,
                         "cost_usd": total_cost,
                         "tool_receipts": state.receipt_evidence(parsed.get("result")),
+                        "answer": parsed.get("answer"),
+                        "kept_memories": list(getattr(self, "_kept_memories", [])),
                         **getattr(self, "_dispatch_metadata", {}),
                     },
                 )
@@ -1284,6 +1349,7 @@ class BaseSubAgent(ABC):
                         },
                     )
                 tool_duration_ms = round((time.monotonic() - tool_started) * 1000)
+                tool_result, observed_images = multimodal.split_images(tool_result)
                 decision = tool_result.get("decision") if isinstance(tool_result, dict) else None
                 decision_usage = (
                     tool_result.get("decision_usage")
@@ -1314,10 +1380,7 @@ class BaseSubAgent(ABC):
                 # The observation channel clips below; the bytes it clips stay
                 # reachable via read_turn_result for the last N turns.
                 if tool_name != "read_turn_result":
-                    ring = state.internal_variables.setdefault("_turn_results", {})
-                    ring[str(turn)] = str(tool_result)[:_TURN_RESULT_RETENTION]
-                    for stale in sorted(ring, key=int)[:-_TURN_RESULT_WINDOW]:
-                        del ring[stale]
+                    _retain_turn_result(state.internal_variables, turn, str(tool_result))
 
                 # Record in state
                 error_str = tool_result.get("error") if isinstance(tool_result, dict) else None
@@ -1340,9 +1403,11 @@ class BaseSubAgent(ABC):
                     state.add_thought(f"[EPISTEMIC] {_plateau_signal}")
 
                 # ── Track usage + convergence ──
+                registered = self._tools.get(tool_name)
                 self._cognition.track_usage(
                     tool_name, tokens=llm_tokens_this_turn, tool_output=tool_result,
                     params=tool_params,
+                    declared_phase=getattr(registered, "declared_phase", None),
                 )
 
                 # ── Record failure if tool errored ──
@@ -1412,12 +1477,13 @@ class BaseSubAgent(ABC):
                         # Record conversation for continuity through the pivot
                         observation = (
                             f"Tool '{tool_name}' returned: "
-                            f"{_clip_observation(str(tool_result), turn)}\n"
+                            f"{_observe(tool_name, tool_result, turn)}\n"
                             f"Authoritative tool receipt: {tool_receipt.receipt_id}"
                         )
                         conversation_history.append({
                             "assistant": content,
                             "observation": observation,
+                            "images": observed_images,
                         })
                         continue
                     else:
@@ -1444,7 +1510,7 @@ class BaseSubAgent(ABC):
                 # Record conversation history for multi-turn LLM continuity
                 # Structured turn digest instead of raw output — helps the LLM
                 # retain what was learned and reason about strategy changes.
-                result_str = _clip_observation(str(tool_result), turn)
+                result_str = _observe(tool_name, tool_result, turn)
                 observation = (
                     f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}):\n"
                     f"{result_str}\n\n"
@@ -1457,6 +1523,7 @@ class BaseSubAgent(ABC):
                 conversation_history.append({
                     "assistant": content,
                     "observation": observation,
+                    "images": observed_images,
                 })
 
                 # Log turn to memory
@@ -1850,14 +1917,18 @@ class BaseSubAgent(ABC):
 
         # Check for DONE
         if done_match or result_match:
-            summary = done_match.group(1).strip() if done_match else "Completed via RESULT block"
+            answer = done_match.group(1).strip() if done_match else None
+            summary = answer or "Completed via RESULT block"
             result = None
             if result_match:
                 try:
                     result = json.loads(result_match.group(1).strip())
                 except (json.JSONDecodeError, ValueError):
                     result = result_match.group(1).strip()
-            return {"type": "done", "thought": thought, "summary": summary, "result": result}
+            return {
+                "type": "done", "thought": thought, "summary": summary,
+                "result": result, "answer": answer or None,
+            }
 
         # Check for TOOL (matched above, before precedence resolution)
         if tool_match:
@@ -1902,6 +1973,7 @@ class BaseSubAgent(ABC):
                     "thought": json_thought,
                     "summary": str(done_summary),
                     "result": obj.get("result"),
+                    "answer": str(done_summary).strip() or None,
                 }
 
         # Unparseable

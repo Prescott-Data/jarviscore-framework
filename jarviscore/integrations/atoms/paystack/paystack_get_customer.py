@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def paystack_get_customer(customer_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Fetch customer by email or customer code. Official: https://paystack.com/docs/api/customer/#fetch-customer"""
     try:

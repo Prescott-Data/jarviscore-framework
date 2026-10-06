@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 SIGN_API = 'https://api.hellosign.com/v3'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Dropbox Sign embedded template draft.",
+}
+
+
 async def dropbox_sign_create_folder(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create embedded template draft. Official: https://developers.hellosign.com/api/template/create-embedded-draft"""
     try:

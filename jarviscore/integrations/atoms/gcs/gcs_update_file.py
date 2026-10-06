@@ -2,6 +2,14 @@ from typing import Any, Dict, List, Optional
 _GCS_API_ROOT = 'https://storage.googleapis.com/storage/v1'
 _GCS_UPLOAD_ROOT = 'https://storage.googleapis.com/upload/storage/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["bucket_name", "object_name", "fields"],
+    "consequence": "Updates metadata fields on one Google Cloud Storage object.",
+}
+
+
 async def gcs_update_file(bucket_name: str, object_name: str, fields: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update object metadata (PATCH .../b/{bucket}/o/{object}). OAuth Bearer token (cloud-platform or devstorage scope). JSON API root required. Official: https://cloud.google.com/storage/docs/json_api/v1"""
     try:

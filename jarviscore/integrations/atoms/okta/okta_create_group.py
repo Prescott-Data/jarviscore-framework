@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["domain", "payload"],
+    "consequence": "Creates one Okta group in the connected Okta organization.",
+}
+
+
 async def okta_create_group(domain: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create OKTA_GROUP. Official: https://developer.okta.com/docs/reference/api/overview/"""
     try:

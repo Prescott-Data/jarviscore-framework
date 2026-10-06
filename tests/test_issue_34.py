@@ -45,6 +45,32 @@ async def test_complexity_gate_trivial(MockClassifier):
 
 @pytest.mark.asyncio
 @patch("jarviscore.planning.classifier.TaskComplexityClassifier")
+async def test_the_workers_authored_answer_is_the_result_not_a_payload_recap(MockClassifier):
+    mock_classifier_instance = AsyncMock()
+    MockClassifier.return_value = mock_classifier_instance
+    mock_classifier_instance.classify.return_value.level = "trivial"
+    mock_classifier_instance.classify.return_value.reason = "Simple task"
+
+    agent = DummyGoalAgent()
+    agent.llm = AsyncMock()
+    agent._kernel = AsyncMock()
+    plan = "Monday: bean chilli.\n\nShopping list:\n- 2 tins kidney beans\n- 300 g rice"
+
+    class MockOutput:
+        status = "success"
+        payload = {"answer": "Four dinners planned near the budget.", "dinners": 4}
+        summary = plan
+        metadata = {"answer": plan}
+
+    agent._kernel.execute.return_value = MockOutput()
+
+    result = await agent.execute_task({"task": "Plan dinners"})
+
+    assert result["result_summary"] == plan
+    assert result["output"] == MockOutput.payload
+
+@pytest.mark.asyncio
+@patch("jarviscore.planning.classifier.TaskComplexityClassifier")
 @patch.object(DummyGoalAgent, "execute_goal", new_callable=AsyncMock)
 async def test_complexity_gate_complex(mock_execute_goal, MockClassifier):
     # Setup mock classifier to return complex

@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _ASSEMBLA_V1_SUFFIX = '/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Updates one Assembla space with the provided fields.",
+}
+
+
 async def assembla_update_project(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update space (PUT /v1/spaces/{id}.json). Official: https://api-docs.assembla.cc/content/ref/spaces_update.html"""
     try:

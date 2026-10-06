@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["subject", "start_datetime", "end_datetime", "participants"],
+    "consequence": "Creates one Microsoft Graph online meeting in the connected account.",
+}
+
+
 async def msgraph_create_meeting(subject: str, start_datetime: str, end_datetime: str, timezone: str='UTC', participants: list=None) -> dict:
     """Create meeting. POST https://graph.microsoft.com/v1.0/me/onlineMeetings"""
     try:

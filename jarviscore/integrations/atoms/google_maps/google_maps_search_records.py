@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 _PLACES_API_ROOT = 'https://places.googleapis.com/v1'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def google_maps_search_records(text_query: str, max_results: int=20, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Places API searchText (pageSize max 20, pageToken pagination). Official: https://developers.google.com/maps/documentation/places/web-service/reference/rest/v1/places/searchText"""
     try:

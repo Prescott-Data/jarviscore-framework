@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["fullname", "direction"],
+    "consequence": "Sets the connected Reddit account's vote on one post or comment.",
+}
+
+
 async def reddit_vote(fullname: str, direction: int) -> dict:
     """Vote. POST https://oauth.reddit.com/api/vote"""
     try:

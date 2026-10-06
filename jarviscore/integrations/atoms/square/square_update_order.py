@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["order_id", "payload"],
+    "consequence": "Updates one Square order with the provided changes, which can alter order details and customer-facing transaction records.",
+}
+
+
 async def square_update_order(order_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Square API v2: update order. Official: https://developer.squareup.com/reference/square/orders-api/update-order"""
     try:

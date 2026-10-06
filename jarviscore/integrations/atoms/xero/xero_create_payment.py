@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 XERO_API = 'https://api.xero.com/api.xro/2.0'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["invoice_id", "account_id", "amount", "date", "tenant_id"],
+    "consequence": "Records one payment against a Xero invoice using the specified account and amount.",
+}
+
+
 async def xero_create_payment(invoice_id: str, account_id: str, amount: float, tenant_id: str='', date: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """xero REST: create payment. Official: https://developer.xero.com/documentation/api/accounting/overview"""
     try:

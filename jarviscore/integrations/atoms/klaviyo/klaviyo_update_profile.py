@@ -2,6 +2,14 @@ from typing import Any, Dict, Optional
 KLAVIYO_API = 'https://a.klaviyo.com'
 KL_REVISION = '2024-10-15'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["profile_id", "payload"],
+    "consequence": "Updates one Klaviyo profile's attributes.",
+}
+
+
 async def klaviyo_update_profile(profile_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update profile in klaviyo. Official: https://developers.klaviyo.com/en/reference/profiles_api_overview"""
     try:

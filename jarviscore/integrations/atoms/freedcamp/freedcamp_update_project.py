@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _FC_API_ROOT = 'https://freedcamp.com/api/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Updates one Freedcamp project with the provided fields.",
+}
+
+
 async def freedcamp_update_project(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update project (POST). Official: https://freedcamp.com/help_/tutorials/wiki/wiki_public/view/DFaab#/projects"""
     try:

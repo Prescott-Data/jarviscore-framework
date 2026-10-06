@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 MONDAY_API = 'https://api.monday.com/v2'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["item_id", "payload"],
+    "consequence": "Updates column values on one monday.com item.",
+}
+
+
 async def monday_update_item(item_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update item columns via GraphQL change_multiple_column_values. Official: https://developer.monday.com/api-reference/docs/change-column-values"""
     try:

@@ -97,8 +97,11 @@ markdown_extensions:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
+# The logo links to the homepage, so it is not repeated as a nav item.
+not_in_nav: |
+  /index.md
+
 nav:
-  - Home: index.md
   - Getting Started: getting-started.md
   - Compare:
     - Overview: compare/index.md
@@ -174,7 +177,7 @@ nav:
   - Enterprise: infrastructure/enterprise.md
 
 extra:
-  version: "1.13.0"
+  version: "2.0.0"
   social:
     - icon: material/web
       link: https://developers.prescottdata.io

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one WooCommerce order, which may commit the store to fulfill and charge a customer order.",
+}
+
+
 async def woocommerce_create_order(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """woocommerce REST: create order. Official: https://woocommerce.github.io/woocommerce-rest-api-docs/"""
     try:

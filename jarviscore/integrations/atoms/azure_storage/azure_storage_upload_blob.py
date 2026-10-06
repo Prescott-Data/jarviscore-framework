@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["account_name", "container_name", "blob_name", "content", "content_type"],
+    "consequence": "Uploads or overwrites one blob in Azure Blob Storage.",
+}
+
+
 async def azure_storage_upload_blob(account_name: str, container_name: str, blob_name: str, content: bytes, content_type: str='application/octet-stream') -> dict:
     """Storage upload blob via the azure_storage API."""
     try:

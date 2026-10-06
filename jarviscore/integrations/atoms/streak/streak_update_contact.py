@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["contact_key", "payload"],
+    "consequence": "Updates one Streak contact with the provided fields.",
+}
+
+
 async def streak_update_contact(contact_key: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Streak API: update contact. Official: https://streak.com/api#update_a_contact"""
     try:

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one PagerDuty user account, which can grant a person access to the connected PagerDuty account.",
+}
+
+
 async def pagerduty_create_user(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create user (wrapped user body). Official: https://developer.pagerduty.com/api-reference/operations/createUser"""
     try:

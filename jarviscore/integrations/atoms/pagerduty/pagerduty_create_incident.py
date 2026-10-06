@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one PagerDuty incident.",
+}
+
+
 async def pagerduty_create_incident(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create incident (wrapped incident body; From header required for account API keys). Official: https://developer.pagerduty.com/api-reference/operations/createIncident"""
     try:

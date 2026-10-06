@@ -275,8 +275,7 @@ Your job: transform raw data into clear, actionable output for your audience.
         Mode 'w' overwrites, 'a' appends.
         """
         try:
-            # Security: prevent path traversal
-            abs_path = os.path.abspath(path)
+            abs_path = self._workspace_path(path)
 
             # Create parent dirs
             parent = os.path.dirname(abs_path)
@@ -300,6 +299,7 @@ Your job: transform raw data into clear, actionable output for your audience.
     def _tool_read_file(self, path: str, **kwargs) -> Dict[str, Any]:
         """Read content from a file."""
         try:
+            path = self._workspace_path(path)
             if not os.path.exists(path):
                 return {"status": "error", "error": f"File not found: {path}"}
             if not os.path.isfile(path):
@@ -331,6 +331,7 @@ Your job: transform raw data into clear, actionable output for your audience.
     ) -> Dict[str, Any]:
         """List files in a directory, optionally filtered by pattern."""
         try:
+            path = self._workspace_path(path)
             if not os.path.exists(path):
                 return {"status": "error", "error": f"Directory not found: {path}"}
             if not os.path.isdir(path):

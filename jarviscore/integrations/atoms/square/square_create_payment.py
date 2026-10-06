@@ -1,6 +1,14 @@
 import uuid
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Square payment or order transaction that can charge money to a customer account.",
+}
+
+
 async def square_create_payment(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Square API v2: create payment. Official: https://developer.squareup.com/reference/square/payments-api/create-payment"""
     try:

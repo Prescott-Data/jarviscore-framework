@@ -601,12 +601,20 @@ class AgentCognitionManager:
             redis_store=redis_store,
         )
 
-    def classify_tool(self, tool_name: str) -> str:
+    def classify_tool(self, tool_name: str, declared_phase: Any = None) -> str:
         """
         Classify a tool as 'thinking' or 'action'.
 
-        Unknown tools default to 'action' (conservative — charges action budget).
+        A phase declared when the tool was registered wins: discovery and
+        analysis tools gather information, so they draw on the thinking budget.
+        Undeclared tools fall back to the name sets; unknown names default to
+        'action' (conservative — charges action budget).
         """
+        declared = getattr(declared_phase, "value", declared_phase)
+        if declared in {"thinking", AgentPhase.DISCOVERY.value, AgentPhase.ANALYSIS.value}:
+            return "thinking"
+        if declared in {"action", AgentPhase.IMPLEMENTATION.value, AgentPhase.COMPLETION.value}:
+            return "action"
         if tool_name in THINKING_TOOLS:
             return "thinking"
         return "action"
@@ -617,6 +625,7 @@ class AgentCognitionManager:
         tokens: int = 0,
         tool_output: Any = None,
         params: Optional[Dict[str, Any]] = None,
+        declared_phase: Any = None,
     ) -> None:
         """
         Record a tool invocation and charge tokens to the appropriate budget.
@@ -628,8 +637,9 @@ class AgentCognitionManager:
             params: Tool parameters — forwarded to the ConvergenceGovernor so
                 the same-tool streak can distinguish iteration (same tool,
                 different params) from spinning (same tool, same params).
+            declared_phase: The phase the subagent registered the tool with.
         """
-        phase = self.classify_tool(tool_name)
+        phase = self.classify_tool(tool_name, declared_phase)
         if tokens > 0:
             self.lease.consume(tokens, phase)
 

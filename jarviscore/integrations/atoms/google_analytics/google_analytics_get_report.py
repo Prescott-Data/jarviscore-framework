@@ -2,6 +2,12 @@ from typing import Any, Dict, List, Optional
 _GA_DATA_ROOT = 'https://analyticsdata.googleapis.com/v1beta'
 _GA_ADMIN_ROOT = 'https://analyticsadmin.googleapis.com/v1beta'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def google_analytics_get_report(property_id: str, report_body: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get a report by ID from google analytics. Official: https://developers.google.com/analytics/devguides/reporting/data/v1/rest/v1beta/properties/runReport"""
     try:

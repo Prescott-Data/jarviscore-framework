@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["pipeline_key", "payload"],
+    "consequence": "Creates one deal box in the specified Streak pipeline.",
+}
+
+
 async def streak_create_deal(pipeline_key: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Streak API: create deal. Official: https://streak.com/api#create_a_box"""
     try:

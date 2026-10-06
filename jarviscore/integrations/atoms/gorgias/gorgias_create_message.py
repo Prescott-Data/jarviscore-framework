@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 GORGIAS_API = 'https://your-domain.gorgias.com/api'
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["conversation_id", "payload"],
+    "consequence": "Posts one message to a Gorgias ticket conversation, which can notify participants or agents in that thread.",
+}
+
+
 async def gorgias_create_message(payload: Dict[str, Any], conversation_id: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a message on a Gorgias ticket. Official: https://developers.gorgias.com/reference/create-ticket-message"""
     try:

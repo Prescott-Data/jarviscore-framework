@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["page_id", "title", "archived"],
+    "consequence": "Updates one Notion page's title or archive status; an archived page can be restored.",
+}
+
+
 async def notion_update_page(page_id: str, title: str=None, archived: bool=None) -> dict:
     """Update page via the notion API."""
     try:

@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def segment_list_sources(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Segment Public API: list sources. Official: https://segment.com/docs/api/public-api/#tag/Sources/operation/listSources"""
     try:

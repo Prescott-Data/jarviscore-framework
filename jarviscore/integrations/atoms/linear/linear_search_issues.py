@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def linear_search_issues(query: str, max_results: int=20) -> dict:
     """Search issues. POST https://api.linear.app/graphql"""
     gql = '\n    query($term: String!, $first: Int!) {\n        issues(filter: { title: { containsIgnoreCase: $term } }, first: $first) {\n            nodes {\n                id\n                identifier\n                title\n                priority\n                state {\n                    name\n                }\n                assignee {\n                    name\n                }\n                team {\n                    name\n                    key\n                }\n                createdAt\n            }\n        }\n    }\n    '

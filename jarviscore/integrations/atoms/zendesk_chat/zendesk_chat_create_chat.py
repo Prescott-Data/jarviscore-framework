@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["name"],
+    "consequence": "Sends one Zendesk Chat offline message chat submission from the configured visitor session.",
+}
+
+
 async def zendesk_chat_create_chat(name: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """zendesk_chat REST: create chat. Official: https://developer.zendesk.com/api-reference/live-chat/introduction/"""
     try:

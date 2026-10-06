@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def pendo_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search track types by query (default) or trackEvents when auth_info.resource=trackEvents and track_type_id set. Official: https://engageapi.pendo.io/"""
     try:

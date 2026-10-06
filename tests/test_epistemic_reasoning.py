@@ -199,12 +199,14 @@ class TestConversationHistoryWindow:
     """Verify conversation history window is 10 turns."""
 
     def test_history_window_is_10(self):
-        """The history slicing in run() should use [-10:]."""
+        """run() threads history through _thread_history, which keeps 10 turns."""
         import inspect
-        source = inspect.getsource(BaseSubAgent.run)
-        # The code should reference [-10:] not [-6:]
-        assert "[-10:]" in source
-        assert "[-6:]" not in source
+        from jarviscore.kernel.subagent import _thread_history
+        assert "_thread_history(messages, conversation_history)" in inspect.getsource(BaseSubAgent.run)
+        messages = []
+        _thread_history(messages, [{"assistant": str(i), "observation": str(i)} for i in range(15)])
+        assert len(messages) == 20
+        assert messages[0]["content"] == "5"
 
 
 # ──────────────────────────────────────────────────────────────────────

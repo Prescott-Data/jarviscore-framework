@@ -25,7 +25,10 @@ def test_local_process_execution_fails_closed_by_default(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_local_generated_code_execution_fails_closed_by_default(tmp_path):
+async def test_local_generated_code_execution_fails_closed_by_default(tmp_path, monkeypatch):
+    import jarviscore.execution.isolation as isolation
+
+    monkeypatch.setattr(isolation, "confinement_prefix", lambda *args, **kwargs: None)
     sandbox = _create_coder_sandbox(workspace_dir=tmp_path)
 
     with pytest.raises(

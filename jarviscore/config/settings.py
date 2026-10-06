@@ -21,7 +21,7 @@ or as per-process env vars — not in a shared .env file.
     JARVISCORE_BIND_PORT=7949 python research_synthesizer.py
     JARVISCORE_BIND_PORT=7946 python research_node_1.py
 """
-from typing import Optional
+from typing import Dict, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     # Delay formula: min(base_delay * 2^attempt, 60s).
     llm_max_retries_429: int = 4
     llm_429_base_delay: float = 2.0
+    # Output allowance for calls that do not pass max_tokens. Reasoning models
+    # bill hidden reasoning against it; declare their ceilings below instead.
+    llm_default_max_tokens: int = 4000
+    # Declared completion-token ceiling per model or deployment name, e.g.
+    # LLM_MODEL_OUTPUT_LIMITS='{"gpt-5.2-chat": 128000}'. Declared models get
+    # their full ceiling, bounded by the remaining workflow budget.
+    llm_model_output_limits: Dict[str, int] = Field(default_factory=dict)
 
     # JarvisCore launch promotion. This is a revocable Prescott entitlement
     # token, never an upstream model-provider API key. The endpoint and model
@@ -267,6 +274,12 @@ class Settings(BaseSettings):
     #   Fallback:   any multimodal model (gpt-4o, gemini-2.5-flash) — vision required
     # Falls back to task_model_standard when not set (which may not be CUA-capable).
     browser_model: Optional[str] = None  # BROWSER_MODEL
+    # Root for persistent browser profiles. Each tenant named by the mesh's
+    # memory_scope_field keeps its own logins here across runs; unset = fresh
+    # browser every run.
+    browser_profile_dir: Optional[str] = None  # BROWSER_PROFILE_DIR
+    # CDP endpoint of a browser the person already has open (shared browser).
+    browser_control_url: Optional[str] = None  # BROWSER_CONTROL_URL
 
     # === Search Providers ===
     # Gemini Grounded Search (primary): set GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT

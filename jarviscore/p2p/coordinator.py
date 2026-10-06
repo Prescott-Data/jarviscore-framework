@@ -7,6 +7,7 @@ Provides agent discovery, capability announcement, and message routing.
 Adapted from an earlier internal agent codebase P2P infrastructure
 """
 import asyncio
+import json
 import logging
 from typing import List, Dict, Any, Optional
 
@@ -14,6 +15,16 @@ from .swim_manager import SWIMThreadManager
 from .keepalive import P2PKeepaliveManager
 from .broadcaster import StepOutputBroadcaster
 from .messages import IncomingMessage, MessageType
+
+
+def _peer_payload(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a peer message payload; the ZMQ transport delivers it JSON-encoded."""
+    payload = message.get('payload', {})
+    if isinstance(payload, (str, bytes)):
+        payload = json.loads(payload)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Peer payload must be an object, got {type(payload).__name__}")
+    return payload
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +75,8 @@ class P2PCoordinator:
         self._capability_map: Dict[str, List[str]] = {}  # capability -> [agent_ids]
         self._agent_peer_clients: Dict[str, Any] = {}  # agent_id -> PeerClient
         self._remote_agent_registry: Dict[str, Dict[str, Any]] = {}  # agent_id -> agent info
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._introductions: set = set()
 
     async def start(self):
         """
@@ -124,7 +137,83 @@ class P2PCoordinator:
         logger.info("✓ Message handlers registered")
 
         self._started = True
+        self._subscribe_membership()
         logger.info("P2P coordinator started successfully")
+
+    def _subscribe_membership(self):
+        """Introduce this node's agents to every member SWIM reports, whenever it arrives."""
+        from swim.events.types import MemberAliveEvent, MemberJoinedEvent
+
+        self._loop = asyncio.get_running_loop()
+        dispatcher = self.swim_manager.event_dispatcher
+        # Bound methods die immediately under the dispatcher's default weak references.
+        dispatcher.subscribe(MemberJoinedEvent, self._on_member_seen, weak=False)
+        dispatcher.subscribe(MemberAliveEvent, self._on_member_seen, weak=False)
+        for member in self.swim_manager.swim_node.members.get_alive_members(exclude_self=True):
+            self._schedule_introduction(member.address)
+
+    def _unsubscribe_membership(self):
+        from swim.events.types import MemberAliveEvent, MemberJoinedEvent
+
+        dispatcher = self.swim_manager.event_dispatcher if self.swim_manager else None
+        if dispatcher:
+            dispatcher.unsubscribe(MemberJoinedEvent, self._on_member_seen)
+            dispatcher.unsubscribe(MemberAliveEvent, self._on_member_seen)
+
+    def _on_member_seen(self, event):
+        """SWIM-thread callback; the introduction itself runs on the coordinator loop."""
+        if self._started and self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._schedule_introduction, event.member.address)
+
+    def _schedule_introduction(self, peer_addr: str):
+        task = asyncio.ensure_future(self._introduce_to(peer_addr))
+        self._introductions.add(task)
+        task.add_done_callback(self._introductions.discard)
+
+    async def _introduce_to(self, peer_addr: str, timeout: float = 30.0) -> bool:
+        """Send our capabilities to one member, retrying until a send succeeds."""
+        conn_mgr = self.swim_manager.zmq_agent.connection_manager
+        deadline = asyncio.get_running_loop().time() + timeout
+        while self._started:
+            zmq_addr = conn_mgr.get_zmq_address_for_swim(peer_addr)
+            if zmq_addr and conn_mgr.can_send_to_node(zmq_addr):
+                sent = await self._send_p2p_message(
+                    peer_addr, 'CAPABILITY_ANNOUNCEMENT', self._capability_payload()
+                )
+                if sent:
+                    logger.info(f"Introduced capabilities to {peer_addr}")
+                    return True
+            if asyncio.get_running_loop().time() >= deadline:
+                logger.warning(f"Could not introduce capabilities to {peer_addr} within {timeout}s")
+                return False
+            await asyncio.sleep(0.2)
+        return False
+
+    def _capability_payload(self) -> Dict[str, Any]:
+        """This node's capability announcement: capability index plus full agent info."""
+        capabilities: Dict[str, List[str]] = {}
+        agents_info = {}
+        for agent in self.agents:
+            for cap in agent.capabilities:
+                capabilities.setdefault(cap, []).append(agent.agent_id)
+            agents_info[agent.agent_id] = {
+                'agent_id': agent.agent_id,
+                'role': agent.role,
+                'capabilities': list(agent.capabilities),
+                'capability_descriptions': dict(
+                    getattr(agent, 'capability_descriptions', {}) or {}
+                ),
+                'capability_contracts': dict(
+                    getattr(agent, 'capability_contracts', {}) or {}
+                ),
+                'description': getattr(agent, 'description', ''),
+                'node_id': self._get_node_id()
+            }
+        return {
+            'node_id': self._get_node_id(),
+            'capabilities': capabilities,
+            'agents': agents_info
+        }
 
     def _register_handlers(self):
         """Register framework message handlers with ZMQ router."""
@@ -231,29 +320,8 @@ class P2PCoordinator:
         # Wait for ZMQ connections to be ready before announcing
         await self._wait_for_zmq_connections(timeout=5.0)
 
-        capabilities = {}
-        agents_info = {}  # Full agent info for remote registry
-
-        for agent in self.agents:
-            for cap in agent.capabilities:
-                if cap not in capabilities:
-                    capabilities[cap] = []
-                capabilities[cap].append(agent.agent_id)
-
-            # Collect full agent info for remote visibility
-            agents_info[agent.agent_id] = {
-                'agent_id': agent.agent_id,
-                'role': agent.role,
-                'capabilities': list(agent.capabilities),
-                'capability_descriptions': dict(
-                    getattr(agent, 'capability_descriptions', {}) or {}
-                ),
-                'capability_contracts': dict(
-                    getattr(agent, 'capability_contracts', {}) or {}
-                ),
-                'description': getattr(agent, 'description', ''),
-                'node_id': self._get_node_id()
-            }
+        payload = self._capability_payload()
+        capabilities = payload['capabilities']
 
         # Merge local capabilities into the map (preserve remote agents)
         for cap, agent_ids in capabilities.items():
@@ -262,12 +330,6 @@ class P2PCoordinator:
             for agent_id in agent_ids:
                 if agent_id not in self._capability_map[cap]:
                     self._capability_map[cap].append(agent_id)
-
-        payload = {
-            'node_id': self._get_node_id(),
-            'capabilities': capabilities,
-            'agents': agents_info  # Include for remote agent registry
-        }
 
         # Broadcast directly using CAPABILITY_ANNOUNCEMENT message type
         # This ensures the handler updates the capability map
@@ -329,35 +391,7 @@ class P2PCoordinator:
                 logger.warning(f"Capability request missing from_node, cannot respond")
                 return
 
-            # Re-announce our capabilities to this specific peer
-            capabilities = {}
-            agents_info = {}
-
-            for agent in self.agents:
-                for cap in agent.capabilities:
-                    if cap not in capabilities:
-                        capabilities[cap] = []
-                    capabilities[cap].append(agent.agent_id)
-
-                agents_info[agent.agent_id] = {
-                    'agent_id': agent.agent_id,
-                    'role': agent.role,
-                    'capabilities': list(agent.capabilities),
-                    'capability_descriptions': dict(
-                        getattr(agent, 'capability_descriptions', {}) or {}
-                    ),
-                    'capability_contracts': dict(
-                        getattr(agent, 'capability_contracts', {}) or {}
-                    ),
-                    'description': getattr(agent, 'description', ''),
-                    'node_id': self._get_node_id()
-                }
-
-            response = {
-                'node_id': self._get_node_id(),
-                'capabilities': capabilities,
-                'agents': agents_info
-            }
+            response = self._capability_payload()
 
             # Send to the SWIM address (from_node), not the ZMQ identity (sender)
             await self._send_p2p_message(sender_swim_id, 'CAPABILITY_ANNOUNCEMENT', response)
@@ -437,6 +471,10 @@ class P2PCoordinator:
             return
 
         logger.info("Stopping P2P coordinator...")
+        self._started = False
+        self._unsubscribe_membership()
+        for task in list(self._introductions):
+            task.cancel()
 
         # Stop keepalive manager
         if self.keepalive_manager:
@@ -479,13 +517,31 @@ class P2PCoordinator:
 
             import json
             payload_json = json.dumps(payload)
-            success = await self.swim_manager.zmq_agent.send_message_base(
+            send = self.swim_manager.zmq_agent.send_message_base(
                 target,
                 msg_type,
                 "payload",
                 payload_json,
                 f"p2p_{msg_type}"
             )
+            # The ZMQ agent's sockets and locks belong to the SWIM thread's loop.
+            swim_loop = getattr(self.swim_manager, "swim_loop", None)
+            if (
+                isinstance(swim_loop, asyncio.AbstractEventLoop)
+                and swim_loop is not asyncio.get_running_loop()
+            ):
+                if swim_loop.is_closed():
+                    send.close()
+                    return False
+                handoff = asyncio.run_coroutine_threadsafe(send, swim_loop)
+                try:
+                    success = await asyncio.wait_for(asyncio.wrap_future(handoff), timeout=30)
+                except asyncio.TimeoutError:
+                    handoff.cancel()
+                    logger.warning(f"P2P send to {target} timed out on the SWIM loop")
+                    return False
+            else:
+                success = await send
 
             # Record activity for keepalive suppression
             if self.keepalive_manager:
@@ -700,7 +756,7 @@ class P2PCoordinator:
     async def _handle_peer_notify(self, sender, message):
         """Handle peer notification message."""
         try:
-            payload = message.get('payload', {})
+            payload = _peer_payload(message)
             target = payload.get('target')
 
             # Find target agent's PeerClient
@@ -730,20 +786,7 @@ class P2PCoordinator:
         """Handle peer request message (expects response)."""
         try:
             logger.info(f"[COORDINATOR] Received PEER_REQUEST from {sender}")
-            
-            # Parse payload - it comes as JSON string in message['payload']
-            import json
-            payload_raw = message.get('payload', {})
-            if isinstance(payload_raw, str):
-                try:
-                    payload = json.loads(payload_raw)
-                    logger.info(f"[COORDINATOR] Parsed JSON payload")
-                except json.JSONDecodeError as e:
-                    logger.error(f"[COORDINATOR] Failed to parse payload JSON: {e}")
-                    return
-            else:
-                payload = payload_raw
-            
+            payload = _peer_payload(message)
             target = payload.get('target')
             logger.info(f"[COORDINATOR] Target: {target}, Payload keys: {list(payload.keys())}")
 
@@ -777,14 +820,7 @@ class P2PCoordinator:
     async def _handle_peer_response(self, sender, message):
         """Handle peer response message."""
         try:
-            # Parse payload - it comes as JSON string
-            import json
-            payload_raw = message.get('payload', {})
-            if isinstance(payload_raw, str):
-                payload = json.loads(payload_raw)
-            else:
-                payload = payload_raw
-                
+            payload = _peer_payload(message)
             target = payload.get('target')
 
             # Find target agent's PeerClient

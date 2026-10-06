@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["incident_id", "payload"],
+    "consequence": "Updates one PagerDuty incident, such as acknowledging, resolving, or reassigning it.",
+}
+
+
 async def pagerduty_update_incident(incident_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update incident via PUT (acknowledge/resolve/reassign; From header required). Official: https://developer.pagerduty.com/api-reference/operations/updateIncident"""
     try:

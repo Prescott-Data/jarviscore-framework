@@ -66,7 +66,23 @@ class TestCoderSubAgent:
             "Your three most recent files are:\n"
             "- Scoreboard\n- Provider Registry\n- Engineering Docs"
         )
+        assert parsed["answer"] == parsed["summary"]
         assert parsed["result"]["files"][0] == "Scoreboard"
+
+    def test_a_result_without_done_carries_no_authored_answer(self, mock_llm):
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
+        parsed = coder._parse_response('RESULT: {"files": ["Scoreboard"]}')
+
+        assert parsed["type"] == "done"
+        assert parsed["answer"] is None
+
+    def test_json_finish_done_is_the_authored_answer(self, mock_llm):
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
+        parsed = coder._parse_response(
+            '{"thought": "ok", "done": "Two files:\\n- A\\n- B", "result": {}}'
+        )
+
+        assert parsed["answer"] == "Two files:\n- A\n- B"
 
     def test_combined_done_result_terminates_with_the_structured_artifact(
         self, mock_llm
@@ -495,6 +511,7 @@ class TestResearcherSubAgent:
     async def test_grep_codebase_finds_pattern(self, mock_llm):
         """grep_codebase returns structured match results for a known pattern."""
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
+        researcher.workspace_root = __import__("pathlib").Path(__file__).resolve().parents[1]
         result = await researcher._tool_grep_codebase(
             pattern="def test_",
             path="tests",
@@ -523,7 +540,11 @@ class TestResearcherSubAgent:
             ),
         ]
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
-        output = await researcher.run("research topic X", max_turns=5)
+        output = await researcher.run(
+            "research topic X",
+            context={"previous_step_results": {"survey": {"url": "https://example.com"}}},
+            max_turns=5,
+        )
         assert output.status == "success"
 
     @pytest.mark.asyncio
@@ -537,7 +558,11 @@ class TestResearcherSubAgent:
             ),
         ]
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
-        output = await researcher.run("task", max_turns=5)
+        output = await researcher.run(
+            "task",
+            context={"previous_step_results": {"survey": {"url": "https://x.com"}}},
+            max_turns=5,
+        )
         assert output.status == "success"
 
 
@@ -730,6 +755,23 @@ class TestCommunicatorSubAgent:
         assert output.metadata["typed_outcome"] == "PROTOCOL_VIOLATION"
         assert output.metadata["protocol_violations"] == 2
         assert len(output.trajectory) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_repaired_violation_does_not_count_against_later_work(self, mock_llm):
+        """Separate slips in a long session are each repairable."""
+        mock_llm.responses = [
+            _llm_response("First slip into prose."),
+            _llm_response('THOUGHT: Draft\nTOOL: draft_message\nPARAMS: {"content": "draft"}'),
+            _llm_response("Second slip into prose."),
+            _llm_response(
+                'THOUGHT: Repair protocol\nDONE: Message drafted\n'
+                'RESULT: {"message": "Status update: all systems go."}'
+            ),
+        ]
+        comm = CommunicatorSubAgent(agent_id="m1", llm_client=mock_llm)
+        output = await comm.run("draft status update", max_turns=4)
+        assert output.status == "success"
+        assert output.payload == {"message": "Status update: all systems go."}
 
     @pytest.mark.asyncio
     async def test_run_resets_drafts(self, mock_llm):

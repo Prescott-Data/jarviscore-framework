@@ -1,3 +1,9 @@
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def notion_search(query: str, filter_type: str=None) -> dict:
     """Search. POST https://api.notion.com/v1/search"""
     try:

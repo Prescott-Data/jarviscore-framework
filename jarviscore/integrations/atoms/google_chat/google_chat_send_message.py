@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _CHAT_API_ROOT = 'https://chat.googleapis.com/v1'
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["space_name", "text", "thread_key"],
+    "consequence": "Sends one message to a Google Chat space and optionally posts it into a specific thread.",
+}
+
+
 async def google_chat_send_message(space_name: str, text: str, thread_key: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Send a message to a Google Chat space. Official: https://developers.google.com/workspace/chat/api/reference/rest/v1/spaces.messages/create"""
     try:

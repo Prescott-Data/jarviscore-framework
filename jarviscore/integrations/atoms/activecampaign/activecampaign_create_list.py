@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload", "account", "base_url"],
+    "consequence": "Creates one ActiveCampaign contact list.",
+}
+
+
 async def activecampaign_create_list(payload: Dict[str, Any], account: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create list via POST /lists with list wrapper. Official: https://developers.activecampaign.com/reference/create-new-list"""
     try:

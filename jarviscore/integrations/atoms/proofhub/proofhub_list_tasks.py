@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def proofhub_list_tasks(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List tasks (uses /alltodo when project/todolist not set). Official: https://github.com/ProofHub/api_v3/blob/master/README.md"""
     try:

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["product_id", "payload"],
+    "consequence": "Updates one Shift4Shop product with the provided fields.",
+}
+
+
 async def shift4shop_update_product(product_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shift4Shop REST: update product. Official: https://developers.3dcart.com/rest-api/products"""
     try:

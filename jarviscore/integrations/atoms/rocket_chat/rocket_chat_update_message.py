@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["message_id", "payload"],
+    "consequence": "Updates one Rocket.Chat message in the specified room.",
+}
+
+
 async def rocket_chat_update_message(message_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a message. Official: https://developer.rocket.chat/apidocs/authentication-api"""
     try:

@@ -254,6 +254,13 @@ new current version from its execution evidence. Authentication, invalid task
 input, permissions, rate limits and truthful provider refusals are not by
 themselves evidence that atom source should be rewritten.
 
+A read atom that ran but cannot do what the task needs can be extended once Coder
+states the gap: the extension keeps the policy and every existing parameter and
+is proven against the observed call. An operation no atom covers becomes a new
+read atom, proven by one stated call. Generated code cannot call a provider that
+has registered atoms except as the atom being proven, and it runs under OS
+confinement (see [Production: Sandbox Execution](../guides/production.md#sandbox-execution)).
+
 HITL is admissible only for account authorization, explicit approval of a
 consequential action, or data proven both human-exclusive and unreachable after
 autonomous paths are exhausted. Low confidence, token pressure and routine

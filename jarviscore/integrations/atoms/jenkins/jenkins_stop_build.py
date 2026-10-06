@@ -1,5 +1,13 @@
 from typing import Any, Dict, Optional
 
+ATOM_POLICY = {
+    "effect": "destructive",
+    "approval": "required",
+    "idempotency_fields": ["job_name", "build_number"],
+    "consequence": "Stops a running Jenkins build job execution.",
+}
+
+
 async def jenkins_stop_build(job_name: str, build_number: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Stop a build in jenkins. Official: https://www.jenkins.io/doc/book/using/remote-access-api/"""
     try:

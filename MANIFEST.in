@@ -1,6 +1,7 @@
 # Include documentation
 include README.md
 include LICENSE
+include NOTICE
 include .env.example
 include TESTING_GUIDE.md
 include CONTRIBUTING.md

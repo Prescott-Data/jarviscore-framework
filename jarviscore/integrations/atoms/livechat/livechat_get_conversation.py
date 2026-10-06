@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 LIVECHAT_AGENT_API = 'https://api.livechatinc.com/v3.6/agent'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def livechat_get_conversation(conversation_id: str, thread_id: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get chat by ID via get_chat action. Official: https://platform.text.com/docs/messaging/agent-chat-api#get-chat"""
     try:

@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["dropbox_path", "autorename"],
+    "consequence": "Creates one folder in the connected Dropbox account.",
+}
+
+
 async def dropbox_create_folder(dropbox_path: str, autorename: bool=False) -> dict:
     """Create folder. POST https://api.dropboxapi.com/2/files/create_folder_v2"""
     try:

@@ -26,6 +26,7 @@ import subprocess
 from typing import Dict, Any, List, Optional, Literal, cast, Set, Tuple
 from urllib.parse import urlparse
 
+from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image, with_images
 from jarviscore.kernel.subagent import BaseSubAgent
 from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.state import KernelState
@@ -229,6 +230,12 @@ class ResearcherSubAgent(BaseSubAgent):
                 "browser_snapshot",
                 self._tool_browser_snapshot,
                 "Get accessibility snapshot of current page. Returns refs (e1, e2...) for interactive elements.",
+                phase=AgentPhase.DISCOVERY
+            )
+            self.register_tool(
+                "browser_screenshot",
+                self._tool_browser_screenshot,
+                "See the current page as an image. Args: full_page=False.",
                 phase=AgentPhase.DISCOVERY
             )
             self.register_tool(
@@ -502,7 +509,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
     def _allowed_tools_for_phase(self, phase: ResearchPhase) -> Set[str]:
         """Tools allowed in each research phase."""
         shared_ui = {
-            "browser_navigate", "browser_snapshot", "ui_snapshot_with_som",
+            "browser_navigate", "browser_snapshot", "browser_screenshot", "ui_snapshot_with_som",
             "browser_click", "browser_type", "browser_click_coord",
             "browser_type_coord", "browser_get_text", "browser_get_page_text",
             "browser_wait", "browser_close",
@@ -579,6 +586,8 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         "rag_query", "read_file", "extract_api_details",
     })
 
+    _SEARCH_TOOLS = frozenset({"search_internet", "search_internet_batch"})
+
     def _can_complete(self, state, parsed: Dict[str, Any]) -> Tuple[bool, Any]:
         """Reject premature DONE, reporting what the result actually contains."""
         base_ok, base_reason = super()._can_complete(state, parsed)
@@ -588,22 +597,61 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         params = parsed.get("result") or {}
         if not isinstance(params, dict):
             params = {}
+        contract = (getattr(state, "context", None) or {}).get("execution_contract") or {}
+        groups = [
+            {str(tool) for tool in group if str(tool)}
+            for group in contract.get("required_tool_groups") or []
+            if isinstance(group, (list, tuple, set))
+        ]
+        tools_used = {t.tool_name for t in state.tool_history}
+        missing = [sorted(group) for group in groups if not (group & tools_used)]
+        if missing:
+            # Upstream results do not stand in for the research this step declares.
+            return False, GateEvidence(
+                check="declared_action_evidence",
+                requirement=(
+                    "each product-declared tool group must have at least one "
+                    "durable invocation"
+                ),
+                observed={
+                    "tools_used": sorted(tools_used),
+                    "missing_tool_groups": missing,
+                },
+            )
         evidence_items = params.get("evidence")
         content_successes = sum(
             1 for t in state.tool_history
             if t.status == "success" and t.tool_name in self._CONTENT_TOOLS
+            and not (
+                isinstance(getattr(t, "tool_output", None), dict)
+                and t.tool_output.get("content_found") is False
+            )
         )
-        if not content_successes and not (evidence_items or params.get("summary")):
+        # A search that ran is a receipt even when it found nothing: a
+        # negative result is research, a summary with no search behind it is not.
+        search_successes = sum(
+            1 for t in state.tool_history
+            if t.status == "success" and t.tool_name in self._SEARCH_TOOLS
+        )
+        findings = (getattr(state, "internal_variables", None) or {}).get("research_findings")
+        recorded_findings = len(findings) if isinstance(findings, list) else 0
+        upstream_results = bool((getattr(state, "context", None) or {}).get("previous_step_results"))
+        # A summary or evidence list is a claim about research, not proof of it.
+        if not (content_successes or search_successes or recorded_findings or upstream_results):
             return False, GateEvidence(
                 check="research_performed",
                 requirement=(
-                    "one successful content tool call, or a summary or evidence "
-                    "in the submitted result"
+                    "one successful search or content read, or upstream step "
+                    "results to work from"
                 ),
                 observed={
                     "tool_calls": len(state.tool_history),
                     "content_tool_successes": 0,
+                    "search_successes": 0,
                     "content_tools": sorted(self._CONTENT_TOOLS),
+                    "search_tools": sorted(self._SEARCH_TOOLS),
+                    "recorded_findings": 0,
+                    "upstream_results": False,
                     "result_summary": bool(params.get("summary")),
                     "result_evidence": (
                         len(evidence_items) if isinstance(evidence_items, list) else 0
@@ -836,37 +884,36 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                         "hint": "Recovered via bounded repair loop.",
                     }
 
-        if hasattr(self.llm, "query_with_vision"):
-            try:
-                import base64
-                ss = await self._bdispatch("screenshot", full_page=False, format="png")
-                ss_bytes = (ss.data or {}).get("bytes") if ss.success else None
-                if ss_bytes:
-                    img_b64 = base64.b64encode(ss_bytes).decode("ascii") if isinstance(ss_bytes, bytes) else str(ss_bytes)
-                    vision_prompt = (
-                        f'I need to {action} an element described as: "{failed_ref}". '
-                        "Find the closest matching interactive element on this page.\n"
-                        'Return JSON: {"found": true/false, "x": int, "y": int, "label": "..."}'
-                    )
-                    raw = await self.llm.query_with_vision(
-                        prompt=vision_prompt,
-                        image_base64=img_b64,
-                        system_prompt="You locate UI elements in screenshots. Return only JSON.",
-                    )
-                    parsed = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
-                    if parsed.get("found") and parsed.get("x") is not None:
-                        ok, data, err = await self._coord_action(int(parsed["x"]), int(parsed["y"]), text if action == "type" else None)
-                        if ok:
-                            return {
-                                "status": "success",
-                                "repaired": True,
-                                "repair_method": "vision_locate",
-                                "x": parsed["x"],
-                                "y": parsed["y"],
-                                "label": parsed.get("label"),
-                            }
-            except Exception as exc:
-                logger.debug("[RESEARCHER] Vision repair fallback failed: %s", exc)
+        try:
+            ss = await self._bdispatch("screenshot", full_page=False, format="png")
+            ss_bytes = (ss.data or {}).get("bytes") if ss.success else None
+            if isinstance(ss_bytes, bytes):
+                vision_prompt = (
+                    f'I need to {action} an element described as: "{failed_ref}". '
+                    "Find the closest matching interactive element on this page.\n"
+                    'Return JSON: {"found": true/false, "x": int, "y": int, "label": "..."}'
+                )
+                reply = await self.llm_client.generate(messages=[
+                    {"role": "system", "content": "You locate UI elements in screenshots. Return only JSON."},
+                    {"role": "user", "content": with_images(
+                        vision_prompt, [Image(data=ss_bytes, media_type="image/png")]
+                    )},
+                ])
+                raw = str(reply.get("content") or "")
+                parsed = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+                if parsed.get("found") and parsed.get("x") is not None:
+                    ok, data, err = await self._coord_action(int(parsed["x"]), int(parsed["y"]), text if action == "type" else None)
+                    if ok:
+                        return {
+                            "status": "success",
+                            "repaired": True,
+                            "repair_method": "vision_locate",
+                            "x": parsed["x"],
+                            "y": parsed["y"],
+                            "label": parsed.get("label"),
+                        }
+        except Exception as exc:
+            logger.warning("[RESEARCHER] Vision repair failed: %s", exc)
 
         return {
             "status": "error",
@@ -1721,6 +1768,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             self.tracer.log_tool_result("read_file", None, error=error)
             return {"status": "error", "error": error}
         try:
+            path = self._workspace_path(path)
             with open(path, "r") as f:
                 content = f.read()
         except Exception as e:
@@ -1732,7 +1780,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         has_more = (offset + limit) < total_chars
         next_offset = offset + limit if has_more else None
 
-        if self.current_state:
+        if self.current_state and content:
             self.current_state.internal_variables["research_source"] = path
             self._add_research_finding({
                 "source": path,
@@ -1761,6 +1809,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         return {
             "status": "success",
             "content": page,
+            "content_found": bool(page),
             "source": path,
             "total_chars": total_chars,
             "offset": offset,
@@ -1768,9 +1817,14 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             "next_offset": next_offset,
         }
 
+    async def _answered_search(self, query: str, **kwargs) -> List[Dict[str, Any]]:
+        # Injected clients without search_answered cannot tell failure from no results.
+        search = getattr(self.internet_search, "search_answered", None) or self.internet_search.search
+        return await search(query, **kwargs)
+
     async def _tool_search_internet(
         self, query: str, preferred_domains: Optional[List[str]] = None
-    ) -> str:
+    ) -> Any:
         """
         Search the internet.
         Args:
@@ -1798,7 +1852,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
 
         try:
             await self.internet_search.initialize()
-            results = await self.internet_search.search(effective_query, max_results=5)
+            results = await self._answered_search(effective_query, max_results=5)
             results = self._filter_search_results(results)
             results = self._compact_search_results(results, limit=5)
             # Register URLs to prevent hallucination
@@ -1818,7 +1872,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             return json.dumps(results, indent=2)
         except Exception as e:
             self.tracer.log_tool_result("search_internet", None, error=str(e))
-            return json.dumps({"error": str(e)})
+            return {"status": "error", "error": str(e)}
 
     async def _tool_search_internet_batch(
         self,
@@ -1872,7 +1926,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         # wasted parallel network slots and latency on every batch search.
         _academic_skip = set(self._ACADEMIC_PROVIDERS) if not self._get_provider_allowlist() else set()
         tasks = [
-            self.internet_search.search(
+            self._answered_search(
                 q,
                 max_results=max_results_per_query,
                 exclude_providers=_academic_skip,
@@ -1894,6 +1948,13 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                         self._add_known_url(r["url"])
             else:
                 out["by_query"][q] = {"error": "Unexpected search result type", "results": []}
+
+        if all("error" in data for data in out["by_query"].values()):
+            error = "; ".join(
+                f"{q}: {data['error']}" for q, data in out["by_query"].items()
+            )
+            self.tracer.log_tool_result("search_internet_batch", None, error=error)
+            return {"status": "error", "error": error, "by_query": out["by_query"]}
                         
         # Flatten for easy consumption: all_results = list of {query, title, snippet, url}
         all_results = []
@@ -2375,7 +2436,13 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 if isinstance(item, dict)
             ]
 
-        if result and self.current_state:
+        result_count = len(result.get("results", [])) if isinstance(result, dict) else 0
+        if isinstance(result, dict):
+            # An empty index answers successfully with nothing in it. Say so,
+            # so the read is not mistaken for research performed.
+            result = dict(result)
+            result["content_found"] = result_count > 0
+        if result_count and self.current_state:
             self._add_research_finding({
                 "query": query,
                 "rag_result_preview": str(result)[:500],
@@ -2383,7 +2450,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 "timestamp": asyncio.get_event_loop().time(),
             })
 
-        result_count = len(result.get("results", [])) if isinstance(result, dict) else 0
         if extracted_count:
             logger.info("[RESEARCHER] rag_query: extracted %d api_spec(s) from %d passages", extracted_count, result_count)
         self.tracer.log_tool_result("rag_query", {"count": result_count, "specs_extracted": extracted_count})
@@ -2502,6 +2568,11 @@ DOCUMENTATION TEXT:
 
         matches: List[Dict[str, Any]] = []
         source = "ripgrep"
+        try:
+            path = self._workspace_path(path)
+        except PermissionError as exc:
+            self.tracer.log_tool_result("grep_codebase", None, error=str(exc))
+            return {"status": "error", "error": str(exc)}
 
         try:
             cmd = [
@@ -2512,7 +2583,8 @@ DOCUMENTATION TEXT:
                 "-g", file_glob,
                 "-C", str(context_lines),
                 "--max-count", "5",   # max 5 hits per file to avoid any single file dominating
-                pattern,
+                "-e", pattern,
+                "--",
                 path,
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -2746,6 +2818,24 @@ DOCUMENTATION TEXT:
             result["som_ready"] = True
             result["hint"] = "SoM snapshot persisted. Prefer browser_click/browser_type with refs."
         return result
+
+    async def _tool_browser_screenshot(self, full_page: bool = False) -> Dict[str, Any]:
+        result = await self._bdispatch("screenshot", full_page=bool(full_page), format="png")
+        shot = (result.data or {}).get("bytes") if result.success else None
+        if not isinstance(shot, bytes):
+            return {"status": "error", "error": result.error or "The browser returned no screenshot."}
+        info = await self._bdispatch("evaluate", expression="() => ({url: location.href, title: document.title})")
+        page = (info.data or {}).get("result") if info.success else None
+        page = page if isinstance(page, dict) else {}
+        return {
+            "status": "success",
+            "url": page.get("url"),
+            "title": page.get("title"),
+            OBSERVED_IMAGES: [
+                Image(data=shot, media_type="image/png", label=f"Screenshot of {page.get('url') or 'the current page'}")
+            ],
+            "note": "The screenshot is attached to this observation as an image.",
+        }
     
     async def _tool_browser_click(
         self, 

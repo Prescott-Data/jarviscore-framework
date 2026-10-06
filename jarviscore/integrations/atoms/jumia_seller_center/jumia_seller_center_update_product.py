@@ -2,6 +2,14 @@ from typing import Any, Dict, List, Optional
 JUMIA_SC_API = 'http://sellerapi.sellercenter.jumia.com'
 SC_VERSION = '1.0'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["product_id", "payload"],
+    "consequence": "Updates one product listing in Jumia Seller Center.",
+}
+
+
 async def jumia_seller_center_update_product(product_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update product feed via ProductUpdate (XML body). Official: http://sellerapi.sellercenter.jumia.com/v2.7.11/product-endpoints/productupdate/"""
     try:

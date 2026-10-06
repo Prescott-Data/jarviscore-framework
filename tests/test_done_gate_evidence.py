@@ -430,6 +430,137 @@ class TestResearcherGate:
         assert evidence.observed["tool_calls"] == 0
         assert evidence.observed["content_tool_successes"] == 0
 
+    def test_a_claimed_summary_and_evidence_are_not_research(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        parsed = {"result": {
+            "summary": "Searches were attempted but returned nothing.",
+            "evidence": [{"pointer": "https://example.com/team"}],
+        }}
+
+        ok, evidence = self._researcher()._can_complete(_state(), parsed)
+
+        assert ok is False
+        assert evidence.check == "research_performed"
+        assert evidence.observed["result_summary"] is True
+        assert evidence.observed["result_evidence"] == 1
+
+    def test_upstream_step_results_are_material_to_work_from(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state(context={"previous_step_results": {"step-1": {"summary": "x"}}})
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "step-1"}]}}
+
+        ok, reason = self._researcher()._can_complete(state, parsed)
+
+        assert ok is True, reason
+
+    def test_declared_research_is_not_replaced_by_upstream_results(self, monkeypatch):
+        """A repair step finished with zero tool calls, claiming searches it never ran."""
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        contract = {"required_tool_groups": [["search_internet", "search_internet_batch"]]}
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "step-1"}]}}
+        unsearched = _state(context={
+            "previous_step_results": {"step-1": {"summary": "x"}},
+            "execution_contract": contract,
+        })
+        searched = _state(
+            context={"execution_contract": contract},
+            tool_history=[ToolResult(tool_name="search_internet_batch", status="success")],
+        )
+
+        ok, evidence = self._researcher()._can_complete(unsearched, parsed)
+        assert ok is False
+        assert evidence.check == "declared_action_evidence"
+        assert evidence.observed["missing_tool_groups"] == [
+            ["search_internet", "search_internet_batch"]
+        ]
+
+        ok, reason = self._researcher()._can_complete(searched, parsed)
+        assert ok is True, reason
+
+    def test_findings_recorded_in_an_earlier_epoch_count(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state()
+        state.internal_variables["research_findings"] = [{"url": "https://example.com"}]
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "https://example.com"}]}}
+
+        ok, reason = self._researcher()._can_complete(state, parsed)
+
+        assert ok is True, reason
+
+    def test_a_search_that_found_nothing_is_research(self, monkeypatch):
+        """A negative result backed by a search must be able to complete."""
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state(tool_history=[
+            ToolResult(
+                tool_name="search_internet",
+                status="success",
+                tool_output={"status": "success", "results": []},
+            ),
+        ])
+        parsed = {"result": {
+            "summary": "No current match exists.",
+            "evidence": [{"pointer": "search_internet: no results"}],
+        }}
+
+        ok, reason = self._researcher()._can_complete(state, parsed)
+
+        assert ok is True, reason
+
+    def test_a_failed_search_is_not_research(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state(tool_history=[
+            ToolResult(tool_name="search_internet", status="failure", error="blocked"),
+        ])
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "x"}]}}
+
+        ok, evidence = self._researcher()._can_complete(state, parsed)
+
+        assert ok is False
+        assert evidence.check == "research_performed"
+
+    @pytest.mark.parametrize("tool_name", ["rag_query", "read_file"])
+    def test_a_read_that_found_nothing_is_not_research(self, monkeypatch, tool_name):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        state = _state(tool_history=[
+            ToolResult(
+                tool_name=tool_name,
+                status="success",
+                tool_output={"status": "success", "results": [], "content_found": False},
+            ),
+        ])
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "index"}]}}
+
+        ok, evidence = self._researcher()._can_complete(state, parsed)
+
+        assert ok is False
+        assert evidence.check == "research_performed"
+
+    def test_an_empty_index_and_an_empty_file_record_no_finding(self, tmp_path):
+        from types import SimpleNamespace
+
+        researcher = self._researcher()
+        researcher.workspace_root = tmp_path
+        researcher.current_state = _state()
+        researcher.tracer = SimpleNamespace(
+            log_tool_start=lambda *a, **k: None, log_tool_result=lambda *a, **k: None
+        )
+        researcher.rag_decision_provider = "vector"
+        researcher._get_rag_pipeline = lambda: SimpleNamespace(
+            retrieve=lambda query, top_k=5: {"status": "success", "results": []}
+        )
+        async def _no_cost(*a, **k):
+            return None
+        researcher._track_content_cost = _no_cost
+        empty = tmp_path / "empty.md"
+        empty.write_text("")
+
+        rag = asyncio.run(researcher._tool_rag_query("anything"))
+        read = asyncio.run(researcher._tool_read_file(file_path=str(empty)))
+
+        assert rag["content_found"] is False
+        assert read["content_found"] is False
+        assert researcher.current_state.internal_variables.get("research_findings", []) == []
+
     def test_no_evidence_at_all_is_counted(self, monkeypatch):
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
         state = _state(tool_history=[
@@ -757,6 +888,7 @@ class TestCoderGate:
 
         assert result is None
         assert "Scoped step task: Create the invitation draft" in review.prompt
+        assert "cannot exist until it runs" in review.prompt
         assert '"deal_id": "deal-1"' in review.prompt
         assert '"event_id": "event-1"' in review.prompt
         assert '"verdict": "satisfied"' in review.prompt

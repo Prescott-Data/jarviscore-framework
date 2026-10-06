@@ -1,6 +1,14 @@
 from typing import Any, Dict, Optional
 DRIFT_CONV_HOST = 'https://driftapi.com'
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["conversation_id", "payload"],
+    "consequence": "Sends one message into a Drift conversation. Recipients in the conversation may see the message immediately.",
+}
+
+
 async def drift_create_message(conversation_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create message (POST https://driftapi.com/conversations/{conversation_id}/messages). Bearer token via auth_info. Official: https://devdocs.drift.com/docs/creating-a-message"""
     try:

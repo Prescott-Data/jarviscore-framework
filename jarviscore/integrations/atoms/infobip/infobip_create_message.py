@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 INFOBIP_API = 'https://api.infobip.com'
 
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["conversation_id", "payload"],
+    "consequence": "Sends one message into an Infobip conversation. Recipients in the conversation may immediately receive or see the message.",
+}
+
+
 async def infobip_create_message(payload: Dict[str, Any], conversation_id: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a message in an Infobip conversation. Official: https://www.infobip.com/docs/conversations/conversations-over-api/manage-calls-and-messages-over-api"""
     try:

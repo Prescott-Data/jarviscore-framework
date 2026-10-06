@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["base_id", "table_name", "record_id", "fields"],
+    "consequence": "Updates fields on one Airtable record.",
+}
+
+
 async def airtable_update_record(base_id: str, table_name: str, record_id: str, fields: dict) -> dict:
     """Update specific fields on an existing Airtable record (partial update)."""
     _base = 'https://api.airtable.com/v0'

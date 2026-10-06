@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["meeting_id", "topic", "start_time", "duration", "agenda", "timezone"],
+    "consequence": "Updates one Zoom meeting's details or schedule.",
+}
+
+
 async def zoom_update_meeting(meeting_id: str, topic: str=None, start_time: str=None, duration: int=None, agenda: str=None, timezone: str=None) -> dict:
     """Update meeting via the zoom API."""
     _base = 'https://api.zoom.us/v2'

@@ -2,17 +2,18 @@ ATOM_POLICY = {
     "effect": "write",
     "approval": "never",
     "idempotency_fields": ["folder_id", "title"],
-    "consequence": "Creates one Google Doc in an existing Drive folder.",
+    "consequence": "Creates one Google Doc in the person's Drive.",
 }
 
 
-async def google_drive_create_document(folder_id: str, title: str, content: str) -> dict:
-    """Create and populate one Google Doc in an existing Drive folder."""
+async def google_drive_create_document(title: str, content: str, folder_id: str = "") -> dict:
+    """Create and populate one Google Doc, in folder_id when given, otherwise in My Drive."""
     metadata = {
         "name": title,
         "mimeType": "application/vnd.google-apps.document",
-        "parents": [folder_id],
     }
+    if folder_id:
+        metadata["parents"] = [folder_id]
     created = await nexus_call(
         "POST",
         "https://www.googleapis.com/drive/v3/files",

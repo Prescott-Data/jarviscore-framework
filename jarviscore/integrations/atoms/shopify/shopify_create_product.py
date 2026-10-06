@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload", "shop"],
+    "consequence": "Creates one Shopify product in the connected store.",
+}
+
+
 async def shopify_create_product(payload: Dict[str, Any], shop: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shopify Admin REST: create product. Official: https://shopify.dev/docs/api/admin-rest/latest/resources/product#post-products"""
     try:
