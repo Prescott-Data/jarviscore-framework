@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _GL_API_ROOT = 'https://gitlab.com/api/v4'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Updates settings or metadata for one GitLab project.",
+}
+
+
 async def gitlab_update_project(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a project. Official: https://docs.gitlab.com/api/projects/#edit-a-project"""
     try:

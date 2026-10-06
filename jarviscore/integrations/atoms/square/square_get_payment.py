@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def square_get_payment(payment_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Square API v2: get payment. Official: https://developer.squareup.com/reference/square/payments-api/get-payment"""
     try:

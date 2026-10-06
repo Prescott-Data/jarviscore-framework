@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _FC_API_ROOT = 'https://freedcamp.com/api/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one task in Freedcamp.",
+}
+
+
 async def freedcamp_create_task(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create task (POST JSON). Official: https://freedcamp.com/help_/tutorials/wiki/wiki_public/view/DFaab#/tasks"""
     try:

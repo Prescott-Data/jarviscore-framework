@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _ASSEMBLA_V1_SUFFIX = '/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Assembla space/project.",
+}
+
+
 async def assembla_create_project(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create space (POST /v1/spaces.json, body in space namespace). Official: https://api-docs.assembla.cc/content/ref/spaces_create.html"""
     try:

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["pipeline_id", "payload"],
+    "consequence": "Updates one Phabricator Harbormaster build plan's configuration or behavior settings.",
+}
+
+
 async def phabricator_update_pipeline(pipeline_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a build plan via harbormaster.buildplan.edit. Official: https://secure.phabricator.com/conduit/"""
     try:

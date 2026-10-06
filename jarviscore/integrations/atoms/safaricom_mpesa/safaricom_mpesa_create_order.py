@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Initiates one Safaricom M-Pesa STK Push payment request to the specified phone number for the specified amount.",
+}
+
+
 async def safaricom_mpesa_create_order(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Initiate STK Push payment (Lipa Na M-Pesa Online). Official: https://developer.safaricom.co.ke/"""
     try:

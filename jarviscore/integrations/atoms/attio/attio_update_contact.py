@@ -2,6 +2,14 @@ from typing import Any, Dict, List, Optional
 _ATTIO_HOST = 'https://api.attio.com'
 _OBJECT_SLUGS = {'contacts': 'people', 'contact': 'people', 'people': 'people', 'accounts': 'companies', 'account': 'companies', 'companies': 'companies', 'deals': 'deals', 'deal': 'deals'}
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["contact_id", "payload"],
+    "consequence": "Updates one Attio person record with the provided field values.",
+}
+
+
 async def attio_update_contact(contact_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update person record (PATCH /v2/objects/people/records/{record_id}). Official: https://docs.attio.com/rest-api/endpoint-reference/records/update-a-record"""
     try:

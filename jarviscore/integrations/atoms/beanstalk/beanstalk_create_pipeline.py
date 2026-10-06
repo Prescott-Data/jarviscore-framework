@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["repository_id", "payload", "account"],
+    "consequence": "Creates one Beanstalk server environment for the repository.",
+}
+
+
 async def beanstalk_create_pipeline(repository_id: str, payload: Dict[str, Any], account: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create server environment. POST /api/{repository_id}/server_environments.json. Official: https://api.beanstalkapp.com/server_environment"""
     try:

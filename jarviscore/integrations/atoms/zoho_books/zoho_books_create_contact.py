@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["org_id", "contact_name", "contact_type", "email", "phone"],
+    "consequence": "Creates one contact in Zoho Books.",
+}
+
+
 async def zoho_books_create_contact(org_id: str, contact_name: str, contact_type: str='customer', email: str=None, phone: str=None) -> dict:
     """Books create contact. POST https://www.zohoapis.com/books/v3/contacts"""
     try:

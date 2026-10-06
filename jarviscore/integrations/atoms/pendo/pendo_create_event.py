@@ -1,6 +1,14 @@
 import time
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Pendo track event for the specified visitor.",
+}
+
+
 async def pendo_create_event(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Ingest server-side track event (track_event_secret; event + visitorId required). Official: https://support.pendo.io/hc/en-us/articles/360032294291-Configure-Track-Events"""
     try:

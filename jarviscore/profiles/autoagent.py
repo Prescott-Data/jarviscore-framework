@@ -12,9 +12,11 @@ import asyncio
 import os
 import re
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
 from jarviscore.core.profile import Profile
 from jarviscore.orchestration.budget import WorkflowBudgetExceeded
+from jarviscore.orchestration.envelopes import delegated_authority
 
 if TYPE_CHECKING:
     from jarviscore.planning.goal_context import GoalExecution
@@ -234,16 +236,18 @@ class AutoAgent(Profile):
                 contract = (
                     getattr(self, "capability_contracts", {}) or {}
                 ).get(requested_capability) or {}
-                systems = [str(value) for value in contract.get("systems") or []]
-                effects = [str(value) for value in contract.get("effects") or []]
+                authority = delegated_authority(
+                    contract, context.get("peer_requester_authority")
+                )
+                if "error" in authority:
+                    return {"status": "failure", "error": authority["error"]}
+                systems = authority["systems"]
                 if systems:
                     context["systems"] = systems
                     if len(systems) == 1:
                         context["system"] = systems[0]
-                for effect in ("read", "propose", "write", "notify", "destructive"):
-                    if effect in effects:
-                        context["effect"] = effect
-                        break
+                if authority["effect"]:
+                    context["effect"] = authority["effect"]
             context.update(
                 peer_sender=message.sender,
                 peer_correlation_id=message.correlation_id,
@@ -394,6 +398,8 @@ class AutoAgent(Profile):
         registry_dir = f"{log_dir}/function_registry"
         self._logger.info(f"Initializing function registry (dir: {registry_dir})...")
         self.code_registry = create_function_registry(registry_dir)
+        # Confined code may read the registry but only registration may change it.
+        self.sandbox.protected_paths = (Path(log_dir).resolve(),)
 
         # 8. Initialize Kernel — production routing:
         #    Registry-first (Option A) → Coder with ValidationLayer (Option B)
@@ -803,9 +809,16 @@ class AutoAgent(Profile):
                     "output": output.payload,
                     "payload": output.payload,
                     "error": None if output.status == "success" else output.summary,
-                    "result_summary": derive_result_summary(
-                        output.status, output.payload, None if output.status == "success" else output.summary,
-                        summary=output.summary,
+                    # The worker's authored answer is the human result; payload
+                    # prose is only a stand-in when no answer was authored.
+                    "result_summary": (
+                        meta.get("answer")
+                        if output.status == "success" and meta.get("answer")
+                        else derive_result_summary(
+                            output.status, output.payload,
+                            None if output.status == "success" else output.summary,
+                            summary=output.summary,
+                        )
                     ),
                     "tokens": result_tokens,
                     "cost_usd": result_cost,
@@ -815,6 +828,7 @@ class AutoAgent(Profile):
                     "function_id": meta.get("function_id"),
                     "dispatches": meta.get("dispatches", []),
                     "_tool_receipts": meta.get("tool_receipts", []),
+                    "kept_memories": meta.get("kept_memories", []),
                     "yield_metadata": {
                         key: meta.get(key)
                         for key in (

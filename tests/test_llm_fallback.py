@@ -228,6 +228,22 @@ async def test_generate_settles_exact_usage_into_the_workflow_budget():
 
 
 @pytest.mark.asyncio
+async def test_a_cancelled_generation_releases_its_reservation():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-llm-cancelled", "Release abandoned calls", budget={"max_tokens": 1000},
+    )
+    llm = _budget_test_client({"content": "never"})
+    llm._generate_inner = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with workflow_budget_scope(store, "wf-llm-cancelled"):
+        with pytest.raises(asyncio.CancelledError):
+            await llm.generate(prompt="hello", max_tokens=20)
+
+    assert store.get_workflow_budget_usage("wf-llm-cancelled", "default")["epoch_reserved_tokens"] == 0
+
+
+@pytest.mark.asyncio
 async def test_generate_reserves_input_in_tokens_not_utf8_bytes():
     store = MockRedisContextStore()
     store.register_workflow_goal(

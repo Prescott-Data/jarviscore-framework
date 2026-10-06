@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["product_id", "payload", "shop"],
+    "consequence": "Updates one Shopify product with the provided fields.",
+}
+
+
 async def shopify_update_product(product_id: str, payload: Dict[str, Any], shop: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shopify Admin REST: update product. Official: https://shopify.dev/docs/api/admin-rest/latest/resources/product#put-products-product-id"""
     try:

@@ -8,11 +8,11 @@ import logging
 import random
 import re
 import time
-import json
 from typing import Optional, Dict, List, Any
 from enum import Enum
 
 from jarviscore.context.context_manager import ContextManager
+from jarviscore.execution import multimodal
 from jarviscore.promo import PROMO_MODEL
 from jarviscore.orchestration.budget import current_workflow_budget
 
@@ -422,8 +422,8 @@ class UnifiedLLMClient:
         budget_account = current_workflow_budget()
         reservation_id = None
         if budget_account is not None:
-            input_reservation = _TOKEN_COUNTER.count_tokens(
-                json.dumps(messages, ensure_ascii=False, default=str)
+            input_reservation = multimodal.count_tokens(
+                messages, _TOKEN_COUNTER.count_tokens
             )
             if not explicit_allowance:
                 max_tokens = max(
@@ -445,7 +445,8 @@ class UnifiedLLMClient:
                     messages, temperature, max_tokens,
                     implicit_allowance=not explicit_allowance, **kwargs
                 )
-        except Exception:
+        except BaseException:
+            # Cancellation included: an abandoned call must not hold capacity.
             if budget_account is not None and reservation_id is not None:
                 budget_account.release(reservation_id)
             raise
@@ -672,6 +673,17 @@ class UnifiedLLMClient:
     ]
 
     @classmethod
+    def _repair_azure_text(cls, content: str) -> str:
+        for trigger, safe in cls._AZURE_FILTER_REPAIR_SUBSTITUTIONS:
+            lower = content.lower()
+            idx = lower.find(trigger.lower())
+            while idx != -1:
+                content = content[:idx] + safe + content[idx + len(trigger):]
+                lower = content.lower()
+                idx = lower.find(trigger.lower(), idx + len(safe))
+        return content
+
+    @classmethod
     def _sanitize_for_azure(cls, messages: List[Dict]) -> List[Dict]:
         """Apply opt-in Azure content-filter repair after a raw prompt is rejected."""
         sanitized = []
@@ -695,13 +707,14 @@ class UnifiedLLMClient:
                 })
             elif msg["role"] == "user":
                 content = msg["content"]
-                for trigger, safe in cls._AZURE_FILTER_REPAIR_SUBSTITUTIONS:
-                    lower = content.lower()
-                    idx = lower.find(trigger.lower())
-                    while idx != -1:
-                        content = content[:idx] + safe + content[idx + len(trigger):]
-                        lower = content.lower()
-                        idx = lower.find(trigger.lower(), idx + len(safe))
+                if isinstance(content, list):
+                    content = [
+                        part if multimodal.is_image_part(part)
+                        else {**part, "text": cls._repair_azure_text(str(part.get("text", "")))}
+                        for part in multimodal.parts(content)
+                    ]
+                else:
+                    content = cls._repair_azure_text(content)
                 sanitized.append({"role": "user", "content": content})
             else:
                 sanitized.append(msg)
@@ -751,7 +764,7 @@ class UnifiedLLMClient:
                 if is_responses_only:
                     resp_kwargs = {
                         "model": deployment,
-                        "input": attempt_messages,
+                        "input": [multimodal.to_responses(m) for m in attempt_messages],
                         "max_output_tokens": max_tokens,
                     }
                     if response_format is not None:
@@ -901,6 +914,7 @@ class UnifiedLLMClient:
         max_tokens: int,
         provider_label: str,
         default_pricing: Dict,
+        contents: Any = None,
         **kwargs,
     ) -> Dict:
         """Shared helper for google.genai generate_content calls (Gemini and Vertex AI)."""
@@ -908,7 +922,7 @@ class UnifiedLLMClient:
 
         gen_kwargs = {
             "model": model_name,
-            "contents": prompt,
+            "contents": prompt if contents is None else contents,
             "config": {
                 "temperature": temperature,
                 "max_output_tokens": max_tokens,
@@ -1027,6 +1041,7 @@ class UnifiedLLMClient:
             client=self.gemini_client,
             model_name=self.gemini_model,
             prompt=prompt,
+            contents=multimodal.to_genai(messages) if multimodal.has_images(messages) else None,
             temperature=temperature,
             max_tokens=max_tokens,
             provider_label="gemini",
@@ -1044,6 +1059,7 @@ class UnifiedLLMClient:
             client=self.vertex_ai_client,
             model_name=self.vertex_ai_model,
             prompt=prompt,
+            contents=multimodal.to_genai(messages) if multimodal.has_images(messages) else None,
             temperature=temperature,
             max_tokens=max_tokens,
             provider_label="vertex_ai",
@@ -1063,7 +1079,7 @@ class UnifiedLLMClient:
             if msg['role'] == 'system':
                 system_msg = msg['content']
             else:
-                conv_messages.append(msg)
+                conv_messages.append({**msg, "content": multimodal.to_anthropic(msg["content"])})
 
         model = kwargs.pop('model', None) or self.config.get('claude_model', 'claude-sonnet-4')
         start_time = time.time()
@@ -1120,7 +1136,7 @@ class UnifiedLLMClient:
         parts = []
         for msg in messages:
             role = msg['role']
-            content = msg['content']
+            content = multimodal.text_of(msg['content'])
             if role == 'system':
                 parts.append(f"System: {content}")
             elif role == 'user':

@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 _EGNYTE_PUBAPI_SUFFIX = '/pubapi/v1'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def egnyte_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search files and folders (GET /pubapi/v1/search). Bearer OAuth per Egnyte Public API. Official: https://developers.egnyte.com/docs/read/Search_API_Documentation"""
     try:

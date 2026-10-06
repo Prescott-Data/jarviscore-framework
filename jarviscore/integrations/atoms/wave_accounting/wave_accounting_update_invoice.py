@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _GQL = 'https://gql.waveapps.com/graphql/public'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["invoice_id", "name"],
+    "consequence": "Updates one Wave Accounting invoice, such as changing its title or status.",
+}
+
+
 async def wave_accounting_update_invoice(business_id: str='', customer_id: str='', invoice_id: str='', payment_id: str='', name: str='', query: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Wave GraphQL: update invoice. Official: https://developer.waveapps.com/hc/en-us/articles/360019588314-API-Reference"""
     try:

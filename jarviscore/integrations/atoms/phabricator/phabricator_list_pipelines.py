@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def phabricator_list_pipelines(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List Harbormaster build plans (pipelines) via harbormaster.buildplan.search. Official: https://secure.phabricator.com/conduit/"""
     try:

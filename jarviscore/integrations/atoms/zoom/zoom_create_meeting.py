@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["topic", "start_time", "duration", "user_id", "agenda", "timezone", "meeting_type"],
+    "consequence": "Creates one Zoom meeting for the specified Zoom user and generates meeting join details.",
+}
+
+
 async def zoom_create_meeting(topic: str, start_time: str, duration: int, user_id: str='me', agenda: str='', timezone: str='UTC', meeting_type: int=2) -> dict:
     """Create meeting via the zoom API."""
     _base = 'https://api.zoom.us/v2'

@@ -31,8 +31,10 @@ gets names, types and defaults rather than a paragraph of source to interpret.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 #: Atoms authenticate through this and nothing else.
@@ -172,6 +174,88 @@ def _performs_delete(
     return False
 
 
+def _performs_http_mutation(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    seen: Optional[set[str]] = None,
+) -> bool:
+    """Follow local helpers to a POST, PUT or PATCH provider call."""
+    seen = set(seen or ())
+    if fn.name in seen:
+        return False
+    seen.add(fn.name)
+    reachable_functions = dict(functions)
+    reachable_functions.update({
+        statement.name: statement
+        for statement in fn.body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+    })
+    calls: list[ast.Call] = []
+
+    class Calls(ast.NodeVisitor):
+        def visit_FunctionDef(self, node):
+            return None
+
+        def visit_AsyncFunctionDef(self, node):
+            return None
+
+        def visit_Call(self, node):
+            calls.append(node)
+            self.generic_visit(node)
+
+    visitor = Calls()
+    for statement in fn.body:
+        if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            visitor.visit(statement)
+
+    for call in calls:
+        name = call.func.id if isinstance(call.func, ast.Name) else None
+        if name == AUTH_CALL and call.args:
+            method = _default(call.args[0])
+            if isinstance(method, str) and method.upper() in {"POST", "PUT", "PATCH"}:
+                return True
+        if name in reachable_functions and _performs_http_mutation(
+            reachable_functions[name], reachable_functions, seen
+        ):
+            return True
+    return False
+
+
+def _declarative(statement: ast.stmt) -> bool:
+    """Whether a module-level statement only declares, so nothing runs on import."""
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        arguments = statement.args
+        evaluated = [
+            *arguments.defaults,
+            *[default for default in arguments.kw_defaults if default is not None],
+            *[arg.annotation for arg in [*arguments.posonlyargs, *arguments.args,
+                                         *arguments.kwonlyargs, arguments.vararg,
+                                         arguments.kwarg] if arg is not None and arg.annotation],
+            *([statement.returns] if statement.returns else []),
+        ]
+        return not statement.decorator_list and all(_constant(node) for node in evaluated)
+    if isinstance(statement, ast.ClassDef):
+        return (
+            not statement.decorator_list
+            and all(_constant(node) for node in [*statement.bases, *(k.value for k in statement.keywords)])
+            and all(_declarative(item) for item in statement.body)
+        )
+    if isinstance(statement, (ast.Import, ast.ImportFrom)):
+        return True
+    if isinstance(statement, ast.Expr):
+        return isinstance(statement.value, ast.Constant)
+    if isinstance(statement, (ast.Assign, ast.AnnAssign)) and statement.value is not None:
+        return _constant(statement.value)
+    return False
+
+
+def _constant(node: ast.expr) -> bool:
+    return not any(
+        isinstance(item, (ast.Call, ast.Await, ast.Lambda, ast.NamedExpr))
+        for item in ast.walk(node)
+    )
+
+
 def read_contract(source: str, *, system: str = "", expected_name: str = "") -> ContractResult:
     """Read atom source against the convention, saying what fails and why.
 
@@ -184,6 +268,13 @@ def read_contract(source: str, *, system: str = "", expected_name: str = "") -> 
         tree = ast.parse(source)
     except SyntaxError as exc:
         return ContractResult(None, (f"source does not parse: {exc}",))
+
+    for statement in tree.body:
+        if not _declarative(statement):
+            problems.append(
+                f"line {statement.lineno}: an atom module may only import, define, and "
+                "assign constants; it runs nothing at module level"
+            )
 
     functions = [n for n in tree.body if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))]
     if not functions:
@@ -205,11 +296,13 @@ def read_contract(source: str, *, system: str = "", expected_name: str = "") -> 
         for node in ast.walk(fn)
     )
     policy = AtomPolicy()
+    policy_declared = False
     for statement in tree.body:
         if isinstance(statement, ast.Assign) and any(
             isinstance(target, ast.Name) and target.id == POLICY_NAME
             for target in statement.targets
         ):
+            policy_declared = True
             try:
                 raw_policy = ast.literal_eval(statement.value)
                 policy = AtomPolicy(
@@ -243,6 +336,10 @@ def read_contract(source: str, *, system: str = "", expected_name: str = "") -> 
             problems.append("destructive atoms require approval")
     elif _performs_delete(fn, functions_by_name):
         problems.append("atoms that perform HTTP DELETE require a destructive ATOM_POLICY")
+    if not policy_declared and _performs_http_mutation(fn, functions_by_name):
+        problems.append(
+            "atoms that perform HTTP POST, PUT, or PATCH require an explicit ATOM_POLICY"
+        )
 
     if not _NAME.match(fn.name):
         problems.append(
@@ -302,11 +399,36 @@ def read_contract(source: str, *, system: str = "", expected_name: str = "") -> 
     return ContractResult(atom, tuple(problems))
 
 
+SHIPPED_ATOMS_DIR = Path(__file__).resolve().parents[1] / "integrations" / "atoms"
+_SYSTEM = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def shipped_source(atom: Atom) -> Optional[str]:
+    """The atom's source exactly as this framework package ships it, if it does."""
+    if not _NAME.match(atom.name) or not _SYSTEM.match(atom.system or ""):
+        return None
+    try:
+        return (SHIPPED_ATOMS_DIR / atom.system / f"{atom.name}.py").read_text(
+            encoding="utf-8"
+        )
+    except OSError:
+        return None
+
+
 def invocation(atom: Atom, params: dict) -> str:
     """Sandbox code that runs the atom and returns its result.
 
     The sandbox awaits `main()` and uses its return value, so the atom is called
     through one — the same entry point every other piece of sandbox code uses.
+    Arguments travel as one JSON string literal, so caller-supplied names and
+    values are only ever data.
     """
-    arguments = ", ".join(f"{key}={value!r}" for key, value in params.items())
-    return f"async def main():\n    return await {atom.name}({arguments})\n"
+    unknown = sorted(set(params) - {parameter.name for parameter in atom.parameters})
+    if unknown:
+        raise ValueError(f"{atom.name} has no parameter named {', '.join(unknown)}")
+    arguments = json.dumps(params, default=str)
+    return (
+        "async def main():\n"
+        "    import json\n"
+        f"    return await {atom.name}(**json.loads({arguments!r}))\n"
+    )

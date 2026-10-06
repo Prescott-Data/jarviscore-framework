@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["to", "subject", "body", "from_email", "from_name"],
+    "consequence": "Sends one email through the connected Brevo account. A sent email cannot be recalled.",
+}
+
+
 async def brevo_send_email(to: str, subject: str, body: str, from_email: str='agents@example.com', from_name: str='AI Agent') -> dict:
     """Send email. POST https://api.brevo.com/v3/smtp/email"""
     _h = {'Content-Type': 'application/json'}

@@ -107,6 +107,28 @@ class TestStepOutputs:
         saved = store.get_step_output("wf-large-claim", "step-1")["output"]
         assert saved["typed_outcome"] == "STEP_OUTPUT_TOO_LARGE"
 
+    def test_one_consequential_writer_per_system_at_a_time(self, store):
+        def step(step_id, effect, systems):
+            return {"id": step_id, "capability": "shop", "task": step_id,
+                    "effect": effect, "systems": systems, "depends_on": []}
+
+        store.init_workflow_graph("wf-shop", [
+            step("order", "write", ["browser"]),
+            step("interim", "write", ["browser"]),
+            step("track", "read", ["browser"]),
+            step("email", "notify", ["gmail"]),
+        ])
+
+        assert store.claim_step("wf-shop", "order", "agent-a:1", lease_seconds=30)
+        assert not store.claim_step("wf-shop", "interim", "agent-b:1", lease_seconds=30)
+        assert store.claim_step("wf-shop", "track", "agent-c:1", lease_seconds=30)
+        assert store.claim_step("wf-shop", "email", "agent-d:1", lease_seconds=30)
+
+        assert store.finish_claimed_step(
+            "wf-shop", "order", "agent-a:1", {"status": "success", "output": "placed"},
+        )
+        assert store.claim_step("wf-shop", "interim", "agent-b:2", lease_seconds=30)
+
     def test_circular_step_output_is_replaced_by_bounded_failure(self, store):
         circular = []
         circular.append(circular)
@@ -950,6 +972,35 @@ class TestAtomicStepClaiming:
             claim_id,
             resume_agent_id="agent-a",
         )
+
+    def test_resuming_a_waiting_step_renews_its_execution_epoch(self, store):
+        store.init_workflow_graph(
+            "wf-human-resume",
+            [{"id": "step-1", "capability": "purchase", "task": "buy", "depends_on": []}],
+        )
+        claim_id = "agent-a:approval"
+        assert store.claim_step("wf-human-resume", "step-1", claim_id, lease_seconds=30)
+        assert store.finish_claimed_step(
+            "wf-human-resume",
+            "step-1",
+            claim_id,
+            {"status": "waiting", "typed_outcome": "WAITING_FOR_APPROVAL"},
+            status="waiting",
+        )
+
+        step = store.resume_workflow_step(
+            "wf-human-resume",
+            "step-1",
+            context={"_approved_actions": ["purchase-1"]},
+        )
+
+        assert step["status"] == "pending"
+        assert step["resume_agent_id"] == "agent-a"
+        assert step["resume_context"] == {
+            "_approved_actions": ["purchase-1"],
+            "_resume": True,
+            "_new_execution_epoch": True,
+        }
 
     def test_empty_epoch_delta_clears_prior_continuation_workspace(self, store):
         store.init_workflow_graph(

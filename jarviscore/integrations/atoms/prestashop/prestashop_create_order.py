@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one PrestaShop order in the connected store, which may commit the merchant to fulfill and process a purchase.",
+}
+
+
 async def prestashop_create_order(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create an order (XML body). Official: https://devdocs.prestashop-project.org/9/webservice/getting-started/"""
     try:

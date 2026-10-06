@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 HEIGHT_API = 'https://api.height.app'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Updates one Height list with the provided fields.",
+}
+
+
 async def height_update_project(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a Height list. Official: https://height.app/api-docs"""
     try:

@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _GL_API_ROOT = 'https://gitlab.com/api/v4'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one GitLab project with the provided settings.",
+}
+
+
 async def gitlab_create_project(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a project. Official: https://docs.gitlab.com/api/projects/#create-a-project"""
     try:

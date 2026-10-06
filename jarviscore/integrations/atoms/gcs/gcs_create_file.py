@@ -2,6 +2,14 @@ from typing import Any, Dict, List, Optional
 _GCS_API_ROOT = 'https://storage.googleapis.com/storage/v1'
 _GCS_UPLOAD_ROOT = 'https://storage.googleapis.com/upload/storage/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["bucket_name", "object_name", "content", "content_type"],
+    "consequence": "Creates or overwrites one Google Cloud Storage object in the specified bucket.",
+}
+
+
 async def gcs_create_file(bucket_name: str, object_name: str, content: str, content_type: str='application/octet-stream', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Upload object (POST .../upload/storage/v1/b/{bucket}/o?uploadType=media&name=). OAuth Bearer token (cloud-platform or devstorage scope). JSON API root required. Official: https://cloud.google.com/storage/docs/json_api/v1"""
     try:

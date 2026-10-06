@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["report_id", "payload"],
+    "consequence": "Updates one saved PostHog insight report.",
+}
+
+
 async def posthog_update_report(report_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update saved insight. Official: https://posthog.com/docs/api/product-analytics-2"""
     try:

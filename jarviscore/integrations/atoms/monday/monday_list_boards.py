@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 MONDAY_API = 'https://api.monday.com/v2'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def monday_list_boards(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List boards via GraphQL boards query with page/limit. Official: https://developer.monday.com/api-reference/reference/boards"""
     try:

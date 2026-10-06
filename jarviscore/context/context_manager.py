@@ -411,7 +411,7 @@ class ContextManager:
 
         if state.tool_history:
             receipt_lines = [
-                f"- `{turn.receipt_id}`: {turn.tool_name}"
+                f"- `{turn.receipt_id}`: {turn.tool_name}; observed at {turn.observed_at.isoformat()}"
                 for turn in state.tool_history[-20:]
                 if getattr(turn, "receipt_id", "")
             ]

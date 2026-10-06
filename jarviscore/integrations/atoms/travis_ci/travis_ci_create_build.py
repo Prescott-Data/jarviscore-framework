@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _TR_ROOT = 'https://api.travis-ci.com'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "branch"],
+    "consequence": "Triggers one Travis CI build request for the specified repository branch.",
+}
+
+
 async def travis_ci_create_build(project_id: str, branch: str='main', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Travis CI API v3: create build. Official: https://developer.travis-ci.com/resource"""
     try:

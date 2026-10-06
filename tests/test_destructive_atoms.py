@@ -65,6 +65,16 @@ async def demo_delete_item(item_id: str) -> dict:
     assert "require a destructive ATOM_POLICY" in contract.report()
 
 
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH"])
+def test_http_mutation_without_policy_is_never_treated_as_read(method):
+    source = f'''\nasync def shop_create_item(item: dict) -> dict:\n    """Create one item."""\n    return await nexus_call("{method}", "https://example.test/items", json=item)\n'''
+
+    contract = read_contract(source, system="shop", expected_name="shop_create_item")
+
+    assert not contract.ok
+    assert "require an explicit ATOM_POLICY" in contract.report()
+
+
 def test_idempotency_fields_must_name_parameters():
     invalid = SOURCE.replace('["message_id"]', '["missing_id"]')
     contract = read_contract(invalid, system="gmail", expected_name="gmail_delete_message")
@@ -144,3 +154,63 @@ async def test_write_atom_executes_without_approval_and_retry_is_idempotent():
 
     assert first == retry
     agent._tool_execute_code.assert_awaited_once()
+
+
+OUTBOUND_ATOMS = [
+    ("gmail", "gmail_send_email"),
+    ("msgraph", "msgraph_send_email"),
+    ("msgraph", "msgraph_send_chat_message"),
+    ("telegram", "telegram_create_message"),
+    ("whatsapp_business", "whatsapp_business_create_message"),
+    ("twilio", "twilio_create_message"),
+    ("sendgrid", "sendgrid_send_email"),
+    ("linkedin", "linkedin_create_post"),
+    ("twitter", "twitter_post_tweet"),
+    ("twitter", "twitter_reply_tweet"),
+]
+
+
+@pytest.mark.parametrize("system,name", OUTBOUND_ATOMS)
+def test_speaking_for_the_user_waits_for_their_approval(system, name):
+    from pathlib import Path
+
+    import jarviscore
+
+    source = (Path(jarviscore.__file__).parent / "integrations" / "atoms" / system / f"{name}.py").read_text()
+    contract = read_contract(source, system=system, expected_name=name)
+
+    assert contract.ok, contract.report()
+    assert contract.atom.policy.effect == "notify"
+    assert contract.atom.policy.requires_approval
+
+
+@pytest.mark.asyncio
+async def test_an_application_guard_refuses_before_approval_or_execution():
+    atom = read_contract(
+        SOURCE, system="gmail", expected_name="gmail_delete_message"
+    ).atom
+    seen = []
+
+    def guard(guarded_atom, params, context):
+        seen.append((guarded_atom.name, params, context["step_id"]))
+        return "the recipient is suppressed"
+
+    agent = CoderSubAgent.__new__(CoderSubAgent)
+    agent._atoms = {atom.name: atom}
+    agent._run_context = {"workflow_id": "wf", "step_id": "step"}
+    agent.code_registry = Registry()
+    agent.redis_store = ExecutionStore()
+    agent.effect_guards = (guard,)
+    agent._tool_execute_code = AsyncMock()
+
+    refused = await agent._atom_tool(atom.name)(message_id="m-1")
+
+    assert refused["semantic_error"] == "EFFECT_REFUSED_BY_GUARD"
+    assert "the recipient is suppressed" in refused["error"]
+    assert "typed_outcome" not in refused
+    assert seen == [("gmail_delete_message", {"message_id": "m-1"}, "step")]
+    agent._tool_execute_code.assert_not_awaited()
+
+    agent.effect_guards = (lambda *_: None,)
+    waiting = await agent._atom_tool(atom.name)(message_id="m-1")
+    assert waiting["typed_outcome"] == "WAITING_FOR_APPROVAL"

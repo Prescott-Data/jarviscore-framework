@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 LACRM_API = 'https://api.lessannoyingcrm.com/v2'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def less_annoying_crm_search_records(query: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search contacts via GetContacts SearchTerms. Official: https://account.lessannoyingcrm.com/api_docs/v2/Core_Functions/Search"""
     try:

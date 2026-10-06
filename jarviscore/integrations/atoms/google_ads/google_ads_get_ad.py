@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def google_ads_get_ad(customer_id: str, ad_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get a ad by ID from google ads. Official: https://developers.google.com/google-ads/api/docs/rest/common/search"""
     try:

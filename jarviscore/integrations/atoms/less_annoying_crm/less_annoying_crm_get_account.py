@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 LACRM_API = 'https://api.lessannoyingcrm.com/v2'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def less_annoying_crm_get_account(account_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Get company via GetContact. Official: https://account.lessannoyingcrm.com/api_docs/v2/Core_Functions/Contacts"""
     try:

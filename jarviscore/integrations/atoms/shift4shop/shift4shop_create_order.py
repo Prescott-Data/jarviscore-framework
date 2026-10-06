@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one order in the Shift4Shop store, which may commit the customer to a purchase.",
+}
+
+
 async def shift4shop_create_order(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shift4Shop REST: create order. Official: https://developers.3dcart.com/rest-api/orders"""
     try:

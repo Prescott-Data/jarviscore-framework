@@ -1,6 +1,12 @@
 from typing import Any, Dict, List, Optional
 LIVECHAT_AGENT_API = 'https://api.livechatinc.com/v3.6/agent'
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def livechat_search_records(query: str, limit: int=25, page_id: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Search archived chats via list_archives filters.query. Official: https://platform.text.com/docs/messaging/agent-chat-api#list-archives"""
     try:

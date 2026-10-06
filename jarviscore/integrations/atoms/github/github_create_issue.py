@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["owner", "repo", "title", "body", "labels"],
+    "consequence": "Creates one GitHub issue in the specified repository.",
+}
+
+
 async def github_create_issue(owner: str, repo: str, title: str, body: str=None, labels: list=None) -> dict:
     """Create issue via the github API."""
     _base = 'https://api.github.com'

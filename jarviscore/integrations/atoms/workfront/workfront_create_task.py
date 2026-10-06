@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["name"],
+    "consequence": "Creates one Adobe Workfront task in the configured project.",
+}
+
+
 async def workfront_create_task(name: str, limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """workfront REST: create task. Official: https://developer.adobe.com/workfront/api-explorer/"""
     try:

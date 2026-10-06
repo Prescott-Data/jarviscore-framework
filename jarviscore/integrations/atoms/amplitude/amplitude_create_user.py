@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Sets user properties for one or more users in Amplitude via the Identify API.",
+}
+
+
 async def amplitude_create_user(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Set user properties via Identify API (POST https://api2.amplitude.com/identify). Official: https://www.docs.developers.amplitude.com/analytics/apis/identify-api/"""
     try:

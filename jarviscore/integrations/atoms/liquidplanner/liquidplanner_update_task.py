@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
 LP_CLASSIC_API = 'https://app.liquidplanner.com/api/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["workspace_id", "task_id", "payload"],
+    "consequence": "Updates one LiquidPlanner task in the specified workspace.",
+}
+
+
 async def liquidplanner_update_task(workspace_id: str, task_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a task via PUT with task wrapper. Official: https://developer.liquidplanner.com/docs/create-and-update-examples"""
     try:

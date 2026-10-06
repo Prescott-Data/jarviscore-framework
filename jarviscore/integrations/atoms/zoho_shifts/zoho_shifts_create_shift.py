@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["org_id", "schedule_id", "start_time", "end_time", "employee_id", "position_id", "notes"],
+    "consequence": "Creates one shift in Zoho Shifts for the specified schedule and time range.",
+}
+
+
 async def zoho_shifts_create_shift(org_id: str, schedule_id: str, start_time: str, end_time: str, employee_id: str=None, position_id: str=None, notes: str=None) -> dict:
     """Shifts create shift via the zoho_shifts API."""
     try:

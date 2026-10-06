@@ -8,6 +8,27 @@ from typing import Any
 
 
 DEPENDENCY_POLICIES = frozenset({"satisfied", "terminal_evidence"})
+AGENT_MEMORY_RULE = (
+    "- keeping something for later sessions (a preference, fact, decision or correction) "
+    "is done with the executing agent's own cross-session memory, available to every "
+    "step; it is not a provider write and names no system. A step whose only outcome is "
+    "keeping such facts uses effect `propose` with empty systems; otherwise it belongs "
+    "in the step whose task establishes the fact."
+)
+PROPORTIONAL_INSPECTION_RULE = (
+    "- size inspection to the requested outcome. When the goal asks which items in a "
+    "collection matter (triage, finding, selecting), cover the whole collection through "
+    "the provider's listing metadata and summaries (sender, subject, title, date, status, "
+    "preview) and read full content only for items that evidence marks as possibly "
+    "relevant; full-content readback of every item is required only when the source goal "
+    "asks for it. State this coverage in the step's task and success criterion. A listing "
+    "is complete when the provider returns no further page; a provider's result-count "
+    "estimate is not a total to reconcile against."
+)
+OBLIGATION_KINDS = frozenset({
+    "outcome", "constraint", "external_effect_prohibition", "approval_boundary",
+    "scope_limit", "evidence_requirement", "fallback_condition",
+})
 # Provider stop reasons that certify a finished answer (Azure, Claude, Responses API).
 _COMPLETED_REASONS = frozenset({"stop", "end_turn", "stop_sequence", "completed"})
 
@@ -21,10 +42,12 @@ class GoalObligation:
     id: str
     description: str
     source_quote: str
+    kind: str = "outcome"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
+            "kind": self.kind,
             "description": self.description,
             "source_quote": self.source_quote,
         }
@@ -398,7 +421,7 @@ class MeshPlanner:
             current_steps, targets, obligation_projection
         )
         try:
-            steps = self._ensure_declared_artifact_dependencies(
+            steps = self._reject_unauthorized_effects(self._ensure_declared_artifact_dependencies(
                 self._ensure_response_step(
                     self._parse_steps(
                         step_raw, parsed_obligations,
@@ -411,7 +434,7 @@ class MeshPlanner:
                     settled_producer_ids=settled,
                 ),
                 external_steps=current_steps,
-            )
+            ), current_steps)
         except MeshPlanError as first_error:
             last_error = first_error
             for repair_attempt in range(1, 3):
@@ -427,7 +450,7 @@ class MeshPlanner:
                             validation_error=str(last_error),
                         )
                     )
-                    steps = self._ensure_declared_artifact_dependencies(
+                    steps = self._reject_unauthorized_effects(self._ensure_declared_artifact_dependencies(
                         self._ensure_response_step(
                             self._parse_steps(
                                 step_raw, parsed_obligations,
@@ -440,7 +463,7 @@ class MeshPlanner:
                             settled_producer_ids=settled,
                         ),
                         external_steps=current_steps,
-                    )
+                    ), current_steps)
                     break
                 except Exception as exc:
                     last_error = exc
@@ -471,7 +494,7 @@ class MeshPlanner:
                     reason=reason,
                     planning_brief=self.planning_brief,
                 ))
-                repaired_steps = self._ensure_declared_artifact_dependencies(
+                repaired_steps = self._reject_unauthorized_effects(self._ensure_declared_artifact_dependencies(
                     self._ensure_response_step(
                         self._parse_steps(
                             repair_raw, parsed_obligations,
@@ -484,7 +507,7 @@ class MeshPlanner:
                         settled_producer_ids=settled,
                     ),
                     external_steps=current_steps,
-                )
+                ), current_steps)
                 plan = MeshPlan(
                     goal=source,
                     obligations=parsed_obligations,
@@ -538,6 +561,34 @@ class MeshPlanner:
             "decision=amend|settle_blocked and reason"
             )
         return {"decision": decision, "reason": reason}
+
+    @staticmethod
+    def _reject_unauthorized_effects(
+        steps: list[MeshPlannedStep], current_steps: list[dict[str, Any]]
+    ) -> list[MeshPlannedStep]:
+        """Amendments retry authorized external effects; they never grant new ones."""
+        from jarviscore.orchestration.envelopes import CONSEQUENTIAL_EFFECTS
+
+        authorized = {
+            str(obligation_id)
+            for step in current_steps
+            if str(step.get("effect") or "") in CONSEQUENTIAL_EFFECTS
+            for obligation_id in step.get("covers") or []
+        }
+        for step in steps:
+            if step.effect not in CONSEQUENTIAL_EFFECTS:
+                continue
+            unauthorized = sorted(set(step.covers) - authorized) or (
+                [] if step.covers else ["(no obligation)"]
+            )
+            if unauthorized:
+                raise MeshPlanError(
+                    f"Step {step.step_id} adds a {step.effect} effect for obligations "
+                    f"{unauthorized} that the plan never served with an external effect. "
+                    "An amendment may retry or correct an authorized effect, but must "
+                    "report other unmet needs to the person instead of acting on them."
+                )
+        return steps
 
     def _settled_obligation_producers(
         self,
@@ -723,7 +774,11 @@ IMMUTABLE SOURCE BLOCKS:
 {json.dumps(source_blocks, ensure_ascii=False)}
 
 Return one valid json object with `obligations`. Each obligation has exactly:
-id, description, source_ref.
+id, kind, description, source_ref.
+- kind is exactly one of: outcome, constraint, external_effect_prohibition,
+    approval_boundary, scope_limit, evidence_requirement, fallback_condition.
+- use external_effect_prohibition only when the source forbids a provider-side
+    write, notification, destructive action or other external effect.
 - source_ref must be exactly one id from IMMUTABLE SOURCE BLOCKS. The compiler
     binds that reference to exact source text; do not copy or paraphrase source text.
 - capture every requested outcome, constraint, prohibition, approval boundary,
@@ -756,7 +811,9 @@ VALIDATION ERROR:
 {validation_error}
 
 Return one valid json object with `obligations`. Each obligation has exactly:
-id, description, source_ref.
+id, kind, description, source_ref.
+- kind is exactly one of: outcome, constraint, external_effect_prohibition,
+    approval_boundary, scope_limit, evidence_requirement, fallback_condition.
 - Every source_ref must be exactly one id from IMMUTABLE SOURCE BLOCKS. The
     compiler binds it to exact source text; do not copy or paraphrase source text.
 - Preserve the intended meaning of every invalid obligation.
@@ -796,6 +853,8 @@ expected_findings, depends_on, covers, dependency_policy.
 - effect must be exactly one of: read, propose, write, notify, destructive, final_response.
 - systems lists every provider the step will call and must be authorized by the capability.
 - write, notify and destructive outcomes must name exactly one provider in systems.
+{AGENT_MEMORY_RULE}
+{PROPORTIONAL_INSPECTION_RULE}
 - covers contains obligation ids satisfied by the step.
 - dependency_policy is `satisfied` unless this step intentionally diagnoses or
     remediates an unresolved dependency artifact; only then use `terminal_evidence`.
@@ -874,6 +933,8 @@ Return one valid json object using exactly one repair shape:
 - provider-owned outcomes should absorb missing same-provider resource discovery and
     return concrete identifiers or links needed by dependents.
 - mutating outcomes use exactly one provider and an effect authorized by capability.
+{AGENT_MEMORY_RULE}
+{PROPORTIONAL_INSPECTION_RULE}
 - never make required downstream work depend on an optional mutation-only branch.
 - repair missing information dependencies: every outcome must receive each required artifact
     from its producer directly listed in `depends_on`. Runtime context contains direct dependency
@@ -928,6 +989,8 @@ success_criterion, expected_findings, depends_on, covers, dependency_policy.
     assign them to the terminal domain step whose artifact proves compliance.
 - preserve real data dependencies and use only capabilities and effect authority from
     LIVE CAPABILITY CATALOG.
+{AGENT_MEMORY_RULE}
+{PROPORTIONAL_INSPECTION_RULE}
 - resolve the stated validation error without executing work or adding requirements.
 """
 
@@ -993,6 +1056,8 @@ expected_findings, depends_on, covers, dependency_policy.
 - effect must be exactly one of: read, propose, write, notify, destructive, final_response.
 - systems lists every provider the step will call and must be authorized by the capability.
 - write, notify and destructive outcomes must name exactly one provider in systems.
+{AGENT_MEMORY_RULE}
+{PROPORTIONAL_INSPECTION_RULE}
 - use capabilities, never an agent ID or named instance.
 
 Do not assign peers, execute work, change completed work or add requirements."""
@@ -1340,7 +1405,10 @@ DAG STEPS:
 Return exactly one json object: {{"complete": true, "missing": []}} only if every requested
 outcome, constraint, prohibition, approval boundary, fallback condition, scope
 limit and evidence requirement in SOURCE GOAL exists in the obligation ledger
-and is covered by an executable DAG step. For every write, notify, or destructive
+and is covered by an executable DAG step. Keeping something for later sessions is
+covered by any step whose task establishes it: every agent has its own cross-session
+memory, so it needs no provider system, and a `propose` step with empty systems is
+correct for it. For every write, notify, or destructive
 step, verify that information needed to perform the intended action is supplied by the
 source goal or a producer directly listed in `depends_on`. Runtime context contains direct
 dependency artifacts only. Transitive ancestry establishes ordering only and does not deliver
@@ -1353,6 +1421,11 @@ or links required downstream; do not demand atom-level steps for that discovery.
 When a downstream outcome needs an artifact's content, require the producing step's
 task and success criterion to inspect and return provider-readback evidence of usable
 content. Resource existence, title, identifier, link or MIME type alone is insufficient.
+When the goal asks which items of a collection matter, coverage of the whole collection
+through listing metadata and summaries, with full reads of the candidates they identify,
+is complete; do not require full-content readback of every item unless the goal asks for it.
+A listing is complete when the provider returns no further page; never require
+reconciliation against a provider's result-count estimate.
 Treat each direct dependency as supplying only the artifact promised by its own task,
 success criterion and expected findings. Do not assume a summary, ranking, approval or
 other transformation relays its input artifacts unless its declared output explicitly
@@ -1369,7 +1442,7 @@ one id from IMMUTABLE SOURCE BLOCKS that makes the stage applicable. Never deriv
 source provenance from TARGET MESH PLANNING BRIEF text.
 
 For an invalid obligation ledger, return complete=false, `missing`, and a corrected
-`obligations` list using exactly id, description, source_ref. The corrected ledger may
+`obligations` list using exactly id, kind, description, source_ref. The corrected ledger may
 remove only redundant composite obligations and must preserve every independently
 verifiable source requirement. For an executable-step defect, omit `obligations` and
 list each missing item with description and one source_ref from IMMUTABLE SOURCE BLOCKS.
@@ -1408,6 +1481,7 @@ or obligations. Omit `corrections` when any other DAG change is required."""
             if not isinstance(item, dict):
                 raise MeshPlanError(f"Obligation {index} must be an object")
             obligation_id = str(item.get("id") or "").strip()
+            kind = str(item.get("kind") or "outcome").strip()
             description = str(item.get("description") or "").strip()
             source_ref = str(item.get("source_ref") or "").strip()
             source_quote = str(item.get("source_quote") or "").strip()
@@ -1430,12 +1504,18 @@ or obligations. Omit `corrections` when any other DAG change is required."""
                 raise MeshPlanError(f"Obligation {index} has a missing or duplicate id")
             if not description:
                 raise MeshPlanError(f"Obligation {obligation_id} has no description")
+            if kind not in OBLIGATION_KINDS:
+                raise MeshPlanError(
+                    f"Obligation {obligation_id} has invalid kind {kind!r}"
+                )
             if not source_quote or source_quote not in goal:
                 raise MeshPlanError(
                     f"Obligation {obligation_id} source_quote is not present in the source goal"
                 )
             obligation_ids.add(obligation_id)
-            obligations.append(GoalObligation(obligation_id, description, source_quote))
+            obligations.append(
+                GoalObligation(obligation_id, description, source_quote, kind)
+            )
         return obligations
 
     def _parse_steps(

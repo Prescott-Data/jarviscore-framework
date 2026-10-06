@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["chat_id", "name"],
+    "consequence": "Updates the visitor name on one Zendesk Chat chat.",
+}
+
+
 async def zendesk_chat_update_chat(chat_id: str, name: str='', limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """zendesk_chat REST: update chat. Official: https://developer.zendesk.com/api-reference/live-chat/introduction/"""
     try:

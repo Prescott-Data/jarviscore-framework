@@ -520,6 +520,7 @@ class TestContentReading:
             f.write("# Test file\nprint('hello')\n")
             f.flush()
             path = f.name
+        researcher.workspace_root = os.path.dirname(path)
         try:
             result = await researcher._tool_read_file(path)
             assert isinstance(result, (str, dict))

@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 KEAP_API = 'https://api.infusionsoft.com/crm/rest/v2'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Keap deal (opportunity) record.",
+}
+
+
 async def keap_create_deal(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create Keap deal. Official: https://developer.keap.com/docs/restv2/"""
     try:

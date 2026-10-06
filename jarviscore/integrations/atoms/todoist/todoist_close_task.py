@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["task_id"],
+    "consequence": "Marks one Todoist task complete; it can be reopened.",
+}
+
+
 async def todoist_close_task(task_id: str) -> dict:
     """Close task via the todoist API."""
     try:

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["deal_id", "payload"],
+    "consequence": "Updates one ActiveCampaign deal record.",
+}
+
+
 async def activecampaign_update_deal(deal_id: str, payload: Dict[str, Any], account: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update deal via PUT /deals/{id}. Official: https://developers.activecampaign.com/reference/update-a-deal-new"""
     try:

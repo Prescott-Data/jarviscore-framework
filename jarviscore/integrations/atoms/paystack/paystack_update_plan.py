@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["plan_id", "payload"],
+    "consequence": "Updates a Paystack subscription plan's settings or details.",
+}
+
+
 async def paystack_update_plan(plan_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update plan by id or plan code via PUT. Official: https://paystack.com/docs/api/plan/#update-plan"""
     try:

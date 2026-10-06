@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _GADS_API_ROOT = 'https://googleads.googleapis.com/v24'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["customer_id", "ad_id", "payload", "resource_name", "update_mask"],
+    "consequence": "Updates one Google Ads ad configuration in the specified customer account, which can change live advertising behavior or delivery.",
+}
+
+
 async def google_ads_update_ad(customer_id: str, ad_id: str, payload: Dict[str, Any], resource_name: Optional[str]=None, update_mask: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update a ad in google ads. Official: https://developers.google.com/google-ads/api/docs/rest/common/search"""
     try:

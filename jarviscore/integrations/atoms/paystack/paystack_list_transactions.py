@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def paystack_list_transactions(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List transactions with page/perPage; optional auth_info filters: customer, status, from, to, amount. Official: https://paystack.com/docs/api/transaction/#list-transactions"""
     try:

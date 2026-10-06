@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["file_id", "payload"],
+    "consequence": "Updates metadata for one Box file.",
+}
+
+
 async def box_update_file(file_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update file metadata (PUT /files/{file_id}). Official: https://developer.box.com/reference/put-files-id/"""
     try:

@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["author_urn", "text"],
+    "consequence": "Publishes one LinkedIn post as the connected member or organisation.",
+}
+
+
 async def linkedin_create_post(author_urn: str, text: str, visibility: str='PUBLIC') -> dict:
     """Create post via the linkedin API."""
     _base = 'https://api.linkedin.com/v2'

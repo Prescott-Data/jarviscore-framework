@@ -187,6 +187,19 @@ same name. The registry keeps the old version as history and makes the proven
 replacement the current version. Never create a parallel name to hide a broken
 atom.
 
+When an offered read atom runs but cannot do what the task needs (it omits
+fields the provider returns, cannot page, cannot filter), extend it rather than
+writing parallel code: call `inspect_atom_for_repair` and `repair_atom` with
+`gap` saying what it cannot do. Keep every existing parameter, give new ones
+defaults, then register the proven candidate under the same name. The atom is
+the capability every later run inherits; improving it is the job.
+
+A provider that already has registered atoms is reached only through atoms.
+Code you write for the task itself has no provider access there. For an
+operation no atom covers, write a new read atom with `write_code` (atom=<name>,
+call=<arguments>): it is proven by that one call, then register it and call it
+like any other.
+
 ## CRITICAL RULES (read all before acting)
 
 1. **CODE, DON'T META-CODE** — Produce actual Python functions, not plans or descriptions.
@@ -315,6 +328,8 @@ atom.
         # CandidateStore — versioned in-memory record of each code attempt
         self._candidates: List[Dict[str, Any]] = []
         self._failed_atom_calls: Dict[str, Dict[str, Any]] = {}
+        self._observed_atom_calls: Dict[str, Dict[str, Any]] = {}
+        self._callable_atoms_by_system: Dict[str, List[str]] = {}
 
         # Hard gate flag — delegate_research blocked until first write_code
         self._has_written_code: bool = False
@@ -453,11 +468,15 @@ atom.
             "Review one proposed external effect against source intent and gathered "
             "evidence. This is an agent reasoning decision, not provider routing. "
             "Allow only when the proposed effect is requested and every conditional "
-            "precondition needed for it is supported by evidence. Do not infer absence "
-            "of one resource from absence of another. Return already_satisfied when "
+            "precondition needed for it is supported by evidence. Judge only what must "
+            "be true before the effect: evidence of its own result (a readback, receipt, "
+            "link or confirmation of what this call creates or changes) cannot exist "
+            "until it runs, and the agent verifies it afterwards, so never redirect for "
+            "it. Do not infer "
+            "absence of one resource from absence of another. Return already_satisfied when "
             "the gathered evidence establishes that the requested real-world outcome "
-            "already exists, so repeating the effect would be redundant. Redirect when "
-            "a relevant observation or verification is still missing. Return only JSON: "
+            "already exists, so repeating the effect would be redundant. Redirect only when "
+            "an observation that must precede the effect is still missing. Return only JSON: "
             '{"decision":"allow|redirect|already_satisfied","reason":"...",'
             '"missing_evidence":["..."],"supporting_evidence":["..."]}.\n\n'
             f"Source objective: {state.context.get('objective') or state.task}\n"
@@ -605,7 +624,10 @@ atom.
             self._tool_write_code,
             (
                 "Generate Python code for a task. Runs ValidationLayer automatically. "
-                "Params: {\"code\": \"<python code>\", \"system\": \"<optional provider name>\"}"
+                "For a provider operation no registered atom covers, write the new read "
+                "atom and name it with atom; it is proven by running it once with call. "
+                "Params: {\"code\": \"<python code>\", \"system\": \"<optional provider name>\", "
+                "\"atom\": \"<system_verb_object, for a new atom>\", \"call\": {<its arguments>}}"
             ),
             phase="thinking",
         )
@@ -613,8 +635,9 @@ atom.
             "inspect_atom_for_repair",
             self._tool_inspect_atom_for_repair,
             (
-                "Read the exact registered source and failure evidence for an atom "
-                "that failed in this run. Params: {\"function_name\": \"<atom_name>\"}"
+                "Read the exact registered source of an atom that failed in this run, "
+                "or that ran but cannot do what the task needs (state that as gap). "
+                "Params: {\"function_name\": \"<atom_name>\", \"gap\": \"<what it cannot do>\"}"
             ),
             phase="thinking",
         )
@@ -622,11 +645,13 @@ atom.
             "repair_atom",
             self._tool_repair_atom,
             (
-                "Submit corrected source for an atom that failed in this run. The "
-                "replacement must preserve its registered name and provider contract; "
-                "it is executed against the original invocation before it can replace "
-                "the registry version. Params: {\"function_name\": \"<atom_name>\", "
-                "\"code\": \"<corrected source>\"}"
+                "Submit corrected or extended source for an atom that failed, or that "
+                "ran but cannot do what the task needs (state that as gap). The "
+                "replacement keeps its registered name and provider contract; an "
+                "extension keeps every existing parameter. It is executed against the "
+                "observed invocation before it can replace the registry version. "
+                "Params: {\"function_name\": \"<atom_name>\", \"code\": \"<source>\", "
+                "\"gap\": \"<what it cannot do, for an extension>\"}"
             ),
             phase="thinking",
         )
@@ -804,19 +829,42 @@ atom.
             merged["error"] = execution_result.get("error", "Code execution failed.")
         return merged
 
+    def _repairable_call(self, function_name: str, gap: str = "") -> Optional[Dict[str, Any]]:
+        """The observed call a repair or extension is proven against, if any.
+
+        A failed call can be repaired. A call that ran but cannot do what the
+        task needs can be extended once the agent names that gap.
+        """
+        failure = self._failed_atom_calls.get(function_name)
+        if failure is not None:
+            return {**failure, "kind": "repair"}
+        observed = getattr(self, "_observed_atom_calls", {}).get(function_name)
+        if observed is not None and str(gap or "").strip():
+            return {**observed, "kind": "extension", "gap": str(gap).strip()}
+        return None
+
+    @staticmethod
+    def _not_repairable(function_name: str) -> Dict[str, Any]:
+        return {
+            "status": "error",
+            "error": (
+                f"`{function_name}` neither failed nor was called in this run. Call it first; "
+                "if it fails, repair it, and if it runs but cannot do what the task needs, "
+                "extend it by stating that gap."
+            ),
+            "semantic_error": "ATOM_REPAIR_NOT_OBSERVED",
+        }
+
     def _tool_inspect_atom_for_repair(
         self,
         function_name: str,
+        gap: str = "",
         **kwargs,
     ) -> Dict[str, Any]:
-        """Expose current source only after that exact atom failed in this run."""
-        failure = self._failed_atom_calls.get(function_name)
-        if failure is None or self.code_registry is None:
-            return {
-                "status": "error",
-                "error": f"No repairable failure for `{function_name}` was observed in this run.",
-                "semantic_error": "ATOM_REPAIR_NOT_OBSERVED",
-            }
+        """Expose current source after that exact atom failed, or ran but left a stated gap."""
+        call = self._repairable_call(function_name, gap)
+        if call is None or self.code_registry is None:
+            return self._not_repairable(function_name)
         source = self.code_registry.get_function_code(function_name)
         metadata = self.code_registry.get_function_metadata(function_name) or {}
         if not source:
@@ -831,26 +879,25 @@ atom.
             "system": metadata.get("system"),
             "version": metadata.get("version"),
             "source": source,
-            "failed_invocation": failure.get("params", {}),
-            "failure": failure.get("error"),
+            "kind": call["kind"],
+            "failed_invocation": call.get("params", {}),
+            "failure": call.get("error"),
+            "gap": call.get("gap"),
         }
 
     def _tool_repair_atom(
         self,
         function_name: str,
         code: str,
+        gap: str = "",
         **kwargs,
     ) -> Dict[str, Any]:
-        """Validate a replacement tied to one observed atom failure/version."""
+        """Validate a replacement tied to one observed failure, or an extension tied to a stated gap."""
         from jarviscore.execution.atom_contract import read_contract
 
-        failure = self._failed_atom_calls.get(function_name)
+        failure = self._repairable_call(function_name, gap)
         if failure is None or self.code_registry is None:
-            return {
-                "status": "error",
-                "error": f"No repairable failure for `{function_name}` was observed in this run.",
-                "semantic_error": "ATOM_REPAIR_NOT_OBSERVED",
-            }
+            return self._not_repairable(function_name)
         metadata = self.code_registry.get_function_metadata(function_name) or {}
         base_version = metadata.get("version")
         if base_version != failure.get("version"):
@@ -870,9 +917,21 @@ atom.
         if not contract.ok or contract.atom is None or contract.atom.legacy:
             return {
                 "status": "validation_failed",
-                "error": "; ".join(contract.errors) or "Replacement atom contract is invalid.",
-                "issues": list(contract.errors),
+                "error": "; ".join(contract.problems) or "Replacement atom contract is invalid.",
+                "issues": list(contract.problems),
             }
+        if failure["kind"] == "extension":
+            problem = self._extension_problem(
+                self.code_registry.get_function_code(function_name) or "",
+                contract.atom,
+                str(metadata.get("system") or ""),
+            )
+            if problem:
+                return {
+                    "status": "validation_failed",
+                    "error": problem,
+                    "semantic_error": "ATOM_EXTENSION_NOT_ADDITIVE",
+                }
         candidate_id = len(self._candidates) + 1
         self._candidates.append({
             "candidate_id": candidate_id,
@@ -881,6 +940,8 @@ atom.
             "status": "validated",
             "function_name": function_name,
             "repair_of": function_name,
+            "repair_kind": failure["kind"],
+            "gap": failure.get("gap"),
             "base_version": base_version,
             "invocation_params": dict(failure.get("params") or {}),
             "ts": time.time(),
@@ -895,6 +956,34 @@ atom.
                 "It must execute successfully before registry replacement."
             ),
         }
+
+    @staticmethod
+    def _extension_problem(current_source: str, extended, system: str) -> Optional[str]:
+        """Why an extension would break existing callers or change authority, if it would."""
+        from jarviscore.execution.atom_contract import read_contract
+
+        current = read_contract(current_source, system=system, expected_name=extended.name).atom
+        if current is None:
+            return "The current atom cannot be read, so it cannot be extended; repair it instead."
+        if current.policy.effect != "read":
+            return (
+                "Only read atoms can be extended: proving an extension re-runs the observed "
+                "call, which would repeat a real-world effect."
+            )
+        if extended.policy != current.policy:
+            return "An extension cannot change the atom's effect, approval or consequence."
+        existing = {parameter.name: parameter for parameter in current.parameters}
+        offered = {parameter.name: parameter for parameter in extended.parameters}
+        missing = sorted(set(existing) - set(offered))
+        if missing:
+            return f"An extension must keep every existing parameter; missing: {', '.join(missing)}."
+        newly_required = sorted(
+            name for name, parameter in offered.items()
+            if name not in existing and parameter.required
+        )
+        if newly_required:
+            return f"New parameters need defaults so existing calls still work: {', '.join(newly_required)}."
+        return None
 
     # ─────────────────────────────────────────────────────────────
     # Tool: check_registry
@@ -995,9 +1084,11 @@ atom.
         self,
         code: str,
         system: Optional[str] = None,
+        atom: Optional[str] = None,
+        call: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Record + validate a code candidate."""
+        """Record + validate a code candidate, or a new atom proven by one stated call."""
         self._has_written_code = True  # Unlock delegate_research gate
 
         # Often the agent is the first to work out which provider the task needs.
@@ -1006,6 +1097,8 @@ atom.
         access_note = self._refresh_offerings_for(system)
 
         candidate_id = len(self._candidates) + 1
+        if atom:
+            return self._new_atom_candidate(candidate_id, code, system, atom, call)
 
         contract_text = (
             f"{getattr(self, '_current_task', '')}\n"
@@ -1094,6 +1187,57 @@ atom.
             result["system_access"] = access_note
         return result
 
+    def _new_atom_candidate(self, candidate_id, code, system, name, call) -> Dict[str, Any]:
+        """A new read atom for an operation no registered atom covers, proven by one stated call."""
+        from jarviscore.execution.atom_contract import invocation, read_contract
+
+        def refused(error, semantic):
+            return {"candidate_id": candidate_id, "status": "validation_failed",
+                    "error": error, "semantic_error": semantic}
+
+        if not system:
+            return refused("A new atom needs system=<provider>.", "ATOM_SYSTEM_REQUIRED")
+        if self.code_registry is not None and self.code_registry.get_function_metadata(name):
+            return refused(
+                f"`{name}` is already registered; repair or extend it with "
+                "inspect_atom_for_repair and repair_atom instead of replacing it.",
+                "ATOM_ALREADY_REGISTERED",
+            )
+        contract = read_contract(code, system=system, expected_name=name)
+        if not contract.ok or contract.atom is None or contract.atom.legacy:
+            return refused("; ".join(contract.problems) or "Atom contract is invalid.",
+                           "ATOM_CONTRACT_INVALID")
+        if contract.atom.policy.effect != "read":
+            return refused(
+                "Only read atoms are proven by running them; an atom with real-world "
+                "effects cannot be proven by performing that effect unapproved.",
+                "ATOM_PROOF_WOULD_ACT",
+            )
+        params = dict(call or {})
+        try:
+            invocation(contract.atom, params)
+        except ValueError as exc:
+            return refused(str(exc), "ATOM_PARAMETERS_INVALID")
+        self._candidates.append({
+            "candidate_id": candidate_id,
+            "code": code,
+            "system": system,
+            "status": "validated",
+            "function_name": name,
+            "new_atom": name,
+            "invocation_params": params,
+            "ts": time.time(),
+        })
+        return {
+            "candidate_id": candidate_id,
+            "status": "validated",
+            "function_name": name,
+            "message": (
+                f"New atom `{name}` is contract-valid. It runs once with the stated call; "
+                "register it after that succeeds."
+            ),
+        }
+
     # ─────────────────────────────────────────────────────────────
     # Tool: validate_code
     # ─────────────────────────────────────────────────────────────
@@ -1158,18 +1302,19 @@ atom.
                 }
             exec_code = candidate["code"]
 
-        if candidate and candidate.get("repair_of"):
+        if candidate and (candidate.get("repair_of") or candidate.get("new_atom")):
             from jarviscore.execution.atom_contract import invocation, read_contract
 
+            proving = str(candidate.get("repair_of") or candidate["new_atom"])
             contract = read_contract(
                 exec_code or "",
                 system=str(candidate.get("system") or ""),
-                expected_name=str(candidate["repair_of"]),
+                expected_name=proving,
             )
             if not contract.ok or contract.atom is None:
                 return {
                     "status": "error",
-                    "error": "; ".join(contract.errors) or "Replacement atom contract is invalid.",
+                    "error": "; ".join(contract.problems) or "Replacement atom contract is invalid.",
                     "semantic_error": "ATOM_REPAIR_INVALID",
                 }
             repair_atom = contract.atom
@@ -1208,12 +1353,12 @@ atom.
                     exec_context[k] = self._run_context[k]
         internal_atom = kwargs.get("_internal_atom")
         offered_atoms = getattr(self, "_atoms", {})
+        proven_name = candidate and (candidate.get("repair_of") or candidate.get("new_atom"))
         repair_authorized = bool(
-            candidate
-            and candidate.get("repair_of")
+            proven_name
             and isinstance(internal_atom, tuple)
             and len(internal_atom) == 2
-            and internal_atom[0].name == candidate.get("repair_of")
+            and internal_atom[0].name == proven_name
         )
         if (
             isinstance(internal_atom, tuple)
@@ -1224,14 +1369,38 @@ atom.
             )
         ):
             atom, action_id = internal_atom
-            exec_context["_mutation_authority"] = {
+            exec_context["_atom_authority"] = {
                 "atom": atom.name,
-                "action_id": str(action_id),
-                "effect": atom.policy.effect,
+                "system": str(atom.system or candidate and candidate.get("system") or "").lower(),
             }
+            if not (candidate and candidate.get("new_atom")):
+                exec_context["_mutation_authority"] = {
+                    "atom": atom.name,
+                    "action_id": str(action_id),
+                    "effect": atom.policy.effect,
+                }
+        if self.code_registry is not None:
+            exec_context["_atoms_for_system"] = self._registered_atom_names
 
         start_ts = time.time()
-        result = await self.sandbox.execute(exec_code, context=exec_context or None)
+        shipped = kwargs.get("_shipped_atom")
+        from jarviscore.execution.coder_sandbox import BashPermissionError
+
+        try:
+            if shipped is not None and hasattr(self.sandbox, "execute_shipped_atom"):
+                atom, params = shipped
+                result = await self.sandbox.execute_shipped_atom(
+                    atom, params, context=exec_context or None
+                )
+            else:
+                result = await self.sandbox.execute(exec_code, context=exec_context or None)
+        except BashPermissionError as exc:
+            # A refusal is something to work around with other tools, not the end of the step.
+            return {
+                "status": "error",
+                "error": f"{exc} Continue with the other tools available to you.",
+                "semantic_error": "CODE_EXECUTION_UNAVAILABLE",
+            }
         exec_time = time.time() - start_ts
 
 
@@ -1436,7 +1605,9 @@ atom.
         if repair_of:
             metadata["repair_of_version"] = candidate.get("base_version")
             metadata["repair_failure"] = (
-                self._failed_atom_calls.get(str(repair_of), {}).get("error")
+                f"Extended: {candidate.get('gap')}"
+                if candidate.get("repair_kind") == "extension"
+                else self._failed_atom_calls.get(str(repair_of), {}).get("error")
             )
 
         success = self.code_registry.register_function(
@@ -1457,6 +1628,11 @@ atom.
             getattr(self, "_dispatch_metadata", {})["function_id"] = function_name
             candidate["function_name"] = function_name
             candidate["status"] = "registered"
+            self._callable_atoms_by_system.pop(str(system or ""), None)
+            if repair_of and repair_of in getattr(self, "_atoms", {}):
+                self._reoffer_atom(repair_of)
+            elif candidate.get("new_atom") == function_name:
+                self._reoffer_atom(function_name, system=str(system or ""))
 
             return {
                 "status": "registered",
@@ -1815,6 +1991,47 @@ atom.
                 len(self._atom_tools), ", ".join(systems), ", ".join(self._atom_tools),
             )
 
+    def _registered_atom_names(self, system: str) -> List[str]:
+        """Callable atoms the registry holds for a system; provider access goes through them."""
+        cache = self._callable_atoms_by_system
+        if system not in cache:
+            from jarviscore.execution.atom_contract import read_contract
+
+            names = []
+            for entry in self.code_registry.get_functions_by_system(system):
+                name = entry.get("function_name")
+                code = self.code_registry.get_function_code(name) if name else None
+                atom = read_contract(code or "", system=system, expected_name=name).atom
+                if atom is not None and not atom.legacy:
+                    names.append(name)
+            cache[system] = sorted(names)
+        return cache[system]
+
+    def _reoffer_atom(self, name: str, system: str = "") -> None:
+        """Offer the registry's current version of an atom the agent just repaired, extended or created."""
+        from jarviscore.execution.atom_contract import read_contract
+
+        current = getattr(self, "_atoms", {}).get(name)
+        system = current.system if current is not None else system
+        code = self.code_registry.get_function_code(name) if self.code_registry else None
+        atom = read_contract(code or "", system=system, expected_name=name).atom
+        if atom is None:
+            return
+        if not hasattr(self, "_atoms"):
+            self._atoms = {}
+        self._atoms[name] = atom
+        if name not in getattr(self, "_atom_tools", []):
+            self._atom_tools = [*getattr(self, "_atom_tools", []), name]
+        self.register_tool(
+            name,
+            self._atom_tool(name),
+            f"{atom.describe()} Runs against {atom.system} with "
+            "credentials resolved outside the sandbox; you never handle them.",
+            phase="action",
+        )
+        self._failed_atom_calls.pop(name, None)
+        self._observed_atom_calls.pop(name, None)
+
     async def _sync_connections(self) -> None:
         """Learn what the gateway holds before deciding what to offer.
 
@@ -2052,7 +2269,7 @@ atom.
 
     def _atom_tool(self, name: str):
         async def call(**params):
-            from jarviscore.execution.atom_contract import invocation
+            from jarviscore.execution.atom_contract import invocation, shipped_source
 
             atom = self._atoms.get(name)
             registry = self.code_registry
@@ -2064,6 +2281,10 @@ atom.
                     "semantic_error": "ATOM_UNAVAILABLE",
                 }
             action_id = self._atom_action_id(atom, params)
+            if atom.policy.effect in {"write", "notify", "destructive"}:
+                refusal = await self._guard_refusal(atom, params)
+                if refusal is not None:
+                    return refusal
             if atom.policy.requires_approval and action_id not in set(
                 self._run_context.get("_approved_actions") or ()
             ):
@@ -2087,12 +2308,21 @@ atom.
                 atom.system
             )
             self._run_context["_nexus_provider"] = atom.system
+            try:
+                call_code = f"{code}\n\n{invocation(atom, params)}"
+            except ValueError as exc:
+                return {
+                    "status": "error",
+                    "error": str(exc),
+                    "semantic_error": "ATOM_PARAMETERS_INVALID",
+                }
             # Runs where any other sandbox code runs: nexus_call attaches the
             # credential there, so proving an atom is just running it.
             result = await self._tool_execute_code(
-                code=f"{code}\n\n{invocation(atom, params)}",
+                code=call_code,
                 description=f"{name} via {atom.system}",
                 _internal_atom=(atom, action_id),
+                _shipped_atom=(atom, params) if shipped_source(atom) == code else None,
             )
             self._record_atom_outcome(name, result, params=params)
             if (
@@ -2103,6 +2333,21 @@ atom.
             return result
         call.__name__ = name
         return call
+
+    async def _guard_refusal(self, atom, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Application guards may refuse a consequential atom; they can never allow one."""
+        for guard in getattr(self, "effect_guards", None) or ():
+            reason = guard(atom, dict(params), dict(self._run_context))
+            if hasattr(reason, "__await__"):
+                reason = await reason
+            if reason:
+                return {
+                    "status": "error",
+                    "error": f"{atom.name} was refused before it ran: {reason}",
+                    "semantic_error": "EFFECT_REFUSED_BY_GUARD",
+                    "system": atom.system,
+                }
+        return None
 
     @staticmethod
     def _atom_action_id(atom, params: Dict[str, Any]) -> str:
@@ -2153,6 +2398,12 @@ atom.
                 execution_time=float(result.get("execution_time") or 0.0),
                 error_type=result.get("error_type"),
             )
+            if status == "success":
+                metadata = self.code_registry.get_function_metadata(name) or {}
+                self._observed_atom_calls[name] = {
+                    "version": metadata.get("version"),
+                    "params": dict(params or {}),
+                }
             if status == "failure":
                 metadata = self.code_registry.get_function_metadata(name) or {}
                 self._failed_atom_calls[name] = {

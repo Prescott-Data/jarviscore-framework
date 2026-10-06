@@ -453,6 +453,30 @@ class TestResearcherGate:
 
         assert ok is True, reason
 
+    def test_declared_research_is_not_replaced_by_upstream_results(self, monkeypatch):
+        """A repair step finished with zero tool calls, claiming searches it never ran."""
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+        contract = {"required_tool_groups": [["search_internet", "search_internet_batch"]]}
+        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "step-1"}]}}
+        unsearched = _state(context={
+            "previous_step_results": {"step-1": {"summary": "x"}},
+            "execution_contract": contract,
+        })
+        searched = _state(
+            context={"execution_contract": contract},
+            tool_history=[ToolResult(tool_name="search_internet_batch", status="success")],
+        )
+
+        ok, evidence = self._researcher()._can_complete(unsearched, parsed)
+        assert ok is False
+        assert evidence.check == "declared_action_evidence"
+        assert evidence.observed["missing_tool_groups"] == [
+            ["search_internet", "search_internet_batch"]
+        ]
+
+        ok, reason = self._researcher()._can_complete(searched, parsed)
+        assert ok is True, reason
+
     def test_findings_recorded_in_an_earlier_epoch_count(self, monkeypatch):
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
         state = _state()
@@ -515,6 +539,7 @@ class TestResearcherGate:
         from types import SimpleNamespace
 
         researcher = self._researcher()
+        researcher.workspace_root = tmp_path
         researcher.current_state = _state()
         researcher.tracer = SimpleNamespace(
             log_tool_start=lambda *a, **k: None, log_tool_result=lambda *a, **k: None
@@ -863,6 +888,7 @@ class TestCoderGate:
 
         assert result is None
         assert "Scoped step task: Create the invitation draft" in review.prompt
+        assert "cannot exist until it runs" in review.prompt
         assert '"deal_id": "deal-1"' in review.prompt
         assert '"event_id": "event-1"' in review.prompt
         assert '"verdict": "satisfied"' in review.prompt

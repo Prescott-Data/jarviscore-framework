@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["job_name", "payload"],
+    "consequence": "Updates the configuration XML for one Jenkins job.",
+}
+
+
 async def jenkins_update_project(job_name: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update Jenkins job config XML. Official: https://www.jenkins.io/doc/book/using/remote-access-api/"""
     try:

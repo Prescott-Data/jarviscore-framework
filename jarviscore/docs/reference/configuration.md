@@ -364,7 +364,7 @@ Advanced execution parameters for the OODA loop Kernel. The defaults are appropr
 |---|---|---|
 | `KERNEL_MAX_TURNS` | `30` | Maximum OODA loop turns per task execution. |
 | `SANDBOX_MODE` | `local` | `local` (in-process execution) or `remote` (external sandboxed execution). |
-| `ALLOW_UNSAFE_LOCAL_EXECUTION` | `false` | Explicitly allow generated Python and shell/build commands to run as host subprocesses. Local mode does not isolate the host filesystem or network; keep this disabled for untrusted agent input and use a remote/container sandbox. |
+| `ALLOW_UNSAFE_LOCAL_EXECUTION` | `false` | Run model-written code as an unconfined host subprocess where OS confinement is unavailable. With the default, such code runs only under macOS `sandbox-exec` or Linux `bwrap` (no network, writes only to the run workspace) and is refused elsewhere. Keep disabled for untrusted agent input; see [Sandbox Execution](../guides/production.md#sandbox-execution). |
 | `EXECUTION_TIMEOUT` | `300` | Seconds before sandbox code execution is forcibly terminated. |
 | `MAX_REPAIR_ATTEMPTS` | `3` | Autonomous repair retries when generated code fails. |
 | `HITL_ENABLED` | `false` | Enable Human-in-the-Loop escalation. |
@@ -383,6 +383,17 @@ These control how the Kernel allocates context across its OODA turns. You will n
 | `KERNEL_THINKING_BUDGET` | `56000` | Token allocation for Kernel reasoning turns. |
 | `KERNEL_ACTION_BUDGET` | `24000` | Token allocation for action execution turns. |
 | `KERNEL_WALL_CLOCK_MS` | `180000` | Maximum wall-clock time in milliseconds for a single task execution (3 minutes). |
+
+**Tool result observation**
+
+Each tool result is shown inline up to a limit with an explicit marker, and is kept whole so the agent can read the rest with `read_turn_result`. Nothing is cut: older results are released whole, and the agent is told why.
+
+| Variable | Default | Description |
+|---|---|---|
+| `SUBAGENT_OBSERVATION_LIMIT` | `800` | Characters of each tool result shown inline before the retrieval marker. |
+| `SUBAGENT_TURN_RESULT_WINDOW` | `10` | Number of recent tool results kept whole for `read_turn_result`. |
+| `SUBAGENT_TURN_RESULT_BUDGET` | `2000000` | Total characters kept across those results; older results are released whole when exceeded. |
+| `SUBAGENT_READ_PAGE_LIMIT` | `20000` | Largest page `read_turn_result` returns; each page is shown whole. |
 
 ---
 

@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["parent_id", "text"],
+    "consequence": "Posts one comment on Reddit replying to the specified post or comment. The comment becomes visible to other Reddit users.",
+}
+
+
 async def reddit_submit_comment(parent_id: str, text: str) -> dict:
     """Submit comment. POST https://oauth.reddit.com/api/comment"""
     try:

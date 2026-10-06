@@ -89,7 +89,15 @@ failure honestly; an HTTP status alone is not a business decision.
 
 `write`, `notify`, and `destructive` atoms require idempotency fields and a
 consequence. Destructive atoms require approval. An atom that performs HTTP
-`DELETE` must declare a destructive policy.
+`DELETE` must declare a destructive policy. An atom that performs HTTP `POST`,
+`PUT`, or `PATCH` must declare its policy explicitly, because many provider APIs
+use `POST` for searches and queries: the declaration, not the HTTP method, says
+whether the call changes anything. Every shipped atom carries one.
+
+Atom modules are declarative: at module level they hold only imports, constant
+assignments, and function or class definitions, with no calls in decorators,
+defaults, annotations, or base classes. Reading an atom therefore never runs
+provider code.
 
 The contract is checked from Python syntax by
 `jarviscore.execution.atom_contract.read_contract()`. Invalid source is not
@@ -190,6 +198,11 @@ If no suitable atom exists, the Coder can write candidate code, validate it,
 execute it, and register it only after successful execution. Registration without
 a successful `candidate_id` is rejected.
 
+When a provider has registered atoms, generated code reaches that provider only
+through them: a direct `nexus_call` to the provider is refused unless the code
+is the atom being proven. A missing operation becomes a new atom rather than a
+one-off script.
+
 ```mermaid
 stateDiagram-v2
     [*] --> RegistryLookup
@@ -207,16 +220,25 @@ stateDiagram-v2
     Evidence --> [*]
 ```
 
-## Repair is evidence-bound
+## Repair, extension, and new atoms are evidence-bound
 
-A registered atom enters repair only after an eligible failure was observed in
-the current run. The Coder must inspect the exact current source/version, submit
-a replacement under the same function identity, and execute it successfully
-against the original invocation.
+The Coder maintains the catalog during a run, so developers do not hand-maintain
+atoms. Every change is proven by a real execution before registration.
 
-Registration rejects stale repairs when the current atom version changed after
-repair began. A successful replacement records `repair_of_version` and the
-observed failure while retaining all prior immutable source versions.
+| Change | Opens when | Rules |
+|---|---|---|
+| Repair | The atom failed in the current run | Same function identity; proven against the failed invocation |
+| Extension | The atom ran in this run, and the Coder states the `gap` it cannot cover | Read atoms only; same policy; every existing parameter kept; new parameters have defaults; proven against the observed call |
+| New atom | No registered atom covers the operation | Read atoms only; name not already registered; proven by one stated call (`write_code(atom=..., call=...)`) |
+
+Atoms with real-world effects are never extended or created by proof, because
+proving them would perform the effect without approval.
+
+The Coder must inspect the exact current source/version before submitting a
+replacement. Registration rejects stale changes when the current atom version
+changed after work began. A successful replacement records `repair_of_version`
+and the observed failure or stated gap while retaining all prior immutable
+source versions.
 
 ## What a system bundle is
 

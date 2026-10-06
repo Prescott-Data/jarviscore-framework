@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["project_id", "payload"],
+    "consequence": "Updates one Pivotal Tracker project's settings or metadata.",
+}
+
+
 async def pivotal_tracker_update_project(project_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update project. Official: https://www.pivotaltracker.com/help/api/rest/v5"""
     try:

@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload", "shop"],
+    "consequence": "Creates one Shopify customer record in the specified store.",
+}
+
+
 async def shopify_create_customer(payload: Dict[str, Any], shop: str='', timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Shopify Admin REST: create customer. Official: https://shopify.dev/docs/api/admin-rest/latest/resources/customer#post-customers"""
     try:

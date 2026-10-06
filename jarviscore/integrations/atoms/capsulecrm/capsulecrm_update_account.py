@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 CAPSULE_API = 'https://api.capsulecrm.com'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["account_id", "payload"],
+    "consequence": "Updates one Capsule CRM account record.",
+}
+
+
 async def capsulecrm_update_account(account_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update Account via Capsule CRM API. Official: https://developer.capsulecrm.com/v2/operations/Party"""
     try:

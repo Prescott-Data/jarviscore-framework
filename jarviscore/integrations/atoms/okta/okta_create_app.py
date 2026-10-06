@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["domain", "payload"],
+    "consequence": "Creates one Okta application in the specified Okta organization, which can affect authentication access and integrations.",
+}
+
+
 async def okta_create_app(domain: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create application. Official: https://developer.okta.com/docs/reference/api/overview/"""
     try:

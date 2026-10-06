@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["email", "first_name", "last_name", "list_ids"],
+    "consequence": "Creates one contact in the connected Brevo account and optionally adds the contact to lists.",
+}
+
+
 async def brevo_create_contact(email: str, first_name: str='', last_name: str='', list_ids: list=None) -> dict:
     """Create contact. POST https://api.brevo.com/v3/contacts"""
     _h = {'Content-Type': 'application/json'}

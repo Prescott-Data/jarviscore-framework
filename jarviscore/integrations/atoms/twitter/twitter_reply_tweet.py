@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["text", "reply_to_tweet_id"],
+    "consequence": "Publishes one public reply from the connected X account.",
+}
+
+
 async def twitter_reply_tweet(text: str, reply_to_tweet_id: str) -> dict:
     """Reply tweet. POST https://api.twitter.com/2/tweets"""
     try:

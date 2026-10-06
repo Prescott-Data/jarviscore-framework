@@ -1,3 +1,11 @@
+ATOM_POLICY = {
+    "effect": "notify",
+    "approval": "required",
+    "idempotency_fields": ["owner", "repo", "issue_number", "body"],
+    "consequence": "Posts one comment to the specified GitHub issue or pull request, notifying participants and subscribers.",
+}
+
+
 async def github_create_comment(owner: str, repo: str, issue_number: int, body: str) -> dict:
     """Create comment via the github API."""
     _base = 'https://api.github.com'

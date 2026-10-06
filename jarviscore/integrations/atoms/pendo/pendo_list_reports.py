@@ -1,5 +1,11 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "read",
+    "approval": "never",
+}
+
+
 async def pendo_list_reports(limit: int=25, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """List saved reports. Official: https://engageapi.pendo.io/ (see singer-io/tap-pendo Reports stream)"""
     try:

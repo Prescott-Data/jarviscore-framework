@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["pipeline_id", "repository_id", "payload"],
+    "consequence": "Updates one Beanstalk server environment configuration in the repository.",
+}
+
+
 async def beanstalk_update_pipeline(pipeline_id: str, repository_id: str, payload: Dict[str, Any], account: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update server environment. PUT /api/{repository_id}/server_environments/{id}.json. Official: https://api.beanstalkapp.com/server_environment"""
     try:

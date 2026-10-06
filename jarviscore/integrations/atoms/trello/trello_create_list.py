@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _TR_ROOT = 'https://api.trello.com/1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["name", "board_id"],
+    "consequence": "Creates one Trello list on the specified board.",
+}
+
+
 async def trello_create_list(name: str, board_id: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Trello REST: create list. Official: https://developer.atlassian.com/cloud/trello/rest/"""
     try:

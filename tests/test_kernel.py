@@ -963,6 +963,26 @@ class TestTaskClassification:
         assert mock_llm.calls == []
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("effect", ["read", "write"])
+    async def test_the_agents_own_browser_is_a_surface_not_a_connection(self, kernel, mock_llm, effect):
+        decision = await kernel._route_task(
+            "Add the backpack to the basket",
+            {"systems": ["browser"], "system": "browser", "effect": effect},
+            agent_default_role="browser",
+        )
+        assert decision.role == "browser"
+        assert mock_llm.calls == []
+
+    @pytest.mark.asyncio
+    async def test_a_connected_provider_still_goes_to_the_credentialed_coder(self, kernel):
+        decision = await kernel._route_task(
+            "Send the reply",
+            {"systems": ["gmail"], "system": "gmail", "effect": "notify"},
+            agent_default_role="browser",
+        )
+        assert decision.role == "coder"
+
+    @pytest.mark.asyncio
     async def test_structured_router_selects_role(self, kernel, mock_llm):
         mock_llm.responses = [_router_response("communicator", reason="request needs coordination")]
         decision = await kernel._route_task(
@@ -1151,6 +1171,17 @@ class TestSubagentCreation:
         assert context["peer_requester_step_id"] == "calendar"
         assert not ({"system", "systems", "effect", "capability", "step_id"} & set(context))
         assert all(not key.startswith("_") for key in context)
+        assert context["peer_requester_authority"] == {
+            "effect": "write", "systems": ["google_calendar"],
+        }
+
+        subagent._current_state.context = {"effect": "propose"}
+        await subagent._tools["ask_peer"].func(
+            role="commerce_operator", question="Place the order",
+            peer_requester_authority={"effect": "write", "systems": ["browser"]},
+        )
+        _, args, context = peer_tool.calls[1]
+        assert context["peer_requester_authority"] == {"effect": "propose", "systems": []}
 
     @pytest.mark.asyncio
     async def test_every_subagent_can_inspect_its_workflow_and_read_step_output(

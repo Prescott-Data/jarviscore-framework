@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _ASSEMBLA_V1_SUFFIX = '/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["space_id", "space_tool_id", "payload"],
+    "consequence": "Creates one Assembla merge request in the specified repository tool.",
+}
+
+
 async def assembla_create_pipeline(payload: Dict[str, Any], space_id: Optional[str]=None, space_tool_id: Optional[str]=None, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create merge request in repo tool (POST .../merge_requests.json). Official: https://api-docs.assembla.cc/content/ref/merge_requests_create.html"""
     try:

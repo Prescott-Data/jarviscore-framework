@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Dict, Optional, List, Any, Callable, Awaitable, Tuple
+from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
 
 from playwright.async_api import (
@@ -19,7 +19,6 @@ from playwright.async_api import (
     Page,
     Playwright,
     Locator,
-    Error as PlaywrightError
 )
 
 try:
@@ -408,7 +407,12 @@ class BrowserSession:
             if self.user_data_dir:
                 from .profile_decoration import decorate_profile
 
-                decorate_profile(self.user_data_dir, self.profile_name, self.profile_color)
+                try:
+                    decorate_profile(
+                        self.user_data_dir, self.profile_name, self.profile_color
+                    )
+                except OSError as exc:
+                    logger.warning("Could not decorate browser profile: %s", exc)
                 self._context = await self._playwright.chromium.launch_persistent_context(
                     self.user_data_dir,
                     headless=self.headless,

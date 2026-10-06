@@ -19,6 +19,9 @@ from jarviscore.kernel.subagent import (
     _OBSERVATION_LIMIT,
     _TURN_RESULT_WINDOW,
     _clip_observation,
+    _observe,
+    _READ_PAGE_LIMIT,
+    _retain_turn_result,
 )
 
 
@@ -103,6 +106,54 @@ class TestReadTurnResult:
 
     def test_window_constant_is_positive(self):
         assert _TURN_RESULT_WINDOW >= 1
+
+    def test_a_large_listing_is_retained_whole_up_to_its_page_token(self, agent, state_with_ring):
+        listing = str({"messages": [{"id": f"m{i}", "snippet": "s" * 400} for i in range(100)],
+                       "next_page_token": "PAGE-2"})
+        assert len(listing) > 40_000
+        _retain_turn_result(state_with_ring.internal_variables, 5, listing)
+
+        out = agent._tool_read_turn_result(turn=5, offset=0)
+        pages = [out["output"]]
+        while out["remaining_chars"]:
+            out = agent._tool_read_turn_result(turn=5, offset=out["offset"] + len(out["output"]))
+            pages.append(out["output"])
+
+        assert out["total_chars"] == len(listing)
+        assert "".join(pages) == listing
+        assert listing.endswith("'next_page_token': 'PAGE-2'}")
+
+    def test_an_old_turn_is_released_whole_and_the_agent_is_told_why(self, agent, state_with_ring):
+        for turn in range(5, 5 + _TURN_RESULT_WINDOW):
+            _retain_turn_result(state_with_ring.internal_variables, turn, f"result {turn}")
+
+        out = agent._tool_read_turn_result(turn=3)
+
+        assert out["status"] == "error"
+        assert "was released because only the last" in out["error"]
+        assert "repeat that call" in out["error"]
+
+    def test_the_size_budget_releases_whole_older_turns_never_part_of_one(self, agent, monkeypatch):
+        import jarviscore.kernel.subagent as subagent
+
+        monkeypatch.setattr(subagent, "_TURN_RESULT_BUDGET", 1000)
+        variables = {}
+        _retain_turn_result(variables, 1, "a" * 600)
+        _retain_turn_result(variables, 2, "b" * 600)
+        _retain_turn_result(variables, 3, "c" * 5000)
+
+        assert variables["_turn_results"] == {"3": "c" * 5000}
+        assert "later results needed the room" in variables["_released_turn_results"]["1"]
+
+    def test_a_read_page_is_shown_whole_and_sized_to_fit(self, agent, state_with_ring):
+        _retain_turn_result(state_with_ring.internal_variables, 5, "L" * (_READ_PAGE_LIMIT * 3))
+
+        page = agent._tool_read_turn_result(turn=5, offset=0, length=10**9)
+
+        assert len(page["output"]) == _READ_PAGE_LIMIT
+        assert page["remaining_chars"] == _READ_PAGE_LIMIT * 2
+        assert _observe("read_turn_result", page, turn=6) == str(page)
+        assert "showing" in _observe("gmail_list_messages", "x" * (_OBSERVATION_LIMIT + 1), turn=6)
 
 
 class TestToolRegistration:

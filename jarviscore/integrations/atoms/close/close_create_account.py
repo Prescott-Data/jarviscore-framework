@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 CLOSE_API = 'https://api.close.com/api/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one lead (account) record in Close CRM.",
+}
+
+
 async def close_create_account(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create a lead (account) in Close CRM. HTTP Basic API key (username, empty password). Official: https://developer.close.com/"""
     try:

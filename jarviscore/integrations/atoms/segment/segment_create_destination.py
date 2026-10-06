@@ -1,5 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Segment destination configuration.",
+}
+
+
 async def segment_create_destination(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Segment Public API: create destination. Official: https://segment.com/docs/api/public-api/#tag/Destinations/operation/createDestination"""
     try:

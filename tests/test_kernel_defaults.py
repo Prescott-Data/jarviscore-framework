@@ -66,7 +66,23 @@ class TestCoderSubAgent:
             "Your three most recent files are:\n"
             "- Scoreboard\n- Provider Registry\n- Engineering Docs"
         )
+        assert parsed["answer"] == parsed["summary"]
         assert parsed["result"]["files"][0] == "Scoreboard"
+
+    def test_a_result_without_done_carries_no_authored_answer(self, mock_llm):
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
+        parsed = coder._parse_response('RESULT: {"files": ["Scoreboard"]}')
+
+        assert parsed["type"] == "done"
+        assert parsed["answer"] is None
+
+    def test_json_finish_done_is_the_authored_answer(self, mock_llm):
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
+        parsed = coder._parse_response(
+            '{"thought": "ok", "done": "Two files:\\n- A\\n- B", "result": {}}'
+        )
+
+        assert parsed["answer"] == "Two files:\n- A\n- B"
 
     def test_combined_done_result_terminates_with_the_structured_artifact(
         self, mock_llm
@@ -441,6 +457,7 @@ class TestResearcherSubAgent:
     async def test_grep_codebase_finds_pattern(self, mock_llm):
         """grep_codebase returns structured match results for a known pattern."""
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
+        researcher.workspace_root = __import__("pathlib").Path(__file__).resolve().parents[1]
         result = await researcher._tool_grep_codebase(
             pattern="def test_",
             path="tests",

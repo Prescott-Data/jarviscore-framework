@@ -1,6 +1,14 @@
 from typing import Any, Dict, List, Optional
 _TP_ROOT = 'https://example.tpondemand.com/api/v1'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["name"],
+    "consequence": "Creates one Targetprocess project.",
+}
+
+
 async def targetprocess_create_project(name: str, timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Targetprocess REST: create project. Official: https://dev.targetprocess.com/docs/REST%20API"""
     try:

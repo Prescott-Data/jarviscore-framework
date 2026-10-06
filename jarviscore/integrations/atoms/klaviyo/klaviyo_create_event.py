@@ -2,6 +2,14 @@ from typing import Any, Dict, List, Optional
 KLAVIYO_API = 'https://a.klaviyo.com'
 KL_REVISION = '2024-10-15'
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one event record in Klaviyo.",
+}
+
+
 async def klaviyo_create_event(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create Klaviyo event. Official: https://developers.klaviyo.com/en/reference/get_events"""
     try:
