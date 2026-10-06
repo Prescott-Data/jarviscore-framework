@@ -805,6 +805,96 @@ async def test_execute_goal_reconciles_actionable_semantic_hold(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_failed_reconciliation_amendment_preserves_best_response(monkeypatch):
+    from jarviscore.planning.mesh_planner import MeshPlanError, MeshPlanner
+
+    store = MockRedisContextStore()
+    store.publish_workflow(
+        "wf-amendment-failed",
+        goal="Verify the account and explain its fit",
+        obligations=[{"id": "o1", "description": "Explain the verified fit"}],
+        steps=[
+            {"id": "research", "capability": "research", "effect": "read",
+             "task": "Verify the account", "depends_on": []},
+            {"id": "final_response", "capability": "final_response",
+             "effect": "final_response", "task": "Give the best answer",
+             "depends_on": ["research"]},
+        ],
+    )
+    store.save_step_output(
+        "wf-amendment-failed", "research",
+        output={"result_summary": "The account is verified; the fit remains partial."},
+    )
+    store.update_step_status("wf-amendment-failed", "research", "completed")
+    store.get_obligation_projection = lambda workflow_id: {"o1": {
+        "id": "o1", "state": "unresolved",
+        "attempt_interpretations": {
+            "research": {"meaning": "The account is verified, but fit evidence is partial."},
+        },
+    }}
+    mesh = Mesh(config={
+        "p2p_enabled": False,
+        "distributed_poll_interval": 0.01,
+        "mesh_response_capability": "final_response",
+    })
+    mesh._redis_store = store
+    mesh._has_planning_llm = lambda: True
+    mesh._planning_llm = lambda: MockLLMClient()
+    mesh._mesh_capability_catalog = lambda: {
+        "research": {"effects": ["read"]},
+        "final_response": {"effects": ["final_response"]},
+    }
+
+    async def decide_to_amend(*args, **kwargs):
+        return {"decision": "amend", "reason": "Strengthen the fit evidence."}
+
+    monkeypatch.setattr(MeshPlanner, "reconciliation_decision", decide_to_amend)
+    mesh.replan_goal = AsyncMock(side_effect=MeshPlanError(
+        "amendment remained invalid after two repairs"
+    ))
+
+    async def complete_response_after_settlement():
+        for _ in range(100):
+            if store.get_workflow_reconciliation_settlement(
+                "wf-amendment-failed", 1
+            ):
+                store.save_step_output(
+                    "wf-amendment-failed", "final_response",
+                    output={"result_summary": "Best available answer; fit is incomplete."},
+                )
+                store.update_step_status(
+                    "wf-amendment-failed", "final_response", "completed"
+                )
+                return
+            await asyncio.sleep(0.005)
+        pytest.fail("failed amendment did not produce a blocked settlement")
+
+    response = asyncio.create_task(complete_response_after_settlement())
+    result = await mesh._wait_for_workflow_terminal(
+        "wf-amendment-failed",
+        store.get_workflow_definition("wf-amendment-failed"),
+        timeout=2,
+    )
+    await response
+
+    assert result["status"] == "completed"
+    assert result["obligation_status"] == "blocked"
+    assert result["response_status"] == "completed"
+    assert result["result_summary"] == "Best available answer; fit is incomplete."
+    settlement = store.get_workflow_reconciliation_settlement(
+        "wf-amendment-failed", 1
+    )
+    assert "amendment remained invalid" in settlement["planner_error"]
+    events = store.get_ledger_full("wf-amendment-failed")
+    failed = [
+        event for event in events
+        if event.get("event") == "semantic_reconciliation_amendment_failed"
+    ]
+    assert len(failed) == 1
+    assert "amendment remained invalid" in failed[0]["error"]
+
+
+@pytest.mark.asyncio
 async def test_execute_goal_surfaces_durable_planning_failure_without_timeout(monkeypatch):
     llm = MockLLMClient(responses=[{"content": "not json"}])
     store = MockRedisContextStore()

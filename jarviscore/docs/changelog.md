@@ -26,6 +26,25 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 2.1.1 <span class="changelog-date">2026-10-06</span>
+
+### Fixed
+
+- **A failed reconciliation amendment no longer crashes the goal.** The planner
+  already repairs an invalid amendment twice. If it still cannot produce a
+  valid DAG, JarvisCore records the raw `MeshPlanError` in the workflow ledger,
+  settles the unresolved obligations as blocked, and lets the existing final
+  response step report the best completed work and the gap. Previously the
+  exception escaped `execute_goal()` after every domain step had completed.
+
+  Proven live by resuming the same GTM workflow that exposed the failure: its
+  verified account evidence and review-only outreach decision survived, no
+  message was sent, and the user received a truthful blocked answer.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.1.0 <span class="changelog-date">2026-10-06</span>
 
 Faster, more accurate evidence answers: retrieval that finds the right table
