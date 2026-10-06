@@ -28,6 +28,12 @@ except ImportError:
     _HAS_BS4 = False
     BeautifulSoup = None  # type: ignore[assignment,misc]
 
+_BLOCK_TAGS = [
+    "address", "article", "blockquote", "br", "dd", "div", "dl", "dt", "figcaption",
+    "figure", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li", "main", "ol", "p",
+    "section", "table", "td", "th", "tr", "ul",
+]
+
 # Browser automation — optional, for SPA content escalation.
 # Only needed if HTTP extraction returns empty content.
 _HAS_BROWSER = False
@@ -122,7 +128,13 @@ class InternetSearch:
         self.grounded_timeout_seconds = search_deadline(
             grounded_timeout_seconds, "RESEARCH_GROUNDED_TIMEOUT_SECONDS", 45.0,
         )
-        self.user_agent = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        # Public registers such as SEC EDGAR admit only automated clients that declare
+        # who they are ("Organisation contact@domain"), so operators set this identity.
+        self.user_agent = (
+            user_agent
+            or os.environ.get("RESEARCH_USER_AGENT", "").strip()
+            or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        )
         self.pdf_timeout_seconds = pdf_timeout_seconds or int(
             os.environ.get("RESEARCH_PDF_TIMEOUT_SECONDS", "90")
         )
@@ -820,31 +832,42 @@ class InternetSearch:
                          "iframe", "noscript", "svg", "form", "dialog"]):
             tag.decompose()
 
+        # Blocks render on their own lines. Without a break between them, adjacent
+        # fields fuse into words no page shows ("Granting Status" + "Granted").
+        for block in soup.find_all(_BLOCK_TAGS):
+            block.insert_before("\n")
+            block.insert_after("\n")
+
+        def text_of(element) -> str:
+            # get_text(strip=True) strips every fragment and joins them with nothing,
+            # which also fuses inline runs ("The <b>HSR</b> period" -> "TheHSRperiod").
+            return " ".join(element.get_text().split())
+
         # Process headings
         for i in range(1, 7):
             for h in soup.find_all(f"h{i}"):
-                text = h.get_text(strip=True)
+                text = text_of(h)
                 if text:
                     h.replace_with(f"\n\n{'#' * i} {text}\n\n")
 
         # Process lists
         for ul in soup.find_all("ul"):
             for li in ul.find_all("li", recursive=False):
-                text = li.get_text(strip=True)
+                text = text_of(li)
                 if text:
                     li.replace_with(f"* {text}\n")
             ul.replace_with(f"\n{ul.get_text()}\n")
             
         for ol in soup.find_all("ol"):
             for i, li in enumerate(ol.find_all("li", recursive=False), 1):
-                text = li.get_text(strip=True)
+                text = text_of(li)
                 if text:
                     li.replace_with(f"{i}. {text}\n")
             ol.replace_with(f"\n{ol.get_text()}\n")
 
         # Process links
         for a in soup.find_all("a", href=True):
-            text = a.get_text(strip=True)
+            text = text_of(a)
             href = str(a.get("href") or "")
             if text and href and not href.startswith("#"):
                 a.replace_with(f"[{text}]({href})")
@@ -876,7 +899,7 @@ class InternetSearch:
                 cells = tr.find_all(["th", "td"])
                 if not cells:
                     continue
-                cell_texts = [c.get_text(strip=True) for c in cells]
+                cell_texts = [text_of(c) for c in cells]
                 col_count = max(col_count, len(cell_texts))
                 # Mark header rows (all cells are <th>) with separator
                 is_header = all(c.name == "th" for c in cells)
@@ -901,7 +924,7 @@ class InternetSearch:
 
         # Process paragraphs and divs
         for p in soup.find_all(["p", "div", "section", "article"]):
-            text = p.get_text(strip=True)
+            text = text_of(p)
             if text:
                 p.replace_with(f"\n{text}\n")
 
@@ -1001,10 +1024,9 @@ class InternetSearch:
             
             # Use a more robust approach with custom headers and timeout
             headers = {
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": self.user_agent,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://www.google.com/",
                 "Upgrade-Insecure-Requests": "1"
             }
             
@@ -1015,6 +1037,7 @@ class InternetSearch:
                 timeout=aiohttp.ClientTimeout(total=20),
             ) as response:
                 if response.status == 200:
+                    final_url = str(response.url)
                     # Get response metadata
                     content_type = response.headers.get("Content-Type", "").lower()
                     
@@ -1097,7 +1120,7 @@ class InternetSearch:
                         href = str(a.get("href") or "").strip()
                         if not href or href.startswith(("#", "javascript:", "mailto:")):
                             continue
-                        absolute = urljoin(clean_url, href)
+                        absolute = urljoin(final_url, href)
                         if absolute.startswith(("http://", "https://")):
                             links.append(absolute)
                     # Deduplicate and cap
@@ -1114,7 +1137,7 @@ class InternetSearch:
                     logger.info(f"Successfully extracted markdown content ({len(markdown_content)} characters)")
                     
                     return {
-                        "url": clean_url,
+                        "url": final_url,
                         "title": title,
                         "content": markdown_content, # Primary content is now Markdown
                         "main_content": markdown_content,

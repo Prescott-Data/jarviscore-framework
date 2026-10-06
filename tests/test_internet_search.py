@@ -133,6 +133,30 @@ async def test_search_uses_wikipedia_when_explicitly_enabled(monkeypatch):
     assert calls == ["searxng", "arxiv", "crossref", "wikipedia"]
 
 
+def test_page_text_keeps_the_words_a_reader_sees():
+    from bs4 import BeautifulSoup
+
+    # The FTC early-termination notice: label and value are sibling blocks.
+    html = (
+        "<main><h1>20251399: Salesforce, Inc.; Informatica Inc.</h1>"
+        '<div class="field"><div class="field__label">Granting Status</div>'
+        '<div class="field__items"><div class="field__item">Granted</div></div></div>'
+        '<div class="field"><div class="field__label">Acquiring Party</div>'
+        '<div class="field__item">Salesforce, Inc.</div></div>'
+        "<p>The <b>HSR</b> waiting period was <em>terminated</em> early. Hello <b>world</b>!</p>"
+        "<table><tr><td><span>Date</span><div>August 26, 2025</div></td></tr></table>"
+        "</main>"
+    )
+
+    text = InternetSearch._html_to_markdown(BeautifulSoup(html, "html.parser"))
+
+    assert "Granting Status Granted" in text
+    assert "Acquiring Party Salesforce, Inc." in text
+    assert "The HSR waiting period was terminated early. Hello world!" in text
+    assert "| Date August 26, 2025 |" in text
+    assert "StatusGranted" not in text
+
+
 def _web_only_search(monkeypatch):
     for key in (
         "GEMINI_API_KEY", "GEMINI_GROUNDING_API_KEY", "GOOGLE_GENAI_API_KEY",

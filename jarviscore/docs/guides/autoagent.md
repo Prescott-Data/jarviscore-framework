@@ -538,8 +538,12 @@ workflow tools automatically:
 | `read_workflow_step(step_id)` | Read one durable step definition and output |
 
 The peer decides its own tools and provider actions. `ask_capability` selects an
-authority boundary, not an agent implementation. Workflow inspection requires
-Redis; mailbox reading requires a configured mailbox.
+authority boundary, not an agent implementation. An agent cannot ask its own
+role or one of its own capabilities: those targets are left out of the tool
+descriptions, and a request that names them is refused with an error
+(`PEER_REQUEST_TO_OWN_ROLE` for its own role), because the agent should do that
+work itself. Workflow inspection requires Redis; mailbox reading requires a
+configured mailbox.
 
 For result status, selective revisions, cancellation and deployment rules, see
 [Durable Goal Execution](goal-execution.md).

@@ -538,8 +538,18 @@ class Kernel:
                     return {"status": "success", "output": legacy_output}
 
                 phase = "thinking" if name == "list_peers" else "action"
+                schema = definition.get("input_schema") or {}
+                required = set(schema.get("required") or [])
+                params = "; ".join(
+                    f"{field} ({'required' if field in required else 'optional'}): "
+                    f"{spec.get('description') or spec.get('type') or ''}"
+                    for field, spec in (schema.get("properties") or {}).items()
+                )
                 subagent.register_tool(
-                    name, execute_peer_tool, definition["description"], phase=phase
+                    name,
+                    execute_peer_tool,
+                    definition["description"] + (f" Params: {params}." if params else ""),
+                    phase=phase,
                 )
         if self.redis_store is None:
             return

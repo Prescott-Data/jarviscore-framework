@@ -276,6 +276,45 @@ class MeshPlanner:
             )
         return plan
 
+    def validate_template(
+        self,
+        goal: str,
+        template: MeshPlan | dict[str, Any],
+    ) -> MeshPlan:
+        """Bind and validate a declarative plan without invoking the planner LLM."""
+        source = (goal or "").strip()
+        if not source:
+            raise MeshPlanError("A mesh goal cannot be empty")
+        if not self.capabilities:
+            raise MeshPlanError("No mesh capabilities are available")
+        raw = template.to_dict() if isinstance(template, MeshPlan) else dict(template)
+        template_goal = str(raw.get("goal") or source).strip()
+        if template_goal != source:
+            raise MeshPlanError("Mesh plan template goal differs from the source goal")
+        unknown = set(raw) - {"goal", "obligations", "steps", "revision"}
+        if unknown:
+            raise MeshPlanError(
+                f"Mesh plan template has unsupported fields: {sorted(unknown)}"
+            )
+        revision = int(raw.get("revision") or 1)
+        if revision != 1:
+            raise MeshPlanError("Initial Mesh plan templates require revision 1")
+        obligations = self._parse_obligations(
+            {"obligations": raw.get("obligations")},
+            source,
+        )
+        steps = self._ensure_declared_artifact_dependencies(
+            self._ensure_response_step(
+                self._parse_steps({"steps": raw.get("steps")}, obligations)
+            )
+        )
+        return MeshPlan(
+            goal=source,
+            obligations=obligations,
+            steps=steps,
+            revision=revision,
+        )
+
     @staticmethod
     def _apply_audit_corrections(plan: MeshPlan, audit: dict[str, Any]) -> MeshPlan:
         corrections = audit.get("corrections")

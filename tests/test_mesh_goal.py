@@ -237,6 +237,10 @@ class FailingResponsePeer(ResponsePeer):
         return {"status": "failure", "error": "response synthesis failed"}
 
 
+class PassthroughResponsePeer(ResponsePeer):
+    final_response_passthrough = True
+
+
 class RevisionResponsePeer(ResponsePeer):
     async def execute_task(self, task):
         self.received.append(task)
@@ -406,6 +410,111 @@ async def test_execute_goal_compiles_publishes_and_peers_claim_by_capability(mon
     assert event_types.index("goal_registered") < event_types.index("dag_published")
     assert event_types.count("step_claimed") == 2
     assert event_types.count("step_completed") == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_goal_uses_validated_template_without_planner_calls(monkeypatch):
+    llm = MockLLMClient()
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    researcher = mesh.add(ResearchPeer(llm, agent_id="researcher-1"))
+    analyst = mesh.add(AnalysisPeer(agent_id="analyst-1"))
+    goal = "Find evidence and analyse it"
+    template = {
+        "obligations": [{
+            "id": "o1", "description": "Answer from evidence",
+            "source_quote": goal,
+        }],
+        "steps": [{
+            "id": "research", "capability": "research", "effect": "read",
+            "systems": [], "task": "Find evidence",
+            "success_criterion": "Evidence exists", "expected_findings": ["evidence"],
+            "depends_on": [], "covers": [],
+        }, {
+            "id": "analyse", "capability": "analysis", "effect": "read",
+            "systems": [], "task": "Analyse the evidence",
+            "success_criterion": "Analysis uses evidence",
+            "expected_findings": ["analysis"], "depends_on": ["research"],
+            "covers": ["o1"],
+        }],
+    }
+
+    await mesh.start()
+    try:
+        result = await mesh.execute_goal(
+            goal,
+            workflow_id="wf-template",
+            plan_template=template,
+            timeout=2,
+        )
+        resumed = await mesh.execute_goal(
+            goal,
+            workflow_id="wf-template",
+            plan_template={"invalid_after_publication": True},
+            timeout=2,
+        )
+        with pytest.raises(ValueError, match="another goal"):
+            await mesh.execute_goal(
+                "A different source goal",
+                workflow_id="wf-template",
+                plan_template=template,
+                timeout=2,
+            )
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "completed"
+    assert resumed["status"] == "completed"
+    assert llm.calls == []
+    assert len(researcher.received) == 1
+    assert len(analyst.received) == 1
+    assert store.get_pending_workflow_goals() == []
+    assert store.get_workflow_planning_status("wf-template")["source"] == "template"
+
+
+@pytest.mark.asyncio
+async def test_execute_goal_falls_back_to_generated_plan_when_template_mismatches(monkeypatch):
+    llm = MockLLMClient(responses=goal_responses())
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    mesh.add(ResearchPeer(llm, agent_id="researcher-1"))
+    mesh.add(AnalysisPeer(agent_id="analyst-1"))
+    goal = "Find evidence and analyse it"
+
+    await mesh.start()
+    try:
+        result = await mesh.execute_goal(
+            goal,
+            workflow_id="wf-template-fallback",
+            plan_template={
+                "obligations": [{
+                    "id": "o1", "description": "Answer from evidence",
+                    "source_quote": goal,
+                }],
+                "steps": [{
+                    "id": "unknown", "capability": "unavailable",
+                    "effect": "read", "task": "Impossible",
+                    "success_criterion": "Impossible", "covers": ["o1"],
+                }],
+            },
+            timeout=2,
+        )
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "completed"
+    assert len(llm.calls) == 3
+    assert "plan_template_rejected" in [
+        event["event"] for event in store.get_ledger_full("wf-template-fallback")
+    ]
 
 
 @pytest.mark.asyncio
@@ -806,7 +915,7 @@ async def test_hold_blocks_multi_system_effects_but_final_response_still_runs(mo
     mesh.add(CollateralPeer, agent_id="collateral")
     writer = mesh.add(WritePeer, agent_id="writer")
     notifier = mesh.add(NotifyPeer, agent_id="notifier")
-    responder = mesh.add(ResponsePeer, agent_id="responder")
+    responder = mesh.add(PassthroughResponsePeer, agent_id="responder")
 
     await mesh.start()
     store.publish_workflow(
@@ -880,6 +989,51 @@ async def test_hold_blocks_multi_system_effects_but_final_response_still_runs(mo
         ("final_response", "final_response", []),
     ]
     assert all("agent" not in step and "atom" not in step for step in persisted["steps"])
+
+
+@pytest.mark.asyncio
+async def test_final_response_can_pass_through_one_validated_dependency(monkeypatch):
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    mesh.add(CollateralPeer, agent_id="worker")
+    responder = mesh.add(PassthroughResponsePeer, agent_id="responder")
+    artifact = {"document_id": "deck-1", "status": "existing"}
+
+    await mesh.start()
+    store.publish_workflow(
+        "wf-response-passthrough",
+        goal="Find and return collateral",
+        obligations=[],
+        steps=[
+            {
+                "id": "find", "capability": "sales_collateral", "effect": "read",
+                "systems": [], "task": "Find collateral", "depends_on": [],
+            },
+            {
+                "id": "respond", "capability": "final_response",
+                "effect": "final_response", "systems": [], "task": "Return collateral",
+                "depends_on": ["find"],
+            },
+        ],
+    )
+    try:
+        result = await mesh.execute_goal(
+            "Find and return collateral",
+            workflow_id="wf-response-passthrough",
+            timeout=1,
+        )
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "completed"
+    assert responder.received == []
+    persisted = store.get_step_output("wf-response-passthrough", "respond")
+    assert persisted["output"]["output"] == artifact
+    assert persisted["output"]["result_summary"] == "Task completed."
 
 
 @pytest.mark.asyncio

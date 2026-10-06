@@ -130,6 +130,9 @@ GEMINI_GROUNDING_MODEL=gemini-2.5-flash
 # Optional: tune PDF extraction behaviour
 RESEARCH_PDF_TIMEOUT_SECONDS=90
 RESEARCH_PDF_MAX_RETRIES=3
+
+# Optional: declare who is crawling (required by registers such as SEC EDGAR)
+RESEARCH_USER_AGENT="Acme Research research@acme.example"
 ```
 
 ---

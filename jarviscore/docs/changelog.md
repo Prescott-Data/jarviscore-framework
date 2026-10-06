@@ -26,6 +26,72 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 2.1.0 <span class="changelog-date">2026-10-06</span>
+
+Faster, more accurate evidence answers: retrieval that finds the right table
+row and cites it exactly, a planning step that can be skipped when the plan is
+known, and a researcher that actually reaches the browser and PDF tools in live
+runs.
+
+### Added
+
+- **Retrieval quality.** `RagPipeline` accepts `embed_model`,
+  `query_instruction` (prepended to queries only, for asymmetric models such as
+  bge) and a cross-encoder `rerank_model` that rescores the vector shortlist in
+  one batched pass. Also settable as `RAG_QUERY_INSTRUCTION`,
+  `RAG_RERANK_MODEL` and `RAG_RERANK_CANDIDATES`. Defaults are unchanged.
+- **Declared index units and context.** `ingest_documents()` accepts `units`
+  (exact spans to index, such as table rows) and `context` (embedded and
+  reranked with each unit, never returned as quoted text).
+- **Citation atoms.** Documents may carry exact quotes with source locators;
+  each result and evidence record carries the atoms whose quote it contains.
+- **Scoped retrieval and deletion.** `retrieve(..., where={...})` filters on
+  metadata before ranking; `store.delete(where)` removes entries without
+  re-embedding. `one_per_source=True` keeps only each source's best passage.
+- **Plan templates.** `execute_goal(..., plan_template=...)` and
+  `submit_goal(..., plan_template=...)` publish a validated DAG without a
+  planning call; an invalid template is recorded and the goal is planned.
+- **Final response passthrough.** An agent with `final_response_passthrough`
+  persists the single upstream artifact unchanged as the final response.
+- **Declared crawler identity.** `RESEARCH_USER_AGENT` sets the `User-Agent`
+  research fetches send, as registers such as SEC EDGAR require.
+
+### Fixed
+
+- **The researcher reaches its browser and PDF tools in live runs.** Its
+  research phase and URL registry were read from state nothing bound, so live
+  runs stayed in their first phase and browser tools were always blocked.
+- **Browser-rendered and PDF reads return content** instead of failing on an
+  undefined relevance scorer.
+- **`LLM_DEFAULT_MAX_TOKENS` is honoured.** The setting was dropped, so every
+  call defaulted to 4,000 output tokens.
+- **An exhausted lease continues in a new epoch before landing**, so a run
+  with epochs left no longer ends with a partial landing answer.
+- **Agents do not delegate to themselves.** `ask_peer` refuses the
+  requester's own role (`PEER_REQUEST_TO_OWN_ROLE`) and capability requests
+  refuse its own capabilities; neither is offered in the tool descriptions.
+- **A capability request is fulfilled only by a completed peer result**, not
+  by any status other than an error.
+- **Peer tool parameters are declared to the model**, so it stops guessing
+  `ask_capability` field names.
+- **Published goals resume across deployments**, with goal identity enforced
+  and cancellation tombstones kept.
+- **Scoped RAG searches return results.** Filters looked at top-level fields
+  while the pipeline stores caller fields under `metadata`.
+- **Search keeps a redirected page's final URL** and page text keeps block
+  boundaries and inline spacing.
+- **The default vector store opens on first use**, so callers that bind their
+  own store never open the default index.
+
+### Compatibility
+
+Backward-compatible minor release. Retrieval defaults are unchanged; evidence
+quotes now hold the complete passage rather than its first 500 characters.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.0.0 <span class="changelog-date">2026-10-06</span>
 
 JarvisCore now maintains its own atoms and runs the code its agents write

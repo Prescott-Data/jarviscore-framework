@@ -402,6 +402,15 @@ class PeerClient:
         """This agent's unique ID."""
         return self._agent_id
 
+    @property
+    def my_capabilities(self) -> List[str]:
+        """Capabilities this agent owns itself; peer mandates are for the rest."""
+        for agents in self._agent_registry.values():
+            for agent in agents:
+                if agent.agent_id == self._agent_id:
+                    return sorted(str(item) for item in getattr(agent, "capabilities", []) or [])
+        return []
+
     # ─────────────────────────────────────────────────────────────────
     # DISCOVERY (simplified for tool use)
     # ─────────────────────────────────────────────────────────────────
@@ -499,6 +508,14 @@ class PeerClient:
         timeout: float = 7200.0,
     ) -> Dict[str, Any]:
         """Resolve one scoped capability mandate through durable or direct P2P."""
+        if capability in self.my_capabilities:
+            return {
+                "status": "error",
+                "error": (
+                    f"{self.my_role!r} owns capability {capability!r}; a peer mandate "
+                    "resolves a capability the requester lacks, not its own assignment."
+                ),
+            }
         peer_context = neutral_context(context)
         workflow_id = str(peer_context.get("workflow_id") or "").strip()
         workflow = (

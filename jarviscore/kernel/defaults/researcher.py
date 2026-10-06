@@ -154,9 +154,14 @@ class ResearcherSubAgent(BaseSubAgent):
         if not hasattr(self, 'tracer') or self.tracer is None:
             self.tracer = _NoOpTracer()
 
-        # Ensure current_state exists (tools check self.current_state)
-        if not hasattr(self, 'current_state'):
-            self.current_state = None
+    @property
+    def current_state(self) -> Optional[KernelState]:
+        """The live Kernel state the base loop binds for this dispatch."""
+        return self._current_state
+
+    @current_state.setter
+    def current_state(self, state: Optional[KernelState]) -> None:
+        self._current_state = state
 
     def setup_tools(self) -> None:
         """Register all researcher tools. Called by BaseSubAgent.__init__."""
@@ -2208,8 +2213,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                             "method": "browser_pdf_fetch",
                             "content": final_content,
                             "api_specs_found": len(api_specs),
-                            "relevance_score": self._calculate_relevance_score(final_content, len(api_specs)),
-                            "ooda_hint": "HIGH RELEVANCE: Extract" if self._calculate_relevance_score(final_content, len(api_specs)) > 0.7 else "LOW RELEVANCE: Discard"
                         })
                     else:
                         results.append({
@@ -2291,8 +2294,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                             "method": "browser_render",
                             "content": final_content,
                             "api_specs_found": len(api_specs),
-                            "relevance_score": self._calculate_relevance_score(final_content, len(api_specs)),
-                            "ooda_hint": "HIGH RELEVANCE: Extract" if self._calculate_relevance_score(final_content, len(api_specs)) > 0.7 else "LOW RELEVANCE: Discard"
                         })
                     else:
                         results.append({

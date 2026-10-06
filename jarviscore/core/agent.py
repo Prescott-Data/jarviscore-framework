@@ -50,6 +50,7 @@ class Agent(ABC):
     # Optional capability flags
     p2p_responder: bool = False  # Set to True for agents that run a continuous listener loop (e.g. CustomAgent)
     output_schema: Optional[Any] = None  # Pydantic BaseModel class for output validation
+    final_response_passthrough: bool = False
 
     def __init__(self, agent_id: Optional[str] = None):
         """

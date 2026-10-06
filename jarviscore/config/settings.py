@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     # === LLM Configuration ===
     llm_timeout: float = 120.0
     llm_temperature: float = 0.7
+    # Output cap when a caller passes none. Reasoning deployments bill hidden
+    # reasoning against it, so a low cap returns empty or truncated completions.
+    llm_default_max_tokens: int = 4000
     # Max concurrent LLM calls across the whole process (0 = unlimited).
     # Set to match your deployment's RPM ÷ expected_avg_call_seconds.
     # e.g. RPM=60, avg_latency=5s → 60/12 = 5 concurrent max.

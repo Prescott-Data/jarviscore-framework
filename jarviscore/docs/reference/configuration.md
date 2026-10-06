@@ -259,6 +259,12 @@ These deadlines bound each provider including its retries; existing HTTP-request
 timeouts still apply. They do not change agent leases or the overall task budget.
 Timeout diagnostics identify the provider, exception type and configured deadline.
 
+### Crawler identity
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESEARCH_USER_AGENT` | A desktop browser string | `User-Agent` sent when research fetches pages and PDFs. Public registers such as SEC EDGAR admit automated clients only when they declare who they are, for example `Acme Research research@acme.example`. Both `InternetSearch` implementations also accept a `user_agent` argument. |
+
 JarvisCore runs multiple search providers in parallel and merges results. All providers have circuit breakers: a failing provider is skipped automatically. See the [Internet Search guide](../guides/internet-search.md) for provider details, ranking logic, and usage patterns.
 
 ### Google Grounded Search <span class="jc-badge jc-badge-primary">Primary</span>

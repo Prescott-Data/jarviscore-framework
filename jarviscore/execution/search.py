@@ -115,10 +115,14 @@ class InternetSearch:
         self.grounded_timeout_seconds = search_deadline(
             grounded_timeout_seconds, "RESEARCH_GROUNDED_TIMEOUT_SECONDS", 45.0,
         )
-        self.user_agent = user_agent or (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
+        self.user_agent = (
+            user_agent
+            or os.environ.get("RESEARCH_USER_AGENT", "").strip()
+            or (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
         )
 
         # Serper (optional)

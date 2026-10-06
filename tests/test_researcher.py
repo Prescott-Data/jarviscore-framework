@@ -149,6 +149,42 @@ class TestPhaseLifecycle:
     def test_phase_without_state_returns_init(self, researcher_no_state):
         assert researcher_no_state._current_research_phase() == ResearchPhase.INIT
 
+    @pytest.mark.asyncio
+    async def test_live_run_carries_phase_and_url_registry_in_kernel_state(
+        self, internet_search
+    ):
+        """The base loop binds state itself; nothing assigns current_state by hand."""
+
+        class ScriptedLLM:
+            def __init__(self):
+                self.turns = iter([
+                    'THOUGHT: find the docs\nTOOL: search_internet\n'
+                    'PARAMS: {"query": "Stripe API"}',
+                    'THOUGHT: found them\nDONE: Stripe docs located.\nRESULT: '
+                    '{"summary": "Stripe docs located.", "evidence": '
+                    '[{"kind": "web", "pointer": "https://docs.stripe.com/api"}]}',
+                ])
+
+            async def generate(self, messages, **kwargs):
+                return {
+                    "content": next(self.turns),
+                    "tokens": {"input": 10, "output": 10, "total": 20},
+                }
+
+        researcher = ResearcherSubAgent(
+            agent_id="live-researcher",
+            llm_client=ScriptedLLM(),
+            internet_search=internet_search,
+        )
+
+        output = await researcher.run("Research Stripe API", context={}, max_turns=4)
+
+        assert output.status == "success"
+        assert researcher.current_state is researcher._current_state
+        live = researcher._current_state.internal_variables
+        assert live["research_flow"]["phase"] == ResearchPhase.SEARCHING.value
+        assert "https://docs.stripe.com/api" in researcher._get_known_urls()
+
     def test_full_lifecycle(self, researcher):
         """Walk through the full phase lifecycle."""
         assert researcher._current_research_phase() == ResearchPhase.INIT
@@ -495,6 +531,41 @@ class TestSearchReceipts:
 # ═════════════════════════════════════════════════════════════════
 
 class TestContentReading:
+
+    @pytest.mark.asyncio
+    async def test_blocked_fetch_escalates_to_a_browser_render(self, researcher, monkeypatch):
+        """A regulator that refuses plain fetches is read through the browser."""
+        url = "https://www.sec.gov/Archives/edgar/data/1/filing.htm"
+
+        async def refused(target, *args, **kwargs):
+            return {"success": False, "content": "", "error": "HTTP error: 403", "url": target}
+
+        class Rendered:
+            success = True
+            error = None
+            data = {"snapshot": "", "url": url}
+
+        async def dispatch(kind, **payload):
+            return Rendered()
+
+        async def page_text():
+            return {"status": "success", "content": "The waiting period expired."}
+
+        async def no_wait(seconds):
+            return None
+
+        monkeypatch.setattr(researcher.internet_search, "extract_content", refused)
+        monkeypatch.setattr(researcher, "_ensure_dispatcher", AsyncMock())
+        monkeypatch.setattr(researcher, "_bdispatch", dispatch)
+        monkeypatch.setattr(researcher, "_tool_browser_get_page_text", page_text)
+        monkeypatch.setattr("jarviscore.kernel.defaults.researcher.asyncio.sleep", no_wait)
+
+        result = await researcher._tool_read_web_content(urls=[url])
+
+        page = next(item for item in result["pages"] if item["url"] == url)
+        assert page["status"] == "success", page
+        assert page["method"] == "browser_render"
+        assert "The waiting period expired." in page["content"]
 
     @pytest.mark.asyncio
     async def test_read_web_content_returns_content(self, researcher):

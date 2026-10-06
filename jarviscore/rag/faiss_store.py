@@ -4,11 +4,12 @@ Stores vectors + metadata locally.
 
 Optional dependency — install with: pip install jarviscore[rag]
 """
-import os
 import json
 import logging
+import os
+from typing import Any, Dict, List, Optional
+
 import numpy as np
-from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,13 @@ class FaissVectorStore:
 
     def _load_or_create_index(self):
         if os.path.exists(self.index_path):
-            return faiss.read_index(self.index_path)
+            index = faiss.read_index(self.index_path)
+            if index.d != self.dim:
+                raise ValueError(
+                    f"Index at {self.index_path} holds {index.d}-dimensional vectors but the "
+                    f"embedding model produces {self.dim}; rebuild the index for this model."
+                )
+            return index
         return faiss.IndexFlatIP(self.dim)
 
     def _load_metadata(self) -> List[Dict[str, Any]]:
@@ -58,19 +65,62 @@ class FaissVectorStore:
         self._metadata.extend(metadatas)
         self._persist()
 
-    def search(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query_vector: List[float],
+        top_k: int = 5,
+        where: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
         if self._index.ntotal == 0:
             return []
         q = np.array([query_vector], dtype="float32")
-        scores, indices = self._index.search(q, top_k)
+        search_depth = int(self._index.ntotal) if where else top_k
+        scores, indices = self._index.search(q, search_depth)
         results: List[Dict[str, Any]] = []
         for score, idx in zip(scores[0], indices[0]):
             if idx < 0 or idx >= len(self._metadata):
                 continue
+            if where and not self._matches(self._metadata[idx], where):
+                continue
             meta = self._metadata[idx].copy()
             meta["score"] = float(score)
             results.append(meta)
+            if len(results) >= top_k:
+                break
         return results
+
+    @staticmethod
+    def _matches(entry: Dict[str, Any], where: Dict[str, Any]) -> bool:
+        """Filter fields live in the caller's metadata; entry fields such as source also apply."""
+        caller = entry.get("metadata") or {}
+        for field, expected in where.items():
+            value = caller[field] if field in caller else entry.get(field)
+            if isinstance(expected, (list, tuple, set, frozenset)):
+                if value not in expected:
+                    return False
+            elif value != expected:
+                return False
+        return True
+
+    def delete(self, where: Dict[str, Any]) -> int:
+        """Remove matching entries, keeping every other stored vector without re-embedding."""
+        if not where:
+            raise ValueError("delete requires a filter")
+        keep = [
+            position for position, entry in enumerate(self._metadata)
+            if not self._matches(entry, where)
+        ]
+        removed = len(self._metadata) - len(keep)
+        if not removed:
+            return 0
+        index = faiss.IndexFlatIP(self.dim)
+        if keep:
+            vectors = self._index.reconstruct_n(0, int(self._index.ntotal))
+            index.add(np.ascontiguousarray(vectors[keep], dtype="float32"))
+        self._index = index
+        self._metadata = [self._metadata[position] for position in keep]
+        self._persist()
+        return removed
 
     def stats(self) -> Dict[str, Any]:
         return {

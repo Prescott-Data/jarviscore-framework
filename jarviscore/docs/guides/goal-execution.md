@@ -150,6 +150,48 @@ Describe outcomes and evidence standards, not a fixed list of agent instances,
 tools or provider calls. The planner still constructs the task-specific DAG and
 peers still claim capabilities directly.
 
+## Run a validated plan template
+
+When a product already knows the DAG for a kind of question, it can pass that
+plan as `plan_template` and skip the planning call. The Mesh validates the
+template against the same rules as a planned DAG (known capabilities, effects
+and systems the capabilities authorize, dependencies, obligation coverage, a
+final response step) and publishes it:
+
+```python
+result = await mesh.execute_goal(
+    goal,
+    workflow_id="question-42",
+    plan_template={
+        "obligations": [{
+            "id": "o1", "description": "Answer from evidence", "source_quote": goal,
+        }],
+        "steps": [{
+            "id": "research", "capability": "research", "effect": "read",
+            "systems": [], "task": "Find evidence",
+            "success_criterion": "Evidence exists",
+            "expected_findings": ["evidence"], "depends_on": [], "covers": [],
+        }, {
+            "id": "analyse", "capability": "analysis", "effect": "read",
+            "systems": [], "task": "Analyse the evidence",
+            "success_criterion": "Analysis uses evidence",
+            "expected_findings": ["analysis"], "depends_on": ["research"],
+            "covers": ["o1"],
+        }],
+    },
+)
+```
+
+A template accepts only `goal`, `obligations`, `steps` and `revision` (which
+must be 1), and its `goal` must equal the source goal. If it fails validation,
+the ledger records `plan_template_rejected` with the reason and the goal is
+planned normally. The published template is the workflow's initial plan:
+amendments, resume and reconciliation work as for a planned DAG. Re-running the
+same workflow id with the same goal and context resumes it; a different goal is
+rejected.
+
+`submit_goal()` accepts `plan_template` too.
+
 ## Task context received by agents
 
 Both `AutoAgent.execute_task()` and `CustomAgent.execute_task()` receive the

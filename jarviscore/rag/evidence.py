@@ -37,7 +37,8 @@ def build_evidence_record(
     specificity: float = 0.7,
     corroboration: float = 0.5,
     model_confidence: float = 0.7,
-    published_at: Optional[str] = None
+    published_at: Optional[str] = None,
+    citation_atoms: Optional[list[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Build a structured evidence record with score.
@@ -61,6 +62,7 @@ def build_evidence_record(
         "source": source,
         "pointer": pointer,
         "quote": quote,
+        "citation_atoms": citation_atoms or [],
         "score": score,
         "freshness_days": freshness_days,
         "confidence": model_confidence,
