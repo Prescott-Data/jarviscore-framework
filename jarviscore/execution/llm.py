@@ -13,6 +13,7 @@ from enum import Enum
 
 from jarviscore.context.context_manager import ContextManager
 from jarviscore.execution import multimodal
+from jarviscore.execution.governor import current_lane, process_governor, retry_after_seconds
 from jarviscore.promo import PROMO_MODEL
 from jarviscore.orchestration.budget import current_workflow_budget
 
@@ -101,7 +102,7 @@ except ImportError:
     logger.debug("Gemini SDK not available (pip install google-genai)")
 
 try:
-    from openai import AsyncAzureOpenAI
+    from openai import AsyncAzureOpenAI, DefaultAsyncHttpxClient
     AZURE_AVAILABLE = True
 except ImportError:
     AZURE_AVAILABLE = False
@@ -199,6 +200,31 @@ class UnifiedLLMClient:
         # Concurrency limiter — reads LLM_MAX_CONCURRENT from config (env var)
         max_concurrent = int(self.config.get("llm_max_concurrent", 0))
         self._semaphore = _get_llm_semaphore(max_concurrent)
+        self._governor = (
+            process_governor(self.config)
+            if self.config.get("llm_governor_enabled", True) else None
+        )
+
+    async def _observe_azure_response(self, response) -> None:
+        """Feed every Azure response's rate-limit headers to its deployment's governor."""
+        governor = getattr(self, "_governor", None)
+        if governor is None:
+            return
+        parts = response.request.url.path.split("/")
+        if "deployments" in parts and parts.index("deployments") + 1 < len(parts):
+            deployment = parts[parts.index("deployments") + 1]
+            governor.deployment(f"azure:{deployment}").observe_headers(response.headers)
+
+    def _deployment_key(self, provider: "LLMProvider", model: Optional[str]) -> str:
+        served = model or {
+            LLMProvider.PROMO: PROMO_MODEL,
+            LLMProvider.AZURE: self.config.get("azure_deployment", "gpt-4o"),
+            LLMProvider.CLAUDE: self.config.get("claude_model"),
+            LLMProvider.GEMINI: self.config.get("gemini_model"),
+            LLMProvider.VERTEX_AI: self.config.get("vertex_ai_model"),
+            LLMProvider.VLLM: self.config.get("llm_model"),
+        }.get(provider)
+        return f"{provider.value}:{served or 'default'}"
 
 
     def _setup_providers(self):
@@ -230,7 +256,10 @@ class UnifiedLLMClient:
                         api_key=azure_key,
                         azure_endpoint=azure_endpoint,
                         api_version=self.config.get('azure_api_version', '2024-10-21'),
-                        timeout=self.config.get('llm_timeout', 120)
+                        timeout=self.config.get('llm_timeout', 120),
+                        http_client=DefaultAsyncHttpxClient(
+                            event_hooks={"response": [self._observe_azure_response]}
+                        ),
                     )
                     self.provider_order.append(LLMProvider.AZURE)
                     logger.info(f"✓ Azure OpenAI provider available (primary): {azure_endpoint}")
@@ -482,6 +511,9 @@ class UnifiedLLMClient:
         base_delay = float(self.config.get("llm_429_base_delay", 2.0))
         last_error = None
         reserved_allowance = max_tokens
+        governor = getattr(self, "_governor", None)
+        lane = kwargs.pop("lane", None) or current_lane()
+        input_tokens = None
 
         for provider in self.provider_order:
             max_tokens = reserved_allowance
@@ -491,29 +523,34 @@ class UnifiedLLMClient:
                     self._declared_output_allowance(kwargs.get("model"), provider),
                 )
             for attempt in range(max_429_retries + 1):
+                permit = None
                 try:
                     logger.debug(f"Trying provider: {provider.value} (attempt {attempt})")
-                    if provider == LLMProvider.PROMO:
-                        return await self._call_promo(messages, temperature, max_tokens, **kwargs)
-                    elif provider == LLMProvider.VLLM:
-                        return await self._call_vllm(messages, temperature, max_tokens, **kwargs)
-                    elif provider == LLMProvider.AZURE:
-                        return await self._call_azure(messages, temperature, max_tokens, **kwargs)
-                    elif provider == LLMProvider.GEMINI:
-                        return await self._call_gemini(messages, temperature, max_tokens, **kwargs)
-                    elif provider == LLMProvider.VERTEX_AI:
-                        return await self._call_vertex_ai(messages, temperature, max_tokens, **kwargs)
-                    elif provider == LLMProvider.CLAUDE:
-                        return await self._call_claude(messages, temperature, max_tokens, **kwargs)
+                    if governor is not None:
+                        if input_tokens is None:
+                            input_tokens = multimodal.count_tokens(
+                                messages, _TOKEN_COUNTER.count_tokens
+                            )
+                        # Providers charge the requested output ceiling at admission.
+                        permit = await governor.deployment(
+                            self._deployment_key(provider, kwargs.get("model"))
+                        ).admit(input_tokens + max_tokens, lane)
+                    result = await self._dispatch(
+                        provider, messages, temperature, max_tokens, **kwargs
+                    )
+                    if permit is not None:
+                        usage = result.get("tokens") or {}
+                        await permit.finish(total_tokens=int(usage.get("total") or 0))
+                    return result
                 except Exception as e:
+                    if permit is not None:
+                        await permit.finish(
+                            rate_limited=self._is_rate_limit(e), failed=True
+                        )
                     if provider == LLMProvider.PROMO:
                         raise
                     error_str = str(e)
-                    is_rate_limit = (
-                        "429" in error_str
-                        or "too_many_requests" in error_str.lower()
-                        or "rate limit" in error_str.lower()
-                    )
+                    is_rate_limit = self._is_rate_limit(e)
                     if is_rate_limit and attempt < max_429_retries:
                         # Exponential backoff with full jitter — without jitter,
                         # N concurrent callers rate-limited at the same instant
@@ -528,8 +565,10 @@ class UnifiedLLMClient:
                         # (2026-07-23). A huge hint means the provider is DOWN
                         # for this window: fail fast so callers can degrade.
                         hint = re.search(r"retry after (\d+) second", error_str, re.IGNORECASE)
-                        if hint:
+                        hinted = retry_after_seconds(e)
+                        if hinted is None and hint:
                             hinted = float(hint.group(1))
+                        if hinted is not None:
                             if hinted > 300.0:
                                 logger.error(
                                     f"Provider {provider.value} quota exhausted "
@@ -549,11 +588,43 @@ class UnifiedLLMClient:
                         last_error = e
                         logger.warning(f"Provider {provider.value} failed: {e}")
                         break  # move to next provider
+                except BaseException:
+                    # Cancellation included: an abandoned call must not hold capacity.
+                    if permit is not None:
+                        await permit.finish(failed=True)
+                    raise
 
         raise RuntimeError(
             f"All LLM providers failed. Last error: {last_error}\n"
             f"Tried: {[p.value for p in self.provider_order]}"
         )
+
+    @staticmethod
+    def _is_rate_limit(error: BaseException) -> bool:
+        if getattr(error, "status_code", None) == 429:
+            return True
+        text = str(error)
+        return (
+            "429" in text
+            or "too_many_requests" in text.lower()
+            or "rate limit" in text.lower()
+        )
+
+    async def _dispatch(self, provider: "LLMProvider", messages: List[Dict],
+                        temperature: float, max_tokens: int, **kwargs) -> Dict:
+        if provider == LLMProvider.PROMO:
+            return await self._call_promo(messages, temperature, max_tokens, **kwargs)
+        if provider == LLMProvider.VLLM:
+            return await self._call_vllm(messages, temperature, max_tokens, **kwargs)
+        if provider == LLMProvider.AZURE:
+            return await self._call_azure(messages, temperature, max_tokens, **kwargs)
+        if provider == LLMProvider.GEMINI:
+            return await self._call_gemini(messages, temperature, max_tokens, **kwargs)
+        if provider == LLMProvider.VERTEX_AI:
+            return await self._call_vertex_ai(messages, temperature, max_tokens, **kwargs)
+        if provider == LLMProvider.CLAUDE:
+            return await self._call_claude(messages, temperature, max_tokens, **kwargs)
+        raise RuntimeError(f"Unknown LLM provider {provider!r}")
 
 
 

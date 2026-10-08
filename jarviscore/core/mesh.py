@@ -3171,6 +3171,7 @@ class Mesh:
             - keepalive_status: Keepalive manager health (if P2P enabled)
             - swim_status: SWIM protocol status (if P2P enabled)
             - capability_map: Mapping of capabilities to agent IDs
+            - llm_governor: Per-deployment calls in flight, waits and rate limits
 
         Example:
             diagnostics = mesh.get_diagnostics()
@@ -3178,11 +3179,14 @@ class Mesh:
             for peer in diagnostics['known_peers']:
                 print(f"  {peer['role']} at {peer['node_id']}: {peer['status']}")
         """
+        from jarviscore.execution import governor
+
         result = {
             "local_node": self._get_local_node_info(),
             "known_peers": self._get_peer_list(),
             "local_agents": self._get_local_agents_info(),
-            "connectivity_status": self._assess_connectivity_status()
+            "connectivity_status": self._assess_connectivity_status(),
+            "llm_governor": governor.snapshot(),
         }
 
         # Add P2P-specific diagnostics if coordinator is available
