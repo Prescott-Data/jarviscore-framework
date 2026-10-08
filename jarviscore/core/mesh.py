@@ -614,6 +614,22 @@ class Mesh:
             if definition is None:
                 definition = await self._wait_for_workflow_definition(identity, timeout)
             if definition is None:
+                planning = self._redis_store.get_workflow_planning_status(identity) or {}
+                if planning.get("status") == "failed":
+                    # A finished planning failure is the goal's outcome, not an interruption.
+                    return {
+                        "workflow_id": identity,
+                        "status": "failed",
+                        "failure_stage": "planning",
+                        "error": planning.get("error") or "Mesh planning failed",
+                        "obligation_status": "blocked",
+                        "response_status": "failed",
+                        "goal": goal,
+                        "obligations": [],
+                        "revision": 0,
+                        "result_summary": "",
+                        "steps": [],
+                    }
                 raise RuntimeError(f"Workflow {identity!r} was not published before timeout")
             return await self._wait_for_workflow_terminal(identity, definition, timeout)
         except asyncio.CancelledError:
@@ -1168,9 +1184,7 @@ class Mesh:
         while deadline is None or asyncio.get_running_loop().time() < deadline:
             planning = self._redis_store.get_workflow_planning_status(workflow_id)
             if planning and planning.get("status") == "failed":
-                raise RuntimeError(
-                    f"Workflow {workflow_id!r} planning failed: {planning.get('error')}"
-                )
+                return None
             definition = self._redis_store.get_workflow_definition(workflow_id)
             if definition is not None:
                 return definition
@@ -1335,23 +1349,41 @@ class Mesh:
                                         0.0, deadline - asyncio.get_running_loop().time()
                                     )
                                 )
-                                return await self.replan_goal(
-                                    workflow_id,
-                                    reason=decision["reason"],
-                                    context={
-                                        "semantic_reconciliation": {
-                                            "revision": revision,
-                                            "obligations": semantic_gaps,
-                                            "history": (
-                                                self._redis_store
-                                                .get_workflow_reconciliation_history(
-                                                    workflow_id
-                                                )
-                                            ),
+                                try:
+                                    return await self.replan_goal(
+                                        workflow_id,
+                                        reason=decision["reason"],
+                                        context={
+                                            "semantic_reconciliation": {
+                                                "revision": revision,
+                                                "obligations": semantic_gaps,
+                                                "history": (
+                                                    self._redis_store
+                                                    .get_workflow_reconciliation_history(
+                                                        workflow_id
+                                                    )
+                                                ),
+                                            },
                                         },
-                                    },
-                                    timeout=remaining,
-                                )
+                                        timeout=remaining,
+                                    )
+                                except Exception:
+                                    planning = (
+                                        self._redis_store.get_workflow_planning_status(
+                                            workflow_id
+                                        ) or {}
+                                    )
+                                    if planning.get("status") != "failed":
+                                        raise
+                                    # A finished planning failure settles this revision;
+                                    # the work already done still answers the goal.
+                                    decision = {
+                                        **decision,
+                                        "reason": (
+                                            "The amendment could not be planned: "
+                                            f"{planning.get('error') or 'planning failed'}"
+                                        ),
+                                    }
                             settlement = {
                                 "event": "semantic_reconciliation_settled",
                                 "revision": revision,

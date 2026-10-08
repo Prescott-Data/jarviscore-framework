@@ -1491,7 +1491,7 @@ async def test_amendment_response_uses_the_attempt_that_satisfied_the_obligation
 def _gtm_reverification_history():
     """Shape of live run gtm-live-73455c56 when its first revision was planned."""
     obligations = [
-        {"id": f"obligation-{n}", "description": f"Need {n}", "source_quote": "goal"}
+        {"id": f"obligation-{n}", "description": f"Need {n}", "source_quote": "account"}
         for n in range(1, 9)
     ]
     step = {

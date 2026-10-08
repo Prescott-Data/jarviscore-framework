@@ -31,7 +31,9 @@ class WorkflowBudgetAccount:
             reservation_id,
             max(1, int(tokens)),
         ):
-            usage = self.store.get_workflow_budget_usage(self.workflow_id) or {}
+            usage = self.store.get_workflow_budget_usage(
+                self.workflow_id, epoch_id=self.epoch_id
+            ) or {}
             limit = int(usage.get("max_tokens_per_epoch", 0) or 0)
             recoverable = not limit or int(tokens) <= limit
             raise WorkflowBudgetExceeded(
