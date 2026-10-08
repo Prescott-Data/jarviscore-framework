@@ -82,6 +82,38 @@ async def test_headers_reporting_an_almost_spent_quota_back_off_before_any_429()
 
 
 @pytest.mark.asyncio
+async def test_reported_limits_skip_slow_start_to_what_they_sustain(monkeypatch):
+    concurrency = AdaptiveConcurrency(initial=4, ceiling=256, bulk_reserve=0.0)
+    deployment = DeploymentGovernor("azure:test", Limits(), concurrency, None)
+    deployment.observe_headers({
+        "x-ratelimit-limit-requests": "60000", "x-ratelimit-limit-tokens": "6000000",
+        "x-ratelimit-remaining-requests": "59990", "x-ratelimit-remaining-tokens": "5900000",
+    })
+    clock = [1000.0]
+    monkeypatch.setattr(governor_module.time, "monotonic", lambda: clock[0])
+
+    permit = await deployment.admit(50_000)
+    clock[0] += 20.0  # a 20 s call reserving 50k tokens
+    await permit.finish(total_tokens=30_000)
+
+    # 6M TPM / 50k per call = 120 calls a minute; at 20 s each that is 40 in flight.
+    assert concurrency.limit >= 0.85 * 40
+    assert deployment.snapshot()["tpm"] == 6_000_000
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limit_holds_off_the_jump_for_a_minute():
+    concurrency = AdaptiveConcurrency(initial=16, ceiling=256, bulk_reserve=0.0)
+    deployment = DeploymentGovernor("azure:test", Limits(), concurrency, None)
+    deployment.observe_headers({"x-ratelimit-limit-requests": "60000"})
+    permit = await deployment.admit(10)
+    await permit.finish(rate_limited=True, failed=True)
+    permit = await deployment.admit(10)
+    await permit.finish(total_tokens=10)
+    assert concurrency.limit < 16
+
+
+@pytest.mark.asyncio
 async def test_bulk_work_leaves_headroom_for_interactive_calls():
     concurrency = AdaptiveConcurrency(initial=10, ceiling=10, bulk_reserve=0.2)
     deployment = DeploymentGovernor("azure:test", Limits(), concurrency, None)

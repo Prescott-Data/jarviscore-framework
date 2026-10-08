@@ -69,6 +69,8 @@ class Settings(BaseSettings):
 
     # === LLM Configuration ===
     llm_timeout: float = 120.0
+    # Connecting (TCP + TLS) gets its own short limit; the SDK retries a failed connect.
+    llm_connect_timeout: float = 10.0
     llm_temperature: float = 0.7
     # Output cap when a caller passes none. Reasoning deployments bill hidden
     # reasoning against it, so a low cap returns empty or truncated completions.

@@ -29,6 +29,8 @@ BULK = "bulk"
 _DECREASE_COOLDOWN_SECONDS = 2.0
 # After a Redis failure the window counts locally this long before trying again.
 _REDIS_RETRY_SECONDS = 30.0
+# Share of a reported limit the governor plans to use.
+_TARGET_UTILISATION = 0.85
 _LANE: ContextVar[str] = ContextVar("llm_lane", default=INTERACTIVE)
 
 
@@ -242,6 +244,12 @@ class AdaptiveConcurrency:
         self.threshold = max(1.0, self.limit / 2.0)
         self.limit = self.threshold
 
+    def raise_to(self, target: float) -> None:
+        """Skip slow start when the provider has said how much it allows."""
+        if time.monotonic() - self._last_decrease < 60.0:
+            return
+        self.limit = max(self.limit, min(float(self.ceiling), target))
+
 
 @dataclass
 class DeploymentStats:
@@ -261,6 +269,7 @@ class Permit:
     reserved: int
     second: Optional[int]
     waited: float
+    started: float = field(default_factory=lambda: time.monotonic())
     _released: bool = field(default=False, repr=False)
 
     async def finish(self, *, total_tokens: int = 0, rate_limited: bool = False,
@@ -282,6 +291,7 @@ class DeploymentGovernor:
         self.window = window
         self.stats = DeploymentStats()
         self._headers: dict[str, str] = {}
+        self.reported = Limits()
 
     async def admit(self, tokens: int, lane: str = INTERACTIVE) -> Permit:
         started = time.monotonic()
@@ -305,6 +315,24 @@ class DeploymentGovernor:
     def observe_headers(self, headers: Mapping[str, str]) -> None:
         self._headers = {k.lower(): v for k, v in headers.items()
                          if k.lower().startswith("x-ratelimit") or k.lower().startswith("retry-after")}
+        try:
+            self.reported = Limits(
+                rpm=int(float(self._headers.get("x-ratelimit-limit-requests") or 0)),
+                tpm=int(float(self._headers.get("x-ratelimit-limit-tokens") or 0)),
+            )
+        except ValueError:
+            pass
+
+    def _allowed_in_flight(self, seconds_per_call: float, reserved: int) -> float:
+        """Calls in flight the reported limits sustain at this latency (Little's law)."""
+        if seconds_per_call <= 0:
+            return 0.0
+        bounds = []
+        if self.reported.rpm:
+            bounds.append(self.reported.rpm / 60.0 * seconds_per_call)
+        if self.reported.tpm and reserved:
+            bounds.append(self.reported.tpm / 60.0 / reserved * seconds_per_call)
+        return _TARGET_UTILISATION * min(bounds) if bounds else 0.0
 
     def _headers_report_congestion(self, reserved: int) -> bool:
         def number(name: str) -> Optional[float]:
@@ -335,6 +363,9 @@ class DeploymentGovernor:
             outcome = "congested"
         else:
             outcome = "ok"
+            self.concurrency.raise_to(self._allowed_in_flight(
+                time.monotonic() - permit.started, permit.reserved
+            ))
         await self.concurrency.release(outcome)
 
     def snapshot(self) -> dict[str, Any]:
@@ -342,8 +373,8 @@ class DeploymentGovernor:
             "limit": round(self.concurrency.limit, 2),
             "in_flight": self.concurrency.in_flight,
             "waiting": self.concurrency.waiting,
-            "rpm": self.limits.rpm or None,
-            "tpm": self.limits.tpm or None,
+            "rpm": self.limits.rpm or self.reported.rpm or None,
+            "tpm": self.limits.tpm or self.reported.tpm or None,
             "admitted": self.stats.admitted,
             "rate_limited": self.stats.rate_limited,
             "congested": self.stats.congested,

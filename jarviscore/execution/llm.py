@@ -4,6 +4,7 @@ Supports: JarvisCore promotion, vLLM, Azure OpenAI, Gemini, Vertex AI, Claude
 """
 import asyncio
 import aiohttp
+import httpx
 import logging
 import random
 import re
@@ -256,7 +257,12 @@ class UnifiedLLMClient:
                         api_key=azure_key,
                         azure_endpoint=azure_endpoint,
                         api_version=self.config.get('azure_api_version', '2024-10-21'),
-                        timeout=self.config.get('llm_timeout', 120),
+                        # A stalled TLS handshake must fail fast and be retried by the SDK,
+                        # not hold the call for the whole response timeout.
+                        timeout=httpx.Timeout(
+                            self.config.get('llm_timeout', 120),
+                            connect=float(self.config.get('llm_connect_timeout', 10.0)),
+                        ),
                         http_client=DefaultAsyncHttpxClient(
                             event_hooks={"response": [self._observe_azure_response]}
                         ),
