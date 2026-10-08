@@ -34,7 +34,9 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from jarviscore.contracts.hitl import HITLAction
 from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image
+from jarviscore.kernel import approval
 from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.subagent import BaseSubAgent
 
@@ -133,11 +135,9 @@ Your job: navigate and interact with web pages to extract data or complete tasks
    add `"irreversible": true` and `"consequence": "<what will happen>"` to that
    tool's PARAMS and call it. That call is how the person is asked: the runtime
     pauses and shows them the consequence; it does NOT perform the action.
-    On resume, approval authorizes you to call the same tool again with the same
-    irreversible flag and consequence. The earlier WAITING_FOR_APPROVAL receipt
-    is historical, not evidence that approval is still pending. Inspect current
-    provider state to avoid duplicate execution, perform the approved action if
-    it has not happened, and observe its outcome before finishing.
+    When they approve, JarvisCore performs exactly that action as the step resumes
+    and records its receipt; observe the outcome on the page before finishing and
+    never repeat it. When they decline, do not attempt it; report that it was not done.
     Do not stop short or report the action as blocked for lack of
    approval; issue the flagged call. Browsing, searching, signing in, adding to a
    basket and filling a form without submitting it are reversible.
@@ -316,37 +316,22 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             observed={"tools_used": sorted({t.tool_name for t in attempts})},
         )
 
-    @staticmethod
-    def _brief_approval(state) -> Optional[str]:
-        """Tell a resumed run, in words, which waiting action the person approved.
+    def _approved_action_params(self, action: HITLAction) -> Dict[str, Any]:
+        return {**action.params, "irreversible": True, "consequence": action.consequence}
 
-        Returns the page the action was proposed on, so the run reopens it.
-        """
-        variables = getattr(state, "internal_variables", None)
-        pending = (variables or {}).get("_pending_approval")
-        approved = set((getattr(state, "context", None) or {}).get("_approved_actions") or ())
-        if not pending or pending["action_id"] not in approved:
-            return None
-        variables.pop("_pending_approval")
-        stale_prefixes = (
-            "[EPISTEMIC] KNOWLEDGE_PLATEAU",
-            "[DONE_GATE]",
-        )
-        state.thoughts = [
-            thought for thought in state.thoughts
-            if not thought.startswith(stale_prefixes)
-        ]
-        state.output = None
-        params = {**pending["params"], "irreversible": True, "consequence": pending["consequence"]}
-        state.add_thought(
-            f"[APPROVED] Approval is granted for: {pending['consequence']}. "
-            "The previous WAITING_FOR_APPROVAL receipt describes the earlier pause. "
-            "The runtime has not executed the action; approval only authorizes your next tool call. "
-            f"The browser is back on {pending['page']}. Verify current provider state first "
-            f"to avoid duplicates, then if still unexecuted call TOOL: {pending['tool']} "
-            f"PARAMS: {json.dumps(params)}. Confirm the actual outcome from the page."
-        )
-        return pending["page"]
+    async def _approved_action_applies(self, action: HITLAction) -> bool:
+        """The element the person approved is still where they approved it."""
+        if not self._page:
+            return False
+        if action.location.startswith(("http://", "https://")):
+            try:
+                await self._page.goto(action.location, wait_until="domcontentloaded")
+            except Exception as exc:
+                logger.info("[browser] Approved action page did not reopen: %s", exc)
+                return False
+        context = getattr(getattr(self, "_current_state", None), "context", None) or {}
+        target = await self._action_target(action.tool, dict(action.params))
+        return target is not None and self.action_id(context, action.tool, target) == action.action_id
 
     @staticmethod
     def action_id(context: Dict[str, Any], tool_name: str, target: Any) -> str:
@@ -441,30 +426,23 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                     "semantic_error": "ACTION_TARGET_NOT_FOUND",
                 }
             action_id = self.action_id(context, tool_name, target)
-            if action_id not in set(context.get("_approved_actions") or ()):
-                where = self._page.url if self._page else "the current page"
-                state = getattr(self, "_current_state", None)
-                if state is not None and hasattr(state, "internal_variables"):
-                    state.internal_variables["_pending_approval"] = {
-                        "action_id": action_id,
-                        "tool": tool_name,
-                        "params": params,
-                        "consequence": consequence,
-                        "page": where,
-                    }
-                return {
-                    "status": "waiting",
-                    "hitl_required": True,
-                    "hitl_type": "approval",
-                    "typed_outcome": "WAITING_FOR_APPROVAL",
-                    "system": "browser",
-                    "action_id": action_id,
-                    "action": self._describe_action(tool_name, params, target, where),
-                    "consequence": consequence,
-                    "workflow_id": context.get("workflow_id"),
-                    "step_id": context.get("step_id"),
-                    "detail": f"Waiting for approval: {consequence}",
-                }
+            where = self._page.url if self._page else "the current page"
+            action = HITLAction(
+                action_id=action_id,
+                tool=tool_name,
+                system="browser",
+                params=params,
+                description=self._describe_action(tool_name, params, target, where),
+                consequence=consequence,
+                location=where,
+            )
+            workflow_id, step_id = context.get("workflow_id"), context.get("step_id")
+            refusal = approval.gate(self.redis_store, workflow_id, step_id, action)
+            if refusal is not None:
+                return refusal
+            result = await super()._execute_tool(tool_name, params)
+            approval.settle(self.redis_store, workflow_id, step_id, action_id, result)
+            return result
         return await super()._execute_tool(tool_name, params)
 
     def profile_dir(self, context: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -485,7 +463,6 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 
     async def _pre_run_hook(self, state) -> None:
         """Open the browser this run works in before the OODA loop starts."""
-        resume_page = self._brief_approval(state)
         if not PLAYWRIGHT_AVAILABLE:
             return
         args = [
@@ -542,9 +519,6 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 "shared" if self._attached else "persistent" if profile else "fresh",
                 self.headless,
             )
-            if resume_page and resume_page.startswith(("http://", "https://")):
-                # The approved action is waiting where it was proposed.
-                await self._page.goto(resume_page, wait_until="domcontentloaded")
         except Exception as e:
             logger.error("[browser] Failed to open browser: %s", e)
             self._launch_error = str(e)

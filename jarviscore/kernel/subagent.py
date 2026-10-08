@@ -805,6 +805,7 @@ class BaseSubAgent(ABC):
         # ── TraceManager: use injected trace or no-op ──
         from jarviscore.kernel.tracing import create_noop_trace
         _trace = trace if trace is not None else create_noop_trace()
+        await self._carry_out_decided_actions(state, _trace)
         total_tokens = {"input": 0, "output": 0, "total": state.tokens_used}
         total_cost = state.total_cost_usd
         system_prompt = self._build_system_prompt()
@@ -1590,6 +1591,72 @@ class BaseSubAgent(ABC):
         registry warm-up, context seeding). Default is a no-op.
         """
         pass
+
+    async def _carry_out_decided_actions(self, state: KernelState, trace) -> None:
+        """Act on each decision a person made while this step waited, exactly once.
+
+        An approved action runs here, through the normal tool path, so its
+        receipt is authoritative; a declined one is reported and never run.
+        """
+        from jarviscore.kernel import approval
+
+        workflow_id = state.context.get("workflow_id")
+        step_id = state.context.get("step_id")
+        decisions = approval.decided(self.redis_store, workflow_id, step_id)
+        if decisions:
+            # Completion pressure from before the pause describes a world the decision changed.
+            state.output = None
+            state.thoughts = [
+                thought for thought in state.thoughts
+                if not thought.startswith(("[EPISTEMIC] KNOWLEDGE_PLATEAU", "[DONE_GATE]"))
+            ]
+        for action, approved in decisions:
+            if not approved:
+                approval.settle(self.redis_store, workflow_id, step_id, action.action_id, {
+                    "status": "declined",
+                })
+                state.add_thought(
+                    f"[HITL DECLINED] The person declined: {action.consequence}. "
+                    "It was not performed and must not be attempted. Report that outcome."
+                )
+                continue
+            if not await self._approved_action_applies(action):
+                approval.settle(self.redis_store, workflow_id, step_id, action.action_id, {
+                    "status": "not_performed",
+                    "reason": "the approved target is no longer where it was approved",
+                })
+                state.add_thought(
+                    f"[HITL APPROVED, NOT PERFORMED] The person approved: {action.consequence}. "
+                    f"JarvisCore did not perform it because {action.description or action.tool} "
+                    "is no longer where it was approved. Inspect current provider state; "
+                    "if the action is still needed it must be proposed again for a new decision."
+                )
+                continue
+            params = self._approved_action_params(action)
+            trace.log_tool_start(action.tool, params)
+            started_at = time.time()
+            started = time.monotonic()
+            result = await self._execute_tool(action.tool, params)
+            error = result.get("error") if isinstance(result, dict) else None
+            trace.log_tool_result(action.tool, result, error=error)
+            receipt = state.add_tool_result(
+                action.tool, params, result, error=error, timestamp=started_at,
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
+            state.add_thought(
+                f"[HITL APPROVED, PERFORMED] The person approved: {action.consequence}. "
+                f"JarvisCore performed {action.description or action.tool} as this step "
+                f"resumed (tool receipt {receipt.receipt_id}): {json.dumps(result, default=str)}. "
+                "Observe the provider's outcome before finishing; never repeat this action."
+            )
+
+    def _approved_action_params(self, action) -> Dict[str, Any]:
+        """Tool parameters that perform an approved action."""
+        return dict(action.params)
+
+    async def _approved_action_applies(self, action) -> bool:
+        """Whether the approved action still targets what the person approved."""
+        return True
 
     def _save_subagent_state(self, state: KernelState) -> None:
         """Place subclass runtime state into the serializable checkpoint."""

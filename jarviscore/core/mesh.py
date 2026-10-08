@@ -1481,6 +1481,39 @@ class Mesh:
         self._redis_store.resume_workflow_step(workflow_id, step_id, context=context)
         return await self._wait_for_workflow_terminal(workflow_id, definition, timeout)
 
+    async def resolve_hitl(
+        self,
+        workflow_id: str,
+        action_id: str,
+        *,
+        decision: str,
+        resolved_by: str = "",
+        note: str = "",
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Record a person's decision on a waiting action and continue its step."""
+        from jarviscore.contracts.hitl import (
+            APPROVED_DECISIONS,
+            REJECTED_DECISIONS,
+            normalize_hitl_decision,
+        )
+
+        if not self._started or self._redis_store is None:
+            raise RuntimeError("A started Redis-backed Mesh is required to resolve HITL.")
+        normalized = normalize_hitl_decision(decision)
+        if normalized not in APPROVED_DECISIONS | REJECTED_DECISIONS:
+            raise ValueError("A waiting action is resolved by approving or declining it.")
+        step_id = self._redis_store.get_hitl_action_step(workflow_id, action_id)
+        if step_id is None:
+            raise KeyError(f"Workflow {workflow_id!r} has no action {action_id!r} awaiting a decision")
+        if self._redis_store.get_hitl_resolution(workflow_id, step_id, action_id) is not None:
+            raise ValueError("This action has already been decided.")
+        self._redis_store.resolve_hitl_request(
+            workflow_id, step_id, normalized.value,
+            responder=resolved_by, comment=note, action_id=action_id,
+        )
+        return await self.resume_goal(workflow_id, step_id, timeout=timeout)
+
     async def replan_goal(
         self,
         workflow_id: str,

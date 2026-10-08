@@ -171,16 +171,18 @@ def test_one_run_opens_one_browser(log):
     assert log.count("launch") == 1
 
 
-def _committing_agent(context):
+def _committing_agent(context, store=None):
     from types import SimpleNamespace
 
-    agent = BrowserSubAgent("b", None)
+    from jarviscore.testing.mocks import MockRedisContextStore
+
+    agent = BrowserSubAgent("b", None, redis_store=store or MockRedisContextStore())
     agent._current_state = SimpleNamespace(context=context)
     clicks = []
 
     async def _click(**params):
         clicks.append(params)
-        return {"status": "success"}
+        return {"status": "success", "url": "https://shop.test/orders/FC-1"}
 
     agent._tools["click"].func = _click
     return agent, clicks
@@ -201,6 +203,10 @@ def test_an_irreversible_action_waits_for_the_person():
     assert result["action"] == "Click “Place order” on the current page"
     assert "{" not in result["action"]
     assert clicks == []
+    request = agent.redis_store.get_hitl_request("wf", "buy", result["action_id"])
+    assert request["status"] == "pending" and request["category"] == "critical_action"
+    assert request["action"]["params"] == {"text": "Place order"}
+    assert result["hitl_request_id"] == request["request_id"]
 
 
 def test_an_approval_names_the_element_and_page_a_person_would_recognise():
@@ -213,17 +219,38 @@ def test_an_approval_names_the_element_and_page_a_person_would_recognise():
     assert action == "Click “Place order” on shop.test/basket/add-list"
 
 
-def test_the_approved_action_runs_on_resume_and_nothing_else_does():
+def test_only_the_approved_action_runs_and_it_runs_once():
     context = {"workflow_id": "wf", "step_id": "buy"}
-    agent, _ = _committing_agent(context)
+    agent, clicks = _committing_agent(context)
     approved = asyncio.run(agent._execute_tool("click", dict(ORDER)))["action_id"]
+    agent.redis_store.resolve_hitl_request("wf", "buy", "approve", action_id=approved)
 
-    resumed, clicks = _committing_agent({**context, "_approved_actions": [approved]})
-    assert asyncio.run(resumed._execute_tool("click", dict(ORDER)))["status"] == "success"
+    assert asyncio.run(agent._execute_tool("click", dict(ORDER)))["status"] == "success"
+    again = asyncio.run(agent._execute_tool("click", dict(ORDER)))
     assert clicks == [{"text": "Place order"}]
+    assert again["url"] == "https://shop.test/orders/FC-1" and "already ran" in again["note"]
 
     other = {**ORDER, "text": "Place order for 10"}
-    assert asyncio.run(resumed._execute_tool("click", other))["status"] == "waiting"
+    assert asyncio.run(agent._execute_tool("click", other))["status"] == "waiting"
+
+
+def test_a_declined_action_is_never_performed():
+    agent, clicks = _committing_agent({"workflow_id": "wf", "step_id": "buy"})
+    declined = asyncio.run(agent._execute_tool("click", dict(ORDER)))["action_id"]
+    agent.redis_store.resolve_hitl_request("wf", "buy", "reject", action_id=declined)
+
+    result = asyncio.run(agent._execute_tool("click", dict(ORDER)))
+
+    assert result["semantic_error"] == "ACTION_DECLINED" and clicks == []
+
+
+def test_without_durable_state_no_one_can_approve_so_nothing_runs():
+    from types import SimpleNamespace
+
+    agent = BrowserSubAgent("b", None)
+    agent._current_state = SimpleNamespace(context={"workflow_id": "wf", "step_id": "buy"})
+    result = asyncio.run(agent._execute_tool("click", dict(ORDER)))
+    assert result["semantic_error"] == "APPROVAL_UNAVAILABLE"
 
 
 def test_an_irreversible_action_must_say_what_it_does():
@@ -259,38 +286,64 @@ def test_form_action_identity_survives_alternate_basket_urls(destination, same_a
     assert (original == resumed) is same_action
 
 
-def test_a_resumed_run_is_told_what_the_person_approved():
+def _resumed_after(decision, applies=True):
     from jarviscore.kernel.state import KernelState
+    from jarviscore.kernel.tracing import create_noop_trace
+    from jarviscore.testing.mocks import MockRedisContextStore
 
+    store = MockRedisContextStore()
     state = KernelState(
         workflow_id="wf", step_id="buy", agent_id="b", task="t",
         context={"workflow_id": "wf", "step_id": "buy"},
     )
-    agent, _ = _committing_agent(state.context)
+    agent, clicks = _committing_agent(state.context, store)
     agent._current_state = state
     waiting = asyncio.run(agent._execute_tool("click", dict(ORDER)))
-
-    unapproved = state.model_copy(deep=True)
-    BrowserSubAgent._brief_approval(unapproved)
-    assert not any("[APPROVED]" in thought for thought in unapproved.thoughts)
-
+    store.resolve_hitl_request("wf", "buy", decision, action_id=waiting["action_id"])
+    state.output = {"status": "blocked"}
     state.thoughts.extend([
         "Keep this useful observation.",
-        "[EPISTEMIC] KNOWLEDGE_PLATEAU: Call DONE with what you have.",
         "[DONE_GATE] Previous completion pressure.",
     ])
-    state.output = {"status": "blocked"}
-    state.context["_approved_actions"] = [waiting["action_id"]]
-    BrowserSubAgent._brief_approval(state)
-    briefing = next(thought for thought in state.thoughts if "[APPROVED]" in thought)
-    assert "Places the order and charges £29.99" in briefing and '"Place order"' in briefing
-    assert "runtime has not executed the action" in briefing
-    assert "previous WAITING_FOR_APPROVAL receipt" in briefing
-    assert "Verify current provider state first" in briefing
+
+    async def still_applies(action):
+        return applies
+
+    agent._approved_action_applies = still_applies
+    asyncio.run(agent._carry_out_decided_actions(state, create_noop_trace()))
+    asyncio.run(agent._carry_out_decided_actions(state, create_noop_trace()))
+    outcome = store.get_hitl_request("wf", "buy", waiting["action_id"])["outcome"]
+    return state, clicks, outcome
+
+
+def test_a_resumed_step_performs_the_approved_action_once_with_a_receipt():
+    state, clicks, outcome = _resumed_after("approve")
+
+    assert clicks == [{"text": "Place order"}]
+    assert [t.tool_name for t in state.tool_history] == ["click"]
+    assert state.tool_history[0].status == "success"
+    performed = [t for t in state.thoughts if t.startswith("[HITL APPROVED, PERFORMED]")]
+    assert len(performed) == 1 and "FC-1" in performed[0]
+    assert outcome["status"] == "success"
     assert state.output is None
-    assert state.thoughts[0] == "Keep this useful observation."
-    assert not any("KNOWLEDGE_PLATEAU" in thought or "DONE_GATE" in thought for thought in state.thoughts)
-    assert "_pending_approval" not in state.internal_variables
+    assert "Keep this useful observation." in state.thoughts
+    assert not any(t.startswith("[DONE_GATE]") for t in state.thoughts)
+
+
+def test_a_resumed_step_reports_a_declined_action_and_never_runs_it():
+    state, clicks, outcome = _resumed_after("reject")
+
+    assert clicks == [] and state.tool_history == []
+    assert sum(t.startswith("[HITL DECLINED]") for t in state.thoughts) == 1
+    assert outcome == {"status": "declined"}
+
+
+def test_an_approval_does_not_run_against_a_page_that_changed():
+    state, clicks, outcome = _resumed_after("approve", applies=False)
+
+    assert clicks == []
+    assert any(t.startswith("[HITL APPROVED, NOT PERFORMED]") for t in state.thoughts)
+    assert outcome["status"] == "not_performed"
 
 
 def test_reversible_actions_run_without_asking():
