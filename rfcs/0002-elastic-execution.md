@@ -132,15 +132,26 @@ Polling every 2 s adds a mean 1 s per step. A worker blocks on a short
 
 ### 5.1 Scope and limits
 
-A governor owns one deployment key: `(provider, endpoint, deployment)`. Its limits
-come from configuration:
+A governor owns one deployment key: `(provider, endpoint, deployment)`. It needs no
+configuration; developers do not set limits. It finds them in this order:
+
+1. **Provider metadata, when credentials allow.** For Azure, the deployment's
+   `sku.capacity` from Resource Manager is the TPM in thousands. RPM follows the
+   documented ratio of 6 RPM per 1,000 TPM for standard deployments.
+2. **Response headers.** Every Azure response carries
+   `x-ratelimit-remaining-requests` and `x-ratelimit-remaining-tokens`. The window's
+   limit is inferred from remaining capacity plus what the governor itself reserved
+   in that window, and it is re-learned continuously as quota changes.
+3. **Slow start.** Until either source answers, admission starts at a conservative
+   in-flight limit (default 4) and grows by AIMD (§5.3). A new deployment reaches
+   its real ceiling within a few windows without being told it.
+
+An override exists for operators who share a deployment and want to hold the
+framework below its full quota:
 
 ```
 LLM_LIMITS='{"azure:gpt-5.2-chat":{"rpm":3000,"tpm":1000000}}'
 ```
-
-They are refined at runtime from rate-limit headers where the provider returns them
-(Azure: `x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens`).
 
 ### 5.2 Admission
 
@@ -210,15 +221,22 @@ Quality is a measured property, not an assumption. A tiered profile ships only
 after passing the agreement test in §8 against a strong-only baseline on the same
 workload.
 
+No developer setup is needed for tiers either:
+- **Discovery.** The framework lists the deployments on the configured resource, or
+  reads the existing `TASK_MODEL_NANO` setting, and classifies each one by model
+  family.
+- **One deployment.** With only one, everything runs on it, as today.
+- **Choosing a model.** Developers name a model only to override the choice.
+
 ## 7. Configuration and observability
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `pool=Pool(min,max,idle_seconds,per_worker)` | none (singleton) | elastic pool per capability |
-| `LLM_LIMITS` | unset (governor learns from headers) | RPM/TPM per deployment |
+| `LLM_LIMITS` | unset: discovered (§5.1) | optional cap below the deployment's quota |
 | `LLM_TARGET_UTILISATION` | 0.85 | AIMD ceiling |
 | `LLM_BULK_RESERVE` | 0.15 | TPM held back from the bulk lane |
-| `models=` in role profiles | strong-only | tier per turn kind |
+| `models=` in role profiles | automatic tiers when a fast deployment exists, else strong-only | tier per turn kind |
 
 The mesh status endpoint and traces report:
 - per pool: live workers, backlog, claim latency;
@@ -269,9 +287,10 @@ Each PR stands alone and is useful by itself.
 
 ## 11. Open questions
 
-1. The RPM/TPM limits and the available fast-tier deployment on our Azure resource
-   (for example a mini or nano model) decide both the real ceiling and the cost
-   ratio. They need confirming before the §8 targets are final.
+1. The §8 targets depend on our Azure resource's real quota and on whether a
+   fast-tier deployment (for example a mini or nano model) exists on it. The
+   governor discovers both at runtime; they are needed here only to fix the
+   benchmark numbers.
 2. Should pools also scale across processes on demand (spawning a worker
    process)? Proposed: no for 2.2; in-process pools plus more replicas cover it.
 3. Fast-tier failure modes on long matter passages (quote fidelity) may need the
