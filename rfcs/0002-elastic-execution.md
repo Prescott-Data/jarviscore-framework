@@ -228,6 +228,22 @@ No developer setup is needed for tiers either:
 - **One deployment.** With only one, everything runs on it, as today.
 - **Choosing a model.** Developers name a model only to override the choice.
 
+### 6.1 Which agents get what
+
+| Capability | AutoAgent | CustomAgent |
+|---|---|---|
+| Governor (§5) | automatic | automatic: every profile calls the same `self.llm` client |
+| Pools (§4) | `mesh.add(..., pool=Pool(...))` | the same, for agents that keep no per-instance state |
+| Tiered turns (§6) | automatic: the kernel knows which turn is final | per call: `self.llm.generate(..., tier="fast" \| "strong")`; omit it for the default |
+
+Scaling follows volume, not a judgement about one task:
+- **More ready work:** the scaler adds workers.
+- **A harder single step:** it goes to a stronger tier.
+- **A large composite goal:** the planner already splits it into independent steps,
+  and the pool supplies the workers to run them at once.
+
+No agent has to decide "this is heavy, spawn"; the framework sees the backlog.
+
 ## 7. Configuration and observability
 
 | Setting | Default | Meaning |
