@@ -42,6 +42,7 @@ from uuid import uuid4
 
 from .agent import Agent
 from .envelope import attach_result_summary
+from .pool import Pool, PoolState
 from jarviscore.orchestration.envelopes import (
     ExecutionBudget,
     neutral_context,
@@ -185,6 +186,7 @@ class Mesh:
         self._decision_client = None   # JevDecisionClient — when TypeSafe is configured
         self._distributed_worker_tasks: List[asyncio.Task] = []
         self._distributed_step_tasks: Set[asyncio.Task] = set()
+        self._pools: Dict[str, PoolState] = {}
         self._mesh_planner_task: Optional[asyncio.Task] = None
         self._scheduler_task: Optional[asyncio.Task] = None
         self._agent_run_tasks: List[asyncio.Task] = []
@@ -206,6 +208,7 @@ class Mesh:
         self,
         agent_class_or_instance,
         agent_id: Optional[str] = None,
+        pool: Optional[Pool] = None,
         **kwargs
     ) -> Agent:
         """
@@ -215,6 +218,9 @@ class Mesh:
             agent_class_or_instance: Agent class to instantiate, or pre-instantiated
                 agent (from wrap() function). Must inherit from Agent.
             agent_id: Optional unique identifier for the agent (ignored if instance)
+            pool: Optional ``Pool`` letting the mesh run more instances of this
+                agent while its work queues up. Needs the agent class, and suits
+                agents that keep no per-instance state between steps.
             **kwargs: Additional arguments passed to agent constructor (ignored if instance)
 
         Returns:
@@ -236,6 +242,11 @@ class Mesh:
         """
         # Check if it's already an instance (from wrap() function)
         if isinstance(agent_class_or_instance, Agent):
+            if pool is not None:
+                raise TypeError(
+                    "A pool creates members from the agent class; pass the class, "
+                    "not an instance"
+                )
             agent = agent_class_or_instance
         else:
             # It's a class - validate and instantiate
@@ -280,6 +291,14 @@ class Mesh:
             if capability not in self._capability_index:
                 self._capability_index[capability] = []
             self._capability_index[capability].append(agent)
+
+        if pool is not None:
+            member_class, member_id = agent_class_or_instance, agent.agent_id
+            self._pools[agent.agent_id] = PoolState(
+                spec=pool,
+                factory=lambda: member_class(agent_id=member_id, **kwargs),
+                base=agent,
+            )
 
         self._logger.info(
             f"Registered agent: {agent.agent_id} "
@@ -492,7 +511,9 @@ class Mesh:
                 )
             self._distributed_worker_tasks = [
                 asyncio.create_task(
-                    self._run_distributed_worker(agent),
+                    self._run_pool(self._pools[agent.agent_id])
+                    if agent.agent_id in self._pools
+                    else self._run_distributed_worker(agent),
                     name=f"distributed-worker-{agent.agent_id}",
                 )
                 for agent in self.agents
@@ -1761,6 +1782,9 @@ class Mesh:
         )
         self._distributed_worker_tasks.clear()
         self._distributed_step_tasks.clear()
+        for state in self._pools.values():
+            for member in [m for m in state.members if m is not state.base]:
+                await self._retire_pool_member(state, member)
         self._mesh_planner_task = None
         self._scheduler_task = None
 
@@ -1809,70 +1833,192 @@ class Mesh:
         while self._started:
             try:
                 await self._service_capability_needs(agent, capabilities)
-                for workflow_id in self._redis_store.get_active_workflows():
-                    if self._redis_store.is_workflow_cancelled(workflow_id):
-                        self._redis_store.unregister_active_workflow(workflow_id)
-                        continue
-                    if not self._node_can_access_workspace(workflow_id):
-                        continue
-                    for step_id in self._redis_store.get_all_step_ids(workflow_id):
-                        step_def = self._redis_store.get_step_definition(
-                            workflow_id, step_id
+                for workflow_id, step_id, step_def in self._ready_steps(
+                    agent.agent_id, capabilities
+                ):
+                    claim_id = f"{agent.agent_id}:{uuid4().hex}"
+                    lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
+                    if self._redis_store.claim_step(
+                        workflow_id, step_id, claim_id, lease_seconds=lease_seconds
+                    ):
+                        self._logger.info(
+                            f"[DistributedWorker] Claimed '{step_id}' "
+                            f"in '{workflow_id}' → {agent.agent_id}"
                         )
-                        if step_def and step_def.get("status") == "in_progress":
-                            self._redis_store.recover_expired_step_claim(
-                                workflow_id, step_id
-                            )
-                            step_def = self._redis_store.get_step_definition(
-                                workflow_id, step_id
-                            )
-                        if step_def and step_def.get("status") == "blocked":
-                            self._redis_store.requeue_blocked_step(workflow_id, step_id)
-                            step_def = self._redis_store.get_step_definition(
-                                workflow_id, step_id
-                            )
-                        if not step_def or step_def.get("status") != "pending":
-                            continue
-                        requirement = (
-                            step_def.get("capability")
-                            or step_def.get("agent")
-                            or step_def.get("role")
+                        await self._execute_distributed_step(
+                            agent, workflow_id, step_id, step_def,
+                            claim_id=claim_id,
+                            lease_seconds=lease_seconds,
                         )
-                        if requirement not in capabilities:
-                            continue
-                        resume_agent_id = step_def.get("resume_agent_id")
-                        if resume_agent_id and resume_agent_id != agent.agent_id:
-                            continue
-                        blockers = self._redis_store.get_dependency_blockers(
-                            workflow_id, step_id
-                        )
-                        if blockers:
-                            self._redis_store.block_step(
-                                workflow_id, step_id, blockers
-                            )
-                            continue
-                        if not self._redis_store.are_dependencies_met(workflow_id, step_id):
-                            continue
-                        claim_id = f"{agent.agent_id}:{uuid4().hex}"
-                        lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
-                        if self._redis_store.claim_step(
-                            workflow_id, step_id, claim_id, lease_seconds=lease_seconds
-                        ):
-                            self._logger.info(
-                                f"[DistributedWorker] Claimed '{step_id}' "
-                                f"in '{workflow_id}' → {agent.agent_id}"
-                            )
-                            await self._execute_distributed_step(
-                                agent, workflow_id, step_id, step_def,
-                                claim_id=claim_id,
-                                lease_seconds=lease_seconds,
-                            )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self._logger.warning(f"[DistributedWorker] Error: {exc}")
 
             await asyncio.sleep(float(self.config.get("distributed_poll_interval", 2.0)))
+
+    def _ready_steps(self, agent_id: str, capabilities: set[str]):
+        """Pending steps this agent may claim now, recovering expired claims on the way."""
+        for workflow_id in self._redis_store.get_active_workflows():
+            if self._redis_store.is_workflow_cancelled(workflow_id):
+                self._redis_store.unregister_active_workflow(workflow_id)
+                continue
+            if not self._node_can_access_workspace(workflow_id):
+                continue
+            for step_id in self._redis_store.get_all_step_ids(workflow_id):
+                step_def = self._redis_store.get_step_definition(
+                    workflow_id, step_id
+                )
+                if step_def and step_def.get("status") == "in_progress":
+                    self._redis_store.recover_expired_step_claim(
+                        workflow_id, step_id
+                    )
+                    step_def = self._redis_store.get_step_definition(
+                        workflow_id, step_id
+                    )
+                if step_def and step_def.get("status") == "blocked":
+                    self._redis_store.requeue_blocked_step(workflow_id, step_id)
+                    step_def = self._redis_store.get_step_definition(
+                        workflow_id, step_id
+                    )
+                if not step_def or step_def.get("status") != "pending":
+                    continue
+                requirement = (
+                    step_def.get("capability")
+                    or step_def.get("agent")
+                    or step_def.get("role")
+                )
+                if requirement not in capabilities:
+                    continue
+                resume_agent_id = step_def.get("resume_agent_id")
+                if resume_agent_id and resume_agent_id != agent_id:
+                    continue
+                blockers = self._redis_store.get_dependency_blockers(
+                    workflow_id, step_id
+                )
+                if blockers:
+                    self._redis_store.block_step(
+                        workflow_id, step_id, blockers
+                    )
+                    continue
+                if not self._redis_store.are_dependencies_met(workflow_id, step_id):
+                    continue
+                yield workflow_id, step_id, step_def
+
+    async def _run_pool(self, state: PoolState) -> None:
+        """Dispatch a pooled agent's ready steps to idle members, adding members up to max.
+
+        One dispatcher scans per pool: members do not each poll Redis.
+        """
+        base = state.base
+        capabilities = {base.role, *getattr(base, "capabilities", [])}
+        lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
+        poll = float(self.config.get("distributed_poll_interval", 2.0))
+        self._logger.info(
+            "[Pool] %s online | min=%d max=%d | capabilities: %s",
+            base.agent_id, state.spec.min, state.spec.max, sorted(capabilities),
+        )
+        while self._started:
+            try:
+                while len(state.members) < state.spec.min:
+                    state.release(await self._grow_pool(state))
+                if state.idle:
+                    member = state.idle.pop()
+                    try:
+                        await self._service_capability_needs(member, capabilities)
+                    finally:
+                        state.release(member)
+                for workflow_id, step_id, step_def in self._ready_steps(
+                    base.agent_id, capabilities
+                ):
+                    if state.idle:
+                        member = state.idle.pop()
+                    elif len(state.members) < state.spec.max:
+                        member = await self._grow_pool(state)
+                    else:
+                        break
+                    claim_id = f"{member.agent_id}:{uuid4().hex}"
+                    if not self._redis_store.claim_step(
+                        workflow_id, step_id, claim_id, lease_seconds=lease_seconds
+                    ):
+                        state.release(member)
+                        continue
+                    state.steps_started += 1
+                    self._logger.info(
+                        "[Pool] Claimed '%s' in '%s' → %s (%d/%d busy)",
+                        step_id, workflow_id, member.agent_id, state.busy, len(state.members),
+                    )
+                    task = asyncio.create_task(
+                        self._run_pool_step(
+                            state, member, workflow_id, step_id, step_def,
+                            claim_id, lease_seconds,
+                        ),
+                        name=f"pool-step-{step_id}",
+                    )
+                    self._distributed_step_tasks.add(task)
+                    task.add_done_callback(self._distributed_step_tasks.discard)
+                for member in state.retirable():
+                    await self._retire_pool_member(state, member)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._logger.warning("[Pool] %s dispatch error: %s", base.agent_id, exc)
+            await asyncio.sleep(poll)
+
+    async def _run_pool_step(
+        self, state: PoolState, member: Any, workflow_id: str, step_id: str,
+        step_def: dict, claim_id: str, lease_seconds: int,
+    ) -> None:
+        from jarviscore.execution.governor import lane_scope
+
+        try:
+            with lane_scope(state.spec.lane):
+                await self._execute_distributed_step(
+                    member, workflow_id, step_id, step_def,
+                    claim_id=claim_id, lease_seconds=lease_seconds,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._logger.warning(
+                "[Pool] %s step '%s' failed outside its result: %s",
+                member.agent_id, step_id, exc,
+            )
+        finally:
+            state.release(member)
+
+    async def _grow_pool(self, state: PoolState) -> Any:
+        """Create, wire and set up one more member sharing the pooled agent's identity."""
+        member = state.factory()
+        member._mesh = self
+        self._inject_infrastructure([member])
+        self._inject_peer_clients([member], register=False)
+        if self._auth_manager and getattr(member, "requires_auth", False):
+            member._auth_manager = self._auth_manager
+        await member.setup()
+        state.members.append(member)
+        self._logger.info(
+            "[Pool] %s grew to %d member(s)", state.base.agent_id, len(state.members)
+        )
+        return member
+
+    async def _retire_pool_member(self, state: PoolState, member: Any) -> None:
+        if member in state.idle:
+            state.idle.remove(member)
+        if member in state.members:
+            state.members.remove(member)
+        state.last_active.pop(id(member), None)
+        try:
+            member.request_shutdown()
+            peers = getattr(member, "peers", None)
+            if peers is not None:
+                await peers.close()
+            await member.teardown()
+        except Exception as exc:
+            self._logger.warning("[Pool] member teardown failed: %s", exc)
+        self._logger.info(
+            "[Pool] %s shrank to %d member(s)", state.base.agent_id, len(state.members)
+        )
 
     async def _service_capability_needs(
         self, agent: Agent, capabilities: set[str]
@@ -2647,7 +2793,7 @@ class Mesh:
             return MeshMode.DISTRIBUTED
         return MeshMode.AUTONOMOUS
 
-    def _inject_infrastructure(self):
+    def _inject_infrastructure(self, agents: Optional[List[Any]] = None):
         """
         Inject redis_store, blob_storage, mailbox, and HITLQueue into all agents.
 
@@ -2672,7 +2818,7 @@ class Mesh:
         except ImportError:
             _HITLQueue = None
 
-        for agent in self.agents:
+        for agent in (self.agents if agents is None else agents):
             agent._redis_store   = self._redis_store
             agent._blob_storage  = self._blob_storage
             agent._nexus_store   = self._nexus_store    # always set (NexusLocalStore)
@@ -2702,13 +2848,13 @@ class Mesh:
         self._logger.info(
             "✓ Infrastructure injected into %d agent(s) "
             "(redis=%s, blob=%s, hitl=%s)",
-            len(self.agents),
+            len(self.agents if agents is None else agents),
             "yes" if self._redis_store else "no",
             "yes" if self._blob_storage else "no",
             "yes" if _HITLQueue else "no",
         )
 
-    def _inject_peer_clients(self):
+    def _inject_peer_clients(self, agents: Optional[List[Any]] = None, register: bool = True):
         """
         Inject PeerClient instances into all agents regardless of mesh mode.
 
@@ -2765,7 +2911,7 @@ class Mesh:
 
         coordinator = self._p2p_coordinator if is_p2p else None
 
-        for agent in self.agents:
+        for agent in (self.agents if agents is None else agents):
             peer_client = PeerClient(
                 coordinator=coordinator,
                 agent_id=agent.agent_id,
@@ -2782,8 +2928,9 @@ class Mesh:
             if callable(notification_handler):
                 peer_client.set_notification_handler(notification_handler)
 
-            # Register with coordinator for remote message routing (P2P only)
-            if is_p2p and self._p2p_coordinator:
+            # Register with coordinator for remote message routing (P2P only).
+            # Pool members share the registered agent's id; inbound routing stays with it.
+            if register and is_p2p and self._p2p_coordinator:
                 self._p2p_coordinator.register_peer_client(agent.agent_id, peer_client)
 
             self._logger.debug(
@@ -3172,6 +3319,7 @@ class Mesh:
             - swim_status: SWIM protocol status (if P2P enabled)
             - capability_map: Mapping of capabilities to agent IDs
             - llm_governor: Per-deployment calls in flight, waits and rate limits
+            - pools: Members, busy members and limits of each elastic pool
 
         Example:
             diagnostics = mesh.get_diagnostics()
@@ -3187,6 +3335,7 @@ class Mesh:
             "local_agents": self._get_local_agents_info(),
             "connectivity_status": self._assess_connectivity_status(),
             "llm_governor": governor.snapshot(),
+            "pools": {agent_id: state.snapshot() for agent_id, state in self._pools.items()},
         }
 
         # Add P2P-specific diagnostics if coordinator is available

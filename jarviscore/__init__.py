@@ -60,6 +60,7 @@ __license__ = "Apache-2.0"
 from jarviscore.core.agent import Agent
 from jarviscore.core.profile import Profile
 from jarviscore.core.mesh import Mesh, MeshMode
+from jarviscore.core.pool import Pool
 
 # Execution profiles
 from jarviscore.profiles.autoagent import AutoAgent
@@ -137,6 +138,7 @@ __all__ = [
     "Profile",
     "Mesh",
     "MeshMode",
+    "Pool",
 
     # Profiles
     "AutoAgent",
