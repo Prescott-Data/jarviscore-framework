@@ -553,6 +553,69 @@ async def test_execute_goal_propagates_non_success_without_hanging(
     assert analyst.received == []
 
 
+class ApprovalPeer(ResearchPeer):
+    """Pauses on one consequential action through JarvisCore HITL."""
+
+    async def execute_task(self, task):
+        from jarviscore.contracts.hitl import HITLAction
+        from jarviscore.kernel import approval
+
+        self.received.append(task)
+        context = task.get("context", {})
+        workflow_id, step_id = context["workflow_id"], context["step_id"]
+        decided = approval.decided(self._redis_store, workflow_id, step_id)
+        if decided:
+            action, approved = decided[0]
+            approval.settle(self._redis_store, workflow_id, step_id, action.action_id, {
+                "status": "success" if approved else "declined",
+            })
+            return {"status": "success", "output": {"evidence": [
+                "performed" if approved else "declined",
+            ]}}
+        waiting = approval.gate(self._redis_store, workflow_id, step_id, HITLAction(
+            action_id="a" * 64, tool="click", system="browser",
+            description="Click “Place order”", consequence="Places the order",
+        ))
+        return {"status": "waiting", "output": waiting}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decision, evidence", [("approve", "performed"), ("reject", "declined")])
+async def test_a_person_resolves_a_waiting_action_through_hitl(monkeypatch, decision, evidence):
+    llm = MockLLMClient(responses=goal_responses())
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    mesh.add(ApprovalPeer(llm, agent_id="researcher-1"))
+    analyst = mesh.add(AnalysisPeer(agent_id="analyst-1"))
+
+    await mesh.start()
+    try:
+        first = await mesh.execute_goal(
+            "Find evidence and analyse it", workflow_id="wf-hitl", timeout=1,
+        )
+        pending = store.get_hitl_request("wf-hitl", "research", "a" * 64)
+        resumed = await mesh.resolve_hitl(
+            "wf-hitl", "a" * 64, decision=decision, resolved_by="owner", timeout=1,
+        )
+        with pytest.raises(ValueError, match="already been decided"):
+            await mesh.resolve_hitl("wf-hitl", "a" * 64, decision="approve", timeout=1)
+    finally:
+        await mesh.stop()
+
+    assert first["status"] == "waiting"
+    assert pending["status"] == "pending" and pending["action"]["consequence"] == "Places the order"
+    assert resumed["status"] == "completed"
+    assert analyst.received[0]["context"]["previous_step_results"] == {
+        "research": {"evidence": [evidence]},
+    }
+    events = [entry.get("event") for entry in store.get_ledger_full("wf-hitl")]
+    assert {"hitl_requested", "hitl_resolved", "hitl_action_settled"} <= set(events)
+
+
 @pytest.mark.asyncio
 async def test_waiting_goal_resumes_same_peer_and_unblocks_downstream(monkeypatch):
     llm = MockLLMClient(responses=goal_responses())
@@ -805,6 +868,60 @@ async def test_execute_goal_reconciles_actionable_semantic_hold(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_failed_amendment_settles_the_revision_and_still_answers(monkeypatch):
+    initial_steps = [{
+        "step_id": "locate", "capability": "verification", "effect": "read",
+        "task": "Locate and verify usable content", "success_criterion": "Content is verified",
+        "expected_findings": ["content verification"], "depends_on": [],
+        "covers": ["o0", "o1"],
+    }]
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"obligations": [{
+            "id": "o0", "description": "Locate the resource", "source_ref": "source-1",
+        }, {
+            "id": "o1", "description": "Verify usable content", "source_ref": "source-1",
+        }]})},
+        {"content": json.dumps({"steps": initial_steps})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+        {"content": json.dumps({
+            "decision": "amend", "reason": "The available verification capability can inspect content.",
+        })},
+        {"content": "not json"},
+    ])
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={
+        "p2p_enabled": False,
+        "distributed_poll_interval": 0.01,
+        "mesh_response_capability": "final_response",
+    })
+    mesh.add(RemediatingPeer(llm, agent_id="verifier"))
+    responder = mesh.add(RevisionResponsePeer(agent_id="responder"))
+
+    await mesh.start()
+    try:
+        result = await mesh.execute_goal(
+            "Locate and verify usable content", workflow_id="wf-amend-fails", timeout=2,
+        )
+    finally:
+        await mesh.stop()
+
+    assert store.get_workflow_planning_status("wf-amend-fails")["status"] == "failed"
+    assert result["revision"] == 1
+    assert result["obligation_status"] == "blocked"
+    assert result["response_status"] == "completed"
+    assert [task["id"] for task in responder.received] == ["final_response"]
+    settled = [
+        event for event in store.get_ledger_full("wf-amend-fails")
+        if event.get("event") == "semantic_reconciliation_settled"
+    ]
+    assert settled and "could not be planned" in settled[-1]["reason"]
+
+
+@pytest.mark.asyncio
 async def test_execute_goal_surfaces_durable_planning_failure_without_timeout(monkeypatch):
     llm = MockLLMClient(responses=[{"content": "not json"}])
     store = MockRedisContextStore()
@@ -817,15 +934,23 @@ async def test_execute_goal_surfaces_durable_planning_failure_without_timeout(mo
 
     await mesh.start()
     try:
-        with pytest.raises(RuntimeError, match="planning failed.*not valid JSON"):
-            await mesh.execute_goal(
-                "Find evidence",
-                workflow_id="wf-invalid-plan",
-                timeout=1,
-            )
+        result = await mesh.execute_goal(
+            "Find evidence",
+            workflow_id="wf-invalid-plan",
+            timeout=1,
+        )
+        resubmitted = await mesh.execute_goal(
+            "Find evidence",
+            workflow_id="wf-invalid-plan",
+            timeout=1,
+        )
     finally:
         await mesh.stop()
 
+    assert result["status"] == "failed"
+    assert result["failure_stage"] == "planning"
+    assert "not valid JSON" in result["error"]
+    assert resubmitted == result
     assert store.get_workflow_planning_status("wf-invalid-plan")["status"] == "failed"
     assert "wf-invalid-plan" not in store.get_pending_workflow_goals()
 

@@ -144,7 +144,7 @@ def test_plan_template_validates_without_calling_llm_and_adds_response_step():
         "research", "answer", "final_response",
     ]
     assert plan.steps[1].depends_on == ["research"]
-    assert plan.steps[2].depends_on == ["answer"]
+    assert plan.steps[2].depends_on == ["research", "answer"]
 
 
 def test_plan_template_rejects_capability_mismatch_without_calling_llm():
@@ -334,8 +334,8 @@ def test_mesh_planning_brief_reaches_amendment_and_reconciliation_prompts():
             plan, current_steps=[], reason="Evidence missing", planning_brief=brief,
         ),
         planner._amendment_repair_prompt(
-            plan, audit={"complete": False}, current_steps=[],
-            reason="Evidence missing", planning_brief=brief,
+            plan, audit={"complete": False}, target_obligation_ids={"o1"},
+            current_steps=[], reason="Evidence missing", planning_brief=brief,
         ),
         planner._invalid_amendment_repair_prompt(
             plan.goal, plan.obligations, current_steps=[], rejected={"steps": []},
@@ -1329,6 +1329,7 @@ def test_amendment_audit_and_repair_include_failed_terminal_evidence():
     )
     repair_prompt = MeshPlanner._amendment_repair_prompt(
         plan, audit={"complete": False, "missing": ["repair"]},
+        target_obligation_ids={"o1"},
         current_steps=[failed], reason="Correct the failed verification",
     )
 
@@ -1485,6 +1486,122 @@ async def test_amendment_response_uses_the_attempt_that_satisfied_the_obligation
     )
 
     assert plan.steps[-1].depends_on == ["step-3", "outreach-a"]
+
+
+def _gtm_reverification_history():
+    """Shape of live run gtm-live-73455c56 when its first revision was planned."""
+    obligations = [
+        {"id": f"obligation-{n}", "description": f"Need {n}", "source_quote": "account"}
+        for n in range(1, 9)
+    ]
+    step = {
+        "capability": "gtm", "effect": "read", "systems": [],
+        "success_criterion": "Done", "expected_findings": [], "status": "completed",
+    }
+    current_steps = [
+        {**step, "id": "step-1", "task": "Research", "depends_on": [],
+         "covers": ["obligation-1", "obligation-2", "obligation-3", "obligation-4"]},
+        {**step, "id": "step-2", "task": "Assess fit", "depends_on": ["step-1"],
+         "covers": ["obligation-5"]},
+        {**step, "id": "step-3", "effect": "propose", "task": "Draft email",
+         "depends_on": ["step-1", "step-2"],
+         "covers": ["obligation-6", "obligation-7", "obligation-8"]},
+        {**step, "id": "final_response", "capability": "action_briefing",
+         "effect": "final_response", "task": "Answer",
+         "depends_on": ["step-3", "step-1", "step-2"], "covers": []},
+    ]
+    targets = {"obligation-1", "obligation-4", "obligation-5", "obligation-6", "obligation-7"}
+    projection = {
+        item["id"]: (
+            {"state": "unresolved", "attempt_states": {"step-1": "unresolved"}}
+            if item["id"] in targets else
+            {"state": "satisfied", "attempt_states": {
+                "step-3" if item["id"] == "obligation-8" else "step-1": "satisfied"
+            }}
+        )
+        for item in obligations
+    }
+
+    def new(step_id, effect, covers, depends_on):
+        return {
+            "step_id": step_id, "capability": "gtm", "effect": effect, "systems": [],
+            "task": f"{step_id} work", "success_criterion": "Done",
+            "expected_findings": [], "depends_on": depends_on, "covers": covers,
+        }
+
+    delta = [
+        new("step-4", "read", ["obligation-1", "obligation-4"], ["step-1"]),
+        new("step-5", "read", ["obligation-5"], ["step-4", "step-2"]),
+        new("step-6", "propose", ["obligation-6", "obligation-7"],
+            ["step-4", "step-5", "step-3"]),
+    ]
+    return obligations, current_steps, targets, projection, delta
+
+
+@pytest.mark.asyncio
+async def test_amendment_response_depends_on_every_new_producer():
+    """The answer reads all new evidence, not only the last new step's artifact."""
+    obligations, current_steps, targets, projection, delta = (
+        _gtm_reverification_history()
+    )
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"steps": delta})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(
+        llm,
+        capabilities={"gtm": "Go to market", "action_briefing": "Brief the user"},
+        response_capability="action_briefing",
+    )
+
+    plan = await planner.amend(
+        "Qualify one account and draft outreach",
+        obligations=obligations,
+        target_obligation_ids=targets,
+        current_steps=current_steps,
+        reason="Re-verify the decision-maker",
+        revision=1,
+        obligation_projection=projection,
+    )
+
+    response = plan.steps[-1]
+    assert response.step_id == "final_response_2"
+    assert response.depends_on == ["step-4", "step-5", "step-6", "step-1", "step-3"]
+
+
+@pytest.mark.asyncio
+async def test_amendment_repair_is_asked_to_cover_only_the_amendment_targets():
+    obligations, current_steps, targets, projection, delta = (
+        _gtm_reverification_history()
+    )
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"steps": delta})},
+        {"content": json.dumps({"complete": False, "missing": ["Draft lacks a source"]})},
+        {"content": json.dumps({"steps": delta})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(
+        llm,
+        capabilities={"gtm": "Go to market", "action_briefing": "Brief the user"},
+        response_capability="action_briefing",
+    )
+
+    await planner.amend(
+        "Qualify one account and draft outreach",
+        obligations=obligations,
+        target_obligation_ids=targets,
+        current_steps=current_steps,
+        reason="Re-verify the decision-maker",
+        revision=1,
+        obligation_projection=projection,
+    )
+
+    repair_prompt = llm.calls[2]["messages"][0]["content"]
+    assert (
+        "cover every UNRESOLVED OBLIGATION ID exactly through new work: "
+        + json.dumps(sorted(targets))
+    ) in repair_prompt
+    assert '"obligation-2"' not in repair_prompt.split("INVARIANTS:", 1)[1]
 
 
 @pytest.mark.asyncio

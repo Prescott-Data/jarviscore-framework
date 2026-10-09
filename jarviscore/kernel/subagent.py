@@ -105,6 +105,8 @@ _OBSERVATION_LIMIT = int(os.getenv("SUBAGENT_OBSERVATION_LIMIT", "800"))
 # Whole results of the last N tool turns are kept; older turns are released
 # whole, never cut, when the window or the total-size budget is exceeded.
 _TURN_RESULT_WINDOW = int(os.getenv("SUBAGENT_TURN_RESULT_WINDOW", "10"))
+# Exchanges the agent sees each turn, and carries into a continued step.
+_CONVERSATION_WINDOW = 10
 _TURN_RESULT_BUDGET = int(os.getenv("SUBAGENT_TURN_RESULT_BUDGET", "2000000"))
 # read_turn_result pages are shown whole, so each page is sized to fit the agent's view.
 _READ_PAGE_LIMIT = int(os.getenv("SUBAGENT_READ_PAGE_LIMIT", "20000"))
@@ -144,20 +146,38 @@ def _clip_observation(text: str, turn: int, limit: int = 0) -> str:
     )
 
 
-def _observe(tool_name: str, tool_result: Any, turn: int) -> str:
+def _checkpoint(state: KernelState, conversation_history: list) -> str:
+    """The step state with the agent's recent exchanges; images stay as their receipts."""
+    state.conversation = [
+        {key: value for key, value in entry.items() if key != "images"}
+        for entry in conversation_history[-_CONVERSATION_WINDOW:]
+    ]
+    return state.model_dump_json()
+
+
+def _observe(tool_name: str, tool_result: Any, turn: int, whole: bool = False) -> str:
     """The agent's view of a tool result; a read_turn_result page is already sized and shown whole."""
-    if tool_name == "read_turn_result":
+    if whole or tool_name == "read_turn_result":
         return str(tool_result)
     return _clip_observation(str(tool_result), turn)
 
 def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) -> None:
-    """Prior turns as assistant/user pairs, images included (last 10)."""
-    for hist_entry in conversation_history[-10:]:
+    """Prior turns as assistant/user pairs, images included (last 10).
+
+    A perception a later one replaced is shown as a pointer to it: the agent
+    acts on the latest view of the world, and can still read the older one.
+    """
+    recent = conversation_history[-_CONVERSATION_WINDOW:]
+    latest = max((i for i, entry in enumerate(recent) if entry.get("perception")), default=None)
+    for i, hist_entry in enumerate(recent):
+        observation = hist_entry["observation"]
+        if hist_entry.get("perception") and i != latest:
+            observation = hist_entry["superseded"]
         messages.append({"role": "assistant", "content": hist_entry["assistant"]})
         messages.append({
             "role": "user",
             "content": multimodal.with_images(
-                hist_entry["observation"], hist_entry.get("images", ())
+                observation, hist_entry.get("images", ())
             ),
         })
 
@@ -326,6 +346,11 @@ class BaseSubAgent(ABC):
     #: values, the agent submitted an identical result, and no tool ran in between
     #: — so an agent that is still working is never cut off, however long it takes.
     max_identical_done_attempts: int = 3
+
+    #: Tools whose results are the agent's perception and are shown whole, never clipped.
+    whole_observation_tools: frozenset = frozenset()
+    #: Perceptions of a changing world: a newer result replaces older ones in the agent's view.
+    perception_tools: frozenset = frozenset()
 
     def __init__(
         self,
@@ -689,8 +714,7 @@ class BaseSubAgent(ABC):
             "**DECISION CONTRACT (follow this structure in your THOUGHT):**\n"
             "1. **KNOWN:** What have I established so far? (refer to WHAT I KNOW SO FAR above)\n"
             "2. **GAP:** What specific information am I still missing?\n"
-            "3. **STRATEGY:** What is the most efficient next step to close the gap?\n"
-            "4. **EXIT CHECK:** Do I have enough to produce a useful result? If yes, call DONE.\n\n"
+            "3. **STRATEGY:** What is the most efficient next step to close the gap?\n\n"
             "Then emit your TOOL/PARAMS or DONE/RESULT."
         )
         if "ask_peer" in self._tools:
@@ -754,6 +778,7 @@ class BaseSubAgent(ABC):
         if context_manager is None:
             from jarviscore.context.context_manager import ContextManager
             context_manager = ContextManager()
+        context_manager.perception_tools = self.perception_tools
 
         # ── Initialize or resume state ──
         state = KernelState(
@@ -805,13 +830,15 @@ class BaseSubAgent(ABC):
         # ── TraceManager: use injected trace or no-op ──
         from jarviscore.kernel.tracing import create_noop_trace
         _trace = trace if trace is not None else create_noop_trace()
+        await self._carry_out_decided_actions(state, _trace)
         total_tokens = {"input": 0, "output": 0, "total": state.tokens_used}
         total_cost = state.total_cost_usd
         system_prompt = self._build_system_prompt()
 
         # Rolling conversation history for multi-turn LLM continuity
-        # (prevents amnesia — the LLM sees its own prior reasoning)
-        conversation_history: List[Dict[str, str]] = []
+        # (prevents amnesia — the LLM sees its own prior reasoning); a
+        # continued step picks up the exchanges its last epoch checkpointed.
+        conversation_history: List[Dict[str, Any]] = list(state.conversation)
 
         # Epistemic consistency enforcement — blocks redundant searches/URLs
         # before they execute (deterministic, unlike prompt-based nudges)
@@ -849,7 +876,7 @@ class BaseSubAgent(ABC):
                     state.action_tokens_used = self._cognition.lease.action_used
                     state.tokens_used = total_tokens["total"]
                     state.total_cost_usd = total_cost
-                    await memory.save_checkpoint(state.model_dump_json())
+                    await memory.save_checkpoint(_checkpoint(state, conversation_history))
                     return AgentOutput(
                         status="epoch_exhausted",
                         summary=(
@@ -897,10 +924,12 @@ class BaseSubAgent(ABC):
             context_block = context_manager.build_context(state)
 
             # ═══ 2. ORIENT — Meta-cognition check ═══
+            # A notice about this run's budget or dynamics belongs to this turn;
+            # kept as a thought it would outlive the run it describes.
             intervention = self._cognition.get_intervention()
             if intervention:
                 self._log.warning("Cognition intervention: %s", intervention[:120])
-                state.add_thought(f"[META] {intervention}")
+                context_block += f"\n\n## RUNTIME NOTICE (this turn)\n{intervention}"
 
             # Inject failure memory into state for context building
             failure_block = self._cognition.failure_memory_block()
@@ -933,7 +962,7 @@ class BaseSubAgent(ABC):
                     state.tokens_used = total_tokens["total"]
                     state.total_cost_usd = total_cost
                     if memory is not None:
-                        await memory.save_checkpoint(state.model_dump_json())
+                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
                     if not e.recoverable:
                         _trace.log_step_complete(
                             False,
@@ -1062,7 +1091,7 @@ class BaseSubAgent(ABC):
                             state.action_tokens_used = self._cognition.lease.action_used
                             state.tokens_used = total_tokens["total"]
                             state.total_cost_usd = total_cost
-                            await memory.save_checkpoint(state.model_dump_json())
+                            await memory.save_checkpoint(_checkpoint(state, conversation_history))
                             return AgentOutput(
                                 status="epoch_exhausted",
                                 summary=f"{summary}; durable state was checkpointed",
@@ -1252,7 +1281,7 @@ class BaseSubAgent(ABC):
                     turn_log["error"] = str(exc)
                     trajectory.append(turn_log)
                     if memory is not None:
-                        await memory.save_checkpoint(state.model_dump_json())
+                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
                     _trace.log_step_complete(
                         False,
                         "Active execution epoch exhausted; checkpointed for continuation.",
@@ -1323,8 +1352,7 @@ class BaseSubAgent(ABC):
                     tool_name, tool_params, tool_result, turn, state
                 )
                 _plateau_signal = _epistemic.check_plateau(state, turn)
-                if _plateau_signal:
-                    state.add_thought(f"[EPISTEMIC] {_plateau_signal}")
+                plateau_note = f"\n\n[EPISTEMIC] {_plateau_signal}" if _plateau_signal else ""
 
                 # ── Track usage + convergence ──
                 registered = self._tools.get(tool_name)
@@ -1354,8 +1382,15 @@ class BaseSubAgent(ABC):
                     state.total_cost_usd = total_cost
                     self._save_subagent_state(state)
                     trajectory.append(turn_log)
+                    conversation_history.append({
+                        "assistant": content,
+                        "observation": (
+                            f"[Turn {turn}] Tool '{tool_name}' returned (waiting):\n"
+                            f"{_observe(tool_name, tool_result, turn)}"
+                        ),
+                    })
                     if memory is not None:
-                        await memory.save_checkpoint(state.model_dump_json())
+                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
                     return AgentOutput(
                         status="yield",
                         payload=tool_result,
@@ -1401,8 +1436,8 @@ class BaseSubAgent(ABC):
                         # Record conversation for continuity through the pivot
                         observation = (
                             f"Tool '{tool_name}' returned: "
-                            f"{_observe(tool_name, tool_result, turn)}\n"
-                            f"Authoritative tool receipt: {tool_receipt.receipt_id}"
+                            f"{_observe(tool_name, tool_result, turn, tool_name in self.whole_observation_tools)}\n"
+                            f"Authoritative tool receipt: {tool_receipt.receipt_id}{plateau_note}"
                         )
                         conversation_history.append({
                             "assistant": content,
@@ -1434,7 +1469,9 @@ class BaseSubAgent(ABC):
                 # Record conversation history for multi-turn LLM continuity
                 # Structured turn digest instead of raw output — helps the LLM
                 # retain what was learned and reason about strategy changes.
-                result_str = _observe(tool_name, tool_result, turn)
+                result_str = _observe(
+                    tool_name, tool_result, turn, tool_name in self.whole_observation_tools
+                )
                 observation = (
                     f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}):\n"
                     f"{result_str}\n\n"
@@ -1442,12 +1479,18 @@ class BaseSubAgent(ABC):
                     "When final JSON reports this command execution, include this exact "
                     "value as `tool_receipt_id`; JarvisCore binds the runtime facts.\n\n"
                     f"Reflect: What new information does this provide? "
-                    f"Does it change your strategy?"
+                    f"Does it change your strategy?{plateau_note}"
                 )
                 conversation_history.append({
                     "assistant": content,
                     "observation": observation,
                     "images": observed_images,
+                    "perception": tool_name in self.perception_tools,
+                    "superseded": (
+                        f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}); "
+                        "a later perception replaced this view. Full result: TOOL: "
+                        f'read_turn_result PARAMS: {{"turn": {turn}}}'
+                    ),
                 })
 
                 # Log turn to memory
@@ -1471,7 +1514,7 @@ class BaseSubAgent(ABC):
                 # Save checkpoint
                 if memory:
                     try:
-                        await memory.save_checkpoint(state.model_dump_json())
+                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
                     except Exception as e:
                         self._log.warning("Checkpoint save failed for %s turn=%s: %s", self.agent_id, turn, e)
 
@@ -1590,6 +1633,80 @@ class BaseSubAgent(ABC):
         registry warm-up, context seeding). Default is a no-op.
         """
         pass
+
+    async def _carry_out_decided_actions(self, state: KernelState, trace) -> None:
+        """Act on each decision a person made while this step waited, exactly once.
+
+        An approved action runs here, through the normal tool path, so its
+        receipt is authoritative; a declined one is reported and never run.
+        """
+        from jarviscore.kernel import approval
+
+        workflow_id = state.context.get("workflow_id")
+        step_id = state.context.get("step_id")
+        decisions = approval.decided(self.redis_store, workflow_id, step_id)
+        if decisions:
+            # Completion pressure from before the pause describes a world the decision changed.
+            state.output = None
+            state.thoughts = [
+                thought for thought in state.thoughts
+                if not thought.startswith(("[EPISTEMIC] KNOWLEDGE_PLATEAU", "[DONE_GATE]"))
+            ]
+        for action, approved in decisions:
+            if not approved:
+                approval.settle(self.redis_store, workflow_id, step_id, action.action_id, {
+                    "status": "declined",
+                })
+                state.add_thought(
+                    f"[HITL DECLINED] The person declined: {action.consequence}. "
+                    "It was not performed and must not be attempted. Report that outcome."
+                )
+                continue
+            if not await self._approved_action_applies(action):
+                approval.settle(self.redis_store, workflow_id, step_id, action.action_id, {
+                    "status": "not_performed",
+                    "reason": "the approved target is no longer where it was approved",
+                })
+                state.add_thought(
+                    f"[HITL APPROVED, NOT PERFORMED] The person approved: {action.consequence}. "
+                    f"JarvisCore did not perform it because {action.description or action.tool} "
+                    "is no longer where it was approved. Inspect current provider state; "
+                    "if the action is still needed it must be proposed again for a new decision."
+                )
+                continue
+            params = self._approved_action_params(action)
+            trace.log_tool_start(action.tool, params)
+            started_at = time.time()
+            started = time.monotonic()
+            result = await self._execute_tool(action.tool, params)
+            error = result.get("error") if isinstance(result, dict) else None
+            trace.log_tool_result(action.tool, result, error=error)
+            receipt = state.add_tool_result(
+                action.tool, params, result, error=error, timestamp=started_at,
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
+            if isinstance(result, dict) and result.get("performed") is False:
+                state.add_thought(
+                    f"[HITL APPROVED, NOT YET PERFORMED] The person approved: {action.consequence}. "
+                    f"When JarvisCore tried it as this step resumed, nothing happened: {error}. "
+                    "The approval stands for this exact action: deal with what blocked it, then "
+                    "call the same action again with irreversible and consequence; it runs once."
+                )
+                continue
+            state.add_thought(
+                f"[HITL APPROVED, PERFORMED] The person approved: {action.consequence}. "
+                f"JarvisCore performed {action.description or action.tool} as this step "
+                f"resumed (tool receipt {receipt.receipt_id}): {json.dumps(result, default=str)}. "
+                "Observe the provider's outcome before finishing; never repeat this action."
+            )
+
+    def _approved_action_params(self, action) -> Dict[str, Any]:
+        """Tool parameters that perform an approved action."""
+        return dict(action.params)
+
+    async def _approved_action_applies(self, action) -> bool:
+        """Whether the approved action still targets what the person approved."""
+        return True
 
     def _save_subagent_state(self, state: KernelState) -> None:
         """Place subclass runtime state into the serializable checkpoint."""
@@ -1812,12 +1929,12 @@ class BaseSubAgent(ABC):
                     "result": result,
                 }
 
-        # RESULT alone (no DONE, no TOOL) only completes when it carries a
-        # structured JSON object. "RESULT: pending" prose mid-thought must not
-        # end the dispatch with a fabricated completion (issue #61).
-        if result_match and not done_match and not tool_match:
-            if _extract_json_object(result_match.group(1).strip()) is None:
-                result_match = None
+        # DONE is the completion directive; RESULT is the structured payload that
+        # accompanies it. A RESULT without DONE ({"status": "in_progress"}, a
+        # plan, a partial table) is not a completion: treating it as one
+        # recorded unfinished steps as successful (issues #61, browser epochs).
+        if result_match and not done_match:
+            result_match = None
 
         # Directive precedence: models quote protocol keywords in their
         # reasoning constantly — the system prompt itself teaches the magic

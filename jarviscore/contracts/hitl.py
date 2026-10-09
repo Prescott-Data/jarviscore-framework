@@ -168,6 +168,24 @@ class HITLPolicy(BaseModel):
 
 # ── Request ───────────────────────────────────────────────────────────────────
 
+class HITLAction(BaseModel):
+    """The exact consequential action a person is asked to approve.
+
+    ``action_id`` fingerprints what the action touches, so one decision covers
+    this action across a resume and never a different one.
+    """
+
+    action_id: str = Field(min_length=1)
+    tool: str = Field(min_length=1)
+    system: str = ""
+    params: Dict[str, Any] = Field(default_factory=dict)
+    description: str = ""
+    consequence: str = Field(min_length=1)
+    location: str = ""
+    # What the action touches, independent of how it was addressed when proposed.
+    target: Dict[str, Any] = Field(default_factory=dict)
+
+
 class HITLRequest(BaseModel):
     """
     A HITL request created by the kernel when human input is needed.
@@ -194,6 +212,7 @@ class HITLRequest(BaseModel):
 
     description: str = ""
     payload: Dict[str, Any] = Field(default_factory=dict)
+    action: Optional[HITLAction] = None
 
     # Who can resolve and how
     targets: List[str] = Field(default_factory=list)
@@ -215,9 +234,24 @@ class HITLRequest(BaseModel):
     def to_redis_mapping(self) -> Dict[str, str]:
         """Flatten for Redis HSET — all values must be strings."""
         import json
-        d = self.model_dump()
+        d = self.model_dump(mode="json")
         return {k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                for k, v in d.items()}
+                for k, v in d.items() if v is not None}
+
+    @classmethod
+    def from_redis_mapping(cls, raw: Dict[str, Any]) -> "HITLRequest":
+        """Rebuild a request from the hash ``to_redis_mapping`` wrote."""
+        import json
+        structured = {"payload", "targets", "channels", "policy", "metadata", "action"}
+        fields = {}
+        for name in cls.model_fields:
+            if name not in raw:
+                continue
+            value = raw[name]
+            if name in structured and isinstance(value, str):
+                value = json.loads(value)
+            fields[name] = value
+        return cls(**fields)
 
 
 # ── Resolution ────────────────────────────────────────────────────────────────

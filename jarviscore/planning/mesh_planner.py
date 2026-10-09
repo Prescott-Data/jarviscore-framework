@@ -529,6 +529,7 @@ class MeshPlanner:
                 repair_raw = await self._call_json(self._amendment_repair_prompt(
                     plan,
                     audit=audit,
+                    target_obligation_ids=targets,
                     current_steps=current_steps,
                     reason=reason,
                     planning_brief=self.planning_brief,
@@ -686,14 +687,12 @@ class MeshPlanner:
         ):
             raise MeshPlanError("Domain steps cannot depend on the final response")
         steps = self._normalize_obligation_coverage(steps)
-        depended_on = {
-            dependency for step in steps for dependency in step.depends_on
-        }
-        sinks = [step.step_id for step in steps if step.step_id not in depended_on]
-        sinks += [
+        # The response reads every workflow artifact, so it depends on every producer.
+        producers = [step.step_id for step in steps]
+        producers += [
             producer_id
             for producer_id in settled_producer_ids or []
-            if producer_id not in sinks
+            if producer_id not in producers
         ]
         existing_ids = {step.step_id for step in steps} | (reserved_ids or set())
         step_id = "final_response"
@@ -720,7 +719,7 @@ class MeshPlanner:
                     "workflow IDs, step IDs, evidence pointers or trace details."
                 ),
                 expected_findings=["user-facing outcome"],
-                depends_on=sinks,
+                depends_on=producers,
                 covers=[],
             ),
         ]
@@ -1215,6 +1214,7 @@ Otherwise return complete=false with `missing` entries describing the amendment 
         plan: MeshPlan,
         *,
         audit: dict[str, Any],
+        target_obligation_ids: set[str],
         current_steps: list[dict[str, Any]],
         reason: str,
         planning_brief: str = "",
@@ -1245,7 +1245,7 @@ AUDIT FINDINGS:
 
 {MeshPlanner._format_planning_brief(planning_brief)}
 
-{MeshPlanner._amendment_step_invariants({item.id for item in plan.obligations})}
+{MeshPlanner._amendment_step_invariants(target_obligation_ids)}
 
 Return one valid json object containing only NEW `steps` using the normal step
 schema. Current step ids may appear only in depends_on. Add remediation work after

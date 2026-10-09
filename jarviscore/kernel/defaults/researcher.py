@@ -27,7 +27,7 @@ from typing import Dict, Any, List, Optional, Literal, cast, Set, Tuple
 from urllib.parse import urlparse
 
 from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image, with_images
-from jarviscore.kernel.subagent import BaseSubAgent
+from jarviscore.kernel.subagent import BaseSubAgent, _extract_json_object
 from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.state import KernelState
 from jarviscore.kernel.defaults.research_flow import ResearchFlow, ResearchPhase
@@ -575,7 +575,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
 
     #: What each named done-payload check reads, stated once for the agent.
     _DONE_REQUIREMENTS = {
-        "summary": "a non-empty summary",
+        "summary": "a statement of what was found: the DONE answer, or a non-empty summary",
         "evidence": "at least one evidence entry, or a recorded research finding",
         "evidence_pointers": "every evidence entry carries a pointer or url",
         "api_specs": "every api_spec entry carries a method and a url or path",
@@ -658,7 +658,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     ),
                 },
             )
-        valid, _reason, report = self._validate_done_payload(state, params)
+        valid, _reason, report = self._validate_done_payload(state, params, answer=parsed.get("answer"))
         if not valid:
             check = report.get("check", "done_payload")
             observed = {key: value for key, value in report.items() if key != "check"}
@@ -670,9 +670,13 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             )
         return True, ""
 
-    def _validate_done_payload(self, state, params: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    def _validate_done_payload(
+        self, state, params: Dict[str, Any], answer: Optional[str] = None,
+    ) -> Tuple[bool, str, Dict[str, Any]]:
         strict = _env_bool("RESEARCH_STRICT_DONE_VALIDATION", True)
-        summary = str(params.get("summary") or "").strip()
+        # The DONE answer is the human statement of what was found; a product
+        # that owns its result shape need not repeat it as a `summary` field.
+        summary = str(params.get("summary") or answer or "").strip()
         evidence = params.get("evidence")
         api_specs = params.get("api_specs") or []
         findings = state.internal_variables.get("research_findings", []) if getattr(state, "internal_variables", None) else []
@@ -2502,17 +2506,27 @@ Rules:
 - If you cannot determine a value, omit the key rather than guessing.
 
 DOCUMENTATION TEXT:
-{text[:20000]}
+{text}
 """
-        if not hasattr(self.llm, "query_json"):
-            error = "LLM does not support structured query"
+        try:
+            response = await self.llm_client.generate(
+                messages=[
+                    {"role": "system", "content": "You are a precise API specification extractor. Return only valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0,
+            )
+            result = _extract_json_object(str((response or {}).get("content") or ""))
+        except Exception as exc:
+            error = f"API extraction failed: {exc}"
             self.tracer.log_tool_result("extract_api_details", None, error=error)
             return {"error": error}
-
-        result = await self.llm.query_json(
-            "You are a precise API specification extractor. Return only valid JSON.", prompt
-        )
-        extracted_specs = result.get("api_specs") if isinstance(result, dict) else []
+        if result is None:
+            error = "API extraction returned no JSON object"
+            self.tracer.log_tool_result("extract_api_details", None, error=error)
+            return {"error": error}
+        extracted_specs = result.get("api_specs")
         spec_count = len(extracted_specs) if isinstance(extracted_specs, list) else 0
 
         if isinstance(extracted_specs, list) and extracted_specs:

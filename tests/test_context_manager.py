@@ -619,3 +619,21 @@ class TestGoalStateBlock:
         rendered = big_cm.build_context(_kernel_state(context=ctx))
         assert "H" * 900 in rendered
         assert "truncated" not in rendered
+
+
+def test_the_plan_states_the_goal_once_and_keeps_every_specific_quote(big_cm):
+    goal = "Order noodles and rice under £6, delivered by Wednesday."
+    plan = {
+        "goal": goal,
+        "obligations": [
+            {"id": "o1", "description": "Order noodles.", "source_quote": goal},
+            {"id": "o2", "description": "Stay under £6.", "source_quote": "under £6"},
+        ],
+        "steps": [{"id": "step-1", "task": "Order"}],
+    }
+
+    rendered = big_cm.build_context(_kernel_state(context={"workflow_plan": plan}))
+
+    assert rendered.count(goal) == 1
+    assert "'source_quote': 'under £6'" in rendered and "(the whole goal above)" in rendered
+    assert plan["obligations"][0]["source_quote"] == goal

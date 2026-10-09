@@ -444,6 +444,20 @@ class ContextManager:
 
         return blocks
 
+    @staticmethod
+    def _plan_view(plan: Dict[str, Any]) -> Dict[str, Any]:
+        """The plan as the agent reads it: a goal-wide source quote points to the goal it repeats."""
+        goal = str(plan.get("goal") or "").strip()
+        obligations = plan.get("obligations")
+        if not goal or not isinstance(obligations, list):
+            return plan
+        view = []
+        for obligation in obligations:
+            if isinstance(obligation, dict) and str(obligation.get("source_quote") or "").strip() == goal:
+                obligation = {**obligation, "source_quote": "(the whole goal above)"}
+            view.append(obligation)
+        return {**plan, "obligations": view}
+
     def _compose_input_context(self, state: "KernelState", tier) -> str:
         """Input context, whole values only; bulk keys drop entirely under pressure."""
         if not state.context:
@@ -478,6 +492,8 @@ class ContextManager:
         allowed = set(filter_input_context_keys(other.keys(), tier))
         cleaned = self._scrub_dict({k: v for k, v in other.items() if k in allowed})
         for key, value in cleaned.items():
+            if key == "workflow_plan" and isinstance(value, dict):
+                value = self._plan_view(value)
             if hasattr(value, "model_json_schema"):
                 try:
                     value = json.dumps(value.model_json_schema(), indent=2)
@@ -502,16 +518,28 @@ class ContextManager:
         formatted = []
         current = header_tokens
         withheld = 0
+        perception_tools = getattr(self, "perception_tools", frozenset())
+        recent = history[-20:]
+        latest_perception = max(
+            (i for i, turn in enumerate(recent) if getattr(turn, "tool_name", None) in perception_tools),
+            default=None,
+        )
 
         # Process most-recent first (max 20 entries)
-        for turn in reversed(history[-20:]):
+        for index, turn in reversed(list(enumerate(recent))):
             if hasattr(turn, "tool_name"):
                 # KernelState.ToolResult model
+                output = turn.tool_output
+                if turn.tool_name in perception_tools and index != latest_perception:
+                    output = (
+                        f"replaced by a later {turn.tool_name}; read it in full with "
+                        "TOOL: read_turn_result"
+                    )
                 entry = (
                     f"**{turn.tool_name}** [{turn.status}]\n"
                     f"  Receipt: {turn.receipt_id or 'legacy-unreceipted'}\n"
                     f"  Input: {json.dumps(turn.tool_input, default=str)}\n"
-                    f"  Output: {turn.tool_output}"
+                    f"  Output: {output}"
                 )
                 if turn.error:
                     entry += f"\n  Error: {turn.error}"

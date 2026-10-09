@@ -69,12 +69,11 @@ class TestCoderSubAgent:
         assert parsed["answer"] == parsed["summary"]
         assert parsed["result"]["files"][0] == "Scoreboard"
 
-    def test_a_result_without_done_carries_no_authored_answer(self, mock_llm):
+    def test_a_result_without_done_is_not_a_completion(self, mock_llm):
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
         parsed = coder._parse_response('RESULT: {"files": ["Scoreboard"]}')
 
-        assert parsed["type"] == "done"
-        assert parsed["answer"] is None
+        assert parsed["type"] == "raw"
 
     def test_json_finish_done_is_the_authored_answer(self, mock_llm):
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
