@@ -200,6 +200,7 @@ class RedisContextStore:
         }
         self._redis.hset(key, mapping={k: v for k, v in data.items() if v is not None})
         self._redis.expire(key, self._ttl_seconds)
+        self._index_step_output(workflow_id, step_id)
         return True
 
     def get_step_output(self, workflow_id: str,
@@ -222,18 +223,26 @@ class RedisContextStore:
                 pass
         return result
 
+    def _index_step_output(self, workflow_id: str, step_id: str, pipe=None) -> None:
+        target = pipe if pipe is not None else self._redis
+        index = f"step_output_ids:{workflow_id}"
+        target.sadd(index, step_id)
+        target.expire(index, self._ttl_seconds)
+
     def list_step_output_ids(self, workflow_id: str) -> List[str]:
         """Return all step IDs that have saved outputs for this workflow.
 
-        Uses SCAN (non-blocking) to find keys matching
-        step_output:{workflow_id}:*  and strips the prefix to return
-        just the step_id portion.
+        Reads the workflow's output index and graph instead of scanning the
+        keyspace: a SCAN walks every key in the database, so its cost grew with
+        every workflow ever run and it ran on each step dispatch.
         """
-        prefix = f"step_output:{workflow_id}:"
-        return [
-            k[len(prefix):]
-            for k in self._redis.scan_iter(match=f"{prefix}*")
-        ]
+        candidates = set(self._redis.smembers(f"step_output_ids:{workflow_id}") or ())
+        candidates.update(self._redis.hkeys(f"workflow_graph:{workflow_id}") or ())
+        ordered = sorted(candidates)
+        pipe = self._redis.pipeline()
+        for step_id in ordered:
+            pipe.exists(f"step_output:{workflow_id}:{step_id}")
+        return [step_id for step_id, found in zip(ordered, pipe.execute()) if found]
 
     # ------------------------------------------------------------------
     # Shared Context / Truth
@@ -2251,6 +2260,7 @@ class RedisContextStore:
                 pipe.multi()
                 pipe.hset(output_key, mapping={k: v for k, v in mapping.items() if v is not None})
                 pipe.expire(output_key, self._ttl_seconds)
+                self._index_step_output(workflow_id, step_id, pipe)
                 pipe.hset(graph_key, mapping={step_id: json.dumps(data)})
                 if projection:
                     pipe.set(projection_key, json.dumps(projection, default=str))

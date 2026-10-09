@@ -66,6 +66,20 @@ class TestStepOutputs:
         """Reading a step that hasn't run returns None."""
         assert store.get_step_output("wf-1", "nonexistent") is None
 
+    def test_listing_a_workflows_outputs_never_scans_the_keyspace(self, store, monkeypatch):
+        store.save_step_output("wf-1", "step-1", output="a")
+        store.save_step_output("wf-1", "step-2", output="b")
+        store.save_step_output("wf-2", "step-1", output="c")
+        store._redis.hset("workflow_graph:wf-1", "step-3", "{}")
+        store._redis.hset("step_output:wf-1:step-3", "output", "\"before the index\"")
+
+        def scan_forbidden(*args, **kwargs):
+            raise AssertionError("SCAN walks every key in the database")
+
+        monkeypatch.setattr(store._redis, "scan_iter", scan_forbidden)
+
+        assert store.list_step_output_ids("wf-1") == ["step-1", "step-2", "step-3"]
+
     def test_overwrite(self, store):
         """Saving the same step again overwrites (retry/repair scenario)."""
         store.save_step_output("wf-1", "step-1", output="first")

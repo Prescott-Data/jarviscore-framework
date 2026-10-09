@@ -191,6 +191,29 @@ def test_a_pool_needs_the_agent_class():
         mesh.add(PooledVerifier(agent_id="verifier"), pool=Pool())
 
 
+@pytest.mark.asyncio
+async def test_a_state_change_wakes_waiting_loops_before_the_poll_interval():
+    mesh = Mesh(config={"p2p_enabled": False})
+    mark = mesh._activity_generation
+    waiting = asyncio.create_task(mesh._idle(30, mark))
+    await asyncio.sleep(0)
+
+    started = time.monotonic()
+    mesh._wake_workers()
+    await asyncio.wait_for(waiting, timeout=1)
+
+    assert time.monotonic() - started < 0.5
+
+
+@pytest.mark.asyncio
+async def test_a_change_made_during_a_scan_is_not_slept_through():
+    mesh = Mesh(config={"p2p_enabled": False})
+    mark = mesh._activity_generation
+    mesh._wake_workers()
+
+    await asyncio.wait_for(mesh._idle(30, mark), timeout=0.5)
+
+
 @pytest.mark.parametrize("arguments", [
     {"min": 0}, {"min": 3, "max": 2}, {"idle_seconds": -1}, {"lane": "fast"},
 ])

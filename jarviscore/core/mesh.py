@@ -201,6 +201,9 @@ class Mesh:
 
         self._started = False
         self._node_id = f"mesh-{uuid4().hex[:12]}"
+        # A state change on this node wakes its loops at once; polling covers other nodes.
+        self._activity = asyncio.Event()
+        self._activity_generation = 0
         self._logger = logging.getLogger("jarviscore.mesh")
         self._logger.info("Mesh created — capabilities will be detected at start()")
 
@@ -728,7 +731,27 @@ class Mesh:
                         "error": template_error,
                         "timestamp": time.time(),
                     })
+            self._wake_workers()
         return identity
+
+    def _wake_workers(self) -> None:
+        """Wake every loop on this node waiting for workflow state to change."""
+        self._activity_generation += 1
+        event, self._activity = self._activity, asyncio.Event()
+        event.set()
+
+    async def _idle(self, seconds: float, mark: int) -> None:
+        """Wait up to ``seconds``, returning early once this node changes workflow state.
+
+        ``mark`` is the generation read before the caller's scan, so a change made
+        while it scanned is not slept through.
+        """
+        if self._activity_generation != mark:
+            return
+        try:
+            await asyncio.wait_for(self._activity.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
 
     @property
     def schedules(self):
@@ -1069,6 +1092,7 @@ class Mesh:
         from jarviscore.planning.mesh_planner import MeshPlanner
 
         while self._started:
+            mark = self._activity_generation
             try:
                 for workflow_id in self._redis_store.get_pending_workflow_goals():
                     if self._redis_store.get_workflow_definition(workflow_id) is not None:
@@ -1123,11 +1147,12 @@ class Mesh:
                         self._redis_store.release_workflow_planning(
                             workflow_id, self._node_id
                         )
+                        self._wake_workers()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self._logger.warning("[MeshPlanner] Planning attempt failed: %s", exc)
-            await asyncio.sleep(interval)
+            await self._idle(interval, mark)
 
     def _mesh_capability_catalog(self) -> Dict[str, Any]:
         catalog: Dict[str, Any] = {}
@@ -1187,6 +1212,7 @@ class Mesh:
         )
         interval = float(self.config.get("distributed_poll_interval", 2.0))
         while deadline is None or asyncio.get_running_loop().time() < deadline:
+            mark = self._activity_generation
             planning = self._redis_store.get_workflow_planning_status(workflow_id)
             if planning and planning.get("status") == "failed":
                 raise RuntimeError(
@@ -1195,7 +1221,7 @@ class Mesh:
             definition = self._redis_store.get_workflow_definition(workflow_id)
             if definition is not None:
                 return definition
-            await asyncio.sleep(interval)
+            await self._idle(interval, mark)
         return None
 
     async def _wait_for_workflow_terminal(
@@ -1210,6 +1236,7 @@ class Mesh:
         )
         interval = float(self.config.get("distributed_poll_interval", 2.0))
         while deadline is None or asyncio.get_running_loop().time() < deadline:
+            mark = self._activity_generation
             latest = self._redis_store.get_workflow_definition(workflow_id)
             if latest is not None:
                 definition = latest
@@ -1397,7 +1424,7 @@ class Mesh:
                             workflow_id, revision, settlement
                         )
                 if not all_current_terminal and not paused_for_person:
-                    await asyncio.sleep(interval)
+                    await self._idle(interval, mark)
                     continue
                 overall = (
                     "cancelled" if "cancelled" in current_statuses
@@ -1444,7 +1471,7 @@ class Mesh:
                     ),
                     "steps": steps,
                 }
-            await asyncio.sleep(interval)
+            await self._idle(interval, mark)
         raise TimeoutError(f"Workflow {workflow_id!r} did not finish within {timeout}s")
 
     def cancel_goal(self, workflow_id: str, *, reason: str = "Goal cancelled") -> bool:
@@ -1582,6 +1609,7 @@ class Mesh:
             raise
         finally:
             self._redis_store.release_workflow_planning(workflow_id, self._node_id)
+            self._wake_workers()
 
         amended = self._redis_store.get_workflow_definition(workflow_id)
         return await self._wait_for_workflow_terminal(workflow_id, amended, timeout)
@@ -1831,6 +1859,7 @@ class Mesh:
         )
 
         while self._started:
+            mark = self._activity_generation
             try:
                 await self._service_capability_needs(agent, capabilities)
                 for workflow_id, step_id, step_def in self._ready_steps(
@@ -1855,7 +1884,7 @@ class Mesh:
             except Exception as exc:
                 self._logger.warning(f"[DistributedWorker] Error: {exc}")
 
-            await asyncio.sleep(float(self.config.get("distributed_poll_interval", 2.0)))
+            await self._idle(float(self.config.get("distributed_poll_interval", 2.0)), mark)
 
     def _ready_steps(self, agent_id: str, capabilities: set[str]):
         """Pending steps this agent may claim now, recovering expired claims on the way."""
@@ -1919,6 +1948,7 @@ class Mesh:
             base.agent_id, state.spec.min, state.spec.max, sorted(capabilities),
         )
         while self._started:
+            mark = self._activity_generation
             try:
                 while len(state.members) < state.spec.min:
                     state.release(await self._grow_pool(state))
@@ -1963,7 +1993,7 @@ class Mesh:
                 raise
             except Exception as exc:
                 self._logger.warning("[Pool] %s dispatch error: %s", base.agent_id, exc)
-            await asyncio.sleep(poll)
+            await self._idle(poll, mark)
 
     async def _run_pool_step(
         self, state: PoolState, member: Any, workflow_id: str, step_id: str,
@@ -2399,6 +2429,7 @@ class Mesh:
                     exhausted,
                     status="failed",
                 )
+                self._wake_workers()
                 return
             continued = self._redis_store.continue_claimed_step(
                 workflow_id,
@@ -2423,6 +2454,7 @@ class Mesh:
             result,
             status=terminal,
         )
+        self._wake_workers()
         if not committed:
             self._logger.warning(
                 "[DistributedWorker] Rejected stale result for '%s' in '%s' from %s",
