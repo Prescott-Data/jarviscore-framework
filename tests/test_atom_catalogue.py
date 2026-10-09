@@ -54,6 +54,21 @@ class TestCatalogueIsLoaded:
             registry = create_function_registry(directory, seed=False)
             assert registry.function_metadata == {}
 
+    def test_agents_in_one_process_share_one_registry_per_directory(self, monkeypatch):
+        from jarviscore.execution import code_registry
+
+        built = []
+        monkeypatch.setattr(code_registry, "_SHARED_REGISTRIES", {})
+        monkeypatch.setattr(
+            code_registry, "create_function_registry",
+            lambda path: built.append(path) or object(),
+        )
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            one = code_registry.shared_function_registry(first)
+            assert code_registry.shared_function_registry(f"{first}/.") is one
+            assert code_registry.shared_function_registry(second) is not one
+        assert len(built) == 2
+
     def test_a_registry_with_history_receives_only_missing_shipped_atoms(self, monkeypatch):
         calls = []
 
