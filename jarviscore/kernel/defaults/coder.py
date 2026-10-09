@@ -370,10 +370,10 @@ like any other.
                 if name in self._tools
             ]
             first_attempt = (
-                "\n\nYou have not investigated this task yet. Your next response MUST "
-                "use one relevant tool before emitting DONE or a final artifact. "
+                "\n\nNo tool has run in this task yet. "
                 f"Relevant available paths include: {', '.join(useful) or 'the registered tools above'}. "
-                "Choose from the current gap; do not call a tool merely to make the run pass."
+                "A result that depends on live data rests on one of them; the tools this "
+                "run used are recorded with its result."
             )
         return (
             f"{prompt}\n\n"
@@ -399,7 +399,7 @@ like any other.
         state: KernelState,
         parsed: Dict[str, Any],
     ) -> tuple:
-        """Require investigation and one bounded peer review of blocked work."""
+        """Require product-declared actions; record the rest rather than demand it."""
         contract = state.context.get("execution_contract") or {}
         raw_groups = contract.get("required_tool_groups") or []
         groups = [
@@ -422,18 +422,6 @@ like any other.
                         "tools_used": sorted(tools_used),
                         "missing_tool_groups": missing,
                     },
-                ),
-            )
-        if not state.tool_history:
-            return (
-                False,
-                GateEvidence(
-                    check="meaningful_attempt",
-                    requirement=(
-                        "use a relevant provider, code, workflow, mailbox, or peer tool "
-                        "before claiming success or a blocker"
-                    ),
-                    observed={"tool_calls": 0},
                 ),
             )
         return super()._can_complete(state, parsed)

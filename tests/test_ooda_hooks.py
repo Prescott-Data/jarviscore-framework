@@ -271,16 +271,15 @@ class TestResearcherHookIntegration:
         source = inspect.getsource(ResearcherSubAgent._pre_execute_hook)
         assert "PHASE_TOOL_CONTRACT_VIOLATION" in source
 
-    def test_researcher_can_complete_checks_evidence(self):
-        """The researcher rejects a DONE with no research behind it."""
+    def test_researcher_can_complete_checks_the_result_shape(self):
+        """The researcher rejects a DONE whose result lacks its summary."""
         from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
         researcher = ResearcherSubAgent.__new__(ResearcherSubAgent)
 
         ok, evidence = researcher._can_complete(_make_state(), {"result": {}})
 
         assert ok is False
-        assert evidence.check == "research_performed"
-        assert "read_web_content" in evidence.observed["content_tools"]
+        assert evidence.check == "summary"
 
 
 # ──────────────────────────────────────────────────────────────────

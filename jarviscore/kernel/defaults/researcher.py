@@ -526,12 +526,17 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         return mapping.get(phase, set())
 
     def _check_phase_tool_contract(self, tool_name: str) -> Optional[str]:
-        """Check if a tool is allowed in the current research phase."""
-        if not _env_bool("RESEARCH_STRICT_PHASE_CONTRACT", True):
-            return None
+        """Check a tool against the current research phase when strict phases are enabled.
+
+        Phases are recorded for every run; blocking tools by phase is opt-in through
+        RESEARCH_STRICT_PHASE_CONTRACT, because a phase guessed from the last tool
+        call is a poor reason to refuse the next one.
+        """
         if tool_name == "done":
             return ("EPISTEMIC CONTRACT VIOLATION: The 'done' tool has been removed. "
                     "You MUST use 'publish_research_findings' to exit your turn.")
+        if not _env_bool("RESEARCH_STRICT_PHASE_CONTRACT", False):
+            return None
         if tool_name == "error":
             return None
         phase = self._current_research_phase()
@@ -586,10 +591,8 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         "rag_query", "read_file", "extract_api_details",
     })
 
-    _SEARCH_TOOLS = frozenset({"search_internet", "search_internet_batch"})
-
     def _can_complete(self, state, parsed: Dict[str, Any]) -> Tuple[bool, Any]:
-        """Reject premature DONE, reporting what the result actually contains."""
+        """Check the result's own shape; what research ran is recorded, not demanded."""
         base_ok, base_reason = super()._can_complete(state, parsed)
         if not base_ok:
             return base_ok, base_reason
@@ -618,7 +621,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     "missing_tool_groups": missing,
                 },
             )
-        evidence_items = params.get("evidence")
         content_successes = sum(
             1 for t in state.tool_history
             if t.status == "success" and t.tool_name in self._CONTENT_TOOLS
@@ -627,37 +629,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 and t.tool_output.get("content_found") is False
             )
         )
-        # A search that ran is a receipt even when it found nothing: a
-        # negative result is research, a summary with no search behind it is not.
-        search_successes = sum(
-            1 for t in state.tool_history
-            if t.status == "success" and t.tool_name in self._SEARCH_TOOLS
-        )
-        findings = (getattr(state, "internal_variables", None) or {}).get("research_findings")
-        recorded_findings = len(findings) if isinstance(findings, list) else 0
-        upstream_results = bool((getattr(state, "context", None) or {}).get("previous_step_results"))
-        # A summary or evidence list is a claim about research, not proof of it.
-        if not (content_successes or search_successes or recorded_findings or upstream_results):
-            return False, GateEvidence(
-                check="research_performed",
-                requirement=(
-                    "one successful search or content read, or upstream step "
-                    "results to work from"
-                ),
-                observed={
-                    "tool_calls": len(state.tool_history),
-                    "content_tool_successes": 0,
-                    "search_successes": 0,
-                    "content_tools": sorted(self._CONTENT_TOOLS),
-                    "search_tools": sorted(self._SEARCH_TOOLS),
-                    "recorded_findings": 0,
-                    "upstream_results": False,
-                    "result_summary": bool(params.get("summary")),
-                    "result_evidence": (
-                        len(evidence_items) if isinstance(evidence_items, list) else 0
-                    ),
-                },
-            )
         valid, _reason, report = self._validate_done_payload(state, params)
         if not valid:
             check = report.get("check", "done_payload")

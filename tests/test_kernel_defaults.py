@@ -274,11 +274,16 @@ class TestCoderSubAgent:
             memory=memory,
         )
 
-        # The gate rejects an evidence-free landing either way; precedence is what differs.
-        assert result.status == "epoch_exhausted"
-        assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+        # Earlier epochs keep working; the last epoch lands the honest partial result.
         assert llm.calls == (2 if landing_attempted else 1)
-        memory.save_checkpoint.assert_awaited_once()
+        if landing_attempted:
+            assert result.status == "success"
+            assert result.metadata["typed_outcome"] == "SUCCESS_ON_LANDING"
+            assert result.metadata["work_record"] == {}
+        else:
+            assert result.status == "epoch_exhausted"
+            assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+            memory.save_checkpoint.assert_awaited_once()
 
     """Tests for CoderSubAgent."""
 
@@ -426,14 +431,15 @@ class TestCoderSubAgent:
 
     @pytest.mark.asyncio
     async def test_full_run_done_immediately(self, mock_llm):
-        """Coder rejects DONE without executable proof of work."""
+        """A direct answer completes, and its record shows that no tool ran."""
         mock_llm.responses = [
             _llm_response("THOUGHT: Simple task\nDONE: Completed\nRESULT: {\"value\": 42}")
         ]
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
         output = await coder.run("compute 42", max_turns=1)
-        assert output.status == "yield"
-        assert output.metadata["typed_outcome"] == "YIELD_EMERGENCY_TURN_FUSE"
+        assert output.status == "success"
+        assert output.payload == {"value": 42}
+        assert output.metadata["work_record"] == {}
 
     @pytest.mark.asyncio
     async def test_full_run_tool_then_done(self, mock_llm, mock_sandbox):

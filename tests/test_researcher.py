@@ -231,11 +231,17 @@ class TestPhaseToolContract:
         assert "browser_navigate" in allowed
         assert "browser_get_page_text" in allowed
 
-    def test_extracting_blocks_search_internet(self, researcher):
+    def test_extracting_blocks_search_internet_when_phases_are_strict(self, researcher):
         researcher._set_research_phase(ResearchPhase.EXTRACTING, "test")
-        violation = researcher._check_phase_tool_contract("search_internet")
+        with patch.dict(os.environ, {"RESEARCH_STRICT_PHASE_CONTRACT": "true"}):
+            violation = researcher._check_phase_tool_contract("search_internet")
         assert violation is not None
         assert "not allowed" in violation
+
+    def test_phases_are_recorded_not_enforced_by_default(self, researcher):
+        researcher._set_research_phase(ResearchPhase.STUCK, "test")
+        assert researcher._current_research_phase() is ResearchPhase.STUCK
+        assert researcher._check_phase_tool_contract("search_internet") is None
 
     def test_stuck_only_allows_publish(self, researcher):
         allowed = researcher._allowed_tools_for_phase(ResearchPhase.STUCK)
@@ -501,7 +507,10 @@ class TestSearchReceipts:
         ok, evidence = await self._gate_after(researcher, "search_internet", query="firm")
 
         assert researcher.current_state.tool_history[-1].status == "failure"
-        assert ok is False and evidence.check == "research_performed"
+        assert ok is True
+        assert researcher._work_record(researcher.current_state) == {
+            "search_internet": {"calls": 1, "succeeded": 0}
+        }
 
     @pytest.mark.asyncio
     async def test_unavailable_batch_search_is_a_failed_receipt(self, llm, monkeypatch):
@@ -513,7 +522,10 @@ class TestSearchReceipts:
         )
 
         assert researcher.current_state.tool_history[-1].status == "failure"
-        assert ok is False and evidence.check == "research_performed"
+        assert ok is True
+        assert researcher._work_record(researcher.current_state) == {
+            "search_internet_batch": {"calls": 1, "succeeded": 0}
+        }
 
     @pytest.mark.asyncio
     async def test_an_answered_empty_search_is_a_negative_result(self, llm, monkeypatch):

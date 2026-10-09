@@ -667,6 +667,7 @@ class BaseSubAgent(ABC):
                           "lease_exhausted": exhausted, "landing_turn": True,
                           "typed_outcome": "SUCCESS_ON_LANDING",
                           "tool_receipts": state.receipt_evidence(state.output),
+                          "work_record": self._work_record(state),
                           "answer": parsed.get("answer"),
                           "kept_memories": list(getattr(self, "_kept_memories", []))},
             )
@@ -1146,6 +1147,7 @@ class BaseSubAgent(ABC):
                         "tokens": total_tokens,
                         "cost_usd": total_cost,
                         "tool_receipts": state.receipt_evidence(parsed.get("result")),
+                        "work_record": self._work_record(state),
                         "answer": parsed.get("answer"),
                         "kept_memories": list(getattr(self, "_kept_memories", [])),
                         **getattr(self, "_dispatch_metadata", {}),
@@ -1644,6 +1646,20 @@ class BaseSubAgent(ABC):
         history decide whether completion is supported.
         """
         return (True, "")
+
+    @staticmethod
+    def _work_record(state: KernelState) -> Dict[str, Dict[str, int]]:
+        """What this run did, per tool, counted from its tool log.
+
+        Completion is not refused for how the work was done; the record travels with
+        the result so the product, a reviewer or a person decides what it supports.
+        """
+        record: Dict[str, Dict[str, int]] = {}
+        for receipt in state.tool_history:
+            entry = record.setdefault(receipt.tool_name, {"calls": 0, "succeeded": 0})
+            entry["calls"] += 1
+            entry["succeeded"] += receipt.status == "success"
+        return record
 
     @staticmethod
     def _ground_completion(
