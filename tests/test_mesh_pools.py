@@ -214,6 +214,20 @@ async def test_a_change_made_during_a_scan_is_not_slept_through():
     await asyncio.wait_for(mesh._idle(30, mark), timeout=0.5)
 
 
+@pytest.mark.asyncio
+async def test_a_goal_waiter_wakes_for_its_own_workflow_only():
+    mesh = Mesh(config={"p2p_enabled": False})
+    mark = mesh._workflow_mark("wf-a")
+    waiting = asyncio.create_task(mesh._idle_for(30, mark))
+
+    mesh._wake_workers("wf-b")
+    await asyncio.sleep(0.05)
+    assert not waiting.done()
+
+    mesh._wake_workers("wf-a")
+    await asyncio.wait_for(waiting, timeout=1)
+
+
 @pytest.mark.parametrize("arguments", [
     {"min": 0}, {"min": 3, "max": 2}, {"idle_seconds": -1}, {"lane": "fast"},
 ])
