@@ -1,6 +1,7 @@
 """Where the browser subagent works: shared, persistent per person, or fresh."""
 
 import asyncio
+import json
 
 import pytest
 
@@ -17,14 +18,35 @@ class _Page:
         self.log.append("page.close")
 
 
+class _Session:
+    def __init__(self, log):
+        self.log = log
+
+    async def send(self, method, params=None):
+        self.log.append(("cdp", method, (params or {}).get("userAgent")))
+        if method == "Browser.getVersion":
+            return {"product": "HeadlessChrome/153.0.7390.54"}
+        return {}
+
+    async def detach(self):
+        pass
+
+
 class _Context:
     def __init__(self, log, pages=()):
         self.log = log
         self.pages = list(pages)
+        self.page_handlers = []
 
     async def new_page(self):
         self.log.append("context.new_page")
         return _Page(self.log)
+
+    async def new_cdp_session(self, page):
+        return _Session(self.log)
+
+    def on(self, event, handler):
+        self.page_handlers.append(handler)
 
     async def close(self):
         self.log.append("context.close")
@@ -128,6 +150,9 @@ def test_persistent_profile_is_opened_and_closed(log, tmp_path):
     asyncio.run(agent._pre_run_hook(_state({"owner_id": "ada"})))
     assert log[0] == ("launch_persistent_context", agent.profile_dir({"owner_id": "ada"}))
     assert agent._page is not None
+    overrides = [entry[2] for entry in log if entry[:2] == ("cdp", "Network.setUserAgentOverride")]
+    assert overrides and "HeadlessChrome" not in overrides[0] and "Chrome/153.0.0.0" in overrides[0]
+    assert len(agent._context.page_handlers) == 1
     asyncio.run(agent._post_run_hook())
 
     assert "context.close" in log and "playwright.stop" in log
@@ -273,7 +298,7 @@ def test_form_action_identity_survives_alternate_basket_urls(destination, same_a
         agent = BrowserSubAgent("b", None)
         agent._page = SimpleNamespace(url=page)
 
-        async def fingerprint(selector, text):
+        async def fingerprint(selector, text="", ref=""):
             return {"tag": "BUTTON", "id": "place-order", "form": form, "method": "post"}
 
         agent._fingerprint = fingerprint
@@ -346,10 +371,189 @@ def test_an_approval_does_not_run_against_a_page_that_changed():
     assert outcome["status"] == "not_performed"
 
 
+def test_an_approval_that_could_not_be_performed_is_asked_again_fresh():
+    from jarviscore.kernel import approval as approval_module
+    from jarviscore.contracts.hitl import HITLAction
+    from jarviscore.testing.mocks import MockRedisContextStore
+
+    store = MockRedisContextStore()
+    action = HITLAction(action_id="a" * 64, tool="click", consequence="Places the order")
+    approval_module.gate(store, "wf", "buy", action)
+    store.resolve_hitl_request("wf", "buy", "approve", action_id=action.action_id)
+    approval_module.settle(store, "wf", "buy", action.action_id, {"status": "not_performed"})
+
+    again = approval_module.gate(store, "wf", "buy", action)
+    record = store.get_hitl_request("wf", "buy", action.action_id)
+
+    assert again["typed_outcome"] == "WAITING_FOR_APPROVAL"
+    assert record["status"] == "pending" and "decision" not in record and "outcome" not in record
+
+
+def test_an_action_proposed_by_ref_is_found_again_by_what_it_touches():
+    from types import SimpleNamespace
+
+    from jarviscore.contracts.hitl import HITLAction
+
+    button = {"tag": "BUTTON", "id": "place-order", "text": "Place order", "form": None}
+    elements_after_reload = {"e7": {"tag": "A", "text": "Basket"}, "e45": button}
+
+    class _Page:
+        url = "http://shop.test/basket"
+
+        async def goto(self, url, wait_until=None):
+            return None
+
+    agent = BrowserSubAgent("b", None)
+    agent._page = _Page()
+    agent._current_state = SimpleNamespace(context={"workflow_id": "wf", "step_id": "buy"})
+
+    async def index():
+        return [{"ref": ref, "role": "button", "name": "", "state": ""} for ref in elements_after_reload]
+
+    async def fingerprint(selector="", text="", ref=""):
+        return {"f1e45": button}.get(ref) or elements_after_reload.get(ref)
+
+    agent._index = index
+    agent._fingerprint = fingerprint
+    proposed = asyncio.run(agent._action_target("click", {"ref": "f1e45"}))
+    action = HITLAction(
+        action_id=agent.action_id(agent._current_state.context, "click", proposed),
+        tool="click", params={"ref": "f1e45"}, consequence="Places the order",
+        location="http://shop.test/basket",
+    )
+
+    assert asyncio.run(agent._approved_action_applies(action)) is True
+    assert agent._approved_action_params(action)["ref"] == "e45"
+
+
 def test_reversible_actions_run_without_asking():
     agent, clicks = _committing_agent({"workflow_id": "wf", "step_id": "buy"})
     assert asyncio.run(agent._execute_tool("click", {"text": "Add to cart"}))["status"] == "success"
     assert clicks == [{"text": "Add to cart"}]
+
+
+def test_the_browser_presents_the_chrome_that_is_running():
+    identity = browser_module.browser_identity("153.0.7390.54", system="Darwin", machine="arm64")
+
+    assert identity["userAgent"] == (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+    )
+    metadata = identity["userAgentMetadata"]
+    assert metadata["platform"] == "macOS" and metadata["architecture"] == "arm"
+    assert {"brand": "Google Chrome", "version": "153.0.7390.54"} in metadata["fullVersionList"]
+    assert "Headless" not in json.dumps(identity)
+
+
+SNAPSHOT = """\
+- generic [active] [ref=f7e1]:
+  - banner [ref=f7e2]:
+    - link "FreshCart" [ref=f7e3] [cursor=pointer]:
+      - /url: /
+  - combobox [disabled] [aria-hidden] [ref=f7e9]
+  - combobox "Departing from" [ref=f7e10]
+  - heading "Basket" [level=2] [ref=f7e11]
+  - button "Place \\"express\\" order" [ref=f7e12] [cursor=pointer]
+"""
+
+
+class _SnapshotPage:
+    url = "https://shop.test/basket"
+
+    def __init__(self, disabled=()):
+        self.disabled = set(disabled)
+
+    def locator(self, selector):
+        return _SnapshotLocator(self, selector)
+
+    async def title(self):
+        return "Basket"
+
+
+class _SnapshotLocator:
+    def __init__(self, page, selector):
+        self.page, self.selector = page, selector
+
+    async def aria_snapshot(self, mode=None):
+        return SNAPSHOT
+
+    async def count(self):
+        return 1
+
+    async def is_disabled(self):
+        return self.selector.removeprefix("aria-ref=") in self.page.disabled
+
+    async def is_visible(self):
+        return True
+
+
+def _indexed_agent(disabled=()):
+    agent = BrowserSubAgent("b", None)
+    agent._page = _SnapshotPage(disabled)
+    return agent
+
+
+def test_the_snapshot_indexes_what_a_person_can_act_on():
+    result = asyncio.run(_indexed_agent()._tool_snapshot())
+
+    assert result["elements"].splitlines() == [
+        'f7e3 link "FreshCart"',
+        'f7e9 combobox "" [disabled aria-hidden]',
+        'f7e10 combobox "Departing from"',
+        'f7e12 button "Place \\"express\\" order"',
+    ]
+    assert result["count"] == 4
+
+
+def test_a_disabled_element_is_refused_at_once_with_the_reason():
+    result = asyncio.run(_indexed_agent(disabled={"f7e9"})._tool_click(ref="f7e9"))
+
+    assert result["semantic_error"] == "ELEMENT_NOT_ACTIONABLE"
+    assert "disabled" in result["error"]
+
+
+def test_find_asks_the_decision_model_and_returns_its_evidence():
+    class _Decisions:
+        async def evaluate(self, state, questions):
+            from types import SimpleNamespace
+
+            self.criteria = questions["element"]["criteria"]
+            return SimpleNamespace(request_id="req-1", answers={"element": {
+                "choice": "f7e10", "confidence": 0.82,
+                "probabilities": {"f7e10": 0.82, "f7e12": 0.1, "f7e3": 0.08},
+            }})
+
+    agent = _indexed_agent()
+    agent.decision_client = _Decisions()
+    result = asyncio.run(agent._tool_find("Enter the departure station"))
+
+    assert result["ref"] == "f7e10" and result["confidence"] == 0.82
+    assert result["element"]["name"] == "Departing from"
+    assert [a["ref"] for a in result["alternatives"]] == ["f7e12", "f7e3"]
+    assert "f7e9" not in agent.decision_client.criteria
+
+
+def test_perception_is_observed_whole():
+    from jarviscore.kernel.subagent import _observe
+
+    index = "x" * 5000
+
+    assert _observe("snapshot", index, 1, "snapshot" in BrowserSubAgent.whole_observation_tools) == index
+    assert len(_observe("get_text", index, 1)) < 1200
+
+
+def test_only_the_latest_snapshot_stays_in_view():
+    from jarviscore.kernel.subagent import _thread_history
+
+    def turn(n, perception):
+        return {"assistant": f"a{n}", "observation": f"page {n}", "perception": perception,
+                "superseded": f"turn {n} replaced; read_turn_result {n}"}
+
+    messages = []
+    _thread_history(messages, [turn(1, True), turn(2, False), turn(3, True)])
+    shown = [m["content"] for m in messages if m["role"] == "user"]
+
+    assert shown == ["turn 1 replaced; read_turn_result 1", "page 2", "page 3"]
 
 
 def _state_with(*tools):

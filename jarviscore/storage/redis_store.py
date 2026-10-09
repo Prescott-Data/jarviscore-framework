@@ -2541,6 +2541,8 @@ class RedisContextStore:
         """
         action_id = request.action.action_id if request.action else None
         key = self._hitl_key(request.workflow_id, request.step_id, action_id)
+        # A new request replaces the record whole; no earlier decision carries over.
+        self._redis.delete(key)
         self._redis.hset(key, mapping=request.to_redis_mapping())
         self._redis.expire(key, self._ttl_seconds)
         if action_id:

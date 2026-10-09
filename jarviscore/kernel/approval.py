@@ -57,7 +57,9 @@ def gate(store, workflow_id: str, step_id: str, action: HITLAction) -> dict[str,
             "semantic_error": "APPROVAL_UNAVAILABLE",
         }
     record = store.get_hitl_request(workflow_id, step_id, action.action_id)
-    if record is None:
+    outcome = (record or {}).get("outcome")
+    if record is None or (isinstance(outcome, dict) and outcome.get("status") == "not_performed"):
+        # An approval that could not be carried out leaves the action undecided.
         request = HITLRequest(
             workflow_id=workflow_id,
             step_id=step_id,

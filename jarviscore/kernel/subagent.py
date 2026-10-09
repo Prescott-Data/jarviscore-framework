@@ -144,20 +144,29 @@ def _clip_observation(text: str, turn: int, limit: int = 0) -> str:
     )
 
 
-def _observe(tool_name: str, tool_result: Any, turn: int) -> str:
+def _observe(tool_name: str, tool_result: Any, turn: int, whole: bool = False) -> str:
     """The agent's view of a tool result; a read_turn_result page is already sized and shown whole."""
-    if tool_name == "read_turn_result":
+    if whole or tool_name == "read_turn_result":
         return str(tool_result)
     return _clip_observation(str(tool_result), turn)
 
 def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) -> None:
-    """Prior turns as assistant/user pairs, images included (last 10)."""
-    for hist_entry in conversation_history[-10:]:
+    """Prior turns as assistant/user pairs, images included (last 10).
+
+    A perception a later one replaced is shown as a pointer to it: the agent
+    acts on the latest view of the world, and can still read the older one.
+    """
+    recent = conversation_history[-10:]
+    latest = max((i for i, entry in enumerate(recent) if entry.get("perception")), default=None)
+    for i, hist_entry in enumerate(recent):
+        observation = hist_entry["observation"]
+        if hist_entry.get("perception") and i != latest:
+            observation = hist_entry["superseded"]
         messages.append({"role": "assistant", "content": hist_entry["assistant"]})
         messages.append({
             "role": "user",
             "content": multimodal.with_images(
-                hist_entry["observation"], hist_entry.get("images", ())
+                observation, hist_entry.get("images", ())
             ),
         })
 
@@ -326,6 +335,11 @@ class BaseSubAgent(ABC):
     #: values, the agent submitted an identical result, and no tool ran in between
     #: — so an agent that is still working is never cut off, however long it takes.
     max_identical_done_attempts: int = 3
+
+    #: Tools whose results are the agent's perception and are shown whole, never clipped.
+    whole_observation_tools: frozenset = frozenset()
+    #: Perceptions of a changing world: a newer result replaces older ones in the agent's view.
+    perception_tools: frozenset = frozenset()
 
     def __init__(
         self,
@@ -754,6 +768,7 @@ class BaseSubAgent(ABC):
         if context_manager is None:
             from jarviscore.context.context_manager import ContextManager
             context_manager = ContextManager()
+        context_manager.perception_tools = self.perception_tools
 
         # ── Initialize or resume state ──
         state = KernelState(
@@ -1402,7 +1417,7 @@ class BaseSubAgent(ABC):
                         # Record conversation for continuity through the pivot
                         observation = (
                             f"Tool '{tool_name}' returned: "
-                            f"{_observe(tool_name, tool_result, turn)}\n"
+                            f"{_observe(tool_name, tool_result, turn, tool_name in self.whole_observation_tools)}\n"
                             f"Authoritative tool receipt: {tool_receipt.receipt_id}"
                         )
                         conversation_history.append({
@@ -1435,7 +1450,9 @@ class BaseSubAgent(ABC):
                 # Record conversation history for multi-turn LLM continuity
                 # Structured turn digest instead of raw output — helps the LLM
                 # retain what was learned and reason about strategy changes.
-                result_str = _observe(tool_name, tool_result, turn)
+                result_str = _observe(
+                    tool_name, tool_result, turn, tool_name in self.whole_observation_tools
+                )
                 observation = (
                     f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}):\n"
                     f"{result_str}\n\n"
@@ -1449,6 +1466,12 @@ class BaseSubAgent(ABC):
                     "assistant": content,
                     "observation": observation,
                     "images": observed_images,
+                    "perception": tool_name in self.perception_tools,
+                    "superseded": (
+                        f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}); "
+                        "a later perception replaced this view. Full result: TOOL: "
+                        f'read_turn_result PARAMS: {{"turn": {turn}}}'
+                    ),
                 })
 
                 # Log turn to memory

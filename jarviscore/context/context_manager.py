@@ -502,16 +502,28 @@ class ContextManager:
         formatted = []
         current = header_tokens
         withheld = 0
+        perception_tools = getattr(self, "perception_tools", frozenset())
+        recent = history[-20:]
+        latest_perception = max(
+            (i for i, turn in enumerate(recent) if getattr(turn, "tool_name", None) in perception_tools),
+            default=None,
+        )
 
         # Process most-recent first (max 20 entries)
-        for turn in reversed(history[-20:]):
+        for index, turn in reversed(list(enumerate(recent))):
             if hasattr(turn, "tool_name"):
                 # KernelState.ToolResult model
+                output = turn.tool_output
+                if turn.tool_name in perception_tools and index != latest_perception:
+                    output = (
+                        f"replaced by a later {turn.tool_name}; read it in full with "
+                        "TOOL: read_turn_result"
+                    )
                 entry = (
                     f"**{turn.tool_name}** [{turn.status}]\n"
                     f"  Receipt: {turn.receipt_id or 'legacy-unreceipted'}\n"
                     f"  Input: {json.dumps(turn.tool_input, default=str)}\n"
-                    f"  Output: {turn.tool_output}"
+                    f"  Output: {output}"
                 )
                 if turn.error:
                     entry += f"\n  Error: {turn.error}"

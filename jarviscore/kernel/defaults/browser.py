@@ -32,6 +32,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 from jarviscore.contracts.hitl import HITLAction
@@ -79,10 +80,57 @@ _READ_WITH_FIELDS = """(root, wholePage) => {
 
 # Tools that can commit the person when the agent marks the action irreversible.
 _COMMITTING_TOOLS = frozenset({"click", "type_text", "fill_form", "select_option", "evaluate"})
+
+
+def browser_identity(version: str, system: Optional[str] = None, machine: Optional[str] = None) -> Dict[str, Any]:
+    """The User-Agent and client hints of Chrome ``version`` on this host."""
+    import platform
+
+    system = system or platform.system()
+    machine = (machine or platform.machine()).lower()
+    platform_name, token = {
+        "Darwin": ("macOS", "Macintosh; Intel Mac OS X 10_15_7"),
+        "Windows": ("Windows", "Windows NT 10.0; Win64; x64"),
+    }.get(system, ("Linux", "X11; Linux x86_64"))
+    major = version.split(".", 1)[0]
+    brands = [("Chromium", major), ("Google Chrome", major), ("Not-A.Brand", "99")]
+    return {
+        "userAgent": (
+            f"Mozilla/5.0 ({token}) AppleWebKit/537.36 (KHTML, like Gecko) "
+            f"Chrome/{major}.0.0.0 Safari/537.36"
+        ),
+        "userAgentMetadata": {
+            "brands": [{"brand": brand, "version": v} for brand, v in brands],
+            "fullVersionList": [
+                {"brand": brand, "version": version if v == major else "99.0.0.0"}
+                for brand, v in brands
+            ],
+            "platform": platform_name,
+            "platformVersion": "",
+            "architecture": "arm" if machine in {"arm64", "aarch64"} else "x86",
+            "model": "",
+            "mobile": False,
+        },
+    }
 # Tools whose result is what the page actually showed.
 _OBSERVATION_TOOLS = frozenset({
-    "get_text", "get_attribute", "get_links", "screenshot", "evaluate", "wait_for", "get_cookies",
+    "snapshot", "get_text", "get_attribute", "get_links", "screenshot", "evaluate", "wait_for", "get_cookies",
 })
+# Roles a person can act on; the snapshot index lists only these.
+_INTERACTIVE_ROLES = frozenset({
+    "link", "button", "combobox", "textbox", "searchbox", "checkbox", "radio", "menuitem",
+    "menuitemcheckbox", "menuitemradio", "tab", "option", "spinbutton", "slider", "switch",
+})
+_SNAPSHOT_LINE = re.compile(r'^\s*- (\w+)(?: "((?:[^"\\]|\\.)*)")?(.*?)\[ref=((?:f\d+)?e\d+)\]')
+_SNAPSHOT_STATE = re.compile(r"\[(disabled|checked|expanded|selected|pressed|aria-hidden)\]")
+# What sits over an element's centre, or null when a click would reach it.
+_COVERED_BY = """el => {
+    const box = el.getBoundingClientRect();
+    const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    if (!top || top === el || el.contains(top) || top.contains(el)) return null;
+    const label = (top.getAttribute('aria-label') || top.innerText || '').trim().slice(0, 80);
+    return `${top.tagName.toLowerCase()}${top.id ? '#' + top.id : ''}${label ? ' "' + label + '"' : ''}`;
+}"""
 
 
 class BrowserSubAgent(BaseSubAgent):
@@ -109,6 +157,9 @@ class BrowserSubAgent(BaseSubAgent):
     - close_page: Close the current page and open a fresh one
     """
 
+    whole_observation_tools = frozenset({"snapshot", "find"})
+    perception_tools = frozenset({"snapshot"})
+
     SYSTEM_PROMPT = """\
 You are a BROWSER AUTOMATION SPECIALIST in a multi-agent orchestration framework.
 Your job: navigate and interact with web pages to extract data or complete tasks.
@@ -116,13 +167,17 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 ## CRITICAL RULES
 
 1. **NAVIGATE FIRST** — Always call navigate() before any other interaction.
-2. **WAIT FOR LOAD** — Pages may load slowly. Use wait_for() to confirm elements exist
-   before clicking or typing. Do not assume elements are immediately available.
-3. **SCREENSHOT TO VERIFY** — When unsure about page state, take a screenshot first.
-4. **CSS SELECTORS** — Use specific CSS selectors. Prefer IDs (#id) over classes (.class).
-   If CSS fails, try XPath or text-based matching.
-5. **HANDLE ERRORS** — If a tool returns status=error, take a screenshot to understand
-   the current page state before retrying.
+2. **SEE THE PAGE, THEN ACT BY REF** — Call snapshot() to see every element you can act
+   on, each with a ref, role, name and state such as [disabled]. Act on an element by
+   passing its ref to click, type_text, fill_form or select_option. When find() is
+   available, it picks the element for a goal in under a second; act on its ref when
+   its confidence is high, otherwise choose from the snapshot yourself. Take a new
+   snapshot after the page changes: refs from an earlier page no longer apply.
+3. **SCREENSHOT TO VERIFY** — When the snapshot cannot tell you what the page shows
+   (images, layout), take a screenshot.
+4. **CSS SELECTORS** — Only when an element has no ref, use a specific CSS selector.
+5. **HANDLE ERRORS** — An element that is disabled, hidden or gone is reported at once;
+   take a new snapshot and choose an element that can be acted on.
 6. **DATA EXTRACTION** — Use get_text() or evaluate() for structured data. Note findings
    explicitly in your DONE summary.
 7. **NO LOOPS** — Do not retry the same action more than twice. If stuck, take a screenshot,
@@ -146,12 +201,11 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 
 ## WORKFLOW
 
-1. navigate(url) → wait for load
-2. wait_for(selector) → confirm target element is present
-3. interact (click / type_text / fill_form)
-4. get_text / get_attribute / evaluate → extract data
-5. screenshot() → visual verification if needed
-6. DONE with findings
+1. navigate(url)
+2. snapshot() → see what can be acted on
+3. interact by ref (click / type_text / fill_form / select_option)
+4. snapshot(ref) or get_text(ref) → read the result
+5. DONE with findings
 """
 
     def __init__(
@@ -181,6 +235,8 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self._attached = False
         self._profile_lock: Optional[asyncio.Lock] = None
         self._launch_error = ""
+        self._identity: Dict[str, Any] = {}
+        self._relocated: Dict[str, str] = {}
 
         super().__init__(
             agent_id=agent_id,
@@ -211,21 +267,29 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             phase="action",
         )
         self.register_tool(
+            "snapshot",
+            self._tool_snapshot,
+            'Index every element you can act on: one line per element, "<ref> <role> \\"<name>\\"" with '
+            'states like [disabled]. Act on elements by ref. With {"ref": "<ref>"} returns that '
+            "region in full, text included. Params: {}",
+            phase="thinking",
+        )
+        self.register_tool(
             "click",
             self._tool_click,
-            'Click an element. Params: {"selector": "<css>", "text": "<optional text match>"}',
+            'Click an element. Params: {"ref": "<snapshot ref>"} or {"selector": "<css>"} or {"text": "<visible text>"}',
             phase="action",
         )
         self.register_tool(
             "type_text",
             self._tool_type_text,
-            'Type text into an input. Params: {"selector": "<css>", "text": "<text>", "clear_first": true}',
+            'Type text into an input. Params: {"ref": "<snapshot ref>" or "selector": "<css>", "text": "<text>", "clear_first": true}',
             phase="action",
         )
         self.register_tool(
             "get_text",
             self._tool_get_text,
-            'Get text from an element or page. Params: {"selector": "<css or empty for full page>", "max_chars": 5000}',
+            'Get text from an element or page. Params: {"ref": "<snapshot ref>" or "selector": "<css>", or neither for the full page; "max_chars": 5000}',
             phase="thinking",
         )
         self.register_tool(
@@ -261,13 +325,13 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self.register_tool(
             "fill_form",
             self._tool_fill_form,
-            'Fill multiple form fields. Params: {"fields": [{"selector": "<css>", "value": "<text>"}]}',
+            'Fill multiple form fields. Params: {"fields": [{"ref": "<snapshot ref>" or "selector": "<css>", "value": "<text>"}]}',
             phase="action",
         )
         self.register_tool(
             "select_option",
             self._tool_select_option,
-            'Select a dropdown option. Params: {"selector": "<css>", "value": "<option value or label>"}',
+            'Select a dropdown option. Params: {"ref": "<snapshot ref>" or "selector": "<css>", "value": "<option value or label>"}',
             phase="action",
         )
         self.register_tool(
@@ -317,10 +381,17 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         )
 
     def _approved_action_params(self, action: HITLAction) -> Dict[str, Any]:
-        return {**action.params, "irreversible": True, "consequence": action.consequence}
+        params = dict(action.params)
+        if "ref" in params:
+            params["ref"] = self._relocated.get(action.action_id, params["ref"])
+        return {**params, "irreversible": True, "consequence": action.consequence}
 
     async def _approved_action_applies(self, action: HITLAction) -> bool:
-        """The element the person approved is still where they approved it."""
+        """The element the person approved is still where they approved it.
+
+        A snapshot ref names an element only on the page it was taken from, so
+        an action proposed by ref is found again by what it touches.
+        """
         if not self._page:
             return False
         if action.location.startswith(("http://", "https://")):
@@ -330,8 +401,15 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 logger.info("[browser] Approved action page did not reopen: %s", exc)
                 return False
         context = getattr(getattr(self, "_current_state", None), "context", None) or {}
-        target = await self._action_target(action.tool, dict(action.params))
-        return target is not None and self.action_id(context, action.tool, target) == action.action_id
+        if "ref" not in action.params:
+            target = await self._action_target(action.tool, dict(action.params))
+            return target is not None and self.action_id(context, action.tool, target) == action.action_id
+        for element in await self._index():
+            target = await self._action_target(action.tool, {**action.params, "ref": element["ref"]})
+            if target is not None and self.action_id(context, action.tool, target) == action.action_id:
+                self._relocated[action.action_id] = element["ref"]
+                return True
+        return False
 
     @staticmethod
     def action_id(context: Dict[str, Any], tool_name: str, target: Any) -> str:
@@ -344,12 +422,15 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         }
         return hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
 
-    async def _fingerprint(self, selector: str = "", text: str = "") -> Optional[Dict[str, Any]]:
-        locator = (
-            self._page.get_by_text(text, exact=False).first
-            if text and not selector
-            else self._page.locator(selector).first
-        )
+    async def _fingerprint(self, selector: str = "", text: str = "", ref: str = "") -> Optional[Dict[str, Any]]:
+        if ref:
+            locator = self._ref(ref)
+        else:
+            locator = (
+                self._page.get_by_text(text, exact=False).first
+                if text and not selector
+                else self._page.locator(selector).first
+            )
         return await locator.evaluate(
             "el => ({tag: el.tagName, id: el.id, name: el.getAttribute('name'), "
             "type: el.getAttribute('type'), text: (el.innerText || el.value || '').trim(), "
@@ -388,14 +469,19 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             page = urlsplit(self._page.url)
             where = f"{page.scheme}://{page.netloc}{page.path}"
             if tool_name == "click":
-                element = await self._fingerprint(params.get("selector", ""), params.get("text", ""))
+                element = await self._fingerprint(
+                    params.get("selector", ""), params.get("text", ""), params.get("ref", "")
+                )
                 return {"page": (element or {}).get("form") or where, "element": element}
             if tool_name in {"type_text", "select_option"}:
-                element = await self._fingerprint(params.get("selector", ""))
+                element = await self._fingerprint(params.get("selector", ""), ref=params.get("ref", ""))
                 return {"page": where, "element": element, "value": params.get("text", params.get("value"))}
             if tool_name == "fill_form":
                 fields = [
-                    {"element": await self._fingerprint(field.get("selector", "")), "value": field.get("value")}
+                    {
+                        "element": await self._fingerprint(field.get("selector", ""), ref=field.get("ref", "")),
+                        "value": field.get("value"),
+                    }
                     for field in params.get("fields") or []
                 ]
                 return {"page": where, "fields": fields}
@@ -435,6 +521,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 description=self._describe_action(tool_name, params, target, where),
                 consequence=consequence,
                 location=where,
+                target=target if isinstance(target, dict) else {},
             )
             workflow_id, step_id = context.get("workflow_id"), context.get("step_id")
             refusal = approval.gate(self.redis_store, workflow_id, step_id, action)
@@ -463,6 +550,14 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 
     async def _pre_run_hook(self, state) -> None:
         """Open the browser this run works in before the OODA loop starts."""
+        if getattr(self, "decision_client", None) is not None and "find" not in self._tools:
+            self.register_tool(
+                "find",
+                self._tool_find,
+                'Pick the element that accomplishes a goal, in under a second, with the decision model. '
+                'Returns its ref, confidence and the closest alternatives. Params: {"goal": "<what to act on>"}',
+                phase="thinking",
+            )
         if not PLAYWRIGHT_AVAILABLE:
             return
         args = [
@@ -471,11 +566,6 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             "--disable-dev-shm-usage",
             "--disable-blink-features=AutomationControlled",
         ]
-        user_agent = (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
         self._launch_error = ""
         try:
             self._playwright = await async_playwright().start()
@@ -500,7 +590,6 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                     headless=self.headless,
                     args=args,
                     viewport=self.viewport,
-                    user_agent=user_agent,
                 )
                 self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
             else:
@@ -510,10 +599,11 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 )
                 self._context = await self._browser.new_context(
                     viewport=self.viewport,
-                    user_agent=user_agent,
                     java_script_enabled=True,
                 )
                 self._page = await self._context.new_page()
+            if not self._attached:
+                await self._present_as_browser()
             logger.info(
                 "[browser] Browser ready (mode=%s, headless=%s)",
                 "shared" if self._attached else "persistent" if profile else "fresh",
@@ -523,6 +613,25 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             logger.error("[browser] Failed to open browser: %s", e)
             self._launch_error = str(e)
             await self._post_run_hook()
+
+    async def _present_as_browser(self) -> None:
+        """Identify as the Chrome that is actually running, on the OS it runs on.
+
+        Headless Chromium announces itself as ``HeadlessChrome``; sites behind
+        bot defences deny it outright. The real version and platform, given
+        consistently in the header and the client hints, are what a person's
+        browser sends.
+        """
+        session = await self._context.new_cdp_session(self._page)
+        product = (await session.send("Browser.getVersion"))["product"]
+        await session.detach()
+        self._identity = browser_identity(product.split("/", 1)[1])
+        await self._identify(self._page)
+        self._context.on("page", lambda page: asyncio.ensure_future(self._identify(page)))
+
+    async def _identify(self, page) -> None:
+        session = await self._context.new_cdp_session(page)
+        await session.send("Network.setUserAgentOverride", self._identity)
 
     async def _post_run_hook(self) -> None:
         """Close what this run opened; a shared browser stays open."""
@@ -613,21 +722,27 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self,
         selector: str = "",
         text: str = "",
+        ref: str = "",
         timeout_ms: int = 10000,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Click an element by CSS selector or visible text."""
+        """Click an element by snapshot ref, CSS selector or visible text."""
         err = self._ensure_page()
         if err:
             return err
         try:
-            if text and not selector:
+            if ref:
+                locator, refusal = await self._actionable(ref)
+                if refusal:
+                    return refusal
+                await locator.click(timeout=timeout_ms)
+            elif text and not selector:
                 # Text-based click
                 await self._page.get_by_text(text, exact=False).first.click(timeout=timeout_ms)
             elif selector:
                 await self._page.click(selector, timeout=timeout_ms)
             else:
-                return {"status": "error", "error": "Either selector or text is required"}
+                return {"status": "error", "error": "One of ref, selector or text is required"}
             await asyncio.sleep(0.5)  # Brief pause for page response
             return {"status": "success", "url": self._page.url}
         except Exception as e:
@@ -635,8 +750,9 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 
     async def _tool_type_text(
         self,
-        selector: str,
-        text: str,
+        selector: str = "",
+        text: str = "",
+        ref: str = "",
         clear_first: bool = True,
         delay_ms: int = 50,
         **kwargs,
@@ -646,10 +762,18 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         if err:
             return err
         try:
+            if ref:
+                locator, refusal = await self._actionable(ref)
+                if refusal:
+                    return refusal
+            elif selector:
+                locator = self._page.locator(selector).first
+            else:
+                return {"status": "error", "error": "One of ref or selector is required"}
             if clear_first:
-                await self._page.fill(selector, "", timeout=10000)
-            await self._page.type(selector, text, delay=delay_ms)
-            return {"status": "success", "selector": selector, "chars_typed": len(text)}
+                await locator.fill("", timeout=10000)
+            await locator.press_sequentially(text, delay=delay_ms)
+            return {"status": "success", "target": ref or selector, "chars_typed": len(text)}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -657,6 +781,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self,
         selector: str = "",
         max_chars: int = 5000,
+        ref: str = "",
         **kwargs,
     ) -> Dict[str, Any]:
         """Extract text from an element or the full page."""
@@ -664,8 +789,8 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         if err:
             return err
         try:
-            if selector:
-                element = self._page.locator(selector).first
+            if ref or selector:
+                element = self._ref(ref) if ref else self._page.locator(selector).first
                 text = await element.evaluate(_READ_WITH_FIELDS, False, timeout=10000)
             else:
                 text = await self._page.evaluate(
@@ -684,6 +809,121 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
+
+    def _ref(self, ref: str):
+        return self._page.locator(f"aria-ref={ref}")
+
+    async def _actionable(self, ref: str):
+        """The element behind ``ref``, or the reason it cannot be acted on now."""
+        locator = self._ref(ref)
+        try:
+            if await locator.count() == 0:
+                reason = "is not on the current page; take a new snapshot"
+            elif await locator.is_disabled():
+                reason = "is disabled"
+            elif not await locator.is_visible():
+                reason = "is not visible"
+            else:
+                await locator.scroll_into_view_if_needed(timeout=2000)
+                cover = await locator.evaluate(_COVERED_BY)
+                if not cover:
+                    return locator, None
+                reason = f"is covered by {cover}; deal with that first"
+        except Exception as exc:
+            reason = f"could not be resolved ({exc})"
+        return locator, {
+            "status": "error",
+            "error": f"Element {ref} {reason}.",
+            "semantic_error": "ELEMENT_NOT_ACTIONABLE",
+        }
+
+    async def _index(self) -> List[Dict[str, str]]:
+        """Every interactive element on the page with its ref, role, name and state."""
+        snapshot = await self._page.locator("body").aria_snapshot(mode="ai")
+        elements = []
+        for line in snapshot.splitlines():
+            match = _SNAPSHOT_LINE.match(line)
+            if not match or match.group(1) not in _INTERACTIVE_ROLES:
+                continue
+            role, name, flags, ref = match.groups()
+            elements.append({
+                "ref": ref, "role": role, "name": name or "",
+                "state": " ".join(_SNAPSHOT_STATE.findall(flags)),
+            })
+        return elements
+
+    async def _tool_snapshot(self, ref: str = "", **kwargs) -> Dict[str, Any]:
+        """The page as a numbered index of what can be acted on, or one region in full."""
+        err = self._ensure_page()
+        if err:
+            return err
+        try:
+            if ref:
+                region = await self._ref(ref).aria_snapshot(mode="ai")
+                return {"status": "success", "url": self._page.url, "region": region}
+            elements = await self._index()
+            listing = "\n".join(
+                f"{e['ref']} {e['role']} \"{e['name']}\""
+                + (f" [{e['state']}]" if e["state"] else "")
+                for e in elements
+            )
+            self._record_observed_state(self._page.url, listing)
+            return {
+                "status": "success",
+                "url": self._page.url,
+                "title": await self._page.title(),
+                "elements": listing,
+                "count": len(elements),
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    def _record_observed_state(self, url: str, listing: str) -> None:
+        """A page state not seen before is progress; revisiting known states is not."""
+        variables = getattr(getattr(self, "_current_state", None), "internal_variables", None)
+        if variables is None:
+            return
+        digest = hashlib.sha256(f"{url}\n{listing}".encode()).hexdigest()[:16]
+        observed = variables.setdefault("_observed_states", [])
+        if digest not in observed:
+            observed.append(digest)
+
+    async def _tool_find(self, goal: str, **kwargs) -> Dict[str, Any]:
+        """Choose the element that accomplishes ``goal`` with the decision model."""
+        err = self._ensure_page()
+        if err:
+            return err
+        try:
+            elements = [e for e in await self._index() if "disabled" not in e["state"]]
+            if not elements:
+                return {"status": "error", "error": "No actionable elements are on this page."}
+            result = await self.decision_client.evaluate(
+                state=f"Page: {await self._page.title()} ({self._page.url})\nGoal: {goal}",
+                questions={"element": {
+                    "type": "choice",
+                    "instructions": "Which page element should be acted on to accomplish the goal?",
+                    "criteria": {
+                        e["ref"]: f"{e['role']} \"{e['name']}\"" + (f" ({e['state']})" if e["state"] else "")
+                        for e in elements
+                    },
+                }},
+            )
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+        answer = result.answers["element"]
+        by_ref = {e["ref"]: e for e in elements}
+        ranked = sorted(answer["probabilities"].items(), key=lambda item: item[1], reverse=True)
+        return {
+            "status": "success",
+            "ref": answer["choice"],
+            "element": by_ref.get(answer["choice"]),
+            "confidence": answer["confidence"],
+            "alternatives": [
+                {**by_ref[ref], "probability": round(p, 3)}
+                for ref, p in ranked[1:4] if ref in by_ref
+            ],
+            "decision_request_id": result.request_id,
+        }
 
     async def _tool_get_attribute(
         self,
@@ -806,16 +1046,25 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             return err
         results = []
         for field in fields:
+            ref = field.get("ref", "")
             selector = field.get("selector", "")
+            target = ref or selector
             value = field.get("value", "")
-            if not selector:
-                results.append({"selector": selector, "status": "error", "error": "No selector"})
+            if not target:
+                results.append({"target": target, "status": "error", "error": "No ref or selector"})
                 continue
             try:
-                await self._page.fill(selector, value, timeout=10000)
-                results.append({"selector": selector, "status": "success"})
+                if ref:
+                    locator, refusal = await self._actionable(ref)
+                    if refusal:
+                        results.append({"target": ref, **refusal})
+                        continue
+                    await locator.fill(value, timeout=10000)
+                else:
+                    await self._page.fill(selector, value, timeout=10000)
+                results.append({"target": target, "status": "success"})
             except Exception as e:
-                results.append({"selector": selector, "status": "error", "error": str(e)})
+                results.append({"target": target, "status": "error", "error": str(e)})
         success_count = sum(1 for r in results if r["status"] == "success")
         return {
             "status": "success" if success_count == len(fields) else "partial",
@@ -826,8 +1075,9 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 
     async def _tool_select_option(
         self,
-        selector: str,
-        value: str,
+        selector: str = "",
+        value: str = "",
+        ref: str = "",
         **kwargs,
     ) -> Dict[str, Any]:
         """Select an option from a <select> dropdown."""
@@ -835,11 +1085,17 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         if err:
             return err
         try:
+            if ref:
+                locator, refusal = await self._actionable(ref)
+                if refusal:
+                    return refusal
+            else:
+                locator = self._page.locator(selector).first
             # Try by value first, then by label
-            selected = await self._page.select_option(selector, value=value, timeout=10000)
+            selected = await locator.select_option(value=value, timeout=10000)
             if not selected:
-                selected = await self._page.select_option(selector, label=value, timeout=10000)
-            return {"status": "success", "selector": selector, "selected": selected}
+                selected = await locator.select_option(label=value, timeout=10000)
+            return {"status": "success", "target": ref or selector, "selected": selected}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 

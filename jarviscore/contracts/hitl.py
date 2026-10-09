@@ -182,6 +182,8 @@ class HITLAction(BaseModel):
     description: str = ""
     consequence: str = Field(min_length=1)
     location: str = ""
+    # What the action touches, independent of how it was addressed when proposed.
+    target: Dict[str, Any] = Field(default_factory=dict)
 
 
 class HITLRequest(BaseModel):

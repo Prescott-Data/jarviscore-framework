@@ -286,6 +286,28 @@ class TestKnowledgePlateau:
         signal = ledger.check_plateau(state, 3)
         assert signal is None
 
+    def test_a_subagent_that_records_no_knowledge_is_never_told_to_stop(self):
+        """A browser acting on pages records no findings; zero is not a plateau."""
+        ledger = EpistemicLedger()
+        state = _make_state()
+
+        signals = [ledger.check_plateau(state, turn) for turn in range(8)]
+
+        assert signals == [None] * 8
+
+    def test_a_browser_circling_the_same_pages_reaches_a_plateau(self):
+        """New page states are progress; seeing only known ones again is not."""
+        ledger = EpistemicLedger()
+        state = _make_state()
+        observed = state.internal_variables.setdefault("_observed_states", [])
+
+        for turn in range(4):
+            observed.append(f"page-{turn}")
+            assert ledger.check_plateau(state, turn) is None
+        signals = [ledger.check_plateau(state, turn) for turn in range(4, 7)]
+
+        assert signals[-1] is not None and "KNOWLEDGE_PLATEAU" in signals[-1]
+
 
 # ──────────────────────────────────────────────────────────────────
 # OODA Integration Tests (source-level verification)

@@ -197,7 +197,8 @@ class EpistemicLedger:
         recent = self._knowledge_snapshots[-_PLATEAU_THRESHOLD:]
         baseline = recent[0][1]
 
-        if all(count == baseline for _, count in recent):
+        # A subagent that records no knowledge items gives the plateau nothing to measure.
+        if current and all(count == baseline for _, count in recent):
             return (
                 f"KNOWLEDGE_PLATEAU: No new findings for "
                 f"{_PLATEAU_THRESHOLD} consecutive action turns. "
@@ -399,4 +400,7 @@ class EpistemicLedger:
             specs = iv.get("api_specs", [])
             if isinstance(specs, list):
                 count += len(specs)
+            observed = iv.get("_observed_states", [])
+            if isinstance(observed, list):
+                count += len(observed)
         return count
