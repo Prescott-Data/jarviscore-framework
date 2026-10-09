@@ -99,6 +99,10 @@ class Settings(BaseSettings):
         validation_alias="JARVISCORE_PROMO_RAW_ARTIFACT_DIR",
     )
 
+    # Any decision model: 'module:callable' returning a DecisionClient.
+    # When unset, TypeSafe Jev is used if TYPESAFE_API_KEY is configured.
+    decision_client_factory: Optional[str] = Field(None, validation_alias="DECISION_CLIENT_FACTORY")
+
     # TypeSafe Jev decision model. Separate from generation providers because
     # System One returns typed judgments rather than text completions.
     typesafe_api_key: Optional[str] = Field(None, validation_alias="TYPESAFE_API_KEY")

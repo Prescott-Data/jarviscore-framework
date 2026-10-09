@@ -90,7 +90,13 @@ def gate(store, workflow_id: str, step_id: str, action: HITLAction) -> dict[str,
 
 
 def settle(store, workflow_id: str, step_id: str, action_id: str, outcome: dict[str, Any]) -> None:
-    """Record what became of a decided action against its decision."""
+    """Record what became of a decided action against its decision.
+
+    A tool that refused before acting (``performed: False``) changed nothing, so
+    the decision stands for the action until it is actually carried out.
+    """
+    if isinstance(outcome, dict) and outcome.get("performed") is False:
+        return
     if _durable(store, workflow_id, step_id):
         store.settle_hitl_action(workflow_id, step_id, action_id, outcome)
 

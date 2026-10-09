@@ -13,9 +13,14 @@ class _Page:
     def __init__(self, log):
         self.log = log
         self.url = "about:blank"
+        self.closed = False
 
     async def close(self):
+        self.closed = True
         self.log.append("page.close")
+
+    def is_closed(self):
+        return self.closed
 
 
 class _Session:
@@ -140,6 +145,93 @@ def test_single_tenant_deployments_share_one_default_profile(tmp_path):
     assert agent.profile_dir({}) == agent.profile_dir({"owner_id": "anyone"})
 
 
+def _epochs(monkeypatch, statuses):
+    """Run the browser agent once per status, as the base loop would end each run."""
+    from types import SimpleNamespace
+
+    from jarviscore.kernel.subagent import BaseSubAgent
+
+    pages = []
+
+    async def base_run(self, task, context=None, max_turns=20, model=None, **kwargs):
+        await self._pre_run_hook(_state(context))
+        pages.append(self._page)
+        return SimpleNamespace(status=statuses.pop(0))
+
+    monkeypatch.setattr(BaseSubAgent, "run", base_run)
+    return pages
+
+
+def test_a_step_continues_on_the_page_its_last_epoch_left(log, monkeypatch):
+    pages = _epochs(monkeypatch, ["epoch_exhausted", "success"])
+    agent = BrowserSubAgent("b", None)
+    step = {"workflow_id": "wf", "step_id": "shop"}
+
+    async def scenario():
+        await agent.run("order", dict(step))
+        assert log.count("launch") == 1 and "page.close" not in log
+        await agent.run("order", {**step, "_resume": True, "_new_execution_epoch": True})
+
+    asyncio.run(scenario())
+
+    assert pages[0] is pages[1]
+    assert log.count("launch") == 1
+    assert log.count("browser.close") == 1
+    assert agent._page is None and agent._held_for is None
+
+
+def test_another_step_never_inherits_a_held_page(log, monkeypatch):
+    pages = _epochs(monkeypatch, ["epoch_exhausted", "success"])
+    agent = BrowserSubAgent("b", None)
+
+    async def scenario():
+        await agent.run("order", {"workflow_id": "wf", "step_id": "shop"})
+        await agent.run("other", {"workflow_id": "wf2", "step_id": "shop",
+                                  "_resume": True, "_new_execution_epoch": True})
+
+    asyncio.run(scenario())
+
+    assert pages[0] is not pages[1] and pages[0].closed
+    assert log.count("launch") == 2
+
+
+def test_any_other_ending_closes_the_browser(log, monkeypatch):
+    _epochs(monkeypatch, ["yield"])
+    agent = BrowserSubAgent("b", None)
+
+    asyncio.run(agent.run("order", {"workflow_id": "wf", "step_id": "shop"}))
+
+    assert "browser.close" in log and agent._page is None and agent._held_for is None
+
+
+def test_a_continuation_that_never_comes_releases_the_browser(log, monkeypatch):
+    _epochs(monkeypatch, ["epoch_exhausted"])
+    agent = BrowserSubAgent("b", None)
+    agent.continuation_hold_s = 0.05
+
+    async def scenario():
+        await agent.run("order", {"workflow_id": "wf", "step_id": "shop"})
+        assert agent._page is not None
+        await asyncio.sleep(0.2)
+
+    asyncio.run(scenario())
+
+    assert "browser.close" in log and agent._page is None
+
+
+def test_teardown_closes_a_held_browser(log, monkeypatch):
+    _epochs(monkeypatch, ["epoch_exhausted"])
+    agent = BrowserSubAgent("b", None)
+
+    async def scenario():
+        await agent.run("order", {"workflow_id": "wf", "step_id": "shop"})
+        await agent.teardown()
+
+    asyncio.run(scenario())
+
+    assert "browser.close" in log and agent._page is None and agent._hold_expiry is None
+
+
 def test_no_profile_root_means_a_fresh_browser():
     assert BrowserSubAgent("b", None).profile_dir({"owner_id": "ada"}) is None
 
@@ -259,6 +351,28 @@ def test_only_the_approved_action_runs_and_it_runs_once():
     assert asyncio.run(agent._execute_tool("click", other))["status"] == "waiting"
 
 
+def test_an_approved_action_the_page_blocked_stays_approved_until_it_runs():
+    context = {"workflow_id": "wf", "step_id": "buy"}
+    agent, clicks = _committing_agent(context)
+    approved = asyncio.run(agent._execute_tool("click", dict(ORDER)))["action_id"]
+    agent.redis_store.resolve_hitl_request("wf", "buy", "approve", action_id=approved)
+    real_click = agent._tools["click"].func
+
+    async def covered(**params):
+        return {"status": "error", "error": "Element e53 is covered by a cookie dialog.",
+                "semantic_error": "ELEMENT_NOT_ACTIONABLE", "performed": False}
+
+    agent._tools["click"].func = covered
+    blocked = asyncio.run(agent._execute_tool("click", dict(ORDER)))
+    agent._tools["click"].func = real_click
+    placed = asyncio.run(agent._execute_tool("click", dict(ORDER)))
+    again = asyncio.run(agent._execute_tool("click", dict(ORDER)))
+
+    assert blocked["semantic_error"] == "ELEMENT_NOT_ACTIONABLE" and "note" not in blocked
+    assert placed["status"] == "success" and clicks == [{"text": "Place order"}]
+    assert "already ran" in again["note"]
+
+
 def test_a_declined_action_is_never_performed():
     agent, clicks = _committing_agent({"workflow_id": "wf", "step_id": "buy"})
     declined = asyncio.run(agent._execute_tool("click", dict(ORDER)))["action_id"]
@@ -309,6 +423,28 @@ def test_form_action_identity_survives_alternate_basket_urls(destination, same_a
     resumed = asyncio.run(identity("https://shop.test/basket", destination))
 
     assert (original == resumed) is same_action
+
+
+def test_an_order_for_another_delivery_slot_is_a_different_decision():
+    from types import SimpleNamespace
+
+    context = {"workflow_id": "wf", "step_id": "buy"}
+
+    async def identity(slot):
+        agent = BrowserSubAgent("b", None)
+        agent._page = SimpleNamespace(url="https://shop.test/checkout")
+
+        async def fingerprint(selector, text="", ref=""):
+            return {"tag": "BUTTON", "text": "Place order", "form": "https://shop.test/checkout",
+                    "method": "post", "fields": [["slot", slot]]}
+
+        agent._fingerprint = fingerprint
+        return agent.action_id(context, "click", await agent._action_target("click", {"text": "Place order"}))
+
+    wednesday = asyncio.run(identity("2026-10-14T10:00"))
+
+    assert wednesday == asyncio.run(identity("2026-10-14T10:00"))
+    assert wednesday != asyncio.run(identity("2026-10-10T10:00"))
 
 
 def _resumed_after(decision, applies=True):
@@ -371,9 +507,38 @@ def test_an_approval_does_not_run_against_a_page_that_changed():
     assert outcome["status"] == "not_performed"
 
 
+def test_a_resumed_approval_the_page_blocked_is_left_for_the_agent_to_carry_out():
+    from jarviscore.kernel.state import KernelState
+    from jarviscore.kernel.tracing import create_noop_trace
+    from jarviscore.testing.mocks import MockRedisContextStore
+
+    store = MockRedisContextStore()
+    state = KernelState(workflow_id="wf", step_id="buy", agent_id="b", task="t",
+                        context={"workflow_id": "wf", "step_id": "buy"})
+    agent, clicks = _committing_agent(state.context, store)
+    agent._current_state = state
+    waiting = asyncio.run(agent._execute_tool("click", dict(ORDER)))
+    store.resolve_hitl_request("wf", "buy", "approve", action_id=waiting["action_id"])
+
+    async def covered(**params):
+        return {"status": "error", "error": "covered by a cookie dialog",
+                "semantic_error": "ELEMENT_NOT_ACTIONABLE", "performed": False}
+
+    async def still_applies(action):
+        return True
+
+    agent._tools["click"].func = covered
+    agent._approved_action_applies = still_applies
+    asyncio.run(agent._carry_out_decided_actions(state, create_noop_trace()))
+
+    assert store.get_hitl_request("wf", "buy", waiting["action_id"]).get("outcome") is None
+    assert any(t.startswith("[HITL APPROVED, NOT YET PERFORMED]") for t in state.thoughts)
+    assert not any(t.startswith("[HITL APPROVED, PERFORMED]") for t in state.thoughts)
+
+
 def test_an_approval_that_could_not_be_performed_is_asked_again_fresh():
-    from jarviscore.kernel import approval as approval_module
     from jarviscore.contracts.hitl import HITLAction
+    from jarviscore.kernel import approval as approval_module
     from jarviscore.testing.mocks import MockRedisContextStore
 
     store = MockRedisContextStore()
@@ -453,6 +618,21 @@ SNAPSHOT = """\
   - combobox [disabled] [aria-hidden] [ref=f7e9]
   - combobox "Departing from" [ref=f7e10]
   - heading "Basket" [level=2] [ref=f7e11]
+  - paragraph [ref=f7e20]:
+    - text: "One product per line:"
+    - code [ref=f7e21]: SKU quantity
+  - table [ref=f7e22]:
+    - rowgroup [ref=f7e23]:
+      - row "SKU Product" [ref=f7e24]:
+        - columnheader "SKU" [ref=f7e25]
+        - columnheader "Product" [ref=f7e26]
+      - row "rice-1kg Basmati rice 1kg" [ref=f7e27]:
+        - cell "rice-1kg" [ref=f7e28]
+        - cell "Basmati rice 1kg" [ref=f7e29]
+  - 'link "Delivery: this week - see slots" [ref=f7e30] [cursor=pointer]':
+    - /url: /slots
+    - generic [ref=f7e31]: "Delivery: this week"
+    - generic [ref=f7e32]: see slots
   - button "Place \\"express\\" order" [ref=f7e12] [cursor=pointer]
 """
 
@@ -462,12 +642,16 @@ class _SnapshotPage:
 
     def __init__(self, disabled=()):
         self.disabled = set(disabled)
+        self.clicked = []
 
     def locator(self, selector):
         return _SnapshotLocator(self, selector)
 
     async def title(self):
         return "Basket"
+
+    async def wait_for_load_state(self, state, timeout=None):
+        return None
 
 
 class _SnapshotLocator:
@@ -486,6 +670,40 @@ class _SnapshotLocator:
     async def is_visible(self):
         return True
 
+    async def scroll_into_view_if_needed(self, timeout=None):
+        return None
+
+    async def evaluate(self, script, *args, **kwargs):
+        return None
+
+    async def click(self, timeout=None):
+        self.page.clicked.append(self.selector.removeprefix("aria-ref="))
+
+
+class _Decisions:
+    """A decision model answering from fixed tables, recording what it was asked."""
+
+    def __init__(self, choice="f7e10", confidence=0.9, commits=0.05, denied=0.02):
+        self.choice, self.confidence, self.commits, self.denied = choice, confidence, commits, denied
+        self.asked = []
+
+    async def evaluate(self, state, questions, model=None):
+        from types import SimpleNamespace
+
+        self.asked.append(questions)
+        answers = {}
+        for name, question in questions.items():
+            if question["type"] == "choice":
+                self.criteria = question["criteria"]
+                answers[name] = {"choice": self.choice, "confidence": self.confidence,
+                                 "probabilities": {self.choice: self.confidence}}
+            else:
+                answers[name] = {"noul": self.commits if name == "commits" else self.denied}
+        return SimpleNamespace(request_id="req-1", answers=answers)
+
+    async def close(self):
+        return None
+
 
 def _indexed_agent(disabled=()):
     agent = BrowserSubAgent("b", None)
@@ -493,16 +711,31 @@ def _indexed_agent(disabled=()):
     return agent
 
 
-def test_the_snapshot_indexes_what_a_person_can_act_on():
+def test_the_snapshot_reads_the_page_as_a_person_sees_it():
     result = asyncio.run(_indexed_agent()._tool_snapshot())
 
-    assert result["elements"].splitlines() == [
-        'f7e3 link "FreshCart"',
-        'f7e9 combobox "" [disabled aria-hidden]',
-        'f7e10 combobox "Departing from"',
-        'f7e12 button "Place \\"express\\" order"',
+    assert result["page"].splitlines() == [
+        '[f7e3] link "FreshCart"',
+        "[f7e9] combobox (disabled aria-hidden)",
+        '[f7e10] combobox "Departing from"',
+        "## Basket",
+        "One product per line: SKU quantity",
+        "| SKU | Product |",
+        "| rice-1kg | Basmati rice 1kg |",
+        '[f7e30] link "Delivery: this week - see slots"',
+        '[f7e12] button "Place "express" order"',
     ]
-    assert result["count"] == 4
+
+
+def test_the_index_lists_only_what_can_be_acted_on():
+    elements = asyncio.run(_indexed_agent()._index())
+
+    assert [(e["ref"], e["role"], e["name"], e["state"]) for e in elements] == [
+        ("f7e3", "link", "FreshCart", ""),
+        ("f7e9", "combobox", "", "disabled aria-hidden"),
+        ("f7e10", "combobox", "Departing from", ""),
+        ("f7e12", "button", 'Place "express" order', ""),
+    ]
 
 
 def test_a_disabled_element_is_refused_at_once_with_the_reason():
@@ -531,6 +764,122 @@ def test_find_asks_the_decision_model_and_returns_its_evidence():
     assert result["element"]["name"] == "Departing from"
     assert [a["ref"] for a in result["alternatives"]] == ["f7e12", "f7e3"]
     assert "f7e9" not in agent.decision_client.criteria
+
+
+def _acting_agent(**decisions):
+    agent = _indexed_agent()
+    agent.decision_client = _Decisions(**decisions)
+    agent.redis_store = None
+    return agent
+
+
+def test_act_finds_and_clicks_in_one_step_when_the_choice_is_clear():
+    agent = _acting_agent(choice="f7e3", confidence=0.95)
+
+    result = asyncio.run(agent._execute_tool("act", {"goal": "Go to the shop home", "action": "click"}))
+
+    assert result["status"] == "success" and agent._page.clicked == ["f7e3"]
+    assert result["acted_on"]["name"] == "FreshCart" and result["confidence"] == 0.95
+
+
+def test_a_page_an_action_reaches_counts_as_progress():
+    from types import SimpleNamespace
+
+    agent = _acting_agent(choice="f7e3", confidence=0.95)
+    agent._current_state = SimpleNamespace(internal_variables={})
+
+    asyncio.run(agent._execute_tool("click", {"ref": "f7e3"}))
+    asyncio.run(agent._execute_tool("click", {"ref": "f7e9"}))
+
+    assert len(agent._current_state.internal_variables["_observed_states"]) == 1
+
+
+def test_act_hands_back_the_choice_when_the_model_is_unsure():
+    agent = _acting_agent(choice="f7e3", confidence=0.4)
+
+    result = asyncio.run(agent._tool_act("Go to the shop home"))
+
+    assert result["status"] == "needs_choice" and agent._page.clicked == []
+    assert result["candidates"][0]["ref"] == "f7e3"
+
+
+def test_act_never_performs_a_consequential_action():
+    agent = _acting_agent(choice="f7e12", confidence=0.99, commits=0.97)
+
+    result = asyncio.run(agent._tool_act("Finish the purchase"))
+    flagged = asyncio.run(agent._execute_tool(
+        "act", {"goal": "Finish the purchase", "irreversible": True, "consequence": "Pays"},
+    ))
+
+    assert result["semantic_error"] == "CONSEQUENTIAL_ACTION" and result["ref"] == "f7e12"
+    assert flagged["semantic_error"] == "IRREVERSIBLE_NEEDS_EXACT_ELEMENT"
+    assert agent._page.clicked == []
+
+
+def test_navigation_reports_whether_the_site_turned_the_browser_away():
+    class _Response:
+        status = 403
+
+    class _Page(_SnapshotPage):
+        async def goto(self, url, wait_until=None, timeout=None):
+            self.url = url
+            return _Response()
+
+        async def evaluate(self, script):
+            return "Access Denied. Reference #18.2f"
+
+    agent = BrowserSubAgent("b", None)
+    agent._page = _Page()
+    agent.site_interval_s = 0
+    agent.decision_client = _Decisions(denied=0.97)
+
+    result = asyncio.run(agent._tool_navigate("https://shop.test/search"))
+
+    assert result["access"] == {"denied": True, "probability": 0.97, "decision_request_id": "req-1"}
+    assert result["http_status"] == 403
+
+
+def test_requests_to_one_site_are_spaced():
+    import time
+
+    agent = BrowserSubAgent("b", None)
+    agent.site_interval_s = 0.2
+    browser_module._LAST_VISIT.clear()
+
+    async def two_visits():
+        await agent._pace("https://shop.test/a")
+        started = time.monotonic()
+        await agent._pace("https://shop.test/b")
+        same_site = time.monotonic() - started
+        started = time.monotonic()
+        await agent._pace("https://other.test/a")
+        return same_site, time.monotonic() - started
+
+    same_site, other_site = asyncio.run(two_visits())
+
+    assert same_site >= 0.18 and other_site < 0.05
+
+
+def test_any_decision_model_can_be_plugged_in(monkeypatch):
+    import sys
+    import types
+
+    from jarviscore.execution.decisions import (
+        DecisionClient,
+        DecisionClientError,
+        create_decision_client,
+    )
+
+    module = types.ModuleType("my_decisions")
+    module.make = lambda config: _Decisions()
+    module.broken = lambda config: object()
+    monkeypatch.setitem(sys.modules, "my_decisions", module)
+
+    client = create_decision_client({"decision_client_factory": "my_decisions:make"})
+
+    assert isinstance(client, DecisionClient) and isinstance(client, _Decisions)
+    with pytest.raises(DecisionClientError, match="did not return a DecisionClient"):
+        create_decision_client({"decision_client_factory": "my_decisions:broken"})
 
 
 def test_perception_is_observed_whole():

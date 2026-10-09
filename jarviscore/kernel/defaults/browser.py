@@ -52,6 +52,8 @@ except ImportError:
     logger.debug("Playwright not installed — BrowserSubAgent unavailable (pip install playwright)")
 
 _PROFILE_LOCKS: Dict[str, asyncio.Lock] = {}
+# When each site was last requested by this process, for per-site pacing.
+_LAST_VISIT: Dict[str, float] = {}
 
 # Page text as a person sees it. innerText leaves out what form fields hold,
 # so a basket of quantity inputs reads as a list with no quantities. Each
@@ -123,6 +125,164 @@ _INTERACTIVE_ROLES = frozenset({
 })
 _SNAPSHOT_LINE = re.compile(r'^\s*- (\w+)(?: "((?:[^"\\]|\\.)*)")?(.*?)\[ref=((?:f\d+)?e\d+)\]')
 _SNAPSHOT_STATE = re.compile(r"\[(disabled|checked|expanded|selected|pressed|aria-hidden)\]")
+_TREE_NODE = re.compile(
+    r'^(?P<role>[\w-]+)(?: "(?P<name>(?:[^"\\]|\\.)*)")?(?P<flags>(?: \[[^\]]*\])*)(?::(?: (?P<text>.*))?)?$'
+)
+# Containers read as one line, the way a person reads a sentence or a table row.
+_INLINE_ROLES = frozenset({
+    "paragraph", "listitem", "row", "cell", "gridcell", "columnheader", "rowheader", "caption",
+    "term", "definition", "code", "strong", "emphasis", "time", "status", "option", "blockquote",
+})
+# Containers whose name tells a person what part of the page they are in.
+_NAMED_REGIONS = frozenset({"dialog", "alertdialog", "alert", "form", "region", "navigation", "table", "list"})
+_VIEW_REF = re.compile(r"\[(?:f\d+)?e\d+\]")
+
+
+def _words(value: str) -> str:
+    return " ".join(re.findall(r"\w+", value.casefold()))
+
+
+def _unquote(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        value = value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    return value
+
+
+def _parse_tree(tree: str) -> list:
+    """The ARIA snapshot as nested nodes: (kind, role, name, flags, text, children)."""
+    root: list = []
+    stack = [(-1, root)]
+    for line in tree.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("- "):
+            continue
+        depth, body = len(line) - len(stripped), stripped[2:]
+        if body.startswith("'"):
+            # YAML single-quotes a line whose text holds a colon; '' is an escaped quote
+            quoted, _, rest = body[1:].rpartition("'")
+            body = quoted.replace("''", "'") + rest
+        while stack[-1][0] >= depth:
+            stack.pop()
+        children: list = []
+        if body.startswith("/"):
+            key, _, value = body[1:].partition(":")
+            node = ("property", key, "", "", _unquote(value), children)
+        elif body.startswith("text:"):
+            node = ("text", "text", "", "", _unquote(body[5:]), children)
+        else:
+            match = _TREE_NODE.match(body)
+            if not match:
+                node = ("text", "text", "", "", _unquote(body), children)
+            else:
+                node = ("element", match["role"], (match["name"] or "").replace('\\"', '"'),
+                        match["flags"] or "", _unquote(match["text"] or ""), children)
+        stack[-1][1].append(node)
+        stack.append((depth, children))
+    return root
+
+
+def _element_label(role: str, name: str, flags: str) -> str:
+    ref = re.search(r"\[ref=([^\]]+)\]", flags)
+    state = " ".join(_SNAPSHOT_STATE.findall(flags))
+    label = f'{role} "{name}"' if name else role
+    return f"[{ref.group(1)}] {label}" + (f" ({state})" if state else "") if ref else label
+
+
+def _inline(node) -> str:
+    kind, role, name, flags, text, children = node
+    if kind == "property":
+        return f"{role}: {text}" if role != "url" and text else ""
+    if kind == "text":
+        return text
+    if role in _INTERACTIVE_ROLES:
+        parts = [_element_label(role, name, flags)]
+    elif role == "img":
+        parts = [f'img "{name}"'] if name else []
+    elif role == "row" and children:
+        name, parts = "", []  # a row's name joins its cells; read the cells
+    else:
+        parts = [name] if name else []
+    if text and text not in name:
+        parts.append(text)
+    for child in children:
+        rendered = _inline(child)
+        if not rendered or rendered == name:
+            continue
+        if name and _words(rendered) in _words(name) and not _VIEW_REF.search(rendered):
+            continue  # the element's name already says it
+        parts.append(rendered)
+    separator = " | " if role == "row" else " "
+    line = separator.join(part for part in parts if part)
+    return f"| {line} |" if role == "row" else line
+
+
+def _index_from_tree(tree: str) -> list[dict[str, str]]:
+    """Every interactive element in an ARIA snapshot with its ref, role, name and state."""
+    elements = []
+    for line in tree.splitlines():
+        match = _SNAPSHOT_LINE.match(line)
+        if not match or match.group(1) not in _INTERACTIVE_ROLES:
+            continue
+        role, name, flags, ref = match.groups()
+        elements.append({
+            "ref": ref, "role": role, "name": (name or "").replace('\\"', '"'),
+            "state": " ".join(_SNAPSHOT_STATE.findall(flags)),
+        })
+    return elements
+
+
+def _reading_view(tree: str) -> str:
+    """The page as a person reads it: its text, with a ref on everything that can be acted on."""
+    lines: list[str] = []
+
+    def render(nodes) -> None:
+        for node in nodes:
+            kind, role, name, flags, text, children = node
+            if kind != "element" or role in _INTERACTIVE_ROLES or role in _INLINE_ROLES or role == "img":
+                rendered = _inline(node)
+                if rendered:
+                    lines.append(f"- {rendered}" if role == "listitem" else rendered)
+                continue
+            if role == "heading":
+                level = re.search(r"\[level=(\d)\]", flags)
+                lines.append(f"{'#' * int(level.group(1)) if level else '#'} {name or _inline(node)}")
+                continue
+            if role in _NAMED_REGIONS and (name or role.startswith("alert") or role == "dialog"):
+                lines.append(f"[{role}{f' {name!r}' if name else ''}]")
+            elif name and text:
+                lines.append(f"{name} {text}")
+            elif name or text:
+                lines.append(name or text)
+            render(children)
+
+    render(_parse_tree(tree))
+    return "\n".join(lines)
+
+
+# Puts the values a person approved back on a reopened form; throws if any cannot be.
+_RESTORE_FORM = """({action, fields}) => {
+    const form = Array.from(document.forms).find(f => f.action === action);
+    if (!form) throw new Error('the approved form is not on this page');
+    for (const [name, value] of fields) {
+        const field = form.elements.namedItem(name);
+        if (!field) throw new Error(`the approved field ${name} is not on this page`);
+        const choices = field instanceof RadioNodeList ? Array.from(field) : [field];
+        const choosable = choices.filter(el => el.type === 'radio' || el.type === 'checkbox');
+        if (choosable.length) {
+            const chosen = choosable.find(el => el.value === value && !el.disabled);
+            if (!chosen) throw new Error(`the approved choice for ${name} is not available`);
+            chosen.checked = true;
+        } else {
+            choices[0].value = value;
+            if (choices[0].value !== value) throw new Error(`the approved value for ${name} is not available`);
+        }
+        for (const el of choices) {
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+        }
+    }
+}"""
 # What sits over an element's centre, or null when a click would reach it.
 _COVERED_BY = """el => {
     const box = el.getBoundingClientRect();
@@ -157,8 +317,16 @@ class BrowserSubAgent(BaseSubAgent):
     - close_page: Close the current page and open a fresh one
     """
 
-    whole_observation_tools = frozenset({"snapshot", "find"})
+    whole_observation_tools = frozenset({"snapshot", "find", "act"})
     perception_tools = frozenset({"snapshot"})
+    #: Seconds between requests to the same site.
+    site_interval_s: float = float(os.getenv("BROWSER_SITE_INTERVAL_S", "1.5"))
+    #: How long an action may take to finish loading before the agent looks again.
+    settle_timeout_ms: int = int(os.getenv("BROWSER_SETTLE_TIMEOUT_MS", "3000"))
+    #: Decision confidence at which act() performs the action itself.
+    act_min_confidence: float = float(os.getenv("BROWSER_ACT_MIN_CONFIDENCE", "0.7"))
+    #: How long a browser stays open for the step's next execution epoch to pick it up.
+    continuation_hold_s: float = float(os.getenv("BROWSER_CONTINUATION_HOLD_S", "120"))
 
     SYSTEM_PROMPT = """\
 You are a BROWSER AUTOMATION SPECIALIST in a multi-agent orchestration framework.
@@ -167,23 +335,26 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 ## CRITICAL RULES
 
 1. **NAVIGATE FIRST** — Always call navigate() before any other interaction.
-2. **SEE THE PAGE, THEN ACT BY REF** — Call snapshot() to see every element you can act
-   on, each with a ref, role, name and state such as [disabled]. Act on an element by
-   passing its ref to click, type_text, fill_form or select_option. When find() is
-   available, it picks the element for a goal in under a second; act on its ref when
-   its confidence is high, otherwise choose from the snapshot yourself. Take a new
-   snapshot after the page changes: refs from an earlier page no longer apply.
-3. **SCREENSHOT TO VERIFY** — When the snapshot cannot tell you what the page shows
-   (images, layout), take a screenshot.
-4. **CSS SELECTORS** — Only when an element has no ref, use a specific CSS selector.
-5. **HANDLE ERRORS** — An element that is disabled, hidden or gone is reported at once;
-   take a new snapshot and choose an element that can be acted on.
-6. **DATA EXTRACTION** — Use get_text() or evaluate() for structured data. Note findings
-   explicitly in your DONE summary.
-7. **NO LOOPS** — Do not retry the same action more than twice. If stuck, take a screenshot,
-   reason about what's happening, then try a different approach.
+2. **READ THE PAGE, THEN ACT BY REF** — snapshot() shows the page as a person reads it:
+   its text, tables, instructions and notices, with a ref on every element you can act
+   on and its state such as (disabled). Follow what the page says about how to use it.
+   Act on an element by passing its ref to click, type_text, fill_form or select_option.
+   Take a new snapshot after the page changes: refs from an earlier page no longer apply.
+3. **LET THE DECISION MODEL PICK WHEN IT IS AVAILABLE** — once you know what to do,
+   act(goal, action) with action click, type or select finds the element and acts in
+   one step; it suits reversible steps. When it returns needs_choice, pick a ref from
+   its candidates. find(goal) returns the ref without acting.
+4. **READ WHAT THE SNAPSHOT SHOWS** — answers come from the page text in the snapshot;
+   use get_text or evaluate only for what it does not show.
+5. **RESPECT ACCESS** — navigate() may report access.denied: the site turned the browser
+   away. Do not route around it through search engines or other copies of the site;
+   report what was blocked.
+6. **HANDLE ERRORS** — An element that is disabled, hidden or covered is reported at once
+   with the reason; deal with the cause (for example accept a cookie banner) or choose
+   another element.
+7. **NO LOOPS** — Do not retry the same action more than twice; try a different approach.
 8. **DONE WITH EVIDENCE** — Your DONE summary must include the extracted data or
-   a clear statement of what action was completed with proof (screenshot hash or text excerpt).
+   a clear statement of what action was completed, as the page showed it in this run.
 9. **IRREVERSIBLE ACTIONS WAIT FOR THE PERSON** — Before an action that commits the
    person or cannot be undone (placing an order, paying, booking, submitting an
    application or form to an organisation, sending a message, deleting, publishing),
@@ -202,9 +373,9 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 ## WORKFLOW
 
 1. navigate(url)
-2. snapshot() → see what can be acted on
-3. interact by ref (click / type_text / fill_form / select_option)
-4. snapshot(ref) or get_text(ref) → read the result
+2. snapshot() → read the page
+3. act by ref, or act(goal, action)
+4. snapshot() after the page changes
 5. DONE with findings
 """
 
@@ -237,6 +408,9 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self._launch_error = ""
         self._identity: Dict[str, Any] = {}
         self._relocated: Dict[str, str] = {}
+        # (workflow_id, step_id) whose next execution epoch may continue in the open browser
+        self._held_for: Optional[tuple] = None
+        self._hold_expiry: Optional[asyncio.TimerHandle] = None
 
         super().__init__(
             agent_id=agent_id,
@@ -269,9 +443,9 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self.register_tool(
             "snapshot",
             self._tool_snapshot,
-            'Index every element you can act on: one line per element, "<ref> <role> \\"<name>\\"" with '
-            'states like [disabled]. Act on elements by ref. With {"ref": "<ref>"} returns that '
-            "region in full, text included. Params: {}",
+            'The page as a person reads it: headings, text, tables as rows, notices and dialogs, '
+            'with "[<ref>] <role> \\"<name>\\"" on everything you can act on and states like '
+            '(disabled). Act on elements by ref. Params: {}',
             phase="thinking",
         )
         self.register_tool(
@@ -400,6 +574,14 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             except Exception as exc:
                 logger.info("[browser] Approved action page did not reopen: %s", exc)
                 return False
+            # A reopened page has lost what was entered; the person approved those values.
+            element = (action.target or {}).get("element") or {}
+            if element.get("form") and element.get("fields"):
+                try:
+                    await self._page.evaluate(_RESTORE_FORM, {"action": element["form"], "fields": element["fields"]})
+                except Exception as exc:
+                    logger.info("[browser] Approved form values could not be restored: %s", exc)
+                    return False
         context = getattr(getattr(self, "_current_state", None), "context", None) or {}
         if "ref" not in action.params:
             target = await self._action_target(action.tool, dict(action.params))
@@ -434,7 +616,10 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         return await locator.evaluate(
             "el => ({tag: el.tagName, id: el.id, name: el.getAttribute('name'), "
             "type: el.getAttribute('type'), text: (el.innerText || el.value || '').trim(), "
-            "form: el.form ? el.form.action : null, method: el.form ? el.form.method : null})",
+            "form: el.form ? el.form.action : null, method: el.form ? el.form.method : null, "
+            "fields: el.form ? Array.from(el.form.elements).filter(f => f.name && !f.disabled "
+            "&& !['hidden','submit','button','reset','image','file'].includes(f.type) "
+            "&& (!['radio','checkbox'].includes(f.type) || f.checked)).map(f => [f.name, String(f.value)]) : null})",
             timeout=5000,
         )
 
@@ -491,6 +676,16 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 
     async def _execute_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
         params = dict(params)
+        if tool_name == "act" and params.get("irreversible") is True:
+            return {
+                "status": "error",
+                "error": (
+                    "act() never performs an irreversible action: a person approves an exact "
+                    "element. Use find() for its ref, then click/type_text with that ref and "
+                    "irreversible plus consequence."
+                ),
+                "semantic_error": "IRREVERSIBLE_NEEDS_EXACT_ELEMENT",
+            }
         irreversible = params.pop("irreversible", False) is True
         consequence = str(params.pop("consequence", "") or "").strip()
         if irreversible and tool_name in _COMMITTING_TOOLS:
@@ -529,8 +724,21 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 return refusal
             result = await super()._execute_tool(tool_name, params)
             approval.settle(self.redis_store, workflow_id, step_id, action_id, result)
+            self._record_reached(tool_name, result)
             return result
-        return await super()._execute_tool(tool_name, params)
+        result = await super()._execute_tool(tool_name, params)
+        self._record_reached(tool_name, result)
+        return result
+
+    def _record_reached(self, tool_name: str, result: Any) -> None:
+        """A page an action led to is progress, whether or not it has been read yet."""
+        if (
+            tool_name in _COMMITTING_TOOLS | {"navigate", "act"}
+            and isinstance(result, dict)
+            and result.get("status") == "success"
+            and self._page is not None
+        ):
+            self._record_observed_state(self._page.url, "")
 
     def profile_dir(self, context: Optional[Dict[str, Any]]) -> Optional[str]:
         """Where this run's tenant keeps its browser profile, if anywhere.
@@ -558,8 +766,30 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 'Returns its ref, confidence and the closest alternatives. Params: {"goal": "<what to act on>"}',
                 phase="thinking",
             )
+            self.register_tool(
+                "act",
+                self._tool_act,
+                'Find the element for a goal and click, type into or select it in one step. When the '
+                'choice is unclear it returns candidates instead of acting. Never for irreversible '
+                'actions. Params: {"goal": "<what to act on>", "action": "click|type|select", '
+                '"text": "<for type>", "value": "<for select>"}',
+                phase="action",
+            )
         if not PLAYWRIGHT_AVAILABLE:
             return
+        if self._held_for is not None:
+            context = getattr(state, "context", None) or {}
+            continuing = (
+                context.get("_new_execution_epoch")
+                and self._held_for == (context.get("workflow_id"), context.get("step_id"))
+                and self._page is not None
+                and not self._page.is_closed()
+            )
+            self._release_hold()
+            if continuing:
+                logger.info("[browser] Continuing in the open browser at %s", self._page.url)
+                return
+            await self._post_run_hook()
         args = [
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -702,6 +932,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         try:
             if not url.startswith(("http://", "https://")):
                 url = "https://" + url
+            await self._pace(url)
             response = await self._page.goto(
                 url,
                 wait_until=wait_for,
@@ -709,14 +940,70 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             )
             self._current_url = self._page.url
             title = await self._page.title()
-            return {
+            result = {
                 "status": "success",
                 "url": self._current_url,
                 "title": title,
                 "http_status": response.status if response else None,
             }
+            access = await self._judge_access(url, result["http_status"], title)
+            if access is not None:
+                result["access"] = access
+            return result
         except Exception as e:
             return {"status": "error", "error": str(e), "url": url}
+
+    async def _pace(self, url: str) -> None:
+        """Space requests to one site the way a person's browsing is spaced."""
+        from urllib.parse import urlsplit
+
+        site = urlsplit(url).netloc
+        loop = asyncio.get_running_loop()
+        last = _LAST_VISIT.get(site)
+        if last is not None:
+            wait = self.site_interval_s - (loop.time() - last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+        _LAST_VISIT[site] = loop.time()
+
+    async def _judge_access(self, url: str, http_status: Optional[int], title: str) -> Optional[Dict[str, Any]]:
+        """Whether the site served the page or turned the browser away, as evidence."""
+        if getattr(self, "decision_client", None) is None:
+            return None
+        try:
+            text = await self._page.evaluate(
+                f"() => ({_READ_WITH_FIELDS})(document.body, true)"
+            )
+            result = await self.decision_client.evaluate(
+                state=(
+                    f"Requested: {url}\nLanded: {self._page.url}\nHTTP status: {http_status}\n"
+                    f"Title: {title}\nPage text:\n{str(text).strip()}"
+                ),
+                questions={"denied": {
+                    "type": "noul",
+                    "instructions": (
+                        "Did the site refuse to serve the requested content to this browser "
+                        "(an access block, bot check or captcha) instead of showing it?"
+                    ),
+                }},
+            )
+        except Exception as exc:
+            logger.info("[browser] Access judgement unavailable: %s", exc)
+            return None
+        denied = float(result.answers["denied"]["noul"])
+        return {
+            "denied": denied >= 0.5,
+            "probability": round(denied, 3),
+            "decision_request_id": result.request_id,
+        }
+
+    async def _settle(self) -> None:
+        """Let what an action started finish loading before the next observation."""
+        try:
+            await self._page.wait_for_load_state("domcontentloaded", timeout=self.settle_timeout_ms)
+            await self._page.wait_for_load_state("networkidle", timeout=self.settle_timeout_ms)
+        except Exception as exc:  # a page that keeps a connection open is still usable
+            logger.debug("[browser] Page did not settle within %sms: %s", self.settle_timeout_ms, exc)
 
     async def _tool_click(
         self,
@@ -743,7 +1030,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 await self._page.click(selector, timeout=timeout_ms)
             else:
                 return {"status": "error", "error": "One of ref, selector or text is required"}
-            await asyncio.sleep(0.5)  # Brief pause for page response
+            await self._settle()
             return {"status": "success", "url": self._page.url}
         except Exception as e:
             return {"status": "error", "error": str(e)}
@@ -773,6 +1060,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             if clear_first:
                 await locator.fill("", timeout=10000)
             await locator.press_sequentially(text, delay=delay_ms)
+            await self._settle()
             return {"status": "success", "target": ref or selector, "chars_typed": len(text)}
         except Exception as e:
             return {"status": "error", "error": str(e)}
@@ -835,45 +1123,29 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             "status": "error",
             "error": f"Element {ref} {reason}.",
             "semantic_error": "ELEMENT_NOT_ACTIONABLE",
+            "performed": False,
         }
 
     async def _index(self) -> List[Dict[str, str]]:
         """Every interactive element on the page with its ref, role, name and state."""
-        snapshot = await self._page.locator("body").aria_snapshot(mode="ai")
-        elements = []
-        for line in snapshot.splitlines():
-            match = _SNAPSHOT_LINE.match(line)
-            if not match or match.group(1) not in _INTERACTIVE_ROLES:
-                continue
-            role, name, flags, ref = match.groups()
-            elements.append({
-                "ref": ref, "role": role, "name": name or "",
-                "state": " ".join(_SNAPSHOT_STATE.findall(flags)),
-            })
-        return elements
+        return _index_from_tree(await self._page.locator("body").aria_snapshot(mode="ai"))
 
     async def _tool_snapshot(self, ref: str = "", **kwargs) -> Dict[str, Any]:
-        """The page as a numbered index of what can be acted on, or one region in full."""
+        """The page, or one region of it, as a person reads it, with refs on what can be acted on."""
         err = self._ensure_page()
         if err:
             return err
         try:
             if ref:
-                region = await self._ref(ref).aria_snapshot(mode="ai")
+                region = _reading_view(await self._ref(ref).aria_snapshot(mode="ai"))
                 return {"status": "success", "url": self._page.url, "region": region}
-            elements = await self._index()
-            listing = "\n".join(
-                f"{e['ref']} {e['role']} \"{e['name']}\""
-                + (f" [{e['state']}]" if e["state"] else "")
-                for e in elements
-            )
-            self._record_observed_state(self._page.url, listing)
+            view = _reading_view(await self._page.locator("body").aria_snapshot(mode="ai"))
+            self._record_observed_state(self._page.url, view)
             return {
                 "status": "success",
                 "url": self._page.url,
                 "title": await self._page.title(),
-                "elements": listing,
-                "count": len(elements),
+                "page": view,
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
@@ -923,6 +1195,67 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 for ref, p in ranked[1:4] if ref in by_ref
             ],
             "decision_request_id": result.request_id,
+        }
+
+    async def _tool_act(
+        self, goal: str, action: str = "click", text: str = "", value: str = "", **kwargs,
+    ) -> Dict[str, Any]:
+        """Find the element for ``goal`` and act on it in one turn when the choice is clear."""
+        tools = {"click": "click", "type": "type_text", "select": "select_option"}
+        if action not in tools:
+            return {"status": "error", "error": "action must be click, type or select"}
+        found = await self._tool_find(goal)
+        if found.get("status") != "success":
+            return found
+        if found["confidence"] < self.act_min_confidence or found["element"] is None:
+            return {
+                "status": "needs_choice",
+                "note": "The element for this goal is not clear; choose a ref yourself and act on it.",
+                "candidates": [found["element"], *found["alternatives"]],
+                "confidence": found["confidence"],
+            }
+        params = {"ref": found["ref"]}
+        if action == "type":
+            params["text"] = text
+        elif action == "select":
+            params["value"] = value
+        element = found["element"]
+        try:
+            verdict = await self.decision_client.evaluate(
+                state=(
+                    f"Page: {await self._page.title()} ({self._page.url})\n"
+                    f"Element: {element['role']} \"{element['name']}\"\nAction: {action}"
+                    + (f" \"{text or value}\"" if text or value else "")
+                ),
+                questions={"commits": {
+                    "type": "noul",
+                    "instructions": (
+                        "Would this action commit the person or be hard to undo, such as placing "
+                        "an order, paying, booking, sending, submitting, publishing or deleting?"
+                    ),
+                }},
+            )
+            commits = float(verdict.answers["commits"]["noul"])
+        except Exception as exc:
+            return {"status": "error", "error": f"Could not judge whether this action commits the person: {exc}"}
+        if commits >= 0.5:
+            return {
+                "status": "error",
+                "error": (
+                    f"{element['role']} \"{element['name']}\" ({found['ref']}) looks consequential; "
+                    "act() never performs it. If it is what the goal needs, call click/type_text "
+                    "with this ref, irreversible and consequence so the person can decide."
+                ),
+                "semantic_error": "CONSEQUENTIAL_ACTION",
+                "ref": found["ref"],
+                "commits_probability": round(commits, 3),
+            }
+        outcome = await self._execute_tool(tools[action], params)
+        return {
+            **outcome,
+            "acted_on": found["element"],
+            "confidence": found["confidence"],
+            "decision_request_id": found["decision_request_id"],
         }
 
     async def _tool_get_attribute(
@@ -1158,8 +1491,40 @@ Your job: navigate and interact with web pages to extract data or complete tasks
     # ──────────────────────────────────────────────────────────────────────
 
     async def run(self, task, context=None, max_turns=20, model=None, **kwargs):
-        """Run with browser lifecycle management; the base loop opens it with state."""
+        """Run with browser lifecycle management; the base loop opens it with state.
+
+        A run that ends because its execution epoch ran out leaves the browser open
+        for the step's next epoch, which continues on the same page.
+        """
+        output = None
         try:
-            return await super().run(task, context, max_turns, model, **kwargs)
+            output = await super().run(task, context, max_turns, model, **kwargs)
+            return output
         finally:
+            if getattr(output, "status", None) == "epoch_exhausted" and self._page is not None:
+                self._hold((context or {}).get("workflow_id"), (context or {}).get("step_id"))
+            else:
+                await self._post_run_hook()
+
+    def _hold(self, workflow_id, step_id) -> None:
+        self._held_for = (workflow_id, step_id)
+        loop = asyncio.get_running_loop()
+        self._hold_expiry = loop.call_later(
+            self.continuation_hold_s, lambda: asyncio.ensure_future(self._expire_hold()),
+        )
+
+    def _release_hold(self) -> None:
+        if self._hold_expiry is not None:
+            self._hold_expiry.cancel()
+        self._hold_expiry = None
+        self._held_for = None
+
+    async def _expire_hold(self) -> None:
+        """The continuation never came: close what was held open for it."""
+        if self._held_for is not None:
+            self._release_hold()
             await self._post_run_hook()
+
+    async def teardown(self) -> None:
+        self._release_hold()
+        await self._post_run_hook()

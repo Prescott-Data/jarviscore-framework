@@ -203,8 +203,8 @@ class EpistemicLedger:
                 f"KNOWLEDGE_PLATEAU: No new findings for "
                 f"{_PLATEAU_THRESHOLD} consecutive action turns. "
                 f"Total knowledge items: {current}. "
-                f"You likely have enough to produce a useful result. "
-                f"Call DONE with what you have."
+                f"More of the same approach is unlikely to add any; change approach, "
+                f"or finish if the task is achieved or cannot progress further."
             )
 
         return None

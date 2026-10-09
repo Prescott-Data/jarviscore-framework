@@ -309,6 +309,46 @@ class TestKnowledgePlateau:
         assert signals[-1] is not None and "KNOWLEDGE_PLATEAU" in signals[-1]
 
 
+def test_a_plateau_is_told_on_its_turn_and_never_becomes_the_agents_memory():
+    """Runtime notices describe this run; kept as thoughts they would greet the next run."""
+    import asyncio
+
+    from jarviscore.kernel.subagent import BaseSubAgent
+
+    class _LLM:
+        def __init__(self):
+            self.prompts = []
+
+        async def generate(self, messages=None, **kwargs):
+            self.prompts.append("\n".join(str(m.get("content")) for m in messages))
+            reply = (
+                'THOUGHT: look\nTOOL: look\nPARAMS: {}' if len(self.prompts) <= 5
+                else "THOUGHT: done\nDONE: finished\nRESULT: {}"
+            )
+            return {"content": reply, "tokens": {"input": 1, "output": 1, "total": 2}, "cost_usd": 0.0}
+
+    class _Agent(BaseSubAgent):
+        def get_system_prompt(self, *args, **kwargs):
+            return "system"
+
+        def setup_tools(self):
+            self.register_tool("look", self._look, "Look around. Params: {}")
+
+        async def _look(self, **kwargs):
+            observed = self._current_state.internal_variables.setdefault("_observed_states", [])
+            if not observed:
+                observed.append("page")
+            return {"status": "success", "seen": "the same page"}
+
+    llm = _LLM()
+    agent = _Agent(agent_id="a", role="tester", llm_client=llm)
+    asyncio.run(agent.run(task="t", max_turns=8))
+
+    assert any("KNOWLEDGE_PLATEAU" in prompt for prompt in llm.prompts)
+    assert not any("KNOWLEDGE_PLATEAU" in t for t in agent._current_state.thoughts)
+    assert not any("Call DONE with what you have" in prompt for prompt in llm.prompts)
+
+
 # ──────────────────────────────────────────────────────────────────
 # OODA Integration Tests (source-level verification)
 # ──────────────────────────────────────────────────────────────────

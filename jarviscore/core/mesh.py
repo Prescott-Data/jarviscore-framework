@@ -360,7 +360,11 @@ class Mesh:
         if self._athena_client:
             self._capabilities.add("athena")
         if self._decision_client:
-            self._capabilities.add("decisions_typesafe")
+            self._capabilities.add("decisions")
+            from jarviscore.execution.decisions import JevDecisionClient
+
+            if isinstance(self._decision_client, JevDecisionClient):
+                self._capabilities.add("decisions_typesafe")
 
         # ── 2. Infrastructure injection into agents ───────────────────────────
         # Must happen before agent.setup() so agents can use stores during setup
@@ -2671,14 +2675,14 @@ class Mesh:
             return None
 
     def _init_decision_client(self, settings):
-        """Initialize TypeSafe Jev only when an API key is configured."""
+        """Initialize the configured decision model, if any."""
         from jarviscore.execution.decisions import create_decision_client
 
         resolved = settings.model_dump()
         resolved.update(self.config)
         client = create_decision_client(resolved)
         if client is not None:
-            self._logger.info("TypeSafe Jev decision client ready")
+            self._logger.info("Decision model client ready: %s", type(client).__name__)
         return client
 
     def _resolve_auto_mode(self) -> "MeshMode":
