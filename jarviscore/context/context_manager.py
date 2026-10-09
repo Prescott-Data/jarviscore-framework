@@ -444,6 +444,20 @@ class ContextManager:
 
         return blocks
 
+    @staticmethod
+    def _plan_view(plan: Dict[str, Any]) -> Dict[str, Any]:
+        """The plan as the agent reads it: a goal-wide source quote points to the goal it repeats."""
+        goal = str(plan.get("goal") or "").strip()
+        obligations = plan.get("obligations")
+        if not goal or not isinstance(obligations, list):
+            return plan
+        view = []
+        for obligation in obligations:
+            if isinstance(obligation, dict) and str(obligation.get("source_quote") or "").strip() == goal:
+                obligation = {**obligation, "source_quote": "(the whole goal above)"}
+            view.append(obligation)
+        return {**plan, "obligations": view}
+
     def _compose_input_context(self, state: "KernelState", tier) -> str:
         """Input context, whole values only; bulk keys drop entirely under pressure."""
         if not state.context:
@@ -478,6 +492,8 @@ class ContextManager:
         allowed = set(filter_input_context_keys(other.keys(), tier))
         cleaned = self._scrub_dict({k: v for k, v in other.items() if k in allowed})
         for key, value in cleaned.items():
+            if key == "workflow_plan" and isinstance(value, dict):
+                value = self._plan_view(value)
             if hasattr(value, "model_json_schema"):
                 try:
                     value = json.dumps(value.model_json_schema(), indent=2)
