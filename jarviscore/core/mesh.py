@@ -740,6 +740,19 @@ class Mesh:
         event, self._activity = self._activity, asyncio.Event()
         event.set()
 
+    def _release_dependents(self, workflow_id: str, step_id: str) -> None:
+        """Requeue steps blocked on ``step_id`` the moment it commits.
+
+        Left to the next worker scan, a waiter woken by the commit can see every step
+        terminal (done or blocked) and close the workflow before the dependents run.
+        """
+        for dependent_id in self._redis_store.get_all_step_ids(workflow_id):
+            dependent = self._redis_store.get_step_definition(workflow_id, dependent_id) or {}
+            if dependent.get("status") == "blocked" and step_id in (
+                dependent.get("depends_on") or []
+            ):
+                self._redis_store.requeue_blocked_step(workflow_id, dependent_id)
+
     async def _idle(self, seconds: float, mark: int) -> None:
         """Wait up to ``seconds``, returning early once this node changes workflow state.
 
@@ -1862,9 +1875,10 @@ class Mesh:
             mark = self._activity_generation
             try:
                 await self._service_capability_needs(agent, capabilities)
-                for workflow_id, step_id, step_def in self._ready_steps(
-                    agent.agent_id, capabilities
-                ):
+                ready = await asyncio.to_thread(
+                    lambda: list(self._ready_steps(agent.agent_id, capabilities))
+                )
+                for workflow_id, step_id, step_def in ready:
                     claim_id = f"{agent.agent_id}:{uuid4().hex}"
                     lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
                     if self._redis_store.claim_step(
@@ -1887,31 +1901,15 @@ class Mesh:
             await self._idle(float(self.config.get("distributed_poll_interval", 2.0)), mark)
 
     def _ready_steps(self, agent_id: str, capabilities: set[str]):
-        """Pending steps this agent may claim now, recovering expired claims on the way."""
-        for workflow_id in self._redis_store.get_active_workflows():
-            if self._redis_store.is_workflow_cancelled(workflow_id):
-                self._redis_store.unregister_active_workflow(workflow_id)
-                continue
-            if not self._node_can_access_workspace(workflow_id):
-                continue
-            for step_id in self._redis_store.get_all_step_ids(workflow_id):
-                step_def = self._redis_store.get_step_definition(
-                    workflow_id, step_id
-                )
-                if step_def and step_def.get("status") == "in_progress":
-                    self._redis_store.recover_expired_step_claim(
-                        workflow_id, step_id
-                    )
-                    step_def = self._redis_store.get_step_definition(
-                        workflow_id, step_id
-                    )
-                if step_def and step_def.get("status") == "blocked":
-                    self._redis_store.requeue_blocked_step(workflow_id, step_id)
-                    step_def = self._redis_store.get_step_definition(
-                        workflow_id, step_id
-                    )
-                if not step_def or step_def.get("status") != "pending":
-                    continue
+        """Pending steps this agent may claim now, recovering expired claims on the way.
+
+        Reads every active graph in one round trip and filters in memory: this runs
+        on every wake of every worker, so per-step reads would multiply with load.
+        """
+        now = time.time()
+        for workflow_id, steps in self._redis_store.get_active_workflow_graphs().items():
+            accessible = None
+            for step_id, step_def in steps.items():
                 requirement = (
                     step_def.get("capability")
                     or step_def.get("agent")
@@ -1919,9 +1917,25 @@ class Mesh:
                 )
                 if requirement not in capabilities:
                     continue
+                status = step_def.get("status")
+                if status == "in_progress":
+                    if float(step_def.get("claim_expires_at") or 0) > now:
+                        continue
+                    if not self._redis_store.recover_expired_step_claim(workflow_id, step_id):
+                        continue
+                    step_def = self._redis_store.get_step_definition(workflow_id, step_id)
+                elif status == "blocked":
+                    self._redis_store.requeue_blocked_step(workflow_id, step_id)
+                    step_def = self._redis_store.get_step_definition(workflow_id, step_id)
+                if not step_def or step_def.get("status") != "pending":
+                    continue
                 resume_agent_id = step_def.get("resume_agent_id")
                 if resume_agent_id and resume_agent_id != agent_id:
                     continue
+                if accessible is None:
+                    accessible = self._node_can_access_workspace(workflow_id)
+                if not accessible:
+                    break
                 blockers = self._redis_store.get_dependency_blockers(
                     workflow_id, step_id
                 )
@@ -1958,9 +1972,10 @@ class Mesh:
                         await self._service_capability_needs(member, capabilities)
                     finally:
                         state.release(member)
-                for workflow_id, step_id, step_def in self._ready_steps(
-                    base.agent_id, capabilities
-                ):
+                ready = await asyncio.to_thread(
+                    lambda: list(self._ready_steps(base.agent_id, capabilities))
+                )
+                for workflow_id, step_id, step_def in ready:
                     if state.idle:
                         member = state.idle.pop()
                     elif len(state.members) < state.spec.max:
@@ -2454,6 +2469,8 @@ class Mesh:
             result,
             status=terminal,
         )
+        if committed:
+            self._release_dependents(workflow_id, step_id)
         self._wake_workers()
         if not committed:
             self._logger.warning(

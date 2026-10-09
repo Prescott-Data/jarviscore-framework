@@ -2360,6 +2360,29 @@ class RedisContextStore:
         """Return all step IDs stored in the workflow DAG hash."""
         return list(self._redis.hkeys(f"workflow_graph:{workflow_id}"))
 
+    def get_active_workflow_graphs(self) -> Dict[str, Dict[str, Any]]:
+        """Every active, uncancelled workflow's step definitions, in one round trip."""
+        workflow_ids = sorted(self.get_active_workflows())
+        pipe = self._redis.pipeline(transaction=False)
+        for workflow_id in workflow_ids:
+            pipe.exists(f"workflow_cancelled:{workflow_id}")
+            pipe.hgetall(f"workflow_graph:{workflow_id}")
+        replies = pipe.execute()
+        graphs: Dict[str, Dict[str, Any]] = {}
+        for index, workflow_id in enumerate(workflow_ids):
+            cancelled, raw_steps = replies[2 * index], replies[2 * index + 1]
+            if cancelled:
+                self.unregister_active_workflow(workflow_id)
+                continue
+            steps = {}
+            for step_id, raw in (raw_steps or {}).items():
+                try:
+                    steps[step_id] = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            graphs[workflow_id] = steps
+        return graphs
+
     # ------------------------------------------------------------------
     # Workflow State (crash recovery)
     # ------------------------------------------------------------------
