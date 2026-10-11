@@ -643,9 +643,13 @@ class _SnapshotPage:
     def __init__(self, disabled=()):
         self.disabled = set(disabled)
         self.clicked = []
+        self.document = 1.0
 
     def locator(self, selector):
         return _SnapshotLocator(self, selector)
+
+    async def evaluate(self, script, *args):
+        return self.document if script == "performance.timeOrigin" else None
 
     async def title(self):
         return "Basket"
@@ -739,10 +743,33 @@ def test_the_index_lists_only_what_can_be_acted_on():
 
 
 def test_a_disabled_element_is_refused_at_once_with_the_reason():
-    result = asyncio.run(_indexed_agent(disabled={"f7e9"})._tool_click(ref="f7e9"))
+    agent = _indexed_agent(disabled={"f7e9"})
+    asyncio.run(agent._tool_snapshot())
+    result = asyncio.run(agent._tool_click(ref="f7e9"))
 
     assert result["semantic_error"] == "ELEMENT_NOT_ACTIONABLE"
     assert "disabled" in result["error"]
+
+
+def test_a_ref_from_before_the_page_reloaded_is_named_stale():
+    # Playwright answers such a ref with "Invalid frame in aria-ref selector" or no match.
+    agent = _indexed_agent()
+    asyncio.run(agent._tool_snapshot())
+    agent._page.document = 2.0
+
+    result = asyncio.run(agent._tool_click(ref="f7e10"))
+
+    assert result["semantic_error"] == "STALE_REF" and result["performed"] is False
+    assert "Take a new snapshot" in result["error"] and agent._page.clicked == []
+
+
+def test_a_ref_the_latest_snapshot_did_not_show_is_named_stale():
+    agent = _indexed_agent()
+    asyncio.run(agent._tool_snapshot())
+
+    result = asyncio.run(agent._tool_get_text(ref="f6e10"))
+
+    assert result["semantic_error"] == "STALE_REF"
 
 
 def test_find_asks_the_decision_model_and_returns_its_evidence():
@@ -787,11 +814,13 @@ def test_a_page_an_action_reaches_counts_as_progress():
 
     agent = _acting_agent(choice="f7e3", confidence=0.95)
     agent._current_state = SimpleNamespace(internal_variables={})
+    asyncio.run(agent._tool_snapshot())
+    seen = len(agent._current_state.internal_variables["_observed_states"])
 
     asyncio.run(agent._execute_tool("click", {"ref": "f7e3"}))
     asyncio.run(agent._execute_tool("click", {"ref": "f7e9"}))
 
-    assert len(agent._current_state.internal_variables["_observed_states"]) == 1
+    assert len(agent._current_state.internal_variables["_observed_states"]) == seen + 1
 
 
 def test_act_hands_back_the_choice_when_the_model_is_unsure():

@@ -123,7 +123,33 @@ class TestCoderSubAgent:
         memory.save_checkpoint.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_oversized_request_fails_instead_of_restarting_forever(self):
+    @pytest.mark.parametrize("max_epochs, continued", [(3, True), (1, False)])
+    async def test_running_out_of_turns_mid_work_continues_while_epochs_remain(
+        self, mock_llm, mock_sandbox, max_epochs, continued,
+    ):
+        # A browser step reached the kernel's turn cap one click from done and the
+        # whole goal failed, while an exhausted token budget would have continued.
+        mock_llm.responses = [_coder_write_response("x = 1")] * 3
+        memory = AsyncMock()
+        memory.load_checkpoint.return_value = None
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, sandbox=mock_sandbox)
+
+        result = await coder.run(
+            task="Continue durable work",
+            context={
+                "workflow_id": "wf-long", "step_id": "step-1", "execution_epoch": 1,
+                "execution_budget": {"max_epochs_per_step": max_epochs},
+            },
+            max_turns=2,
+            memory=memory,
+        )
+
+        if continued:
+            assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+            assert result.metadata["lease_exhausted"] == "turn_cap(2)"
+            memory.save_checkpoint.assert_awaited()
+        else:
+            assert result.metadata["typed_outcome"] == "YIELD_EMERGENCY_TURN_FUSE"
         from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 
         class OversizedLLM:

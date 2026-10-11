@@ -871,27 +871,9 @@ class BaseSubAgent(ABC):
                 if landing is not None:
                     return landing
                 if memory is not None:
-                    state.status = "active"
-                    state.thinking_tokens_used = self._cognition.lease.thinking_used
-                    state.action_tokens_used = self._cognition.lease.action_used
-                    state.tokens_used = total_tokens["total"]
-                    state.total_cost_usd = total_cost
-                    await memory.save_checkpoint(_checkpoint(state, conversation_history))
-                    return AgentOutput(
-                        status="epoch_exhausted",
-                        summary=(
-                            f"Execution lease exhausted after {turn} turns; durable "
-                            "state was checkpointed for continued agent work."
-                        ),
-                        payload=state.get_final_output(),
-                        trajectory=trajectory,
-                        metadata={
-                            "tokens": total_tokens,
-                            "cost_usd": total_cost,
-                            "lease_exhausted": exhausted,
-                            "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
-                            "checkpointed": True,
-                        },
+                    return await self._continue_in_new_epoch(
+                        state, conversation_history, memory, turn, total_tokens,
+                        total_cost, trajectory, exhausted,
                     )
                 return AgentOutput(
                     status="yield",
@@ -1609,7 +1591,14 @@ class BaseSubAgent(ABC):
                 },
             )
 
-        # Max turns reached (emergency fuse)
+        # Max turns reached (emergency fuse). A step still making progress with
+        # durable state continues in its next epoch, as for any exhausted budget;
+        # the workflow's epoch limit bounds it.
+        if memory is not None and self._epochs_remain(state.context):
+            return await self._continue_in_new_epoch(
+                state, conversation_history, memory, state.turn + 1, total_tokens,
+                total_cost, trajectory, f"turn_cap({max_turns})",
+            )
         _trace.log_step_complete(False, f"Emergency turn fuse reached ({max_turns} turns)")
         return AgentOutput(
             status="yield",
@@ -1625,6 +1614,33 @@ class BaseSubAgent(ABC):
     # ──────────────────────────────────────────────────────────────────────
     # Subclass Hooks (overridable)
     # ──────────────────────────────────────────────────────────────────────
+
+    async def _continue_in_new_epoch(
+        self, state, conversation_history, memory, turn, total_tokens, total_cost, trajectory, exhausted,
+    ) -> AgentOutput:
+        """Checkpoint the step so its next execution epoch carries on where this one stopped."""
+        state.status = "active"
+        state.thinking_tokens_used = self._cognition.lease.thinking_used
+        state.action_tokens_used = self._cognition.lease.action_used
+        state.tokens_used = total_tokens["total"]
+        state.total_cost_usd = total_cost
+        await memory.save_checkpoint(_checkpoint(state, conversation_history))
+        return AgentOutput(
+            status="epoch_exhausted",
+            summary=(
+                f"Execution lease exhausted after {turn} turns; durable "
+                "state was checkpointed for continued agent work."
+            ),
+            payload=state.get_final_output(),
+            trajectory=trajectory,
+            metadata={
+                "tokens": total_tokens,
+                "cost_usd": total_cost,
+                "lease_exhausted": exhausted,
+                "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+                "checkpointed": True,
+            },
+        )
 
     async def _pre_run_hook(self, state: KernelState) -> None:
         """Deterministic pre-flight operations before the OODA loop starts.

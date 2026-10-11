@@ -137,6 +137,7 @@ _INLINE_ROLES = frozenset({
 # Containers whose name tells a person what part of the page they are in.
 _NAMED_REGIONS = frozenset({"dialog", "alertdialog", "alert", "form", "region", "navigation", "table", "list"})
 _VIEW_REF = re.compile(r"\[(?:f\d+)?e\d+\]")
+_TREE_REF = re.compile(r"\[ref=([^\]]+)\]")
 
 
 def _words(value: str) -> str:
@@ -417,6 +418,8 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self._launch_error = ""
         self._identity: Dict[str, Any] = {}
         self._relocated: Dict[str, str] = {}
+        # Playwright resolves only the refs of the latest snapshot of the current document.
+        self._live_refs: tuple = (None, frozenset())
         # (workflow_id, step_id) whose next execution epoch may continue in the open browser
         self._held_for: Optional[tuple] = None
         self._hold_expiry: Optional[asyncio.TimerHandle] = None
@@ -705,6 +708,10 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                     "semantic_error": "CONSEQUENCE_REQUIRED",
                 }
             context = getattr(getattr(self, "_current_state", None), "context", None) or {}
+            if params.get("ref"):
+                stale = await self._stale_ref(params["ref"])
+                if stale:
+                    return stale
             target = await self._action_target(tool_name, params)
             if target is None:
                 return {
@@ -1105,6 +1112,10 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             return err
         try:
             if ref or selector:
+                if ref:
+                    stale = await self._stale_ref(ref)
+                    if stale:
+                        return stale
                 element = self._ref(ref) if ref else self._page.locator(selector).first
                 text = await element.evaluate(_READ_WITH_FIELDS, False, timeout=10000)
             else:
@@ -1128,8 +1139,35 @@ Your job: navigate and interact with web pages to extract data or complete tasks
     def _ref(self, ref: str):
         return self._page.locator(f"aria-ref={ref}")
 
+    async def _aria(self, locator) -> str:
+        """An aria snapshot, remembering which refs it made resolvable."""
+        tree = await locator.aria_snapshot(mode="ai")
+        self._live_refs = (await self._document(), frozenset(_TREE_REF.findall(tree)))
+        return tree
+
+    async def _document(self):
+        return await self._page.evaluate("performance.timeOrigin")
+
+    async def _stale_ref(self, ref: str) -> Optional[Dict[str, Any]]:
+        """Why ``ref`` no longer names an element, or None while it does."""
+        document, refs = self._live_refs
+        if ref in refs and document == await self._document():
+            return None
+        return {
+            "status": "error",
+            "error": (
+                f"Ref {ref} is from an earlier view of the page; refs last only until the "
+                "next snapshot or page load. Take a new snapshot and use its refs."
+            ),
+            "semantic_error": "STALE_REF",
+            "performed": False,
+        }
+
     async def _actionable(self, ref: str):
         """The element behind ``ref``, or the reason it cannot be acted on now."""
+        stale = await self._stale_ref(ref)
+        if stale:
+            return None, stale
         locator = self._ref(ref)
         try:
             if await locator.count() == 0:
@@ -1155,7 +1193,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 
     async def _index(self) -> List[Dict[str, str]]:
         """Every interactive element on the page with its ref, role, name and state."""
-        return _index_from_tree(await self._page.locator("body").aria_snapshot(mode="ai"))
+        return _index_from_tree(await self._aria(self._page.locator("body")))
 
     async def _tool_snapshot(self, ref: str = "", **kwargs) -> Dict[str, Any]:
         """The page, or one region of it, as a person reads it, with refs on what can be acted on."""
@@ -1164,9 +1202,12 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             return err
         try:
             if ref:
-                region = _reading_view(await self._ref(ref).aria_snapshot(mode="ai"))
+                stale = await self._stale_ref(ref)
+                if stale:
+                    return stale
+                region = _reading_view(await self._aria(self._ref(ref)))
                 return {"status": "success", "url": self._page.url, "region": region}
-            view = _reading_view(await self._page.locator("body").aria_snapshot(mode="ai"))
+            view = _reading_view(await self._aria(self._page.locator("body")))
             self._record_observed_state(self._page.url, view)
             return {
                 "status": "success",

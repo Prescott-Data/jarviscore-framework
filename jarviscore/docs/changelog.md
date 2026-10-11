@@ -108,6 +108,13 @@ went from 0/8 to 3/3 fully graded passes.
   now states it: in 24 live plannings none needed a repair, and mean planning
   time fell from about 20 s to 15 s.
 - The researcher's page reads and its browser share one sticky egress session.
+- A step that reached the kernel's turn cap mid-work failed its goal, while an
+  exhausted token or time budget would have continued. The turn cap now ends the
+  epoch and the step continues while the workflow grants epochs (seen live: a
+  hard checkout failed one click from finishing).
+- A ref from an earlier snapshot or before a page load reached Playwright as
+  "Invalid frame in aria-ref selector" or matched nothing. The browser now knows
+  which refs its latest snapshot made live and answers `STALE_REF` without acting.
 
 ### Compatibility
 

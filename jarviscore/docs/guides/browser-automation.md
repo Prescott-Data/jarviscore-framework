@@ -72,7 +72,7 @@ The browser sub-agent registers the following tools. The LLM calls them by emitt
 
 ### Seeing the page
 
-`snapshot` is how the agent reads a page. It returns the page as a person reads it: headings, text, tables as rows, notices and dialogs, with a ref such as `[e12]` (or `[f3e12]` inside a frame) on every element that can be acted on and its state, for example `(disabled)`. Every interaction tool accepts that ref. A ref names an element only in the snapshot it came from, so the agent takes a new snapshot after the page changes.
+`snapshot` is how the agent reads a page. It returns the page as a person reads it: headings, text, tables as rows, notices and dialogs, with a ref such as `[e12]` (or `[f3e12]` inside a frame) on every element that can be acted on and its state, for example `(disabled)`. Every interaction tool accepts that ref. A ref lasts only until the next snapshot or page load; using an older one returns `STALE_REF` without acting, and the agent takes a new snapshot.
 
 ```text
 ## Products
@@ -349,6 +349,7 @@ over in the same window.
 | `Browser not initialized` error from tools | Playwright launched but Chromium failed | Check system dependencies; try running `playwright install chromium` again |
 | Page load timeout | `networkidle` timeout (30s default) | Add `wait_for: "domcontentloaded"` in the navigate call for slow pages |
 | Element not found | Stale ref or page not fully loaded | Take a new `snapshot` after the page changes and use its refs |
+| `STALE_REF` | The ref came from an earlier snapshot or the page reloaded | Nothing was done; take a new `snapshot` and use its refs |
 | `ELEMENT_NOT_ACTIONABLE` from `click` or `type_text` | The element is disabled, hidden or covered (often a cookie dialog) | The error names what covers it; deal with that first, then act again |
 | `navigate` result has `"access": {"denied": true}` | The site turned the browser away (block, bot check, captcha) | The page was not served. Datacenter IPs are often refused; set [`EGRESS_PROXY_URL`](#your-own-proxy) to your own provider |
 | `APPROVAL_UNAVAILABLE` | A consequential action without durable workflow state | Run the agent in a Mesh workflow step with Redis configured |
