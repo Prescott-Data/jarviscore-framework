@@ -4,7 +4,9 @@ Supports: JarvisCore promotion, vLLM, Azure OpenAI, Gemini, Vertex AI, Claude
 """
 import asyncio
 import aiohttp
+import functools
 import httpx
+import inspect
 import json
 import logging
 import random
@@ -14,7 +16,7 @@ from typing import Optional, Dict, List, Any
 from enum import Enum
 
 from jarviscore.context.context_manager import ContextManager
-from jarviscore.execution import multimodal
+from jarviscore.execution import multimodal, native_tools
 from jarviscore.execution.governor import current_lane, process_governor, retry_after_seconds
 from jarviscore.promo import PROMO_MODEL
 from jarviscore.orchestration.budget import current_workflow_budget
@@ -140,6 +142,27 @@ try:
 except ImportError:
     CLAUDE_AVAILABLE = False
     logger.debug("Claude SDK not available (pip install anthropic)")
+
+
+@functools.lru_cache(maxsize=None)
+def _anthropic_takes_tool_choice() -> bool:
+    if not CLAUDE_AVAILABLE:
+        return False
+    return "tool_choice" in inspect.signature(Anthropic(api_key="probe").messages.create).parameters
+
+
+@functools.lru_cache(maxsize=None)
+def _genai_threads_function_calls() -> bool:
+    """JSON-schema declarations and thought signatures, which tool turns need."""
+    if not GEMINI_AVAILABLE:
+        return False
+    from google.genai import types
+
+    return (
+        "parameters_json_schema" in types.FunctionDeclaration.model_fields
+        and "thought_signature" in types.Part.model_fields
+        and "id" in types.FunctionCall.model_fields
+    )
 
 
 class LLMProvider(Enum):
@@ -399,10 +422,6 @@ class UnifiedLLMClient:
             or None
         )
 
-    #: Providers whose adapter carries tool definitions, the model's tool calls
-    #: and the tool results threaded back, end to end.
-    _NATIVE_TOOL_PROVIDERS = frozenset({LLMProvider.AZURE})
-
     def carries_native_tools(self, model: Optional[str] = None) -> bool:
         """Whether every provider this call could fall back to carries native tool calls.
 
@@ -410,9 +429,18 @@ class UnifiedLLMClient:
         as prose, so one provider in the chain without them rules native out.
         """
         providers = getattr(self, "provider_order", None) or []
-        if not providers or any(p not in self._NATIVE_TOOL_PROVIDERS for p in providers):
-            return False
-        return not _responses_only(model or self.config.get("azure_deployment") or "")
+        return bool(providers) and all(self._carries_native_tools(p) for p in providers)
+
+    @staticmethod
+    def _carries_native_tools(provider: "LLMProvider") -> bool:
+        if provider in (LLMProvider.AZURE, LLMProvider.VLLM):
+            return True
+        if provider == LLMProvider.CLAUDE:
+            return _anthropic_takes_tool_choice()
+        if provider in (LLMProvider.GEMINI, LLMProvider.VERTEX_AI):
+            return _genai_threads_function_calls()
+        # The promotion endpoint's server decides what it forwards; it is not known to carry tools.
+        return False
 
     def _declared_output_allowance(
         self, model: Optional[str], provider: Optional["LLMProvider"] = None
@@ -716,11 +744,14 @@ class UnifiedLLMClient:
 
         payload = {
             "model": self.config.get('llm_model', 'default'),
-            "messages": messages,
+            "messages": native_tools.openai_messages(messages),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False
         }
+        for option in ("tools", "tool_choice", "parallel_tool_calls"):
+            if kwargs.get(option) is not None:
+                payload[option] = kwargs[option]
 
         timeout = aiohttp.ClientTimeout(total=self.config.get('llm_timeout', 120))
         start_time = time.time()
@@ -734,7 +765,8 @@ class UnifiedLLMClient:
                 data = await response.json()
                 duration = time.time() - start_time
 
-                content = data['choices'][0]['message']['content']
+                message = data['choices'][0]['message']
+                content = message.get('content')
                 usage = data.get('usage', {})
 
                 return {
@@ -743,9 +775,10 @@ class UnifiedLLMClient:
                     **_completion_fields(
                         data['choices'][0].get("finish_reason"),
                         usage=usage,
-                        refusal=data['choices'][0]['message'].get("refusal"),
-                        tool_calls=data['choices'][0]['message'].get("tool_calls"),
+                        refusal=message.get("refusal"),
+                        tool_calls=message.get("tool_calls"),
                     ),
+                    "tool_calls": _function_calls(message.get("tool_calls")),
                     "tokens": {
                         "input": usage.get('prompt_tokens', 0),
                         "output": usage.get('completion_tokens', 0),
@@ -860,6 +893,7 @@ class UnifiedLLMClient:
         logger.debug("_call_azure: deployment=%s, response_format=%s", deployment, response_format)
 
         repair_enabled = bool(self.config.get("azure_content_filter_repair_enabled", False))
+        messages = native_tools.openai_messages(messages)
         attempts = [("raw", messages)]
         if repair_enabled:
             attempts.append(("provider_repaired", self._sanitize_for_azure(messages)))
@@ -893,11 +927,17 @@ class UnifiedLLMClient:
                 if is_responses_only:
                     resp_kwargs = {
                         "model": deployment,
-                        "input": [multimodal.to_responses(m) for m in attempt_messages],
+                        "input": native_tools.responses_input(attempt_messages),
                         "max_output_tokens": max_tokens,
                     }
                     if response_format is not None:
                         resp_kwargs["text"] = {"format": response_format}
+                    if tools is not None:
+                        resp_kwargs["tools"] = native_tools.responses_tools(tools)
+                    if tool_choice is not None:
+                        resp_kwargs["tool_choice"] = tool_choice
+                    if parallel_tool_calls is not None:
+                        resp_kwargs["parallel_tool_calls"] = parallel_tool_calls
                     response = await self.azure_client.responses.create(**resp_kwargs)
                 else:
                     response = await self.azure_client.chat.completions.create(**call_kwargs)
@@ -1052,6 +1092,7 @@ class UnifiedLLMClient:
         provider_label: str,
         default_pricing: Dict,
         contents: Any = None,
+        messages: Optional[List[Dict]] = None,
         **kwargs,
     ) -> Dict:
         """Shared helper for google.genai generate_content calls (Gemini and Vertex AI)."""
@@ -1066,22 +1107,26 @@ class UnifiedLLMClient:
             },
         }
         tools = kwargs.get('tools', None)
-        if tools:
+        if messages is not None and native_tools.is_openai_tools(tools):
+            from google.genai import types
+
+            system, gen_kwargs["contents"] = native_tools.genai_contents(messages, types)
+            if system:
+                gen_kwargs["config"]["system_instruction"] = system
+            gen_kwargs["config"]["tools"] = native_tools.genai_tools(tools, types)
+            gen_kwargs["config"]["tool_config"] = native_tools.genai_tool_config(
+                kwargs.get("tool_choice"), types
+            )
+            gen_kwargs["config"]["automatic_function_calling"] = {"disable": True}
+        elif tools:
             gen_kwargs["config"]["tools"] = self._normalize_tools_for_gemini(tools)
 
         response = await client.aio.models.generate_content(**gen_kwargs)
         duration = time.time() - start_time
 
-        tool_calls = []
         candidate = response.candidates[0] if response.candidates else None
         candidate_content = getattr(candidate, "content", None)
-        if candidate_content and candidate_content.parts:
-            for part in candidate_content.parts:
-                if hasattr(part, 'function_call') and part.function_call:
-                    tool_calls.append({
-                        "name": part.function_call.name,
-                        "args": dict(part.function_call.args) if part.function_call.args else {}
-                    })
+        tool_calls = native_tools.genai_calls(getattr(candidate_content, "parts", None))
 
         if candidate_content and candidate_content.parts:
             content = "".join(
@@ -1179,6 +1224,7 @@ class UnifiedLLMClient:
             model_name=self.gemini_model,
             prompt=prompt,
             contents=multimodal.to_genai(messages) if multimodal.has_images(messages) else None,
+            messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             provider_label="gemini",
@@ -1197,6 +1243,7 @@ class UnifiedLLMClient:
             model_name=self.vertex_ai_model,
             prompt=prompt,
             contents=multimodal.to_genai(messages) if multimodal.has_images(messages) else None,
+            messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             provider_label="vertex_ai",
@@ -1210,13 +1257,10 @@ class UnifiedLLMClient:
             raise RuntimeError("Claude client not initialized")
 
         # Separate system message from conversation
-        system_msg = None
-        conv_messages = []
-        for msg in messages:
-            if msg['role'] == 'system':
-                system_msg = msg['content']
-            else:
-                conv_messages.append({**msg, "content": multimodal.to_anthropic(msg["content"])})
+        tools = kwargs.pop('tools', None)
+        tool_choice = kwargs.pop('tool_choice', None)
+        parallel_tool_calls = kwargs.pop('parallel_tool_calls', None)
+        system_msg, conv_messages = native_tools.anthropic_messages(messages)
 
         model = kwargs.pop('model', None) or self.config.get('claude_model', 'claude-sonnet-4')
         start_time = time.time()
@@ -1228,6 +1272,11 @@ class UnifiedLLMClient:
             "temperature": temperature,
             "messages": conv_messages
         }
+        if tools:
+            request_kwargs["tools"] = native_tools.anthropic_tools(tools)
+            request_kwargs["tool_choice"] = native_tools.anthropic_tool_choice(
+                tool_choice, parallel_tool_calls
+            )
 
         # Only add system if it exists (Claude API requires it to be string or not present)
         if system_msg:
@@ -1258,6 +1307,7 @@ class UnifiedLLMClient:
                 stop_sequence=getattr(response, "stop_sequence", None),
                 usage=response.usage,
             ),
+            "tool_calls": native_tools.anthropic_calls(response.content),
             "tokens": {
                 "input": response.usage.input_tokens,
                 "output": response.usage.output_tokens,
