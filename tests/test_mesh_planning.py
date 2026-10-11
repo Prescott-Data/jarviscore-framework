@@ -682,6 +682,37 @@ async def test_mesh_planner_hydrates_source_quote_from_compiler_owned_reference(
 
 
 @pytest.mark.asyncio
+async def test_the_audit_reads_obligations_as_the_model_was_asked_to_write_them():
+    # Shown source_quote while told the ledger uses source_ref, the auditor
+    # rejected correct plans for a field it was never asked to produce.
+    llm = MockLLMClient(responses=responses())
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    plan = await planner.plan("Find evidence")
+
+    audit_prompt = llm.calls[2]["messages"][0]["content"]
+    ledger = json.loads(audit_prompt.split("OBLIGATIONS:\n", 1)[1].split("\n", 1)[0])
+    assert ledger == [{"id": "o1", "kind": "outcome", "description": "Find evidence", "source_ref": "source-1"}]
+    assert plan.obligations[0].to_dict()["source_quote"] == "Find evidence"
+
+
+def test_a_template_quote_is_referenced_by_the_source_block_holding_it():
+    goal = "Book a table.\nNo peanuts anywhere.\nNo peanuts anywhere."
+    obligations = MeshPlanner._parse_obligations(
+        {"obligations": [
+            {"id": "o1", "description": "Book", "source_quote": "a table"},
+            {"id": "o2", "description": "Whole goal", "source_quote": goal},
+            {"id": "o3", "description": "Avoid peanuts", "source_quote": "No peanuts"},
+        ]},
+        goal,
+    )
+    assert obligations[0].ledger_entry()["source_ref"] == "source-1"
+    assert obligations[1].ledger_entry()["source_ref"] == "source-all"
+    # Held by two lines, the quote is shown rather than guessed between them.
+    assert obligations[2].ledger_entry()["source_quote"] == "No peanuts"
+
+
+@pytest.mark.asyncio
 async def test_mesh_planner_preserves_selected_multiline_source_block_exactly():
     goal = "Run the reliability scan.\n  Do not publish changes."
     valid = responses(steps=[{

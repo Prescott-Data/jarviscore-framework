@@ -242,6 +242,17 @@ class SlackNotifier(AutoAgent):
 
 The four sub-agents the Kernel routes to are the `CoderSubAgent` for tasks that require writing and running Python, the `ResearcherSubAgent` for tasks that require web search and synthesis, the `CommunicatorSubAgent` for tasks that require formatting and delivering output, and the `BrowserSubAgent` for web navigation tasks when `BROWSER_ENABLED=true` is set.
 
+Some steps already say which sub-agent they need, so the Kernel routes them without a model call:
+
+| Step | Sub-agent |
+|---|---|
+| Acts in the agent's own browser (`systems: ["browser"]`) | `browser` |
+| Reads or changes a connected provider | `coder` (the credentialed harness) |
+| Declares a role (`execution_contract.kernel_role` or `default_kernel_role`) | that role |
+| The Mesh's own response step (`effect: final_response`) | `communicator` |
+
+Everything else goes to the structured router.
+
 ### Analysis, not code: the `single_response` contract
 
 The answer must contain visible text and must not carry an explicit incomplete,

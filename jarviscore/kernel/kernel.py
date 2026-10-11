@@ -757,6 +757,12 @@ class Kernel:
                 confidence=1.0,
                 reason="Explicit planner/profile role.",
             )
+        if effect == "final_response" and "communicator" in self._role_lease_profiles:
+            return RoutingDecision(
+                role="communicator",
+                confidence=1.0,
+                reason="The framework's response step synthesizes completed artifacts for the person.",
+            )
         routing_context = dict(context or {})
         credentialed = False
         if system_name:

@@ -43,6 +43,8 @@ class GoalObligation:
     description: str
     source_quote: str
     kind: str = "outcome"
+    # The one source block holding source_quote, when exactly one does.
+    source_ref: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +53,15 @@ class GoalObligation:
             "description": self.description,
             "source_quote": self.source_quote,
         }
+
+    def ledger_entry(self) -> dict[str, Any]:
+        """The obligation as planner prompts ask the model to write one."""
+        entry = {"id": self.id, "kind": self.kind, "description": self.description}
+        if self.source_ref:
+            entry["source_ref"] = self.source_ref
+        else:
+            entry["source_quote"] = self.source_quote
+        return entry
 
 
 @dataclass(frozen=True)
@@ -1434,7 +1445,7 @@ IMMUTABLE SOURCE BLOCKS:
 {json.dumps(source_blocks, ensure_ascii=False)}
 
 OBLIGATIONS:
-{json.dumps([item.to_dict() for item in plan.obligations], ensure_ascii=False)}
+{json.dumps([item.ledger_entry() for item in plan.obligations], ensure_ascii=False)}
 
 DAG STEPS:
 {json.dumps([step.to_dict() for step in plan.steps], ensure_ascii=False)}
@@ -1516,6 +1527,8 @@ or obligations. Omit `corrections` when any other DAG change is required."""
 
         obligations = []
         obligation_ids = set()
+        source_blocks = MeshPlanner._source_blocks(goal)
+        source_by_id = {block["id"]: block["text"] for block in source_blocks}
         for index, item in enumerate(raw_obligations):
             if not isinstance(item, dict):
                 raise MeshPlanError(f"Obligation {index} must be an object")
@@ -1529,16 +1542,17 @@ or obligations. Omit `corrections` when any other DAG change is required."""
                     f"Obligation {obligation_id or index} has no source_ref"
                 )
             if source_ref:
-                source_by_id = {
-                    block["id"]: block["text"]
-                    for block in MeshPlanner._source_blocks(goal)
-                }
                 if source_ref not in source_by_id:
                     raise MeshPlanError(
                         f"Obligation {obligation_id or index} has unknown source_ref "
                         f"{source_ref!r}"
                     )
                 source_quote = source_by_id[source_ref]
+            elif source_quote:
+                holding = [b["id"] for b in source_blocks if b["text"] == source_quote] or [
+                    b["id"] for b in source_blocks if b["id"] != "source-all" and source_quote in b["text"]
+                ]
+                source_ref = holding[0] if len(holding) == 1 else ""
             if not obligation_id or obligation_id in obligation_ids:
                 raise MeshPlanError(f"Obligation {index} has a missing or duplicate id")
             if not description:
@@ -1553,7 +1567,7 @@ or obligations. Omit `corrections` when any other DAG change is required."""
                 )
             obligation_ids.add(obligation_id)
             obligations.append(
-                GoalObligation(obligation_id, description, source_quote, kind)
+                GoalObligation(obligation_id, description, source_quote, kind, source_ref)
             )
         return obligations
 

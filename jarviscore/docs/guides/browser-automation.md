@@ -52,6 +52,8 @@ The kernel reads `browser_headless` from settings and passes it to `BrowserSubAg
 
 The Kernel routes tasks with a structured router. The router sees the task, context summary, valid roles, and role contracts, then returns a typed decision with confidence and reason. Invalid or low-confidence routing fails visibly instead of guessing.
 
+A Mesh step that names the agent's own browser (`systems: ["browser"]`) goes to the browser sub-agent without a router call.
+
 You can also make browser routing explicit by declaring it on your agent class:
 
 ```python

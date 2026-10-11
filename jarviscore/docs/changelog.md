@@ -95,6 +95,12 @@ went from 0/8 to 3/3 fully graded passes.
   it is stated once (about 1.1k fewer prompt tokens per turn).
 - An amendment whose answer reads new evidence could not be planned, and a
   planning failure raised instead of settling the goal on its completed work.
+- The plan audit was shown obligations with `source_quote` while told the ledger
+  uses `source_ref`, and sometimes rejected correct plans for that mismatch,
+  failing the goal at planning. It now reads obligations as the model was asked
+  to write them.
+- The Mesh's own response step was routed by a model call although its role is
+  fixed; it now goes straight to the communicator (about 2 s per goal).
 
 ### Compatibility
 
