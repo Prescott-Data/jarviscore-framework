@@ -554,3 +554,16 @@ class TestNativeToolTurns:
                 target = target[part]
             assert target["properties"]["url"]["type"] == "string"
         assert "$defs" not in parameters["properties"]["result"]
+
+    def test_a_state_carrying_a_declared_output_schema_checkpoints(self):
+        from pydantic import BaseModel
+
+        class Answer(BaseModel):
+            revenue: int
+
+        state = _make_state(context={"output_schema": Answer, "matter_id": "atlas"})
+
+        restored = KernelState.model_validate_json(state.model_dump_json())
+
+        assert restored.context == {"matter_id": "atlas"}
+        assert state.context["output_schema"] is Answer
