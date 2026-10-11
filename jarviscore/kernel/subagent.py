@@ -579,28 +579,35 @@ class BaseSubAgent(ABC):
             ),
         }
         declared = (context or {}).get("output_schema")
+        definitions: Dict[str, Any] = {}
         if hasattr(declared, "model_json_schema"):
-            result = {**declared.model_json_schema(), **result}
+            schema = declared.model_json_schema()
+            # "#/$defs/..." references resolve from the parameters root.
+            definitions = schema.pop("$defs", {})
+            result = {**schema, **result}
+        parameters: Dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": (
+                        "The complete answer for the person who asked, including "
+                        "any lists or details they asked for."
+                    ),
+                },
+                "result": result,
+            },
+            "required": ["summary", "result"],
+        }
+        if definitions:
+            parameters["$defs"] = definitions
         return {"type": "function", "function": {
             "name": _DONE_FUNCTION,
             "description": (
                 "Finish the task with the complete answer. Call it only when the task "
                 "is complete, never merely because more tool calls are needed."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "summary": {
-                        "type": "string",
-                        "description": (
-                            "The complete answer for the person who asked, including "
-                            "any lists or details they asked for."
-                        ),
-                    },
-                    "result": result,
-                },
-                "required": ["summary", "result"],
-            },
+            "parameters": parameters,
         }}
 
     @staticmethod

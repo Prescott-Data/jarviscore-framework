@@ -507,3 +507,40 @@ class TestNativeToolTurns:
         result = done["function"]["parameters"]["properties"]["result"]
         assert result["properties"]["revenue"]["type"] == "integer"
         assert done["function"]["parameters"]["required"] == ["summary", "result"]
+
+    def test_a_nested_output_schema_keeps_its_references_resolvable(self):
+        from typing import List
+
+        from pydantic import BaseModel
+
+        class Citation(BaseModel):
+            url: str
+
+        class Assessment(BaseModel):
+            outcome: str
+            citations: List[Citation]
+
+        parameters = _NativeAgent(_NativeLLM([]))._done_function(
+            {"output_schema": Assessment}
+        )["function"]["parameters"]
+
+        refs = []
+
+        def collect(node):
+            if isinstance(node, dict):
+                if "$ref" in node:
+                    refs.append(node["$ref"])
+                for value in node.values():
+                    collect(value)
+            elif isinstance(node, list):
+                for value in node:
+                    collect(value)
+
+        collect(parameters)
+        assert refs
+        for ref in refs:
+            target = parameters
+            for part in ref.removeprefix("#/").split("/"):
+                target = target[part]
+            assert target["properties"]["url"]["type"] == "string"
+        assert "$defs" not in parameters["properties"]["result"]
