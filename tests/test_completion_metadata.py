@@ -323,7 +323,8 @@ async def test_genai_mixed_tool_call_keeps_partial_text(provider):
     result = await execute(agent)
     assert result["status"] == "failure"
     assert result["output"] == result["payload"] == "partial explanation"
-    assert result["tool_calls"] == [{"name": "lookup", "args": {"q": "test"}}]
+    (call,) = result["tool_calls"]
+    assert (call["name"], call["args"], call["arguments"]) == ("lookup", {"q": "test"}, '{"q": "test"}')
     sdk.aio.models.generate_content.assert_awaited_once()
     json.dumps(result)
 

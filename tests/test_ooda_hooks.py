@@ -427,6 +427,16 @@ class TestNativeToolTurns:
         assert tool_message["tool_call_id"] == "call_search"
         assert "revenue was 5" in tool_message["content"]
 
+    def test_a_providers_call_signature_is_threaded_back_with_the_call(self):
+        signed = _call("search", {"query": "revenue"})
+        signed["tool_calls"][0]["signature"] = "c2ln"
+        llm = _NativeLLM([signed, _call("done", {"summary": "5", "result": {}})])
+
+        asyncio.run(_NativeAgent(llm).run(task="find revenue"))
+
+        threaded = next(m for m in llm.requests[1]["messages"] if m.get("tool_calls"))
+        assert threaded["tool_calls"][0]["signature"] == "c2ln"
+
     def test_a_function_name_maps_back_to_its_tool(self):
         llm = _NativeLLM([
             _call("crm_lookup", {"account": "acme"}),
