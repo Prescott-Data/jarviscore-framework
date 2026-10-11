@@ -33,6 +33,8 @@ class BrowserConfig:
     stealth_enabled: Optional[bool] = None
     profile_name: Optional[str] = None
     profile_color: Optional[str] = None
+    # Playwright proxy option, e.g. Egress.playwright(); not applied to a CDP-attached browser.
+    proxy: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -94,6 +96,7 @@ class BrowserController:
             permissions=self.config.permissions,
             profile_name=self.config.profile_name,
             profile_color=self.config.profile_color,
+            proxy=self.config.proxy,
         )
         await self._session.connect(self.config.cdp_url)
         self._interactions = BrowserInteractions(self._session)

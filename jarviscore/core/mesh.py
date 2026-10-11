@@ -346,6 +346,10 @@ class Mesh:
             "browser_model",
             "browser_profile_dir",
             "browser_control_url",
+            "browser_locale",
+            "browser_timezone",
+            "egress_proxy_url",
+            "egress_proxy_bypass",
         ):
             if knob in self._settings.model_fields_set:
                 self.config.setdefault(knob, getattr(self._settings, knob))

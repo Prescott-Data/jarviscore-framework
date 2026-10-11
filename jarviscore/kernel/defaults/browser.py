@@ -36,6 +36,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from jarviscore.contracts.hitl import HITLAction
+from jarviscore.core.egress import Egress
 from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image
 from jarviscore.kernel import approval
 from jarviscore.kernel.gate import GateEvidence
@@ -392,12 +393,18 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         profile_root: Optional[str] = None,
         scope_field: Optional[str] = None,
         control_url: Optional[str] = None,
+        egress: Optional[Egress] = None,
+        locale: Optional[str] = None,
+        timezone: Optional[str] = None,
     ):
         self.headless = headless
         self.viewport = viewport or {"width": 1280, "height": 720}
         self.profile_root = profile_root
         self.scope_field = scope_field
         self.control_url = control_url
+        self.egress = egress
+        self.locale = locale
+        self.timezone = timezone
 
         # Playwright objects — initialized in _pre_run_hook, closed in _post_run_hook
         self._playwright = None
@@ -802,7 +809,20 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         try:
             self._playwright = await async_playwright().start()
             profile = None if self.control_url else self.profile_dir(getattr(state, "context", None))
+            # A tenant's profile keeps its exit IP across runs; otherwise the workflow does.
+            egress_session = (
+                os.path.basename(profile) if profile
+                else str((getattr(state, "context", None) or {}).get("workflow_id") or "") or None
+            )
+            launch = {"proxy": self.egress.playwright(egress_session)} if self.egress and not self.control_url else {}
+            presented = {
+                key: value
+                for key, value in (("locale", self.locale), ("timezone_id", self.timezone))
+                if value
+            }
             if self.control_url:
+                if self.egress:
+                    logger.info("[browser] An attached browser leaves from its own network; EGRESS_PROXY_URL is not applied")
                 self._browser = await self._playwright.chromium.connect_over_cdp(self.control_url)
                 self._attached = True
                 self._context = (
@@ -822,24 +842,29 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                     headless=self.headless,
                     args=args,
                     viewport=self.viewport,
+                    **launch,
+                    **presented,
                 )
                 self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
             else:
                 self._browser = await self._playwright.chromium.launch(
                     headless=self.headless,
                     args=args,
+                    **launch,
                 )
                 self._context = await self._browser.new_context(
                     viewport=self.viewport,
                     java_script_enabled=True,
+                    **presented,
                 )
                 self._page = await self._context.new_page()
             if not self._attached:
                 await self._present_as_browser()
             logger.info(
-                "[browser] Browser ready (mode=%s, headless=%s)",
+                "[browser] Browser ready (mode=%s, headless=%s, egress=%s)",
                 "shared" if self._attached else "persistent" if profile else "fresh",
                 self.headless,
+                self.egress.redacted() if launch else "direct",
             )
         except Exception as e:
             logger.error("[browser] Failed to open browser: %s", e)

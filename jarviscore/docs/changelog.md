@@ -60,6 +60,12 @@ went from 0/8 to 3/3 fully graded passes.
 - **Any decision model.** `DecisionClient` is a provider-neutral protocol;
   `DECISION_CLIENT_FACTORY` plugs in any implementation. See
   [Bring any decision model](concepts/decision-models.md#bring-any-decision-model).
+- **Your own egress proxy.** `EGRESS_PROXY_URL` routes the browser and the
+  pages the researcher reads through the developer's proxy provider, with a
+  sticky `{session}` per tenant or workflow; `EGRESS_PROXY_BYPASS` names hosts
+  that go direct. `BROWSER_LOCALE` and `BROWSER_TIMEZONE` match the browser to
+  the proxy's region. See
+  [Your own proxy](guides/browser-automation.md#your-own-proxy).
 
 ### Fixed
 

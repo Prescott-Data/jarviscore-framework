@@ -317,6 +317,21 @@ playwright install chromium
 | `BROWSER_SETTLE_TIMEOUT_MS` | `3000` | How long a click or typing may take to finish loading before the agent looks again |
 | `BROWSER_ACT_MIN_CONFIDENCE` | `0.7` | Decision confidence at which `act` performs the action itself; below it, `act` returns candidates |
 | `BROWSER_CONTINUATION_HOLD_S` | `120` | How long a browser stays open for the step's next execution epoch to continue on the same page |
+| `BROWSER_LOCALE` | host's | Locale the browser presents, e.g. `en-GB`; match it to the egress proxy's region |
+| `BROWSER_TIMEZONE` | host's | IANA timezone the browser presents, e.g. `Europe/London` |
+
+---
+
+## Egress Proxy
+
+JarvisCore supplies no IP addresses. To give agents a reputable, stable or regional exit, point them at your own proxy provider. The browser and the pages the researcher reads leave through it; search-provider APIs, LLM calls and Nexus do not.
+
+| Variable | Default | Description |
+|---|---|---|
+| `EGRESS_PROXY_URL` | (none) | `http://` or `https://` proxy, e.g. `http://user-session-{session}:pass@gw.provider.example:7000`. `{session}` becomes a stable 16-character id per tenant profile or workflow, so a provider that pins an exit IP per session keeps one IP for a login or checkout. |
+| `EGRESS_PROXY_BYPASS` | (none) | Comma-separated hosts that go direct, e.g. `searxng,.internal`. Loopback always goes direct. |
+
+See [Browser Automation: Your own proxy](../guides/browser-automation.md#your-own-proxy).
 
 ---
 

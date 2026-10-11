@@ -124,6 +124,9 @@ class ResearcherSubAgent(BaseSubAgent):
         
         self._browser_profile_name = f"researcher_{session_id}"
         if _HAS_BROWSER and BrowserConfig is not None:
+            from jarviscore.core.egress import configured_egress
+
+            egress = configured_egress()
             step_timeout = _env_float("STEP_EXECUTION_TIMEOUT", 0)
             self._browser_config = BrowserConfig(
                 headless=browser_headless,
@@ -135,6 +138,9 @@ class ResearcherSubAgent(BaseSubAgent):
                 ignore_https_errors=_env_bool("BROWSER_IGNORE_HTTPS_ERRORS", True),
                 stealth_enabled=_env_bool("BROWSER_STEALTH_ENABLED", False),
                 cdp_url=cdp_url,
+                locale=_env_str("BROWSER_LOCALE", "") or None,
+                timezone_id=_env_str("BROWSER_TIMEZONE", "") or None,
+                proxy=egress.playwright(session_id) if egress and not cdp_url else None,
             )
         else:
             self._browser_config = None

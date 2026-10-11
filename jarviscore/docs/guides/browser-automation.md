@@ -236,6 +236,40 @@ actually running, on the operating system it runs on: the real version and
 platform, given consistently in the `User-Agent` header and the client hints
 (set over CDP for every page the run opens).
 
+### Your own proxy
+
+Where traffic comes from matters as much as how the browser presents itself:
+many sites refuse datacenter and cloud IPs outright. JarvisCore supplies no IP
+addresses; point it at your own proxy provider (residential or ISP proxies for
+reputation, a regional pool for local content):
+
+```bash title=".env"
+EGRESS_PROXY_URL=http://user-session-{session}:pass@gw.provider.example:7000
+EGRESS_PROXY_BYPASS=searxng,.internal
+BROWSER_LOCALE=en-GB
+BROWSER_TIMEZONE=Europe/London
+```
+
+- The browser and the pages the researcher reads leave through the proxy.
+  Search-provider APIs, LLM calls and Nexus authenticate by key and go direct;
+  loopback and the hosts in `EGRESS_PROXY_BYPASS` go direct too.
+- `{session}` is replaced with a stable id: per tenant when the browser uses a
+  persistent profile, otherwise per workflow. Providers that pin an exit IP to
+  a session id in the username then keep one IP for a whole login or
+  checkout, which breaks if the IP changes underneath it. Use the session
+  syntax your provider documents.
+- Set `BROWSER_LOCALE` and `BROWSER_TIMEZONE` to the proxy's region so the
+  browser's language and clock agree with where its traffic comes from.
+- An attached browser (`BROWSER_CONTROL_URL`) leaves from its own network; the
+  proxy is not applied. Hosted browser services that manage IPs themselves are
+  attached this way.
+- Only `http://` and `https://` proxies are accepted; Chromium cannot
+  authenticate to a SOCKS proxy.
+
+When a site still turns the browser away, `navigate` reports it in `access`.
+A proxy is for reliability and region, not for getting past sites that forbid
+automated access.
+
 ---
 
 ## What tasks suit `BrowserSubAgent`
@@ -314,7 +348,7 @@ over in the same window.
 | Page load timeout | `networkidle` timeout (30s default) | Add `wait_for: "domcontentloaded"` in the navigate call for slow pages |
 | Element not found | Stale ref or page not fully loaded | Take a new `snapshot` after the page changes and use its refs |
 | `ELEMENT_NOT_ACTIONABLE` from `click` or `type_text` | The element is disabled, hidden or covered (often a cookie dialog) | The error names what covers it; deal with that first, then act again |
-| `navigate` result has `"access": {"denied": true}` | The site turned the browser away (block, bot check, captcha) | The page was not served; the IP's reputation or the site's policy is the cause, not the agent |
+| `navigate` result has `"access": {"denied": true}` | The site turned the browser away (block, bot check, captcha) | The page was not served. Datacenter IPs are often refused; set [`EGRESS_PROXY_URL`](#your-own-proxy) to your own provider |
 | `APPROVAL_UNAVAILABLE` | A consequential action without durable workflow state | Run the agent in a Mesh workflow step with Redis configured |
 | `find` and `act` are missing | No decision model on the Mesh | Configure a [decision model](../concepts/decision-models.md) |
 | Step resumes on a fresh page after its epoch ended | The continuation came after `BROWSER_CONTINUATION_HOLD_S` | Raise `BROWSER_CONTINUATION_HOLD_S` |

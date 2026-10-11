@@ -12,11 +12,13 @@ import asyncio
 import traceback
 import re
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import quote_plus, urlparse, urljoin
 
+from jarviscore.core.egress import Egress, configured_egress
 from jarviscore.core.search_deadlines import search_deadline
 
 # beautifulsoup4 — required for HTML→Markdown extraction.
@@ -120,8 +122,12 @@ class InternetSearch:
         *,
         search_timeout_seconds: float | None = None,
         grounded_timeout_seconds: float | None = None,
+        egress: Optional[Egress] = None,
     ):
         self.session = None
+        # Pages read here leave through the developer's proxy; search APIs authenticate by key.
+        self.egress = egress if egress is not None else configured_egress()
+        self._egress_session = uuid.uuid4().hex
         self.search_timeout_seconds = search_deadline(
             search_timeout_seconds, "RESEARCH_SEARCH_TIMEOUT_SECONDS", 15.0,
         )
@@ -180,6 +186,13 @@ class InternetSearch:
         """Return the active session. Callers must call initialize() first."""
         assert self.session is not None, "HTTP session not initialised — call initialize() first"
         return self.session
+
+    def _page_proxy(self, url: str) -> Optional[str]:
+        return self.egress.http_proxy(url, self._egress_session) if self.egress else None
+
+    def browser_proxy(self) -> Optional[Dict[str, Any]]:
+        """The Playwright proxy for a browser reading pages for this search session."""
+        return self.egress.playwright(self._egress_session) if self.egress else None
 
     async def close(self):
         """Close the HTTP session"""
@@ -945,6 +958,7 @@ class InternetSearch:
             headless=os.environ.get("BROWSER_HEADLESS", "true").lower() in ("1", "true", "yes"),
             timeout_ms=30000,
             cdp_url=os.environ.get("BROWSER_CONTROL_URL") or os.environ.get("BROWSER_SERVICE_URL"),
+            proxy=self.browser_proxy(),
         )
         browser = BrowserController(browser_config)
         try:
@@ -1035,6 +1049,7 @@ class InternetSearch:
                 headers=headers,
                 allow_redirects=True,
                 timeout=aiohttp.ClientTimeout(total=20),
+                proxy=self._page_proxy(clean_url),
             ) as response:
                 if response.status == 200:
                     final_url = str(response.url)
@@ -1210,6 +1225,7 @@ class InternetSearch:
                     headers={"User-Agent": self.user_agent, "Accept": "application/pdf,*/*"},
                     allow_redirects=True,
                     timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+                    proxy=self._page_proxy(url),
                 ) as response:
                     last_status = response.status
                     last_type = response.headers.get("Content-Type", "")
