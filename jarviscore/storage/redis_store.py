@@ -2467,7 +2467,7 @@ class RedisContextStore:
     def create_hitl_request(self, workflow_id: str, step_id: str,
                             payload: Dict) -> Dict:
         """Create a HITL request for human approval/input."""
-        key = f"hitl_request:{workflow_id}:{step_id}"
+        key = self._hitl_key(workflow_id, step_id)
         request_id = f"hitl-{workflow_id}-{step_id}-{int(time.time())}"
         data = {
             "request_id": request_id,
@@ -2480,36 +2480,51 @@ class RedisContextStore:
         logger.info(f"HITL request created: {request_id}")
         return {"request_id": request_id, "status": "pending"}
 
-    def get_hitl_request(self, workflow_id: str,
-                         step_id: str) -> Optional[Dict]:
-        """Read HITL request status and human response."""
+    @staticmethod
+    def _hitl_key(workflow_id: str, step_id: str, action_id: Optional[str] = None) -> str:
         key = f"hitl_request:{workflow_id}:{step_id}"
-        data = self._redis.hgetall(key)
+        return f"{key}:{action_id}" if action_id else key
+
+    def get_hitl_request(self, workflow_id: str, step_id: str,
+                         action_id: Optional[str] = None) -> Optional[Dict]:
+        """Read HITL request status and human response."""
+        data = self._redis.hgetall(self._hitl_key(workflow_id, step_id, action_id))
         if not data:
             return None
         result = dict(data)
-        if "payload" in result:
-            try:
-                result["payload"] = json.loads(result["payload"])
-            except (json.JSONDecodeError, TypeError):
-                pass
+        for field in ("payload", "action", "outcome"):
+            if field in result:
+                try:
+                    result[field] = json.loads(result[field])
+                except (json.JSONDecodeError, TypeError):
+                    pass
         return result
 
     def resolve_hitl_request(self, workflow_id: str, step_id: str,
                              decision: str, responder: str = "",
-                             comment: str = "") -> bool:
-        """Record human decision on a HITL request (legacy untyped API)."""
-        key = f"hitl_request:{workflow_id}:{step_id}"
+                             comment: str = "",
+                             action_id: Optional[str] = None) -> bool:
+        """Record a person's decision on a HITL request."""
+        key = self._hitl_key(workflow_id, step_id, action_id)
         if not self._redis.exists(key):
             return False
+        normalized = normalize_hitl_decision(decision).value
         updates = {
             "status": HITLStatus.resolved.value,
-            "decision": normalize_hitl_decision(decision).value,
+            "decision": normalized,
             "responder": responder,
+            "resolved_by": responder,
             "comment": comment,
+            "note": comment,
             "resolved_at": str(time.time()),
         }
         self._redis.hset(key, mapping=updates)
+        if action_id:
+            self.append_ledger_entry(workflow_id, {
+                "event": "hitl_resolved", "step_id": step_id,
+                "action_id": action_id, "decision": normalized,
+                "resolved_by": responder, "timestamp": str(time.time()),
+            })
         logger.info(f"HITL resolved: {workflow_id}/{step_id} -> {decision}")
         return True
 
@@ -2521,15 +2536,31 @@ class RedisContextStore:
 
         Preferred over create_hitl_request() — validates the contract before
         writing and returns the persisted object with any defaults applied.
+        A request for a consequential action is keyed by that action, so one
+        step can wait on several decisions.
         """
-        key = f"hitl_request:{request.workflow_id}:{request.step_id}"
+        action_id = request.action.action_id if request.action else None
+        key = self._hitl_key(request.workflow_id, request.step_id, action_id)
+        # A new request replaces the record whole; no earlier decision carries over.
+        self._redis.delete(key)
         self._redis.hset(key, mapping=request.to_redis_mapping())
         self._redis.expire(key, self._ttl_seconds)
+        if action_id:
+            index = f"hitl_actions:{request.workflow_id}"
+            self._redis.hset(index, action_id, request.step_id)
+            self._redis.expire(index, self._ttl_seconds)
+            self.append_ledger_entry(request.workflow_id, {
+                "event": "hitl_requested", "step_id": request.step_id,
+                "action_id": action_id, "request_id": request.request_id,
+                "consequence": request.action.consequence,
+                "timestamp": str(time.time()),
+            })
         logger.info(f"HITL request created (typed): {request.request_id}")
         return request
 
     def get_hitl_resolution(self, workflow_id: str,
-                            step_id: str) -> Optional[HITLResolution]:
+                            step_id: str,
+                            action_id: Optional[str] = None) -> Optional[HITLResolution]:
         """
         Return a typed HITLResolution if the request has been resolved.
 
@@ -2537,10 +2568,40 @@ class RedisContextStore:
         This is the typed counterpart to get_hitl_request() — preferred for
         kernel polling.
         """
-        raw = self.get_hitl_request(workflow_id, step_id)
+        raw = self.get_hitl_request(workflow_id, step_id, action_id)
         if not raw:
             return None
         return HITLResolution.from_raw(raw)
+
+    def get_hitl_action_step(self, workflow_id: str, action_id: str) -> Optional[str]:
+        """The step whose consequential action ``action_id`` waits on a person."""
+        return self._redis.hget(f"hitl_actions:{workflow_id}", action_id)
+
+    def list_hitl_action_requests(self, workflow_id: str, step_id: str) -> List[Dict]:
+        """Every consequential-action request raised by one step."""
+        index = self._redis.hgetall(f"hitl_actions:{workflow_id}")
+        requests = []
+        for action_id, owner in index.items():
+            if owner != step_id:
+                continue
+            raw = self.get_hitl_request(workflow_id, step_id, action_id)
+            if raw:
+                requests.append(raw)
+        return requests
+
+    def settle_hitl_action(self, workflow_id: str, step_id: str,
+                           action_id: str, outcome: Dict[str, Any]) -> None:
+        """Bind what became of a decided action to the decision itself."""
+        key = self._hitl_key(workflow_id, step_id, action_id)
+        self._redis.hset(key, mapping={
+            "outcome": json.dumps(outcome, default=str),
+            "settled_at": str(time.time()),
+        })
+        self.append_ledger_entry(workflow_id, {
+            "event": "hitl_action_settled", "step_id": step_id,
+            "action_id": action_id, "status": str(outcome.get("status") or ""),
+            "timestamp": str(time.time()),
+        })
 
     # ------------------------------------------------------------------
     # Function Registry Index (Cognitive Projection)

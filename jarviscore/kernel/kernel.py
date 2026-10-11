@@ -757,6 +757,12 @@ class Kernel:
                 confidence=1.0,
                 reason="Explicit planner/profile role.",
             )
+        if effect == "final_response" and "communicator" in self._role_lease_profiles:
+            return RoutingDecision(
+                role="communicator",
+                confidence=1.0,
+                reason="The framework's response step synthesizes completed artifacts for the person.",
+            )
         routing_context = dict(context or {})
         credentialed = False
         if system_name:
@@ -923,6 +929,8 @@ class Kernel:
                 blob_storage=self.blob_storage,
             )
         elif role == "browser":
+            from jarviscore.core.egress import configured_egress
+
             subagent = BrowserSubAgent(
                 agent_id=agent_id,
                 llm_client=self.llm_client,
@@ -933,6 +941,9 @@ class Kernel:
                 profile_root=self.config.get("browser_profile_dir"),
                 scope_field=self.config.get("memory_scope_field"),
                 control_url=self.config.get("browser_control_url"),
+                egress=configured_egress(self.config),
+                locale=self.config.get("browser_locale"),
+                timezone=self.config.get("browser_timezone"),
             )
         else:
             raise ValueError(f"Unknown subagent role: {role}")

@@ -85,6 +85,7 @@ from jarviscore.adapter import jarvis_agent, wrap
 from jarviscore.context import JarvisContext, MemoryAccessor, DependencyAccessor
 from jarviscore.execution.decisions import (
     DecisionClientError,
+    DecisionClient,
     DecisionResult,
     JevDecisionClient,
 )
@@ -170,6 +171,7 @@ __all__ = [
 
     # Decision models
     "DecisionClientError",
+    "DecisionClient",
     "DecisionResult",
     "JevDecisionClient",
 

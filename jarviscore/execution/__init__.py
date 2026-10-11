@@ -21,6 +21,7 @@ from .llm import (
 
 from .decisions import (
     DecisionClientError,
+    DecisionClient,
     DecisionResult,
     JevDecisionClient,
     create_decision_client,
@@ -123,6 +124,7 @@ __all__ = [
 
     # Decision models
     'DecisionClientError',
+    'DecisionClient',
     'DecisionResult',
     'JevDecisionClient',
     'create_decision_client',

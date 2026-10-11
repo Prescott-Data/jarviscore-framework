@@ -22,6 +22,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from jarviscore.contracts.hitl import HITLAction
+from jarviscore.kernel import approval
 from jarviscore.kernel.subagent import BaseSubAgent
 from jarviscore.kernel.state import KernelState
 
@@ -2285,22 +2287,22 @@ like any other.
                 refusal = await self._guard_refusal(atom, params)
                 if refusal is not None:
                     return refusal
-            if atom.policy.requires_approval and action_id not in set(
-                self._run_context.get("_approved_actions") or ()
-            ):
-                return {
-                    "status": "waiting",
-                    "hitl_required": True,
-                    "hitl_type": "approval",
-                    "typed_outcome": "WAITING_FOR_APPROVAL",
-                    "system": atom.system,
-                    "action_id": action_id,
-                    "action": atom.describe(),
-                    "consequence": atom.policy.consequence,
-                    "workflow_id": self._run_context.get("workflow_id"),
-                    "step_id": self._run_context.get("step_id"),
-                    "detail": f"Waiting for approval before {atom.name} runs.",
-                }
+            if atom.policy.requires_approval:
+                refusal = approval.gate(
+                    self.redis_store,
+                    self._run_context.get("workflow_id"),
+                    self._run_context.get("step_id"),
+                    HITLAction(
+                        action_id=action_id,
+                        tool=name,
+                        system=atom.system,
+                        params=dict(params),
+                        description=atom.describe(),
+                        consequence=atom.policy.consequence,
+                    ),
+                )
+                if refusal is not None:
+                    return refusal
             prior = self._idempotent_result(action_id)
             if prior is not None:
                 return prior
@@ -2330,6 +2332,14 @@ like any other.
                 and result.get("status") == "success"
             ):
                 self._save_idempotent_result(action_id, result)
+            if atom.policy.requires_approval:
+                approval.settle(
+                    self.redis_store,
+                    self._run_context.get("workflow_id"),
+                    self._run_context.get("step_id"),
+                    action_id,
+                    result,
+                )
             return result
         call.__name__ = name
         return call

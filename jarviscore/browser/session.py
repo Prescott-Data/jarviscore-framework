@@ -138,6 +138,7 @@ class BrowserSession:
         permissions: Optional[List[str]] = None,
         profile_name: Optional[str] = None,
         profile_color: Optional[str] = None,
+        proxy: Optional[Dict[str, Any]] = None,
     ):
         self.headless = headless
         self.slow_mo = slow_mo
@@ -149,6 +150,7 @@ class BrowserSession:
         self.permissions = permissions or []
         self.profile_name = profile_name
         self.profile_color = profile_color
+        self.proxy = proxy
         
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
@@ -403,6 +405,7 @@ class BrowserSession:
             launch_args = list(self.launch_args or [])
             if self.headless and not any("headless" in arg for arg in launch_args):
                 launch_args.extend(["--headless=new", "--disable-gpu"])
+            launch = {"proxy": self.proxy} if self.proxy else {}
 
             if self.user_data_dir:
                 from .profile_decoration import decorate_profile
@@ -418,6 +421,7 @@ class BrowserSession:
                     headless=self.headless,
                     slow_mo=self.slow_mo,
                     args=launch_args,
+                    **launch,
                     **context_options,
                 )
                 self._browser = self._context.browser
@@ -426,6 +430,7 @@ class BrowserSession:
                     headless=self.headless,
                     slow_mo=self.slow_mo,
                     args=launch_args,
+                    **launch,
                 )
                 self._context = await self._browser.new_context(**context_options)
 

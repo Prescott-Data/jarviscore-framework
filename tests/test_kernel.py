@@ -983,6 +983,25 @@ class TestTaskClassification:
         assert decision.role == "coder"
 
     @pytest.mark.asyncio
+    async def test_the_response_step_is_synthesis_without_asking_the_router(self, kernel, mock_llm):
+        decision = await kernel._route_task(
+            "Synthesize the completed peer artifacts into the explicit user-facing response.",
+            {"systems": [], "effect": "final_response"},
+            agent_default_role="coder",
+            use_default_role_as_fallback=True,
+        )
+        assert decision.role == "communicator"
+        assert mock_llm.calls == []
+
+    @pytest.mark.asyncio
+    async def test_a_declared_role_still_owns_the_response_step(self, kernel, mock_llm):
+        decision = await kernel._route_task(
+            "Synthesize the completed peer artifacts into the explicit user-facing response.",
+            {"effect": "final_response", "execution_contract": {"kernel_role": "researcher"}},
+        )
+        assert decision.role == "researcher"
+
+    @pytest.mark.asyncio
     async def test_structured_router_selects_role(self, kernel, mock_llm):
         mock_llm.responses = [_router_response("communicator", reason="request needs coordination")]
         decision = await kernel._route_task(

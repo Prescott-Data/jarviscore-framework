@@ -10,6 +10,7 @@ Importing:
 """
 
 from .hitl import (
+    HITLAction,
     HITLRequest,
     HITLResolution,
     HITLPolicy,
@@ -23,6 +24,7 @@ from .hitl import (
 
 __all__ = [
     # HITL (Human-in-the-Loop) — core framework primitive
+    "HITLAction",
     "HITLRequest",
     "HITLResolution",
     "HITLPolicy",

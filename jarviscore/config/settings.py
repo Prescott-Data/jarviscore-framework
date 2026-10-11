@@ -99,6 +99,10 @@ class Settings(BaseSettings):
         validation_alias="JARVISCORE_PROMO_RAW_ARTIFACT_DIR",
     )
 
+    # Any decision model: 'module:callable' returning a DecisionClient.
+    # When unset, TypeSafe Jev is used if TYPESAFE_API_KEY is configured.
+    decision_client_factory: Optional[str] = Field(None, validation_alias="DECISION_CLIENT_FACTORY")
+
     # TypeSafe Jev decision model. Separate from generation providers because
     # System One returns typed judgments rather than text completions.
     typesafe_api_key: Optional[str] = Field(None, validation_alias="TYPESAFE_API_KEY")
@@ -280,6 +284,18 @@ class Settings(BaseSettings):
     browser_profile_dir: Optional[str] = None  # BROWSER_PROFILE_DIR
     # CDP endpoint of a browser the person already has open (shared browser).
     browser_control_url: Optional[str] = None  # BROWSER_CONTROL_URL
+    # Locale and IANA timezone the browser presents; match them to the egress
+    # proxy's region. Unset = the host's.
+    browser_locale: Optional[str] = None  # BROWSER_LOCALE, e.g. en-GB
+    browser_timezone: Optional[str] = None  # BROWSER_TIMEZONE, e.g. Europe/London
+
+    # === Egress ===
+    # The developer's own proxy for browser traffic and the pages the researcher
+    # reads, e.g. http://user-session-{session}:pass@gw.provider.example:7000.
+    # {session} becomes a stable id per tenant or workflow (sticky exit IP).
+    egress_proxy_url: Optional[str] = None  # EGRESS_PROXY_URL
+    # Comma-separated hosts that go direct (loopback always does), e.g. searxng,.internal
+    egress_proxy_bypass: Optional[str] = None  # EGRESS_PROXY_BYPASS
 
     # === Search Providers ===
     # Gemini Grounded Search (primary): set GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT

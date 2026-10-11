@@ -242,6 +242,17 @@ class SlackNotifier(AutoAgent):
 
 The four sub-agents the Kernel routes to are the `CoderSubAgent` for tasks that require writing and running Python, the `ResearcherSubAgent` for tasks that require web search and synthesis, the `CommunicatorSubAgent` for tasks that require formatting and delivering output, and the `BrowserSubAgent` for web navigation tasks when `BROWSER_ENABLED=true` is set.
 
+Some steps already say which sub-agent they need, so the Kernel routes them without a model call:
+
+| Step | Sub-agent |
+|---|---|
+| Acts in the agent's own browser (`systems: ["browser"]`) | `browser` |
+| Reads or changes a connected provider | `coder` (the credentialed harness) |
+| Declares a role (`execution_contract.kernel_role` or `default_kernel_role`) | that role |
+| The Mesh's own response step (`effect: final_response`) | `communicator` |
+
+Everything else goes to the structured router.
+
 ### Analysis, not code: the `single_response` contract
 
 The answer must contain visible text and must not carry an explicit incomplete,
@@ -410,7 +421,9 @@ prior = raw.get("output", raw) if isinstance(raw, dict) else {}
 
 ### Checkpointing
 
-Checkpointing happens automatically. After every OODA loop turn, the Kernel calls `UnifiedMemory.save_checkpoint()` which writes the current `KernelState` (all accumulated findings, tool history, and reasoning progress) to Redis under `checkpoint:{workflow_id}:{step_id}`. If the process crashes and the workflow restarts, the `WorkflowEngine` detects the existing checkpoint and resumes from that turn rather than restarting from scratch.
+Checkpointing happens automatically. After every OODA loop turn, the Kernel calls `UnifiedMemory.save_checkpoint()` which writes the current `KernelState` (all accumulated findings, tool history, reasoning progress, and the recent conversation) to Redis under `checkpoint:{workflow_id}:{step_id}`. If the process crashes and the workflow restarts, the `WorkflowEngine` detects the existing checkpoint and resumes from that turn rather than restarting from scratch.
+
+The same checkpoint carries a step across execution epochs and approval pauses. A resumed step continues the conversation it was having, and a browser step whose epoch ran out continues on the same page (see [Browser Automation](./browser-automation.md#session-lifecycle)). Reaching the turn cap mid-work ends the epoch the same way as an exhausted token or time budget: the step continues in its next epoch while the workflow's `max_epochs_per_step` allows, and stops only after the last.
 
 You do not call `save_checkpoint()` or `load_checkpoint()` in application code. The framework manages this transparently when `REDIS_URL` is configured. Without Redis, there is no persistence and no crash recovery: the workflow starts from the beginning on failure.
 

@@ -324,6 +324,22 @@ class TestCompletionValidation:
         assert not valid
         assert "summary" in reason.lower()
 
+    def test_a_product_shaped_result_is_summarised_by_its_done_answer(self, researcher):
+        product_result = {
+            "status": "research_incomplete",
+            "qualification_summary": "Unipart fits, but no current buyer is verified.",
+            "evidence": [{"pointer": "https://www.unipart.com/news"}],
+        }
+
+        valid, _, _ = researcher._validate_done_payload(
+            researcher.current_state, product_result,
+            answer="Unipart is a plausible fit; the decision-maker is not yet verified.",
+        )
+        without_answer, reason, _ = researcher._validate_done_payload(researcher.current_state, product_result)
+
+        assert valid
+        assert not without_answer and "summary" in reason.lower()
+
     def test_rejects_no_evidence(self, researcher):
         valid, reason, report = researcher._validate_done_payload(
             researcher.current_state,

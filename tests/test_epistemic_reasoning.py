@@ -159,9 +159,10 @@ class TestEpistemicDecisionPrompt:
         prompt = self._build_prompt()
         assert "STRATEGY:" in prompt
 
-    def test_prompt_includes_exit_check(self):
+    def test_prompt_never_tells_the_agent_to_stop_once_it_has_something_to_say(self):
         prompt = self._build_prompt()
-        assert "EXIT CHECK:" in prompt
+        assert "EXIT CHECK" not in prompt
+        assert "enough to produce a useful result" not in prompt
 
     def test_prompt_includes_turn_number(self):
         state = _make_state(turn=7)
