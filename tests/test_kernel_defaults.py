@@ -6,7 +6,7 @@ loop, artifact tracking, and error handling without real LLM calls.
 """
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jarviscore.kernel.defaults import (
@@ -274,11 +274,16 @@ class TestCoderSubAgent:
             memory=memory,
         )
 
-        # The gate rejects an evidence-free landing either way; precedence is what differs.
-        assert result.status == "epoch_exhausted"
-        assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+        # Earlier epochs keep working; the last epoch lands the honest partial result.
         assert llm.calls == (2 if landing_attempted else 1)
-        memory.save_checkpoint.assert_awaited_once()
+        if landing_attempted:
+            assert result.status == "success"
+            assert result.metadata["typed_outcome"] == "SUCCESS_ON_LANDING"
+            assert result.metadata["work_record"] == {}
+        else:
+            assert result.status == "epoch_exhausted"
+            assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+            memory.save_checkpoint.assert_awaited_once()
 
     """Tests for CoderSubAgent."""
 
@@ -426,14 +431,15 @@ class TestCoderSubAgent:
 
     @pytest.mark.asyncio
     async def test_full_run_done_immediately(self, mock_llm):
-        """Coder rejects DONE without executable proof of work."""
+        """A direct answer completes, and its record shows that no tool ran."""
         mock_llm.responses = [
             _llm_response("THOUGHT: Simple task\nDONE: Completed\nRESULT: {\"value\": 42}")
         ]
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
         output = await coder.run("compute 42", max_turns=1)
-        assert output.status == "yield"
-        assert output.metadata["typed_outcome"] == "YIELD_EMERGENCY_TURN_FUSE"
+        assert output.status == "success"
+        assert output.payload == {"value": 42}
+        assert output.metadata["work_record"] == {}
 
     @pytest.mark.asyncio
     async def test_full_run_tool_then_done(self, mock_llm, mock_sandbox):
@@ -464,6 +470,23 @@ class TestCoderSubAgent:
         await coder.run("task2")
         # Candidates should be empty (no write_code called in second run)
         assert len(coder.candidates) == 0
+
+    def test_research_can_be_delegated_before_any_code_is_written(self, mock_llm):
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
+        result = coder._tool_delegate_research(question="Which endpoint lists invoices?")
+        assert result["status"] == "delegated"
+        assert result["signal_researcher"] is True
+
+    @pytest.mark.asyncio
+    async def test_api_docs_can_be_read_again(self, mock_llm):
+        search = MagicMock()
+        search.extract_content = MagicMock(
+            side_effect=[{"success": True, "content": "v1"}, {"success": True, "content": "v2"}]
+        )
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, search_client=search)
+        first = await coder._tool_read_api_docs(url="https://docs.example.com/api")
+        second = await coder._tool_read_api_docs(url="https://docs.example.com/api")
+        assert (first["content"], second["content"]) == ("v1", "v2")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -523,8 +546,7 @@ class TestResearcherSubAgent:
 
     @pytest.mark.asyncio
     async def test_full_run_with_findings(self, mock_llm, monkeypatch):
-        """Researcher calls publish_research_findings and completes (phase checks disabled)."""
-        monkeypatch.setenv("RESEARCH_STRICT_PHASE_CONTRACT", "false")
+        """Researcher calls publish_research_findings and completes."""
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "false")
         mock_llm.responses = [
             _llm_response(

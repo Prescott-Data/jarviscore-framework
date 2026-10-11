@@ -22,26 +22,24 @@ Completion protocol:
 OODA Loop Architecture:
     Each turn follows OBSERVE → ORIENT → DECIDE → ACT:
     1. OBSERVE  — ContextManager builds a priority-stack prompt from state
-    2. ORIENT   — Cognition manager checks for interventions (stalls, budget)
+    2. ORIENT   — the turn states the budget that remains
     3. DECIDE   — LLM call produces a tool call or completion signal
-    4. ACT      — Tool execution, failure recording, convergence evaluation
+    4. ACT      — Tool execution and failure recording
 
-    The loop is governed by:
+    The runtime enforces boundaries and reports facts; the agent decides:
     - ExecutionLease budget (thinking + action tokens, wall clock, turn fuse)
-    - ConvergenceGovernor (stagnation, same-tool streak, equivalent outcomes)
-    - FailureLedger (fingerprint-based repeat-action blocking)
-    - EpistemicLedger (search/URL dedup, knowledge plateau detection)
+    - FailureLedger (records and classifies failures)
+    - each result says when the identical call ran before and how it went
 
     Subclass hooks (all have safe defaults):
     - _pre_run_hook()       — one-time setup before the loop starts
-    - _pre_execute_hook()   — gate tool calls (e.g. research phase gating)
+    - _pre_execute_hook()   — gate tool calls (e.g. approval of a consequential action)
     - _can_complete()       — gate DONE signals (e.g. evidence quality check)
 
     Exit paths:
     - parsed["type"] == "done"  — LLM signals completion (subject to _can_complete)
     - state.status == "completed" — tool-driven exit (e.g. publish_research_findings)
     - Lease/budget exhaustion   — emergency yield
-    - Convergence stall         — post-pivot yield
     - Emergency turn fuse       — max_turns reached
 """
 
@@ -60,9 +58,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.execution import multimodal
-from jarviscore.kernel.cognition import AgentCognitionManager
+from jarviscore.kernel.cognition import AgentCognitionManager, FailureLedger
 from jarviscore.orchestration.budget import WorkflowBudgetExceeded
-from jarviscore.kernel.epistemic import EpistemicLedger
 from jarviscore.kernel.gate import GateEvidence, as_evidence, record_attempt
 from jarviscore.kernel.state import KernelState, ToolReceiptError
 
@@ -155,6 +152,35 @@ def _observe(tool_name: str, tool_result: Any, turn: int) -> str:
     if tool_name == "read_turn_result":
         return str(tool_result)
     return _clip_observation(str(tool_result), turn)
+
+
+def _canonical(value: Any) -> str:
+    try:
+        return json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def _identical_call_record(
+    earlier: List[Any], tool_name: str, params: Dict[str, Any], result: Any
+) -> str:
+    """What the tool log shows about earlier calls identical to this one, if any."""
+    fingerprint = FailureLedger.fingerprint(tool_name, params)
+    same = [
+        receipt for receipt in earlier
+        if receipt.tool_name == tool_name
+        and FailureLedger.fingerprint(receipt.tool_name, receipt.tool_input) == fingerprint
+    ]
+    if not same:
+        return ""
+    last = same[-1]
+    unchanged = _canonical(last.tool_output) == _canonical(result)
+    return (
+        f"This exact call (same tool, same arguments) ran {len(same)} time(s) earlier "
+        f"in this run; the last, receipt {last.receipt_id}, ended {last.status}, and "
+        f"its result was {'identical to' if unchanged else 'different from'} this one."
+    )
+
 
 def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) -> None:
     """Prior turns (last 10): a native turn as its tool call and result, a text turn as a pair."""
@@ -859,6 +885,7 @@ class BaseSubAgent(ABC):
                           "lease_exhausted": exhausted, "landing_turn": True,
                           "typed_outcome": "SUCCESS_ON_LANDING",
                           "tool_receipts": state.receipt_evidence(state.output),
+                          "work_record": self._work_record(state),
                           "answer": parsed.get("answer"),
                           "kept_memories": list(getattr(self, "_kept_memories", []))},
             )
@@ -875,10 +902,10 @@ class BaseSubAgent(ABC):
         """
         parts = [context_block, "\n---"]
         parts.append(f"**ROLE: {self.role.upper()} AGENT** | Turn {state.turn}")
-        finish, act = (
-            ("call done", "Then call the function for your next step, or done.")
+        act = (
+            "Then call the function for your next step, or done."
             if self._native_protocol
-            else ("call DONE", "Then emit your TOOL/PARAMS or DONE/RESULT.")
+            else "Then emit your TOOL/PARAMS or DONE/RESULT."
         )
 
         # Epistemic Decision Contract — forces self-assessment
@@ -886,8 +913,7 @@ class BaseSubAgent(ABC):
             "**DECISION CONTRACT (follow this structure in your THOUGHT):**\n"
             "1. **KNOWN:** What have I established so far? (refer to WHAT I KNOW SO FAR above)\n"
             "2. **GAP:** What specific information am I still missing?\n"
-            "3. **STRATEGY:** What is the most efficient next step to close the gap?\n"
-            f"4. **EXIT CHECK:** Do I have enough to produce a useful result? If yes, {finish}.\n\n"
+            "3. **STRATEGY:** What is the most efficient next step to close the gap?\n\n"
             f"{act}"
         )
         if "ask_peer" in self._tools:
@@ -1012,10 +1038,6 @@ class BaseSubAgent(ABC):
         # (prevents amnesia — the LLM sees its own prior reasoning)
         conversation_history: List[Dict[str, str]] = []
 
-        # Epistemic consistency enforcement — blocks redundant searches/URLs
-        # before they execute (deterministic, unlike prompt-based nudges)
-        _epistemic = EpistemicLedger()
-
         # Per-dispatch metadata channel (issue #88): tools stamp identity
         # facts here (e.g. the coder's registry function_id) and the success
         # envelope carries them out. Reset every run so nothing leaks across
@@ -1095,16 +1117,13 @@ class BaseSubAgent(ABC):
             # ═══ 1. OBSERVE — Build context from state ═══
             context_block = context_manager.build_context(state)
 
-            # ═══ 2. ORIENT — Meta-cognition check ═══
-            intervention = self._cognition.get_intervention()
-            if intervention:
-                self._log.warning("Cognition intervention: %s", intervention[:120])
-                state.add_thought(f"[META] {intervention}")
-
-            # Inject failure memory into state for context building
-            failure_block = self._cognition.failure_memory_block()
-            if failure_block:
-                state.failure_ledger = self._cognition.failures.recent_failures
+            # ═══ 2. ORIENT — the budget that remains, as a fact for this turn ═══
+            # A notice about this run's budget belongs to this turn; kept as a
+            # thought it would outlive the run it describes.
+            context_block += (
+                f"\n\n## RUNTIME NOTICE (this turn)\n{self._cognition.budget_facts()}"
+            )
+            state.failure_ledger = self._cognition.failures.recent_failures
 
             # ═══ 3. DECIDE — LLM call ═══
             user_prompt = self._build_user_prompt(state, context_block)
@@ -1358,6 +1377,7 @@ class BaseSubAgent(ABC):
                         "tokens": total_tokens,
                         "cost_usd": total_cost,
                         "tool_receipts": state.receipt_evidence(parsed.get("result")),
+                        "work_record": self._work_record(state),
                         "answer": parsed.get("answer"),
                         "kept_memories": list(getattr(self, "_kept_memories", [])),
                         **getattr(self, "_dispatch_metadata", {}),
@@ -1369,53 +1389,10 @@ class BaseSubAgent(ABC):
                 tool_name = parsed["tool"]
                 tool_params = parsed.get("params", {})
 
-                # ── Repeat failure guard ──
-                if self._cognition.is_repeat_failure(tool_name, tool_params):
-                    self._log.warning("Blocked repeat failure: %s", tool_name)
-                    state.add_thought(
-                        f"[GUARD] Blocked repeat of failing action: {tool_name}. "
-                        "Must try a different tool or different parameters."
-                    )
-                    state.add_tool_result(
-                        tool_name, tool_params,
-                        {"status": "blocked", "error": "REPEAT_BLOCKED"},
-                        error="Identical failing action blocked by failure guard",
-                    )
-                    continue
-
-                # ── Epistemic consistency check ──
-                # Blocks redundant searches and URL re-reads BEFORE execution.
-                # Unlike the convergence governor (which reacts after stalls),
-                # this prevents the wasteful action from happening at all.
-                _ep_verdict = _epistemic.validate_action(
-                    tool_name, tool_params, turn, state
-                )
-                if _ep_verdict.action == "redirect":
-                    self._log.info("Epistemic redirect: %s", _ep_verdict.reason)
-                    state.add_thought(f"[EPISTEMIC] {_ep_verdict.injection}")
-                    state.add_tool_result(
-                        tool_name, tool_params,
-                        {"status": "blocked", "reason": _ep_verdict.reason},
-                        error=_ep_verdict.reason,
-                    )
-                    trajectory.append({
-                        "turn": turn, "type": "epistemic_redirect",
-                        "tool": tool_name, "reason": _ep_verdict.reason,
-                    })
-                    conversation_history.append({
-                        "assistant": content,
-                        "observation": (
-                            f"[Turn {turn}] BLOCKED by epistemic ledger: "
-                            f"{_ep_verdict.reason}\n{_ep_verdict.injection}"
-                        ),
-                        "tool_call": native_call,
-                    })
-                    continue
-
                 # ── Pre-execute hook: subclass-level gating ──
-                # Subclasses override _pre_execute_hook to enforce constraints
-                # (e.g. researcher phase gating). If it returns a dict, that
-                # dict is used as the tool result and execution is skipped.
+                # Subclasses override _pre_execute_hook to enforce boundaries
+                # (e.g. approval of a consequential action). If it returns a dict,
+                # that dict is used as the tool result and execution is skipped.
                 hook_result = await self._pre_execute_hook(
                     tool_name, tool_params, state
                 )
@@ -1522,6 +1499,9 @@ class BaseSubAgent(ABC):
 
                 # Record in state
                 error_str = tool_result.get("error") if isinstance(tool_result, dict) else None
+                repeat_note = _identical_call_record(
+                    state.tool_history, tool_name, tool_params, tool_result
+                )
                 tool_receipt = state.add_tool_result(
                     tool_name,
                     tool_params,
@@ -1532,15 +1512,7 @@ class BaseSubAgent(ABC):
                 )
                 turn_log["tool_receipt_id"] = tool_receipt.receipt_id
 
-                # ── Record in epistemic ledger + check knowledge plateau ──
-                _epistemic.record_outcome(
-                    tool_name, tool_params, tool_result, turn, state
-                )
-                _plateau_signal = _epistemic.check_plateau(state, turn)
-                if _plateau_signal:
-                    state.add_thought(f"[EPISTEMIC] {_plateau_signal}")
-
-                # ── Track usage + convergence ──
+                # ── Track usage ──
                 registered = self._tools.get(tool_name)
                 self._cognition.track_usage(
                     tool_name, tokens=llm_tokens_this_turn, tool_output=tool_result,
@@ -1591,59 +1563,6 @@ class BaseSubAgent(ABC):
                         },
                     )
 
-                # ── Check convergence stall (already evaluated inside track_usage) ──
-                stall = self._cognition.check_stall_verdict()
-                if stall:
-                    if not state.internal_variables.get("_pivot_attempted"):
-                        # Grant ONE pivot turn — inject strategic redirect
-                        state.internal_variables["_pivot_attempted"] = True
-                        state.add_thought(
-                            "[STRATEGIC PIVOT] You are repeating the same approach "
-                            "without making progress. You MUST try a completely "
-                            "different strategy this turn. Consider: different tool, "
-                            "different parameters, or call DONE with partial results."
-                        )
-                        # Grant a fresh convergence window for the pivot turn.
-                        self._cognition.convergence.reset_streaks(
-                            reason=f"strategic pivot granted to {self.role}"
-                        )
-                        logger.info(
-                            f"[{self.role}] Strategic pivot granted — "
-                            f"resetting convergence for one more turn"
-                        )
-                        trajectory.append(turn_log)
-                        # Record conversation for continuity through the pivot
-                        observation = (
-                            f"Tool '{tool_name}' returned: "
-                            f"{_observe(tool_name, tool_result, turn)}\n"
-                            f"Authoritative tool receipt: {tool_receipt.receipt_id}"
-                        )
-                        conversation_history.append({
-                            "assistant": content,
-                            "observation": observation,
-                            "images": observed_images,
-                            "tool_call": native_call,
-                        })
-                        continue
-                    else:
-                        # Pivot was already attempted — escalate now
-                        stall_reason = stall.get("reason", "Convergence stall")
-                        self._log.warning("Convergence stall (post-pivot): %s", stall_reason)
-                        state.add_thought(f"[CONVERGENCE] {stall_reason}")
-                        trajectory.append(turn_log)
-                        _trace.log_step_complete(False, stall_reason)
-                        return AgentOutput(
-                            status=stall.get("action", "yield"),
-                            summary=stall_reason,
-                            payload=state.get_final_output(),
-                            trajectory=trajectory,
-                            metadata={
-                                "tokens": total_tokens, "cost_usd": total_cost,
-                                "typed_outcome": stall.get("typed_outcome"),
-                                "cognition": self._cognition.get_budget_summary(),
-                            },
-                        )
-
                 trajectory.append(turn_log)
 
                 # Record conversation history for multi-turn LLM continuity
@@ -1656,8 +1575,9 @@ class BaseSubAgent(ABC):
                     f"Authoritative tool receipt: {tool_receipt.receipt_id}. "
                     "When final JSON reports this command execution, include this exact "
                     "value as `tool_receipt_id`; JarvisCore binds the runtime facts.\n\n"
-                    f"Reflect: What new information does this provide? "
-                    f"Does it change your strategy?"
+                    + (f"{repeat_note}\n\n" if repeat_note else "")
+                    + "Reflect: What new information does this provide? "
+                    "Does it change your strategy?"
                 )
                 conversation_history.append({
                     "assistant": content,
@@ -1875,6 +1795,20 @@ class BaseSubAgent(ABC):
         history decide whether completion is supported.
         """
         return (True, "")
+
+    @staticmethod
+    def _work_record(state: KernelState) -> Dict[str, Dict[str, int]]:
+        """What this run did, per tool, counted from its tool log.
+
+        Completion is not refused for how the work was done; the record travels with
+        the result so the product, a reviewer or a person decides what it supports.
+        """
+        record: Dict[str, Dict[str, int]] = {}
+        for receipt in state.tool_history:
+            entry = record.setdefault(receipt.tool_name, {"calls": 0, "succeeded": 0})
+            entry["calls"] += 1
+            entry["succeeded"] += receipt.status == "success"
+        return record
 
     @staticmethod
     def _ground_completion(

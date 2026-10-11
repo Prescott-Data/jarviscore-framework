@@ -12,7 +12,7 @@ Two responsibilities:
 
    Priority (highest → lowest, never trimmed → first trimmed):
      1. MISSION       — workflow_id, step_id, task description (fixed)
-     2. FAILURE MEMORY — recent failures (prevents repeat mistakes)
+     2. FAILURE MEMORY — recent failures, as recorded
      3. CURRENT PLAN  — active reasoning / next steps
      4. SCRATCHPAD    — working notes from this turn
      5. LONG-TERM MEM — compressed prior summaries
@@ -349,12 +349,11 @@ class ContextManager:
             add("mailbox", str(mailbox_context))
 
         if state.failure_ledger:
-            lines = ["## FAILURE MEMORY (Do Not Repeat)"]
+            lines = ["## RECENT FAILURES"]
             for entry in state.failure_ledger[-5:]:
                 tool = entry.get("tool", "unknown")
                 err_type = entry.get("error_type", "UNKNOWN")
                 lines.append(f"- `{tool}` → `{err_type}`: {entry.get('error', '')}")
-            lines.append("Rule: if tool+params already failed recently, choose a different strategy.")
             add("failure_memory", "\n".join(lines))
 
         findings = state.internal_variables.get("research_findings", [])

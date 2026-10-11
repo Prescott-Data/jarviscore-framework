@@ -94,7 +94,7 @@ class CoderSubAgent(BaseSubAgent):
     3. execute_code(function_name) → SandboxExecutor
     4. On success → register in FunctionRegistry (VERIFIED stage)
     5. On failure → diagnose error, fix code, re-execute (max 2 attempts)
-    6. On persistent failure → delegate_research (HARD GATE: must write first)
+    6. On persistent failure → delegate_research
     """
 
     DEFAULT_SYSTEM_PROMPT = """\
@@ -330,12 +330,6 @@ like any other.
         self._failed_atom_calls: Dict[str, Dict[str, Any]] = {}
         self._observed_atom_calls: Dict[str, Dict[str, Any]] = {}
         self._callable_atoms_by_system: Dict[str, List[str]] = {}
-
-        # Hard gate flag — delegate_research blocked until first write_code
-        self._has_written_code: bool = False
-
-        # URL content cache — session-scoped dedup for read_api_docs
-        self._read_urls: set = set()
         self._current_task: str = ""
 
         super().__init__(
@@ -370,10 +364,10 @@ like any other.
                 if name in self._tools
             ]
             first_attempt = (
-                "\n\nYou have not investigated this task yet. Your next response MUST "
-                "use one relevant tool before emitting DONE or a final artifact. "
+                "\n\nNo tool has run in this task yet. "
                 f"Relevant available paths include: {', '.join(useful) or 'the registered tools above'}. "
-                "Choose from the current gap; do not call a tool merely to make the run pass."
+                "A result that depends on live data rests on one of them; the tools this "
+                "run used are recorded with its result."
             )
         return (
             f"{prompt}\n\n"
@@ -399,7 +393,7 @@ like any other.
         state: KernelState,
         parsed: Dict[str, Any],
     ) -> tuple:
-        """Require investigation and one bounded peer review of blocked work."""
+        """Require product-declared actions; record the rest rather than demand it."""
         contract = state.context.get("execution_contract") or {}
         raw_groups = contract.get("required_tool_groups") or []
         groups = [
@@ -422,18 +416,6 @@ like any other.
                         "tools_used": sorted(tools_used),
                         "missing_tool_groups": missing,
                     },
-                ),
-            )
-        if not state.tool_history:
-            return (
-                False,
-                GateEvidence(
-                    check="meaningful_attempt",
-                    requirement=(
-                        "use a relevant provider, code, workflow, mailbox, or peer tool "
-                        "before claiming success or a blocker"
-                    ),
-                    observed={"tool_calls": 0},
                 ),
             )
         return super()._can_complete(state, parsed)
@@ -712,10 +694,8 @@ like any other.
             "delegate_research",
             self._tool_delegate_research,
             (
-                "ABSOLUTE LAST RESORT — delegate to the researcher when you are stuck after multiple "
-                "failed attempts AND self-research via quick_api_search/read_api_docs. "
-                "HARD GATE: you MUST call write_code at least once before "
-                "this tool becomes available. "
+                "Delegate a question to the researcher when self-research via "
+                "quick_api_search/read_api_docs has not answered it. "
                 "Params: {\"question\": \"<what you need to know>\", \"context\": \"<what you've tried>\"}"
             ),
             phase="thinking",
@@ -1089,7 +1069,6 @@ like any other.
         **kwargs,
     ) -> Dict[str, Any]:
         """Record + validate a code candidate, or a new atom proven by one stated call."""
-        self._has_written_code = True  # Unlock delegate_research gate
 
         # Often the agent is the first to work out which provider the task needs.
         # Offerings are refreshed here so a proven atom or a missing consent is
@@ -1650,7 +1629,7 @@ like any other.
             }
 
     # ─────────────────────────────────────────────────────────────
-    # Tool: delegate_research (HARD GATE)
+    # Tool: delegate_research
     # ─────────────────────────────────────────────────────────────
 
     def _tool_delegate_research(
@@ -1661,21 +1640,7 @@ like any other.
     ) -> Dict[str, Any]:
         """
         Delegate a question to the researcher subagent.
-
-        HARD GATE: This tool is blocked until write_code has been called
-        at least once. The coder must attempt to solve the problem from
-        training knowledge before delegating.
         """
-        if not self._has_written_code:
-            return {
-                "status": "blocked",
-                "error": (
-                    "HARD GATE: You must call write_code at least once before "
-                    "delegating to research. Write code from your training knowledge first. "
-                    "Research is a LAST RESORT, not a first step."
-                ),
-            }
-
         # Signal to the kernel that research is needed.
         # The kernel will read signal_researcher from the output metadata
         # and dispatch a ResearcherSubAgent.
@@ -1801,23 +1766,12 @@ like any other.
     ) -> Dict[str, Any]:
         """Read content from a single API documentation URL.
 
-        Session-scoped dedup prevents re-reading the same URL. Content
-        truncated to 10KB. Ported from ResearcherSubAgent._tool_read_url.
+        Content truncated to 10KB. Ported from ResearcherSubAgent._tool_read_url.
         """
         if not self.search_client:
             return {
                 "status": "unavailable",
                 "message": "No search_client configured.",
-            }
-
-        # Session dedup — don't re-read within the same run
-        if url in self._read_urls:
-            return {
-                "status": "cached",
-                "message": (
-                    f"URL already read in this session. "
-                    "Use the information from the previous read."
-                ),
             }
 
         logger.info("[CODER] read_api_docs: %s", url)
@@ -1832,8 +1786,6 @@ like any other.
             result = self.search_client.extract_content(url, max_length=12000)
             if hasattr(result, "__await__"):
                 result = await result
-
-            self._read_urls.add(url)
 
             if isinstance(result, dict):
                 if result.get("success"):
@@ -1890,8 +1842,6 @@ like any other.
     async def run(self, task, context=None, max_turns=15, model=None, **kwargs):
         """Fresh candidate list per run — no state bleed between tasks."""
         self._candidates = []
-        self._has_written_code = False
-        self._read_urls = set()
         self._registered_this_run = False
         self._current_task = str(task)
         self._run_context = context or {}
