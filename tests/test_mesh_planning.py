@@ -471,6 +471,26 @@ async def test_mesh_planner_adds_configured_user_response_as_the_terminal_step()
 
 
 @pytest.mark.asyncio
+async def test_the_dag_prompt_says_the_framework_owns_the_response_step():
+    # Unstated, planners covered obligations with their own response step,
+    # which the framework replaces, and a third of plans needed a repair call.
+    llm = MockLLMClient(responses=responses())
+    planner = MeshPlanner(
+        llm,
+        capabilities={"research": "Research evidence", "action_briefing": "Produce the user-facing decision"},
+        response_capability="action_briefing",
+    )
+
+    await planner.plan("Find evidence")
+
+    dag_prompt = llm.calls[1]["messages"][0]["content"]
+    assert "JarvisCore appends the user-facing response step (action_briefing" in dag_prompt
+    assert "every obligation must be covered by a domain step" in dag_prompt
+    assert planner._amendment_prompt("Find evidence", [], set(), [], "r", {}).count("JarvisCore appends") == 1
+    assert MeshPlanner(llm, capabilities={"research": "Research evidence"})._response_rule() == ""
+
+
+@pytest.mark.asyncio
 async def test_mesh_planner_assigns_obligation_truth_to_terminal_domain_work():
     steps = [
         {

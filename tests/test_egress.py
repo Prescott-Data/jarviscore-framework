@@ -165,6 +165,24 @@ def test_an_attached_browser_keeps_its_own_network(recorder):
     assert not any("proxy" in kwargs for _, kwargs in recorder.calls)
 
 
+def test_the_researchers_page_reads_and_browser_share_one_exit(monkeypatch):
+    from jarviscore.config import settings
+    from jarviscore.kernel.defaults import researcher as researcher_module
+
+    monkeypatch.setattr(settings, "egress_proxy_url", "http://user-session-{session}:pw@gw.example:7000")
+    monkeypatch.delenv("BROWSER_CONTROL_URL", raising=False)
+    monkeypatch.delenv("BROWSER_SERVICE_URL", raising=False)
+    if not researcher_module._HAS_BROWSER:
+        pytest.skip("browser extra not installed")
+    agent = researcher_module.ResearcherSubAgent(agent_id="r", llm_client=None)
+
+    page_proxy = agent.internet_search._page_proxy("https://shop.example/")
+    browser_user = agent._browser_config.proxy["username"]
+    assert browser_user in page_proxy
+    other = researcher_module.ResearcherSubAgent(agent_id="r2", llm_client=None)
+    assert other._browser_config.proxy["username"] != browser_user
+
+
 # ── End to end through a real local proxy ───────────────────────────────────
 
 

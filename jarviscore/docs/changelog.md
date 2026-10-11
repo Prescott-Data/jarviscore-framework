@@ -101,6 +101,13 @@ went from 0/8 to 3/3 fully graded passes.
   to write them.
 - The Mesh's own response step was routed by a model call although its role is
   fixed; it now goes straight to the communicator (about 2 s per goal).
+- The planner's first-pass prompt never said JarvisCore appends the response
+  step itself and that only domain steps settle obligations. Plans covered
+  obligations with their own response step, the framework replaced it, and a
+  third to two thirds of plans needed a repair call. Every step-producing prompt
+  now states it: in 24 live plannings none needed a repair, and mean planning
+  time fell from about 20 s to 15 s.
+- The researcher's page reads and its browser share one sticky egress session.
 
 ### Compatibility
 

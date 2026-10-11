@@ -123,11 +123,12 @@ class InternetSearch:
         search_timeout_seconds: float | None = None,
         grounded_timeout_seconds: float | None = None,
         egress: Optional[Egress] = None,
+        egress_session: Optional[str] = None,
     ):
         self.session = None
         # Pages read here leave through the developer's proxy; search APIs authenticate by key.
         self.egress = egress if egress is not None else configured_egress()
-        self._egress_session = uuid.uuid4().hex
+        self._egress_session = egress_session or uuid.uuid4().hex
         self.search_timeout_seconds = search_deadline(
             search_timeout_seconds, "RESEARCH_SEARCH_TIMEOUT_SECONDS", 15.0,
         )

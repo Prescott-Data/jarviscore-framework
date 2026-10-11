@@ -99,11 +99,16 @@ class ResearcherSubAgent(BaseSubAgent):
     """
     
     def __init__(self, *args, **kwargs):
+        import uuid
+
+        # The researcher's page reads and its browser leave from one sticky exit.
+        egress_session = uuid.uuid4().hex
         # Accept optional internet_search injection (e.g. for testing)
         internet_search = kwargs.pop('internet_search', None)
         self.internet_search = internet_search or InternetSearch(
             pdf_timeout_seconds=_env_int("RESEARCH_PDF_TIMEOUT_SECONDS", 90),
             pdf_max_retries=_env_int("RESEARCH_PDF_MAX_RETRIES", 3),
+            egress_session=egress_session,
         )
         
         # Browser controller config — graceful degradation if [browser] not installed
@@ -114,7 +119,6 @@ class ResearcherSubAgent(BaseSubAgent):
         
         cdp_url = _env_str("BROWSER_CONTROL_URL") or _env_str("BROWSER_SERVICE_URL")
         
-        import uuid
         session_id = str(uuid.uuid4())[:8]
         unique_profile_dir = os.path.join(
             _env_str("BROWSER_PROFILE_USER_DATA_BASE", os.path.join(os.path.expanduser("~"), ".jarviscore", "browser_profiles")),
@@ -140,7 +144,7 @@ class ResearcherSubAgent(BaseSubAgent):
                 cdp_url=cdp_url,
                 locale=_env_str("BROWSER_LOCALE", "") or None,
                 timezone_id=_env_str("BROWSER_TIMEZONE", "") or None,
-                proxy=egress.playwright(session_id) if egress and not cdp_url else None,
+                proxy=egress.playwright(egress_session) if egress and not cdp_url else None,
             )
         else:
             self._browser_config = None

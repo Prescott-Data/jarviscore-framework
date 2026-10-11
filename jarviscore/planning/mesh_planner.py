@@ -735,6 +735,16 @@ class MeshPlanner:
             ),
         ]
 
+    def _response_rule(self) -> str:
+        """The response step is the framework's; plans that cover obligations with it lose that coverage."""
+        if not self.response_capability:
+            return ""
+        return (
+            f"- JarvisCore appends the user-facing response step ({self.response_capability}, "
+            "effect final_response) after all domain work; do not plan one. It settles no "
+            "obligation, so every obligation must be covered by a domain step."
+        )
+
     @staticmethod
     def _normalize_obligation_coverage(
         steps: list[MeshPlannedStep],
@@ -905,6 +915,7 @@ expected_findings, depends_on, covers, dependency_policy.
 {AGENT_MEMORY_RULE}
 {PROPORTIONAL_INSPECTION_RULE}
 - covers contains obligation ids satisfied by the step.
+{self._response_rule()}
 - dependency_policy is `satisfied` unless this step intentionally diagnoses or
     remediates an unresolved dependency artifact; only then use `terminal_evidence`.
 - use capabilities, never an agent ID or named instance.
@@ -975,6 +986,7 @@ Return one valid json object using exactly one repair shape:
     step_id, capability, effect, systems, task, success_criterion,
     expected_findings, depends_on, covers, dependency_policy.
 - resolve every audit finding without changing or adding obligations.
+{self._response_rule()}
 - use capabilities, never agent IDs, named instances, atom names, or provider calls.
 - model business outcomes, not conditional branches.
 - keep inspect-or-create and check-then-act work as one provider-owned outcome;
@@ -1034,6 +1046,7 @@ Each step has exactly: step_id, capability, effect, systems, task,
 success_criterion, expected_findings, depends_on, covers, dependency_policy.
 - preserve every obligation exactly; do not add, remove, merge or split obligations.
 - every obligation must be covered by at least one non-final-response domain step.
+{self._response_rule()}
 - constraints, prohibitions and approval boundaries are outcomes to enforce and verify;
     assign them to the terminal domain step whose artifact proves compliance.
 - preserve real data dependencies and use only capabilities and effect authority from
@@ -1108,6 +1121,7 @@ expected_findings, depends_on, covers, dependency_policy.
 {AGENT_MEMORY_RULE}
 {PROPORTIONAL_INSPECTION_RULE}
 - use capabilities, never an agent ID or named instance.
+{self._response_rule()}
 
 Do not assign peers, execute work, change completed work or add requirements."""
 
