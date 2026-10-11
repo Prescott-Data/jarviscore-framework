@@ -22,6 +22,49 @@ jarviscore check --validate-typesafe
 The repository includes a complete Mesh and CustomAgent example at
 [`examples/typesafe_jev_decisions.py`](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/typesafe_jev_decisions.py).
 
+## Bring any decision model
+
+Jev is the built-in client, not a requirement. Anything that implements the
+`DecisionClient` protocol from `jarviscore.execution.decisions` can serve every
+decision in the framework:
+
+```python
+class DecisionClient(Protocol):
+    async def evaluate(
+        self, *, state, questions, model=None,
+    ) -> DecisionResult: ...
+
+    async def close(self) -> None: ...
+```
+
+`evaluate` answers typed questions about explicit state. A `choice` question
+carries `criteria` mapping option ids to descriptions and is answered
+`{"type": "choice", "choice": <id>, "probabilities": {<id>: p}, "confidence": c}`;
+`score` and `noul` answers have the same shape with `score` or `noul` values.
+The client reports its own model, usage, cost and request ID in the
+`DecisionResult`.
+
+Point `DECISION_CLIENT_FACTORY` at a `module:callable` that takes the resolved
+configuration (a dict of settings merged with the Mesh config) and returns your client:
+
+```python title="my_models/decisions.py"
+def create(config):
+    return MyDecisionClient(endpoint=config.get("my_decision_endpoint"))
+```
+
+```bash
+export DECISION_CLIENT_FACTORY=my_models.decisions:create
+```
+
+The factory takes precedence over `TYPESAFE_API_KEY`. A factory that does not
+return a `DecisionClient` fails Mesh start-up with `DecisionClientError` rather
+than running without decisions. The Mesh reports the `decisions` capability for
+any configured client, and `decisions_typesafe` only when the client is Jev.
+
+The browser subagent uses the configured decision model for `find`, `act`,
+whether an action would commit the person, and whether a site turned the
+browser away; see [Browser Automation](../guides/browser-automation.md).
+
 ## Use Jev in a CustomAgent
 
 When TypeSafe is configured, the Mesh injects one shared async client as

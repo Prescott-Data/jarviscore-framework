@@ -301,7 +301,8 @@ class BrowserSubAgent(BaseSubAgent):
 
     Tools:
     - navigate: Go to a URL and wait for page load
-    - click: Click an element by CSS selector or text
+    - snapshot: The page as a person reads it, with refs on what can be acted on
+    - click: Click an element by ref, CSS selector or text
     - type_text: Type text into an input field
     - get_text: Extract text from an element or the whole page
     - get_attribute: Get a specific attribute from an element
@@ -311,10 +312,11 @@ class BrowserSubAgent(BaseSubAgent):
     - get_links: Extract all links from the current page
     - fill_form: Fill multiple form fields at once
     - select_option: Select an option from a <select> dropdown
-    - hover: Hover over an element (triggers hover effects)
     - scroll: Scroll the page or a specific element
     - get_cookies: Get current page cookies
     - close_page: Close the current page and open a fresh one
+    - find, act: With a decision model, the element for a goal; act performs
+      reversible actions on it, never consequential ones
     """
 
     whole_observation_tools = frozenset({"snapshot", "find", "act"})

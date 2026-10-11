@@ -26,6 +26,80 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## Unreleased
+
+Long browser tasks finish what they start. The browser agent reads the page a
+person sees, keeps its browser and conversation across execution epochs, and
+waits for a person before anything that commits them. On a hard grocery
+checkout (cookie dialog, pagination, an out-of-stock substitute, an allergen
+trap, a promo code, a delivery slot taken mid-checkout and an approval) runs
+went from 0/8 to 3/3 fully graded passes.
+
+### Added
+
+- **Consequential actions wait for a person.** A browser or coder action marked
+  `irreversible` with a `consequence` raises a typed `HITLRequest` carrying the
+  exact action, and the step pauses. `Mesh.resolve_hitl()` records the decision
+  and resumes the step; an approved action is performed once through the normal
+  tool path with a receipt, and a declined one is never run. See
+  [HITL](guides/hitl.md#approving-an-agents-consequential-actions).
+- **The browser reads the page.** `snapshot()` returns the page as a person
+  reads it, with refs on the elements that can be acted on; every interaction
+  tool accepts a `ref`. Disabled, hidden and covered elements are refused at
+  once with the reason.
+- **`find` and `act`.** With a decision model configured, `find(goal)` returns
+  the element for a goal and `act(goal, action)` performs a reversible click,
+  typing or selection in one step. `act` never performs a consequential action.
+- **The browser continues across epochs.** A step whose execution epoch runs
+  out keeps its browser for the next epoch (`BROWSER_CONTINUATION_HOLD_S`,
+  default 120 s).
+- **Pace, settling and access.** Requests to one site are spaced
+  (`BROWSER_SITE_INTERVAL_S`), clicks and typing let the page finish loading
+  (`BROWSER_SETTLE_TIMEOUT_MS`), and `navigate` reports when a site turns the
+  browser away.
+- **Any decision model.** `DecisionClient` is a provider-neutral protocol;
+  `DECISION_CLIENT_FACTORY` plugs in any implementation. See
+  [Bring any decision model](concepts/decision-models.md#bring-any-decision-model).
+
+### Fixed
+
+- A bare `RESULT` without `DONE` (for example `{"status": "in_progress"}`) was
+  recorded as a completed step. Only `DONE` completes a step.
+- The EXIT CHECK in the decision contract licensed stopping with gaps the
+  agent's own tools could close; it is removed.
+- Plateau and convergence notices were stored as the agent's thoughts, crowding
+  working memory and opening every continued epoch with "call DONE". They are
+  now shown on the turn they describe, and the plateau notice no longer advises
+  finishing.
+- A continued step lost its conversation; it now resumes with its last 10
+  exchanges, including the turn that paused for a person.
+- An approved action blocked before acting (a cookie dialog over the button)
+  was settled as already run. A tool that refuses before acting reports
+  `performed: False` and the approval stays open.
+- An approved form submission lost the values the person approved when the page
+  was reopened. They are part of the action's identity and are restored before
+  the approved click; if they cannot be, the action does not run.
+- The browser presented a stale Chrome 120 identity on `HeadlessChrome`; it now
+  presents the running Chrome's real version and platform.
+- The researcher's `extract_api_details` failed on every call and cut
+  documentation at 20,000 characters; it now reads the documentation whole.
+- The researcher required a top-level `summary` key, which products that own
+  their result shape could never satisfy. The `DONE` answer now counts.
+- A goal-wide obligation quote was repeated per obligation in the plan view;
+  it is stated once (about 1.1k fewer prompt tokens per turn).
+- An amendment whose answer reads new evidence could not be planned, and a
+  planning failure raised instead of settling the goal on its completed work.
+
+### Compatibility
+
+- A turn that emits `RESULT` without `DONE` no longer completes a step.
+- Browser approvals no longer use the private `_approved_actions` context
+  token; resolve waiting actions with `Mesh.resolve_hitl()`.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.1.0 <span class="changelog-date">2026-10-06</span>
 
 Faster, more accurate evidence answers: retrieval that finds the right table

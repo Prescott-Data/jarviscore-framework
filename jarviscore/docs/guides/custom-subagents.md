@@ -135,6 +135,8 @@ Override these to intervene inside the loop without modifying it.
 
 Called when the LLM emits `DONE`. Return `(True, "")` to allow, or `(False, evidence)` to reject and keep the loop running.
 
+Only `DONE` completes a step. `RESULT` is the structured payload that accompanies `DONE`; a `RESULT` on its own (a plan, a partial table, `{"status": "in_progress"}`) is not a completion, and the agent is asked to repair the protocol on its next turn.
+
 Report what the agent produced, not a verdict on it:
 
 ```python
@@ -292,13 +294,15 @@ execution stack.
 
 | Feature | Notes |
 |---|---|
-| OODA loop (Observe → Orient → Decide → Act) | Full loop with rolling 10-turn conversation history |
+| OODA loop (Observe → Orient → Decide → Act) | Full loop with rolling 10-turn conversation history, carried through checkpoints so a resumed step continues the same conversation |
+| Runtime notices | Plateau and convergence notices are shown on the turn they apply to, not stored as the agent's own thoughts |
 | Token budget and lease enforcement | Via `AgentCognitionManager` |
 | Same-tool streak detection | Via `ConvergenceGovernor`, grants one strategic pivot, then yields |
 | Repeat failure blocking | Via `FailureLedger`, fingerprints `(tool, params)` pairs |
 | Duplicate search/URL blocking | Via `EpistemicLedger`, prevents wasteful re-reads before they happen |
 | Trace event emission | `log_thinking`, `log_tool_start`, `log_tool_result`, `log_step_complete` |
 | Memory checkpointing | Per-turn checkpoint to `UnifiedMemory` when injected by Kernel |
+| Approved actions | A person's decisions are carried out once when the step resumes, before the next turn. A tool that refuses before acting returns `"performed": False`, which leaves the approval open instead of settling it |
 
 ---
 

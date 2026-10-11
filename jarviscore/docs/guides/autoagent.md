@@ -410,7 +410,9 @@ prior = raw.get("output", raw) if isinstance(raw, dict) else {}
 
 ### Checkpointing
 
-Checkpointing happens automatically. After every OODA loop turn, the Kernel calls `UnifiedMemory.save_checkpoint()` which writes the current `KernelState` (all accumulated findings, tool history, and reasoning progress) to Redis under `checkpoint:{workflow_id}:{step_id}`. If the process crashes and the workflow restarts, the `WorkflowEngine` detects the existing checkpoint and resumes from that turn rather than restarting from scratch.
+Checkpointing happens automatically. After every OODA loop turn, the Kernel calls `UnifiedMemory.save_checkpoint()` which writes the current `KernelState` (all accumulated findings, tool history, reasoning progress, and the recent conversation) to Redis under `checkpoint:{workflow_id}:{step_id}`. If the process crashes and the workflow restarts, the `WorkflowEngine` detects the existing checkpoint and resumes from that turn rather than restarting from scratch.
+
+The same checkpoint carries a step across execution epochs and approval pauses. A resumed step continues the conversation it was having, and a browser step whose epoch ran out continues on the same page (see [Browser Automation](./browser-automation.md#session-lifecycle)).
 
 You do not call `save_checkpoint()` or `load_checkpoint()` in application code. The framework manages this transparently when `REDIS_URL` is configured. Without Redis, there is no persistence and no crash recovery: the workflow starts from the beginning on failure.
 

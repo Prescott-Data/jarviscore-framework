@@ -117,6 +117,7 @@ requires one generative LLM provider from the preceding section.
 
 | Variable | Default | Description |
 |---|---|---|
+| `DECISION_CLIENT_FACTORY` | (none) | `module:callable` returning any `DecisionClient`; takes precedence over `TYPESAFE_API_KEY`. See [Bring any decision model](../concepts/decision-models.md#bring-any-decision-model). |
 | `TYPESAFE_API_KEY` | (none) | Enables the shared Jev decision client. |
 | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | TypeSafe model used for decisions. |
 | `TYPESAFE_BASE_URL` | TypeSafe SDK default | Optional compatible gateway or test endpoint. |
@@ -312,6 +313,10 @@ playwright install chromium
 |---|---|---|
 | `BROWSER_ENABLED` | `false` | Enable `BrowserSubAgent` |
 | `BROWSER_HEADLESS` | `true` | Run the browser in headless mode |
+| `BROWSER_SITE_INTERVAL_S` | `1.5` | Seconds between requests to the same site |
+| `BROWSER_SETTLE_TIMEOUT_MS` | `3000` | How long a click or typing may take to finish loading before the agent looks again |
+| `BROWSER_ACT_MIN_CONFIDENCE` | `0.7` | Decision confidence at which `act` performs the action itself; below it, `act` returns candidates |
+| `BROWSER_CONTINUATION_HOLD_S` | `120` | How long a browser stays open for the step's next execution epoch to continue on the same page |
 
 ---
 
