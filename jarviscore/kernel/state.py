@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_serializer
 
 
 class ToolReceiptError(ValueError):
@@ -160,6 +160,12 @@ class KernelState(BaseModel):
 
     system_prompt: str = ""
     context: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_serializer("context")
+    def _persisted_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        # Classes such as a declared output_schema are code, not state; a resume
+        # receives them again with the caller's context.
+        return {key: value for key, value in context.items() if not isinstance(value, type)}
 
     # Structured tool execution history (OODA loop audit trail)
     tool_history: List[ToolResult] = Field(default_factory=list)
