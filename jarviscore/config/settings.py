@@ -69,6 +69,8 @@ class Settings(BaseSettings):
 
     # === LLM Configuration ===
     llm_timeout: float = 120.0
+    # Connecting (TCP + TLS) gets its own short limit; the SDK retries a failed connect.
+    llm_connect_timeout: float = 10.0
     llm_temperature: float = 0.7
     # Output cap when a caller passes none. Reasoning deployments bill hidden
     # reasoning against it, so a low cap returns empty or truncated completions.
@@ -82,6 +84,17 @@ class Settings(BaseSettings):
     # Delay formula: min(base_delay * 2^attempt, 60s).
     llm_max_retries_429: int = 4
     llm_429_base_delay: float = 2.0
+    # Provider governor: paces calls per deployment before they are sent.
+    # Calls in flight start at llm_initial_concurrency and grow while the provider
+    # keeps up; a 429 or near-empty rate-limit headers halve them. Known limits,
+    # e.g. LLM_LIMITS='{"azure:gpt-5.2-chat": {"rpm": 3000, "tpm": 1000000}}',
+    # are enforced in a 60 s window shared through Redis by every process.
+    llm_governor_enabled: bool = True
+    llm_limits: Dict[str, Dict[str, int]] = Field(default_factory=dict)
+    llm_initial_concurrency: int = 8
+    llm_concurrency_ceiling: int = 256
+    # Share of a deployment's calls in flight held back from bulk work.
+    llm_bulk_reserve: float = 0.15
     # Output allowance for calls that do not pass max_tokens. Reasoning models
     # bill hidden reasoning against it; declare their ceilings below instead.
     llm_default_max_tokens: int = 4000
