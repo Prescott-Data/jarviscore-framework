@@ -5,6 +5,7 @@ Supports: JarvisCore promotion, vLLM, Azure OpenAI, Gemini, Vertex AI, Claude
 import asyncio
 import aiohttp
 import httpx
+import json
 import logging
 import random
 import re
@@ -59,6 +60,30 @@ def _metadata_value(value: Any, _depth: int = 0, _seen: frozenset = frozenset())
     if isinstance(attributes, dict):
         return _metadata_value(attributes, _depth + 1, seen)
     return repr(value)
+
+
+def _responses_only(deployment: str) -> bool:
+    """Codex deployments (gpt-5.x-codex) are Responses-API-only on Azure."""
+    return "codex" in (deployment or "").lower()
+
+
+def _function_calls(tool_calls: Any) -> list[dict[str, str]]:
+    """Chat Completions tool calls as plain id/name/arguments records."""
+    calls = []
+    for call in tool_calls or []:
+        function = getattr(call, "function", None)
+        if function is None and isinstance(call, dict):
+            function = call.get("function") or {}
+        get = (lambda key: function.get(key)) if isinstance(function, dict) else (
+            lambda key: getattr(function, key, None)
+        )
+        call_id = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+        calls.append({
+            "id": str(call_id or ""),
+            "name": str(get("name") or ""),
+            "arguments": str(get("arguments") or ""),
+        })
+    return calls
 
 
 def _completion_fields(finish_reason: Any, **metadata: Any) -> dict[str, Any]:
@@ -374,6 +399,21 @@ class UnifiedLLMClient:
             or None
         )
 
+    #: Providers whose adapter carries tool definitions, the model's tool calls
+    #: and the tool results threaded back, end to end.
+    _NATIVE_TOOL_PROVIDERS = frozenset({LLMProvider.AZURE})
+
+    def carries_native_tools(self, model: Optional[str] = None) -> bool:
+        """Whether every provider this call could fall back to carries native tool calls.
+
+        A native turn served by a provider that drops its tools would come back
+        as prose, so one provider in the chain without them rules native out.
+        """
+        providers = getattr(self, "provider_order", None) or []
+        if not providers or any(p not in self._NATIVE_TOOL_PROVIDERS for p in providers):
+            return False
+        return not _responses_only(model or self.config.get("azure_deployment") or "")
+
     def _declared_output_allowance(
         self, model: Optional[str], provider: Optional["LLMProvider"] = None
     ) -> int:
@@ -460,6 +500,10 @@ class UnifiedLLMClient:
             input_reservation = multimodal.count_tokens(
                 messages, _TOKEN_COUNTER.count_tokens
             )
+            if kwargs.get("tools"):
+                input_reservation += _TOKEN_COUNTER.count_tokens(
+                    json.dumps(kwargs["tools"], ensure_ascii=False, default=str)
+                )
             if not explicit_allowance:
                 max_tokens = max(
                     1, min(max_tokens, budget_account.headroom() - input_reservation)
@@ -842,9 +886,8 @@ class UnifiedLLMClient:
             if parallel_tool_calls is not None:
                 call_kwargs["parallel_tool_calls"] = parallel_tool_calls
 
-            # Codex deployments (gpt-5.x-codex) are Responses-API-only on Azure:
-            # chat.completions returns 400 "The requested operation is unsupported".
-            is_responses_only = "codex" in deployment.lower()
+            # chat.completions returns 400 "The requested operation is unsupported" for these.
+            is_responses_only = _responses_only(deployment)
 
             try:
                 if is_responses_only:
@@ -908,6 +951,12 @@ class UnifiedLLMClient:
                     if part.get("type") == "refusal"
                 ]
                 tool_calls = [item for item in output_items if item.get("type") == "function_call"]
+                function_calls = [
+                    {"id": str(item.get("call_id") or item.get("id") or ""),
+                     "name": str(item.get("name") or ""),
+                     "arguments": str(item.get("arguments") or "")}
+                    for item in tool_calls
+                ]
                 completion = _completion_fields(
                     detail_data.get("reason") or status,
                     status=status, incomplete_details=details,
@@ -921,6 +970,7 @@ class UnifiedLLMClient:
                 completion_tokens = usage.completion_tokens
                 total_tokens = usage.total_tokens
                 choice = response.choices[0]
+                function_calls = _function_calls(getattr(choice.message, "tool_calls", None))
                 completion = _completion_fields(
                     getattr(choice, "finish_reason", None), usage=usage,
                     refusal=getattr(choice.message, "refusal", None),
@@ -940,6 +990,7 @@ class UnifiedLLMClient:
                 "content": content,
                 "provider": "azure",
                 **completion,
+                "tool_calls": function_calls,
                 "tokens": {
                     "input": prompt_tokens,
                     "output": completion_tokens,
