@@ -293,10 +293,9 @@ execution stack.
 | Feature | Notes |
 |---|---|
 | OODA loop (Observe → Orient → Decide → Act) | Full loop with rolling 10-turn conversation history |
-| Token budget and lease enforcement | Via `AgentCognitionManager` |
-| Same-tool streak detection | Via `ConvergenceGovernor`, grants one strategic pivot, then yields |
-| Repeat failure blocking | Via `FailureLedger`, fingerprints `(tool, params)` pairs |
-| Duplicate search/URL blocking | Via `EpistemicLedger`, prevents wasteful re-reads before they happen |
+| Token budget and lease enforcement | Via `AgentCognitionManager`; remaining tokens, wall clock and turns are reported each turn as facts |
+| Failure record | Via `FailureLedger`, classifies and records failures; recent failures are shown to the agent, never used to refuse a call |
+| Identical-call record | An exact repeat of an earlier call runs, and its result notes the earlier receipt and whether the result changed |
 | Trace event emission | `log_thinking`, `log_tool_start`, `log_tool_result`, `log_step_complete` |
 | Memory checkpointing | Per-turn checkpoint to `UnifiedMemory` when injected by Kernel |
 

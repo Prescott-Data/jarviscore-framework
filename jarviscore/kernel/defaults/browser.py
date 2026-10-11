@@ -35,7 +35,6 @@ import os
 from typing import Any, Dict, List, Optional
 
 from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image
-from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.subagent import BaseSubAgent
 
 logger = logging.getLogger(__name__)
@@ -77,10 +76,6 @@ _READ_WITH_FIELDS = """(root, wholePage) => {
 
 # Tools that can commit the person when the agent marks the action irreversible.
 _COMMITTING_TOOLS = frozenset({"click", "type_text", "fill_form", "select_option", "evaluate"})
-# Tools whose result is what the page actually showed.
-_OBSERVATION_TOOLS = frozenset({
-    "get_text", "get_attribute", "get_links", "screenshot", "evaluate", "wait_for", "get_cookies",
-})
 
 
 class BrowserSubAgent(BaseSubAgent):
@@ -292,29 +287,6 @@ Your job: navigate and interact with web pages to extract data or complete tasks
     # ──────────────────────────────────────────────────────────────────────
     # Lifecycle — open/close browser per run()
     # ──────────────────────────────────────────────────────────────────────
-
-    def _can_complete(self, state, parsed: Dict[str, Any]):
-        """A browser result reports what the browser showed in this run.
-
-        When every attempt to use the browser failed, those recorded failures
-        are the evidence and an honest report of them may complete.
-        """
-        ok, reason = super()._can_complete(state, parsed)
-        if not ok:
-            return ok, reason
-        attempts = [t for t in state.tool_history if t.tool_name in self._tools and t.tool_name != "read_turn_result"]
-        observed = any(t.status == "success" and t.tool_name in _OBSERVATION_TOOLS for t in attempts)
-        all_failed = bool(attempts) and not any(t.status == "success" for t in attempts)
-        if observed or all_failed:
-            return True, None
-        return False, GateEvidence(
-            check="browser_observation",
-            requirement=(
-                "a browser result rests on what the page showed in this run; observe it "
-                "(get_text, screenshot, get_attribute, ...) before DONE"
-            ),
-            observed={"tools_used": sorted({t.tool_name for t in attempts})},
-        )
 
     @staticmethod
     def _brief_approval(state) -> Optional[str]:

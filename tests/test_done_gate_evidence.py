@@ -422,27 +422,27 @@ class TestResearcherGate:
         from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
         return ResearcherSubAgent.__new__(ResearcherSubAgent)
 
-    def test_no_research_reports_what_was_run(self):
-        ok, evidence = self._researcher()._can_complete(_state(), {"result": {}})
-
-        assert ok is False
-        assert evidence.check == "research_performed"
-        assert evidence.observed["tool_calls"] == 0
-        assert evidence.observed["content_tool_successes"] == 0
-
-    def test_a_claimed_summary_and_evidence_are_not_research(self, monkeypatch):
+    def test_a_result_with_no_research_behind_it_completes_on_the_record(self, monkeypatch):
+        """How the work was done is recorded with the result, not demanded before it."""
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
         parsed = {"result": {
             "summary": "Searches were attempted but returned nothing.",
             "evidence": [{"pointer": "https://example.com/team"}],
         }}
+        state = _state()
 
-        ok, evidence = self._researcher()._can_complete(_state(), parsed)
+        ok, reason = self._researcher()._can_complete(state, parsed)
+
+        assert ok is True, reason
+        assert self._researcher()._work_record(state) == {}
+
+    def test_a_result_missing_its_summary_names_what_is_missing(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+
+        ok, evidence = self._researcher()._can_complete(_state(), {"result": {}})
 
         assert ok is False
-        assert evidence.check == "research_performed"
-        assert evidence.observed["result_summary"] is True
-        assert evidence.observed["result_evidence"] == 1
+        assert evidence.check == "summary"
 
     def test_upstream_step_results_are_material_to_work_from(self, monkeypatch):
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
@@ -506,35 +506,19 @@ class TestResearcherGate:
 
         assert ok is True, reason
 
-    def test_a_failed_search_is_not_research(self, monkeypatch):
+    def test_a_failed_search_is_recorded_as_failed(self, monkeypatch):
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
         state = _state(tool_history=[
             ToolResult(tool_name="search_internet", status="failure", error="blocked"),
         ])
         parsed = {"result": {"summary": "s", "evidence": [{"pointer": "x"}]}}
 
-        ok, evidence = self._researcher()._can_complete(state, parsed)
+        ok, reason = self._researcher()._can_complete(state, parsed)
 
-        assert ok is False
-        assert evidence.check == "research_performed"
-
-    @pytest.mark.parametrize("tool_name", ["rag_query", "read_file"])
-    def test_a_read_that_found_nothing_is_not_research(self, monkeypatch, tool_name):
-        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
-        state = _state(tool_history=[
-            ToolResult(
-                tool_name=tool_name,
-                status="success",
-                tool_output={"status": "success", "results": [], "content_found": False},
-            ),
-        ])
-        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "index"}]}}
-
-        ok, evidence = self._researcher()._can_complete(state, parsed)
-
-        assert ok is False
-        assert evidence.check == "research_performed"
-
+        assert ok is True, reason
+        assert self._researcher()._work_record(state) == {
+            "search_internet": {"calls": 1, "succeeded": 0}
+        }
     def test_an_empty_index_and_an_empty_file_record_no_finding(self, tmp_path):
         from types import SimpleNamespace
 
@@ -760,17 +744,17 @@ class TestCoderGate:
         assert ok is True
         assert evidence == ""
 
-    def test_no_attempt_cannot_finish_with_an_unsupported_result(self):
+    def test_a_result_without_tool_calls_completes_on_the_record(self):
         state = _state(tool_history=[])
 
-        ok, evidence = self._coder()._can_complete(
+        ok, reason = self._coder()._can_complete(
             state, {"result": {"status": "blocked", "reason": "Assumed failure"}}
         )
 
-        assert ok is False
-        assert evidence.check == "meaningful_attempt"
+        assert (ok, reason) == (True, "")
+        assert self._coder()._work_record(state) == {}
 
-    def test_first_turn_prompt_requires_a_relevant_tool_not_success(self):
+    def test_first_turn_prompt_offers_relevant_tools_without_demanding_one(self):
         coder = self._coder()
         coder.role = "coder"
         coder._tools = {
@@ -780,7 +764,8 @@ class TestCoderGate:
 
         prompt = coder._build_user_prompt(_state(tool_history=[]), "## MISSION")
 
-        assert "MUST use one relevant tool" in prompt
+        assert "No tool has run" in prompt
+        assert "MUST" not in prompt.split("No tool has run", 1)[1]
         assert "hubspot_list_deals" in prompt
         assert "ask_peer" in prompt
         assert "ask_capability" in prompt

@@ -314,15 +314,16 @@ DONE = {"type": "done", "summary": "Backpack is $29.99, badge shows 1", "result"
 @pytest.mark.parametrize("tools", [
     (),
     (("navigate", {"status": "success"}), ("click", {"status": "success"})),
+    (("navigate", {"status": "success"}), ("get_text", {"status": "success", "text": "$29.99"})),
 ])
-def test_a_result_the_page_never_showed_cannot_complete(tools):
-    ok, evidence = BrowserSubAgent("b", None)._can_complete(_state_with(*tools), DONE)
-    assert not ok and evidence.check == "browser_observation"
+def test_a_browser_result_completes_with_what_the_run_did_on_record(tools):
+    state = _state_with(*tools)
+    agent = BrowserSubAgent("b", None)
 
-
-def test_a_result_read_from_the_page_completes():
-    state = _state_with(("navigate", {"status": "success"}), ("get_text", {"status": "success", "text": "$29.99"}))
-    assert BrowserSubAgent("b", None)._can_complete(state, DONE) == (True, None)
+    assert agent._can_complete(state, DONE) == (True, "")
+    assert agent._work_record(state) == {
+        name: {"calls": 1, "succeeded": 1} for name, _ in tools
+    }
 
 
 def test_browser_receipts_expose_runtime_observation_timestamps():

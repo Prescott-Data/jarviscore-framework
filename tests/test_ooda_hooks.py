@@ -2,12 +2,11 @@
 Tests for the three structural OODA loop hooks:
 
 1. State-driven exit   — state.status == "completed" terminates the loop
-2. Pre-execute hook    — _pre_execute_hook() can block tool calls
-3. Done-gate           — _can_complete() can reject premature DONE
+2. Pre-execute hook    — _pre_execute_hook() enforces boundaries (e.g. approvals)
+3. Done-gate           — _can_complete() can reject a malformed DONE
 
-These test at the source/contract level (same strategy as TestOODAIntegration
-in test_epistemic_ledger.py) — verifying the hooks exist, are called in the
-right order, and have the correct signatures.
+These test at the source/contract level — verifying the hooks exist, are
+called in the right order, and have the correct signatures.
 """
 
 import asyncio
@@ -149,13 +148,6 @@ class TestPreExecuteHook:
         exec_pos = source.index("_execute_tool")
         assert hook_pos < exec_pos
 
-    def test_hook_called_after_epistemic_check(self):
-        """_pre_execute_hook must be after epistemic validation."""
-        source = inspect.getsource(BaseSubAgent.run)
-        epistemic_pos = source.index("validate_action")
-        hook_pos = source.index("_pre_execute_hook")
-        assert hook_pos > epistemic_pos
-
     def test_hook_block_uses_continue(self):
         """When hook returns a result, the loop should continue (not execute)."""
         source = inspect.getsource(BaseSubAgent.run)
@@ -235,13 +227,12 @@ class TestDoneGate:
 class TestResearcherHookIntegration:
     """Verify the researcher properly overrides the new hooks."""
 
-    def test_researcher_overrides_pre_execute_hook(self):
-        """ResearcherSubAgent must override _pre_execute_hook."""
+    def test_researcher_does_not_gate_tools_by_phase(self):
+        """Research phases are recorded; the researcher adds no pre-execute gate."""
         from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
-        # Verify it's not just the base class method
         assert (
             ResearcherSubAgent._pre_execute_hook
-            is not BaseSubAgent._pre_execute_hook
+            is BaseSubAgent._pre_execute_hook
         )
 
     def test_researcher_overrides_can_complete(self):
@@ -259,28 +250,15 @@ class TestResearcherHookIntegration:
         assert not hasattr(ResearcherSubAgent, "_act") or \
             ResearcherSubAgent._act is getattr(BaseSubAgent, "_act", None)
 
-    def test_researcher_pre_execute_hook_calls_phase_contract(self):
-        """The override should call _check_phase_tool_contract."""
-        from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
-        source = inspect.getsource(ResearcherSubAgent._pre_execute_hook)
-        assert "_check_phase_tool_contract" in source
-
-    def test_researcher_pre_execute_hook_returns_error_on_violation(self):
-        """On phase violation, hook returns dict with status=error."""
-        from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
-        source = inspect.getsource(ResearcherSubAgent._pre_execute_hook)
-        assert "PHASE_TOOL_CONTRACT_VIOLATION" in source
-
-    def test_researcher_can_complete_checks_evidence(self):
-        """The researcher rejects a DONE with no research behind it."""
+    def test_researcher_can_complete_checks_the_result_shape(self):
+        """The researcher rejects a DONE whose result lacks its summary."""
         from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
         researcher = ResearcherSubAgent.__new__(ResearcherSubAgent)
 
         ok, evidence = researcher._can_complete(_make_state(), {"result": {}})
 
         assert ok is False
-        assert evidence.check == "research_performed"
-        assert "read_web_content" in evidence.observed["content_tools"]
+        assert evidence.check == "summary"
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -290,31 +268,27 @@ class TestResearcherHookIntegration:
 class TestGuardOrdering:
     """Verify the complete guard ordering in the OODA ACT phase.
 
-    The correct order is:
-    1. Repeat failure guard
-    2. Epistemic validation
-    3. Pre-execute hook
-    4. _execute_tool
-    5. Epistemic recording
-    6. State-driven exit check
+    The order is:
+    1. Pre-execute hook (boundaries only)
+    2. _execute_tool
+    3. Identical-call record (a fact, never a refusal)
+    4. State-driven exit check
     """
 
     def test_full_guard_order(self):
         source = inspect.getsource(BaseSubAgent.run)
         positions = {
-            "repeat_failure": source.index("is_repeat_failure"),
-            "epistemic": source.index("validate_action"),
             "pre_execute_hook": source.index("_pre_execute_hook"),
             "execute_tool": source.index("_execute_tool"),
-            "record_outcome": source.index("record_outcome"),
+            "identical_call": source.index("_identical_call_record"),
             "state_driven_exit": source.index("state_driven"),
         }
 
-        assert positions["repeat_failure"] < positions["epistemic"]
-        assert positions["epistemic"] < positions["pre_execute_hook"]
         assert positions["pre_execute_hook"] < positions["execute_tool"]
-        assert positions["execute_tool"] < positions["record_outcome"]
-        assert positions["record_outcome"] < positions["state_driven_exit"]
+        assert positions["execute_tool"] < positions["identical_call"]
+        assert positions["identical_call"] < positions["state_driven_exit"]
+        for removed in ("is_repeat_failure", "validate_action", "record_outcome"):
+            assert removed not in source
 
     def test_done_gate_before_done_exit(self):
         """_can_complete appears before the AgentOutput return in DONE handler."""
@@ -324,3 +298,78 @@ class TestGuardOrdering:
         gate_pos = done_block.index("_can_complete")
         return_pos = done_block.index("return AgentOutput")
         assert gate_pos < return_pos
+
+
+# ──────────────────────────────────────────────────────────────────
+# 6. The runtime records; the agent decides
+# ──────────────────────────────────────────────────────────────────
+
+class _RecordingLLM(_ReplayLLM):
+    def __init__(self, replies):
+        super().__init__(replies)
+        self.prompts = []
+
+    async def generate(self, messages=None, **kwargs):
+        self.prompts.append(messages)
+        return await super().generate(messages=messages, **kwargs)
+
+
+class _PollingAgent(BaseSubAgent):
+    def __init__(self, replies):
+        self.polls = 0
+        super().__init__(agent_id="poller", role="tester", llm_client=_RecordingLLM(replies))
+
+    def get_system_prompt(self, *args, **kwargs) -> str:
+        return "system"
+
+    def setup_tools(self) -> None:
+        self.register_tool("poll", self._poll, "Read the order status.")
+
+    async def _poll(self, order: str = "A1") -> Dict[str, Any]:
+        self.polls += 1
+        return {"status": "success", "order": order, "state": "pending"}
+
+
+_POLL = 'THOUGHT: check again\nTOOL: poll\nPARAMS: {"order": "A1"}'
+_STEERING = (
+    "Call DONE", "call done", "Stop gathering", "pivot", "KNOWLEDGE_PLATEAU",
+    "CONVERGENCE", "already read", "too similar", "Do Not Repeat",
+)
+
+
+class TestRuntimeRecordsAgentDecides:
+
+    def _run(self, polls):
+        agent = _PollingAgent([_POLL] * polls + [_done_reply()])
+        result = asyncio.run(agent.run(task="watch order A1", max_turns=polls + 2))
+        return agent, result
+
+    def test_identical_calls_all_run_and_the_agent_decides_when_to_stop(self):
+        agent, result = self._run(12)
+
+        assert agent.polls == 12
+        assert result.status == "success"
+
+    def test_identical_call_result_carries_the_earlier_receipt_as_a_fact(self):
+        agent, _ = self._run(3)
+
+        last_prompt = "\n".join(str(m.get("content")) for m in agent.llm_client.prompts[-1])
+        assert "This exact call (same tool, same arguments) ran 2 time(s) earlier" in last_prompt
+        assert "identical to this one" in last_prompt
+
+    def test_no_runtime_steering_reaches_the_agent(self):
+        agent, _ = self._run(12)
+
+        for messages in agent.llm_client.prompts:
+            text = "\n".join(str(m.get("content")) for m in messages)
+            for phrase in _STEERING:
+                assert phrase not in text, phrase
+
+    def test_budget_facts_are_a_per_turn_notice_not_a_thought(self):
+        agent, _ = self._run(2)
+
+        for messages in agent.llm_client.prompts:
+            text = "\n".join(str(m.get("content")) for m in messages)
+            assert text.count("## RUNTIME NOTICE (this turn)") == 1
+            assert "Remaining: " in text
+        assert not any("Remaining: " in t for t in agent._current_state.thoughts)
