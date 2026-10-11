@@ -6,7 +6,7 @@ loop, artifact tracking, and error handling without real LLM calls.
 """
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jarviscore.kernel.defaults import (
@@ -471,6 +471,23 @@ class TestCoderSubAgent:
         # Candidates should be empty (no write_code called in second run)
         assert len(coder.candidates) == 0
 
+    def test_research_can_be_delegated_before_any_code_is_written(self, mock_llm):
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
+        result = coder._tool_delegate_research(question="Which endpoint lists invoices?")
+        assert result["status"] == "delegated"
+        assert result["signal_researcher"] is True
+
+    @pytest.mark.asyncio
+    async def test_api_docs_can_be_read_again(self, mock_llm):
+        search = MagicMock()
+        search.extract_content = MagicMock(
+            side_effect=[{"success": True, "content": "v1"}, {"success": True, "content": "v2"}]
+        )
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, search_client=search)
+        first = await coder._tool_read_api_docs(url="https://docs.example.com/api")
+        second = await coder._tool_read_api_docs(url="https://docs.example.com/api")
+        assert (first["content"], second["content"]) == ("v1", "v2")
+
 
 # ══════════════════════════════════════════════════════════════════════
 # ResearcherSubAgent Tests
@@ -529,8 +546,7 @@ class TestResearcherSubAgent:
 
     @pytest.mark.asyncio
     async def test_full_run_with_findings(self, mock_llm, monkeypatch):
-        """Researcher calls publish_research_findings and completes (phase checks disabled)."""
-        monkeypatch.setenv("RESEARCH_STRICT_PHASE_CONTRACT", "false")
+        """Researcher calls publish_research_findings and completes."""
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "false")
         mock_llm.responses = [
             _llm_response(

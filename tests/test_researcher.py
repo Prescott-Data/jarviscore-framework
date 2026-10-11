@@ -3,7 +3,7 @@ Tests for the production ResearcherSubAgent.
 
 Covers:
 - Phase lifecycle (INIT → SEARCHING → EXTRACTING → VERIFYING → DONE/STUCK)
-- Phase-tool contract enforcement
+- Phases are recorded, never used to refuse a tool
 - URL registry (anti-hallucination URL tracking)
 - Completion validation (evidence quality gates)
 - Search integration (single + batch)
@@ -199,83 +199,34 @@ class TestPhaseLifecycle:
 
 
 # ═════════════════════════════════════════════════════════════════
-# Phase-Tool Contract Enforcement
+# Phases are recorded, never enforced
 # ═════════════════════════════════════════════════════════════════
 
-class TestPhaseToolContract:
+class TestPhasesAreRecorded:
 
-    def test_init_allows_search_tools(self, researcher):
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.INIT)
-        assert "search_internet" in allowed
-        assert "search_internet_batch" in allowed
-        assert "read_file" in allowed
-        assert "grep_codebase" in allowed
-        assert "probe_target_api" in allowed
+    def test_no_phase_tool_contract_remains(self, researcher):
+        assert not hasattr(researcher, "_allowed_tools_for_phase")
+        assert not hasattr(researcher, "_check_phase_tool_contract")
 
-    def test_init_blocks_extract_api(self, researcher):
-        """extract_api_details requires prior doc reading — not available in INIT."""
-        violation = researcher._check_phase_tool_contract("extract_api_details")
-        # extract_api_details IS allowed in INIT actually
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.INIT)
-        if "extract_api_details" in allowed:
-            assert violation is None
-        else:
-            assert violation is not None
-
-    def test_extracting_allows_read_and_browser(self, researcher):
-        researcher._set_research_phase(ResearchPhase.EXTRACTING, "test")
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.EXTRACTING)
-        assert "read_web_content" in allowed
-        assert "rag_query" in allowed
-        assert "extract_api_details" in allowed
-        assert "browser_navigate" in allowed
-        assert "browser_get_page_text" in allowed
-
-    def test_extracting_blocks_search_internet_when_phases_are_strict(self, researcher):
-        researcher._set_research_phase(ResearchPhase.EXTRACTING, "test")
-        with patch.dict(os.environ, {"RESEARCH_STRICT_PHASE_CONTRACT": "true"}):
-            violation = researcher._check_phase_tool_contract("search_internet")
-        assert violation is not None
-        assert "not allowed" in violation
-
-    def test_phases_are_recorded_not_enforced_by_default(self, researcher):
-        researcher._set_research_phase(ResearchPhase.STUCK, "test")
-        assert researcher._current_research_phase() is ResearchPhase.STUCK
-        assert researcher._check_phase_tool_contract("search_internet") is None
-
-    def test_stuck_only_allows_publish(self, researcher):
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.STUCK)
-        assert allowed == {"publish_research_findings"}
-
-    def test_done_only_allows_publish(self, researcher):
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.DONE)
-        assert allowed == {"publish_research_findings"}
-
-    def test_done_tool_returns_contract_violation(self, researcher):
-        """The old 'done' tool is removed — using it should return an error."""
-        violation = researcher._check_phase_tool_contract("done")
-        assert violation is not None
-        assert "EPISTEMIC CONTRACT VIOLATION" in violation
-
-    def test_error_tool_always_allowed(self, researcher):
+    @pytest.mark.asyncio
+    async def test_every_registered_tool_is_reachable_in_every_phase(self, researcher):
+        state = researcher.current_state
         for phase in ResearchPhase:
             researcher._set_research_phase(phase, "test")
-            assert researcher._check_phase_tool_contract("error") is None
+            for name in researcher._tools:
+                assert researcher._tool_is_actionable(name, state), (phase, name)
+            assert await researcher._pre_execute_hook("search_internet", {}, state) is None
 
-    def test_phase_enforcement_disabled_by_env(self, researcher):
-        with patch.dict(os.environ, {"RESEARCH_STRICT_PHASE_CONTRACT": "false"}):
-            researcher._set_research_phase(ResearchPhase.STUCK, "test")
-            violation = researcher._check_phase_tool_contract("search_internet")
-            assert violation is None
-
-    def test_verifying_allows_broad_tool_access(self, researcher):
-        """VERIFYING phase allows both search and extraction tools for cross-referencing."""
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.VERIFYING)
-        assert "search_internet" in allowed
-        assert "read_web_content" in allowed
-        assert "grep_codebase" in allowed
-        assert "publish_research_findings" in allowed
-        assert "browser_navigate" in allowed
+    @pytest.mark.asyncio
+    async def test_coordinate_click_runs_when_snapshot_refs_exist(self, researcher, monkeypatch):
+        researcher.current_state.internal_variables["browser_state"] = {"last_snapshot_refs": ["e1"]}
+        monkeypatch.setattr(
+            researcher, "_coord_action", AsyncMock(return_value=(True, {"clicked": True}, ""))
+        )
+        result = await researcher._tool_browser_click_coord(
+            x=10, y=20, reason="canvas control has no ref", verify_snapshot=False,
+        )
+        assert result["status"] == "success"
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -444,6 +395,73 @@ class TestSearchInternet:
     async def test_batch_search_sets_phase_to_searching(self, researcher):
         await researcher._tool_search_internet_batch(queries=["q1", "q2"])
         assert researcher._current_research_phase() == ResearchPhase.SEARCHING
+
+    @pytest.mark.asyncio
+    async def test_preferred_domains_rank_first_without_excluding_the_web(self, llm):
+        r = ResearcherSubAgent(agent_id="pref", llm_client=llm, internet_search=_SiteAwareSearch())
+        r.current_state = KernelState(workflow_id="w", step_id="s", agent_id="pref", task="t")
+
+        results = json.loads(
+            await r._tool_search_internet("INFA price 2025-05-27", preferred_domains=["sec.gov"])
+        )
+
+        urls = [item["url"] for item in results]
+        assert urls[0] == "https://www.sec.gov/filing"
+        assert "https://www.investing.com/infa-history" in urls
+        assert urls.count("https://www.sec.gov/filing") == 1
+
+    @pytest.mark.asyncio
+    async def test_batch_preferred_domains_keep_open_web_results_under_the_query(self, llm):
+        r = ResearcherSubAgent(agent_id="pref", llm_client=llm, internet_search=_SiteAwareSearch())
+        r.current_state = KernelState(workflow_id="w", step_id="s", agent_id="pref", task="t")
+
+        out = await r._tool_search_internet_batch(
+            queries=["INFA price"], preferred_domains=["sec.gov"],
+        )
+
+        urls = [item["url"] for item in out["by_query"]["INFA price"]["results"]]
+        assert urls[0] == "https://www.sec.gov/filing"
+        assert "https://www.investing.com/infa-history" in urls
+
+    @pytest.mark.asyncio
+    async def test_preferred_search_fails_only_when_both_searches_fail(self, llm):
+        r = ResearcherSubAgent(agent_id="pref", llm_client=llm, internet_search=_SiteBlockedSearch())
+        r.current_state = KernelState(workflow_id="w", step_id="s", agent_id="pref", task="t")
+
+        results = json.loads(
+            await r._tool_search_internet("INFA price", preferred_domains=["sec.gov"])
+        )
+
+        assert [item["url"] for item in results] == ["https://www.investing.com/infa-history"]
+
+    @pytest.mark.asyncio
+    async def test_search_urls_can_be_read_by_url_after_a_batch(self, researcher, monkeypatch):
+        monkeypatch.setattr(researcher, "_ensure_dispatcher", AsyncMock(), raising=False)
+        await researcher._tool_search_internet_batch(queries=["stripe api"])
+        assert researcher._get_url_registry()
+
+        result = await researcher._tool_read_web_content(urls=["https://docs.stripe.com/api"])
+
+        assert result.get("error") != "URL_ID_SELECTION_REQUIRED"
+        assert result.get("status") != "error"
+
+
+class _SiteAwareSearch(MockInternetSearch):
+    async def search_answered(self, query, max_results=5, **kwargs):
+        if "site:sec.gov" in query:
+            return [{"title": "10-K", "snippet": "filing", "url": "https://www.sec.gov/filing"}]
+        return [
+            {"title": "INFA history", "snippet": "close 24.01", "url": "https://www.investing.com/infa-history"},
+            {"title": "10-K", "snippet": "filing", "url": "https://www.sec.gov/filing"},
+        ]
+
+
+class _SiteBlockedSearch(MockInternetSearch):
+    async def search_answered(self, query, max_results=5, **kwargs):
+        if "site:" in query:
+            from jarviscore.search.internet_search import SearchUnavailable
+            raise SearchUnavailable({"searxng": "engines did not answer"})
+        return [{"title": "INFA history", "snippet": "close", "url": "https://www.investing.com/infa-history"}]
 
 
 class _UnavailableSearch(MockInternetSearch):

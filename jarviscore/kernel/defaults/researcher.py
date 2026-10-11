@@ -400,7 +400,7 @@ You do NOT guess. You do NOT hallucinate. If you cannot find it, you report "Not
 
 2. **PHASE 2: INGESTION (Filter & Read)**
    - **COPY-PASTE URLs** - Use `read_web_content(urls=[...])` with the EXACT URLs from search results.
-   - Prefer `read_web_content(url_ids=[...])` using keys from `search_internet_batch.url_registry`.
+   - `read_web_content(url_ids=[...])` with keys from `search_internet_batch.url_registry` also works.
    - **FAST PATH:** This tool performs "Search -> Visit -> Extract Markdown". It uses High-Tech extraction.
    - If HTTP returns "Page Not Found", the page DOES NOT EXIST. Do NOT try browser. Search for a different page instead.
    - If local evidence exists, use `rag_query` to retrieve vetted passages.
@@ -505,78 +505,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 if p.value == phase:
                     return p
         return ResearchPhase.INIT
-
-    def _allowed_tools_for_phase(self, phase: ResearchPhase) -> Set[str]:
-        """Tools allowed in each research phase."""
-        shared_ui = {
-            "browser_navigate", "browser_snapshot", "browser_screenshot", "ui_snapshot_with_som",
-            "browser_click", "browser_type", "browser_click_coord",
-            "browser_type_coord", "browser_get_text", "browser_get_page_text",
-            "browser_wait", "browser_close",
-        }
-        mapping: Dict[ResearchPhase, Set[str]] = {
-            ResearchPhase.INIT: {"search_internet", "search_internet_batch", "read_file", "read_web_content", "rag_query", "grep_codebase", "extract_api_details", "probe_target_api"},
-            ResearchPhase.SEARCHING: {"search_internet", "search_internet_batch", "read_web_content", "rag_query", "grep_codebase", "extract_api_details", "probe_target_api", "publish_research_findings"},
-            ResearchPhase.EXTRACTING: {"read_web_content", "rag_query", "extract_api_details", "publish_research_findings"} | shared_ui,
-            ResearchPhase.VERIFYING: {"search_internet", "search_internet_batch", "read_web_content", "rag_query", "extract_api_details", "grep_codebase", "probe_target_api", "publish_research_findings", "read_file"} | shared_ui,
-            ResearchPhase.DIAGNOSING: {"search_internet", "search_internet_batch", "read_web_content", "rag_query", "grep_codebase", "extract_api_details", "probe_target_api", "publish_research_findings"} | shared_ui,
-            ResearchPhase.STUCK: {"publish_research_findings"},
-            ResearchPhase.DONE: {"publish_research_findings"},
-        }
-        return mapping.get(phase, set())
-
-    def _check_phase_tool_contract(self, tool_name: str) -> Optional[str]:
-        """Check a tool against the current research phase when strict phases are enabled.
-
-        Phases are recorded for every run; blocking tools by phase is opt-in through
-        RESEARCH_STRICT_PHASE_CONTRACT, because a phase guessed from the last tool
-        call is a poor reason to refuse the next one.
-        """
-        if tool_name == "done":
-            return ("EPISTEMIC CONTRACT VIOLATION: The 'done' tool has been removed. "
-                    "You MUST use 'publish_research_findings' to exit your turn.")
-        if not _env_bool("RESEARCH_STRICT_PHASE_CONTRACT", False):
-            return None
-        if tool_name == "error":
-            return None
-        phase = self._current_research_phase()
-        allowed = self._allowed_tools_for_phase(phase)
-        if tool_name not in allowed:
-            return (
-                f"PHASE_TOOL_CONTRACT_VIOLATION: tool '{tool_name}' is not allowed "
-                f"in phase '{phase.value}'. Allowed tools: {sorted(list(allowed))}"
-            )
-        return None
-
-    def _tool_is_actionable(self, tool_name: str, state: Any) -> bool:
-        return (
-            super()._tool_is_actionable(tool_name, state)
-            and self._check_phase_tool_contract(tool_name) is None
-        )
-
-    async def _pre_execute_hook(
-        self,
-        tool_name: str,
-        params: Dict[str, Any],
-        state: Any,
-    ) -> Optional[Dict[str, Any]]:
-        """Enforce research phase-tool contract before execution.
-
-        Checks whether the requested tool is allowed in the current
-        research phase. If not, returns an error dict (which the base
-        loop uses as the tool result, skipping actual execution).
-        """
-        violation = self._check_phase_tool_contract(str(tool_name))
-        if violation:
-            state.add_thought(f"[RESEARCH_CONTRACT] {violation}")
-            self.tracer.log_tool_start(str(tool_name), params)
-            self.tracer.log_tool_result(str(tool_name), None, violation)
-            return {
-                "status": "error",
-                "error": violation,
-                "semantic_error": "PHASE_TOOL_CONTRACT_VIOLATION",
-            }
-        return None
 
     #: What each named done-payload check reads, stated once for the agent.
     _DONE_REQUIREMENTS = {
@@ -893,13 +821,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             "failed_ref": failed_ref,
             "attempted_refs": sorted(list(attempted)),
         }
-
-    def _som_refs_available(self) -> bool:
-        if not self.current_state:
-            return False
-        browser_state = self.current_state.internal_variables.get("browser_state", {})
-        refs = browser_state.get("last_snapshot_refs", [])
-        return isinstance(refs, list) and len(refs) > 0
 
     # --- STATE MANAGEMENT HELPERS ---
 
@@ -1793,6 +1714,34 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         search = getattr(self.internet_search, "search_answered", None) or self.internet_search.search
         return await search(query, **kwargs)
 
+    async def _search_preferring(
+        self, query: str, preferred_domains: Optional[List[str]], **kwargs
+    ) -> List[Dict[str, Any]]:
+        """Results from the preferred domains first, then the open web: a preference, not a filter."""
+        if not preferred_domains:
+            return await self._answered_search(query, **kwargs)
+        site_hint = " OR ".join(f"site:{d.strip()}" for d in preferred_domains[:3])
+        preferred, general = await asyncio.gather(
+            self._answered_search(f"{query} ({site_hint})", **kwargs),
+            self._answered_search(query, **kwargs),
+            return_exceptions=True,
+        )
+        if isinstance(preferred, BaseException) and isinstance(general, BaseException):
+            raise preferred
+        merged: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for results in (preferred, general):
+            if isinstance(results, BaseException):
+                continue
+            for result in results or []:
+                url = result.get("url") if isinstance(result, dict) else None
+                if url and url in seen:
+                    continue
+                if url:
+                    seen.add(url)
+                merged.append(result)
+        return merged
+
     async def _tool_search_internet(
         self, query: str, preferred_domains: Optional[List[str]] = None
     ) -> Any:
@@ -1800,17 +1749,12 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         Search the internet.
         Args:
             query: Search query string.
-            preferred_domains: Optional list of domains to bias results toward
-                (e.g. ['docs.example.com', 'api.example.com']). Appended as
-                site: hints so the search engine prioritises official sources.
+            preferred_domains: Optional list of domains whose results are listed
+                first (e.g. ['sec.gov']). Results from elsewhere are still returned.
         """
-        effective_query = query
-        if preferred_domains:
-            site_hint = " OR ".join(f"site:{d.strip()}" for d in preferred_domains[:3])
-            effective_query = f"{query} ({site_hint})"
-
-        self.tracer.log_tool_start("search_internet", {"query": effective_query, "preferred_domains": preferred_domains})
-        logger.info("[RESEARCHER] Searching: %s", effective_query)
+        limit = 10 if preferred_domains else 5
+        self.tracer.log_tool_start("search_internet", {"query": query, "preferred_domains": preferred_domains})
+        logger.info("[RESEARCHER] Searching: %s (preferring %s)", query, preferred_domains or "none")
         # ═══ COGNITIVE COST PYRAMID: Level 3 web-search counter ═══
         if self.current_state is not None:
             count = int(self.current_state.internal_variables.get("_web_search_count") or 0) + 1
@@ -1818,24 +1762,21 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             self.tracer.log_event("planning_timeout_fallback", {
                 "reason": "web_search_used",
                 "search_count": count,
-                "query": effective_query,
+                "query": query,
             })
 
         try:
             await self.internet_search.initialize()
-            results = await self._answered_search(effective_query, max_results=5)
+            results = await self._search_preferring(query, preferred_domains, max_results=5)
             results = self._filter_search_results(results)
-            results = self._compact_search_results(results, limit=5)
+            results = self._compact_search_results(results, limit=limit)
             # Register URLs to prevent hallucination
             for r in results:
                 if isinstance(r, dict) and r.get("url"):
                     self._add_known_url(r["url"])
 
             # Phase transition: any successful search leaves INIT (mirrors
-            # the batch variant at _tool_search_internet_batch).  Without
-            # this, the researcher stays in INIT where
-            # publish_research_findings is blocked, producing the
-            # PHASE_TOOL_CONTRACT_VIOLATION seen in prod traces (Bug #2).
+            # the batch variant at _tool_search_internet_batch).
             if self._current_research_phase() == ResearchPhase.INIT:
                 self._set_research_phase(ResearchPhase.SEARCHING, "search_internet_completed")
 
@@ -1856,18 +1797,14 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         Args:
             queries: List of search query strings.
             max_results_per_query: Max results returned per query (default 3).
-            preferred_domains: Optional list of domains to bias all queries toward
-                (e.g. ['docs.example.com']). Applied as site: hints to every query.
+            preferred_domains: Optional list of domains whose results are listed
+                first for every query (e.g. ['sec.gov']). Results from elsewhere
+                are still returned.
         """
         self._set_research_phase(ResearchPhase.SEARCHING, "batch_discovery")
 
-        site_hint: str = ""
-        if preferred_domains:
-            site_hint = " OR ".join(f"site:{d.strip()}" for d in preferred_domains[:3])
-
-        effective_queries = [
-            f"{q} ({site_hint})" if site_hint else q for q in (queries or [])
-        ]
+        effective_queries = list(queries or [])
+        limit = max_results_per_query * (2 if preferred_domains else 1)
 
         self.tracer.log_tool_start("search_internet_batch", {"queries": effective_queries, "preferred_domains": preferred_domains})
         # ═══ COGNITIVE COST PYRAMID: Level 3 web-search counter ═══
@@ -1897,8 +1834,9 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         # wasted parallel network slots and latency on every batch search.
         _academic_skip = set(self._ACADEMIC_PROVIDERS) if not self._get_provider_allowlist() else set()
         tasks = [
-            self._answered_search(
+            self._search_preferring(
                 q,
+                preferred_domains,
                 max_results=max_results_per_query,
                 exclude_providers=_academic_skip,
             )
@@ -1911,7 +1849,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 out["by_query"][q] = {"error": str(res), "results": []}
             elif isinstance(res, list):
                 filtered = self._filter_search_results(res)
-                filtered = self._compact_search_results(filtered, limit=max_results_per_query)
+                filtered = self._compact_search_results(filtered, limit=limit)
                 out["by_query"][q] = {"results": filtered}
                 # Register URLs from search results to prevent hallucination
                 for r in filtered:
@@ -1980,20 +1918,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     safe_urls.append(mapped)
                 elif isinstance(uid, str) and uid.startswith(("http://", "https://")):
                     safe_urls.append(uid)
-        if _env_bool("RESEARCH_REQUIRE_URL_IDS", True):
-            registry = self._get_url_registry()
-            if registry and not url_ids and safe_urls:
-                exact_values = {str(v).strip() for v in registry.values() if isinstance(v, str)}
-                unmatched_urls = [u for u in safe_urls if str(u or "").strip() not in exact_values]
-                return {
-                    "status": "error",
-                    "error": "URL_ID_SELECTION_REQUIRED",
-                    "semantic_error": "URL_ID_SELECTION_REQUIRED",
-                    "reason": "URL registry exists; select target URLs via url_ids for deterministic selection.",
-                    "unminted_urls": unmatched_urls,
-                    "available_url_ids": sorted(list(registry.keys())),
-                }
-        
+
         if not safe_urls:
             error = "No URLs provided"
             self.tracer.log_tool_result("read_web_content", None, error=error)
@@ -2943,15 +2868,12 @@ DOCUMENTATION TEXT:
         x: int,
         y: int,
         reason: str = "",
-        force: bool = False,
         verify_snapshot: bool = True,
     ) -> Dict[str, Any]:
         if not _env_bool("RESEARCH_COORD_FALLBACK_ENABLED", True):
             return {"status": "error", "error": "COORD_FALLBACK_DISABLED"}
         if not reason:
             return {"status": "error", "error": "COORD_REASON_REQUIRED"}
-        if self._som_refs_available() and not force:
-            return {"status": "error", "error": "COORD_BLOCKED_SOM_AVAILABLE", "hint": "Use SoM refs first."}
         ok, data, err = await self._coord_action(x=x, y=y, text=None)
         if not ok:
             return {"status": "error", "error": err, "x": x, "y": y}
@@ -2966,15 +2888,12 @@ DOCUMENTATION TEXT:
         y: int,
         text: str,
         reason: str = "",
-        force: bool = False,
         verify_snapshot: bool = True,
     ) -> Dict[str, Any]:
         if not _env_bool("RESEARCH_COORD_FALLBACK_ENABLED", True):
             return {"status": "error", "error": "COORD_FALLBACK_DISABLED"}
         if not reason:
             return {"status": "error", "error": "COORD_REASON_REQUIRED"}
-        if self._som_refs_available() and not force:
-            return {"status": "error", "error": "COORD_BLOCKED_SOM_AVAILABLE", "hint": "Use SoM refs first."}
         ok, data, err = await self._coord_action(x=x, y=y, text=text)
         if not ok:
             return {"status": "error", "error": err, "x": x, "y": y}

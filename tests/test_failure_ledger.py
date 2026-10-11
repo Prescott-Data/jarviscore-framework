@@ -5,13 +5,12 @@ What these tests prove:
 - Structured signals (error_type field, status_code) outrank prose sniffing
 - Numeric codes in prose match on word boundaries — "1404 rows" is not a 404
 - record() feeds the structured output into classification
-- is_guarded() queries Redis with the SAME workflow id record() writes
-- UNKNOWN guarding is configurable (guard = historical default, skip = lenient)
+- record() indexes the failure under the run's workflow id
+- The ledger records; it never guards a call
 """
 
 from unittest.mock import MagicMock
 
-import jarviscore.kernel.cognition as cognition
 from jarviscore.kernel.cognition import FailureLedger
 
 
@@ -69,38 +68,25 @@ class TestRecordUsesStructuredOutput:
         assert ledger.recent_failures[-1]["error_type"] == "RATE_LIMIT"
 
 
-class TestGuardKeyAlignment:
+class TestRecordIndexing:
 
-    def test_is_guarded_queries_the_workflow_id_record_writes(self):
+    def test_record_indexes_under_its_workflow_id(self):
         redis = MagicMock()
-        redis.has_failure_guard = MagicMock(return_value=False)
         redis.index_failure_event = MagicMock()
 
         ledger = FailureLedger(agent_id="agent-9", workflow_id="wf-real-42", redis_store=redis)
-        fp = ledger.record("web_search", {"q": "x"}, error="403 forbidden")
-        ledger.is_guarded(fp)
+        ledger.record("web_search", {"q": "x"}, error="403 forbidden")
 
-        written_wf = redis.index_failure_event.call_args.kwargs["workflow_id"]
-        read_wf = redis.has_failure_guard.call_args.args[1]
-        assert written_wf == read_wf == "wf-real-42"
+        kwargs = redis.index_failure_event.call_args.kwargs
+        assert kwargs["workflow_id"] == "wf-real-42"
+        assert kwargs["error_type"] == "AUTH_FORBIDDEN"
 
 
-class TestUnknownGuardPolicy:
+class TestRecordsWithoutGuarding:
 
-    def _guarded_after_unknown_failure(self):
+    def test_ledger_offers_no_guard(self):
         ledger = FailureLedger(agent_id="a", workflow_id="wf")
-        fp = ledger.record("tool", {"p": 1}, error="something inexplicable")
+        ledger.record("tool", {"p": 1}, error="something inexplicable")
         assert ledger.recent_failures[-1]["error_type"] == "UNKNOWN"
-        return ledger.is_guarded(fp)
-
-    def test_default_guards_unknown(self):
-        assert self._guarded_after_unknown_failure() is True
-
-    def test_skip_mode_does_not_guard_unknown(self, monkeypatch):
-        monkeypatch.setattr(cognition, "_FAILURE_GUARD_UNKNOWN", "skip")
-        assert self._guarded_after_unknown_failure() is False
-
-    def test_transient_failures_never_guarded_either_way(self):
-        ledger = FailureLedger(agent_id="a", workflow_id="wf")
-        fp = ledger.record("tool", {"p": 1}, error="connection timed out")
-        assert ledger.is_guarded(fp) is False
+        assert not hasattr(ledger, "is_guarded")
+        assert not hasattr(ledger, "render_block")
