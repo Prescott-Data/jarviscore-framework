@@ -302,6 +302,7 @@ execution stack.
 | Duplicate search/URL blocking | Via `EpistemicLedger`, prevents wasteful re-reads before they happen |
 | Trace event emission | `log_thinking`, `log_tool_start`, `log_tool_result`, `log_step_complete` |
 | Memory checkpointing | Per-turn checkpoint to `UnifiedMemory` when injected by Kernel |
+| Working notes | `NOTE: <fact>` lines alongside any action are written to the step's `WorkingScratchpad` and shown every turn as MY WORKING NOTES, across epochs; they cost no turn |
 | Approved actions | A person's decisions are carried out once when the step resumes, before the next turn. A tool that refuses before acting returns `"performed": False`, which leaves the approval open instead of settling it |
 
 ---

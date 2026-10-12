@@ -95,7 +95,9 @@ _RESULT_PATTERN = re.compile(r"^RESULT:\s*(.+)$", re.MULTILINE | re.DOTALL)
 _COMBINED_DONE_RESULT_PATTERN = re.compile(
     r"^DONE/RESULT\s*:?\s*\n(.+)$", re.MULTILINE | re.DOTALL
 )
-_THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGHT):|\Z)", re.MULTILINE | re.DOTALL)
+_THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGHT|NOTE):|\Z)", re.MULTILINE | re.DOTALL)
+# Notes ride along with any action: writing down what is established costs no turn.
+_NOTE_PATTERN = re.compile(r"^NOTE:\s*(.+?)(?=\n(?:NOTE|THOUGHT|TOOL|PARAMS|DONE|RESULT):|\Z)", re.MULTILINE | re.DOTALL)
 
 # ── Observation channel integrity (issue #57) ─────────────────────────────
 # How much of a tool result the agent sees inline per turn. Anything beyond
@@ -411,24 +413,13 @@ class BaseSubAgent(ABC):
         """Register a tool available to this subagent."""
         self._tools[name] = ToolDefinition(name, func, description, phase)
 
-    async def _tool_note(self, finding: str) -> Dict[str, Any]:
-        """Write in your working scratchpad what you have established, so you never re-check it (params: finding). Your notes are shown to you every turn of this step, also after it continues; older exchanges are not.
-
-        Note what you verified and where you saw it (a price, an option, a
-        constraint checked, a page that does or does not have something),
-        decisions you made, and what remains to do.
-        """
-        text = (finding or "").strip()
-        if not text:
-            return {"status": "error", "error": "Nothing to note: finding was empty."}
-        state = self._current_state
-        turn = state.turn if state is not None else None
+    async def _keep_notes(self, state: KernelState, notes) -> None:
+        """Write the agent's notes to its step scratchpad and its every-turn view."""
         working = getattr(self._current_memory, "working", None)
-        if working is not None:
-            await working.write("note", {"content": text, "turn": turn})
-        if state is not None:
-            state.working_notes.append({"turn": turn, "note": text})
-        return {"status": "success", "noted": text, "notes": len(state.working_notes) if state else 1}
+        for note in notes or ():
+            if working is not None:
+                await working.write("note", {"content": note, "turn": state.turn})
+            state.working_notes.append({"turn": state.turn, "note": note})
 
     async def _tool_remember(self, fact: str, kind: str = "fact") -> Dict[str, Any]:
         """Keep something worth knowing in a later session (params: fact, optional kind).
@@ -617,7 +608,8 @@ class BaseSubAgent(ABC):
             "Protocol:",
             "  To use a tool: THOUGHT: <reasoning>\\nTOOL: <name>\\nPARAMS: <json>",
             "  To finish:     THOUGHT: <reasoning>\\nDONE: <complete human answer>\\nRESULT: <json>",
-            "  JSON alternative: {\"thought\": \"...\", \"tool\": \"...\", \"params\": {...}}",
+            "  To keep what you established: NOTE: <fact> lines before TOOL or DONE.",
+            "  JSON alternative: {\"thought\": \"...\", \"notes\": [...], \"tool\": \"...\", \"params\": {...}}",
             "  JSON finish:      {\"thought\": \"...\", \"done\": \"<complete human answer>\", \"result\": {...}}",
             "  This protocol is one action per turn, not one action per task. After each",
             "  tool result you receive another turn; continue calling tools until the task",
@@ -632,6 +624,14 @@ class BaseSubAgent(ABC):
             "  of the runtime, and it is not a second copy of the answer: DONE is",
             "  the only answer the person and downstream agents read. If there is",
             "  no data beyond the answer, RESULT may be an empty object.",
+            "",
+            "Your memory:",
+            f"  You see the task, your working notes and your last {_CONVERSATION_WINDOW} exchanges. Older",
+            "  exchanges are gone from view, and a long task continues across several",
+            "  sittings. What you have established (a price, an option, a constraint you",
+            "  checked, a page that has or lacks something, a decision) is kept only if",
+            "  you write it on a NOTE: line. A note costs no turn: write it in the same",
+            "  reply as your next TOOL or DONE. Your notes are shown to you every turn.",
         ]
         return "\n".join(parts)
 
@@ -731,10 +731,12 @@ class BaseSubAgent(ABC):
         # Epistemic Decision Contract — forces self-assessment
         parts.append(
             "**DECISION CONTRACT (follow this structure in your THOUGHT):**\n"
-            "1. **KNOWN:** What have I established so far? (refer to WHAT I KNOW SO FAR above)\n"
+            "1. **KNOWN:** What have I established so far? (my working notes and findings above, and this turn's result)\n"
             "2. **GAP:** What specific information am I still missing?\n"
             "3. **STRATEGY:** What is the most efficient next step to close the gap?\n\n"
-            "Then emit your TOOL/PARAMS or DONE/RESULT."
+            "Write anything newly established on NOTE: lines; your THOUGHT is gone from "
+            "view after a few turns, your notes are not. Then emit your TOOL/PARAMS or "
+            "DONE/RESULT."
         )
         if "ask_peer" in self._tools:
             parts.append(
@@ -1034,6 +1036,7 @@ class BaseSubAgent(ABC):
 
             # Parse response
             parsed = self._parse_response_for_contract(content, context)
+            await self._keep_notes(state, parsed.get("notes"))
             if parsed["type"] != "raw":
                 # Repairs bound a run of malformed replies, not a session's lifetime.
                 state.internal_variables["_protocol_violation_count"] = 0
@@ -1935,6 +1938,21 @@ class BaseSubAgent(ABC):
 
     @staticmethod
     def _parse_response(content: str) -> Dict[str, Any]:
+        """The reply's directive, plus any notes the agent wrote alongside it."""
+        parsed = BaseSubAgent._parse_directive(content)
+        notes = [match.group(1).strip() for match in _NOTE_PATTERN.finditer(content)]
+        if not notes and not _TOOL_PATTERN.search(content) and not _DONE_PATTERN.search(content):
+            # A JSON-protocol reply; a text reply's JSON is its PARAMS, whose fields are the tool's.
+            obj = _extract_json_object(content) or {}
+            raw = obj.get("notes") if ("tool" in obj or "done" in obj) else None
+            notes = [str(note).strip() for note in (raw if isinstance(raw, list) else [raw] if raw else [])]
+        notes = [note for note in notes if note]
+        if notes:
+            parsed["notes"] = notes
+        return parsed
+
+    @staticmethod
+    def _parse_directive(content: str) -> Dict[str, Any]:
         """
         Parse LLM response for tool calls or completion.
 

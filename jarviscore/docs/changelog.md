@@ -37,6 +37,12 @@ went from 0/8 to 3/3 fully graded passes.
 
 ### Added
 
+- **Working notes.** An agent writes what it has established on `NOTE:` lines
+  alongside any action; notes go to the step's `WorkingScratchpad`, are shown
+  every turn as MY WORKING NOTES (never withheld under context pressure) and
+  carry across execution epochs. Until now the scratchpad was written every turn
+  but never shown back to the agent. Each turn's decision contract now asks for
+  notes instead of restating what is known in a thought that scrolls away.
 - **Consequential actions wait for a person.** A browser or coder action marked
   `irreversible` with a `consequence` raises a typed `HITLRequest` carrying the
   exact action, and the step pauses. `Mesh.resolve_hitl()` records the decision

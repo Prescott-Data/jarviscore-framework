@@ -285,7 +285,7 @@ flowchart LR
 
 | Phase | What happens |
 |---|---|
-| Observe | The Kernel calls `UnifiedMemory.rehydrate_bundle()` to load all available context: recent episodic turns, the LTM summary, the scratchpad, and any Athena context. |
+| Observe | The Kernel recalls what earlier sessions recorded about the task (`UnifiedMemory.recall()`). Each turn the agent sees the mission, its working notes, the recent tool receipts and its last ten exchanges; a continued step restores these from its checkpoint. |
 | Orient | The Kernel formats all context into a system prompt and calls the LLM to produce a next-action decision. |
 | Decide | The LLM response is parsed into a structured action: a tool call, a sub-agent invocation, a HITL escalation, or a completion signal. |
 | Act | The framework executes the chosen action and writes the outcome back to memory via `UnifiedMemory.log_turn()`. |

@@ -30,27 +30,43 @@ def _state(**kwargs):
     return KernelState(workflow_id="wf", step_id="s1", agent_id="a1", task="order groceries", **kwargs)
 
 
-def test_a_note_goes_to_the_step_scratchpad_and_the_agents_view():
+def test_a_note_rides_along_with_an_action_and_reaches_the_scratchpad_and_view():
+    reply = (
+        "THOUGHT: Sauce checked, now rice\n"
+        "NOTE: Sweet chilli sauce 350g: £1.20, no peanuts (product page)\n"
+        "NOTE: Basmati 1kg is out of stock\n"
+        "TOOL: navigate\nPARAMS: {\"url\": \"http://shop/search?q=rice\"}"
+    )
+    parsed = BaseSubAgent._parse_response(reply)
+    assert parsed["type"] == "tool" and parsed["tool"] == "navigate"
+    assert parsed["thought"] == "Sauce checked, now rice"
+    assert parsed["notes"] == ["Sweet chilli sauce 350g: £1.20, no peanuts (product page)", "Basmati 1kg is out of stock"]
+
     agent = _Agent()
     agent._current_state = _state(turn=7)
     pad = _Pad()
     agent._current_memory = type("Memory", (), {"working": pad})()
+    asyncio.run(agent._keep_notes(agent._current_state, parsed["notes"]))
 
-    result = asyncio.run(agent._tool_note("Sweet chilli sauce 350g: £1.20, no peanuts (product page)"))
-
-    assert result["status"] == "success"
-    assert pad.writes == [("note", {"content": "Sweet chilli sauce 350g: £1.20, no peanuts (product page)", "turn": 7}, "step")]
-    assert agent._current_state.working_notes == [{"turn": 7, "note": "Sweet chilli sauce 350g: £1.20, no peanuts (product page)"}]
+    assert pad.writes[0] == ("note", {"content": "Sweet chilli sauce 350g: £1.20, no peanuts (product page)", "turn": 7}, "step")
+    assert [n["note"] for n in agent._current_state.working_notes] == parsed["notes"]
 
 
-def test_notes_work_without_a_blob_store_and_refuse_nothing_written():
+def test_a_tools_own_notes_field_is_not_mistaken_for_the_agents():
+    reply = 'THOUGHT: fill it\nTOOL: fill_form\nPARAMS: {"fields": [], "notes": "leave at door"}'
+    assert "notes" not in BaseSubAgent._parse_response(reply)
+    json_reply = '{"thought": "t", "notes": ["Promo needs a weekday"], "tool": "snapshot", "params": {}}'
+    assert BaseSubAgent._parse_response(json_reply)["notes"] == ["Promo needs a weekday"]
+
+
+def test_notes_work_without_a_blob_store():
     agent = _Agent()
     agent._current_state = _state()
     agent._current_memory = None
 
-    assert asyncio.run(agent._tool_note("Basket holds 4 items"))["status"] == "success"
-    assert asyncio.run(agent._tool_note("   "))["status"] == "error"
-    assert len(agent._current_state.working_notes) == 1
+    asyncio.run(agent._keep_notes(agent._current_state, ["Basket holds 4 items"]))
+
+    assert agent._current_state.working_notes == [{"turn": 0, "note": "Basket holds 4 items"}]
 
 
 def test_notes_are_shown_every_turn_even_under_the_heaviest_pressure():
@@ -72,3 +88,20 @@ def test_notes_survive_a_checkpoint_into_the_next_epoch():
     restored = KernelState.model_validate_json(state.model_dump_json())
 
     assert restored.working_notes == state.working_notes
+
+
+def test_the_agent_is_told_what_it_forgets_and_how_to_keep_it():
+    # Registered but unexplained, the tool went unused in 15 live runs.
+    prompt = _Agent()._build_system_prompt()
+
+    assert "Your memory:" in prompt and "last 10 exchanges" in prompt
+    assert "NOTE: line" in prompt and "costs no turn" in prompt
+
+
+def test_every_turns_decision_contract_asks_for_notes_not_a_thought_that_scrolls_away():
+    # The contract had the agent restate KNOWN in its THOUGHT each turn and never
+    # mentioned notes; with notes available it still wrote none in a live run.
+    turn = _Agent()._build_user_prompt(_state(turn=3), "## MISSION")
+
+    assert "Write anything newly established on NOTE: lines" in turn
+    assert "my working notes and findings above" in turn
