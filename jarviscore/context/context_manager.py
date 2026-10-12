@@ -344,6 +344,11 @@ class ContextManager:
             mission += f"**CRITICAL ERROR TO FIX:** {state.last_error}\n"
         add("mission", mission)
         add("goal_state", self._build_goal_state_block(state.context or {}))
+        notes = getattr(state, "working_notes", None) or []
+        if notes:
+            add("working_notes", "## MY WORKING NOTES\nWhat I wrote down in this step (turn: note):\n" + "\n".join(
+                f"- [{note.get('turn')}] {note.get('note')}" for note in notes
+            ))
         mailbox_context = (state.context or {}).get("_mailbox_context")
         if mailbox_context:
             add("mailbox", str(mailbox_context))

@@ -411,6 +411,25 @@ class BaseSubAgent(ABC):
         """Register a tool available to this subagent."""
         self._tools[name] = ToolDefinition(name, func, description, phase)
 
+    async def _tool_note(self, finding: str) -> Dict[str, Any]:
+        """Write in your working scratchpad what you have established, so you never re-check it (params: finding). Your notes are shown to you every turn of this step, also after it continues; older exchanges are not.
+
+        Note what you verified and where you saw it (a price, an option, a
+        constraint checked, a page that does or does not have something),
+        decisions you made, and what remains to do.
+        """
+        text = (finding or "").strip()
+        if not text:
+            return {"status": "error", "error": "Nothing to note: finding was empty."}
+        state = self._current_state
+        turn = state.turn if state is not None else None
+        working = getattr(self._current_memory, "working", None)
+        if working is not None:
+            await working.write("note", {"content": text, "turn": turn})
+        if state is not None:
+            state.working_notes.append({"turn": turn, "note": text})
+        return {"status": "success", "noted": text, "notes": len(state.working_notes) if state else 1}
+
     async def _tool_remember(self, fact: str, kind: str = "fact") -> Dict[str, Any]:
         """Keep something worth knowing in a later session (params: fact, optional kind).
 
@@ -1481,7 +1500,7 @@ class BaseSubAgent(ABC):
                         await memory.log_turn(
                             turn_id=str(turn), thought=parsed.get("thought", ""),
                             action=tool_name,
-                            result=str(tool_result)[:1000],
+                            result=str(tool_result),
                             tokens=llm_tokens_this_turn,
                         )
                     except Exception as exc:

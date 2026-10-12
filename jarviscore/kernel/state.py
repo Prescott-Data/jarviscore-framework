@@ -167,6 +167,8 @@ class KernelState(BaseModel):
     # Working memory — thoughts, scratchpad notes
     thoughts: List[str] = Field(default_factory=list)
     scratchpad_notes: str = ""
+    # What the agent wrote in this step's working scratchpad; shown every turn and kept across epochs.
+    working_notes: List[Dict[str, Any]] = Field(default_factory=list)
     # The agent's recent exchanges (its reasoning and what it observed), so a
     # continued step resumes where it was rather than from the task alone.
     conversation: List[Dict[str, Any]] = Field(default_factory=list)

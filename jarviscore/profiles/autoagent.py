@@ -1393,7 +1393,7 @@ class AutoAgent(Profile):
                         self._kernel.blob_storage,
                         workflow_id=step_ctx.get("workflow_id", execution.goal_id),
                         step_id=step.step_id,
-                        role=self.role,
+                        role=self.agent_id,
                     )
                     await pad.promote_to_truth(execution.truth, source=step.step_id)
                 except Exception as _se:
