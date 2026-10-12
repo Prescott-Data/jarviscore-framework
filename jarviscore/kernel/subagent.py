@@ -175,6 +175,7 @@ def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) 
                 "id": call["id"],
                 "type": "function",
                 "function": {"name": call["name"], "arguments": call["arguments"]},
+                **({"signature": call["signature"]} if call.get("signature") else {}),
             }],
         })
         messages.append({
@@ -618,7 +619,7 @@ class BaseSubAgent(ABC):
         if not calls:
             return {"type": "raw", "content": content}
         call = calls[0]
-        native_call = {"id": call["id"], "name": call["name"], "arguments": call["arguments"]}
+        native_call = {key: call[key] for key in ("id", "name", "arguments", "signature") if key in call}
         arguments = _extract_json_object(call["arguments"]) if call["arguments"].strip() else {}
         if call["name"] == _DONE_FUNCTION:
             if arguments is None:
