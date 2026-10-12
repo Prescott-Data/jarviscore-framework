@@ -98,7 +98,9 @@ _RESULT_PATTERN = re.compile(r"^RESULT:\s*(.+)$", re.MULTILINE | re.DOTALL)
 _COMBINED_DONE_RESULT_PATTERN = re.compile(
     r"^DONE/RESULT\s*:?\s*\n(.+)$", re.MULTILINE | re.DOTALL
 )
-_THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGHT):|\Z)", re.MULTILINE | re.DOTALL)
+_THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGHT|NOTE):|\Z)", re.MULTILINE | re.DOTALL)
+# Notes ride along with any action: writing down what is established costs no turn.
+_NOTE_PATTERN = re.compile(r"^NOTE:\s*(.+?)(?=\n(?:NOTE|THOUGHT|TOOL|PARAMS|DONE|RESULT):|\Z)", re.MULTILINE | re.DOTALL)
 
 # ── Observation channel integrity (issue #57) ─────────────────────────────
 # How much of a tool result the agent sees inline per turn. Anything beyond
@@ -108,6 +110,8 @@ _OBSERVATION_LIMIT = int(os.getenv("SUBAGENT_OBSERVATION_LIMIT", "800"))
 # Whole results of the last N tool turns are kept; older turns are released
 # whole, never cut, when the window or the total-size budget is exceeded.
 _TURN_RESULT_WINDOW = int(os.getenv("SUBAGENT_TURN_RESULT_WINDOW", "10"))
+# Exchanges the agent sees each turn, and carries into a continued step.
+_CONVERSATION_WINDOW = 10
 _TURN_RESULT_BUDGET = int(os.getenv("SUBAGENT_TURN_RESULT_BUDGET", "2000000"))
 # read_turn_result pages are shown whole, so each page is sized to fit the agent's view.
 _READ_PAGE_LIMIT = int(os.getenv("SUBAGENT_READ_PAGE_LIMIT", "20000"))
@@ -147,9 +151,18 @@ def _clip_observation(text: str, turn: int, limit: int = 0) -> str:
     )
 
 
-def _observe(tool_name: str, tool_result: Any, turn: int) -> str:
+def _checkpoint(state: KernelState, conversation_history: list) -> str:
+    """The step state with the agent's recent exchanges; images stay as their receipts."""
+    state.conversation = [
+        {key: value for key, value in entry.items() if key != "images"}
+        for entry in conversation_history[-_CONVERSATION_WINDOW:]
+    ]
+    return state.model_dump_json()
+
+
+def _observe(tool_name: str, tool_result: Any, turn: int, whole: bool = False) -> str:
     """The agent's view of a tool result; a read_turn_result page is already sized and shown whole."""
-    if tool_name == "read_turn_result":
+    if whole or tool_name == "read_turn_result":
         return str(tool_result)
     return _clip_observation(str(tool_result), turn)
 
@@ -183,15 +196,24 @@ def _identical_call_record(
 
 
 def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) -> None:
-    """Prior turns (last 10): a native turn as its tool call and result, a text turn as a pair."""
-    for hist_entry in conversation_history[-10:]:
+    """Prior turns (last 10): a native turn as its tool call and result, a text turn as a pair.
+
+    A perception a later one replaced is shown as a pointer to it: the agent
+    acts on the latest view of the world, and can still read the older one.
+    """
+    recent = conversation_history[-_CONVERSATION_WINDOW:]
+    latest = max((i for i, entry in enumerate(recent) if entry.get("perception")), default=None)
+    for i, hist_entry in enumerate(recent):
+        observation = hist_entry["observation"]
+        if hist_entry.get("perception") and i != latest:
+            observation = hist_entry["superseded"]
         call = hist_entry.get("tool_call")
         images = hist_entry.get("images", ())
         if call is None:
             messages.append({"role": "assistant", "content": hist_entry["assistant"]})
             messages.append({
                 "role": "user",
-                "content": multimodal.with_images(hist_entry["observation"], images),
+                "content": multimodal.with_images(observation, images),
             })
             continue
         messages.append({
@@ -207,7 +229,7 @@ def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) 
         messages.append({
             "role": "tool",
             "tool_call_id": call["id"],
-            "content": hist_entry["observation"],
+            "content": observation,
         })
         if images:
             # A tool message carries text only, so the images it returned follow it.
@@ -219,6 +241,16 @@ def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) 
 
 #: The function that finishes a native turn, as DONE/RESULT finishes a text one.
 _DONE_FUNCTION = "done"
+#: The argument every native function carries for notes, as NOTE: lines carry them in text.
+_NOTES_ARGUMENT = "working_notes"
+_NOTES_SCHEMA = {
+    "type": "array",
+    "items": {"type": "string"},
+    "description": (
+        "Facts you established and want to keep (a price, an option, a constraint "
+        "you checked, a decision). Shown to you every turn, across sittings."
+    ),
+}
 _INVALID_FUNCTION_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 _JSON_SCALARS = {str: "string", bool: "boolean", int: "integer", float: "number"}
 
@@ -430,6 +462,11 @@ class BaseSubAgent(ABC):
     #: Whether this dispatch's turns are native tool calls; set by run() from the LLM client.
     _native_protocol: bool = False
 
+    #: Tools whose results are the agent's perception and are shown whole, never clipped.
+    whole_observation_tools: frozenset = frozenset()
+    #: Perceptions of a changing world: a newer result replaces older ones in the agent's view.
+    perception_tools: frozenset = frozenset()
+
     def __init__(
         self,
         agent_id: str,
@@ -488,6 +525,14 @@ class BaseSubAgent(ABC):
     ) -> None:
         """Register a tool available to this subagent."""
         self._tools[name] = ToolDefinition(name, func, description, phase)
+
+    async def _keep_notes(self, state: KernelState, notes) -> None:
+        """Write the agent's notes to its step scratchpad and its every-turn view."""
+        working = getattr(self._current_memory, "working", None)
+        for note in notes or ():
+            if working is not None:
+                await working.write("note", {"content": note, "turn": state.turn})
+            state.working_notes.append({"turn": state.turn, "note": note})
 
     async def _tool_remember(self, fact: str, kind: str = "fact") -> Dict[str, Any]:
         """Keep something worth knowing in a later session (params: fact, optional kind).
@@ -589,10 +634,17 @@ class BaseSubAgent(ABC):
             while function in tools_by_function or function == _DONE_FUNCTION:
                 function = f"{function[:56]}_{len(tools_by_function)}"
             tools_by_function[function] = tool.name
+            parameters = _parameters_schema(tool.func)
+            if _NOTES_ARGUMENT in parameters["properties"]:
+                raise ValueError(
+                    f"Tool {tool.name!r} declares {_NOTES_ARGUMENT!r}, which native turns "
+                    "reserve for the agent's notes; rename the parameter."
+                )
+            parameters["properties"][_NOTES_ARGUMENT] = _NOTES_SCHEMA
             specs.append({"type": "function", "function": {
                 "name": function,
                 "description": tool.description,
-                "parameters": _parameters_schema(tool.func),
+                "parameters": parameters,
             }})
         specs.append(self._done_function(context))
         return specs, tools_by_function
@@ -623,6 +675,7 @@ class BaseSubAgent(ABC):
                     ),
                 },
                 "result": result,
+                _NOTES_ARGUMENT: _NOTES_SCHEMA,
             },
             "required": ["summary", "result"],
         }
@@ -647,6 +700,13 @@ class BaseSubAgent(ABC):
         call = calls[0]
         native_call = {key: call[key] for key in ("id", "name", "arguments", "signature") if key in call}
         arguments = _extract_json_object(call["arguments"]) if call["arguments"].strip() else {}
+        raw_notes = arguments.pop(_NOTES_ARGUMENT, None) if arguments is not None else None
+        notes = [
+            str(note).strip()
+            for note in (raw_notes if isinstance(raw_notes, list) else [raw_notes] if raw_notes else [])
+            if str(note).strip()
+        ]
+        kept = {"notes": notes} if notes else {}
         if call["name"] == _DONE_FUNCTION:
             if arguments is None:
                 return {"type": "raw", "content": call["arguments"], "native_call": native_call}
@@ -658,6 +718,7 @@ class BaseSubAgent(ABC):
                 "result": arguments.get("result"),
                 "answer": summary or None,
                 "native_call": native_call,
+                **kept,
             }
         return {
             "type": "tool",
@@ -665,6 +726,7 @@ class BaseSubAgent(ABC):
             "tool": tools_by_function.get(call["name"], call["name"]),
             "params": arguments if arguments is not None else {"raw": call["arguments"]},
             "native_call": native_call,
+            **kept,
         }
 
     @abstractmethod
@@ -772,6 +834,14 @@ class BaseSubAgent(ABC):
                 "  flags, booleans about your own process, or a diagnosis of the runtime,",
                 "  and it is not a second copy of the answer. If there is no data beyond",
                 "  the answer, result may be an empty object.",
+                "",
+                "Your memory:",
+                f"  You see the task, your working notes and your last {_CONVERSATION_WINDOW} exchanges. Older",
+                "  exchanges are gone from view, and a long task continues across several",
+                "  sittings. What you have established (a price, an option, a constraint you",
+                "  checked, a page that has or lacks something, a decision) is kept only if",
+                "  you put it in working_notes. Every function accepts working_notes, so a",
+                "  note costs no turn. Your notes are shown to you every turn.",
             ]
             return "\n".join(parts)
         parts += [
@@ -782,7 +852,8 @@ class BaseSubAgent(ABC):
             "Protocol:",
             "  To use a tool: THOUGHT: <reasoning>\\nTOOL: <name>\\nPARAMS: <json>",
             "  To finish:     THOUGHT: <reasoning>\\nDONE: <complete human answer>\\nRESULT: <json>",
-            "  JSON alternative: {\"thought\": \"...\", \"tool\": \"...\", \"params\": {...}}",
+            "  To keep what you established: NOTE: <fact> lines before TOOL or DONE.",
+            "  JSON alternative: {\"thought\": \"...\", \"notes\": [...], \"tool\": \"...\", \"params\": {...}}",
             "  JSON finish:      {\"thought\": \"...\", \"done\": \"<complete human answer>\", \"result\": {...}}",
             "  This protocol is one action per turn, not one action per task. After each",
             "  tool result you receive another turn; continue calling tools until the task",
@@ -797,6 +868,14 @@ class BaseSubAgent(ABC):
             "  of the runtime, and it is not a second copy of the answer: DONE is",
             "  the only answer the person and downstream agents read. If there is",
             "  no data beyond the answer, RESULT may be an empty object.",
+            "",
+            "Your memory:",
+            f"  You see the task, your working notes and your last {_CONVERSATION_WINDOW} exchanges. Older",
+            "  exchanges are gone from view, and a long task continues across several",
+            "  sittings. What you have established (a price, an option, a constraint you",
+            "  checked, a page that has or lacks something, a decision) is kept only if",
+            "  you write it on a NOTE: line. A note costs no turn: write it in the same",
+            "  reply as your next TOOL or DONE. Your notes are shown to you every turn.",
         ]
         return "\n".join(parts)
 
@@ -914,13 +993,21 @@ class BaseSubAgent(ABC):
             if self._native_protocol
             else "Then emit your TOOL/PARAMS or DONE/RESULT."
         )
+        keep = (
+            "Write anything newly established in working_notes; your reasoning is gone "
+            "from view after a few turns, your notes are not. "
+            if self._native_protocol
+            else "Write anything newly established on NOTE: lines; your THOUGHT is gone "
+            "from view after a few turns, your notes are not. "
+        )
 
         # Epistemic Decision Contract — forces self-assessment
         parts.append(
             "**DECISION CONTRACT (follow this structure in your THOUGHT):**\n"
-            "1. **KNOWN:** What have I established so far? (refer to WHAT I KNOW SO FAR above)\n"
+            "1. **KNOWN:** What have I established so far? (my working notes and findings above, and this turn's result)\n"
             "2. **GAP:** What specific information am I still missing?\n"
             "3. **STRATEGY:** What is the most efficient next step to close the gap?\n\n"
+            f"{keep}"
             f"{act}"
         )
         if "ask_peer" in self._tools:
@@ -984,6 +1071,7 @@ class BaseSubAgent(ABC):
         if context_manager is None:
             from jarviscore.context.context_manager import ContextManager
             context_manager = ContextManager()
+        context_manager.perception_tools = self.perception_tools
 
         # ── Initialize or resume state ──
         state = KernelState(
@@ -1035,6 +1123,7 @@ class BaseSubAgent(ABC):
         # ── TraceManager: use injected trace or no-op ──
         from jarviscore.kernel.tracing import create_noop_trace
         _trace = trace if trace is not None else create_noop_trace()
+        await self._carry_out_decided_actions(state, _trace)
         total_tokens = {"input": 0, "output": 0, "total": state.tokens_used}
         total_cost = state.total_cost_usd
         carries_native = getattr(self.llm_client, "carries_native_tools", None)
@@ -1042,8 +1131,9 @@ class BaseSubAgent(ABC):
         system_prompt = self._build_system_prompt()
 
         # Rolling conversation history for multi-turn LLM continuity
-        # (prevents amnesia — the LLM sees its own prior reasoning)
-        conversation_history: List[Dict[str, str]] = []
+        # (prevents amnesia — the LLM sees its own prior reasoning); a
+        # continued step picks up the exchanges its last epoch checkpointed.
+        conversation_history: List[Dict[str, Any]] = list(state.conversation)
 
         # Per-dispatch metadata channel (issue #88): tools stamp identity
         # facts here (e.g. the coder's registry function_id) and the success
@@ -1072,27 +1162,9 @@ class BaseSubAgent(ABC):
                 if landing is not None:
                     return landing
                 if memory is not None:
-                    state.status = "active"
-                    state.thinking_tokens_used = self._cognition.lease.thinking_used
-                    state.action_tokens_used = self._cognition.lease.action_used
-                    state.tokens_used = total_tokens["total"]
-                    state.total_cost_usd = total_cost
-                    await memory.save_checkpoint(state.model_dump_json())
-                    return AgentOutput(
-                        status="epoch_exhausted",
-                        summary=(
-                            f"Execution lease exhausted after {turn} turns; durable "
-                            "state was checkpointed for continued agent work."
-                        ),
-                        payload=state.get_final_output(),
-                        trajectory=trajectory,
-                        metadata={
-                            "tokens": total_tokens,
-                            "cost_usd": total_cost,
-                            "lease_exhausted": exhausted,
-                            "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
-                            "checkpointed": True,
-                        },
+                    return await self._continue_in_new_epoch(
+                        state, conversation_history, memory, turn, total_tokens,
+                        total_cost, trajectory, exhausted,
                     )
                 return AgentOutput(
                     status="yield",
@@ -1164,7 +1236,7 @@ class BaseSubAgent(ABC):
                     state.tokens_used = total_tokens["total"]
                     state.total_cost_usd = total_cost
                     if memory is not None:
-                        await memory.save_checkpoint(state.model_dump_json())
+                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
                     if not e.recoverable:
                         _trace.log_step_complete(
                             False,
@@ -1241,6 +1313,8 @@ class BaseSubAgent(ABC):
             llm_tokens_this_turn = tokens.get("total", 0)
             state.tokens_used = total_tokens["total"]
 
+            # Parse response
+            await self._keep_notes(state, parsed.get("notes"))
             if parsed["type"] != "raw":
                 # Repairs bound a run of malformed replies, not a session's lifetime.
                 state.internal_variables["_protocol_violation_count"] = 0
@@ -1299,7 +1373,7 @@ class BaseSubAgent(ABC):
                             state.action_tokens_used = self._cognition.lease.action_used
                             state.tokens_used = total_tokens["total"]
                             state.total_cost_usd = total_cost
-                            await memory.save_checkpoint(state.model_dump_json())
+                            await memory.save_checkpoint(_checkpoint(state, conversation_history))
                             return AgentOutput(
                                 status="epoch_exhausted",
                                 summary=f"{summary}; durable state was checkpointed",
@@ -1450,7 +1524,7 @@ class BaseSubAgent(ABC):
                     turn_log["error"] = str(exc)
                     trajectory.append(turn_log)
                     if memory is not None:
-                        await memory.save_checkpoint(state.model_dump_json())
+                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
                     _trace.log_step_complete(
                         False,
                         "Active execution epoch exhausted; checkpointed for continuation.",
@@ -1547,8 +1621,15 @@ class BaseSubAgent(ABC):
                     state.total_cost_usd = total_cost
                     self._save_subagent_state(state)
                     trajectory.append(turn_log)
+                    conversation_history.append({
+                        "assistant": content,
+                        "observation": (
+                            f"[Turn {turn}] Tool '{tool_name}' returned (waiting):\n"
+                            f"{_observe(tool_name, tool_result, turn)}"
+                        ),
+                    })
                     if memory is not None:
-                        await memory.save_checkpoint(state.model_dump_json())
+                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
                     return AgentOutput(
                         status="yield",
                         payload=tool_result,
@@ -1575,7 +1656,9 @@ class BaseSubAgent(ABC):
                 # Record conversation history for multi-turn LLM continuity
                 # Structured turn digest instead of raw output — helps the LLM
                 # retain what was learned and reason about strategy changes.
-                result_str = _observe(tool_name, tool_result, turn)
+                result_str = _observe(
+                    tool_name, tool_result, turn, tool_name in self.whole_observation_tools
+                )
                 observation = (
                     f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}):\n"
                     f"{result_str}\n\n"
@@ -1591,6 +1674,12 @@ class BaseSubAgent(ABC):
                     "observation": observation,
                     "images": observed_images,
                     "tool_call": native_call,
+                    "perception": tool_name in self.perception_tools,
+                    "superseded": (
+                        f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}); "
+                        "a later perception replaced this view. Full result: call "
+                        f'read_turn_result with {{"turn": {turn}}}'
+                    ),
                 })
 
                 # Log turn to memory
@@ -1599,7 +1688,7 @@ class BaseSubAgent(ABC):
                         await memory.log_turn(
                             turn_id=str(turn), thought=parsed.get("thought", ""),
                             action=tool_name,
-                            result=str(tool_result)[:1000],
+                            result=str(tool_result),
                             tokens=llm_tokens_this_turn,
                         )
                     except Exception as exc:
@@ -1614,7 +1703,7 @@ class BaseSubAgent(ABC):
                 # Save checkpoint
                 if memory:
                     try:
-                        await memory.save_checkpoint(state.model_dump_json())
+                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
                     except Exception as e:
                         self._log.warning("Checkpoint save failed for %s turn=%s: %s", self.agent_id, turn, e)
 
@@ -1724,7 +1813,14 @@ class BaseSubAgent(ABC):
                 },
             )
 
-        # Max turns reached (emergency fuse)
+        # Max turns reached (emergency fuse). A step still making progress with
+        # durable state continues in its next epoch, as for any exhausted budget;
+        # the workflow's epoch limit bounds it.
+        if memory is not None and self._epochs_remain(state.context):
+            return await self._continue_in_new_epoch(
+                state, conversation_history, memory, state.turn + 1, total_tokens,
+                total_cost, trajectory, f"turn_cap({max_turns})",
+            )
         _trace.log_step_complete(False, f"Emergency turn fuse reached ({max_turns} turns)")
         return AgentOutput(
             status="yield",
@@ -1741,6 +1837,33 @@ class BaseSubAgent(ABC):
     # Subclass Hooks (overridable)
     # ──────────────────────────────────────────────────────────────────────
 
+    async def _continue_in_new_epoch(
+        self, state, conversation_history, memory, turn, total_tokens, total_cost, trajectory, exhausted,
+    ) -> AgentOutput:
+        """Checkpoint the step so its next execution epoch carries on where this one stopped."""
+        state.status = "active"
+        state.thinking_tokens_used = self._cognition.lease.thinking_used
+        state.action_tokens_used = self._cognition.lease.action_used
+        state.tokens_used = total_tokens["total"]
+        state.total_cost_usd = total_cost
+        await memory.save_checkpoint(_checkpoint(state, conversation_history))
+        return AgentOutput(
+            status="epoch_exhausted",
+            summary=(
+                f"Execution lease exhausted after {turn} turns; durable "
+                "state was checkpointed for continued agent work."
+            ),
+            payload=state.get_final_output(),
+            trajectory=trajectory,
+            metadata={
+                "tokens": total_tokens,
+                "cost_usd": total_cost,
+                "lease_exhausted": exhausted,
+                "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
+                "checkpointed": True,
+            },
+        )
+
     async def _pre_run_hook(self, state: KernelState) -> None:
         """Deterministic pre-flight operations before the OODA loop starts.
 
@@ -1748,6 +1871,80 @@ class BaseSubAgent(ABC):
         registry warm-up, context seeding). Default is a no-op.
         """
         pass
+
+    async def _carry_out_decided_actions(self, state: KernelState, trace) -> None:
+        """Act on each decision a person made while this step waited, exactly once.
+
+        An approved action runs here, through the normal tool path, so its
+        receipt is authoritative; a declined one is reported and never run.
+        """
+        from jarviscore.kernel import approval
+
+        workflow_id = state.context.get("workflow_id")
+        step_id = state.context.get("step_id")
+        decisions = approval.decided(self.redis_store, workflow_id, step_id)
+        if decisions:
+            # Completion pressure from before the pause describes a world the decision changed.
+            state.output = None
+            state.thoughts = [
+                thought for thought in state.thoughts
+                if not thought.startswith("[DONE_GATE]")
+            ]
+        for action, approved in decisions:
+            if not approved:
+                approval.settle(self.redis_store, workflow_id, step_id, action.action_id, {
+                    "status": "declined",
+                })
+                state.add_thought(
+                    f"[HITL DECLINED] The person declined: {action.consequence}. "
+                    "It was not performed and must not be attempted. Report that outcome."
+                )
+                continue
+            if not await self._approved_action_applies(action):
+                approval.settle(self.redis_store, workflow_id, step_id, action.action_id, {
+                    "status": "not_performed",
+                    "reason": "the approved target is no longer where it was approved",
+                })
+                state.add_thought(
+                    f"[HITL APPROVED, NOT PERFORMED] The person approved: {action.consequence}. "
+                    f"JarvisCore did not perform it because {action.description or action.tool} "
+                    "is no longer where it was approved. Inspect current provider state; "
+                    "if the action is still needed it must be proposed again for a new decision."
+                )
+                continue
+            params = self._approved_action_params(action)
+            trace.log_tool_start(action.tool, params)
+            started_at = time.time()
+            started = time.monotonic()
+            result = await self._execute_tool(action.tool, params)
+            error = result.get("error") if isinstance(result, dict) else None
+            trace.log_tool_result(action.tool, result, error=error)
+            receipt = state.add_tool_result(
+                action.tool, params, result, error=error, timestamp=started_at,
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
+            if isinstance(result, dict) and result.get("performed") is False:
+                state.add_thought(
+                    f"[HITL APPROVED, NOT YET PERFORMED] The person approved: {action.consequence}. "
+                    f"When JarvisCore tried it as this step resumed, nothing happened: {error}. "
+                    "The approval stands for this exact action: deal with what blocked it, then "
+                    "call the same action again with irreversible and consequence; it runs once."
+                )
+                continue
+            state.add_thought(
+                f"[HITL APPROVED, PERFORMED] The person approved: {action.consequence}. "
+                f"JarvisCore performed {action.description or action.tool} as this step "
+                f"resumed (tool receipt {receipt.receipt_id}): {json.dumps(result, default=str)}. "
+                "Observe the provider's outcome before finishing; never repeat this action."
+            )
+
+    def _approved_action_params(self, action) -> Dict[str, Any]:
+        """Tool parameters that perform an approved action."""
+        return dict(action.params)
+
+    async def _approved_action_applies(self, action) -> bool:
+        """Whether the approved action still targets what the person approved."""
+        return True
 
     def _save_subagent_state(self, state: KernelState) -> None:
         """Place subclass runtime state into the serializable checkpoint."""
@@ -1957,6 +2154,21 @@ class BaseSubAgent(ABC):
 
     @staticmethod
     def _parse_response(content: str) -> Dict[str, Any]:
+        """The reply's directive, plus any notes the agent wrote alongside it."""
+        parsed = BaseSubAgent._parse_directive(content)
+        notes = [match.group(1).strip() for match in _NOTE_PATTERN.finditer(content)]
+        if not notes and not _TOOL_PATTERN.search(content) and not _DONE_PATTERN.search(content):
+            # A JSON-protocol reply; a text reply's JSON is its PARAMS, whose fields are the tool's.
+            obj = _extract_json_object(content) or {}
+            raw = obj.get("notes") if ("tool" in obj or "done" in obj) else None
+            notes = [str(note).strip() for note in (raw if isinstance(raw, list) else [raw] if raw else [])]
+        notes = [note for note in notes if note]
+        if notes:
+            parsed["notes"] = notes
+        return parsed
+
+    @staticmethod
+    def _parse_directive(content: str) -> Dict[str, Any]:
         """
         Parse LLM response for tool calls or completion.
 
@@ -1986,12 +2198,12 @@ class BaseSubAgent(ABC):
                     "result": result,
                 }
 
-        # RESULT alone (no DONE, no TOOL) only completes when it carries a
-        # structured JSON object. "RESULT: pending" prose mid-thought must not
-        # end the dispatch with a fabricated completion (issue #61).
-        if result_match and not done_match and not tool_match:
-            if _extract_json_object(result_match.group(1).strip()) is None:
-                result_match = None
+        # DONE is the completion directive; RESULT is the structured payload that
+        # accompanies it. A RESULT without DONE ({"status": "in_progress"}, a
+        # plan, a partial table) is not a completion: treating it as one
+        # recorded unfinished steps as successful (issues #61, browser epochs).
+        if result_match and not done_match:
+            result_match = None
 
         # Directive precedence: models quote protocol keywords in their
         # reasoning constantly — the system prompt itself teaches the magic

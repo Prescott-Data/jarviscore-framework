@@ -57,6 +57,8 @@ BLOCK_PRIORITY: Dict[str, int] = {
     "context_pressure": 0,
     "tool_receipts": 0,
     "budget": 0,
+    # The agent's own scratchpad is what it has established; losing it under pressure restarts the work.
+    "working_notes": 0,
     "failure_memory": 1,
     "knowledge": 1,
     "mailbox": 1,

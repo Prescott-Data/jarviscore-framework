@@ -67,6 +67,20 @@ class WorkspaceMutation(BaseModel):
     observed_at: datetime
 
 
+class ObservationReceipt(BaseModel):
+    """A cited tool result that is neither a command run nor a file mutation.
+
+    A page read or a search has no fact to bind over the claim; the receipt
+    proves the citation is real, and the claim stands as the agent wrote it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_receipt_id: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    observed_at: datetime
+
+
 class ToolResult(BaseModel):
     """Record of a single tool invocation within the OODA loop."""
 
@@ -173,6 +187,11 @@ class KernelState(BaseModel):
     # Working memory — thoughts, scratchpad notes
     thoughts: List[str] = Field(default_factory=list)
     scratchpad_notes: str = ""
+    # What the agent wrote in this step's working scratchpad; shown every turn and kept across epochs.
+    working_notes: List[Dict[str, Any]] = Field(default_factory=list)
+    # The agent's recent exchanges (its reasoning and what it observed), so a
+    # continued step resumes where it was rather than from the task alone.
+    conversation: List[Dict[str, Any]] = Field(default_factory=list)
 
     # Flexible key-value store for subagent-specific state
     # (e.g. research_findings, candidate_code, shared_context)
@@ -331,12 +350,14 @@ class KernelState(BaseModel):
                     evidence: BaseModel = receipt.workspace_mutation()
                 elif mutation_claim:
                     evidence = prior_mutations.get(receipt_id)
+                elif receipt is not None and receipt.tool_name in {"workspace_write", "workspace_edit"}:
+                    evidence = receipt.workspace_mutation()
+                elif receipt is not None and (receipt.tool_name == "workspace_run" or command_claim):
+                    evidence = receipt.command_observation()
                 elif receipt is not None:
-                    evidence = (
-                        receipt.workspace_mutation()
-                        if receipt.tool_name in {"workspace_write", "workspace_edit"}
-                        else receipt.command_observation()
-                    )
+                    # A cited observation (a page read, a search): it exists, and there is
+                    # no command or mutation fact to bind, so the claim stands as written.
+                    return {key: hydrate(item) for key, item in candidate.items()}
                 else:
                     evidence = prior_mutations.get(receipt_id) or prior_observations.get(
                         receipt_id
@@ -385,7 +406,11 @@ class KernelState(BaseModel):
                 elif receipt.tool_name in {"workspace_write", "workspace_edit"}:
                     item = receipt.workspace_mutation()
                 else:
-                    continue
+                    item = ObservationReceipt(
+                        tool_receipt_id=receipt.receipt_id,
+                        tool_name=receipt.tool_name,
+                        observed_at=receipt.observed_at,
+                    )
             except ToolReceiptError:
                 continue
             evidence.append(item.model_dump(mode="json"))
@@ -446,6 +471,13 @@ def hydrate_receipt_evidence(
     """Ground receipt-bearing output after all product normalization hooks."""
     commands: Dict[str, CommandObservation] = {}
     mutations: Dict[str, WorkspaceMutation] = {}
+    # Only this step's own receipts: a prior step's output keeps an observation
+    # claim as written, so its shape is no proof the receipt exists.
+    observations = {
+        str(item["tool_receipt_id"])
+        for item in receipt_evidence
+        if isinstance(item, dict) and set(item) == set(ObservationReceipt.model_fields)
+    }
     workflow_prefix = f"tool:{workflow_id}:" if workflow_id else ""
 
     def collect(candidate: Any) -> None:
@@ -498,6 +530,13 @@ def hydrate_receipt_evidence(
                 evidence = commands.get(receipt_id)
                 if evidence is None:
                     evidence = mutations.get(receipt_id)
+            if evidence is None and receipt_id in observations:
+                if command_claim:
+                    raise ToolReceiptError(
+                        f"Tool receipt {receipt_id!r} is not command evidence"
+                    )
+                if not mutation_claim:
+                    return {key: hydrate(item) for key, item in candidate.items()}
             if evidence is None:
                 raise ToolReceiptError(f"Unknown tool receipt {receipt_id!r}")
             return evidence.model_dump(mode="json")

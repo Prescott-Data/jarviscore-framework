@@ -43,6 +43,8 @@ class GoalObligation:
     description: str
     source_quote: str
     kind: str = "outcome"
+    # The one source block holding source_quote, when exactly one does.
+    source_ref: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +53,15 @@ class GoalObligation:
             "description": self.description,
             "source_quote": self.source_quote,
         }
+
+    def ledger_entry(self) -> dict[str, Any]:
+        """The obligation as planner prompts ask the model to write one."""
+        entry = {"id": self.id, "kind": self.kind, "description": self.description}
+        if self.source_ref:
+            entry["source_ref"] = self.source_ref
+        else:
+            entry["source_quote"] = self.source_quote
+        return entry
 
 
 @dataclass(frozen=True)
@@ -529,6 +540,7 @@ class MeshPlanner:
                 repair_raw = await self._call_json(self._amendment_repair_prompt(
                     plan,
                     audit=audit,
+                    target_obligation_ids=targets,
                     current_steps=current_steps,
                     reason=reason,
                     planning_brief=self.planning_brief,
@@ -686,14 +698,12 @@ class MeshPlanner:
         ):
             raise MeshPlanError("Domain steps cannot depend on the final response")
         steps = self._normalize_obligation_coverage(steps)
-        depended_on = {
-            dependency for step in steps for dependency in step.depends_on
-        }
-        sinks = [step.step_id for step in steps if step.step_id not in depended_on]
-        sinks += [
+        # The response reads every workflow artifact, so it depends on every producer.
+        producers = [step.step_id for step in steps]
+        producers += [
             producer_id
             for producer_id in settled_producer_ids or []
-            if producer_id not in sinks
+            if producer_id not in producers
         ]
         existing_ids = {step.step_id for step in steps} | (reserved_ids or set())
         step_id = "final_response"
@@ -720,10 +730,20 @@ class MeshPlanner:
                     "workflow IDs, step IDs, evidence pointers or trace details."
                 ),
                 expected_findings=["user-facing outcome"],
-                depends_on=sinks,
+                depends_on=producers,
                 covers=[],
             ),
         ]
+
+    def _response_rule(self) -> str:
+        """The response step is the framework's; plans that cover obligations with it lose that coverage."""
+        if not self.response_capability:
+            return ""
+        return (
+            f"- JarvisCore appends the user-facing response step ({self.response_capability}, "
+            "effect final_response) after all domain work; do not plan one. It settles no "
+            "obligation, so every obligation must be covered by a domain step."
+        )
 
     @staticmethod
     def _normalize_obligation_coverage(
@@ -895,6 +915,7 @@ expected_findings, depends_on, covers, dependency_policy.
 {AGENT_MEMORY_RULE}
 {PROPORTIONAL_INSPECTION_RULE}
 - covers contains obligation ids satisfied by the step.
+{self._response_rule()}
 - dependency_policy is `satisfied` unless this step intentionally diagnoses or
     remediates an unresolved dependency artifact; only then use `terminal_evidence`.
 - use capabilities, never an agent ID or named instance.
@@ -965,6 +986,7 @@ Return one valid json object using exactly one repair shape:
     step_id, capability, effect, systems, task, success_criterion,
     expected_findings, depends_on, covers, dependency_policy.
 - resolve every audit finding without changing or adding obligations.
+{self._response_rule()}
 - use capabilities, never agent IDs, named instances, atom names, or provider calls.
 - model business outcomes, not conditional branches.
 - keep inspect-or-create and check-then-act work as one provider-owned outcome;
@@ -1024,6 +1046,7 @@ Each step has exactly: step_id, capability, effect, systems, task,
 success_criterion, expected_findings, depends_on, covers, dependency_policy.
 - preserve every obligation exactly; do not add, remove, merge or split obligations.
 - every obligation must be covered by at least one non-final-response domain step.
+{self._response_rule()}
 - constraints, prohibitions and approval boundaries are outcomes to enforce and verify;
     assign them to the terminal domain step whose artifact proves compliance.
 - preserve real data dependencies and use only capabilities and effect authority from
@@ -1098,6 +1121,7 @@ expected_findings, depends_on, covers, dependency_policy.
 {AGENT_MEMORY_RULE}
 {PROPORTIONAL_INSPECTION_RULE}
 - use capabilities, never an agent ID or named instance.
+{self._response_rule()}
 
 Do not assign peers, execute work, change completed work or add requirements."""
 
@@ -1215,6 +1239,7 @@ Otherwise return complete=false with `missing` entries describing the amendment 
         plan: MeshPlan,
         *,
         audit: dict[str, Any],
+        target_obligation_ids: set[str],
         current_steps: list[dict[str, Any]],
         reason: str,
         planning_brief: str = "",
@@ -1245,7 +1270,7 @@ AUDIT FINDINGS:
 
 {MeshPlanner._format_planning_brief(planning_brief)}
 
-{MeshPlanner._amendment_step_invariants({item.id for item in plan.obligations})}
+{MeshPlanner._amendment_step_invariants(target_obligation_ids)}
 
 Return one valid json object containing only NEW `steps` using the normal step
 schema. Current step ids may appear only in depends_on. Add remediation work after
@@ -1434,7 +1459,7 @@ IMMUTABLE SOURCE BLOCKS:
 {json.dumps(source_blocks, ensure_ascii=False)}
 
 OBLIGATIONS:
-{json.dumps([item.to_dict() for item in plan.obligations], ensure_ascii=False)}
+{json.dumps([item.ledger_entry() for item in plan.obligations], ensure_ascii=False)}
 
 DAG STEPS:
 {json.dumps([step.to_dict() for step in plan.steps], ensure_ascii=False)}
@@ -1516,6 +1541,8 @@ or obligations. Omit `corrections` when any other DAG change is required."""
 
         obligations = []
         obligation_ids = set()
+        source_blocks = MeshPlanner._source_blocks(goal)
+        source_by_id = {block["id"]: block["text"] for block in source_blocks}
         for index, item in enumerate(raw_obligations):
             if not isinstance(item, dict):
                 raise MeshPlanError(f"Obligation {index} must be an object")
@@ -1529,16 +1556,17 @@ or obligations. Omit `corrections` when any other DAG change is required."""
                     f"Obligation {obligation_id or index} has no source_ref"
                 )
             if source_ref:
-                source_by_id = {
-                    block["id"]: block["text"]
-                    for block in MeshPlanner._source_blocks(goal)
-                }
                 if source_ref not in source_by_id:
                     raise MeshPlanError(
                         f"Obligation {obligation_id or index} has unknown source_ref "
                         f"{source_ref!r}"
                     )
                 source_quote = source_by_id[source_ref]
+            elif source_quote:
+                holding = [b["id"] for b in source_blocks if b["text"] == source_quote] or [
+                    b["id"] for b in source_blocks if b["id"] != "source-all" and source_quote in b["text"]
+                ]
+                source_ref = holding[0] if len(holding) == 1 else ""
             if not obligation_id or obligation_id in obligation_ids:
                 raise MeshPlanError(f"Obligation {index} has a missing or duplicate id")
             if not description:
@@ -1553,7 +1581,7 @@ or obligations. Omit `corrections` when any other DAG change is required."""
                 )
             obligation_ids.add(obligation_id)
             obligations.append(
-                GoalObligation(obligation_id, description, source_quote, kind)
+                GoalObligation(obligation_id, description, source_quote, kind, source_ref)
             )
         return obligations
 

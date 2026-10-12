@@ -386,7 +386,11 @@ class TestNativeToolTurns:
         assert {"search", "crm_lookup", "done"} <= set(functions)
         assert functions["search"]["parameters"] == {
             "type": "object",
-            "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"},
+                "working_notes": functions["done"]["parameters"]["properties"]["working_notes"],
+            },
             "required": ["query"],
         }
         system = first["messages"][0]["content"]
@@ -423,6 +427,34 @@ class TestNativeToolTurns:
         calls = [turn for turn in result.trajectory if turn.get("type") == "tool_call"]
         assert calls[0]["tool"] == "crm.lookup"
         assert "acme" in calls[0]["result"]
+
+    def test_notes_ride_along_with_a_native_call_and_never_reach_the_tool(self):
+        # tool_choice="required" leaves no text beside the call, so NOTE: lines
+        # cannot carry notes here; every function takes them as an argument.
+        llm = _NativeLLM([
+            _call("search", {"query": "revenue", "working_notes": ["FY25 report is on page 4"]}),
+            _call("done", {"summary": "5", "result": {}, "working_notes": ["Revenue was 5"]}),
+        ])
+        agent = _NativeAgent(llm)
+
+        asyncio.run(agent.run(task="find revenue"))
+
+        assert agent.searched == [("revenue", 5)]
+        assert [n["note"] for n in agent._current_state.working_notes] == [
+            "FY25 report is on page 4", "Revenue was 5",
+        ]
+        assert "FY25 report is on page 4" in llm.requests[1]["messages"][-1]["content"]
+        assert "working_notes" in llm.requests[0]["messages"][0]["content"]
+
+    def test_a_tool_cannot_claim_the_notes_argument(self):
+        agent = _NativeAgent(_NativeLLM([]))
+
+        async def clash(working_notes: str):
+            return {}
+
+        agent.register_tool("clash", clash, "Clashes.")
+        with pytest.raises(ValueError, match="reserve"):
+            agent._native_tool_specs({})
 
     def test_a_reply_that_calls_no_function_is_repaired_not_accepted(self):
         llm = _NativeLLM([

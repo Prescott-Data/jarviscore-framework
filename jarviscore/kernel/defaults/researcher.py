@@ -27,7 +27,7 @@ from typing import Dict, Any, List, Optional, Literal, cast, Set, Tuple
 from urllib.parse import urlparse
 
 from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image, with_images
-from jarviscore.kernel.subagent import BaseSubAgent
+from jarviscore.kernel.subagent import BaseSubAgent, _extract_json_object
 from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.state import KernelState
 from jarviscore.kernel.defaults.research_flow import ResearchFlow, ResearchPhase
@@ -99,11 +99,16 @@ class ResearcherSubAgent(BaseSubAgent):
     """
     
     def __init__(self, *args, **kwargs):
+        import uuid
+
+        # The researcher's page reads and its browser leave from one sticky exit.
+        egress_session = uuid.uuid4().hex
         # Accept optional internet_search injection (e.g. for testing)
         internet_search = kwargs.pop('internet_search', None)
         self.internet_search = internet_search or InternetSearch(
             pdf_timeout_seconds=_env_int("RESEARCH_PDF_TIMEOUT_SECONDS", 90),
             pdf_max_retries=_env_int("RESEARCH_PDF_MAX_RETRIES", 3),
+            egress_session=egress_session,
         )
         
         # Browser controller config — graceful degradation if [browser] not installed
@@ -114,7 +119,6 @@ class ResearcherSubAgent(BaseSubAgent):
         
         cdp_url = _env_str("BROWSER_CONTROL_URL") or _env_str("BROWSER_SERVICE_URL")
         
-        import uuid
         session_id = str(uuid.uuid4())[:8]
         unique_profile_dir = os.path.join(
             _env_str("BROWSER_PROFILE_USER_DATA_BASE", os.path.join(os.path.expanduser("~"), ".jarviscore", "browser_profiles")),
@@ -124,6 +128,9 @@ class ResearcherSubAgent(BaseSubAgent):
         
         self._browser_profile_name = f"researcher_{session_id}"
         if _HAS_BROWSER and BrowserConfig is not None:
+            from jarviscore.core.egress import configured_egress
+
+            egress = configured_egress()
             step_timeout = _env_float("STEP_EXECUTION_TIMEOUT", 0)
             self._browser_config = BrowserConfig(
                 headless=browser_headless,
@@ -135,6 +142,9 @@ class ResearcherSubAgent(BaseSubAgent):
                 ignore_https_errors=_env_bool("BROWSER_IGNORE_HTTPS_ERRORS", True),
                 stealth_enabled=_env_bool("BROWSER_STEALTH_ENABLED", False),
                 cdp_url=cdp_url,
+                locale=_env_str("BROWSER_LOCALE", "") or None,
+                timezone_id=_env_str("BROWSER_TIMEZONE", "") or None,
+                proxy=egress.playwright(egress_session) if egress and not cdp_url else None,
             )
         else:
             self._browser_config = None
@@ -508,7 +518,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
 
     #: What each named done-payload check reads, stated once for the agent.
     _DONE_REQUIREMENTS = {
-        "summary": "a non-empty summary",
+        "summary": "a statement of what was found: the DONE answer, or a non-empty summary",
         "evidence": "at least one evidence entry, or a recorded research finding",
         "evidence_pointers": "every evidence entry carries a pointer or url",
         "api_specs": "every api_spec entry carries a method and a url or path",
@@ -557,7 +567,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 and t.tool_output.get("content_found") is False
             )
         )
-        valid, _reason, report = self._validate_done_payload(state, params)
+        valid, _reason, report = self._validate_done_payload(state, params, answer=parsed.get("answer"))
         if not valid:
             check = report.get("check", "done_payload")
             observed = {key: value for key, value in report.items() if key != "check"}
@@ -569,9 +579,13 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             )
         return True, ""
 
-    def _validate_done_payload(self, state, params: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    def _validate_done_payload(
+        self, state, params: Dict[str, Any], answer: Optional[str] = None,
+    ) -> Tuple[bool, str, Dict[str, Any]]:
         strict = _env_bool("RESEARCH_STRICT_DONE_VALIDATION", True)
-        summary = str(params.get("summary") or "").strip()
+        # The DONE answer is the human statement of what was found; a product
+        # that owns its result shape need not repeat it as a `summary` field.
+        summary = str(params.get("summary") or answer or "").strip()
         evidence = params.get("evidence")
         api_specs = params.get("api_specs") or []
         findings = state.internal_variables.get("research_findings", []) if getattr(state, "internal_variables", None) else []
@@ -2398,17 +2412,27 @@ Rules:
 - If you cannot determine a value, omit the key rather than guessing.
 
 DOCUMENTATION TEXT:
-{text[:20000]}
+{text}
 """
-        if not hasattr(self.llm, "query_json"):
-            error = "LLM does not support structured query"
+        try:
+            response = await self.llm_client.generate(
+                messages=[
+                    {"role": "system", "content": "You are a precise API specification extractor. Return only valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0,
+            )
+            result = _extract_json_object(str((response or {}).get("content") or ""))
+        except Exception as exc:
+            error = f"API extraction failed: {exc}"
             self.tracer.log_tool_result("extract_api_details", None, error=error)
             return {"error": error}
-
-        result = await self.llm.query_json(
-            "You are a precise API specification extractor. Return only valid JSON.", prompt
-        )
-        extracted_specs = result.get("api_specs") if isinstance(result, dict) else []
+        if result is None:
+            error = "API extraction returned no JSON object"
+            self.tracer.log_tool_result("extract_api_details", None, error=error)
+            return {"error": error}
+        extracted_specs = result.get("api_specs")
         spec_count = len(extracted_specs) if isinstance(extracted_specs, list) else 0
 
         if isinstance(extracted_specs, list) and extracted_specs:

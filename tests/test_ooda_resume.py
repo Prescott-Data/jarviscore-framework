@@ -94,6 +94,38 @@ async def test_resume_starts_after_the_waiting_turn():
 
 
 @pytest.mark.asyncio
+async def test_a_continued_step_resumes_with_its_own_recent_reasoning():
+    WaitingAgent.calls = 0
+    memory = CheckpointMemory()
+    context = {"workflow_id": "wf-1", "step_id": "step-1"}
+    await WaitingAgent(
+        agent_id="mail-agent", role="coder",
+        llm_client=QueueLLM([
+            (
+                'THOUGHT: KNOWN: the invoice is from Acme, £420. Need Gmail\n'
+                'TOOL: request_access\nPARAMS: {"system": "gmail"}'
+            ),
+        ]),
+    ).run("process my mailbox", context=context, memory=memory)
+
+    class RecordingLLM(QueueLLM):
+        async def generate(self, **kwargs):
+            self.seen = kwargs["messages"]
+            return await super().generate(**kwargs)
+
+    llm = RecordingLLM(['THOUGHT: continue\nDONE: Mailbox processed.\nRESULT: {"processed": true}'])
+    await WaitingAgent(agent_id="mail-agent", role="coder", llm_client=llm).run(
+        "process my mailbox",
+        context=context | {"_resume": True, "_new_execution_epoch": True},
+        memory=memory,
+    )
+
+    carried = [m["content"] for m in llm.seen if m["role"] == "assistant"]
+    assert any("the invoice is from Acme, £420" in str(c) for c in carried)
+    assert any("Waiting for Gmail access" in str(m["content"]) for m in llm.seen if m["role"] == "user")
+
+
+@pytest.mark.asyncio
 async def test_new_execution_epoch_preserves_action_evidence_and_closes_gap(tmp_path):
     memory = CheckpointMemory()
     state = KernelState(

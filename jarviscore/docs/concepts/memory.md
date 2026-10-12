@@ -31,11 +31,13 @@ flowchart LR
 
 ### Tier 1: Working Scratchpad
 
-The `WorkingScratchpad` holds the agent's active reasoning notes for the current workflow step. It is backed by blob storage (local filesystem or Azure Blob) and is scoped to a single `(workflow_id, step_id, agent_id)` tuple.
+The `WorkingScratchpad` holds the agent's working notes for the current workflow step. It is backed by blob storage (local filesystem or Azure Blob) and is scoped to a single `(workflow_id, step_id, agent_id)` tuple.
 
-Every call to `UnifiedMemory.log_turn()` appends a JSONL entry to the scratchpad. The scratchpad is included in the `rehydrate_bundle()` output as a formatted markdown string, which the Kernel injects into its context window at the start of each turn.
+An agent sees only its last ten exchanges, so anything it established earlier in a long step is kept by writing it down. Alongside any action, the agent writes `NOTE: <fact>` lines (or `"notes": [...]` in the JSON protocol); a note costs no turn. Each note is appended to the scratchpad and shown to the agent at the top of every later turn as **MY WORKING NOTES**, a block that context pressure never withholds. The notes are part of the step's checkpoint, so a step that continues in a new execution epoch keeps them.
 
-The scratchpad is ephemeral relative to the session: it is created fresh for each step and is not carried across steps. Use the Episodic Ledger and LTM for cross-step continuity.
+Every call to `UnifiedMemory.log_turn()` also appends the turn (thought, action and the whole result) to the scratchpad as an audit record; these turn entries are not shown back to the agent.
+
+The scratchpad is scoped to its step. Entries written with `scope="goal"` are promoted into the goal's truth when an `AutoAgent` goal step completes; use the Episodic Ledger and LTM for other cross-step continuity.
 
 **Activates when:** `blob_storage` is provided to `UnifiedMemory`.
 

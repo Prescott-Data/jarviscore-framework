@@ -95,7 +95,8 @@ class TestInfrastructureInjection:
             try:
                 assert first.decisions is decision_client
                 assert second.decisions is decision_client
-                assert mesh.has_capability("decisions_typesafe")
+                assert mesh.has_capability("decisions")
+                assert not mesh.has_capability("decisions_typesafe")
             finally:
                 await mesh.stop()
 
