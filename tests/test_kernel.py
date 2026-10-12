@@ -211,6 +211,49 @@ def test_command_receipt_validation_fails_closed(observation):
         )
 
 
+def test_a_cited_page_read_is_evidence_but_not_a_command_run():
+    # Live runs cited get_text receipts as the observation invites, and the
+    # gate rejected DONE as "not command evidence" again and again.
+    state = KernelState(workflow_id="wf-1", step_id="visit", agent_id="b1", task="Opening hours")
+    read = state.add_tool_result("get_text", {"ref": "e4"}, {"status": "success", "text": "Open 10:00-17:50"})
+
+    claim = {"opening_hours": "10:00-17:50", "tool_receipt_id": read.receipt_id}
+    assert state.hydrate_tool_receipts(claim, require_command_receipts=True) == claim
+
+    with pytest.raises(ToolReceiptError, match="not command evidence"):
+        state.hydrate_tool_receipts({
+            "tool_receipt_id": read.receipt_id, "command": ["curl", "x"], "exit_code": 0,
+        }, require_command_receipts=True)
+    with pytest.raises(ToolReceiptError, match="Unknown tool receipt"):
+        state.hydrate_tool_receipts({"tool_receipt_id": "tool:wf-1:visit:99"}, require_command_receipts=True)
+
+
+def test_a_cited_page_read_survives_the_step_boundary():
+    # The loop accepted the citation, then the mesh rejected the same output as
+    # "Unknown tool receipt" because only command and mutation receipts crossed.
+    state = KernelState(workflow_id="wf-1", step_id="visit", agent_id="b1", task="Opening hours")
+    read = state.add_tool_result("get_text", {"ref": "e4"}, {"status": "success", "text": "Open 10:00"})
+    claim = {"opening_hours": "10:00", "tool_receipt_id": read.receipt_id}
+
+    evidence = state.receipt_evidence(claim)
+    assert evidence == [{
+        "tool_receipt_id": read.receipt_id, "tool_name": "get_text",
+        "observed_at": read.observed_at.isoformat().replace("+00:00", "Z"),
+    }]
+    assert hydrate_receipt_evidence(claim, receipt_evidence=evidence, workflow_id="wf-1") == claim
+
+    with pytest.raises(ToolReceiptError, match="not command evidence"):
+        hydrate_receipt_evidence(
+            {"tool_receipt_id": read.receipt_id, "command": ["curl"], "exit_code": 0},
+            receipt_evidence=evidence, workflow_id="wf-1",
+        )
+    # A prior step's output is no proof: only this step's receipts count.
+    with pytest.raises(ToolReceiptError, match="Unknown tool receipt"):
+        hydrate_receipt_evidence(
+            claim, receipt_evidence=[], previous_step_results={"visit": evidence}, workflow_id="wf-1",
+        )
+
+
 def test_coder_done_gate_binds_authoritative_command_receipt(kernel):
     coder = kernel._create_subagent("coder", "test-coder")
     state = KernelState(
