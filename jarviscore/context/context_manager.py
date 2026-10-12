@@ -536,7 +536,7 @@ class ContextManager:
         if withheld:
             formatted.append(
                 f"…{withheld} earlier action(s) not inlined this turn — "
-                "call TOOL: read_turn_result to read any of them in full."
+                "call read_turn_result to read any of them in full."
             )
         return header + "\n\n".join(formatted), current
 

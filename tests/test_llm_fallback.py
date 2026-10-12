@@ -579,6 +579,78 @@ async def test_azure_content_filter_repair_is_explicit_opt_in():
     assert result["content_filter_repaired"] is True
 
 
+def test_native_tools_need_every_provider_in_the_chain_to_carry_them():
+    llm = UnifiedLLMClient.__new__(UnifiedLLMClient)
+    llm.config = {"azure_deployment": "gpt-5.2-chat"}
+
+    llm.provider_order = [LLMProvider.AZURE]
+    assert llm.carries_native_tools() is True
+    assert llm.carries_native_tools("gpt-5.1-codex") is False
+
+    # A fallback that drops tools would answer a native turn in prose.
+    llm.provider_order = [LLMProvider.AZURE, LLMProvider.CLAUDE]
+    assert llm.carries_native_tools() is False
+    llm.provider_order = []
+    assert llm.carries_native_tools() is False
+
+
+@pytest.mark.asyncio
+async def test_azure_returns_the_models_function_calls():
+    llm = UnifiedLLMClient.__new__(UnifiedLLMClient)
+    llm.config = {"azure_deployment": "gpt-5.2-chat"}
+    call = SimpleNamespace(
+        id="call_1",
+        function=SimpleNamespace(name="search", arguments='{"query": "x"}'),
+    )
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(
+            message=SimpleNamespace(content=None, tool_calls=[call]),
+            finish_reason="tool_calls",
+        )],
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=3, total_tokens=13),
+    )
+    create = AsyncMock(return_value=response)
+    llm.azure_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    tools = [{"type": "function", "function": {"name": "search", "parameters": {}}}]
+
+    result = await llm._call_azure(
+        messages=[{"role": "user", "content": "find x"}],
+        temperature=0.0,
+        max_tokens=10,
+        tools=tools,
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
+
+    sent = create.await_args.kwargs
+    assert sent["tools"] == tools
+    assert sent["tool_choice"] == "required"
+    assert sent["parallel_tool_calls"] is False
+    assert result["tool_calls"] == [
+        {"id": "call_1", "name": "search", "arguments": '{"query": "x"}'}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_definitions_are_reserved_with_the_prompt():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-llm-tools", "Reserve the tool definitions", budget={"max_tokens": 1000},
+    )
+    llm = _budget_test_client({"content": "", "tokens": {"total": 3}})
+    tools = [{"type": "function", "function": {
+        "name": "search", "description": "evidence " * 2000, "parameters": {},
+    }}]
+
+    with workflow_budget_scope(store, "wf-llm-tools"):
+        with pytest.raises(WorkflowBudgetExceeded):
+            await llm.generate(prompt="hello", max_tokens=20, tools=tools)
+
+    llm._generate_inner.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # Vertex AI provider tests (mocked — no real GCP credentials required)
 # ---------------------------------------------------------------------------

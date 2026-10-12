@@ -2,8 +2,12 @@
 6C: BaseSubAgent — Abstract base for all kernel subagents.
 
 Subagents are specialized execution units dispatched by the kernel.
-Each has a set of tools, a system prompt, and uses a text-based
-tool call protocol that works with any LLM provider.
+Each has a set of tools and a system prompt. Each turn the model takes one
+action: a tool call, or done with the answer and its data.
+
+Where every provider the LLM client can reach carries native tool calls, the
+tools are offered as functions and the model must call one each turn
+(``done`` finishes). Elsewhere the text protocol below carries the same turn:
 
 Tool call protocol (LLM output):
     THOUGHT: <reasoning>
@@ -49,8 +53,10 @@ import logging
 import os
 import re
 import time
+import types
+import typing
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.execution import multimodal
@@ -139,8 +145,8 @@ def _clip_observation(text: str, turn: int, limit: int = 0) -> str:
         return text
     return (
         f"{text[:limit]}\n"
-        f"…[showing {limit} of {len(text)} chars — call TOOL: read_turn_result "
-        f'PARAMS: {{"turn": {turn}, "offset": {limit}}} for the rest]'
+        f"…[showing {limit} of {len(text)} chars — call read_turn_result with "
+        f'{{"turn": {turn}, "offset": {limit}}} for the rest]'
     )
 
 
@@ -151,15 +157,82 @@ def _observe(tool_name: str, tool_result: Any, turn: int) -> str:
     return _clip_observation(str(tool_result), turn)
 
 def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) -> None:
-    """Prior turns as assistant/user pairs, images included (last 10)."""
+    """Prior turns (last 10): a native turn as its tool call and result, a text turn as a pair."""
     for hist_entry in conversation_history[-10:]:
-        messages.append({"role": "assistant", "content": hist_entry["assistant"]})
+        call = hist_entry.get("tool_call")
+        images = hist_entry.get("images", ())
+        if call is None:
+            messages.append({"role": "assistant", "content": hist_entry["assistant"]})
+            messages.append({
+                "role": "user",
+                "content": multimodal.with_images(hist_entry["observation"], images),
+            })
+            continue
         messages.append({
-            "role": "user",
-            "content": multimodal.with_images(
-                hist_entry["observation"], hist_entry.get("images", ())
-            ),
+            "role": "assistant",
+            "content": hist_entry["assistant"] or None,
+            "tool_calls": [{
+                "id": call["id"],
+                "type": "function",
+                "function": {"name": call["name"], "arguments": call["arguments"]},
+            }],
         })
+        messages.append({
+            "role": "tool",
+            "tool_call_id": call["id"],
+            "content": hist_entry["observation"],
+        })
+        if images:
+            # A tool message carries text only, so the images it returned follow it.
+            messages.append({
+                "role": "user",
+                "content": multimodal.with_images(f"Images returned by {call['name']}:", images),
+            })
+
+
+#: The function that finishes a native turn, as DONE/RESULT finishes a text one.
+_DONE_FUNCTION = "done"
+_INVALID_FUNCTION_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
+_JSON_SCALARS = {str: "string", bool: "boolean", int: "integer", float: "number"}
+
+
+def _json_schema_for(annotation: Any) -> Dict[str, Any]:
+    """JSON Schema for one annotated argument; an empty schema where none is declared."""
+    origin = typing.get_origin(annotation)
+    if origin in (Union, types.UnionType):
+        options = [arg for arg in typing.get_args(annotation) if arg is not type(None)]
+        return _json_schema_for(options[0]) if len(options) == 1 else {}
+    base = origin or annotation
+    if base in _JSON_SCALARS:
+        return {"type": _JSON_SCALARS[base]}
+    if base in (list, tuple, set, frozenset):
+        return {"type": "array", "items": {}}
+    if base is dict:
+        return {"type": "object"}
+    return {}
+
+
+def _parameters_schema(func: Callable) -> Dict[str, Any]:
+    """A tool's arguments as JSON Schema, read from its signature."""
+    schema: Dict[str, Any] = {"type": "object", "properties": {}}
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return schema
+    try:
+        hints = typing.get_type_hints(func)
+    except Exception:
+        hints = {}
+    required = []
+    for name, parameter in signature.parameters.items():
+        if parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD):
+            continue
+        schema["properties"][name] = _json_schema_for(hints.get(name, parameter.annotation))
+        if parameter.default is parameter.empty:
+            required.append(name)
+    if required:
+        schema["required"] = required
+    return schema
 
 
 def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -327,6 +400,9 @@ class BaseSubAgent(ABC):
     #: — so an agent that is still working is never cut off, however long it takes.
     max_identical_done_attempts: int = 3
 
+    #: Whether this dispatch's turns are native tool calls; set by run() from the LLM client.
+    _native_protocol: bool = False
+
     def __init__(
         self,
         agent_id: str,
@@ -478,6 +554,92 @@ class BaseSubAgent(ABC):
             lines.append(f"  - {tool.name}: {tool.description} [{tool.phase}]")
         return "\n".join(lines)
 
+    def _native_tool_specs(self, context: Optional[Dict]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+        """The registered tools and done as provider functions, and each function's tool."""
+        specs, tools_by_function = [], {}
+        for tool in self._tools.values():
+            function = _INVALID_FUNCTION_CHARS.sub("_", tool.name)[:64]
+            while function in tools_by_function or function == _DONE_FUNCTION:
+                function = f"{function[:56]}_{len(tools_by_function)}"
+            tools_by_function[function] = tool.name
+            specs.append({"type": "function", "function": {
+                "name": function,
+                "description": tool.description,
+                "parameters": _parameters_schema(tool.func),
+            }})
+        specs.append(self._done_function(context))
+        return specs, tools_by_function
+
+    @staticmethod
+    def _done_function(context: Optional[Dict]) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "description": (
+                "The data behind the answer, shaped for whoever will use it next: the "
+                "list, the record, the figures. An empty object when there is none."
+            ),
+        }
+        declared = (context or {}).get("output_schema")
+        definitions: Dict[str, Any] = {}
+        if hasattr(declared, "model_json_schema"):
+            schema = declared.model_json_schema()
+            # "#/$defs/..." references resolve from the parameters root.
+            definitions = schema.pop("$defs", {})
+            result = {**schema, **result}
+        parameters: Dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": (
+                        "The complete answer for the person who asked, including "
+                        "any lists or details they asked for."
+                    ),
+                },
+                "result": result,
+            },
+            "required": ["summary", "result"],
+        }
+        if definitions:
+            parameters["$defs"] = definitions
+        return {"type": "function", "function": {
+            "name": _DONE_FUNCTION,
+            "description": (
+                "Finish the task with the complete answer. Call it only when the task "
+                "is complete, never merely because more tool calls are needed."
+            ),
+            "parameters": parameters,
+        }}
+
+    @staticmethod
+    def _parse_native_turn(llm_result: Dict[str, Any], tools_by_function: Dict[str, str]) -> Dict[str, Any]:
+        """The turn's action from the model's first function call."""
+        content = (llm_result.get("content") or "").strip()
+        calls = llm_result.get("tool_calls") or []
+        if not calls:
+            return {"type": "raw", "content": content}
+        call = calls[0]
+        native_call = {"id": call["id"], "name": call["name"], "arguments": call["arguments"]}
+        arguments = _extract_json_object(call["arguments"]) if call["arguments"].strip() else {}
+        if call["name"] == _DONE_FUNCTION:
+            if arguments is None:
+                return {"type": "raw", "content": call["arguments"], "native_call": native_call}
+            summary = str(arguments.get("summary") or "").strip()
+            return {
+                "type": "done",
+                "thought": content,
+                "summary": summary or "Completed via done",
+                "result": arguments.get("result"),
+                "answer": summary or None,
+                "native_call": native_call,
+            }
+        return {
+            "type": "tool",
+            "thought": content,
+            "tool": tools_by_function.get(call["name"], call["name"]),
+            "params": arguments if arguments is not None else {"raw": call["arguments"]},
+            "native_call": native_call,
+        }
+
     @abstractmethod
     def get_system_prompt(self) -> str:
         """Return the system prompt for this subagent."""
@@ -565,6 +727,26 @@ class BaseSubAgent(ABC):
                 "═══ EXECUTION HARNESS (how you operate this turn) ═══",
                 "",
             ]
+        if self._native_protocol:
+            parts += [
+                self.get_system_prompt(),
+                "",
+                "Protocol:",
+                "  You act only by calling the functions offered: one call per turn. After",
+                "  each result you receive another turn; keep calling tools until the task",
+                "  is complete, then call done. Never call done merely because additional",
+                "  tool calls are needed.",
+                "",
+                "Finishing:",
+                "  done's summary is read by the person who asked. Put the complete answer",
+                "  there, including any lists or details they asked for. done's result",
+                "  carries the data behind that answer, shaped for whoever will use it",
+                "  next: the list, the record, the figures. It is not a place for status",
+                "  flags, booleans about your own process, or a diagnosis of the runtime,",
+                "  and it is not a second copy of the answer. If there is no data beyond",
+                "  the answer, result may be an empty object.",
+            ]
+            return "\n".join(parts)
         parts += [
             self.get_system_prompt(),
             "",
@@ -624,21 +806,37 @@ class BaseSubAgent(ABC):
         try:
             messages = [{"role": "system", "content": system_prompt}]
             _thread_history(messages, conversation_history)
-            messages.append({"role": "user", "content": (
-                f"Your execution budget is exhausted ({exhausted}). Tools are no "
-                "longer available. Produce your final answer NOW from what you "
-                "have already gathered. Respond with exactly:\n"
-                "DONE: <complete human answer; may span lines>\nRESULT: <json result>\n"
-                "If your findings are partial, say so inside the result."
-            )})
-            kwargs = {"model": model} if model else {}
+            kwargs: Dict[str, Any] = {"model": model} if model else {}
+            if self._native_protocol:
+                instruction = (
+                    f"Your execution budget is exhausted ({exhausted}). Only done is "
+                    "available now. Call done with your final answer from what you have "
+                    "already gathered. If your findings are partial, say so inside the result."
+                )
+                kwargs.update(
+                    tools=[self._done_function(state.context)],
+                    tool_choice="required",
+                    parallel_tool_calls=False,
+                )
+            else:
+                instruction = (
+                    f"Your execution budget is exhausted ({exhausted}). Tools are no "
+                    "longer available. Produce your final answer NOW from what you "
+                    "have already gathered. Respond with exactly:\n"
+                    "DONE: <complete human answer; may span lines>\nRESULT: <json result>\n"
+                    "If your findings are partial, say so inside the result."
+                )
+            messages.append({"role": "user", "content": instruction})
             llm_result = await self.llm_client.generate(messages=messages, **kwargs)
-            content = llm_result.get("content", "")
+            content = llm_result.get("content") or ""
             tokens = llm_result.get("tokens", {})
             total_tokens["input"] += tokens.get("input", 0)
             total_tokens["output"] += tokens.get("output", 0)
             total_tokens["total"] += tokens.get("total", 0)
-            parsed = self._parse_response_for_contract(content, state.context)
+            if self._native_protocol:
+                parsed = self._parse_native_turn(llm_result, {})
+            else:
+                parsed = self._parse_response_for_contract(content, state.context)
             if parsed.get("type") != "done":
                 return None
             can_exit, reject_reason = self._ground_completion(state, parsed)
@@ -683,6 +881,11 @@ class BaseSubAgent(ABC):
         """
         parts = [context_block, "\n---"]
         parts.append(f"**ROLE: {self.role.upper()} AGENT** | Turn {state.turn}")
+        finish, act = (
+            ("call done", "Then call the function for your next step, or done.")
+            if self._native_protocol
+            else ("call DONE", "Then emit your TOOL/PARAMS or DONE/RESULT.")
+        )
 
         # Epistemic Decision Contract — forces self-assessment
         parts.append(
@@ -690,8 +893,8 @@ class BaseSubAgent(ABC):
             "1. **KNOWN:** What have I established so far? (refer to WHAT I KNOW SO FAR above)\n"
             "2. **GAP:** What specific information am I still missing?\n"
             "3. **STRATEGY:** What is the most efficient next step to close the gap?\n"
-            "4. **EXIT CHECK:** Do I have enough to produce a useful result? If yes, call DONE.\n\n"
-            "Then emit your TOOL/PARAMS or DONE/RESULT."
+            f"4. **EXIT CHECK:** Do I have enough to produce a useful result? If yes, {finish}.\n\n"
+            f"{act}"
         )
         if "ask_peer" in self._tools:
             parts.append(
@@ -807,6 +1010,8 @@ class BaseSubAgent(ABC):
         _trace = trace if trace is not None else create_noop_trace()
         total_tokens = {"input": 0, "output": 0, "total": state.tokens_used}
         total_cost = state.total_cost_usd
+        carries_native = getattr(self.llm_client, "carries_native_tools", None)
+        self._native_protocol = callable(carries_native) and carries_native(model) is True
         system_prompt = self._build_system_prompt()
 
         # Rolling conversation history for multi-turn LLM continuity
@@ -918,6 +1123,12 @@ class BaseSubAgent(ABC):
             kwargs = {}
             if model:
                 kwargs["model"] = model
+            tools_by_function: Dict[str, str] = {}
+            if self._native_protocol:
+                tool_specs, tools_by_function = self._native_tool_specs(state.context)
+                kwargs.update(
+                    tools=tool_specs, tool_choice="required", parallel_tool_calls=False,
+                )
 
             _llm_t0 = __import__('time').monotonic()
             try:
@@ -993,8 +1204,16 @@ class BaseSubAgent(ABC):
             total_tokens["output"] += tokens.get("output", 0)
             total_tokens["total"] += tokens.get("total", 0)
             total_cost += llm_result.get("cost_usd", 0.0)
+            if self._native_protocol:
+                parsed = self._parse_native_turn(llm_result, tools_by_function)
+            else:
+                parsed = self._parse_response_for_contract(content, context)
+            native_call = parsed.get("native_call")
+            reply = content
+            if native_call:
+                reply = f"{content}\n{native_call['name']}({native_call['arguments']})".strip()
             _trace.log_llm_response(
-                content[:500],
+                reply[:500],
                 round((__import__('time').monotonic() - _llm_t0) * 1000, 1),
                 tokens=tokens.get("total", 0),
                 model=llm_result.get("model") or model,
@@ -1002,8 +1221,6 @@ class BaseSubAgent(ABC):
             llm_tokens_this_turn = tokens.get("total", 0)
             state.tokens_used = total_tokens["total"]
 
-            # Parse response
-            parsed = self._parse_response_for_contract(content, context)
             if parsed["type"] != "raw":
                 # Repairs bound a run of malformed replies, not a session's lifetime.
                 state.internal_variables["_protocol_violation_count"] = 0
@@ -1099,6 +1316,7 @@ class BaseSubAgent(ABC):
                             f"[Turn {turn}] {report}\n"
                             f"DONE was not recorded. It may be attempted again."
                         ),
+                        "tool_call": native_call,
                     })
                     # Charge tokens WITHOUT the "done" label: track_usage("done")
                     # sets done_called, which made should_continue() kill the agent
@@ -1196,6 +1414,7 @@ class BaseSubAgent(ABC):
                             f"[Turn {turn}] BLOCKED by epistemic ledger: "
                             f"{_ep_verdict.reason}\n{_ep_verdict.injection}"
                         ),
+                        "tool_call": native_call,
                     })
                     continue
 
@@ -1218,6 +1437,7 @@ class BaseSubAgent(ABC):
                     self._record_pre_execute_result(
                         state, trajectory, conversation_history, content,
                         turn, tool_name, tool_params, hook_result, hook_event,
+                        tool_call=native_call,
                     )
                     continue
 
@@ -1408,6 +1628,7 @@ class BaseSubAgent(ABC):
                             "assistant": content,
                             "observation": observation,
                             "images": observed_images,
+                            "tool_call": native_call,
                         })
                         continue
                     else:
@@ -1448,6 +1669,7 @@ class BaseSubAgent(ABC):
                     "assistant": content,
                     "observation": observation,
                     "images": observed_images,
+                    "tool_call": native_call,
                 })
 
                 # Log turn to memory
@@ -1527,20 +1749,35 @@ class BaseSubAgent(ABC):
                 error="Subagent response did not match TOOL or DONE protocol.",
             )
             if protocol_violations <= max_protocol_repairs and turn < max_turns - 1:
-                conversation_history.append({
-                    "assistant": content,
-                    "observation": (
+                if native_call:
+                    repair = (
+                        f"[Turn {turn}] PROTOCOL VIOLATION: the arguments of "
+                        f"{native_call['name']} were not a JSON object. Call it again "
+                        "with a valid JSON object."
+                    )
+                elif self._native_protocol:
+                    repair = (
+                        f"[Turn {turn}] PROTOCOL VIOLATION: your reply called no function. "
+                        "Act by calling exactly one of the offered functions; call done "
+                        "to finish."
+                    )
+                else:
+                    repair = (
                         f"[Turn {turn}] PROTOCOL VIOLATION: Your response did not match "
                         "the required TOOL/PARAMS or DONE/RESULT protocol.\n"
                         "Repair on the next turn. Emit exactly one of:\n"
                         "THOUGHT: <reasoning>\\nTOOL: <tool_name>\\nPARAMS: <json>\n"
                         "or\n"
                         "THOUGHT: <reasoning>\\nDONE: <summary>\\nRESULT: <json>."
-                    ),
+                    )
+                conversation_history.append({
+                    "assistant": content,
+                    "observation": repair,
+                    "tool_call": native_call,
                 })
                 state.add_thought(
-                    "[PROTOCOL_VIOLATION] Previous response did not match the required "
-                    "TOOL/PARAMS or DONE/RESULT protocol. Repair on the next turn."
+                    "[PROTOCOL_VIOLATION] The previous reply took no valid action. "
+                    "Repair on the next turn."
                 )
                 continue
             return AgentOutput(
@@ -1689,6 +1926,7 @@ class BaseSubAgent(ABC):
         tool_params: Dict[str, Any],
         hook_result: Dict[str, Any],
         hook_event: str,
+        tool_call: Optional[Dict[str, str]] = None,
     ) -> None:
         hook_succeeded = hook_result.get("status") == "success"
         disposition = "resolved" if hook_succeeded else "blocked"
@@ -1719,6 +1957,7 @@ class BaseSubAgent(ABC):
                 f"[Turn {turn}] Tool '{tool_name}' {disposition} by "
                 f"pre-execute review: {str(hook_result)[:500]}"
             ),
+            "tool_call": tool_call,
         })
 
     async def _execute_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
@@ -1743,9 +1982,9 @@ class BaseSubAgent(ABC):
             return {
                 "status": "error",
                 "error": (
-                    f"Could not parse your PARAMS as valid JSON. "
+                    f"Could not parse your arguments as a JSON object. "
                     f"Tool '{tool_name}' expects these parameters: {expected}. "
-                    f"Please re-emit TOOL/PARAMS with a valid JSON object."
+                    f"Call it again with a valid JSON object."
                 ),
                 "semantic_error": "MALFORMED_PARAMS",
                 "expected_params": expected,
