@@ -159,9 +159,9 @@ class TestEpistemicDecisionPrompt:
         prompt = self._build_prompt()
         assert "STRATEGY:" in prompt
 
-    def test_prompt_includes_exit_check(self):
+    def test_prompt_leaves_sufficiency_to_the_agent(self):
         prompt = self._build_prompt()
-        assert "EXIT CHECK:" in prompt
+        assert "EXIT CHECK:" not in prompt
 
     def test_prompt_includes_turn_number(self):
         state = _make_state(turn=7)

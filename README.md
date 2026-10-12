@@ -215,7 +215,7 @@ The Kernel runs an Observe-Orient-Decide-Act (OODA) loop for every AutoAgent tas
 | **Planner** | Decomposes goals into executable steps using heavy-tier models |
 | **StepEvaluator** | Classifies step outcomes using nano-tier models for fast, cheap evaluation |
 | **GoalContext** | Tracks plan state, step history, and convergence signals |
-| **EpistemicLedger** | Records what the agent knows, assumes, and has verified |
+| **FailureLedger** | Records and classifies tool failures for the agent and for tracing |
 
 ### TypeSafe Jev Decision Models
 

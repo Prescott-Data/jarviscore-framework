@@ -476,6 +476,75 @@ async def test_execute_goal_uses_validated_template_without_planner_calls(monkey
     assert store.get_workflow_planning_status("wf-template")["source"] == "template"
 
 
+class HeldResearchPeer(ResearchPeer):
+    def __init__(self, llm, agent_id=None):
+        super().__init__(llm, agent_id)
+        self.release = asyncio.Event()
+
+    async def execute_task(self, task):
+        await self.release.wait()
+        return await super().execute_task(task)
+
+
+@pytest.mark.asyncio
+async def test_a_draining_mesh_finishes_its_goals_and_takes_no_new_work(monkeypatch):
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    researcher = mesh.add(HeldResearchPeer(MockLLMClient(), agent_id="researcher-1"))
+    analyst = mesh.add(AnalysisPeer(agent_id="analyst-1"))
+    goal = "Find evidence and analyse it"
+    template = {
+        "obligations": [{"id": "o1", "description": "Answer from evidence", "source_quote": goal}],
+        "steps": [{
+            "id": "research", "capability": "research", "effect": "read",
+            "systems": [], "task": "Find evidence",
+            "success_criterion": "Evidence exists", "expected_findings": ["evidence"],
+            "depends_on": [], "covers": [],
+        }, {
+            "id": "analyse", "capability": "analysis", "effect": "read",
+            "systems": [], "task": "Analyse the evidence",
+            "success_criterion": "Analysis uses evidence",
+            "expected_findings": ["analysis"], "depends_on": ["research"],
+            "covers": ["o1"],
+        }],
+    }
+
+    await mesh.start()
+    try:
+        driven = asyncio.create_task(mesh.execute_goal(
+            goal, workflow_id="wf-driven", plan_template=template, timeout=10,
+        ))
+        deadline = time.monotonic() + 5
+        while store.get_step_status("wf-driven", "research") != "in_progress":
+            assert time.monotonic() < deadline
+            await asyncio.sleep(0.01)
+
+        mesh.drain()
+        # Work another node submitted after this one began draining.
+        store.publish_workflow(
+            "wf-elsewhere", goal="Research elsewhere", obligations=[],
+            steps=[{"id": "research", "capability": "research", "effect": "read",
+                    "task": "Find other evidence", "depends_on": []}],
+        )
+        with pytest.raises(RuntimeError, match="draining"):
+            await mesh.submit_goal(goal, workflow_id="wf-new", plan_template=template)
+
+        researcher.release.set()
+        result = await asyncio.wait_for(driven, 5)
+        await asyncio.sleep(0.2)
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "completed"
+    assert len(analyst.received) == 1
+    assert store.get_step_status("wf-elsewhere", "research") == "pending"
+    assert store.get_workflow_definition("wf-new") is None
+
+
 @pytest.mark.asyncio
 async def test_execute_goal_falls_back_to_generated_plan_when_template_mismatches(monkeypatch):
     llm = MockLLMClient(responses=goal_responses())

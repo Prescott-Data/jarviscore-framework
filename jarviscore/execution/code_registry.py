@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -1562,6 +1563,24 @@ def create_function_registry(
     return registry
 
 
+_SHARED_REGISTRIES: Dict[str, "FunctionRegistry"] = {}
+_SHARED_REGISTRIES_LOCK = threading.Lock()
+
+
+def shared_function_registry(storage_path: str = "./logs/function_registry") -> FunctionRegistry:
+    """The process's one registry for this directory, loaded and seeded once.
+
+    Agents writing the same directory see one index instead of diverging copies,
+    and a pool member joins in microseconds instead of reloading the catalogue.
+    """
+    key = str(Path(storage_path).resolve())
+    with _SHARED_REGISTRIES_LOCK:
+        registry = _SHARED_REGISTRIES.get(key)
+        if registry is None:
+            registry = _SHARED_REGISTRIES[key] = create_function_registry(storage_path)
+        return registry
+
+
 def _seed_shipped_atoms(registry: FunctionRegistry) -> None:
     """Load the packaged atoms so a fresh registry is not an empty one.
 
@@ -1594,7 +1613,7 @@ def _seed_shipped_atoms(registry: FunctionRegistry) -> None:
     )
     if failed:
         logger.warning("%d atom(s) in the catalogue could not be loaded", len(failed))
-    if not registered:
+    if not registry.function_metadata:
         # A silent no-op here is what made an empty registry look like normal
         # operation for as long as it did.
         logger.warning(

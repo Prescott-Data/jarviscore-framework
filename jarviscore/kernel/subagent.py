@@ -2,8 +2,12 @@
 6C: BaseSubAgent — Abstract base for all kernel subagents.
 
 Subagents are specialized execution units dispatched by the kernel.
-Each has a set of tools, a system prompt, and uses a text-based
-tool call protocol that works with any LLM provider.
+Each has a set of tools and a system prompt. Each turn the model takes one
+action: a tool call, or done with the answer and its data.
+
+Where every provider the LLM client can reach carries native tool calls, the
+tools are offered as functions and the model must call one each turn
+(``done`` finishes). Elsewhere the text protocol below carries the same turn:
 
 Tool call protocol (LLM output):
     THOUGHT: <reasoning>
@@ -18,26 +22,24 @@ Completion protocol:
 OODA Loop Architecture:
     Each turn follows OBSERVE → ORIENT → DECIDE → ACT:
     1. OBSERVE  — ContextManager builds a priority-stack prompt from state
-    2. ORIENT   — Cognition manager checks for interventions (stalls, budget)
+    2. ORIENT   — the turn states the budget that remains
     3. DECIDE   — LLM call produces a tool call or completion signal
-    4. ACT      — Tool execution, failure recording, convergence evaluation
+    4. ACT      — Tool execution and failure recording
 
-    The loop is governed by:
+    The runtime enforces boundaries and reports facts; the agent decides:
     - ExecutionLease budget (thinking + action tokens, wall clock, turn fuse)
-    - ConvergenceGovernor (stagnation, same-tool streak, equivalent outcomes)
-    - FailureLedger (fingerprint-based repeat-action blocking)
-    - EpistemicLedger (search/URL dedup, knowledge plateau detection)
+    - FailureLedger (records and classifies failures)
+    - each result says when the identical call ran before and how it went
 
     Subclass hooks (all have safe defaults):
     - _pre_run_hook()       — one-time setup before the loop starts
-    - _pre_execute_hook()   — gate tool calls (e.g. research phase gating)
+    - _pre_execute_hook()   — gate tool calls (e.g. approval of a consequential action)
     - _can_complete()       — gate DONE signals (e.g. evidence quality check)
 
     Exit paths:
     - parsed["type"] == "done"  — LLM signals completion (subject to _can_complete)
     - state.status == "completed" — tool-driven exit (e.g. publish_research_findings)
     - Lease/budget exhaustion   — emergency yield
-    - Convergence stall         — post-pivot yield
     - Emergency turn fuse       — max_turns reached
 """
 
@@ -49,14 +51,15 @@ import logging
 import os
 import re
 import time
+import types
+import typing
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 from jarviscore.context.truth import AgentOutput
 from jarviscore.execution import multimodal
-from jarviscore.kernel.cognition import AgentCognitionManager
+from jarviscore.kernel.cognition import AgentCognitionManager, FailureLedger
 from jarviscore.orchestration.budget import WorkflowBudgetExceeded
-from jarviscore.kernel.epistemic import EpistemicLedger
 from jarviscore.kernel.gate import GateEvidence, as_evidence, record_attempt
 from jarviscore.kernel.state import KernelState, ToolReceiptError
 
@@ -139,8 +142,8 @@ def _clip_observation(text: str, turn: int, limit: int = 0) -> str:
         return text
     return (
         f"{text[:limit]}\n"
-        f"…[showing {limit} of {len(text)} chars — call TOOL: read_turn_result "
-        f'PARAMS: {{"turn": {turn}, "offset": {limit}}} for the rest]'
+        f"…[showing {limit} of {len(text)} chars — call read_turn_result with "
+        f'{{"turn": {turn}, "offset": {limit}}} for the rest]'
     )
 
 
@@ -150,16 +153,113 @@ def _observe(tool_name: str, tool_result: Any, turn: int) -> str:
         return str(tool_result)
     return _clip_observation(str(tool_result), turn)
 
+
+def _canonical(value: Any) -> str:
+    try:
+        return json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def _identical_call_record(
+    earlier: List[Any], tool_name: str, params: Dict[str, Any], result: Any
+) -> str:
+    """What the tool log shows about earlier calls identical to this one, if any."""
+    fingerprint = FailureLedger.fingerprint(tool_name, params)
+    same = [
+        receipt for receipt in earlier
+        if receipt.tool_name == tool_name
+        and FailureLedger.fingerprint(receipt.tool_name, receipt.tool_input) == fingerprint
+    ]
+    if not same:
+        return ""
+    last = same[-1]
+    unchanged = _canonical(last.tool_output) == _canonical(result)
+    return (
+        f"This exact call (same tool, same arguments) ran {len(same)} time(s) earlier "
+        f"in this run; the last, receipt {last.receipt_id}, ended {last.status}, and "
+        f"its result was {'identical to' if unchanged else 'different from'} this one."
+    )
+
+
 def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) -> None:
-    """Prior turns as assistant/user pairs, images included (last 10)."""
+    """Prior turns (last 10): a native turn as its tool call and result, a text turn as a pair."""
     for hist_entry in conversation_history[-10:]:
-        messages.append({"role": "assistant", "content": hist_entry["assistant"]})
+        call = hist_entry.get("tool_call")
+        images = hist_entry.get("images", ())
+        if call is None:
+            messages.append({"role": "assistant", "content": hist_entry["assistant"]})
+            messages.append({
+                "role": "user",
+                "content": multimodal.with_images(hist_entry["observation"], images),
+            })
+            continue
         messages.append({
-            "role": "user",
-            "content": multimodal.with_images(
-                hist_entry["observation"], hist_entry.get("images", ())
-            ),
+            "role": "assistant",
+            "content": hist_entry["assistant"] or None,
+            "tool_calls": [{
+                "id": call["id"],
+                "type": "function",
+                "function": {"name": call["name"], "arguments": call["arguments"]},
+                **({"signature": call["signature"]} if call.get("signature") else {}),
+            }],
         })
+        messages.append({
+            "role": "tool",
+            "tool_call_id": call["id"],
+            "content": hist_entry["observation"],
+        })
+        if images:
+            # A tool message carries text only, so the images it returned follow it.
+            messages.append({
+                "role": "user",
+                "content": multimodal.with_images(f"Images returned by {call['name']}:", images),
+            })
+
+
+#: The function that finishes a native turn, as DONE/RESULT finishes a text one.
+_DONE_FUNCTION = "done"
+_INVALID_FUNCTION_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
+_JSON_SCALARS = {str: "string", bool: "boolean", int: "integer", float: "number"}
+
+
+def _json_schema_for(annotation: Any) -> Dict[str, Any]:
+    """JSON Schema for one annotated argument; an empty schema where none is declared."""
+    origin = typing.get_origin(annotation)
+    if origin in (Union, types.UnionType):
+        options = [arg for arg in typing.get_args(annotation) if arg is not type(None)]
+        return _json_schema_for(options[0]) if len(options) == 1 else {}
+    base = origin or annotation
+    if base in _JSON_SCALARS:
+        return {"type": _JSON_SCALARS[base]}
+    if base in (list, tuple, set, frozenset):
+        return {"type": "array", "items": {}}
+    if base is dict:
+        return {"type": "object"}
+    return {}
+
+
+def _parameters_schema(func: Callable) -> Dict[str, Any]:
+    """A tool's arguments as JSON Schema, read from its signature."""
+    schema: Dict[str, Any] = {"type": "object", "properties": {}}
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return schema
+    try:
+        hints = typing.get_type_hints(func)
+    except Exception:
+        hints = {}
+    required = []
+    for name, parameter in signature.parameters.items():
+        if parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD):
+            continue
+        schema["properties"][name] = _json_schema_for(hints.get(name, parameter.annotation))
+        if parameter.default is parameter.empty:
+            required.append(name)
+    if required:
+        schema["required"] = required
+    return schema
 
 
 def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -327,6 +427,9 @@ class BaseSubAgent(ABC):
     #: — so an agent that is still working is never cut off, however long it takes.
     max_identical_done_attempts: int = 3
 
+    #: Whether this dispatch's turns are native tool calls; set by run() from the LLM client.
+    _native_protocol: bool = False
+
     def __init__(
         self,
         agent_id: str,
@@ -478,6 +581,92 @@ class BaseSubAgent(ABC):
             lines.append(f"  - {tool.name}: {tool.description} [{tool.phase}]")
         return "\n".join(lines)
 
+    def _native_tool_specs(self, context: Optional[Dict]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+        """The registered tools and done as provider functions, and each function's tool."""
+        specs, tools_by_function = [], {}
+        for tool in self._tools.values():
+            function = _INVALID_FUNCTION_CHARS.sub("_", tool.name)[:64]
+            while function in tools_by_function or function == _DONE_FUNCTION:
+                function = f"{function[:56]}_{len(tools_by_function)}"
+            tools_by_function[function] = tool.name
+            specs.append({"type": "function", "function": {
+                "name": function,
+                "description": tool.description,
+                "parameters": _parameters_schema(tool.func),
+            }})
+        specs.append(self._done_function(context))
+        return specs, tools_by_function
+
+    @staticmethod
+    def _done_function(context: Optional[Dict]) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "description": (
+                "The data behind the answer, shaped for whoever will use it next: the "
+                "list, the record, the figures. An empty object when there is none."
+            ),
+        }
+        declared = (context or {}).get("output_schema")
+        definitions: Dict[str, Any] = {}
+        if hasattr(declared, "model_json_schema"):
+            schema = declared.model_json_schema()
+            # "#/$defs/..." references resolve from the parameters root.
+            definitions = schema.pop("$defs", {})
+            result = {**schema, **result}
+        parameters: Dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": (
+                        "The complete answer for the person who asked, including "
+                        "any lists or details they asked for."
+                    ),
+                },
+                "result": result,
+            },
+            "required": ["summary", "result"],
+        }
+        if definitions:
+            parameters["$defs"] = definitions
+        return {"type": "function", "function": {
+            "name": _DONE_FUNCTION,
+            "description": (
+                "Finish the task with the complete answer. Call it only when the task "
+                "is complete, never merely because more tool calls are needed."
+            ),
+            "parameters": parameters,
+        }}
+
+    @staticmethod
+    def _parse_native_turn(llm_result: Dict[str, Any], tools_by_function: Dict[str, str]) -> Dict[str, Any]:
+        """The turn's action from the model's first function call."""
+        content = (llm_result.get("content") or "").strip()
+        calls = llm_result.get("tool_calls") or []
+        if not calls:
+            return {"type": "raw", "content": content}
+        call = calls[0]
+        native_call = {key: call[key] for key in ("id", "name", "arguments", "signature") if key in call}
+        arguments = _extract_json_object(call["arguments"]) if call["arguments"].strip() else {}
+        if call["name"] == _DONE_FUNCTION:
+            if arguments is None:
+                return {"type": "raw", "content": call["arguments"], "native_call": native_call}
+            summary = str(arguments.get("summary") or "").strip()
+            return {
+                "type": "done",
+                "thought": content,
+                "summary": summary or "Completed via done",
+                "result": arguments.get("result"),
+                "answer": summary or None,
+                "native_call": native_call,
+            }
+        return {
+            "type": "tool",
+            "thought": content,
+            "tool": tools_by_function.get(call["name"], call["name"]),
+            "params": arguments if arguments is not None else {"raw": call["arguments"]},
+            "native_call": native_call,
+        }
+
     @abstractmethod
     def get_system_prompt(self) -> str:
         """Return the system prompt for this subagent."""
@@ -565,6 +754,26 @@ class BaseSubAgent(ABC):
                 "═══ EXECUTION HARNESS (how you operate this turn) ═══",
                 "",
             ]
+        if self._native_protocol:
+            parts += [
+                self.get_system_prompt(),
+                "",
+                "Protocol:",
+                "  You act only by calling the functions offered: one call per turn. After",
+                "  each result you receive another turn; keep calling tools until the task",
+                "  is complete, then call done. Never call done merely because additional",
+                "  tool calls are needed.",
+                "",
+                "Finishing:",
+                "  done's summary is read by the person who asked. Put the complete answer",
+                "  there, including any lists or details they asked for. done's result",
+                "  carries the data behind that answer, shaped for whoever will use it",
+                "  next: the list, the record, the figures. It is not a place for status",
+                "  flags, booleans about your own process, or a diagnosis of the runtime,",
+                "  and it is not a second copy of the answer. If there is no data beyond",
+                "  the answer, result may be an empty object.",
+            ]
+            return "\n".join(parts)
         parts += [
             self.get_system_prompt(),
             "",
@@ -624,21 +833,37 @@ class BaseSubAgent(ABC):
         try:
             messages = [{"role": "system", "content": system_prompt}]
             _thread_history(messages, conversation_history)
-            messages.append({"role": "user", "content": (
-                f"Your execution budget is exhausted ({exhausted}). Tools are no "
-                "longer available. Produce your final answer NOW from what you "
-                "have already gathered. Respond with exactly:\n"
-                "DONE: <complete human answer; may span lines>\nRESULT: <json result>\n"
-                "If your findings are partial, say so inside the result."
-            )})
-            kwargs = {"model": model} if model else {}
+            kwargs: Dict[str, Any] = {"model": model} if model else {}
+            if self._native_protocol:
+                instruction = (
+                    f"Your execution budget is exhausted ({exhausted}). Only done is "
+                    "available now. Call done with your final answer from what you have "
+                    "already gathered. If your findings are partial, say so inside the result."
+                )
+                kwargs.update(
+                    tools=[self._done_function(state.context)],
+                    tool_choice="required",
+                    parallel_tool_calls=False,
+                )
+            else:
+                instruction = (
+                    f"Your execution budget is exhausted ({exhausted}). Tools are no "
+                    "longer available. Produce your final answer NOW from what you "
+                    "have already gathered. Respond with exactly:\n"
+                    "DONE: <complete human answer; may span lines>\nRESULT: <json result>\n"
+                    "If your findings are partial, say so inside the result."
+                )
+            messages.append({"role": "user", "content": instruction})
             llm_result = await self.llm_client.generate(messages=messages, **kwargs)
-            content = llm_result.get("content", "")
+            content = llm_result.get("content") or ""
             tokens = llm_result.get("tokens", {})
             total_tokens["input"] += tokens.get("input", 0)
             total_tokens["output"] += tokens.get("output", 0)
             total_tokens["total"] += tokens.get("total", 0)
-            parsed = self._parse_response_for_contract(content, state.context)
+            if self._native_protocol:
+                parsed = self._parse_native_turn(llm_result, {})
+            else:
+                parsed = self._parse_response_for_contract(content, state.context)
             if parsed.get("type") != "done":
                 return None
             can_exit, reject_reason = self._ground_completion(state, parsed)
@@ -667,6 +892,7 @@ class BaseSubAgent(ABC):
                           "lease_exhausted": exhausted, "landing_turn": True,
                           "typed_outcome": "SUCCESS_ON_LANDING",
                           "tool_receipts": state.receipt_evidence(state.output),
+                          "work_record": self._work_record(state),
                           "answer": parsed.get("answer"),
                           "kept_memories": list(getattr(self, "_kept_memories", []))},
             )
@@ -683,15 +909,19 @@ class BaseSubAgent(ABC):
         """
         parts = [context_block, "\n---"]
         parts.append(f"**ROLE: {self.role.upper()} AGENT** | Turn {state.turn}")
+        act = (
+            "Then call the function for your next step, or done."
+            if self._native_protocol
+            else "Then emit your TOOL/PARAMS or DONE/RESULT."
+        )
 
         # Epistemic Decision Contract — forces self-assessment
         parts.append(
             "**DECISION CONTRACT (follow this structure in your THOUGHT):**\n"
             "1. **KNOWN:** What have I established so far? (refer to WHAT I KNOW SO FAR above)\n"
             "2. **GAP:** What specific information am I still missing?\n"
-            "3. **STRATEGY:** What is the most efficient next step to close the gap?\n"
-            "4. **EXIT CHECK:** Do I have enough to produce a useful result? If yes, call DONE.\n\n"
-            "Then emit your TOOL/PARAMS or DONE/RESULT."
+            "3. **STRATEGY:** What is the most efficient next step to close the gap?\n\n"
+            f"{act}"
         )
         if "ask_peer" in self._tools:
             parts.append(
@@ -807,15 +1037,13 @@ class BaseSubAgent(ABC):
         _trace = trace if trace is not None else create_noop_trace()
         total_tokens = {"input": 0, "output": 0, "total": state.tokens_used}
         total_cost = state.total_cost_usd
+        carries_native = getattr(self.llm_client, "carries_native_tools", None)
+        self._native_protocol = callable(carries_native) and carries_native(model) is True
         system_prompt = self._build_system_prompt()
 
         # Rolling conversation history for multi-turn LLM continuity
         # (prevents amnesia — the LLM sees its own prior reasoning)
         conversation_history: List[Dict[str, str]] = []
-
-        # Epistemic consistency enforcement — blocks redundant searches/URLs
-        # before they execute (deterministic, unlike prompt-based nudges)
-        _epistemic = EpistemicLedger()
 
         # Per-dispatch metadata channel (issue #88): tools stamp identity
         # facts here (e.g. the coder's registry function_id) and the success
@@ -896,16 +1124,13 @@ class BaseSubAgent(ABC):
             # ═══ 1. OBSERVE — Build context from state ═══
             context_block = context_manager.build_context(state)
 
-            # ═══ 2. ORIENT — Meta-cognition check ═══
-            intervention = self._cognition.get_intervention()
-            if intervention:
-                self._log.warning("Cognition intervention: %s", intervention[:120])
-                state.add_thought(f"[META] {intervention}")
-
-            # Inject failure memory into state for context building
-            failure_block = self._cognition.failure_memory_block()
-            if failure_block:
-                state.failure_ledger = self._cognition.failures.recent_failures
+            # ═══ 2. ORIENT — the budget that remains, as a fact for this turn ═══
+            # A notice about this run's budget belongs to this turn; kept as a
+            # thought it would outlive the run it describes.
+            context_block += (
+                f"\n\n## RUNTIME NOTICE (this turn)\n{self._cognition.budget_facts()}"
+            )
+            state.failure_ledger = self._cognition.failures.recent_failures
 
             # ═══ 3. DECIDE — LLM call ═══
             user_prompt = self._build_user_prompt(state, context_block)
@@ -918,6 +1143,12 @@ class BaseSubAgent(ABC):
             kwargs = {}
             if model:
                 kwargs["model"] = model
+            tools_by_function: Dict[str, str] = {}
+            if self._native_protocol:
+                tool_specs, tools_by_function = self._native_tool_specs(state.context)
+                kwargs.update(
+                    tools=tool_specs, tool_choice="required", parallel_tool_calls=False,
+                )
 
             _llm_t0 = __import__('time').monotonic()
             try:
@@ -993,8 +1224,16 @@ class BaseSubAgent(ABC):
             total_tokens["output"] += tokens.get("output", 0)
             total_tokens["total"] += tokens.get("total", 0)
             total_cost += llm_result.get("cost_usd", 0.0)
+            if self._native_protocol:
+                parsed = self._parse_native_turn(llm_result, tools_by_function)
+            else:
+                parsed = self._parse_response_for_contract(content, context)
+            native_call = parsed.get("native_call")
+            reply = content
+            if native_call:
+                reply = f"{content}\n{native_call['name']}({native_call['arguments']})".strip()
             _trace.log_llm_response(
-                content[:500],
+                reply[:500],
                 round((__import__('time').monotonic() - _llm_t0) * 1000, 1),
                 tokens=tokens.get("total", 0),
                 model=llm_result.get("model") or model,
@@ -1002,8 +1241,6 @@ class BaseSubAgent(ABC):
             llm_tokens_this_turn = tokens.get("total", 0)
             state.tokens_used = total_tokens["total"]
 
-            # Parse response
-            parsed = self._parse_response_for_contract(content, context)
             if parsed["type"] != "raw":
                 # Repairs bound a run of malformed replies, not a session's lifetime.
                 state.internal_variables["_protocol_violation_count"] = 0
@@ -1099,6 +1336,7 @@ class BaseSubAgent(ABC):
                             f"[Turn {turn}] {report}\n"
                             f"DONE was not recorded. It may be attempted again."
                         ),
+                        "tool_call": native_call,
                     })
                     # Charge tokens WITHOUT the "done" label: track_usage("done")
                     # sets done_called, which made should_continue() kill the agent
@@ -1146,6 +1384,7 @@ class BaseSubAgent(ABC):
                         "tokens": total_tokens,
                         "cost_usd": total_cost,
                         "tool_receipts": state.receipt_evidence(parsed.get("result")),
+                        "work_record": self._work_record(state),
                         "answer": parsed.get("answer"),
                         "kept_memories": list(getattr(self, "_kept_memories", [])),
                         **getattr(self, "_dispatch_metadata", {}),
@@ -1157,52 +1396,10 @@ class BaseSubAgent(ABC):
                 tool_name = parsed["tool"]
                 tool_params = parsed.get("params", {})
 
-                # ── Repeat failure guard ──
-                if self._cognition.is_repeat_failure(tool_name, tool_params):
-                    self._log.warning("Blocked repeat failure: %s", tool_name)
-                    state.add_thought(
-                        f"[GUARD] Blocked repeat of failing action: {tool_name}. "
-                        "Must try a different tool or different parameters."
-                    )
-                    state.add_tool_result(
-                        tool_name, tool_params,
-                        {"status": "blocked", "error": "REPEAT_BLOCKED"},
-                        error="Identical failing action blocked by failure guard",
-                    )
-                    continue
-
-                # ── Epistemic consistency check ──
-                # Blocks redundant searches and URL re-reads BEFORE execution.
-                # Unlike the convergence governor (which reacts after stalls),
-                # this prevents the wasteful action from happening at all.
-                _ep_verdict = _epistemic.validate_action(
-                    tool_name, tool_params, turn, state
-                )
-                if _ep_verdict.action == "redirect":
-                    self._log.info("Epistemic redirect: %s", _ep_verdict.reason)
-                    state.add_thought(f"[EPISTEMIC] {_ep_verdict.injection}")
-                    state.add_tool_result(
-                        tool_name, tool_params,
-                        {"status": "blocked", "reason": _ep_verdict.reason},
-                        error=_ep_verdict.reason,
-                    )
-                    trajectory.append({
-                        "turn": turn, "type": "epistemic_redirect",
-                        "tool": tool_name, "reason": _ep_verdict.reason,
-                    })
-                    conversation_history.append({
-                        "assistant": content,
-                        "observation": (
-                            f"[Turn {turn}] BLOCKED by epistemic ledger: "
-                            f"{_ep_verdict.reason}\n{_ep_verdict.injection}"
-                        ),
-                    })
-                    continue
-
                 # ── Pre-execute hook: subclass-level gating ──
-                # Subclasses override _pre_execute_hook to enforce constraints
-                # (e.g. researcher phase gating). If it returns a dict, that
-                # dict is used as the tool result and execution is skipped.
+                # Subclasses override _pre_execute_hook to enforce boundaries
+                # (e.g. approval of a consequential action). If it returns a dict,
+                # that dict is used as the tool result and execution is skipped.
                 hook_result = await self._pre_execute_hook(
                     tool_name, tool_params, state
                 )
@@ -1218,6 +1415,7 @@ class BaseSubAgent(ABC):
                     self._record_pre_execute_result(
                         state, trajectory, conversation_history, content,
                         turn, tool_name, tool_params, hook_result, hook_event,
+                        tool_call=native_call,
                     )
                     continue
 
@@ -1308,6 +1506,9 @@ class BaseSubAgent(ABC):
 
                 # Record in state
                 error_str = tool_result.get("error") if isinstance(tool_result, dict) else None
+                repeat_note = _identical_call_record(
+                    state.tool_history, tool_name, tool_params, tool_result
+                )
                 tool_receipt = state.add_tool_result(
                     tool_name,
                     tool_params,
@@ -1318,15 +1519,7 @@ class BaseSubAgent(ABC):
                 )
                 turn_log["tool_receipt_id"] = tool_receipt.receipt_id
 
-                # ── Record in epistemic ledger + check knowledge plateau ──
-                _epistemic.record_outcome(
-                    tool_name, tool_params, tool_result, turn, state
-                )
-                _plateau_signal = _epistemic.check_plateau(state, turn)
-                if _plateau_signal:
-                    state.add_thought(f"[EPISTEMIC] {_plateau_signal}")
-
-                # ── Track usage + convergence ──
+                # ── Track usage ──
                 registered = self._tools.get(tool_name)
                 self._cognition.track_usage(
                     tool_name, tokens=llm_tokens_this_turn, tool_output=tool_result,
@@ -1377,58 +1570,6 @@ class BaseSubAgent(ABC):
                         },
                     )
 
-                # ── Check convergence stall (already evaluated inside track_usage) ──
-                stall = self._cognition.check_stall_verdict()
-                if stall:
-                    if not state.internal_variables.get("_pivot_attempted"):
-                        # Grant ONE pivot turn — inject strategic redirect
-                        state.internal_variables["_pivot_attempted"] = True
-                        state.add_thought(
-                            "[STRATEGIC PIVOT] You are repeating the same approach "
-                            "without making progress. You MUST try a completely "
-                            "different strategy this turn. Consider: different tool, "
-                            "different parameters, or call DONE with partial results."
-                        )
-                        # Grant a fresh convergence window for the pivot turn.
-                        self._cognition.convergence.reset_streaks(
-                            reason=f"strategic pivot granted to {self.role}"
-                        )
-                        logger.info(
-                            f"[{self.role}] Strategic pivot granted — "
-                            f"resetting convergence for one more turn"
-                        )
-                        trajectory.append(turn_log)
-                        # Record conversation for continuity through the pivot
-                        observation = (
-                            f"Tool '{tool_name}' returned: "
-                            f"{_observe(tool_name, tool_result, turn)}\n"
-                            f"Authoritative tool receipt: {tool_receipt.receipt_id}"
-                        )
-                        conversation_history.append({
-                            "assistant": content,
-                            "observation": observation,
-                            "images": observed_images,
-                        })
-                        continue
-                    else:
-                        # Pivot was already attempted — escalate now
-                        stall_reason = stall.get("reason", "Convergence stall")
-                        self._log.warning("Convergence stall (post-pivot): %s", stall_reason)
-                        state.add_thought(f"[CONVERGENCE] {stall_reason}")
-                        trajectory.append(turn_log)
-                        _trace.log_step_complete(False, stall_reason)
-                        return AgentOutput(
-                            status=stall.get("action", "yield"),
-                            summary=stall_reason,
-                            payload=state.get_final_output(),
-                            trajectory=trajectory,
-                            metadata={
-                                "tokens": total_tokens, "cost_usd": total_cost,
-                                "typed_outcome": stall.get("typed_outcome"),
-                                "cognition": self._cognition.get_budget_summary(),
-                            },
-                        )
-
                 trajectory.append(turn_log)
 
                 # Record conversation history for multi-turn LLM continuity
@@ -1441,13 +1582,15 @@ class BaseSubAgent(ABC):
                     f"Authoritative tool receipt: {tool_receipt.receipt_id}. "
                     "When final JSON reports this command execution, include this exact "
                     "value as `tool_receipt_id`; JarvisCore binds the runtime facts.\n\n"
-                    f"Reflect: What new information does this provide? "
-                    f"Does it change your strategy?"
+                    + (f"{repeat_note}\n\n" if repeat_note else "")
+                    + "Reflect: What new information does this provide? "
+                    "Does it change your strategy?"
                 )
                 conversation_history.append({
                     "assistant": content,
                     "observation": observation,
                     "images": observed_images,
+                    "tool_call": native_call,
                 })
 
                 # Log turn to memory
@@ -1527,20 +1670,35 @@ class BaseSubAgent(ABC):
                 error="Subagent response did not match TOOL or DONE protocol.",
             )
             if protocol_violations <= max_protocol_repairs and turn < max_turns - 1:
-                conversation_history.append({
-                    "assistant": content,
-                    "observation": (
+                if native_call:
+                    repair = (
+                        f"[Turn {turn}] PROTOCOL VIOLATION: the arguments of "
+                        f"{native_call['name']} were not a JSON object. Call it again "
+                        "with a valid JSON object."
+                    )
+                elif self._native_protocol:
+                    repair = (
+                        f"[Turn {turn}] PROTOCOL VIOLATION: your reply called no function. "
+                        "Act by calling exactly one of the offered functions; call done "
+                        "to finish."
+                    )
+                else:
+                    repair = (
                         f"[Turn {turn}] PROTOCOL VIOLATION: Your response did not match "
                         "the required TOOL/PARAMS or DONE/RESULT protocol.\n"
                         "Repair on the next turn. Emit exactly one of:\n"
                         "THOUGHT: <reasoning>\\nTOOL: <tool_name>\\nPARAMS: <json>\n"
                         "or\n"
                         "THOUGHT: <reasoning>\\nDONE: <summary>\\nRESULT: <json>."
-                    ),
+                    )
+                conversation_history.append({
+                    "assistant": content,
+                    "observation": repair,
+                    "tool_call": native_call,
                 })
                 state.add_thought(
-                    "[PROTOCOL_VIOLATION] Previous response did not match the required "
-                    "TOOL/PARAMS or DONE/RESULT protocol. Repair on the next turn."
+                    "[PROTOCOL_VIOLATION] The previous reply took no valid action. "
+                    "Repair on the next turn."
                 )
                 continue
             return AgentOutput(
@@ -1646,6 +1804,20 @@ class BaseSubAgent(ABC):
         return (True, "")
 
     @staticmethod
+    def _work_record(state: KernelState) -> Dict[str, Dict[str, int]]:
+        """What this run did, per tool, counted from its tool log.
+
+        Completion is not refused for how the work was done; the record travels with
+        the result so the product, a reviewer or a person decides what it supports.
+        """
+        record: Dict[str, Dict[str, int]] = {}
+        for receipt in state.tool_history:
+            entry = record.setdefault(receipt.tool_name, {"calls": 0, "succeeded": 0})
+            entry["calls"] += 1
+            entry["succeeded"] += receipt.status == "success"
+        return record
+
+    @staticmethod
     def _ground_completion(
         state: KernelState,
         parsed: Dict[str, Any],
@@ -1689,6 +1861,7 @@ class BaseSubAgent(ABC):
         tool_params: Dict[str, Any],
         hook_result: Dict[str, Any],
         hook_event: str,
+        tool_call: Optional[Dict[str, str]] = None,
     ) -> None:
         hook_succeeded = hook_result.get("status") == "success"
         disposition = "resolved" if hook_succeeded else "blocked"
@@ -1719,6 +1892,7 @@ class BaseSubAgent(ABC):
                 f"[Turn {turn}] Tool '{tool_name}' {disposition} by "
                 f"pre-execute review: {str(hook_result)[:500]}"
             ),
+            "tool_call": tool_call,
         })
 
     async def _execute_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
@@ -1743,9 +1917,9 @@ class BaseSubAgent(ABC):
             return {
                 "status": "error",
                 "error": (
-                    f"Could not parse your PARAMS as valid JSON. "
+                    f"Could not parse your arguments as a JSON object. "
                     f"Tool '{tool_name}' expects these parameters: {expected}. "
-                    f"Please re-emit TOOL/PARAMS with a valid JSON object."
+                    f"Call it again with a valid JSON object."
                 ),
                 "semantic_error": "MALFORMED_PARAMS",
                 "expected_params": expected,

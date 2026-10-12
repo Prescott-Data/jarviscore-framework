@@ -109,6 +109,7 @@ from .code_registry import (
     FunctionRegistry,
     FunctionStatus,
     create_function_registry,
+    shared_function_registry,
     # Backward-compatible aliases
     CodeRegistry,
     create_code_registry,
@@ -192,6 +193,7 @@ __all__ = [
     'FunctionRegistry',
     'FunctionStatus',
     'create_function_registry',
+    'shared_function_registry',
     # Backward-compatible aliases
     'CodeRegistry',
     'create_code_registry',

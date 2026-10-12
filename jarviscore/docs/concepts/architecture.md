@@ -292,6 +292,8 @@ flowchart LR
 
 The loop continues until the Kernel receives a completion signal, hits the turn limit, or encounters a fatal error.
 
+Each Decide is one action. Where every configured provider supports function calling (Azure OpenAI, Claude, Gemini, Vertex AI, vLLM), the tools are offered natively, the model must call one per turn, and `done` carries the answer and its data. A chain that includes a provider without native tool calls, such as promotional access, uses the equivalent text protocol (`TOOL`/`PARAMS`, `DONE`/`RESULT`).
+
 ---
 
 ## Infrastructure Layers

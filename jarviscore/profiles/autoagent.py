@@ -333,7 +333,7 @@ class AutoAgent(Profile):
             create_coder_sandbox,
             create_autonomous_repair,
             create_result_handler,
-            create_function_registry
+            shared_function_registry
         )
 
         # 1. Initialize LLM (auto-detects providers)
@@ -397,7 +397,7 @@ class AutoAgent(Profile):
         # 7. Initialize function registry (graduated, reusable generated functions)
         registry_dir = f"{log_dir}/function_registry"
         self._logger.info(f"Initializing function registry (dir: {registry_dir})...")
-        self.code_registry = create_function_registry(registry_dir)
+        self.code_registry = await asyncio.to_thread(shared_function_registry, registry_dir)
         # Confined code may read the registry but only registration may change it.
         self.sandbox.protected_paths = (Path(log_dir).resolve(),)
 
