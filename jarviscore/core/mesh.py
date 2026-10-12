@@ -2267,140 +2267,64 @@ class Mesh:
                 **({"_resume": True} if step_def.get("resume_agent_id") else {}),
             },
         }
-        heartbeat = asyncio.create_task(
-            self._renew_distributed_claim(
-                workflow_id, step_id, claim_id, lease_seconds
-            ),
-            name=f"claim-heartbeat-{step_id}",
-        )
-        try:
-            try:
-                with workflow_budget_scope(
-                    self._redis_store,
-                    workflow_id,
-                    epoch_id=f"step:{claim_id}",
+        lease_lost = asyncio.Event()
+
+        async def owned_work():
+            with workflow_budget_scope(
+                self._redis_store,
+                workflow_id,
+                epoch_id=f"step:{claim_id}",
+            ):
+                authorization = None
+                if effect != "final_response":
+                    authorization = await agent.authorize_dependencies(
+                        str(task["task"]),
+                        task["context"]["previous_step_results"],
+                        task["context"]["previous_step_interpretations"],
+                    )
+                    task["context"]["dependency_authorization"] = {
+                        "decision": authorization.decision,
+                        "reason": authorization.reason,
+                    }
+                if (
+                    authorization is not None
+                    and authorization.decision == "block"
+                    and getattr(agent, "llm", None) is None
                 ):
-                    authorization = None
-                    if effect != "final_response":
-                        authorization = await agent.authorize_dependencies(
-                            str(task["task"]),
-                            task["context"]["previous_step_results"],
-                            task["context"]["previous_step_interpretations"],
-                        )
-                        task["context"]["dependency_authorization"] = {
-                            "decision": authorization.decision,
-                            "reason": authorization.reason,
-                        }
-                    if (
-                        authorization is not None
-                        and authorization.decision == "block"
-                        and getattr(agent, "llm", None) is None
-                    ):
-                        result = {
-                            "status": "blocked",
-                            "error": authorization.reason,
-                            "dependency_authorization": task["context"][
-                                "dependency_authorization"
-                            ],
-                        }
-                    else:
-                        async def execute_bound_task():
-                            if (
-                                effect == "final_response"
-                                and getattr(agent, "final_response_passthrough", False)
-                                and len(step_def.get("depends_on", [])) == 1
-                                and len(direct_dependency_results) == 1
-                            ):
-                                artifact = copy.deepcopy(
-                                    next(iter(direct_dependency_results.values()))
+                    result = {
+                        "status": "blocked",
+                        "error": authorization.reason,
+                        "dependency_authorization": task["context"][
+                            "dependency_authorization"
+                        ],
+                    }
+                else:
+                    async def execute_bound_task():
+                        if (
+                            effect == "final_response"
+                            and getattr(agent, "final_response_passthrough", False)
+                            and len(step_def.get("depends_on", [])) == 1
+                            and len(direct_dependency_results) == 1
+                        ):
+                            artifact = copy.deepcopy(
+                                next(iter(direct_dependency_results.values()))
+                            )
+                            return attach_result_summary({
+                                "status": "success",
+                                "output": artifact,
+                            })
+                        async with self._bound_step_workspace(agent, task) as binding:
+                            bound_result = await agent.execute_task(task)
+                            if isinstance(bound_result, dict):
+                                receipt_evidence = bound_result.pop(
+                                    "_tool_receipts", []
                                 )
-                                return attach_result_summary({
-                                    "status": "success",
-                                    "output": artifact,
-                                })
-                            async with self._bound_step_workspace(agent, task) as binding:
-                                bound_result = await agent.execute_task(task)
-                                if isinstance(bound_result, dict):
-                                    receipt_evidence = bound_result.pop(
-                                        "_tool_receipts", []
-                                    )
-                                    bound_result.pop("workspace_delta", None)
-                                    if bound_result.get("status") == "success":
-                                        try:
-                                            bound_result["output"] = hydrate_receipt_evidence(
-                                                bound_result.get("output"),
-                                                receipt_evidence=receipt_evidence,
-                                                previous_step_results=task["context"].get(
-                                                    "previous_step_results"
-                                                ),
-                                                workflow_id=workflow_id,
-                                            )
-                                        except ToolReceiptError as exc:
-                                            bound_result.update({
-                                                "status": "failure",
-                                                "output": None,
-                                                "error": (
-                                                    "Final output failed authoritative "
-                                                    f"receipt validation: {exc}"
-                                                ),
-                                            })
-                                bound_status = (
-                                    bound_result.get("status")
-                                    if isinstance(bound_result, dict)
-                                    else None
-                                )
-                                if (
-                                    binding is not None
-                                    and isinstance(bound_result, dict)
-                                    and bound_status in {"success", "epoch_exhausted"}
-                                ):
-                                    delta = await binding.export_delta(
-                                        f"workflows/{workflow_id}/workspace_deltas/{step_id}",
-                                        ignored_names=tuple(
-                                            self.config.get(
-                                                "workspace_delta_ignored_names"
-                                            )
-                                            or (
-                                                ".git",
-                                                ".tmp",
-                                                ".venv",
-                                                "__pycache__",
-                                                "node_modules",
-                                                "output",
-                                                "target",
-                                            )
-                                        ),
-                                    )
-                                    if delta.added or delta.modified or delta.deleted:
-                                        bound_result["workspace_delta"] = asdict(delta)
-                                    if bound_status == "epoch_exhausted":
-                                        return bound_result
-                                    final_receipts = []
-                                    delta_entries = {
-                                        entry.path: entry
-                                        for entry in (*delta.added, *delta.modified)
-                                    }
-                                    for evidence in receipt_evidence:
-                                        if not isinstance(evidence, dict) or "path" not in evidence:
-                                            final_receipts.append(evidence)
-                                            continue
-                                        entry = delta_entries.get(str(evidence.get("path") or ""))
-                                        if entry is None:
-                                            continue
-                                        if (
-                                            str(evidence.get("sha256") or "")
-                                            != entry.sha256
-                                            or int(evidence.get("bytes") or -1)
-                                            != entry.size
-                                            or bool(evidence.get("executable", False))
-                                            != entry.executable
-                                        ):
-                                            continue
-                                        final_receipts.append(evidence)
+                                bound_result.pop("workspace_delta", None)
+                                if bound_result.get("status") == "success":
                                     try:
                                         bound_result["output"] = hydrate_receipt_evidence(
                                             bound_result.get("output"),
-                                            receipt_evidence=final_receipts,
+                                            receipt_evidence=receipt_evidence,
                                             previous_step_results=task["context"].get(
                                                 "previous_step_results"
                                             ),
@@ -2411,21 +2335,110 @@ class Mesh:
                                             "status": "failure",
                                             "output": None,
                                             "error": (
-                                                "Final workspace state failed authoritative "
+                                                "Final output failed authoritative "
                                                 f"receipt validation: {exc}"
                                             ),
                                         })
-                                        return bound_result
-                                return bound_result
+                            bound_status = (
+                                bound_result.get("status")
+                                if isinstance(bound_result, dict)
+                                else None
+                            )
+                            if (
+                                binding is not None
+                                and isinstance(bound_result, dict)
+                                and bound_status in {"success", "epoch_exhausted"}
+                            ):
+                                delta = await binding.export_delta(
+                                    f"workflows/{workflow_id}/workspace_deltas/{step_id}",
+                                    ignored_names=tuple(
+                                        self.config.get(
+                                            "workspace_delta_ignored_names"
+                                        )
+                                        or (
+                                            ".git",
+                                            ".tmp",
+                                            ".venv",
+                                            "__pycache__",
+                                            "node_modules",
+                                            "output",
+                                            "target",
+                                        )
+                                    ),
+                                )
+                                if delta.added or delta.modified or delta.deleted:
+                                    bound_result["workspace_delta"] = asdict(delta)
+                                if bound_status == "epoch_exhausted":
+                                    return bound_result
+                                final_receipts = []
+                                delta_entries = {
+                                    entry.path: entry
+                                    for entry in (*delta.added, *delta.modified)
+                                }
+                                for evidence in receipt_evidence:
+                                    if not isinstance(evidence, dict) or "path" not in evidence:
+                                        final_receipts.append(evidence)
+                                        continue
+                                    entry = delta_entries.get(str(evidence.get("path") or ""))
+                                    if entry is None:
+                                        continue
+                                    if (
+                                        str(evidence.get("sha256") or "")
+                                        != entry.sha256
+                                        or int(evidence.get("bytes") or -1)
+                                        != entry.size
+                                        or bool(evidence.get("executable", False))
+                                        != entry.executable
+                                    ):
+                                        continue
+                                    final_receipts.append(evidence)
+                                try:
+                                    bound_result["output"] = hydrate_receipt_evidence(
+                                        bound_result.get("output"),
+                                        receipt_evidence=final_receipts,
+                                        previous_step_results=task["context"].get(
+                                            "previous_step_results"
+                                        ),
+                                        workflow_id=workflow_id,
+                                    )
+                                except ToolReceiptError as exc:
+                                    bound_result.update({
+                                        "status": "failure",
+                                        "output": None,
+                                        "error": (
+                                            "Final workspace state failed authoritative "
+                                            f"receipt validation: {exc}"
+                                        ),
+                                    })
+                                    return bound_result
+                            return bound_result
 
-                        lock = getattr(agent, "_peer_execution_lock", None)
-                        if lock is None:
+                    lock = getattr(agent, "_peer_execution_lock", None)
+                    if lock is None:
+                        result = await execute_bound_task()
+                    else:
+                        async with lock:
                             result = await execute_bound_task()
-                        else:
-                            async with lock:
-                                result = await execute_bound_task()
+            return result
+
+        work = asyncio.create_task(owned_work(), name=f"step-work-{step_id}")
+        heartbeat = asyncio.create_task(
+            self._renew_distributed_claim(
+                workflow_id, step_id, claim_id, lease_seconds, lease_lost, work
+            ),
+            name=f"claim-heartbeat-{step_id}",
+        )
+        try:
+            try:
+                result = await work
             except asyncio.CancelledError:
-                raise
+                if not lease_lost.is_set():
+                    raise
+                self._logger.warning(
+                    "[DistributedWorker] '%s' in '%s' stopped: %s no longer holds its claim",
+                    step_id, workflow_id, agent.agent_id,
+                )
+                return
             except Exception as exc:
                 self._logger.error(
                     f"[DistributedWorker] '{step_id}' in '{workflow_id}' failed: {exc}"
@@ -2437,6 +2450,9 @@ class Mesh:
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
+            if not work.done():
+                work.cancel()
+                await asyncio.gather(work, return_exceptions=True)
 
         s = result.get("status", "?") if isinstance(result, dict) else "done"
         if s == "epoch_exhausted":
@@ -2704,13 +2720,24 @@ class Mesh:
         step_id: str,
         claim_id: str,
         lease_seconds: int,
+        lease_lost: Optional[asyncio.Event] = None,
+        work: Optional[asyncio.Task] = None,
     ) -> None:
+        """Keep the claim alive; once it cannot be renewed, stop the work holding it.
+
+        Another member may already have claimed the step, and fencing would refuse
+        this work's result anyway, so continuing only spends tokens and tool calls.
+        """
         interval = max(0.1, lease_seconds / 3)
         while True:
             await asyncio.sleep(interval)
             if not self._redis_store.renew_step_claim(
                 workflow_id, step_id, claim_id, lease_seconds
             ):
+                if lease_lost is not None:
+                    lease_lost.set()
+                if work is not None and not work.done():
+                    work.cancel()
                 return
 
     # Phase 9: Infrastructure helpers

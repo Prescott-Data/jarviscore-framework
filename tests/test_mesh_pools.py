@@ -125,6 +125,37 @@ async def test_each_step_is_claimed_and_run_exactly_once(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_work_that_loses_its_claim_stops_and_the_pool_carries_on(monkeypatch):
+    PooledVerifier.reset()
+    PooledVerifier.seconds = 30.0
+    store = MockRedisContextStore()
+    mesh = _mesh(monkeypatch, store, distributed_claim_lease_seconds=1)
+    mesh.add(PooledVerifier, agent_id="verifier", pool=Pool(max=2))
+    _publish(store, 1, prefix="held")
+
+    await mesh.start()
+    try:
+        deadline = time.monotonic() + 5
+        while PooledVerifier.running == 0 and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert PooledVerifier.running == 1
+        # Another node takes the step over, as after a pause longer than the lease.
+        store._redis.set("step_lock:held-0:verification_assessment", "elsewhere:claim")
+
+        deadline = time.monotonic() + 5
+        while PooledVerifier.running and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        assert PooledVerifier.running == 0
+
+        PooledVerifier.seconds = 0.05
+        _publish(store, 1, prefix="next")
+        await _wait_completed(store, 1, prefix="next")
+    finally:
+        PooledVerifier.seconds = 0.05
+        await mesh.stop()
+
+
+@pytest.mark.asyncio
 async def test_idle_members_beyond_min_are_retired(monkeypatch):
     PooledVerifier.reset()
     store = MockRedisContextStore()
