@@ -205,6 +205,9 @@ class Mesh:
         self._activity = asyncio.Event()
         self._activity_generation = 0
         self._workflow_activity: Dict[str, asyncio.Event] = {}
+        # Workflows this node's execute_goal calls are waiting on, by caller count.
+        self._driving: Dict[str, int] = {}
+        self._draining = False
         self._logger = logging.getLogger("jarviscore.mesh")
         self._logger.info("Mesh created — capabilities will be detected at start()")
 
@@ -335,6 +338,7 @@ class Mesh:
         if not self.agents:
             raise RuntimeError("No agents registered. Use mesh.add() to register agents.")
 
+        self._draining = False
         self._logger.info("Starting mesh — probing infrastructure...")
 
         # ── 1. Infrastructure detection ───────────────────────────────────────
@@ -634,6 +638,7 @@ class Mesh:
             goal, workflow_id=workflow_id, context=context, timeout=timeout,
             plan_template=plan_template,
         )
+        self._driving[identity] = self._driving.get(identity, 0) + 1
         try:
             definition = self._redis_store.get_workflow_definition(identity)
             if definition is None:
@@ -646,6 +651,26 @@ class Mesh:
                 identity, reason="Goal execution was cancelled by its caller"
             )
             raise
+        finally:
+            remaining = self._driving.get(identity, 1) - 1
+            if remaining > 0:
+                self._driving[identity] = remaining
+            else:
+                self._driving.pop(identity, None)
+
+    def drain(self) -> None:
+        """Stop taking new work while this node's own goals finish.
+
+        After draining, this node starts no new goal and claims no step or
+        capability need outside the workflows its execute_goal calls are still
+        waiting on, so an application can await those calls before ``stop()``
+        without picking up other nodes' work meanwhile.
+        """
+        self._draining = True
+        self._wake_workers()
+
+    def _takes_work_for(self, workflow_id: str) -> bool:
+        return not self._draining or workflow_id in self._driving
 
     async def submit_goal(
         self,
@@ -665,6 +690,8 @@ class Mesh:
         """
         if not self._started:
             raise RuntimeError("Mesh not started. Call await mesh.start() first.")
+        if self._draining:
+            raise RuntimeError("Mesh is draining and takes no new goals.")
         if self._redis_store is None:
             raise RuntimeError("Mesh goal execution requires Redis for a shared durable DAG.")
         source = (goal or "").strip()
@@ -1783,6 +1810,7 @@ class Mesh:
             return
 
         self._logger.info("Stopping mesh...")
+        self._draining = True
 
         # Request shutdown for all agents (for p2p mode loops)
         for agent in self.agents:
@@ -1926,6 +1954,8 @@ class Mesh:
         """
         now = time.time()
         for workflow_id, steps in self._redis_store.get_active_workflow_graphs().items():
+            if not self._takes_work_for(workflow_id):
+                continue
             accessible = None
             for step_id, step_def in steps.items():
                 requirement = (
@@ -2089,6 +2119,8 @@ class Mesh:
         """Claim peer-resolvable gaps by capability, never by central assignment."""
         lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
         for workflow_id in self._redis_store.get_workflows_with_capability_needs():
+            if not self._takes_work_for(workflow_id):
+                continue
             if self._redis_store.is_workflow_cancelled(workflow_id):
                 continue
             for need in self._redis_store.get_open_capability_needs(workflow_id):
