@@ -18,6 +18,7 @@ from enum import Enum
 from jarviscore.context.context_manager import ContextManager
 from jarviscore.execution import multimodal, native_tools
 from jarviscore.execution.governor import current_lane, process_governor, retry_after_seconds
+from jarviscore.config.paths import runtime_path
 from jarviscore.promo import PROMO_MODEL
 from jarviscore.orchestration.budget import current_workflow_budget
 
@@ -289,7 +290,7 @@ class UnifiedLLMClient:
             self.promo_client = PromoLLMClient(
                 token=promo_token,
                 timeout=self.config.get("llm_timeout", 120),
-                artifact_dir=self.config.get("promo_raw_artifact_dir", "./traces/promo_calls"),
+                artifact_dir=self.config.get("promo_raw_artifact_dir", runtime_path("traces", "promo_calls")),
             )
             self.provider_order.append(LLMProvider.PROMO)
             logger.info("✓ JarvisCore promotional LLM access configured")

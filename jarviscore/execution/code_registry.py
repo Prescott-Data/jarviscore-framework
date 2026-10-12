@@ -41,6 +41,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 
+from jarviscore.config.paths import runtime_path
+
 logger = logging.getLogger(__name__)
 
 #: Words that appear in almost any task and so separate nothing. Scored equally
@@ -84,7 +86,7 @@ class FunctionRegistry:
     stages (candidate → verified → golden) based on success count.
 
     Example:
-        registry = FunctionRegistry("./logs/function_registry")
+        registry = FunctionRegistry(".jarviscore/logs/function_registry")
 
         # Register a function
         registry.register_function(
@@ -131,7 +133,7 @@ class FunctionRegistry:
         # Storage paths (matching earlier agent implementations layout)
         self.storage_path = Path(
             storage_path
-            or os.environ.get("FUNCTION_REGISTRY_PATH", "./logs/function_registry")
+            or os.environ.get("FUNCTION_REGISTRY_PATH", runtime_path("logs", "function_registry"))
         )
         self.metadata_path = self.storage_path / "metadata"
         self.atom_storage_path = Path(
@@ -1540,7 +1542,7 @@ CodeRegistry = FunctionRegistry
 # ─────────────────────────────────────────────────────────────────
 
 def create_function_registry(
-    storage_path: str = "./logs/function_registry",
+    storage_path: Optional[str] = None,
     blob_storage=None,
     redis_store=None,
     seed: bool = True,
@@ -1549,7 +1551,8 @@ def create_function_registry(
     Factory function to create function registry.
 
     Args:
-        storage_path: Directory for function storage
+        storage_path: Directory for function storage. Defaults to the
+            consolidated .jarviscore/logs/function_registry.
         blob_storage: Optional BlobStorage for distributed sync
         redis_store: Optional RedisContextStore for cognitive projection
         seed: Load the shipped atom catalogue when the registry is empty.
@@ -1567,7 +1570,9 @@ _SHARED_REGISTRIES: Dict[str, "FunctionRegistry"] = {}
 _SHARED_REGISTRIES_LOCK = threading.Lock()
 
 
-def shared_function_registry(storage_path: str = "./logs/function_registry") -> FunctionRegistry:
+def shared_function_registry(
+    storage_path: str = runtime_path("logs", "function_registry"),
+) -> FunctionRegistry:
     """The process's one registry for this directory, loaded and seeded once.
 
     Agents writing the same directory see one index instead of diverging copies,
