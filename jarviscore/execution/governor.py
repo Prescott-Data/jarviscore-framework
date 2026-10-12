@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import threading
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -179,8 +180,22 @@ class RateWindow:
         self._local.adjust(second, delta)
 
 
+class _Waiter:
+    __slots__ = ("lane", "loop", "future")
+
+    def __init__(self, lane: str, loop: asyncio.AbstractEventLoop) -> None:
+        self.lane = lane
+        self.loop = loop
+        self.future = loop.create_future()
+
+
 class AdaptiveConcurrency:
-    """Calls in flight for one deployment, found by slow start and AIMD."""
+    """Calls in flight for one deployment, found by slow start and AIMD.
+
+    One process can call the LLM from several event loops (sync work in a thread
+    runs its own), so the count is guarded by a thread lock and each waiter is
+    woken on its own loop.
+    """
 
     def __init__(self, initial: int, ceiling: int, bulk_reserve: float) -> None:
         self.initial = max(1, int(initial))
@@ -191,18 +206,8 @@ class AdaptiveConcurrency:
         self.in_flight = 0
         self.waiting = 0
         self._last_decrease = 0.0
-        self._condition: Optional[asyncio.Condition] = None
-        self._loop = None
-
-    def _wait_condition(self) -> asyncio.Condition:
-        loop = asyncio.get_running_loop()
-        if self._condition is None or self._loop is not loop:
-            # A new event loop (a restarted service, a test) starts with no calls in flight.
-            self._condition = asyncio.Condition()
-            self._loop = loop
-            self.in_flight = 0
-            self.waiting = 0
-        return self._condition
+        self._lock = threading.Lock()
+        self._waiters: list[_Waiter] = []
 
     def _capacity(self, lane: str) -> int:
         limit = max(1, int(self.limit))
@@ -211,24 +216,59 @@ class AdaptiveConcurrency:
         return limit
 
     async def acquire(self, lane: str) -> None:
-        condition = self._wait_condition()
-        async with condition:
+        with self._lock:
+            queued = any(waiter.lane == lane for waiter in self._waiters)
+            if not queued and self.in_flight < self._capacity(lane):
+                self.in_flight += 1
+                return
+            waiter = _Waiter(lane, asyncio.get_running_loop())
+            self._waiters.append(waiter)
             self.waiting += 1
-            try:
-                await condition.wait_for(lambda: self.in_flight < self._capacity(lane))
-            finally:
-                self.waiting -= 1
-            self.in_flight += 1
+        try:
+            await waiter.future
+        except BaseException:
+            with self._lock:
+                if waiter in self._waiters:
+                    self._waiters.remove(waiter)
+                    self.waiting -= 1
+                    raise
+            # The slot was handed over as this wait was cancelled.
+            if waiter.future.done() and not waiter.future.cancelled():
+                self._give_back()
+            raise
 
     async def release(self, outcome: str) -> None:
-        condition = self._wait_condition()
-        async with condition:
+        with self._lock:
             self.in_flight = max(0, self.in_flight - 1)
             if outcome == "ok":
                 self._increase()
             elif outcome == "congested":
                 self._decrease()
-            condition.notify_all()
+            self._wake()
+
+    def _give_back(self) -> None:
+        with self._lock:
+            self.in_flight = max(0, self.in_flight - 1)
+            self._wake()
+
+    def _wake(self) -> None:
+        """Hand free slots to waiters in arrival order; call with the lock held."""
+        for waiter in list(self._waiters):
+            if self.in_flight >= self._capacity(waiter.lane):
+                continue
+            self._waiters.remove(waiter)
+            self.waiting -= 1
+            self.in_flight += 1
+            try:
+                waiter.loop.call_soon_threadsafe(self._deliver, waiter)
+            except RuntimeError:  # its loop has closed
+                self.in_flight -= 1
+
+    def _deliver(self, waiter: _Waiter) -> None:
+        if waiter.future.done():  # cancelled before the slot arrived
+            self._give_back()
+        else:
+            waiter.future.set_result(None)
 
     def _increase(self) -> None:
         if self.limit < self.threshold:

@@ -223,6 +223,69 @@ async def test_a_cancelled_admission_wait_releases_its_slot():
     assert concurrency.in_flight == 0 and concurrency.waiting == 0
 
 
+@pytest.mark.asyncio
+async def test_a_wait_cancelled_as_its_slot_arrives_gives_the_slot_back():
+    concurrency = AdaptiveConcurrency(initial=1, ceiling=1, bulk_reserve=0.0)
+    deployment = DeploymentGovernor("azure:test", Limits(), concurrency, None)
+    held = await deployment.admit(1)
+    waiting = asyncio.ensure_future(deployment.admit(1))
+    await asyncio.sleep(0.01)
+
+    await held.finish(total_tokens=1)  # hands the slot over; delivery is still queued
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    await asyncio.sleep(0.01)
+
+    assert concurrency.in_flight == 0 and concurrency.waiting == 0
+    permit = await asyncio.wait_for(deployment.admit(1), 1)
+    await permit.finish(total_tokens=1)
+
+
+@pytest.mark.asyncio
+async def test_a_call_from_another_event_loop_does_not_strand_waiters():
+    # Sync work run in a thread (e.g. ingestion) calls the LLM through asyncio.run.
+    concurrency = AdaptiveConcurrency(initial=1, ceiling=1, bulk_reserve=0.0)
+    deployment = DeploymentGovernor("azure:test", Limits(), concurrency, None)
+    held = await deployment.admit(1)
+    waiting = asyncio.ensure_future(deployment.admit(1))
+    await asyncio.sleep(0.01)
+
+    async def elsewhere():
+        permit = await deployment.admit(1)
+        await permit.finish(total_tokens=1)
+
+    other = asyncio.ensure_future(asyncio.to_thread(asyncio.run, elsewhere()))
+    await asyncio.sleep(0.05)
+    await held.finish(total_tokens=1)
+
+    second = await asyncio.wait_for(waiting, 2)
+    await second.finish(total_tokens=1)
+    await asyncio.wait_for(other, 2)
+    assert concurrency.in_flight == 0 and concurrency.waiting == 0
+
+
+@pytest.mark.asyncio
+async def test_loops_in_several_threads_share_one_limit():
+    concurrency = AdaptiveConcurrency(initial=3, ceiling=3, bulk_reserve=0.0)
+    deployment = DeploymentGovernor("azure:test", Limits(), concurrency, None)
+    peak = 0
+
+    async def calls():
+        nonlocal peak
+        for _ in range(20):
+            permit = await deployment.admit(1)
+            peak = max(peak, concurrency.in_flight)
+            await asyncio.sleep(0.001)
+            await permit.finish(rate_limited=True, failed=True)
+
+    threads = [asyncio.to_thread(asyncio.run, calls()) for _ in range(3)]
+    await asyncio.wait_for(asyncio.gather(calls(), *threads), 10)
+
+    assert peak <= 3
+    assert concurrency.in_flight == 0 and concurrency.waiting == 0
+
+
 def test_retry_after_comes_from_response_headers():
     error = SimpleNamespace(response=SimpleNamespace(headers={"retry-after-ms": "1500"}))
     assert retry_after_seconds(error) == 1.5

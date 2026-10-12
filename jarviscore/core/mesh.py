@@ -42,6 +42,7 @@ from uuid import uuid4
 
 from .agent import Agent
 from .envelope import attach_result_summary
+from .pool import Pool, PoolState
 from jarviscore.orchestration.envelopes import (
     ExecutionBudget,
     neutral_context,
@@ -185,6 +186,7 @@ class Mesh:
         self._decision_client = None   # JevDecisionClient — when TypeSafe is configured
         self._distributed_worker_tasks: List[asyncio.Task] = []
         self._distributed_step_tasks: Set[asyncio.Task] = set()
+        self._pools: Dict[str, PoolState] = {}
         self._mesh_planner_task: Optional[asyncio.Task] = None
         self._scheduler_task: Optional[asyncio.Task] = None
         self._agent_run_tasks: List[asyncio.Task] = []
@@ -199,6 +201,13 @@ class Mesh:
 
         self._started = False
         self._node_id = f"mesh-{uuid4().hex[:12]}"
+        # A state change on this node wakes its loops at once; polling covers other nodes.
+        self._activity = asyncio.Event()
+        self._activity_generation = 0
+        self._workflow_activity: Dict[str, asyncio.Event] = {}
+        # Workflows this node's execute_goal calls are waiting on, by caller count.
+        self._driving: Dict[str, int] = {}
+        self._draining = False
         self._logger = logging.getLogger("jarviscore.mesh")
         self._logger.info("Mesh created — capabilities will be detected at start()")
 
@@ -206,6 +215,7 @@ class Mesh:
         self,
         agent_class_or_instance,
         agent_id: Optional[str] = None,
+        pool: Optional[Pool] = None,
         **kwargs
     ) -> Agent:
         """
@@ -215,6 +225,9 @@ class Mesh:
             agent_class_or_instance: Agent class to instantiate, or pre-instantiated
                 agent (from wrap() function). Must inherit from Agent.
             agent_id: Optional unique identifier for the agent (ignored if instance)
+            pool: Optional ``Pool`` letting the mesh run more instances of this
+                agent while its work queues up. Needs the agent class, and suits
+                agents that keep no per-instance state between steps.
             **kwargs: Additional arguments passed to agent constructor (ignored if instance)
 
         Returns:
@@ -236,6 +249,11 @@ class Mesh:
         """
         # Check if it's already an instance (from wrap() function)
         if isinstance(agent_class_or_instance, Agent):
+            if pool is not None:
+                raise TypeError(
+                    "A pool creates members from the agent class; pass the class, "
+                    "not an instance"
+                )
             agent = agent_class_or_instance
         else:
             # It's a class - validate and instantiate
@@ -281,6 +299,14 @@ class Mesh:
                 self._capability_index[capability] = []
             self._capability_index[capability].append(agent)
 
+        if pool is not None:
+            member_class, member_id = agent_class_or_instance, agent.agent_id
+            self._pools[agent.agent_id] = PoolState(
+                spec=pool,
+                factory=lambda: member_class(agent_id=member_id, **kwargs),
+                base=agent,
+            )
+
         self._logger.info(
             f"Registered agent: {agent.agent_id} "
             f"(role={agent.role}, capabilities={agent.capabilities})"
@@ -312,6 +338,7 @@ class Mesh:
         if not self.agents:
             raise RuntimeError("No agents registered. Use mesh.add() to register agents.")
 
+        self._draining = False
         self._logger.info("Starting mesh — probing infrastructure...")
 
         # ── 1. Infrastructure detection ───────────────────────────────────────
@@ -492,7 +519,9 @@ class Mesh:
                 )
             self._distributed_worker_tasks = [
                 asyncio.create_task(
-                    self._run_distributed_worker(agent),
+                    self._run_pool(self._pools[agent.agent_id])
+                    if agent.agent_id in self._pools
+                    else self._run_distributed_worker(agent),
                     name=f"distributed-worker-{agent.agent_id}",
                 )
                 for agent in self.agents
@@ -609,6 +638,7 @@ class Mesh:
             goal, workflow_id=workflow_id, context=context, timeout=timeout,
             plan_template=plan_template,
         )
+        self._driving[identity] = self._driving.get(identity, 0) + 1
         try:
             definition = self._redis_store.get_workflow_definition(identity)
             if definition is None:
@@ -621,6 +651,26 @@ class Mesh:
                 identity, reason="Goal execution was cancelled by its caller"
             )
             raise
+        finally:
+            remaining = self._driving.get(identity, 1) - 1
+            if remaining > 0:
+                self._driving[identity] = remaining
+            else:
+                self._driving.pop(identity, None)
+
+    def drain(self) -> None:
+        """Stop taking new work while this node's own goals finish.
+
+        After draining, this node starts no new goal and claims no step or
+        capability need outside the workflows its execute_goal calls are still
+        waiting on, so an application can await those calls before ``stop()``
+        without picking up other nodes' work meanwhile.
+        """
+        self._draining = True
+        self._wake_workers()
+
+    def _takes_work_for(self, workflow_id: str) -> bool:
+        return not self._draining or workflow_id in self._driving
 
     async def submit_goal(
         self,
@@ -640,6 +690,8 @@ class Mesh:
         """
         if not self._started:
             raise RuntimeError("Mesh not started. Call await mesh.start() first.")
+        if self._draining:
+            raise RuntimeError("Mesh is draining and takes no new goals.")
         if self._redis_store is None:
             raise RuntimeError("Mesh goal execution requires Redis for a shared durable DAG.")
         source = (goal or "").strip()
@@ -707,7 +759,55 @@ class Mesh:
                         "error": template_error,
                         "timestamp": time.time(),
                     })
+            self._wake_workers(identity)
         return identity
+
+    def _wake_workers(self, workflow_id: Optional[str] = None) -> None:
+        """Wake every loop on this node waiting for workflow state, and that workflow's waiter."""
+        self._activity_generation += 1
+        event, self._activity = self._activity, asyncio.Event()
+        event.set()
+        if workflow_id is not None:
+            waiter = self._workflow_activity.pop(workflow_id, None)
+            if waiter is not None:
+                waiter.set()
+
+    def _workflow_mark(self, workflow_id: str) -> asyncio.Event:
+        """The event set by this workflow's next state change on this node."""
+        return self._workflow_activity.setdefault(workflow_id, asyncio.Event())
+
+    async def _idle_for(self, seconds: float, mark: asyncio.Event) -> None:
+        """Wait up to ``seconds`` for the workflow behind ``mark`` to change."""
+        try:
+            await asyncio.wait_for(mark.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
+
+    def _release_dependents(self, workflow_id: str, step_id: str) -> None:
+        """Requeue steps blocked on ``step_id`` the moment it commits.
+
+        Left to the next worker scan, a waiter woken by the commit can see every step
+        terminal (done or blocked) and close the workflow before the dependents run.
+        """
+        for dependent_id in self._redis_store.get_all_step_ids(workflow_id):
+            dependent = self._redis_store.get_step_definition(workflow_id, dependent_id) or {}
+            if dependent.get("status") == "blocked" and step_id in (
+                dependent.get("depends_on") or []
+            ):
+                self._redis_store.requeue_blocked_step(workflow_id, dependent_id)
+
+    async def _idle(self, seconds: float, mark: int) -> None:
+        """Wait up to ``seconds``, returning early once this node changes workflow state.
+
+        ``mark`` is the generation read before the caller's scan, so a change made
+        while it scanned is not slept through.
+        """
+        if self._activity_generation != mark:
+            return
+        try:
+            await asyncio.wait_for(self._activity.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
 
     @property
     def schedules(self):
@@ -1048,6 +1148,7 @@ class Mesh:
         from jarviscore.planning.mesh_planner import MeshPlanner
 
         while self._started:
+            mark = self._activity_generation
             try:
                 for workflow_id in self._redis_store.get_pending_workflow_goals():
                     if self._redis_store.get_workflow_definition(workflow_id) is not None:
@@ -1102,11 +1203,12 @@ class Mesh:
                         self._redis_store.release_workflow_planning(
                             workflow_id, self._node_id
                         )
+                        self._wake_workers(workflow_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self._logger.warning("[MeshPlanner] Planning attempt failed: %s", exc)
-            await asyncio.sleep(interval)
+            await self._idle(interval, mark)
 
     def _mesh_capability_catalog(self) -> Dict[str, Any]:
         catalog: Dict[str, Any] = {}
@@ -1166,6 +1268,7 @@ class Mesh:
         )
         interval = float(self.config.get("distributed_poll_interval", 2.0))
         while deadline is None or asyncio.get_running_loop().time() < deadline:
+            mark = self._workflow_mark(workflow_id)
             planning = self._redis_store.get_workflow_planning_status(workflow_id)
             if planning and planning.get("status") == "failed":
                 raise RuntimeError(
@@ -1174,7 +1277,7 @@ class Mesh:
             definition = self._redis_store.get_workflow_definition(workflow_id)
             if definition is not None:
                 return definition
-            await asyncio.sleep(interval)
+            await self._idle_for(interval, mark)
         return None
 
     async def _wait_for_workflow_terminal(
@@ -1189,6 +1292,7 @@ class Mesh:
         )
         interval = float(self.config.get("distributed_poll_interval", 2.0))
         while deadline is None or asyncio.get_running_loop().time() < deadline:
+            mark = self._workflow_mark(workflow_id)
             latest = self._redis_store.get_workflow_definition(workflow_id)
             if latest is not None:
                 definition = latest
@@ -1376,7 +1480,7 @@ class Mesh:
                             workflow_id, revision, settlement
                         )
                 if not all_current_terminal and not paused_for_person:
-                    await asyncio.sleep(interval)
+                    await self._idle_for(interval, mark)
                     continue
                 overall = (
                     "cancelled" if "cancelled" in current_statuses
@@ -1410,6 +1514,7 @@ class Mesh:
                     }.get(response_state, "waiting" if paused_for_person else "failed")
                 if overall != "waiting":
                     self._redis_store.unregister_active_workflow(workflow_id)
+                self._workflow_activity.pop(workflow_id, None)
                 return {
                     "workflow_id": workflow_id,
                     "status": overall,
@@ -1423,7 +1528,8 @@ class Mesh:
                     ),
                     "steps": steps,
                 }
-            await asyncio.sleep(interval)
+            await self._idle_for(interval, mark)
+        self._workflow_activity.pop(workflow_id, None)
         raise TimeoutError(f"Workflow {workflow_id!r} did not finish within {timeout}s")
 
     def cancel_goal(self, workflow_id: str, *, reason: str = "Goal cancelled") -> bool:
@@ -1561,6 +1667,7 @@ class Mesh:
             raise
         finally:
             self._redis_store.release_workflow_planning(workflow_id, self._node_id)
+            self._wake_workers(workflow_id)
 
         amended = self._redis_store.get_workflow_definition(workflow_id)
         return await self._wait_for_workflow_terminal(workflow_id, amended, timeout)
@@ -1703,6 +1810,7 @@ class Mesh:
             return
 
         self._logger.info("Stopping mesh...")
+        self._draining = True
 
         # Request shutdown for all agents (for p2p mode loops)
         for agent in self.agents:
@@ -1761,6 +1869,9 @@ class Mesh:
         )
         self._distributed_worker_tasks.clear()
         self._distributed_step_tasks.clear()
+        for state in self._pools.values():
+            for member in [m for m in state.members if m is not state.base]:
+                await self._retire_pool_member(state, member)
         self._mesh_planner_task = None
         self._scheduler_task = None
 
@@ -1807,72 +1918,200 @@ class Mesh:
         )
 
         while self._started:
+            mark = self._activity_generation
             try:
                 await self._service_capability_needs(agent, capabilities)
-                for workflow_id in self._redis_store.get_active_workflows():
-                    if self._redis_store.is_workflow_cancelled(workflow_id):
-                        self._redis_store.unregister_active_workflow(workflow_id)
-                        continue
-                    if not self._node_can_access_workspace(workflow_id):
-                        continue
-                    for step_id in self._redis_store.get_all_step_ids(workflow_id):
-                        step_def = self._redis_store.get_step_definition(
-                            workflow_id, step_id
+                ready = await asyncio.to_thread(
+                    lambda: list(self._ready_steps(agent.agent_id, capabilities))
+                )
+                for workflow_id, step_id, step_def in ready:
+                    claim_id = f"{agent.agent_id}:{uuid4().hex}"
+                    lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
+                    if self._redis_store.claim_step(
+                        workflow_id, step_id, claim_id, lease_seconds=lease_seconds
+                    ):
+                        self._logger.info(
+                            f"[DistributedWorker] Claimed '{step_id}' "
+                            f"in '{workflow_id}' → {agent.agent_id}"
                         )
-                        if step_def and step_def.get("status") == "in_progress":
-                            self._redis_store.recover_expired_step_claim(
-                                workflow_id, step_id
-                            )
-                            step_def = self._redis_store.get_step_definition(
-                                workflow_id, step_id
-                            )
-                        if step_def and step_def.get("status") == "blocked":
-                            self._redis_store.requeue_blocked_step(workflow_id, step_id)
-                            step_def = self._redis_store.get_step_definition(
-                                workflow_id, step_id
-                            )
-                        if not step_def or step_def.get("status") != "pending":
-                            continue
-                        requirement = (
-                            step_def.get("capability")
-                            or step_def.get("agent")
-                            or step_def.get("role")
+                        await self._execute_distributed_step(
+                            agent, workflow_id, step_id, step_def,
+                            claim_id=claim_id,
+                            lease_seconds=lease_seconds,
                         )
-                        if requirement not in capabilities:
-                            continue
-                        resume_agent_id = step_def.get("resume_agent_id")
-                        if resume_agent_id and resume_agent_id != agent.agent_id:
-                            continue
-                        blockers = self._redis_store.get_dependency_blockers(
-                            workflow_id, step_id
-                        )
-                        if blockers:
-                            self._redis_store.block_step(
-                                workflow_id, step_id, blockers
-                            )
-                            continue
-                        if not self._redis_store.are_dependencies_met(workflow_id, step_id):
-                            continue
-                        claim_id = f"{agent.agent_id}:{uuid4().hex}"
-                        lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
-                        if self._redis_store.claim_step(
-                            workflow_id, step_id, claim_id, lease_seconds=lease_seconds
-                        ):
-                            self._logger.info(
-                                f"[DistributedWorker] Claimed '{step_id}' "
-                                f"in '{workflow_id}' → {agent.agent_id}"
-                            )
-                            await self._execute_distributed_step(
-                                agent, workflow_id, step_id, step_def,
-                                claim_id=claim_id,
-                                lease_seconds=lease_seconds,
-                            )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self._logger.warning(f"[DistributedWorker] Error: {exc}")
 
-            await asyncio.sleep(float(self.config.get("distributed_poll_interval", 2.0)))
+            await self._idle(float(self.config.get("distributed_poll_interval", 2.0)), mark)
+
+    def _ready_steps(self, agent_id: str, capabilities: set[str]):
+        """Pending steps this agent may claim now, recovering expired claims on the way.
+
+        Reads every active graph in one round trip and filters in memory: this runs
+        on every wake of every worker, so per-step reads would multiply with load.
+        """
+        now = time.time()
+        for workflow_id, steps in self._redis_store.get_active_workflow_graphs().items():
+            if not self._takes_work_for(workflow_id):
+                continue
+            accessible = None
+            for step_id, step_def in steps.items():
+                requirement = (
+                    step_def.get("capability")
+                    or step_def.get("agent")
+                    or step_def.get("role")
+                )
+                if requirement not in capabilities:
+                    continue
+                status = step_def.get("status")
+                if status == "in_progress":
+                    if float(step_def.get("claim_expires_at") or 0) > now:
+                        continue
+                    if not self._redis_store.recover_expired_step_claim(workflow_id, step_id):
+                        continue
+                    step_def = self._redis_store.get_step_definition(workflow_id, step_id)
+                elif status == "blocked":
+                    self._redis_store.requeue_blocked_step(workflow_id, step_id)
+                    step_def = self._redis_store.get_step_definition(workflow_id, step_id)
+                if not step_def or step_def.get("status") != "pending":
+                    continue
+                resume_agent_id = step_def.get("resume_agent_id")
+                if resume_agent_id and resume_agent_id != agent_id:
+                    continue
+                if accessible is None:
+                    accessible = self._node_can_access_workspace(workflow_id)
+                if not accessible:
+                    break
+                blockers = self._redis_store.get_dependency_blockers(
+                    workflow_id, step_id
+                )
+                if blockers:
+                    self._redis_store.block_step(
+                        workflow_id, step_id, blockers
+                    )
+                    continue
+                if not self._redis_store.are_dependencies_met(workflow_id, step_id):
+                    continue
+                yield workflow_id, step_id, step_def
+
+    async def _run_pool(self, state: PoolState) -> None:
+        """Dispatch a pooled agent's ready steps to idle members, adding members up to max.
+
+        One dispatcher scans per pool: members do not each poll Redis.
+        """
+        base = state.base
+        capabilities = {base.role, *getattr(base, "capabilities", [])}
+        lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
+        poll = float(self.config.get("distributed_poll_interval", 2.0))
+        self._logger.info(
+            "[Pool] %s online | min=%d max=%d | capabilities: %s",
+            base.agent_id, state.spec.min, state.spec.max, sorted(capabilities),
+        )
+        while self._started:
+            mark = self._activity_generation
+            try:
+                while len(state.members) < state.spec.min:
+                    state.release(await self._grow_pool(state))
+                if state.idle:
+                    member = state.idle.pop()
+                    try:
+                        await self._service_capability_needs(member, capabilities)
+                    finally:
+                        state.release(member)
+                ready = await asyncio.to_thread(
+                    lambda: list(self._ready_steps(base.agent_id, capabilities))
+                )
+                for workflow_id, step_id, step_def in ready:
+                    if state.idle:
+                        member = state.idle.pop()
+                    elif len(state.members) < state.spec.max:
+                        member = await self._grow_pool(state)
+                    else:
+                        break
+                    claim_id = f"{member.agent_id}:{uuid4().hex}"
+                    if not self._redis_store.claim_step(
+                        workflow_id, step_id, claim_id, lease_seconds=lease_seconds
+                    ):
+                        state.release(member)
+                        continue
+                    state.steps_started += 1
+                    self._logger.info(
+                        "[Pool] Claimed '%s' in '%s' → %s (%d/%d busy)",
+                        step_id, workflow_id, member.agent_id, state.busy, len(state.members),
+                    )
+                    task = asyncio.create_task(
+                        self._run_pool_step(
+                            state, member, workflow_id, step_id, step_def,
+                            claim_id, lease_seconds,
+                        ),
+                        name=f"pool-step-{step_id}",
+                    )
+                    self._distributed_step_tasks.add(task)
+                    task.add_done_callback(self._distributed_step_tasks.discard)
+                for member in state.retirable():
+                    await self._retire_pool_member(state, member)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._logger.warning("[Pool] %s dispatch error: %s", base.agent_id, exc)
+            await self._idle(poll, mark)
+
+    async def _run_pool_step(
+        self, state: PoolState, member: Any, workflow_id: str, step_id: str,
+        step_def: dict, claim_id: str, lease_seconds: int,
+    ) -> None:
+        from jarviscore.execution.governor import lane_scope
+
+        try:
+            with lane_scope(state.spec.lane):
+                await self._execute_distributed_step(
+                    member, workflow_id, step_id, step_def,
+                    claim_id=claim_id, lease_seconds=lease_seconds,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._logger.warning(
+                "[Pool] %s step '%s' failed outside its result: %s",
+                member.agent_id, step_id, exc,
+            )
+        finally:
+            state.release(member)
+
+    async def _grow_pool(self, state: PoolState) -> Any:
+        """Create, wire and set up one more member sharing the pooled agent's identity."""
+        member = state.factory()
+        member._mesh = self
+        self._inject_infrastructure([member])
+        self._inject_peer_clients([member], register=False)
+        if self._auth_manager and getattr(member, "requires_auth", False):
+            member._auth_manager = self._auth_manager
+        await member.setup()
+        state.members.append(member)
+        self._logger.info(
+            "[Pool] %s grew to %d member(s)", state.base.agent_id, len(state.members)
+        )
+        return member
+
+    async def _retire_pool_member(self, state: PoolState, member: Any) -> None:
+        if member in state.idle:
+            state.idle.remove(member)
+        if member in state.members:
+            state.members.remove(member)
+        state.last_active.pop(id(member), None)
+        try:
+            member.request_shutdown()
+            peers = getattr(member, "peers", None)
+            if peers is not None:
+                await peers.close()
+            await member.teardown()
+        except Exception as exc:
+            self._logger.warning("[Pool] member teardown failed: %s", exc)
+        self._logger.info(
+            "[Pool] %s shrank to %d member(s)", state.base.agent_id, len(state.members)
+        )
 
     async def _service_capability_needs(
         self, agent: Agent, capabilities: set[str]
@@ -1880,6 +2119,8 @@ class Mesh:
         """Claim peer-resolvable gaps by capability, never by central assignment."""
         lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
         for workflow_id in self._redis_store.get_workflows_with_capability_needs():
+            if not self._takes_work_for(workflow_id):
+                continue
             if self._redis_store.is_workflow_cancelled(workflow_id):
                 continue
             for need in self._redis_store.get_open_capability_needs(workflow_id):
@@ -2058,140 +2299,64 @@ class Mesh:
                 **({"_resume": True} if step_def.get("resume_agent_id") else {}),
             },
         }
-        heartbeat = asyncio.create_task(
-            self._renew_distributed_claim(
-                workflow_id, step_id, claim_id, lease_seconds
-            ),
-            name=f"claim-heartbeat-{step_id}",
-        )
-        try:
-            try:
-                with workflow_budget_scope(
-                    self._redis_store,
-                    workflow_id,
-                    epoch_id=f"step:{claim_id}",
+        lease_lost = asyncio.Event()
+
+        async def owned_work():
+            with workflow_budget_scope(
+                self._redis_store,
+                workflow_id,
+                epoch_id=f"step:{claim_id}",
+            ):
+                authorization = None
+                if effect != "final_response":
+                    authorization = await agent.authorize_dependencies(
+                        str(task["task"]),
+                        task["context"]["previous_step_results"],
+                        task["context"]["previous_step_interpretations"],
+                    )
+                    task["context"]["dependency_authorization"] = {
+                        "decision": authorization.decision,
+                        "reason": authorization.reason,
+                    }
+                if (
+                    authorization is not None
+                    and authorization.decision == "block"
+                    and getattr(agent, "llm", None) is None
                 ):
-                    authorization = None
-                    if effect != "final_response":
-                        authorization = await agent.authorize_dependencies(
-                            str(task["task"]),
-                            task["context"]["previous_step_results"],
-                            task["context"]["previous_step_interpretations"],
-                        )
-                        task["context"]["dependency_authorization"] = {
-                            "decision": authorization.decision,
-                            "reason": authorization.reason,
-                        }
-                    if (
-                        authorization is not None
-                        and authorization.decision == "block"
-                        and getattr(agent, "llm", None) is None
-                    ):
-                        result = {
-                            "status": "blocked",
-                            "error": authorization.reason,
-                            "dependency_authorization": task["context"][
-                                "dependency_authorization"
-                            ],
-                        }
-                    else:
-                        async def execute_bound_task():
-                            if (
-                                effect == "final_response"
-                                and getattr(agent, "final_response_passthrough", False)
-                                and len(step_def.get("depends_on", [])) == 1
-                                and len(direct_dependency_results) == 1
-                            ):
-                                artifact = copy.deepcopy(
-                                    next(iter(direct_dependency_results.values()))
+                    result = {
+                        "status": "blocked",
+                        "error": authorization.reason,
+                        "dependency_authorization": task["context"][
+                            "dependency_authorization"
+                        ],
+                    }
+                else:
+                    async def execute_bound_task():
+                        if (
+                            effect == "final_response"
+                            and getattr(agent, "final_response_passthrough", False)
+                            and len(step_def.get("depends_on", [])) == 1
+                            and len(direct_dependency_results) == 1
+                        ):
+                            artifact = copy.deepcopy(
+                                next(iter(direct_dependency_results.values()))
+                            )
+                            return attach_result_summary({
+                                "status": "success",
+                                "output": artifact,
+                            })
+                        async with self._bound_step_workspace(agent, task) as binding:
+                            bound_result = await agent.execute_task(task)
+                            if isinstance(bound_result, dict):
+                                receipt_evidence = bound_result.pop(
+                                    "_tool_receipts", []
                                 )
-                                return attach_result_summary({
-                                    "status": "success",
-                                    "output": artifact,
-                                })
-                            async with self._bound_step_workspace(agent, task) as binding:
-                                bound_result = await agent.execute_task(task)
-                                if isinstance(bound_result, dict):
-                                    receipt_evidence = bound_result.pop(
-                                        "_tool_receipts", []
-                                    )
-                                    bound_result.pop("workspace_delta", None)
-                                    if bound_result.get("status") == "success":
-                                        try:
-                                            bound_result["output"] = hydrate_receipt_evidence(
-                                                bound_result.get("output"),
-                                                receipt_evidence=receipt_evidence,
-                                                previous_step_results=task["context"].get(
-                                                    "previous_step_results"
-                                                ),
-                                                workflow_id=workflow_id,
-                                            )
-                                        except ToolReceiptError as exc:
-                                            bound_result.update({
-                                                "status": "failure",
-                                                "output": None,
-                                                "error": (
-                                                    "Final output failed authoritative "
-                                                    f"receipt validation: {exc}"
-                                                ),
-                                            })
-                                bound_status = (
-                                    bound_result.get("status")
-                                    if isinstance(bound_result, dict)
-                                    else None
-                                )
-                                if (
-                                    binding is not None
-                                    and isinstance(bound_result, dict)
-                                    and bound_status in {"success", "epoch_exhausted"}
-                                ):
-                                    delta = await binding.export_delta(
-                                        f"workflows/{workflow_id}/workspace_deltas/{step_id}",
-                                        ignored_names=tuple(
-                                            self.config.get(
-                                                "workspace_delta_ignored_names"
-                                            )
-                                            or (
-                                                ".git",
-                                                ".tmp",
-                                                ".venv",
-                                                "__pycache__",
-                                                "node_modules",
-                                                "output",
-                                                "target",
-                                            )
-                                        ),
-                                    )
-                                    if delta.added or delta.modified or delta.deleted:
-                                        bound_result["workspace_delta"] = asdict(delta)
-                                    if bound_status == "epoch_exhausted":
-                                        return bound_result
-                                    final_receipts = []
-                                    delta_entries = {
-                                        entry.path: entry
-                                        for entry in (*delta.added, *delta.modified)
-                                    }
-                                    for evidence in receipt_evidence:
-                                        if not isinstance(evidence, dict) or "path" not in evidence:
-                                            final_receipts.append(evidence)
-                                            continue
-                                        entry = delta_entries.get(str(evidence.get("path") or ""))
-                                        if entry is None:
-                                            continue
-                                        if (
-                                            str(evidence.get("sha256") or "")
-                                            != entry.sha256
-                                            or int(evidence.get("bytes") or -1)
-                                            != entry.size
-                                            or bool(evidence.get("executable", False))
-                                            != entry.executable
-                                        ):
-                                            continue
-                                        final_receipts.append(evidence)
+                                bound_result.pop("workspace_delta", None)
+                                if bound_result.get("status") == "success":
                                     try:
                                         bound_result["output"] = hydrate_receipt_evidence(
                                             bound_result.get("output"),
-                                            receipt_evidence=final_receipts,
+                                            receipt_evidence=receipt_evidence,
                                             previous_step_results=task["context"].get(
                                                 "previous_step_results"
                                             ),
@@ -2202,21 +2367,110 @@ class Mesh:
                                             "status": "failure",
                                             "output": None,
                                             "error": (
-                                                "Final workspace state failed authoritative "
+                                                "Final output failed authoritative "
                                                 f"receipt validation: {exc}"
                                             ),
                                         })
-                                        return bound_result
-                                return bound_result
+                            bound_status = (
+                                bound_result.get("status")
+                                if isinstance(bound_result, dict)
+                                else None
+                            )
+                            if (
+                                binding is not None
+                                and isinstance(bound_result, dict)
+                                and bound_status in {"success", "epoch_exhausted"}
+                            ):
+                                delta = await binding.export_delta(
+                                    f"workflows/{workflow_id}/workspace_deltas/{step_id}",
+                                    ignored_names=tuple(
+                                        self.config.get(
+                                            "workspace_delta_ignored_names"
+                                        )
+                                        or (
+                                            ".git",
+                                            ".tmp",
+                                            ".venv",
+                                            "__pycache__",
+                                            "node_modules",
+                                            "output",
+                                            "target",
+                                        )
+                                    ),
+                                )
+                                if delta.added or delta.modified or delta.deleted:
+                                    bound_result["workspace_delta"] = asdict(delta)
+                                if bound_status == "epoch_exhausted":
+                                    return bound_result
+                                final_receipts = []
+                                delta_entries = {
+                                    entry.path: entry
+                                    for entry in (*delta.added, *delta.modified)
+                                }
+                                for evidence in receipt_evidence:
+                                    if not isinstance(evidence, dict) or "path" not in evidence:
+                                        final_receipts.append(evidence)
+                                        continue
+                                    entry = delta_entries.get(str(evidence.get("path") or ""))
+                                    if entry is None:
+                                        continue
+                                    if (
+                                        str(evidence.get("sha256") or "")
+                                        != entry.sha256
+                                        or int(evidence.get("bytes") or -1)
+                                        != entry.size
+                                        or bool(evidence.get("executable", False))
+                                        != entry.executable
+                                    ):
+                                        continue
+                                    final_receipts.append(evidence)
+                                try:
+                                    bound_result["output"] = hydrate_receipt_evidence(
+                                        bound_result.get("output"),
+                                        receipt_evidence=final_receipts,
+                                        previous_step_results=task["context"].get(
+                                            "previous_step_results"
+                                        ),
+                                        workflow_id=workflow_id,
+                                    )
+                                except ToolReceiptError as exc:
+                                    bound_result.update({
+                                        "status": "failure",
+                                        "output": None,
+                                        "error": (
+                                            "Final workspace state failed authoritative "
+                                            f"receipt validation: {exc}"
+                                        ),
+                                    })
+                                    return bound_result
+                            return bound_result
 
-                        lock = getattr(agent, "_peer_execution_lock", None)
-                        if lock is None:
+                    lock = getattr(agent, "_peer_execution_lock", None)
+                    if lock is None:
+                        result = await execute_bound_task()
+                    else:
+                        async with lock:
                             result = await execute_bound_task()
-                        else:
-                            async with lock:
-                                result = await execute_bound_task()
+            return result
+
+        work = asyncio.create_task(owned_work(), name=f"step-work-{step_id}")
+        heartbeat = asyncio.create_task(
+            self._renew_distributed_claim(
+                workflow_id, step_id, claim_id, lease_seconds, lease_lost, work
+            ),
+            name=f"claim-heartbeat-{step_id}",
+        )
+        try:
+            try:
+                result = await work
             except asyncio.CancelledError:
-                raise
+                if not lease_lost.is_set():
+                    raise
+                self._logger.warning(
+                    "[DistributedWorker] '%s' in '%s' stopped: %s no longer holds its claim",
+                    step_id, workflow_id, agent.agent_id,
+                )
+                return
             except Exception as exc:
                 self._logger.error(
                     f"[DistributedWorker] '{step_id}' in '{workflow_id}' failed: {exc}"
@@ -2228,6 +2482,9 @@ class Mesh:
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
+            if not work.done():
+                work.cancel()
+                await asyncio.gather(work, return_exceptions=True)
 
         s = result.get("status", "?") if isinstance(result, dict) else "done"
         if s == "epoch_exhausted":
@@ -2253,6 +2510,7 @@ class Mesh:
                     exhausted,
                     status="failed",
                 )
+                self._wake_workers(workflow_id)
                 return
             continued = self._redis_store.continue_claimed_step(
                 workflow_id,
@@ -2277,6 +2535,9 @@ class Mesh:
             result,
             status=terminal,
         )
+        if committed:
+            self._release_dependents(workflow_id, step_id)
+        self._wake_workers(workflow_id)
         if not committed:
             self._logger.warning(
                 "[DistributedWorker] Rejected stale result for '%s' in '%s' from %s",
@@ -2491,13 +2752,24 @@ class Mesh:
         step_id: str,
         claim_id: str,
         lease_seconds: int,
+        lease_lost: Optional[asyncio.Event] = None,
+        work: Optional[asyncio.Task] = None,
     ) -> None:
+        """Keep the claim alive; once it cannot be renewed, stop the work holding it.
+
+        Another member may already have claimed the step, and fencing would refuse
+        this work's result anyway, so continuing only spends tokens and tool calls.
+        """
         interval = max(0.1, lease_seconds / 3)
         while True:
             await asyncio.sleep(interval)
             if not self._redis_store.renew_step_claim(
                 workflow_id, step_id, claim_id, lease_seconds
             ):
+                if lease_lost is not None:
+                    lease_lost.set()
+                if work is not None and not work.done():
+                    work.cancel()
                 return
 
     # Phase 9: Infrastructure helpers
@@ -2647,7 +2919,7 @@ class Mesh:
             return MeshMode.DISTRIBUTED
         return MeshMode.AUTONOMOUS
 
-    def _inject_infrastructure(self):
+    def _inject_infrastructure(self, agents: Optional[List[Any]] = None):
         """
         Inject redis_store, blob_storage, mailbox, and HITLQueue into all agents.
 
@@ -2672,7 +2944,7 @@ class Mesh:
         except ImportError:
             _HITLQueue = None
 
-        for agent in self.agents:
+        for agent in (self.agents if agents is None else agents):
             agent._redis_store   = self._redis_store
             agent._blob_storage  = self._blob_storage
             agent._nexus_store   = self._nexus_store    # always set (NexusLocalStore)
@@ -2702,13 +2974,13 @@ class Mesh:
         self._logger.info(
             "✓ Infrastructure injected into %d agent(s) "
             "(redis=%s, blob=%s, hitl=%s)",
-            len(self.agents),
+            len(self.agents if agents is None else agents),
             "yes" if self._redis_store else "no",
             "yes" if self._blob_storage else "no",
             "yes" if _HITLQueue else "no",
         )
 
-    def _inject_peer_clients(self):
+    def _inject_peer_clients(self, agents: Optional[List[Any]] = None, register: bool = True):
         """
         Inject PeerClient instances into all agents regardless of mesh mode.
 
@@ -2765,7 +3037,7 @@ class Mesh:
 
         coordinator = self._p2p_coordinator if is_p2p else None
 
-        for agent in self.agents:
+        for agent in (self.agents if agents is None else agents):
             peer_client = PeerClient(
                 coordinator=coordinator,
                 agent_id=agent.agent_id,
@@ -2782,8 +3054,9 @@ class Mesh:
             if callable(notification_handler):
                 peer_client.set_notification_handler(notification_handler)
 
-            # Register with coordinator for remote message routing (P2P only)
-            if is_p2p and self._p2p_coordinator:
+            # Register with coordinator for remote message routing (P2P only).
+            # Pool members share the registered agent's id; inbound routing stays with it.
+            if register and is_p2p and self._p2p_coordinator:
                 self._p2p_coordinator.register_peer_client(agent.agent_id, peer_client)
 
             self._logger.debug(
@@ -3172,6 +3445,7 @@ class Mesh:
             - swim_status: SWIM protocol status (if P2P enabled)
             - capability_map: Mapping of capabilities to agent IDs
             - llm_governor: Per-deployment calls in flight, waits and rate limits
+            - pools: Members, busy members and limits of each elastic pool
 
         Example:
             diagnostics = mesh.get_diagnostics()
@@ -3187,6 +3461,7 @@ class Mesh:
             "local_agents": self._get_local_agents_info(),
             "connectivity_status": self._assess_connectivity_status(),
             "llm_governor": governor.snapshot(),
+            "pools": {agent_id: state.snapshot() for agent_id, state in self._pools.items()},
         }
 
         # Add P2P-specific diagnostics if coordinator is available
