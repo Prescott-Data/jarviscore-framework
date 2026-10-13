@@ -1025,6 +1025,32 @@ async def test_execute_goal_surfaces_durable_planning_failure_without_timeout(mo
 
 
 @pytest.mark.asyncio
+async def test_a_pending_goal_whose_record_expired_is_settled_once_not_replanned_forever(monkeypatch):
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    store.register_workflow_goal("wf-expired", "Find evidence")
+    store._redis.delete("workflow_goal:wf-expired")
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.05})
+    mesh.add(ResearchPeer(MockLLMClient(responses=[]), agent_id="researcher-1"))
+
+    await mesh.start()
+    try:
+        await asyncio.sleep(0.5)
+    finally:
+        await mesh.stop()
+
+    status = store.get_workflow_planning_status("wf-expired")
+    assert status["status"] == "failed"
+    assert "expired" in status["error"]
+    assert "wf-expired" not in store.get_pending_workflow_goals()
+    events = [entry["event"] for _, entry in store._redis.xrange("ledgers:wf-expired")]
+    assert events.count("planning_planning") == 1
+
+
+@pytest.mark.asyncio
 async def test_goal_submitter_need_not_be_the_node_that_compiles_or_executes(monkeypatch):
     llm = MockLLMClient(responses=goal_responses())
     store = MockRedisContextStore()

@@ -1187,7 +1187,9 @@ class Mesh:
                         )
                         source = self._redis_store.get_workflow_goal(workflow_id)
                         if source is None:
-                            continue
+                            raise LookupError(
+                                "The goal's source record expired before any node planned it"
+                            )
                         planner = MeshPlanner(
                             self._planning_llm(),
                             capabilities=self._mesh_capability_catalog(),
