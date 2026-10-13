@@ -128,6 +128,16 @@ mid-checkout and an approval) runs went from 0/8 to 3/3 fully graded passes.
   credential and workspace limits, receipt grounding, result shape checks and
   `required_tool_groups`.
   ([RFC 0003](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0003-record-not-police.md))
+- **The runtime never clicks for the agent.** When a researcher click or type
+  failed, the runtime clicked or typed into other elements itself, then a
+  vision-guessed coordinate, and reported success for an element the agent
+  never chose. A failed action now returns its error. Removed with it:
+  `RESEARCH_REPAIR_LOOP_ENABLED`, `RESEARCH_REPAIR_MAX_TURNS` and the
+  `recovery_strategy` text on failed page reads.
+- **Failures are recorded as facts.** `FailureLedger` keeps the class a tool
+  declares, its status code and the whole error; it no longer guesses a class
+  from words in the message. The browser dispatcher no longer attaches a
+  guessed `error_type`.
 
 ### Fixed
 
@@ -157,6 +167,9 @@ mid-checkout and an approval) runs went from 0/8 to 3/3 fully graded passes.
   calls `load_dotenv()` at import. JarvisCore now disables that for the import.
 - A correct answer that cited the receipt of a page read was rejected as an
   unknown receipt. A read that established a fact is evidence.
+- A page a site refused (401/403) was never marked `access: protected`: the
+  fetcher reported a guessed category instead of the status code. Failed page
+  reads now carry `status_code`.
 - A continued step lost its conversation; it now resumes with its last 10
   exchanges, including the turn that paused for a person.
 - An approved action blocked before acting (a cookie dialog over the button)
