@@ -72,7 +72,9 @@ The browser sub-agent registers the following tools. On providers that support n
 
 ### Seeing the page
 
-`snapshot` is how the agent reads a page. It returns the page as a person reads it: headings, text, tables as rows, notices and dialogs, with a ref such as `[e12]` (or `[f3e12]` inside a frame) on every element that can be acted on and its state, for example `(disabled)`. Every interaction tool accepts that ref. A ref lasts only until the next snapshot or page load; using an older one returns `STALE_REF` without acting, and the agent takes a new snapshot.
+`snapshot` is how the agent reads a page. It returns the page as a person reads it: headings, text, tables as rows, notices and dialogs, with a ref such as `[e12]` (or `[f3e12]` inside a frame) on every element that can be acted on and its state, for example `(disabled)`. Elements the page makes clickable without giving them a link or button role, such as a table row that opens a record, carry a ref too. Content a person cannot see is left out: a frame that is transparent, hidden or has no size (a closed support-chat widget, for example) does not appear. Every interaction tool accepts a ref. A ref lasts only until the next page view or page load; using an older one returns `STALE_REF` without acting.
+
+`navigate` and every interaction (`click`, `type_text`, `fill_form`, `select_option`, `scroll`, and `act`) return the page as it stands afterwards, in the same form, so the agent reads the result of an action without spending a turn on a separate snapshot. Only the latest page view stays in the agent's context; earlier ones are replaced by a pointer to `read_turn_result`.
 
 ```text
 ## Products
@@ -92,7 +94,7 @@ The browser sub-agent registers the following tools. On providers that support n
 
 | Tool | Description | Key parameters |
 |---|---|---|
-| `navigate` | Go to a URL and wait for load. The result includes `http_status` and, when a decision model is configured, `access` (whether the site turned the browser away) | `url`, `wait_for` (`networkidle`\|`domcontentloaded`\|`load`) |
+| `navigate` | Go to a URL, wait for the document and for the page to stop changing, and return the page. The result includes `http_status` and, when a decision model is configured, `access` (whether the site turned the browser away) | `url`, `wait_for` (default `domcontentloaded`; also `load`, `networkidle`) |
 | `close_page` | Close current page, open a fresh one |, |
 
 ### Inspection
@@ -106,7 +108,7 @@ The browser sub-agent registers the following tools. On providers that support n
 
 ### Interaction
 
-An element that is disabled, hidden, or covered by something else (a cookie dialog, a modal) is refused at once with the reason, before anything is clicked.
+An element that is disabled, hidden, or covered by something else (a cookie dialog, a modal) is refused at once with the reason, before anything is clicked. The check looks at the point a click would land on; an element laid out without a box of its own (`display: contents`, common for table rows) is checked across the area its content covers and receives the click itself.
 
 | Tool | Description | Key parameters |
 |---|---|---|
@@ -207,10 +209,12 @@ held browser is closed. Any other ending closes it at once.
 - **Pace.** Requests to the same site are spaced by `BROWSER_SITE_INTERVAL_S`
   (default 1.5 s), the way a person's browsing is spaced, across every run in
   the process.
-- **Settling.** After a click or typing (including through `act`), the page is
-  given up to `BROWSER_SETTLE_TIMEOUT_MS` (default 3000) to finish loading what
-  the action started before the agent looks again. A page that keeps a
-  connection open is still used once the time is up.
+- **Settling.** After navigating, clicking or typing (including through `act`),
+  the browser waits for the document to load and then for the page to stop
+  changing for half a second, up to `BROWSER_SETTLE_TIMEOUT_MS` (default 3000),
+  before returning the page. It does not wait for network idle: apps that poll
+  in the background never reach it. A page still changing when the time is up
+  is returned as it stands.
 - **Access.** With a decision model configured, `navigate` reports whether the
   site served the page or turned the browser away (an access block, bot check
   or captcha): `"access": {"denied": true, "probability": 0.97, "decision_request_id": "..."}`.
@@ -303,9 +307,8 @@ class DashboardScraper(AutoAgent):
     You are a web automation specialist. Your task is to log into dashboards and
     extract structured data. Always:
     1. Call navigate() first.
-    2. Read the page with snapshot() and act on elements by their ref.
-    3. Take a new snapshot after the page changes; take a screenshot when the
-       layout matters.
+    2. Read the page each action returns and act on elements by their ref.
+    3. Take a screenshot when the layout matters.
     4. Report the figures exactly as the page shows them, with the page they came from.
     """
 ```

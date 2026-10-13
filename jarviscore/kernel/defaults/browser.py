@@ -186,18 +186,25 @@ def _element_label(role: str, name: str, flags: str) -> str:
     return f"[{ref.group(1)}] {label}" + (f" ({state})" if state else "") if ref else label
 
 
+def _clickable(role: str, flags: str) -> bool:
+    """An element the agent can act on: an interactive role, or one the page gives a pointer cursor."""
+    return role in _INTERACTIVE_ROLES or ("[cursor=pointer]" in flags and "[ref=" in flags)
+
+
 def _inline(node) -> str:
     kind, role, name, flags, text, children = node
     if kind == "property":
         return f"{role}: {text}" if role != "url" and text else ""
     if kind == "text":
         return text
-    if role in _INTERACTIVE_ROLES:
+    if role == "row" and children:
+        # A row's name joins its cells; read the cells.
+        ref = _TREE_REF.search(flags)
+        name, parts = "", [f"[{ref.group(1)}] row"] if ref and _clickable(role, flags) else []
+    elif _clickable(role, flags):
         parts = [_element_label(role, name, flags)]
     elif role == "img":
         parts = [f'img "{name}"'] if name else []
-    elif role == "row" and children:
-        name, parts = "", []  # a row's name joins its cells; read the cells
     else:
         parts = [name] if name else []
     if text and text not in name:
@@ -241,6 +248,11 @@ def _reading_view(tree: str) -> str:
                 if rendered:
                     lines.append(f"- {rendered}" if role == "listitem" else rendered)
                 continue
+            if _clickable(role, flags):
+                # A clickable container keeps its structure: its label, then what it holds.
+                lines.append(_element_label(role, name, flags))
+                render(children)
+                continue
             if role == "heading":
                 level = re.search(r"\[level=(\d)\]", flags)
                 lines.append(f"{'#' * int(level.group(1)) if level else '#'} {name or _inline(node)}")
@@ -257,6 +269,16 @@ def _reading_view(tree: str) -> str:
     return "\n".join(lines)
 
 
+_DOM_QUIET_MS = 500
+# Resolves once the document has gone quiet_ms without a change, or after limit_ms.
+_DOM_QUIET = """([quietMs, limitMs]) => new Promise(resolve => {
+    let quiet;
+    const finish = () => { observer.disconnect(); clearTimeout(quiet); resolve(); };
+    const observer = new MutationObserver(() => { clearTimeout(quiet); quiet = setTimeout(finish, quietMs); });
+    observer.observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+    quiet = setTimeout(finish, quietMs);
+    setTimeout(finish, limitMs);
+})"""
 # Puts the values a person approved back on a reopened form; throws if any cannot be.
 _RESTORE_FORM = """({action, fields}) => {
     const form = Array.from(document.forms).find(f => f.action === action);
@@ -280,14 +302,58 @@ _RESTORE_FORM = """({action, fields}) => {
         }
     }
 }"""
-# What sits over an element's centre, or null when a click would reach it.
+# The point a person would click: the element's own box, or the area its content covers
+# when it has no box of its own (display: contents), kept inside the viewport.
+_TARGET_POINT = """el => {
+    const own = el.getBoundingClientRect();
+    let box = own;
+    if (!own.width || !own.height) {
+        const rects = Array.from(el.querySelectorAll('*')).map(c => c.getBoundingClientRect())
+            .filter(r => r.width && r.height);
+        if (!rects.length) return null;
+        box = {left: Math.min(...rects.map(r => r.left)), top: Math.min(...rects.map(r => r.top)),
+               right: Math.max(...rects.map(r => r.right)), bottom: Math.max(...rects.map(r => r.bottom))};
+    }
+    const left = Math.max(box.left, 0), right = Math.min(box.right, innerWidth);
+    const top = Math.max(box.top, 0), bottom = Math.min(box.bottom, innerHeight);
+    return {x: (left + right) / 2, y: (top + bottom) / 2, own: !!(own.width && own.height)};
+}"""
+# What sits over the point a click would land on, or null when the click would reach the element.
 _COVERED_BY = """el => {
-    const box = el.getBoundingClientRect();
-    const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    const point = (""" + _TARGET_POINT + """)(el);
+    if (!point) return null;
+    const top = document.elementFromPoint(point.x, point.y);
     if (!top || top === el || el.contains(top) || top.contains(el)) return null;
     const label = (top.getAttribute('aria-label') || top.innerText || '').trim().slice(0, 80);
     return `${top.tagName.toLowerCase()}${top.id ? '#' + top.id : ''}${label ? ' "' + label + '"' : ''}`;
 }"""
+# Whether a person can see an element: it has an area and nothing above it is transparent or hidden.
+_SEEN = """el => {
+    const box = el.getBoundingClientRect();
+    if (box.width === 0 || box.height === 0) return false;
+    for (let e = el; e; e = e.parentElement) {
+        const style = getComputedStyle(e);
+        if (style.opacity === '0' || style.visibility === 'hidden' || style.display === 'none') return false;
+    }
+    return true;
+}"""
+_TREE_FRAME = re.compile(r"^(\s*)- iframe\b.*\[ref=([^\]]+)\]")
+
+
+def _without_subtrees(tree: str, refs: set) -> str:
+    """The tree with the nodes carrying ``refs``, and everything under them, left out."""
+    kept, cut_depth = [], None
+    for line in tree.splitlines():
+        depth = len(line) - len(line.lstrip())
+        if cut_depth is not None and depth > cut_depth:
+            continue
+        cut_depth = None
+        match = _TREE_FRAME.match(line)
+        if match and match.group(2) in refs:
+            cut_depth = depth
+            continue
+        kept.append(line)
+    return "\n".join(kept)
 
 
 class BrowserSubAgent(BaseSubAgent):
@@ -317,7 +383,9 @@ class BrowserSubAgent(BaseSubAgent):
     """
 
     whole_observation_tools = frozenset({"snapshot", "find", "act"})
-    perception_tools = frozenset({"snapshot"})
+    perception_tools = frozenset({
+        "snapshot", "navigate", "click", "type_text", "fill_form", "select_option", "scroll", "act",
+    })
     #: Seconds between requests to the same site.
     site_interval_s: float = float(os.getenv("BROWSER_SITE_INTERVAL_S", "1.5"))
     #: How long an action may take to finish loading before the agent looks again.
@@ -334,11 +402,14 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 ## CRITICAL RULES
 
 1. **NAVIGATE FIRST** — Always call navigate() before any other interaction.
-2. **READ THE PAGE, THEN ACT BY REF** — snapshot() shows the page as a person reads it:
-   its text, tables, instructions and notices, with a ref on every element you can act
-   on and its state such as (disabled). Follow what the page says about how to use it.
+2. **READ THE PAGE, THEN ACT BY REF** — navigate and every action (click, type_text,
+   fill_form, select_option, scroll, act) return the page as it stands afterwards: its
+   text, tables, instructions and notices, with a ref on every element you can act on
+   and its state such as (disabled). Read that page before your next step; there is no
+   need to snapshot after an action. Follow what the page says about how to use it.
    Act on an element by passing its ref to click, type_text, fill_form or select_option.
-   Take a new snapshot after the page changes: refs from an earlier page no longer apply.
+   Use the refs of the latest page you were shown: refs from an earlier page no longer
+   apply. snapshot() re-reads the page, or one region of it, when you need it again.
 3. **LET THE DECISION MODEL PICK WHEN IT IS AVAILABLE** — once you know what to do,
    act(goal, action) with action click, type or select finds the element and acts in
    one step; it suits reversible steps. When it returns needs_choice, pick a ref from
@@ -371,11 +442,10 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 
 ## WORKFLOW
 
-1. navigate(url)
-2. snapshot() → read the page
-3. act by ref, or act(goal, action)
-4. snapshot() after the page changes
-5. DONE with findings
+1. navigate(url) → read the page it returns
+2. act by ref, or act(goal, action) → read the page it returns
+3. repeat step 2 until the task is done
+4. DONE with findings
 """
 
     def __init__(
@@ -444,7 +514,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self.register_tool(
             "navigate",
             self._tool_navigate,
-            'Go to a URL. Params: {"url": "<url>", "wait_for": "networkidle|domcontentloaded|load"}',
+            'Go to a URL; returns the page once it has loaded and stopped changing. Params: {"url": "<url>"}',
             phase="action",
         )
         self.register_tool(
@@ -458,13 +528,13 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self.register_tool(
             "click",
             self._tool_click,
-            'Click an element. Params: {"ref": "<snapshot ref>"} or {"selector": "<css>"} or {"text": "<visible text>"}',
+            'Click an element; returns the page afterwards. Params: {"ref": "<ref>"} or {"selector": "<css>"} or {"text": "<visible text>"}',
             phase="action",
         )
         self.register_tool(
             "type_text",
             self._tool_type_text,
-            'Type text into an input. Params: {"ref": "<snapshot ref>" or "selector": "<css>", "text": "<text>", "clear_first": true}',
+            'Type text into an input; returns the page afterwards. Params: {"ref": "<ref>" or "selector": "<css>", "text": "<text>", "clear_first": true}',
             phase="action",
         )
         self.register_tool(
@@ -506,19 +576,19 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self.register_tool(
             "fill_form",
             self._tool_fill_form,
-            'Fill multiple form fields. Params: {"fields": [{"ref": "<snapshot ref>" or "selector": "<css>", "value": "<text>"}]}',
+            'Fill multiple form fields; returns the page afterwards. Params: {"fields": [{"ref": "<ref>" or "selector": "<css>", "value": "<text>"}]}',
             phase="action",
         )
         self.register_tool(
             "select_option",
             self._tool_select_option,
-            'Select a dropdown option. Params: {"ref": "<snapshot ref>" or "selector": "<css>", "value": "<option value or label>"}',
+            'Select a dropdown option; returns the page afterwards. Params: {"ref": "<ref>" or "selector": "<css>", "value": "<option value or label>"}',
             phase="action",
         )
         self.register_tool(
             "scroll",
             self._tool_scroll,
-            'Scroll the page. Params: {"direction": "down|up|top|bottom", "pixels": 500}',
+            'Scroll the page; returns the page afterwards. Params: {"direction": "down|up|top|bottom", "pixels": 500}',
             phase="action",
         )
         self.register_tool(
@@ -914,7 +984,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
     async def _tool_navigate(
         self,
         url: str,
-        wait_for: str = "networkidle",
+        wait_for: str = "domcontentloaded",
         timeout_ms: int = 30000,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -931,6 +1001,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 wait_until=wait_for,
                 timeout=timeout_ms,
             )
+            await self._settle()
             self._current_url = self._page.url
             title = await self._page.title()
             result = {
@@ -942,7 +1013,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             access = await self._judge_access(url, result["http_status"], title)
             if access is not None:
                 result["access"] = access
-            return result
+            return await self._observed(result)
         except Exception as e:
             return {"status": "error", "error": str(e), "url": url}
 
@@ -990,12 +1061,22 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             "decision_request_id": result.request_id,
         }
 
+    async def _observed(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """An action's result with the page as it stands afterwards, so acting includes looking."""
+        try:
+            result["title"] = await self._page.title()
+            result["page"] = _reading_view(await self._aria(self._page.locator("body")))
+        except Exception as exc:
+            result["page_unavailable"] = f"The page could not be read after the action ({exc}); take a snapshot."
+        return result
+
     async def _settle(self) -> None:
-        """Let what an action started finish loading before the next observation."""
+        """Let what an action started finish rendering before the next observation."""
         try:
             await self._page.wait_for_load_state("domcontentloaded", timeout=self.settle_timeout_ms)
-            await self._page.wait_for_load_state("networkidle", timeout=self.settle_timeout_ms)
-        except Exception as exc:  # a page that keeps a connection open is still usable
+            # Apps that poll never reach network idle; a page that stopped changing has settled.
+            await self._page.evaluate(_DOM_QUIET, [_DOM_QUIET_MS, self.settle_timeout_ms])
+        except Exception as exc:  # a navigation mid-wait or a page that never stops changing is still usable
             logger.debug("[browser] Page did not settle within %sms: %s", self.settle_timeout_ms, exc)
 
     async def _tool_click(
@@ -1015,7 +1096,13 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 locator, refusal = await self._actionable(ref)
                 if refusal:
                     return refusal
-                await locator.click(timeout=timeout_ms)
+                point = await locator.evaluate(_TARGET_POINT)
+                if point and not point["own"]:
+                    # An element laid out without a box of its own (display: contents) takes
+                    # the click itself; a point inside it can land on a child that keeps it.
+                    await locator.evaluate("el => el.click()")
+                else:
+                    await locator.click(timeout=timeout_ms)
             elif text and not selector:
                 # Text-based click
                 await self._page.get_by_text(text, exact=False).first.click(timeout=timeout_ms)
@@ -1024,7 +1111,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             else:
                 return {"status": "error", "error": "One of ref, selector or text is required"}
             await self._settle()
-            return {"status": "success", "url": self._page.url}
+            return await self._observed({"status": "success", "url": self._page.url})
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -1054,7 +1141,9 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 await locator.fill("", timeout=10000)
             await locator.press_sequentially(text, delay=delay_ms)
             await self._settle()
-            return {"status": "success", "target": ref or selector, "chars_typed": len(text)}
+            return await self._observed(
+                {"status": "success", "target": ref or selector, "chars_typed": len(text)}
+            )
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -1099,8 +1188,20 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         return self._page.locator(f"aria-ref={ref}")
 
     async def _aria(self, locator) -> str:
-        """An aria snapshot, remembering which refs it made resolvable."""
+        """An aria snapshot of what a person can see, remembering which refs it made resolvable."""
         tree = await locator.aria_snapshot(mode="ai")
+        # A widget frame faded to transparent stays in the accessibility tree but not on screen.
+        unseen = set()
+        for line in tree.splitlines():
+            match = _TREE_FRAME.match(line)
+            if match:
+                try:
+                    if not await self._ref(match.group(2)).evaluate(_SEEN):
+                        unseen.add(match.group(2))
+                except Exception:
+                    continue
+        if unseen:
+            tree = _without_subtrees(tree, unseen)
         self._live_refs = (await self._document(), frozenset(_TREE_REF.findall(tree)))
         return tree
 
@@ -1415,12 +1516,12 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             except Exception as e:
                 results.append({"target": target, "status": "error", "error": str(e)})
         success_count = sum(1 for r in results if r["status"] == "success")
-        return {
+        return await self._observed({
             "status": "success" if success_count == len(fields) else "partial",
             "filled": success_count,
             "total": len(fields),
             "results": results,
-        }
+        })
 
     async def _tool_select_option(
         self,
@@ -1444,7 +1545,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             selected = await locator.select_option(value=value, timeout=10000)
             if not selected:
                 selected = await locator.select_option(label=value, timeout=10000)
-            return {"status": "success", "target": ref or selector, "selected": selected}
+            return await self._observed({"status": "success", "target": ref or selector, "selected": selected})
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -1469,7 +1570,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             else:  # down
                 await self._page.evaluate(f"window.scrollBy(0, {pixels})")
             await asyncio.sleep(0.3)
-            return {"status": "success", "direction": direction, "pixels": pixels}
+            return await self._observed({"status": "success", "direction": direction, "pixels": pixels})
         except Exception as e:
             return {"status": "error", "error": str(e)}
 

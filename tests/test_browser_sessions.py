@@ -6,7 +6,7 @@ import json
 import pytest
 
 from jarviscore.kernel.defaults import browser as browser_module
-from jarviscore.kernel.defaults.browser import BrowserSubAgent
+from jarviscore.kernel.defaults.browser import BrowserSubAgent, _reading_view
 
 
 class _Page:
@@ -729,6 +729,53 @@ def test_the_snapshot_reads_the_page_as_a_person_sees_it():
         '[f7e30] link "Delivery: this week - see slots"',
         '[f7e12] button "Place "express" order"',
     ]
+
+
+def test_a_row_the_page_makes_clickable_carries_its_ref():
+    # Apps such as Hightouch open a record by clicking its table row, which has no link role.
+    tree = (
+        "- table [ref=e150]:\n"
+        "  - row [ref=e156]:\n"
+        '    - columnheader "Model" [ref=e169] [cursor=pointer]\n'
+        "  - row [ref=e188] [cursor=pointer]:\n"
+        '    - cell "FB Sales Patch 2 rows" [ref=e190]\n'
+        '    - cell "56 minutes ago" [ref=e191]\n'
+        "  - generic [ref=e300] [cursor=pointer]:\n"
+        '    - heading "Sync settings" [level=2] [ref=e301]\n'
+    )
+
+    lines = _reading_view(tree).splitlines()
+
+    assert "| [e188] row | FB Sales Patch 2 rows | 56 minutes ago |" in lines
+    assert '| [e169] columnheader "Model" |' in lines
+    assert "[e300] generic" in lines and "## Sync settings" in lines
+
+
+def test_an_action_returns_the_page_it_left_behind():
+    # Acting includes looking: the agent reads the result without a separate snapshot turn.
+    agent = _indexed_agent()
+    asyncio.run(agent._tool_snapshot())
+
+    result = asyncio.run(agent._tool_click(ref="f7e10"))
+
+    assert result["status"] == "success" and agent._page.clicked == ["f7e10"]
+    assert '[f7e12] button "Place "express" order"' in result["page"]
+    assert {"click", "navigate", "type_text", "act"} <= BrowserSubAgent.perception_tools
+
+
+def test_a_frame_no_one_can_see_is_left_out_of_the_page():
+    # Hightouch keeps a faded-out support widget frame in the accessibility tree.
+    tree = (
+        '- heading "All syncs" [level=1] [ref=e10]\n'
+        "- iframe [ref=e1624]:\n"
+        '  - heading "How can we help?" [level=1] [ref=f4e3]\n'
+        '  - button "Close" [ref=f4e15] [cursor=pointer]\n'
+        '- button "Add sync" [ref=e20] [cursor=pointer]\n'
+    )
+
+    view = _reading_view(browser_module._without_subtrees(tree, {"e1624"}))
+
+    assert view.splitlines() == ["# All syncs", '[e20] button "Add sync"']
 
 
 def test_the_index_lists_only_what_can_be_acted_on():

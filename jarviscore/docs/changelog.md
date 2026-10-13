@@ -98,6 +98,12 @@ slots that disappear mid-checkout.
   page's headings, text, tables, notices and dialogs, with a ref on every
   element that can be acted on, and every interaction tool accepts that ref.
   Disabled, hidden and covered elements are refused at once, with the reason.
+- **Every browser action returns the page it leaves behind.** `navigate`,
+  `click`, `type_text`, `fill_form`, `select_option`, `scroll` and `act`
+  return the page as it stands afterwards, so the agent no longer spends a
+  model call on a snapshot after each action. On the regression tasks this
+  halved the model calls for train times (52 to 27) and museum hours (19 to
+  10).
 - **`find` and `act`.** With a decision model configured, `find(goal)` returns
   the element that serves a goal, and `act(goal, action)` performs a reversible
   click, typing or selection in one step. `act` never performs a consequential
@@ -258,6 +264,25 @@ slots that disappear mid-checkout.
   before a page load, reached Playwright as "Invalid frame in aria-ref
   selector" or matched nothing. The browser now tracks which refs its latest
   snapshot made live and answers `STALE_REF` without acting.
+- **Clickable rows carry refs.** Apps such as Hightouch open a record when its
+  table row is clicked. The browser marked those rows clickable, but the page
+  view showed refs only on links, buttons and other interactive roles, so the
+  agent could not open a record by its row. Any element the page gives a
+  pointer cursor now carries a ref.
+- **Invisible frames are left out of the page.** A support-chat widget faded
+  to full transparency stayed in the accessibility tree, and the agent tried
+  to close a panel no one could see. Frames that are transparent, hidden or
+  have no size are no longer shown, and their refs are not live.
+- **Rows laid out without a box are clicked correctly.** An element with
+  `display: contents` has no box of its own, so the check for what covers it
+  looked at the top-left corner of the page and refused the click. The check
+  now uses the area the element's content covers, and such an element receives
+  the click itself.
+- **The browser stops waiting for network idle.** Apps that poll in the
+  background never reach it, so every action waited the full settle time.
+  After the document loads, the browser now waits for the page to stop
+  changing for half a second, up to `BROWSER_SETTLE_TIMEOUT_MS`, and
+  `navigate` waits the same way by default.
 
 ### Upgrading from 2.1
 
