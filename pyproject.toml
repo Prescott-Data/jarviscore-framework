@@ -130,6 +130,7 @@ exclude = ["tests*", "examples*", "hooks*", "nexus*"]
 #   nexus register github --client-id=... --client-secret=...
 #   nexus status / nexus up / nexus list / nexus test
 jarviscore = "jarviscore.cli.__main__:main"
+jc = "jarviscore.cli.__main__:main"
 
 [tool.setuptools.package-data]
 jarviscore = [
