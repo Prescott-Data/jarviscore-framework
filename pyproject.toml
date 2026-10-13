@@ -39,6 +39,10 @@ dependencies = [
     # Agent profiles ship as YAML and are read on every AutoAgent load.
     "pyyaml>=6.0",
 
+    # CLI framework and file watching for `jarviscore dev`.
+    "typer>=0.12.0",
+    "watchfiles>=0.21.0",
+
     # LLM Providers — the engine. Always available, zero-config.
     # Developer picks which provider to use via env vars, not pip extras.
     "openai>=1.0.0",
