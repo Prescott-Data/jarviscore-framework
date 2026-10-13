@@ -301,7 +301,7 @@ execution stack.
 | Identical-call record | An exact repeat of an earlier call runs, and its result notes the earlier receipt and whether the result changed |
 | Trace event emission | `log_thinking`, `log_tool_start`, `log_tool_result`, `log_step_complete` |
 | Memory checkpointing | Per-turn checkpoint to `UnifiedMemory` when injected by Kernel |
-| Working notes | `NOTE: <fact>` lines alongside any action are written to the step's `WorkingScratchpad` and shown every turn as MY WORKING NOTES, across epochs; they cost no turn |
+| Working notes | The `working_notes` argument on any native tool call, or `NOTE: <fact>` lines on the text protocol, is written to the step's `WorkingScratchpad` and shown every turn as MY WORKING NOTES, across epochs; notes cost no turn |
 | Approved actions | A person's decisions are carried out once when the step resumes, before the next turn. A tool that refuses before acting returns `"performed": False`, which leaves the approval open instead of settling it |
 
 ---

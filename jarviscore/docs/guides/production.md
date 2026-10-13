@@ -72,16 +72,45 @@ GEMINI_API_KEY=...
 
 ### LLM rate limiting
 
-In a multi-agent deployment, agents generate concurrent LLM calls. Without a concurrency cap, all agents will hit provider 429 rate limits simultaneously. Set `LLM_MAX_CONCURRENT` using this formula: divide your provider's requests-per-minute limit by the expected average call latency in seconds.
+The provider governor paces every model call per deployment. It starts at 8
+calls in flight, grows while the provider keeps up, and halves on a 429 or when
+the provider's rate-limit headers run low, so most deployments need no
+setting. When several processes share one deployment, declare its limits so
+they share one window through Redis:
 
 ```bash
-# Example: RPM=60, average latency=5s → 60 ÷ 12 = 5
-LLM_MAX_CONCURRENT=5
+LLM_LIMITS='{"azure:gpt-4o": {"rpm": 3000, "tpm": 1000000}}'
+
+# Optional hard cap on calls in flight per deployment
+LLM_MAX_CONCURRENT=16
 
 # 429 retry backoff: 4 retries with exponential delay, starting at 2s, capped at 60s
 LLM_MAX_RETRIES_429=4
 LLM_429_BASE_DELAY=2.0
 ```
+
+See [Provider governor](../reference/configuration.md#multi-tier-model-routing)
+for every setting.
+
+### Scaling one agent: pools
+
+A pool runs one logical agent across as many members as its queued steps need,
+in one process:
+
+```python
+from jarviscore import Mesh, Pool
+
+mesh = Mesh()
+mesh.add(Verifier, pool=Pool(min=1, max=16, idle_seconds=60))
+```
+
+Members share the agent's id. Idle members above `min` retire after
+`idle_seconds`; `mesh.get_diagnostics()` reports each pool. A pool with
+`lane="bulk"` runs its model calls in the governor's bulk lane.
+
+Before stopping a node that still has goals in flight, call `mesh.drain()`: the
+node starts no new goal and claims nothing outside the workflows it is waiting
+on. `mesh.stop()` drains first.
 
 ### Model routing
 

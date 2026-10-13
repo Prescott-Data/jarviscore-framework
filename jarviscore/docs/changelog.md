@@ -19,6 +19,13 @@ All notable changes to JarvisCore Framework are documented here. This project fo
     - **MINOR** (1.**x**.0): new features, new public API surface, backward-compatible behavioral changes.
     - **MAJOR** (**x**.0.0): breaking changes to the public API.
 
+    **The public API** is what `jarviscore` exports in `__all__`, the settings
+    in the [configuration reference](reference/configuration.md), and the
+    behaviour the guides document. Kernel internals, prompts and private
+    (`_`-prefixed) names are not covered and may change in any release.
+    Public API is deprecated with a warning in a minor release before it is
+    removed, and removals are batched into planned major releases.
+
     Versions **1.0.3** and **1.0.4** contain critical regressions and should be
     avoided. They will be yanked from PyPI. Pin `jarviscore-framework>=1.1.0`.
 
@@ -26,23 +33,53 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## Unreleased
+## 2.2.0 <span class="changelog-date">Unreleased</span>
 
-Long browser tasks finish what they start. The browser agent reads the page a
-person sees, keeps its browser and conversation across execution epochs, and
-waits for a person before anything that commits them. On a hard grocery
-checkout (cookie dialog, pagination, an out-of-stock substitute, an allergen
-trap, a promo code, a delivery slot taken mid-checkout and an approval) runs
-went from 0/8 to 3/3 fully graded passes.
+One agent now scales across as many workers as its queue needs, every model
+call is paced against the provider's real limits, and agents act through
+native tool calls on every provider that supports them. The runtime records
+what an agent did instead of steering how it works. Long browser tasks finish
+what they start: on a hard grocery checkout (cookie dialog, pagination, an
+out-of-stock substitute, an allergen trap, a promo code, a delivery slot taken
+mid-checkout and an approval) runs went from 0/8 to 3/3 fully graded passes.
 
 ### Added
 
-- **Working notes.** An agent writes what it has established on `NOTE:` lines
-  alongside any action; notes go to the step's `WorkingScratchpad`, are shown
-  every turn as MY WORKING NOTES (never withheld under context pressure) and
-  carry across execution epochs. Until now the scratchpad was written every turn
-  but never shown back to the agent. Each turn's decision contract now asks for
-  notes instead of restating what is known in a thought that scrolls away.
+- **Elastic worker pools.** `mesh.add(AgentClass, pool=Pool(min, max,
+  idle_seconds, lane))` runs one logical agent across as many members as its
+  queued work needs; idle members retire down to `min`.
+  `Mesh.get_diagnostics()` reports each pool. On 196 Evidence Engine claim
+  verifications on one laptop, wall clock fell from 202 min with fixed workers
+  to 9.4 min with 32 slots. ([RFC 0002](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0002-elastic-execution.md))
+- **Draining.** `Mesh.drain()` stops a node starting new goals or claiming work
+  outside the workflows it is still waiting on; `stop()` drains first.
+- **Provider governor.** Every model call is admitted per deployment before it
+  is sent: slow start, back-off on rate limits, and concurrency learned from
+  the provider's `x-ratelimit-*` headers. `LLM_LIMITS` shares a rate window
+  across processes through Redis. `lane_scope(BULK)` keeps headroom for people
+  waiting on chat. Settings, all with working defaults:
+  `LLM_GOVERNOR_ENABLED`, `LLM_LIMITS`, `LLM_INITIAL_CONCURRENCY`,
+  `LLM_CONCURRENCY_CEILING`, `LLM_BULK_RESERVE`, `LLM_CONNECT_TIMEOUT`.
+- **Native tool turns.** Where every provider in the fallback chain carries
+  tool calls (Azure Chat Completions and Responses, Claude, Gemini and Vertex
+  AI, vLLM), each sub-agent turn is a native function call with
+  `tool_choice="required"` and a `done` function typed from the step's
+  `output_schema`. Replaying a real verifier turn, the text protocol answered
+  without using a tool 24 of 24 times; native turns called a tool 24 of 24
+  times. Promotional access keeps the text protocol. Claude, Gemini and vLLM
+  translations are covered by tests but not yet verified live.
+- **A record of the work.** Every accepted result carries
+  `metadata["work_record"]`: per tool, the calls made and how many succeeded.
+  Budget facts reach the agent as a per-turn `## RUNTIME NOTICE (this turn)`.
+- **Working notes.** An agent writes what it has established in
+  `working_notes` (a `NOTE:` line on the text protocol) alongside any action;
+  notes go to the step's `WorkingScratchpad`, are shown every turn as MY
+  WORKING NOTES (never withheld under context pressure) and carry across
+  execution epochs. Until now the scratchpad was written every turn but never
+  shown back to the agent.
+- **One runtime folder.** Files the framework writes relative to the working
+  directory (blob storage, logs, traces, HITL inbox, step outputs, the function
+  registry) live under `./.jarviscore/`. Thanks to @whoisnjoguu (#146).
 - **Consequential actions wait for a person.** A browser or coder action marked
   `irreversible` with a `consequence` raises a typed `HITLRequest` carrying the
   exact action, and the step pauses. `Mesh.resolve_hitl()` records the decision
@@ -73,16 +110,53 @@ went from 0/8 to 3/3 fully graded passes.
   the proxy's region. See
   [Your own proxy](guides/browser-automation.md#your-own-proxy).
 
+### Changed
+
+- **The runtime records what an agent did instead of policing how.** Live
+  traces showed agents with budget left stopping after three calls because the
+  runtime told them to. Removed: the knowledge plateau, query-similarity and
+  URL de-duplication refusals, the convergence governor's forced pivots, the
+  failure guard's refusal to retry, budget coaching ("stop gathering, call done
+  now"), the EXIT CHECK, the research phase contract and its tool refusals,
+  the required-search and URL-id gates, the coordinate-click block and the
+  coder's research gate. An identical repeated call still runs; its result
+  notes the earlier receipt and whether the result changed. `FailureLedger`
+  records and classifies failures without blocking.
+  `preferred_domains` is a preference: preferred results come first and
+  open-web results are still returned. Kept, because they are boundaries:
+  execution leases, approvals, effect-intent review, atom contracts,
+  credential and workspace limits, receipt grounding, result shape checks and
+  `required_tool_groups`.
+  ([RFC 0003](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0003-record-not-police.md))
+
 ### Fixed
 
 - A bare `RESULT` without `DONE` (for example `{"status": "in_progress"}`) was
   recorded as a completed step. Only `DONE` completes a step.
-- The EXIT CHECK in the decision contract licensed stopping with gaps the
-  agent's own tools could close; it is removed.
-- Plateau and convergence notices were stored as the agent's thoughts, crowding
-  working memory and opening every continued epoch with "call DONE". They are
-  now shown on the turn they describe, and the plateau notice no longer advises
-  finishing.
+- **A goal whose record expired could stall a node.** Its id stayed in the
+  pending-plans set, so every node re-claimed it on every tick; with the new
+  wake-on-change loop that became a busy loop on the event loop, and a node's
+  workers stopped claiming steps (seen live: 31 minutes). It is now settled as
+  a planning failure with the reason.
+- **Pools no longer block the event loop**: the function registry is built once
+  per directory per process and off the loop; step outputs are indexed per
+  workflow instead of scanned across the keyspace; active graphs are fetched in
+  one pipelined call; a goal waiter wakes only for its own workflow.
+- The governor stranded calls waiting on another event loop (seen live: 40+
+  minutes). One limit now holds across every loop.
+- `LLM_MAX_CONCURRENT` was enforced twice, once by a loop-bound semaphore, and
+  the governor ignored it below its starting concurrency of 8. The governor
+  now enforces it alone, as the most calls in flight per deployment.
+- Work that lost its step claim kept calling tools and models until commit.
+  The heartbeat now cancels it.
+- A nested `output_schema` reached providers with dangling `$defs` references,
+  and a state carrying an `output_schema` could not checkpoint.
+- `TELEMETRY_TRACE_DIR` was documented but never read; kernel traces were
+  always written to the default folder. They now go where it points.
+- Importing the P2P layer loaded a `.env` file into the process: `swim-p2p`
+  calls `load_dotenv()` at import. JarvisCore now disables that for the import.
+- A correct answer that cited the receipt of a page read was rejected as an
+  unknown receipt. A read that established a fact is evidence.
 - A continued step lost its conversation; it now resumes with its last 10
   exchanges, including the turn that paused for a person.
 - An approved action blocked before acting (a cookie dialog over the button)
@@ -122,11 +196,29 @@ went from 0/8 to 3/3 fully graded passes.
   "Invalid frame in aria-ref selector" or matched nothing. The browser now knows
   which refs its latest snapshot made live and answers `STALE_REF` without acting.
 
-### Compatibility
+### Upgrading from 2.1
 
-- A turn that emits `RESULT` without `DONE` no longer completes a step.
-- Browser approvals no longer use the private `_approved_actions` context
-  token; resolve waiting actions with `Mesh.resolve_hitl()`.
+No public API is removed. Check these behaviour changes:
+
+1. **Runtime files moved to `./.jarviscore/`.** With default settings, blob
+   storage, logs and traces written by 2.1 are not read from their old folders.
+   To keep them, set the old locations:
+
+    ```bash
+    STORAGE_BASE_PATH=./blob_storage
+    LOG_DIRECTORY=./logs
+    TELEMETRY_TRACE_DIR=./traces
+    ```
+
+2. **Research is no longer enforced by the runtime.** A product whose steps
+   must search or read declares it with `required_tool_groups` or plans it as
+   a step. The removed `CONVERGENCE_*`, `FAILURE_GUARD_*`,
+   `RESEARCH_STRICT_PHASE_CONTRACT` and `RESEARCH_REQUIRE_URL_IDS` settings are
+   ignored. The internal `jarviscore.kernel.epistemic` module and
+   `ConvergenceGovernor` are gone; they were never exported.
+3. A turn that emits `RESULT` without `DONE` no longer completes a step.
+4. Browser approvals no longer use the private `_approved_actions` context
+   token; resolve waiting actions with `Mesh.resolve_hitl()`.
 
 </div>
 

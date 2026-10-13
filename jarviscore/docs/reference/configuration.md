@@ -99,13 +99,38 @@ These become important once you run more than two agents concurrently against a 
 | Variable | Default | Description |
 |---|---|---|
 | `LLM_TIMEOUT` | `120.0` | Seconds before an LLM call times out. |
+| `LLM_CONNECT_TIMEOUT` | `10.0` | Seconds to establish the connection (TCP and TLS), separate from `LLM_TIMEOUT`. |
 | `LLM_TEMPERATURE` | `0.7` | Sampling temperature for all providers. |
-| `LLM_MAX_CONCURRENT` | `0` | Maximum concurrent LLM calls across the whole process. `0` means unlimited. Set to approximately `RPM ÷ avg_latency_seconds` to avoid 429 storms in multi-agent deployments. |
+| `LLM_MAX_CONCURRENT` | `0` | Most calls in flight per deployment. `0` leaves the governor to find the level (up to `LLM_CONCURRENCY_CEILING`). With the governor disabled, a process-wide cap. |
 | `LLM_MAX_RETRIES_429` | `4` | Retry attempts when a provider returns 429 before giving up. |
 | `LLM_429_BASE_DELAY` | `2.0` | Exponential backoff base delay in seconds. Actual delay: `min(base × 2^attempt, 60s)`. |
 | `LLM_MODEL_OUTPUT_LIMITS` | `{}` | JSON map of model or deployment name to its completion-token ceiling, e.g. `{"gpt-5.2-chat": 128000}`. Calls that do not set `max_tokens` receive the serving model's declared ceiling, bounded by the remaining workflow budget. Declare reasoning models here: their hidden reasoning is billed against the same allowance. |
 | `LLM_DEFAULT_MAX_TOKENS` | `4000` | Output allowance for calls to models without a declared ceiling. |
 | `AZURE_CONTENT_FILTER_REPAIR_ENABLED` | `false` | Opt into an Azure-specific content-filter retry that applies a provider-safe preamble and neutral wording after the raw prompt is rejected. Off by default so prompt rewriting never hides developer intent. |
+
+**Provider governor**
+
+Every model call is admitted per deployment (for example `azure:gpt-4o`)
+before it is sent. Calls in flight start at `LLM_INITIAL_CONCURRENCY`, grow
+while the provider keeps up, and halve on a 429 or near-empty rate-limit
+headers. None of these needs setting.
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLM_GOVERNOR_ENABLED` | `true` | Admit every call through the governor. |
+| `LLM_LIMITS` | `{}` | Known limits per deployment, enforced in a 60 s window shared through Redis by every process, e.g. `{"azure:gpt-4o": {"rpm": 3000, "tpm": 1000000}}`. |
+| `LLM_INITIAL_CONCURRENCY` | `8` | Calls in flight per deployment at start. |
+| `LLM_CONCURRENCY_CEILING` | `256` | Most calls in flight per deployment the governor will grow to. |
+| `LLM_BULK_RESERVE` | `0.15` | Share of a deployment's calls in flight held back from bulk work for interactive calls. |
+
+Run background work in the bulk lane so people waiting on chat keep headroom:
+
+```python
+from jarviscore.execution.governor import BULK, lane_scope
+
+with lane_scope(BULK):
+    await mesh.execute_goal("Re-verify every claim in the data room")
+```
 
 ---
 
