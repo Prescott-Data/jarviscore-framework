@@ -128,9 +128,7 @@ peer clients. The registered agent itself is never retired.
 Because members run in parallel, a batch of independent steps takes about as
 long as its slowest step. Their model calls still pass through the
 [provider governor](../reference/configuration.md#provider-governor), so a
-larger pool cannot push a deployment past its rate limits. See
-[Benchmarks](../compare/benchmarks.md#elastic-pools-one-agent-many-workers) for
-measured results.
+larger pool cannot push a deployment past its rate limits.
 
 #### Draining before shutdown
 
