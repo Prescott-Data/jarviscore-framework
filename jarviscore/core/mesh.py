@@ -200,6 +200,8 @@ class Mesh:
         self.mode = MeshMode("auto")
 
         self._started = False
+        # Background loops end on this, not on cancellation alone: agent code may absorb a cancel.
+        self._stopping = False
         self._node_id = f"mesh-{uuid4().hex[:12]}"
         # A state change on this node wakes its loops at once; polling covers other nodes.
         self._activity = asyncio.Event()
@@ -564,6 +566,7 @@ class Mesh:
             self.mode = MeshMode("autonomous")
 
         self._started = True
+        self._stopping = False
         self._logger.info(
             "Mesh started: %d agent(s) | capabilities: %s",
             len(self.agents),
@@ -933,7 +936,7 @@ class Mesh:
 
     async def _run_scheduler(self) -> None:
         interval = float(self.config.get("schedule_poll_seconds", 5.0))
-        while True:
+        while not self._stopping:
             try:
                 for firing in self.schedules.claim_due():
                     await self._fire_schedule(firing)
@@ -1172,7 +1175,7 @@ class Mesh:
         lease_seconds = int(self.config.get("mesh_planning_lease_seconds", 300))
         from jarviscore.planning.mesh_planner import MeshPlanner
 
-        while self._started:
+        while self._started and not self._stopping:
             mark = self._activity_generation
             try:
                 for workflow_id in self._redis_store.get_pending_workflow_goals():
@@ -1887,6 +1890,8 @@ class Mesh:
 
         self._logger.info("Stopping mesh...")
         self._draining = True
+        self._stopping = True
+        self._wake_workers()
 
         # Request shutdown for all agents (for p2p mode loops)
         for agent in self.agents:
@@ -1993,7 +1998,7 @@ class Mesh:
             sorted(capabilities),
         )
 
-        while self._started:
+        while self._started and not self._stopping:
             mark = self._activity_generation
             try:
                 await self._service_capability_needs(agent, capabilities)
@@ -2085,7 +2090,7 @@ class Mesh:
             "[Pool] %s online | min=%d max=%d | capabilities: %s",
             base.agent_id, state.spec.min, state.spec.max, sorted(capabilities),
         )
-        while self._started:
+        while self._started and not self._stopping:
             mark = self._activity_generation
             try:
                 while len(state.members) < state.spec.min:
@@ -3233,7 +3238,7 @@ class Mesh:
         """
         backoff = 5
         max_backoff = 120
-        while self._started:
+        while self._started and not self._stopping:
             try:
                 await agent.run()
                 self._logger.info(

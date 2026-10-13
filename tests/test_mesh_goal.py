@@ -722,6 +722,59 @@ async def test_waiting_goal_resumes_same_peer_and_unblocks_downstream(monkeypatc
     }
 
 
+class StalledResponsePeer(ResponsePeer):
+    async def execute_task(self, task):
+        self.received.append(task)
+        await asyncio.Event().wait()
+
+
+class CancellationAbsorbingResponsePeer(ResponsePeer):
+    """Agent code that turns a cancellation into a normal result, as some libraries do."""
+
+    async def execute_task(self, task):
+        self.received.append(task)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            pass
+        return {"status": "success", "output": {}, "result_summary": "Stopped."}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("responder_class", [StalledResponsePeer, CancellationAbsorbingResponsePeer])
+async def test_stop_returns_while_this_node_runs_the_response_to_a_waiting_goal(monkeypatch, responder_class):
+    # A node whose goal paused for a person may claim that goal's final response itself.
+    llm = MockLLMClient(responses=goal_responses())
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={
+        "p2p_enabled": False,
+        "distributed_poll_interval": 0.01,
+        "mesh_response_capability": "final_response",
+    })
+    mesh.add(WaitingResearchPeer(llm, agent_id="researcher-1"))
+    mesh.add(AnalysisPeer(agent_id="analyst-1"))
+    responder = mesh.add(responder_class(agent_id="responder"))
+
+    await mesh.start()
+    try:
+        first = await mesh.execute_goal(
+            "Find evidence and analyse it", workflow_id="wf-wait-stop", timeout=1,
+        )
+        for _ in range(100):
+            if responder.received:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await asyncio.wait_for(mesh.stop(), timeout=5)
+
+    assert first["status"] == "waiting"
+    assert responder.received, "the node never claimed the final response"
+
+
 @pytest.mark.asyncio
 async def test_failed_goal_can_be_replanned_under_a_revision_lease(monkeypatch):
     amended_steps = [
