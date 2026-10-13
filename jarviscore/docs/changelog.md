@@ -51,7 +51,8 @@ slots that disappear mid-checkout.
   as background work for the provider governor. `Mesh.get_diagnostics()`
   reports each pool. In our Evidence Engine benchmark, verifying 196 claims on
   one laptop took 9.4 minutes with 32 pool slots, against 202 minutes with
-  fixed workers. See [RFC 0002](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0002-elastic-execution.md).
+  fixed workers. See [Benchmarks](compare/benchmarks.md#elastic-pools-one-agent-many-workers)
+  and [RFC 0002](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0002-elastic-execution.md).
 - **Draining.** `Mesh.drain()` stops a node from starting new goals or claiming
   work outside the workflows it is still waiting on, so the goals it already
   started can finish. `stop()` drains first.

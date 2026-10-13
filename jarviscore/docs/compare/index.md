@@ -27,7 +27,8 @@ owners.
 | **Hermes Agent** | A self-improving personal agent with skills, memory, terminal tools, and messaging gateways | One persistent assistant reached through a CLI or messaging channels, with learned skills and scheduled automation |
 
 These are not benchmark rankings. They describe where each project's documented
-architecture places control and state.
+architecture places control and state. For measured results, see
+[Benchmarks](benchmarks.md).
 
 ## What makes JarvisCore different
 

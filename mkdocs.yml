@@ -105,6 +105,7 @@ nav:
   - Getting Started: getting-started.md
   - Compare:
     - Overview: compare/index.md
+    - Benchmarks: compare/benchmarks.md
     - Choose a Runtime:
       - Open Source Agent Framework: open-source-agent-framework.md
       - Open Source Agent Harness: agent-harness.md

@@ -108,6 +108,32 @@ Members share the agent's id. Idle members above `min` retire after
 `idle_seconds`; `mesh.get_diagnostics()` reports each pool. A pool with
 `lane="bulk"` runs its model calls in the governor's bulk lane.
 
+#### How a pool spawns members
+
+Pass the agent class, not an instance: the pool creates new members from it.
+Each pool has one dispatcher, so members do not each poll Redis. On every pass
+the dispatcher looks for steps that are ready for the agent's role or
+capabilities and hands each one to an idle member. When no member is idle and
+the pool is below `max`, it creates a new member from the class, wires it to
+the same infrastructure as the registered agent (including storage, peer
+clients and, when the agent requires them, credentials), runs its `setup()`,
+and gives it the step. Each step is claimed
+atomically in Redis before it runs, so two members, or two nodes, never run the
+same step.
+
+When the work runs out, members above `min` that have been idle for
+`idle_seconds` are retired: the pool calls their `teardown()` and closes their
+peer clients. The registered agent itself is never retired.
+
+Because members run in parallel, a batch of independent steps takes about as
+long as its slowest step. Their model calls still pass through the
+[provider governor](../reference/configuration.md#provider-governor), so a
+larger pool cannot push a deployment past its rate limits. See
+[Benchmarks](../compare/benchmarks.md#elastic-pools-one-agent-many-workers) for
+measured results.
+
+#### Draining before shutdown
+
 Before stopping a node that still has goals in flight, call `mesh.drain()`: the
 node starts no new goal and claims nothing outside the workflows it is waiting
 on. `mesh.stop()` drains first.
