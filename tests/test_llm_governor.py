@@ -386,3 +386,14 @@ async def test_without_a_governor_calls_go_straight_through():
     llm = _client(None)
     llm._call_azure = AsyncMock(return_value={"content": "ok", "tokens": {"total": 1}})
     assert (await llm.generate(prompt="hello", max_tokens=10))["content"] == "ok"
+
+
+def test_llm_max_concurrent_is_one_limit_not_two(monkeypatch):
+    # A second, loop-bound semaphore beside the governor strands calls from other loops.
+    monkeypatch.setattr(governor_module, "_PROCESS_GOVERNOR", None)
+    governed = UnifiedLLMClient({"llm_max_concurrent": 3, "llm_governor_enabled": True})
+    assert governed._semaphore is None
+    assert governed._governor._ceiling == 3
+
+    ungoverned = UnifiedLLMClient({"llm_max_concurrent": 3, "llm_governor_enabled": False})
+    assert ungoverned._governor is None and ungoverned._semaphore is not None

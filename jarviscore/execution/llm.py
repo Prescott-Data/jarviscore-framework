@@ -247,12 +247,14 @@ class UnifiedLLMClient:
 
         logger.info(f"LLM Client initialized with providers: {[p.value for p in self.provider_order]}")
 
-        # Concurrency limiter — reads LLM_MAX_CONCURRENT from config (env var)
-        max_concurrent = int(self.config.get("llm_max_concurrent", 0))
-        self._semaphore = _get_llm_semaphore(max_concurrent)
         self._governor = (
             process_governor(self.config)
             if self.config.get("llm_governor_enabled", True) else None
+        )
+        # The governor enforces LLM_MAX_CONCURRENT as its ceiling, across event loops.
+        self._semaphore = (
+            None if self._governor is not None
+            else _get_llm_semaphore(int(self.config.get("llm_max_concurrent", 0)))
         )
 
     async def _observe_azure_response(self, response) -> None:
