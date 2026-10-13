@@ -1,0 +1,9 @@
+.env
+.jarviscore/secrets.local
+.jarviscore/build/
+.venv/
+__pycache__/
+*.pyc
+traces/
+logs/
+blob_storage/
