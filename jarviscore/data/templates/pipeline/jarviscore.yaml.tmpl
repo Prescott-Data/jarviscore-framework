@@ -1,0 +1,20 @@
+# JarvisCore project. Run locally with `jarviscore dev`.
+# Docs: https://jarviscore.developers.prescottdata.io/
+service: {{service}}
+
+agents:
+  extractor:
+    path: agents/extractor.py
+  analyst:
+    path: agents/analyst.py
+  reporter:
+    path: agents/reporter.py
+
+env:
+  clear:
+    LOG_LEVEL: INFO
+  secret: {{secret_list}}
+
+# Deploy targets go in an overlay such as jarviscore.prod.yaml:
+#   servers:
+#     main: 203.0.113.10
