@@ -1243,6 +1243,40 @@ class TestAtomicStepClaiming:
             "wf-response-reconciliation", "respond", "peer:respond", 30
         )
 
+    def test_resuming_a_step_rejects_a_response_still_composing_from_the_pause(self, store):
+        store.publish_workflow(
+            "wf-response-inflight",
+            goal="Order then report",
+            obligations=[{"id": "o1", "description": "Order", "source_quote": "Order"}],
+            steps=[
+                {
+                    "id": "order", "capability": "shop", "effect": "write",
+                    "task": "Order", "depends_on": [], "covers": ["o1"],
+                    "plan_revision": 1,
+                },
+                {
+                    "id": "respond", "capability": "response",
+                    "effect": "final_response", "task": "Respond",
+                    "depends_on": ["order"], "plan_revision": 1,
+                },
+            ],
+        )
+        assert store.claim_step("wf-response-inflight", "order", "peer:order", 30)
+        assert store.finish_claimed_step(
+            "wf-response-inflight", "order", "peer:order",
+            {"status": "waiting", "reason": "approval required"},
+        )
+        assert store.claim_step("wf-response-inflight", "respond", "peer:respond", 30)
+
+        store.resume_workflow_step("wf-response-inflight", "order")
+
+        assert store.get_step_status("wf-response-inflight", "respond") == "pending"
+        assert not store.finish_claimed_step(
+            "wf-response-inflight", "respond", "peer:respond",
+            {"status": "success", "result_summary": "Awaiting your approval."},
+        )
+        assert store.get_step_output("wf-response-inflight", "respond") is None
+
     def test_final_response_cannot_satisfy_source_obligations(self, store):
         store.publish_workflow(
             "wf-response-projection",

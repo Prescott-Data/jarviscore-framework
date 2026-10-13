@@ -722,6 +722,50 @@ async def test_waiting_goal_resumes_same_peer_and_unblocks_downstream(monkeypatc
     }
 
 
+@pytest.mark.asyncio
+async def test_a_response_composed_during_the_pause_is_composed_again_after_resume(monkeypatch):
+    llm = MockLLMClient(responses=goal_responses())
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={
+        "p2p_enabled": False,
+        "distributed_poll_interval": 0.01,
+        "mesh_response_capability": "final_response",
+    })
+    mesh.add(WaitingResearchPeer(llm, agent_id="researcher-1"))
+    mesh.add(AnalysisPeer(agent_id="analyst-1"))
+    responder = mesh.add(ResponsePeer(agent_id="responder"))
+
+    await mesh.start()
+    try:
+        first = await mesh.execute_goal(
+            "Find evidence and analyse it", workflow_id="wf-stale-response", timeout=1,
+        )
+        response_id = next(
+            step["id"] for step in first["steps"] if step.get("effect") == "final_response"
+        )
+        for _ in range(100):
+            if store.get_step_status("wf-stale-response", response_id) == "completed":
+                break
+            await asyncio.sleep(0.01)
+        assert store.get_step_status("wf-stale-response", response_id) == "completed"
+        resumed = await mesh.resume_goal(
+            "wf-stale-response", "research", context={"human_response": "approved"}, timeout=2,
+        )
+    finally:
+        await mesh.stop()
+
+    assert first["status"] == "waiting"
+    assert resumed["status"] == "completed"
+    assert len(responder.received) == 2
+    assert responder.received[1]["context"]["previous_step_results"]["research"] == {
+        "evidence": ["approved-source"],
+    }
+
+
 class StalledResponsePeer(ResponsePeer):
     async def execute_task(self, task):
         self.received.append(task)

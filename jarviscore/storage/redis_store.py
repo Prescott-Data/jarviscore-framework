@@ -2015,6 +2015,39 @@ class RedisContextStore:
             except redis.WatchError:
                 continue
 
+    @staticmethod
+    def _responses_composed_before(
+        step_id: str, graph: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Final responses downstream of a resuming step, reset because they described the pause."""
+        downstream = {step_id}
+        grew = True
+        while grew:
+            grew = False
+            for other_id, other in graph.items():
+                if other_id not in downstream and downstream & {
+                    str(value) for value in other.get("depends_on") or []
+                }:
+                    downstream.add(other_id)
+                    grew = True
+        reopened = {}
+        for other_id in downstream - {step_id}:
+            response = dict(graph[other_id])
+            if (
+                str(response.get("effect") or "") != "final_response"
+                or response.get("status") not in {"in_progress", "completed", "failed"}
+            ):
+                continue
+            for field in (
+                "claimed_by", "claim_id", "claim_expires_at", "completed_by",
+                "semantic_outcome", "semantic_decision",
+                "resume_agent_id", "resume_context",
+            ):
+                response.pop(field, None)
+            response.update({"status": "pending", "updated_at": time.time()})
+            reopened[other_id] = response
+        return reopened
+
     def resume_workflow_step(
         self,
         workflow_id: str,
@@ -2047,8 +2080,25 @@ class RedisContextStore:
                     "updated_at": time.time(),
                 })
                 data.pop("blocked_by", None)
+                graph = {
+                    str(other_id): json.loads(value)
+                    for other_id, value in pipe.hgetall(graph_key).items()
+                }
+                stale_responses = self._responses_composed_before(step_id, graph)
                 pipe.multi()
                 pipe.hset(graph_key, mapping={step_id: json.dumps(data, default=str)})
+                for response_id, response in stale_responses.items():
+                    pipe.hset(graph_key, mapping={response_id: json.dumps(response, default=str)})
+                    pipe.delete(
+                        f"step_lock:{workflow_id}:{response_id}",
+                        f"step_output:{workflow_id}:{response_id}",
+                    )
+                    pipe.xadd(f"ledgers:{workflow_id}", {
+                        "event": "step_reopened",
+                        "step_id": response_id,
+                        "reason": f"{step_id} resumed after the response was composed",
+                        "timestamp": str(time.time()),
+                    })
                 pipe.sadd("jarviscore:active_workflows", workflow_id)
                 pipe.xadd(f"ledgers:{workflow_id}", {
                     "event": "step_resumed",

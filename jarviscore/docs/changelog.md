@@ -153,6 +153,12 @@ mid-checkout and an approval) runs went from 0/8 to 3/3 fully graded passes.
   never exited, so the approval was never requested). The mesh now marks
   itself stopping first, and its loops end on that rather than on
   cancellation alone.
+- **A goal's answer could describe the pause after the approval went through.**
+  A final response may be composed while a step waits for a person, so it said
+  the order still needed approval even after the order was placed (seen live:
+  1 of 5 hard checkouts). Resuming a step now reopens any final response
+  downstream of it, and a response still being composed from the pause is
+  rejected when it finishes.
 - **Pools no longer block the event loop**: the function registry is built once
   per directory per process and off the loop; step outputs are indexed per
   workflow instead of scanned across the keyspace; active graphs are fetched in
