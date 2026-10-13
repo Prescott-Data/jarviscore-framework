@@ -17,7 +17,7 @@ app = typer.Typer(
 # (command, module, entry function, help)
 _LEGACY_COMMANDS = [
     ("init", "scaffold", "main",
-     "Scaffold a new project (.env.example + optional examples)"),
+     "Create a project: init NAME [--template minimal|support|research|pipeline]"),
     ("check", "check", "main", "Health check and validation"),
     ("smoketest", "smoketest", "main", "Quick smoke test"),
     ("nexus", "nexus", "main", "Manage Nexus auth (init, register, status, list, test)"),

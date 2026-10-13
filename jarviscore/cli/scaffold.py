@@ -9,11 +9,11 @@ Usage:
     python -m jarviscore.cli.scaffold --force      # Overwrite existing files
 """
 
-import sys
-import shutil
-from pathlib import Path
-from importlib import resources
 import argparse
+import shutil
+import sys
+from importlib import resources
+from pathlib import Path
 
 
 def get_data_path() -> Path:
@@ -142,7 +142,7 @@ def copy_skill(dest_dir: Path, force: bool = False) -> bool:
         from importlib import resources
         src = Path(str(resources.files('jarviscore'))) / \
             'skills' / 'jarviscore' / 'SKILL.md'
-    except Exception:
+    except Exception:  # noqa: BLE001 - any resources failure falls back to the source tree
         src = Path(__file__).parent.parent / \
             'skills' / 'jarviscore' / 'SKILL.md'
     if not src.exists():
@@ -198,7 +198,7 @@ def _create_named_project(args) -> int:
     if args.skill:
         copy_skill(result.root, args.force)
 
-    def rel(p): return p.relative_to(result.root)  # noqa: E731
+    def rel(p): return p.relative_to(result.root)
     print(
         f"\n✓ Created {args.name}/ from the '{args.template}' template ({TEMPLATES[args.template]})")
     for path in sorted(result.files):
