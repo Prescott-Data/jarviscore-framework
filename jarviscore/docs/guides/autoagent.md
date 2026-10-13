@@ -660,7 +660,7 @@ Verify the outputs:
 
 ```bash
 redis-cli hgetall "step_output:financial-daily-001:fetch"
-cat blob_storage/reports/financial-daily-001.md
+cat .jarviscore/blob_storage/reports/financial-daily-001.md
 redis-cli xrange ledgers:financial-daily-001 - +
 ```
 

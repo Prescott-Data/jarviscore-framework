@@ -436,7 +436,7 @@ jarviscore inspect wf-2024 --step analyze
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `workflow` | `str` | (none) | Workflow id, prefix match accepted; omit to list runs |
-| `--dir` | `str` | `./traces` | Directory containing trace JSONL files |
+| `--dir` | `str` | `./.jarviscore/traces` | Directory containing trace JSONL files |
 | `--step` | `str` | (none) | Only show events for this step id |
 | `--errors` | flag | off | Only show failures and recoveries |
 

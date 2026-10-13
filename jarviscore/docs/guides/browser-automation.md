@@ -68,7 +68,7 @@ class MyAgent(AutoAgent):
 
 ## Tools available to the LLM
 
-The browser sub-agent registers the following tools. The LLM calls them by emitting `TOOL: <name>` in its OODA loop turns.
+The browser sub-agent registers the following tools. On providers that support native tool calls, the LLM calls them as functions; otherwise it emits `TOOL: <name>` in its OODA loop turns. See [Completion and result contracts](../concepts/contracts.md#completion-and-result-contracts).
 
 ### Seeing the page
 

@@ -427,6 +427,12 @@ result = await mesh.resume_goal(
 )
 ```
 
+The final response can be written while a step waits, so the person sees what
+the goal is waiting for. Resuming the step reopens that response: it is written
+again from the resumed work, and a response still being written from the
+paused state is discarded when it finishes. The resumed result's
+`result_summary` therefore describes what actually happened after the decision.
+
 Cancellation is durable. It fences future claims and prevents an expired
 executor from committing after cancellation:
 

@@ -179,6 +179,8 @@ Every provider has an independent circuit breaker:
 
 Once a provider's breaker opens, it is skipped entirely until the recovery window passes. Healthy providers continue operating normally. You'll see circuit breaker state changes in agent logs at `WARNING` level.
 
+A page read that fails carries the HTTP `status_code` the site returned. A page the site refuses with 401 or 403 is also marked `access: protected`, so the agent can tell a page it is not allowed to read from one that failed for another reason. The runtime does not retry or click around a failure on the agent's behalf; the agent decides what to do next.
+
 ---
 
 ## Which providers should I enable?

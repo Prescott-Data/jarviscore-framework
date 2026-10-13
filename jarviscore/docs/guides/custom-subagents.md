@@ -17,7 +17,7 @@ Sub-agents are the specialised execution units that live inside the Kernel and r
 
 A sub-agent is not a mesh agent. It has no `role` in peer discovery, cannot be addressed by `peers`, and is never added to the Mesh directly. It is an internal worker that the Kernel dispatches to when it classifies a task.
 
-Each sub-agent exposes a **system prompt** that shapes LLM behaviour and a **tool set** that defines what the LLM can call. The OODA loop, convergence governor, epistemic ledger, failure ledger, and token budget tracking are all inherited from `BaseSubAgent`. You provide the prompt and the tools.
+Each sub-agent exposes a **system prompt** that shapes LLM behaviour and a **tool set** that defines what the LLM can call. The OODA loop, working notes, failure ledger, and token budget tracking are all inherited from `BaseSubAgent`. You provide the prompt and the tools.
 
 The Kernel caches sub-agents by `(step_id, role)`, they are reused within a workflow step and destroyed when the step completes.
 

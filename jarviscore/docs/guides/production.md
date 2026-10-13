@@ -24,7 +24,7 @@ This guide covers what changes when you move JarvisCore from a local development
 | Blob storage | `STORAGE_BACKEND=local` writes to local filesystem | `STORAGE_BACKEND=azure` or a mounted persistent volume |
 | Athena memory | Optional | Required for cross-session memory via `ATHENA_URL` |
 | Prometheus | Off by default | Enabled with `PROMETHEUS_ENABLED=true` |
-| LLM concurrency | Unlimited | Set `LLM_MAX_CONCURRENT` to match your provider's RPM |
+| LLM concurrency | The provider governor finds the level from the provider's rate-limit headers | Declare known limits in `LLM_LIMITS` so every process shares one window; set `LLM_MAX_CONCURRENT` only as a hard cap on calls in flight per deployment |
 | P2P bind host | `127.0.0.1` | `0.0.0.0` to be reachable by other nodes |
 | Log level | `DEBUG` or `INFO` | `INFO` or `WARNING` |
 
@@ -41,7 +41,7 @@ Before deploying, confirm each item:
 - [ ] `STORAGE_BACKEND` is set to `azure` or points to a volume-backed path
 - [ ] `ALLOW_UNSAFE_LOCAL_EXECUTION` is off wherever agents read untrusted content
 - [ ] `PROMETHEUS_ENABLED=true` and your scrape target is registered
-- [ ] `LLM_MAX_CONCURRENT` is set to prevent cascading 429 errors
+- [ ] `LLM_LIMITS` declares each deployment's known limits when several processes share it
 - [ ] `LOG_LEVEL=INFO` is set to avoid token content appearing in logs
 - [ ] `P2P_ENABLED` and per-node bind ports are configured correctly for multi-node deployments
 - [ ] `EXECUTION_TIMEOUT` is tuned for your expected task durations
@@ -89,7 +89,7 @@ LLM_MAX_RETRIES_429=4
 LLM_429_BASE_DELAY=2.0
 ```
 
-See [Provider governor](../reference/configuration.md#multi-tier-model-routing)
+See [Provider governor](../reference/configuration.md#provider-governor)
 for every setting.
 
 ### Scaling one agent: pools

@@ -108,7 +108,7 @@ These become important once you run more than two agents concurrently against a 
 | `LLM_DEFAULT_MAX_TOKENS` | `4000` | Output allowance for calls to models without a declared ceiling. |
 | `AZURE_CONTENT_FILTER_REPAIR_ENABLED` | `false` | Opt into an Azure-specific content-filter retry that applies a provider-safe preamble and neutral wording after the raw prompt is rejected. Off by default so prompt rewriting never hides developer intent. |
 
-**Provider governor**
+### Provider governor
 
 Every model call is admitted per deployment (for example `azure:gpt-4o`)
 before it is sent. Calls in flight start at `LLM_INITIAL_CONCURRENCY`, grow

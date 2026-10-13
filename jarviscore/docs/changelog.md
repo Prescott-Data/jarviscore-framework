@@ -35,194 +35,234 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ## 2.2.0 <span class="changelog-date">Unreleased</span>
 
-One agent now scales across as many workers as its queue needs, every model
-call is paced against the provider's real limits, and agents act through
-native tool calls on every provider that supports them. The runtime records
-what an agent did instead of steering how it works. Long browser tasks finish
-what they start: on a hard grocery checkout (cookie dialog, pagination, an
-out-of-stock substitute, an allergen trap, a promo code, a delivery slot taken
-mid-checkout and an approval) runs went from 0/8 to 3/3 fully graded passes.
+One agent can now run as several workers when its queue grows, every model call
+is paced against the provider's real limits, and agents act through native tool
+calls on every provider that supports them. The runtime now records what an
+agent did instead of steering how it works, and long browser tasks hold together
+through cookie dialogs, pagination, out-of-stock items, approvals and delivery
+slots that disappear mid-checkout.
 
 ### Added
 
-- **Elastic worker pools.** `mesh.add(AgentClass, pool=Pool(min, max,
-  idle_seconds, lane))` runs one logical agent across as many members as its
-  queued work needs; idle members retire down to `min`.
-  `Mesh.get_diagnostics()` reports each pool. On 196 Evidence Engine claim
-  verifications on one laptop, wall clock fell from 202 min with fixed workers
-  to 9.4 min with 32 slots. ([RFC 0002](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0002-elastic-execution.md))
-- **Draining.** `Mesh.drain()` stops a node starting new goals or claiming work
-  outside the workflows it is still waiting on; `stop()` drains first.
+- **Elastic worker pools.** `mesh.add(AgentClass, pool=Pool(min=1, max=8,
+  idle_seconds=60))` lets one logical agent run as several members when work
+  queues up, up to `max` in the process. Members above `min` retire after
+  `idle_seconds` without work, and `lane="bulk"` marks the pool's model calls
+  as background work for the provider governor. `Mesh.get_diagnostics()`
+  reports each pool. In our Evidence Engine benchmark, verifying 196 claims on
+  one laptop took 9.4 minutes with 32 pool slots, against 202 minutes with
+  fixed workers. See [RFC 0002](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0002-elastic-execution.md).
+- **Draining.** `Mesh.drain()` stops a node from starting new goals or claiming
+  work outside the workflows it is still waiting on, so the goals it already
+  started can finish. `stop()` drains first.
 - **Provider governor.** Every model call is admitted per deployment before it
-  is sent: slow start, back-off on rate limits, and concurrency learned from
-  the provider's `x-ratelimit-*` headers. `LLM_LIMITS` shares a rate window
-  across processes through Redis. `lane_scope(BULK)` keeps headroom for people
-  waiting on chat. Settings, all with working defaults:
-  `LLM_GOVERNOR_ENABLED`, `LLM_LIMITS`, `LLM_INITIAL_CONCURRENCY`,
-  `LLM_CONCURRENCY_CEILING`, `LLM_BULK_RESERVE`, `LLM_CONNECT_TIMEOUT`.
-- **Native tool turns.** Where every provider in the fallback chain carries
+  is sent. The governor starts with a small number of calls in flight, grows
+  while the provider keeps up, backs off on rate-limit errors and learns the
+  real limits from the provider's `x-ratelimit-*` headers. `LLM_LIMITS`
+  declares known limits so that several processes share one rate window
+  through Redis, and `lane_scope(BULK)` runs background work in a lane that
+  leaves headroom for people waiting on chat. Every setting has a working
+  default: `LLM_GOVERNOR_ENABLED`, `LLM_LIMITS`, `LLM_INITIAL_CONCURRENCY`,
+  `LLM_CONCURRENCY_CEILING`, `LLM_BULK_RESERVE` and `LLM_CONNECT_TIMEOUT`. See
+  [Provider governor](reference/configuration.md#provider-governor).
+- **Native tool turns.** Where every provider in the fallback chain supports
   tool calls (Azure Chat Completions and Responses, Claude, Gemini and Vertex
-  AI, vLLM), each sub-agent turn is a native function call with
-  `tool_choice="required"` and a `done` function typed from the step's
-  `output_schema`. Replaying a real verifier turn, the text protocol answered
-  without using a tool 24 of 24 times; native turns called a tool 24 of 24
-  times. Promotional access keeps the text protocol. Claude, Gemini and vLLM
-  translations are covered by tests but not yet verified live.
+  AI, and vLLM), each sub-agent turn is a native function call: the model must
+  call one of the step's tools, or a `done` function whose result is typed from
+  the step's `output_schema`. Replaying a real verifier turn 24 times, the text
+  protocol answered without using a tool every time, while native turns called
+  a tool every time. The Prescott promotional endpoint keeps the text protocol.
+  The Claude, Gemini and vLLM translations are covered by tests but have not
+  yet been verified against the live services.
 - **A record of the work.** Every accepted result carries
-  `metadata["work_record"]`: per tool, the calls made and how many succeeded.
-  Budget facts reach the agent as a per-turn `## RUNTIME NOTICE (this turn)`.
-- **Working notes.** An agent writes what it has established in
-  `working_notes` (a `NOTE:` line on the text protocol) alongside any action;
-  notes go to the step's `WorkingScratchpad`, are shown every turn as MY
-  WORKING NOTES (never withheld under context pressure) and carry across
-  execution epochs. Until now the scratchpad was written every turn but never
-  shown back to the agent.
+  `metadata["work_record"]`, which lists for each tool the calls made and how
+  many succeeded. Facts about the remaining budget reach the agent as a runtime
+  notice in that turn's prompt, not as instructions to stop.
+- **Working notes.** Alongside any action, an agent can record what it has
+  established: the `working_notes` argument on native turns, or a `NOTE:` line
+  in the text protocol. Notes are kept in the step's `WorkingScratchpad`, shown
+  to the agent on every turn, never dropped when the context is under pressure,
+  and carried into the step's next execution epoch. Until now the scratchpad
+  was written on every turn but never shown back to the agent.
 - **One runtime folder.** Files the framework writes relative to the working
-  directory (blob storage, logs, traces, HITL inbox, step outputs, the function
-  registry) live under `./.jarviscore/`. Thanks to @whoisnjoguu (#146).
+  directory (blob storage, logs, traces, the HITL inbox, step outputs and the
+  function registry) now live under `./.jarviscore/`. Thanks to @whoisnjoguu
+  (#146).
 - **Consequential actions wait for a person.** A browser or coder action marked
-  `irreversible` with a `consequence` raises a typed `HITLRequest` carrying the
-  exact action, and the step pauses. `Mesh.resolve_hitl()` records the decision
-  and resumes the step; an approved action is performed once through the normal
-  tool path with a receipt, and a declined one is never run. See
-  [HITL](guides/hitl.md#approving-an-agents-consequential-actions).
-- **The browser reads the page.** `snapshot()` returns the page as a person
-  reads it, with refs on the elements that can be acted on; every interaction
-  tool accepts a `ref`. Disabled, hidden and covered elements are refused at
-  once with the reason.
+  `irreversible` with a `consequence` raises a typed `HITLRequest` that carries
+  the exact action, and the step pauses. `Mesh.resolve_hitl()` records the
+  decision and resumes the step: an approved action is performed once, through
+  the normal tool path and with a receipt, and a declined action is never run.
+  See [HITL](guides/hitl.md#approving-an-agents-consequential-actions).
+- **The browser reads the page as a person does.** `snapshot()` returns the
+  page's headings, text, tables, notices and dialogs, with a ref on every
+  element that can be acted on, and every interaction tool accepts that ref.
+  Disabled, hidden and covered elements are refused at once, with the reason.
 - **`find` and `act`.** With a decision model configured, `find(goal)` returns
-  the element for a goal and `act(goal, action)` performs a reversible click,
-  typing or selection in one step. `act` never performs a consequential action.
-- **The browser continues across epochs.** A step whose execution epoch runs
-  out keeps its browser for the next epoch (`BROWSER_CONTINUATION_HOLD_S`,
-  default 120 s).
-- **Pace, settling and access.** Requests to one site are spaced
-  (`BROWSER_SITE_INTERVAL_S`), clicks and typing let the page finish loading
-  (`BROWSER_SETTLE_TIMEOUT_MS`), and `navigate` reports when a site turns the
-  browser away.
-- **Any decision model.** `DecisionClient` is a provider-neutral protocol;
+  the element that serves a goal, and `act(goal, action)` performs a reversible
+  click, typing or selection in one step. `act` never performs a consequential
+  action.
+- **The browser continues across epochs.** When a step's execution epoch runs
+  out, its browser is held open for the next epoch for up to
+  `BROWSER_CONTINUATION_HOLD_S` seconds (default 120), so the agent carries on
+  from the same page.
+- **Pace, settling and access.** Requests to the same site are spaced at least
+  `BROWSER_SITE_INTERVAL_S` apart (default 1.5 seconds), clicks and typing wait
+  up to `BROWSER_SETTLE_TIMEOUT_MS` (default 3,000 ms) for the page to finish
+  loading, and `navigate` reports when a site turns the browser away.
+- **Any decision model.** `DecisionClient` is a provider-neutral protocol, and
   `DECISION_CLIENT_FACTORY` plugs in any implementation. See
   [Bring any decision model](concepts/decision-models.md#bring-any-decision-model).
-- **Your own egress proxy.** `EGRESS_PROXY_URL` routes the browser and the
-  pages the researcher reads through the developer's proxy provider, with a
-  sticky `{session}` per tenant or workflow; `EGRESS_PROXY_BYPASS` names hosts
-  that go direct. `BROWSER_LOCALE` and `BROWSER_TIMEZONE` match the browser to
-  the proxy's region. See
-  [Your own proxy](guides/browser-automation.md#your-own-proxy).
+- **Your own egress proxy.** `EGRESS_PROXY_URL` routes the browser, and the
+  pages the researcher reads, through your proxy provider, with a sticky
+  `{session}` per tenant or workflow. `EGRESS_PROXY_BYPASS` names hosts that go
+  direct, and `BROWSER_LOCALE` and `BROWSER_TIMEZONE` match the browser to the
+  proxy's region. See [Your own proxy](guides/browser-automation.md#your-own-proxy).
 
 ### Changed
 
-- **The runtime records what an agent did instead of policing how.** Live
-  traces showed agents with budget left stopping after three calls because the
-  runtime told them to. Removed: the knowledge plateau, query-similarity and
-  URL de-duplication refusals, the convergence governor's forced pivots, the
-  failure guard's refusal to retry, budget coaching ("stop gathering, call done
-  now"), the EXIT CHECK, the research phase contract and its tool refusals,
-  the required-search and URL-id gates, the coordinate-click block and the
-  coder's research gate. An identical repeated call still runs; its result
-  notes the earlier receipt and whether the result changed. `FailureLedger`
-  records and classifies failures without blocking.
-  `preferred_domains` is a preference: preferred results come first and
-  open-web results are still returned. Kept, because they are boundaries:
-  execution leases, approvals, effect-intent review, atom contracts,
-  credential and workspace limits, receipt grounding, result shape checks and
-  `required_tool_groups`.
-  ([RFC 0003](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0003-record-not-police.md))
-- **The runtime never clicks for the agent.** When a researcher click or type
-  failed, the runtime clicked or typed into other elements itself, then a
-  vision-guessed coordinate, and reported success for an element the agent
-  never chose. A failed action now returns its error. Removed with it:
-  `RESEARCH_REPAIR_LOOP_ENABLED`, `RESEARCH_REPAIR_MAX_TURNS` and the
-  `recovery_strategy` text on failed page reads.
-- **Failures are recorded as facts.** `FailureLedger` keeps the class a tool
-  declares, its status code and the whole error; it no longer guesses a class
-  from words in the message. The browser dispatcher no longer attaches a
-  guessed `error_type`.
+- **The runtime records what an agent did instead of policing how it works.**
+  Live traces showed agents that still had budget stopping after three tool
+  calls because the runtime told them to. The runtime no longer refuses or
+  redirects an agent's work. Removed:
+
+    - the knowledge-plateau notice;
+    - refusals of searches similar to earlier ones and of URLs already read;
+    - the convergence governor's forced changes of approach;
+    - the failure guard's refusal to retry a tool;
+    - budget coaching such as "stop gathering, call done now";
+    - the exit checklist shown before completion;
+    - the research phase contract and the tool refusals it made;
+    - the gates that required a search, or URL ids, before reading;
+    - the block on clicking by coordinates;
+    - the coder's requirement to research before writing code.
+
+    A repeated identical call now runs, and its result says whether it matches
+    the earlier receipt. `FailureLedger` records and classifies failures without
+    blocking anything. `preferred_domains` orders results rather than filtering
+    them: preferred sources come first and open-web results are still returned.
+    The boundaries stay in place: execution leases, approvals, effect-intent
+    review, atom contracts, credential and workspace limits, receipt grounding,
+    result shape checks and `required_tool_groups`. See
+    [RFC 0003](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0003-record-not-police.md).
+
+- **The runtime never clicks for the agent.** When a researcher's click or
+  typing failed, the runtime tried other elements itself, then a coordinate
+  guessed from a screenshot, and reported success for an element the agent had
+  never chosen. A failed action now returns its error to the agent. The
+  undocumented `RESEARCH_REPAIR_LOOP_ENABLED` and `RESEARCH_REPAIR_MAX_TURNS`
+  settings and the `recovery_strategy` hint on failed page reads are removed
+  with it. An action a person approved is still performed exactly as approved.
+- **Failures are recorded as facts.** `FailureLedger` keeps the failure class a
+  tool declares, the status code and the full error. It no longer guesses a
+  class from words in the message; a failure without a declared class is
+  recorded as `UNKNOWN`, and the browser no longer attaches a guessed
+  `error_type`.
 
 ### Fixed
 
-- A bare `RESULT` without `DONE` (for example `{"status": "in_progress"}`) was
-  recorded as a completed step. Only `DONE` completes a step.
-- **A goal whose record expired could stall a node.** Its id stayed in the
-  pending-plans set, so every node re-claimed it on every tick; with the new
-  wake-on-change loop that became a busy loop on the event loop, and a node's
-  workers stopped claiming steps (seen live: 31 minutes). It is now settled as
-  a planning failure with the reason.
+- **Only `DONE` completes a step.** A turn with a `RESULT` but no `DONE` (for
+  example `{"status": "in_progress"}`) was recorded as a completed step.
+- **A goal whose record had expired could stall a node.** Its id stayed in the
+  set of goals waiting to be planned, so every node tried to claim it again on
+  every tick. With the new wake-on-change loop this became a busy loop that
+  kept the node's workers from claiming steps. Such a goal is now settled as a
+  planning failure that states the reason.
 - **`Mesh.stop()` could hang** when the node was running a step whose agent
-  code absorbed the cancellation (seen live: a worker paused for an approval
-  never exited, so the approval was never requested). The mesh now marks
-  itself stopping first, and its loops end on that rather than on
-  cancellation alone.
-- **A goal's answer could describe the pause after the approval went through.**
-  A final response may be composed while a step waits for a person, so it said
-  the order still needed approval even after the order was placed (seen live:
-  1 of 5 hard checkouts). Resuming a step now reopens any final response
-  downstream of it, and a response still being composed from the pause is
-  rejected when it finishes.
-- **Pools no longer block the event loop**: the function registry is built once
-  per directory per process and off the loop; step outputs are indexed per
-  workflow instead of scanned across the keyspace; active graphs are fetched in
-  one pipelined call; a goal waiter wakes only for its own workflow.
-- The governor stranded calls waiting on another event loop (seen live: 40+
-  minutes). One limit now holds across every loop.
-- `LLM_MAX_CONCURRENT` was enforced twice, once by a loop-bound semaphore, and
-  the governor ignored it below its starting concurrency of 8. The governor
-  now enforces it alone, as the most calls in flight per deployment.
-- Work that lost its step claim kept calling tools and models until commit.
-  The heartbeat now cancels it.
-- A nested `output_schema` reached providers with dangling `$defs` references,
-  and a state carrying an `output_schema` could not checkpoint.
-- `TELEMETRY_TRACE_DIR` was documented but never read; kernel traces were
-  always written to the default folder. They now go where it points.
-- Importing the P2P layer loaded a `.env` file into the process: `swim-p2p`
-  calls `load_dotenv()` at import. JarvisCore now disables that for the import.
-- A correct answer that cited the receipt of a page read was rejected as an
-  unknown receipt. A read that established a fact is evidence.
-- A page a site refused (401/403) was never marked `access: protected`: the
-  fetcher reported a guessed category instead of the status code. Failed page
-  reads now carry `status_code`.
-- A continued step lost its conversation; it now resumes with its last 10
+  code swallowed the cancellation, for example a worker paused for an
+  approval. The mesh now marks itself as stopping before it cancels anything,
+  and its loops exit on that rather than relying on cancellation alone.
+- **A goal's answer could still describe the pause after the approval went
+  through.** The final response may be written while a step waits for a
+  person, so it could say that an order still needed approval after the order
+  had been placed. Resuming a step now reopens every final response that
+  depends on it, and a response still being written from the paused state is
+  discarded when it finishes.
+- **Pools no longer block the event loop.** The function registry is built
+  once per directory per process, outside the event loop; step outputs are
+  indexed per workflow instead of found by scanning the Redis keyspace; active
+  workflow graphs are fetched in one pipelined call; and a goal waiter wakes
+  only for changes to its own workflow.
+- **The governor no longer strands calls.** A call waiting on a different
+  event loop could wait for a long time without being admitted. One limit now
+  holds across every event loop.
+- **`LLM_MAX_CONCURRENT` is enforced once.** It was applied twice, once by a
+  semaphore bound to a single event loop, and the governor ignored it whenever
+  it was below the governor's starting concurrency of 8. The governor now
+  enforces it alone, as the most calls in flight per deployment.
+- **Work that lost its step claim stops.** It used to keep calling tools and
+  models until it tried to commit; the claim heartbeat now cancels it.
+- **Nested output schemas work.** A nested `output_schema` reached providers
+  with broken internal references (`$defs`), and a state carrying an
+  `output_schema` could not be checkpointed.
+- **`TELEMETRY_TRACE_DIR` is honoured.** The setting was documented but never
+  read, so kernel traces were always written to the default folder.
+- **Importing JarvisCore no longer loads a `.env` file into the process.** The
+  `swim-p2p` dependency calls `load_dotenv()` when it is imported; JarvisCore
+  now prevents that during its import. Settings still read `.env` as
+  documented.
+- **An answer that cites a page read is accepted.** A correct answer citing the
+  receipt of a page read was rejected as citing an unknown receipt. A page read
+  that established a fact now counts as evidence.
+- **Refused pages are marked protected.** A page the site refused with 401 or
+  403 was never marked `access: protected`, because the fetcher reported a
+  guessed category instead of the status code. Failed page reads now carry
+  `status_code`.
+- **A continued step keeps its conversation.** It now resumes with its last 10
   exchanges, including the turn that paused for a person.
-- An approved action blocked before acting (a cookie dialog over the button)
-  was settled as already run. A tool that refuses before acting reports
-  `performed: False` and the approval stays open.
-- An approved form submission lost the values the person approved when the page
-  was reopened. They are part of the action's identity and are restored before
-  the approved click; if they cannot be, the action does not run.
-- The browser presented a stale Chrome 120 identity on `HeadlessChrome`; it now
-  presents the running Chrome's real version and platform.
-- The researcher's `extract_api_details` failed on every call and cut
-  documentation at 20,000 characters; it now reads the documentation whole.
-- The researcher required a top-level `summary` key, which products that own
-  their result shape could never satisfy. The `DONE` answer now counts.
-- A goal-wide obligation quote was repeated per obligation in the plan view;
-  it is stated once (about 1.1k fewer prompt tokens per turn).
-- An amendment whose answer reads new evidence could not be planned, and a
-  planning failure raised instead of settling the goal on its completed work.
-- The plan audit was shown obligations with `source_quote` while told the ledger
-  uses `source_ref`, and sometimes rejected correct plans for that mismatch,
-  failing the goal at planning. It now reads obligations as the model was asked
-  to write them.
-- The Mesh's own response step was routed by a model call although its role is
-  fixed; it now goes straight to the communicator (about 2 s per goal).
-- The planner's first-pass prompt never said JarvisCore appends the response
-  step itself and that only domain steps settle obligations. Plans covered
-  obligations with their own response step, the framework replaced it, and a
-  third to two thirds of plans needed a repair call. Every step-producing prompt
-  now states it: in 24 live plannings none needed a repair, and mean planning
-  time fell from about 20 s to 15 s.
-- The researcher's page reads and its browser share one sticky egress session.
-- A step that reached the kernel's turn cap mid-work failed its goal, while an
-  exhausted token or time budget would have continued. The turn cap now ends the
-  epoch and the step continues while the workflow grants epochs (seen live: a
-  hard checkout failed one click from finishing).
-- A ref from an earlier snapshot or before a page load reached Playwright as
-  "Invalid frame in aria-ref selector" or matched nothing. The browser now knows
-  which refs its latest snapshot made live and answers `STALE_REF` without acting.
+- **An approval is not used up by an action that never ran.** An approved
+  action that was blocked before it could act, for example by a cookie dialog
+  covering the button, was recorded as already performed. A tool that refuses
+  before acting now reports `performed: False`, and the approval stays open.
+- **Approved form values are restored.** When the page was reopened, an
+  approved form submission lost the values the person had approved. Those
+  values are now part of the action's identity and are filled in again before
+  the approved click; if they cannot be restored, the action does not run.
+- **The browser presents its real identity.** It presented a stale Chrome 120
+  identity while running as `HeadlessChrome`; it now reports the running
+  Chrome's actual version and platform.
+- **`extract_api_details` works.** The researcher's tool failed on every call
+  and cut documentation off at 20,000 characters; it now reads the
+  documentation in full.
+- **The researcher's answer is enough.** The researcher required a top-level
+  `summary` key, which products that define their own result shape could never
+  provide. The `DONE` answer now satisfies it.
+- **A goal-wide quote is stated once.** When one source quote applied to every
+  obligation, the plan view repeated it for each of them. It is now stated
+  once, which saves about 1,100 prompt tokens per turn.
+- **Amendments can read new evidence.** An amendment whose answer depends on
+  new evidence could not be planned, and a planning failure raised an error
+  instead of settling the goal on the work already completed.
+- **The plan audit reads obligations as they were written.** It was shown
+  obligations with `source_quote` while being told that the ledger uses
+  `source_ref`, and sometimes rejected correct plans over that mismatch, which
+  failed the goal at planning.
+- **The Mesh's response step is routed directly.** The step that writes the
+  final response was routed by a model call although its destination is fixed.
+  It now goes straight to the communicator, which saves about 2 seconds per
+  goal.
+- **Plans no longer need a repair call for their own response step.** The
+  planner's first prompt never said that JarvisCore appends the response step
+  itself and that only domain steps settle obligations. Plans covered
+  obligations with a response step of their own, the framework replaced it,
+  and between a third and two thirds of plans needed a repair call. Every
+  prompt that produces steps now says so. In 24 live plannings none needed a
+  repair, and mean planning time fell from about 20 to 15 seconds.
+- **The researcher and its browser share one egress session**, so page reads
+  and browser actions leave through the same sticky proxy session.
+- **Reaching the turn cap continues the step.** A step that hit the kernel's
+  turn cap mid-work failed its goal, whereas an exhausted token or time budget
+  would have let it continue. The turn cap now ends the execution epoch, and
+  the step continues while the workflow grants further epochs.
+- **Stale element refs are refused.** A ref from an earlier snapshot, or from
+  before a page load, reached Playwright as "Invalid frame in aria-ref
+  selector" or matched nothing. The browser now tracks which refs its latest
+  snapshot made live and answers `STALE_REF` without acting.
 
 ### Upgrading from 2.1
 
-No public API is removed. Check these behaviour changes:
+No public API is removed: the settings this release drops were never part of
+the configuration reference. Check these behaviour changes:
 
 1. **Runtime files moved to `./.jarviscore/`.** With default settings, blob
    storage, logs and traces written by 2.1 are not read from their old folders.

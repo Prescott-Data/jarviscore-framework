@@ -111,7 +111,13 @@ shared application subclass and return only the validated work product.
 
 ## Completion and result contracts
 
-Kernel sub-agents use a provider-neutral protocol:
+Where every provider in the fallback chain supports native tool calls, each
+sub-agent turn is a function call. The model calls one of the step's tools, or
+calls `done` with `summary` (the complete human answer) and `result` (the
+structured value for downstream work, typed from the step's `output_schema`).
+Either call may carry `working_notes`, which the agent sees again on every turn.
+
+Otherwise, Kernel sub-agents use a provider-neutral text protocol:
 
 ```text
 THOUGHT: <reasoning>
@@ -119,7 +125,8 @@ DONE: <complete human answer>
 RESULT: <JSON or structured value for downstream work>
 ```
 
-JarvisCore appends this protocol to the execution harness. Most application
+Both forms carry the same answer and result, and only `done` (or `DONE`)
+completes a step. JarvisCore appends the protocol to the execution harness. Most application
 prompts should specify the semantics and shape of the deliverable, not redefine
 the parser syntax. A shared application subclass may reinforce `RESULT` when it
 validates a domain work product.
