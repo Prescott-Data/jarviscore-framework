@@ -377,6 +377,7 @@ class Mesh:
             "browser_timezone",
             "egress_proxy_url",
             "egress_proxy_bypass",
+            "telemetry_trace_dir",
         ):
             if knob in self._settings.model_fields_set:
                 self.config.setdefault(knob, getattr(self._settings, knob))

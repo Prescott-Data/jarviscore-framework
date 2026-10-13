@@ -1141,11 +1141,12 @@ class Kernel:
         step_id = context.get("step_id", f"step_{int(time.time())}")
 
         # Create TraceManager for real-time streaming to UI
-        from jarviscore.kernel.tracing import TraceManager, create_noop_trace
+        from jarviscore.kernel.tracing import DEFAULT_TRACE_DIR, TraceManager, create_noop_trace
         try:
             _kernel_trace = TraceManager(
                 workflow_id=workflow_id,
                 step_id=step_id,
+                trace_dir=self.config.get("telemetry_trace_dir") or DEFAULT_TRACE_DIR,
                 event_sink=trace_sink,
             )
         except Exception as _te:

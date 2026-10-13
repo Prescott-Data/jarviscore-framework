@@ -872,6 +872,31 @@ class TestTaskClassification:
         assert "routing decision" in output.metadata["budget_error"]
         assert mock_llm.calls == []
 
+    @pytest.mark.asyncio
+    async def test_kernel_traces_go_to_the_configured_trace_dir(
+        self, mock_llm, mock_sandbox, tmp_path
+    ):
+        decision_client = SimpleNamespace(
+            evaluate=AsyncMock(side_effect=WorkflowBudgetExceeded("No room."))
+        )
+        kernel = Kernel(
+            llm_client=mock_llm,
+            sandbox=mock_sandbox,
+            decision_client=decision_client,
+            config={
+                "kernel_router_provider": "typesafe",
+                "telemetry_trace_dir": str(tmp_path / "audit"),
+            },
+        )
+
+        await kernel.execute(
+            task="Route this task",
+            context={"workflow_id": "wf-1", "step_id": "step-1"},
+            max_dispatches=1,
+        )
+
+        assert (tmp_path / "audit" / "wf-1_step-1.jsonl").exists()
+
     def test_unknown_kernel_router_provider_is_rejected(self, mock_llm, mock_sandbox):
         with pytest.raises(ValueError, match="kernel_router_provider"):
             Kernel(
