@@ -198,8 +198,8 @@ class AdaptiveConcurrency:
     """
 
     def __init__(self, initial: int, ceiling: int, bulk_reserve: float) -> None:
-        self.initial = max(1, int(initial))
-        self.ceiling = max(self.initial, int(ceiling))
+        self.ceiling = max(1, int(ceiling))
+        self.initial = min(max(1, int(initial)), self.ceiling)
         self.bulk_reserve = min(max(float(bulk_reserve), 0.0), 0.9)
         self.limit = float(self.initial)
         self.threshold = math.inf

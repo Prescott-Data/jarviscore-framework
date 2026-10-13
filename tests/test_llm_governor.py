@@ -393,7 +393,8 @@ def test_llm_max_concurrent_is_one_limit_not_two(monkeypatch):
     monkeypatch.setattr(governor_module, "_PROCESS_GOVERNOR", None)
     governed = UnifiedLLMClient({"llm_max_concurrent": 3, "llm_governor_enabled": True})
     assert governed._semaphore is None
-    assert governed._governor._ceiling == 3
+    concurrency = governed._governor.deployment("azure:gpt").concurrency
+    assert concurrency.limit == 3 and concurrency.ceiling == 3
 
     ungoverned = UnifiedLLMClient({"llm_max_concurrent": 3, "llm_governor_enabled": False})
     assert ungoverned._governor is None and ungoverned._semaphore is not None
