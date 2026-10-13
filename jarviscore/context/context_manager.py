@@ -358,7 +358,9 @@ class ContextManager:
             for entry in state.failure_ledger[-5:]:
                 tool = entry.get("tool", "unknown")
                 err_type = entry.get("error_type", "UNKNOWN")
-                lines.append(f"- `{tool}` → `{err_type}`: {entry.get('error', '')}")
+                code = entry.get("status_code")
+                status = f" (status {code})" if code is not None else ""
+                lines.append(f"- `{tool}` → `{err_type}`{status}: {entry.get('error', '')}")
             add("failure_memory", "\n".join(lines))
 
         findings = state.internal_variables.get("research_findings", [])

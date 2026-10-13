@@ -26,7 +26,7 @@ import subprocess
 from typing import Dict, Any, List, Optional, Literal, cast, Set, Tuple
 from urllib.parse import urlparse
 
-from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image, with_images
+from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image
 from jarviscore.kernel.subagent import BaseSubAgent, _extract_json_object
 from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.state import KernelState
@@ -679,163 +679,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         browser_state["som_updated_at"] = asyncio.get_event_loop().time()
         self.current_state.internal_variables["browser_state"] = browser_state
 
-    def _get_ui_memory(self) -> Dict[str, Any]:
-        if not self.current_state:
-            return {"page_states": {}}
-        raw = self.current_state.internal_variables.get("ui_memory", {})
-        if isinstance(raw, dict):
-            raw.setdefault("page_states", {})
-            return raw
-        return {"page_states": {}}
-
-    def _set_ui_memory(self, memory: Dict[str, Any]) -> None:
-        if self.current_state:
-            self.current_state.internal_variables["ui_memory"] = memory
-
-    async def _current_page_signature(self) -> str:
-        result = await self._bdispatch("evaluate", expression="({url: location.href, title: document.title})")
-        if not result.success:
-            return "unknown:unknown"
-        data = (result.data or {}).get("result", {})
-        if not isinstance(data, dict):
-            return "unknown:unknown"
-        return f"{data.get('url', '')}|{data.get('title', '')}"
-
-    async def _record_ui_action_success(self, action: str, ref: str) -> None:
-        if not ref:
-            return
-        sig = await self._current_page_signature()
-        memory = self._get_ui_memory()
-        page_states = memory.get("page_states", {})
-        if not isinstance(page_states, dict):
-            page_states = {}
-        state = page_states.get(sig, {})
-        if not isinstance(state, dict):
-            state = {}
-        by_action = state.get("successful_refs", {})
-        if not isinstance(by_action, dict):
-            by_action = {}
-        refs = by_action.get(action, [])
-        if not isinstance(refs, list):
-            refs = []
-        refs = [r for r in refs if r != ref]
-        refs.insert(0, ref)
-        by_action[action] = refs[:8]
-        state["successful_refs"] = by_action
-        state["updated_at"] = asyncio.get_event_loop().time()
-        page_states[sig] = state
-        memory["page_states"] = page_states
-        self._set_ui_memory(memory)
-
-    def _repair_candidates_from_snapshot(self, failed_ref: str, action: str, refs_map: Dict[str, Any]) -> List[str]:
-        candidates: List[str] = []
-        if failed_ref and failed_ref in refs_map:
-            candidates.append(failed_ref)
-        if failed_ref:
-            for key in sorted(refs_map.keys()):
-                if key.startswith(failed_ref[:1]) and key != failed_ref:
-                    candidates.append(key)
-        for key in sorted(refs_map.keys()):
-            if key not in candidates:
-                candidates.append(key)
-        return candidates[:6]
-
-    async def _attempt_ui_repair(
-        self,
-        action: Literal["click", "type"],
-        failed_ref: str,
-        text: Optional[str] = None,
-        submit: bool = False,
-        slowly: bool = False,
-        timeout_ms: int = 30000,
-    ) -> Dict[str, Any]:
-        # Adaptive repair horizon - give the agent room to think/recover
-        max_turns = max(2, int(os.getenv("RESEARCH_REPAIR_MAX_TURNS", "5")))
-        sig = await self._current_page_signature()
-        memory = self._get_ui_memory()
-        page_states = memory.get("page_states", {})
-        memory_refs: List[str] = []
-        if isinstance(page_states, dict):
-            state = page_states.get(sig, {})
-            if isinstance(state, dict):
-                successful = state.get("successful_refs", {})
-                if isinstance(successful, dict):
-                    memory_refs = list(successful.get(action, []) or [])
-
-        attempted: Set[str] = set()
-        for turn in range(1, max_turns + 1):
-            snap = await self._bdispatch("snapshot", interactive_only=True, compact=True)
-            if snap.success and isinstance(snap.data, dict):
-                self._persist_som_snapshot(snap.data)
-                refs_map = snap.data.get("refs") or {}
-            else:
-                refs_map = {}
-
-            candidates = []
-            for ref in memory_refs:
-                if ref and ref not in candidates:
-                    candidates.append(ref)
-            for ref in self._repair_candidates_from_snapshot(failed_ref, action, refs_map):
-                if ref not in candidates:
-                    candidates.append(ref)
-
-            for ref in candidates:
-                if ref in attempted:
-                    continue
-                attempted.add(ref)
-                if action == "click":
-                    res = await self._bdispatch("click", ref=ref, timeout_ms=timeout_ms)
-                else:
-                    res = await self._bdispatch("type", ref=ref, text=text or "", submit=submit, slowly=slowly, timeout_ms=timeout_ms)
-                if res.success:
-                    await self._record_ui_action_success(action, ref)
-                    return {
-                        "status": "success",
-                        "repaired": True,
-                        "repair_turns": turn,
-                        "ref": ref,
-                        "hint": "Recovered via bounded repair loop.",
-                    }
-
-        try:
-            ss = await self._bdispatch("screenshot", full_page=False, format="png")
-            ss_bytes = (ss.data or {}).get("bytes") if ss.success else None
-            if isinstance(ss_bytes, bytes):
-                vision_prompt = (
-                    f'I need to {action} an element described as: "{failed_ref}". '
-                    "Find the closest matching interactive element on this page.\n"
-                    'Return JSON: {"found": true/false, "x": int, "y": int, "label": "..."}'
-                )
-                reply = await self.llm_client.generate(messages=[
-                    {"role": "system", "content": "You locate UI elements in screenshots. Return only JSON."},
-                    {"role": "user", "content": with_images(
-                        vision_prompt, [Image(data=ss_bytes, media_type="image/png")]
-                    )},
-                ])
-                raw = str(reply.get("content") or "")
-                parsed = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
-                if parsed.get("found") and parsed.get("x") is not None:
-                    ok, data, err = await self._coord_action(int(parsed["x"]), int(parsed["y"]), text if action == "type" else None)
-                    if ok:
-                        return {
-                            "status": "success",
-                            "repaired": True,
-                            "repair_method": "vision_locate",
-                            "x": parsed["x"],
-                            "y": parsed["y"],
-                            "label": parsed.get("label"),
-                        }
-        except Exception as exc:
-            logger.warning("[RESEARCHER] Vision repair failed: %s", exc)
-
-        return {
-            "status": "error",
-            "error": "REPAIR_FAILED",
-            "semantic_error": "REPAIR_FAILED",
-            "failed_ref": failed_ref,
-            "attempted_refs": sorted(list(attempted)),
-        }
-
     # --- STATE MANAGEMENT HELPERS ---
 
     async def _track_content_cost(self, content: str, source: str):
@@ -926,19 +769,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         cp["last_action_success"] = bool(success)
         if self.current_state:
             self.current_state.internal_variables["research_checkpoint"] = cp
-
-    def _suggest_recovery_strategy(self) -> str:
-        cp = self._checkpoint()
-        actions = cp.get("actions_taken", [])
-        if not isinstance(actions, list):
-            actions = []
-        recent = actions[-10:]
-        failures = [a for a in recent if isinstance(a, dict) and not a.get("success")]
-        if len(failures) >= 6:
-            return "High failure ratio. Use url_ids from registry and fetch one official source URL first."
-        if recent and all(isinstance(a, dict) and a.get("action") == "search_internet_batch" for a in recent[-3:]):
-            return "Search-heavy stagnation. Stop searching; call read_web_content with url_ids from last search."
-        return "Switch strategy: read one minted official documentation URL, then verify extracted endpoint evidence."
 
     def _get_rag_ingested_sources(self) -> set:
         if not self.current_state:
@@ -2232,7 +2062,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     allowed_urls = [str(u) for u in raw_urls if u][:10]
                     reverse = self._reverse_url_registry()
                     allowed_url_ids = [reverse[u] for u in allowed_urls if u in reverse]
-            strategy = self._suggest_recovery_strategy()
             self._set_research_phase(ResearchPhase.DIAGNOSING, "no_content_extracted")
             self._record_checkpoint_action("read_web_content", False, {"reason": "NO_CONTENT_EXTRACTED"})
             self.tracer.log_tool_result(
@@ -2247,7 +2076,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 "reason": "All candidate pages failed extraction or provenance checks.",
                 "allowed_urls": allowed_urls,
                 "allowed_url_ids": allowed_url_ids,
-                "recovery_strategy": strategy,
                 "pages": results,
             }
 
@@ -2779,7 +2607,6 @@ DOCUMENTATION TEXT:
             
             if result.success:
                 logger.info(f"[RESEARCHER] Clicked ref={ref}")
-                await self._record_ui_action_success("click", ref)
                 self.tracer.log_tool_result("browser_click", {"ref": ref, "status": "success"})
                 return {
                     "status": "success",
@@ -2787,15 +2614,6 @@ DOCUMENTATION TEXT:
                     "hint": "Page may have changed. Call browser_snapshot() to get fresh refs."
                 }
             else:
-                if _env_bool("RESEARCH_REPAIR_LOOP_ENABLED", True):
-                    repaired = await self._attempt_ui_repair(
-                        action="click",
-                        failed_ref=str(ref or result.ref or ""),
-                        timeout_ms=timeout_ms,
-                    )
-                    if repaired.get("status") == "success":
-                        self.tracer.log_tool_result("browser_click", repaired)
-                        return repaired
                 self.tracer.log_tool_result("browser_click", None, error=result.error)
                 return {"status": "error", "error": result.error, "ref": result.ref}
         except Exception as e:
@@ -2828,7 +2646,6 @@ DOCUMENTATION TEXT:
             
             if result.success:
                 logger.info(f"[RESEARCHER] Typed into ref={ref}, submit={submit}")
-                await self._record_ui_action_success("type", ref)
                 self.tracer.log_tool_result("browser_type", {"ref": ref, "status": "success"})
                 return {
                     "status": "success",
@@ -2837,19 +2654,6 @@ DOCUMENTATION TEXT:
                     "submitted": submit
                 }
             else:
-                if _env_bool("RESEARCH_REPAIR_LOOP_ENABLED", True):
-                    repaired = await self._attempt_ui_repair(
-                        action="type",
-                        failed_ref=str(ref or result.ref or ""),
-                        text=text,
-                        submit=submit,
-                        slowly=slowly,
-                        timeout_ms=timeout_ms,
-                    )
-                    if repaired.get("status") == "success":
-                        repaired["typed"] = text
-                        self.tracer.log_tool_result("browser_type", repaired)
-                        return repaired
                 self.tracer.log_tool_result("browser_type", None, error=result.error)
                 return {"status": "error", "error": result.error, "ref": result.ref}
         except Exception as e:

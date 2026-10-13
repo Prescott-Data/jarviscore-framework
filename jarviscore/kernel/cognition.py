@@ -10,7 +10,6 @@ failed before and how. What to do with that is the agent's decision.
 import hashlib
 import json
 import logging
-import re
 import time
 from collections import deque
 from enum import Enum
@@ -58,15 +57,6 @@ ACTION_TOOLS = frozenset({
     "done",
 })
 
-# HTTP-ish status codes → failure class, for structured classification.
-_STATUS_CODE_CLASSES = {
-    401: "AUTH_UNAUTHORIZED",
-    403: "AUTH_FORBIDDEN",
-    404: "NOT_FOUND",
-    408: "TIMEOUT",
-    429: "RATE_LIMIT",
-}
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FailureLedger
@@ -105,55 +95,23 @@ class FailureLedger:
         return hashlib.sha256(f"{tool_name}:{payload}".encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _classify_error(error_text: str, output: Any = None) -> str:
-        """Classify a failure — structured signals first, prose last.
-
-        The class is what the agent reads about a failure, so machine-readable
-        evidence is preferred over substring sniffing (issue #60):
-
-        1. output["error_type"] — an explicit class from the tool wins outright
-        2. output["status_code"] / output["code"] — numeric HTTP-ish codes
-        3. Prose heuristics — word-boundary matched numeric codes, so
-           "1404 rows" never reads as a 404
-        """
-        # 1. Explicit class from the tool
+    def _declared_error_type(output: Any = None) -> str:
+        """The failure class the tool declared, or UNKNOWN; never guessed from prose or codes."""
         if isinstance(output, dict):
             explicit = output.get("error_type")
             if isinstance(explicit, str) and explicit.strip():
                 return explicit.strip().upper()
-            # 2. Numeric status code
+        return "UNKNOWN"
+
+    @staticmethod
+    def _status_code(output: Any = None) -> Optional[int]:
+        if isinstance(output, dict):
             for key in ("status_code", "code"):
-                code = output.get(key)
                 try:
-                    code = int(code)
+                    return int(output.get(key))
                 except (TypeError, ValueError):
                     continue
-                if code in _STATUS_CODE_CLASSES:
-                    return _STATUS_CODE_CLASSES[code]
-                if code >= 500:
-                    return "NETWORK"
-
-        # 3. Prose heuristics (fallback only)
-        text = str(error_text).lower()
-
-        def _code(n: str) -> bool:
-            return bool(re.search(rf"\b{n}\b", text))
-
-        if _code("401") or "unauthorized" in text:
-            return "AUTH_UNAUTHORIZED"
-        if _code("403") or "forbidden" in text:
-            return "AUTH_FORBIDDEN"
-        if _code("429") or "rate limit" in text:
-            return "RATE_LIMIT"
-        if "timeout" in text or "timed out" in text:
-            return "TIMEOUT"
-        if "network" in text or "connection" in text or "dns" in text:
-            return "NETWORK"
-        if "schema" in text or "validation" in text:
-            return "SCHEMA_VALIDATION"
-        if "not found" in text or _code("404"):
-            return "NOT_FOUND"
-        return "UNKNOWN"
+        return None
 
     def record(
         self,
@@ -170,13 +128,14 @@ class FailureLedger:
         If redis_store is attached, the failure is also indexed there.
         """
         fp = self.fingerprint(tool_name, params)
-        error_type = self._classify_error(error or str(output or ""), output=output)
+        error_type = self._declared_error_type(output)
         entry: Dict[str, Any] = {
             "ts": time.time(),
             "tool": tool_name,
             "fingerprint": fp,
             "error_type": error_type,
-            "error": str(error or output or "")[:500],
+            "status_code": self._status_code(output),
+            "error": str(error or output or ""),
         }
         self._ledger.append(entry)
         # Keep bounded

@@ -228,6 +228,18 @@ class TestPhasesAreRecorded:
         )
         assert result["status"] == "success"
 
+    @pytest.mark.asyncio
+    async def test_a_failed_click_is_reported_and_nothing_else_is_clicked(self, researcher, monkeypatch):
+        failed = MagicMock(success=False, error="element is covered", ref="e3", data=None)
+        dispatch = AsyncMock(return_value=failed)
+        monkeypatch.setattr(researcher, "_bdispatch", dispatch)
+
+        result = await researcher._tool_browser_click(ref="e3")
+
+        assert result == {"status": "error", "error": "element is covered", "ref": "e3"}
+        assert [call.args[0] for call in dispatch.await_args_list] == ["click"]
+        assert dispatch.await_args.kwargs["ref"] == "e3"
+
 
 # ═════════════════════════════════════════════════════════════════
 # URL Registry (Anti-Hallucination)
