@@ -2545,7 +2545,7 @@ class Mesh:
             try:
                 result = await work
             except asyncio.CancelledError:
-                if not lease_lost.is_set():
+                if self._stopping or not lease_lost.is_set():
                     raise
                 self._logger.warning(
                     "[DistributedWorker] '%s' in '%s' stopped: %s no longer holds its claim",
