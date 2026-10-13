@@ -51,6 +51,15 @@ for _name, _, _, _help in _LEGACY_COMMANDS:
     _register_legacy(_name, _help)
 
 
+def _register_commands() -> None:
+    from .serve import serve_command
+
+    app.command("serve", help="Run one agent from jarviscore.yaml.")(serve_command)
+
+
+_register_commands()
+
+
 def main(argv: list | None = None) -> None:
     argv = sys.argv[1:] if argv is None else list(argv)
     # Legacy commands get raw argv (including a bare `--`)
