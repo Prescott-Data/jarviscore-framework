@@ -240,6 +240,21 @@ class TestPhasesAreRecorded:
         assert [call.args[0] for call in dispatch.await_args_list] == ["click"]
         assert dispatch.await_args.kwargs["ref"] == "e3"
 
+    @pytest.mark.asyncio
+    async def test_a_refused_fetch_reports_its_status_and_marks_the_page_protected(self, researcher):
+        researcher.internet_search.extract_content = AsyncMock(
+            return_value={"url": "https://example.com/r", "error": "HTTP error: 403", "status_code": 403}
+        )
+
+        result = await researcher._tool_read_web_content(
+            urls=["https://example.com/r"], auto_escalate=False,
+        )
+
+        page = result["pages"][0]
+        assert page["status_code"] == 403
+        assert page["access"] == "protected"
+        assert page["error"] == "HTTP error: 403"
+
 
 # ═════════════════════════════════════════════════════════════════
 # URL Registry (Anti-Hallucination)

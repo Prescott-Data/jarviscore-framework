@@ -1851,9 +1851,10 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     "url": url,
                     "status": "error",
                     "error": error or "No content extracted",
-                    "hint": "This URL may not exist. Use exact URLs from search results.",
                     "semantic_error": "CONTENT_FETCH_FAILED"
                 }
+                if extracted.get("status_code") is not None:
+                    entry["status_code"] = extracted["status_code"]
                 results.append(entry)
                 continue
 

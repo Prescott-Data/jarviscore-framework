@@ -1074,7 +1074,7 @@ class InternetSearch:
                             return {
                                 "url": clean_url,
                                 "error": f"HTTP error: {status}",
-                                "error_type": "TRANSIENT" if status in (429, 503) else "PERMANENT",
+                                "status_code": status,
                                 "content": "",
                                 "content_length": 0,
                             }
@@ -1164,16 +1164,11 @@ class InternetSearch:
                     }
                 else:
                     logger.warning(f"Failed to fetch {clean_url}, status code: {response.status}")
-                    
-                    # Return structured error
-                    error_type = "TRANSIENT" if response.status in (429, 503, 504) else "PERMANENT"
-                    if response.status in (401, 403):
-                        error_type = "AUTH_REQUIRED"
-                        
+
                     return {
                         "url": clean_url,
                         "error": f"HTTP error: {response.status}",
-                        "error_type": error_type,
+                        "status_code": response.status,
                         "content": "",
                         "content_length": 0
                     }
@@ -1191,7 +1186,7 @@ class InternetSearch:
             return {
                 "url": url,
                 "error": "Timeout",
-                "error_type": "TRANSIENT",
+                "error_type": "TIMEOUT",
                 "content": "",
                 "content_length": 0,
             }
