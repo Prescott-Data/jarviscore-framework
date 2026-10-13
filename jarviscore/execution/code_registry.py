@@ -362,11 +362,8 @@ class FunctionRegistry:
             self.functions[function_name] = function
         elif isinstance(function, str):
             source_code = function
-            # Try dynamic import
-            try:
-                self._try_load_callable(function_name, source_code)
-            except Exception:
-                self._register_source_only(function_name, source_code)
+            # Model-written source only ever runs in the sandbox, never in this process.
+            self._register_source_only(function_name, source_code)
         else:
             logger.error(f"Invalid function type: {type(function)}")
             return False
@@ -1124,17 +1121,7 @@ class FunctionRegistry:
                     "function_name", meta_file.stem
                 )
                 self.function_metadata[function_name] = metadata
-
-                # Try to load callable from atom
-                atom_path = metadata.get("atom_path")
-                if atom_path and Path(atom_path).exists():
-                    try:
-                        code = Path(atom_path).read_text()
-                        self._try_load_callable(function_name, code)
-                    except Exception:
-                        self.functions[function_name] = None
-                else:
-                    self.functions[function_name] = None
+                self.functions[function_name] = None
 
             except Exception as e:
                 logger.error(f"Failed to load metadata from {meta_file}: {e}")
@@ -1416,28 +1403,6 @@ class FunctionRegistry:
                 f"Failed to parse source for {function_name}: {e}"
             )
             self.functions[function_name] = None
-
-    def _try_load_callable(self, function_name: str, source_code: str) -> None:
-        """Try to dynamically import function as callable."""
-        import types
-
-        module = types.ModuleType(f"_registry_{function_name}")
-        try:
-            exec(compile(source_code, f"<registry:{function_name}>", "exec"), module.__dict__)
-            # Look for the function in module namespace
-            if hasattr(module, function_name):
-                self.functions[function_name] = getattr(module, function_name)
-            else:
-                # Try to find any callable
-                for attr_name in dir(module):
-                    attr = getattr(module, attr_name)
-                    if callable(attr) and not attr_name.startswith("_"):
-                        self.functions[function_name] = attr
-                        break
-                else:
-                    self.functions[function_name] = None
-        except Exception:
-            raise
 
     # ─────────────────────────────────────────────────────────────
     # Bundle Cache Helpers

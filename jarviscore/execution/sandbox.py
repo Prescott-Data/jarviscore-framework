@@ -112,11 +112,7 @@ class SandboxExecutor:
         self.sandbox_url = self.config.get('sandbox_service_url')
 
         if self.mode == 'remote' and not self.sandbox_url:
-            logger.warning(
-                "Remote sandbox mode requires sandbox_service_url. "
-                "Falling back to local mode."
-            )
-            self.mode = 'local'
+            raise ValueError("Remote sandbox mode requires sandbox_service_url.")
 
         logger.info(f"Sandbox initialized: mode={self.mode}, timeout={timeout}s")
 
@@ -288,19 +284,8 @@ class SandboxExecutor:
             raise ExecutionTimeout(f"Remote execution exceeded {timeout} seconds")
 
         except aiohttp.ClientError as e:
-            # Network/HTTP errors
-            logger.warning(f"Remote sandbox connection error: {e}. Falling back to local execution.")
-            return await self._execute_local(code, timeout, context)
-
-        except Exception as e:
-            # Only fallback for actual execution errors, not during cleanup
-            if "object has no attribute" not in str(e):
-                logger.warning(f"Remote sandbox failed: {e}. Falling back to local execution.")
-                return await self._execute_local(code, timeout, context)
-            else:
-                # This is likely a cleanup issue, just log and don't fallback
-                logger.debug(f"Ignoring cleanup error: {e}")
-                raise
+            # Never fall back to in-process execution: remote mode was chosen for isolation.
+            raise RuntimeError(f"Remote sandbox unreachable: {e}") from e
 
     def _wrap_code_for_sandbox(self, code: str, context: Optional[Dict] = None) -> str:
         """
