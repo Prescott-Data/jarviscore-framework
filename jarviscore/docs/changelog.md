@@ -148,6 +148,11 @@ mid-checkout and an approval) runs went from 0/8 to 3/3 fully graded passes.
   wake-on-change loop that became a busy loop on the event loop, and a node's
   workers stopped claiming steps (seen live: 31 minutes). It is now settled as
   a planning failure with the reason.
+- **`Mesh.stop()` could hang** when the node was running a step whose agent
+  code absorbed the cancellation (seen live: a worker paused for an approval
+  never exited, so the approval was never requested). The mesh now marks
+  itself stopping first, and its loops end on that rather than on
+  cancellation alone.
 - **Pools no longer block the event loop**: the function registry is built once
   per directory per process and off the loop; step outputs are indexed per
   workflow instead of scanned across the keyspace; active graphs are fetched in
