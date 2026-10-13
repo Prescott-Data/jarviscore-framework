@@ -110,18 +110,18 @@ def print_next_steps(env_created: bool, examples_created: bool):
 
     if env_created:
         steps.append("1. Copy and configure your environment:\n"
-                    "   cp .env.example .env\n"
-                    "   # Edit .env and add a provider key or promotional token")
+                     "   cp .env.example .env\n"
+                     "   # Edit .env and add a provider key or promotional token")
 
     steps.append(f"{'2' if env_created else '1'}. Validate your setup:\n"
-                "   python -m jarviscore.cli.check --validate-llm")
+                 "   python -m jarviscore.cli.check --validate-llm")
 
     steps.append(f"{'3' if env_created else '2'}. Run smoke test:\n"
-                "   python -m jarviscore.cli.smoketest")
+                 "   python -m jarviscore.cli.smoketest")
 
     if examples_created:
         steps.append(f"{'4' if env_created else '3'}. Try an example:\n"
-                    "   python examples/calculator_agent_example.py for AutoAgent Profile or python examples/customagent_p2p_example.py ")
+                     "   python examples/calculator_agent_example.py for AutoAgent Profile or python examples/customagent_p2p_example.py ")
 
     for step in steps:
         print(f"\n{step}")
@@ -140,9 +140,11 @@ def copy_skill(dest_dir: Path, force: bool = False) -> bool:
     """
     try:
         from importlib import resources
-        src = Path(str(resources.files('jarviscore'))) / 'skills' / 'jarviscore' / 'SKILL.md'
+        src = Path(str(resources.files('jarviscore'))) / \
+            'skills' / 'jarviscore' / 'SKILL.md'
     except Exception:
-        src = Path(__file__).parent.parent / 'skills' / 'jarviscore' / 'SKILL.md'
+        src = Path(__file__).parent.parent / \
+            'skills' / 'jarviscore' / 'SKILL.md'
     if not src.exists():
         print(f"✗ Skill file not found: {src}")
         return False
@@ -151,13 +153,63 @@ def copy_skill(dest_dir: Path, force: bool = False) -> bool:
     for editor_dir in ('.github', '.claude'):
         dest = dest_dir / editor_dir / 'skills' / 'jarviscore' / 'SKILL.md'
         if dest.exists() and not force:
-            print(f"⚠ {dest.relative_to(dest_dir)} already exists (use --force to overwrite)")
+            print(
+                f"⚠ {dest.relative_to(dest_dir)} already exists (use --force to overwrite)")
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
         print(f"✓ Installed {dest.relative_to(dest_dir)}")
         wrote = True
     return wrote
+
+
+def _create_named_project(args) -> int:
+    from getpass import getpass
+
+    from .project_init import PROVIDERS, TEMPLATES, InitError, create_project
+
+    provider = args.provider
+    credentials = {}
+    interactive = sys.stdin.isatty()
+    if provider is None and interactive:
+        choices = list(PROVIDERS) + ["skip"]
+        answer = input(
+            f"LLM provider [{'/'.join(choices)}] (skip): ").strip().lower() or "skip"
+        if answer not in choices:
+            print(f"✗ Unknown provider {answer!r}")
+            return 2
+        provider = None if answer == "skip" else answer
+    if provider and interactive:
+        for var, prompt, secret in PROVIDERS.get(provider, []):
+            value = (getpass if secret else input)(
+                f"{prompt} (enter to fill in later): ").strip()
+            if value:
+                credentials[var] = value
+
+    try:
+        result = create_project(
+            Path(args.dir).resolve(), args.name, args.template,
+            provider=provider, credentials=credentials, force=args.force,
+        )
+    except InitError as exc:
+        print(f"✗ {exc}")
+        return 2
+
+    if args.skill:
+        copy_skill(result.root, args.force)
+
+    def rel(p): return p.relative_to(result.root)  # noqa: E731
+    print(
+        f"\n✓ Created {args.name}/ from the '{args.template}' template ({TEMPLATES[args.template]})")
+    for path in sorted(result.files):
+        print(f"    {rel(path)}")
+    if not result.locked:
+        print("  (install uv to also generate uv.lock: https://docs.astral.sh/uv/)")
+    print(f"\nNext:\n  cd {args.name}")
+    if not credentials:
+        print("  edit .env and set one LLM provider")
+    print("  jarviscore dev")
+    return 0
 
 
 def main():
@@ -191,8 +243,25 @@ def main():
         default='.',
         help='Target directory (default: current directory)'
     )
+    parser.add_argument(
+        'name',
+        nargs='?',
+        help='Create a complete project in ./NAME (jarviscore.yaml, agents/, tests/)'
+    )
+    parser.add_argument(
+        '--template',
+        default='minimal',
+        help='Project template when NAME is given: minimal, support, research, pipeline'
+    )
+    parser.add_argument(
+        '--provider',
+        help='LLM provider when NAME is given: claude, azure, gemini, promo (prompts if omitted)'
+    )
 
     args = parser.parse_args()
+    if args.name:
+        sys.exit(_create_named_project(args))
+
     dest_dir = Path(args.dir).resolve()
 
     print_header()
