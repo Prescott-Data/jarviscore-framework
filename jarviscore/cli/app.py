@@ -52,9 +52,13 @@ for _name, _, _, _help in _LEGACY_COMMANDS:
 
 
 def _register_commands() -> None:
+    from .dev import dev_command
     from .serve import serve_command
 
-    app.command("serve", help="Run one agent from jarviscore.yaml.")(serve_command)
+    app.command("dev", help="Run all agents locally with Redis and live reload.")(
+        dev_command)
+    app.command("serve", help="Run one agent from jarviscore.yaml.")(
+        serve_command)
 
 
 _register_commands()
