@@ -405,6 +405,24 @@ class TestNativeToolTurns:
         assert tool_message["tool_call_id"] == "call_search"
         assert "revenue was 5" in tool_message["content"]
 
+    def test_a_long_result_reaches_the_agent_whole_and_once(self):
+        report = "row " * 5000 + "LAST ROW: 15 rejected"
+        llm = _NativeLLM([
+            _call("search", {"query": "revenue"}),
+            _call("done", {"summary": "Read it.", "result": {}}),
+        ])
+        agent = _NativeAgent(llm)
+
+        async def long_report(query: str, limit: int = 5):
+            return {"status": "success", "report": report}
+
+        agent.register_tool("search", long_report, "Read the whole report.")
+        asyncio.run(agent.run(task="read the report"))
+
+        prompt = "\n".join(str(m.get("content")) for m in llm.requests[1]["messages"])
+        assert prompt.count("LAST ROW: 15 rejected") == 1
+        assert "shown in full in the conversation" in prompt
+
     def test_a_providers_call_signature_is_threaded_back_with_the_call(self):
         signed = _call("search", {"query": "revenue"})
         signed["tool_calls"][0]["signature"] = "c2ln"

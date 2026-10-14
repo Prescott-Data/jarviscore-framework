@@ -279,7 +279,7 @@ class KernelState(BaseModel):
         self.tool_history.append(result)
 
         if error:
-            self.last_error = str(error)[:500]
+            self.last_error = str(error)
         return result
 
     def hydrate_tool_receipts(

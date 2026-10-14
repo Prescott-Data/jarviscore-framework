@@ -104,10 +104,8 @@ _THOUGHT_PATTERN = re.compile(r"^THOUGHT:\s*(.+?)(?=\n(?:TOOL|DONE|RESULT|THOUGH
 _NOTE_PATTERN = re.compile(r"^NOTE:\s*(.+?)(?=\n(?:NOTE|THOUGHT|TOOL|PARAMS|DONE|RESULT):|\Z)", re.MULTILINE | re.DOTALL)
 
 # ── Observation channel integrity (issue #57) ─────────────────────────────
-# How much of a tool result the agent sees inline per turn. Anything beyond
-# the cap is clipped WITH an explicit marker and remains retrievable via the
-# built-in read_turn_result tool for the lifetime of the dispatch.
-_OBSERVATION_LIMIT = int(os.getenv("SUBAGENT_OBSERVATION_LIMIT", "800"))
+# The agent sees every tool result whole. Results of earlier turns stay
+# readable through read_turn_result for the lifetime of the dispatch.
 # Whole results of the last N tool turns are kept; older turns are released
 # whole, never cut, when the window or the total-size budget is exceeded.
 _TURN_RESULT_WINDOW = int(os.getenv("SUBAGENT_TURN_RESULT_WINDOW", "10"))
@@ -135,23 +133,6 @@ def _retain_turn_result(internal_variables: Dict[str, Any], turn: int, text: str
         )
 
 
-def _clip_observation(text: str, turn: int, limit: int = 0) -> str:
-    """Clip a tool result for the observation channel — honestly.
-
-    A model that KNOWS data is missing asks for the rest; a model that
-    doesn't confabulates. Every clip therefore carries an explicit marker
-    with the exact retrieval call for the remainder.
-    """
-    limit = limit or _OBSERVATION_LIMIT
-    if len(text) <= limit:
-        return text
-    return (
-        f"{text[:limit]}\n"
-        f"…[showing {limit} of {len(text)} chars — call read_turn_result with "
-        f'{{"turn": {turn}, "offset": {limit}}} for the rest]'
-    )
-
-
 def _checkpoint(state: KernelState, conversation_history: list) -> str:
     """The step state with the agent's recent exchanges; images stay as their receipts."""
     state.conversation = [
@@ -161,11 +142,9 @@ def _checkpoint(state: KernelState, conversation_history: list) -> str:
     return state.model_dump_json()
 
 
-def _observe(tool_name: str, tool_result: Any, turn: int, whole: bool = False) -> str:
-    """The agent's view of a tool result; a read_turn_result page is already sized and shown whole."""
-    if whole or tool_name == "read_turn_result":
-        return str(tool_result)
-    return _clip_observation(str(tool_result), turn)
+def _observe(tool_name: str, tool_result: Any, turn: int, whole: bool = True) -> str:
+    """The agent's view of a tool result: all of it."""
+    return str(tool_result)
 
 
 def _canonical(value: Any) -> str:
@@ -585,12 +564,10 @@ class BaseSubAgent(ABC):
         return {"status": "success", "results": results, "count": len(results)}
 
     def _tool_read_turn_result(self, turn: int, offset: int = 0, length: int = 0) -> Dict[str, Any]:
-        """Read the FULL output of a previous tool call when the inline view was clipped (params: turn, optional offset/length).
+        """Read the whole output of an earlier tool call (params: turn, optional offset/length).
 
-        The observation channel shows at most a fixed window of each tool
-        result; the untruncated output of the last few turns is retained and
-        readable here in chunks. This is the honest counterpart to the
-        …[showing X of Y chars] marker.
+        Results of earlier turns leave the conversation as it moves on; the
+        last few are retained whole and readable here, a page at a time.
         """
         state = self._current_state
         variables = state.internal_variables if state is not None else {}
@@ -1206,7 +1183,13 @@ class BaseSubAgent(ABC):
             self._cognition.lease.consume_turn()
 
             # ═══ 1. OBSERVE — Build context from state ═══
-            context_block = context_manager.build_context(state)
+            # Results in the conversation are shown there whole; the action list points to them.
+            in_conversation = frozenset(
+                entry["receipt_id"]
+                for entry in conversation_history[-_CONVERSATION_WINDOW:]
+                if entry.get("receipt_id")
+            )
+            context_block = context_manager.build_context(state, in_conversation=in_conversation)
 
             # ═══ 2. ORIENT — the budget that remains, as a fact for this turn ═══
             # A notice about this run's budget belongs to this turn; kept as a
@@ -1686,6 +1669,7 @@ class BaseSubAgent(ABC):
                     "observation": observation,
                     "images": observed_images,
                     "tool_call": native_call,
+                    "receipt_id": tool_receipt.receipt_id,
                     "perception": tool_name in self.perception_tools,
                     "superseded": (
                         f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}); "
@@ -2099,7 +2083,7 @@ class BaseSubAgent(ABC):
             "assistant": content,
             "observation": (
                 f"[Turn {turn}] Tool '{tool_name}' {disposition} by "
-                f"pre-execute review: {str(hook_result)[:500]}"
+                f"pre-execute review: {hook_result}"
             ),
             "tool_call": tool_call,
         })

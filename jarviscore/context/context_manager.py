@@ -267,27 +267,30 @@ class ContextManager:
         return "\n".join(lines)
 
 
-    def build_context(self, state: Any) -> str:
+    def build_context(self, state: Any, in_conversation: frozenset = frozenset()) -> str:
         """
         Assemble a priority-ordered prompt context string.
 
         Accepts either KernelState (Pydantic) or Dict. KernelState is
         preferred — it gives us structured tool history, failure memory,
         and belief state. Dict is kept for backward compatibility.
+        ``in_conversation`` names receipts the conversation already shows whole.
         """
         # Route to the appropriate builder
         if isinstance(state, dict):
             return self._build_context_from_dict(state)
-        return self._build_context_from_state(state)
+        return self._build_context_from_state(state, in_conversation)
 
-    def _build_context_from_state(self, state: "KernelState") -> str:
+    def _build_context_from_state(
+        self, state: "KernelState", in_conversation: frozenset = frozenset()
+    ) -> str:
         """Build context from a KernelState Pydantic model.
 
         Blocks are composed once at full fidelity, then the least aggressive
         pressure tier that fits the budget is chosen. Values are never cut.
         """
         budget = self.config.usable_tokens
-        candidates = self._compose_blocks(state)
+        candidates = self._compose_blocks(state, in_conversation)
         full_cost = sum(self.count_tokens(text) for _, text in candidates)
 
         for tier in LADDER:
@@ -325,7 +328,9 @@ class ContextManager:
                 rendered.append(format_step_references(state.workflow_id, prior.keys()))
         return rendered
 
-    def _compose_blocks(self, state: "KernelState") -> List[tuple]:
+    def _compose_blocks(
+        self, state: "KernelState", in_conversation: frozenset = frozenset()
+    ) -> List[tuple]:
         """Every block the turn could show, at full fidelity, in priority order."""
         blocks: List[tuple] = []
 
@@ -430,7 +435,7 @@ class ContextManager:
                     + "\n".join(receipt_lines),
                 )
             history_block, _ = self._format_tool_history(
-                state.tool_history, self.config.history_limit
+                state.tool_history, self.config.history_limit, in_conversation
             )
             add("tool_history", history_block)
 
@@ -512,6 +517,7 @@ class ContextManager:
         self,
         history: List[Any],
         budget: int,
+        in_conversation: frozenset = frozenset(),
     ) -> Tuple[str, int]:
         """Format recent tool history to fit within budget.
 
@@ -536,7 +542,9 @@ class ContextManager:
             if hasattr(turn, "tool_name"):
                 # KernelState.ToolResult model
                 output = turn.tool_output
-                if turn.tool_name in perception_tools and index != latest_perception:
+                if turn.receipt_id and turn.receipt_id in in_conversation:
+                    output = "shown in full in the conversation"
+                elif turn.tool_name in perception_tools and index != latest_perception:
                     output = (
                         f"replaced by a later {turn.tool_name}; read it in full with "
                         "read_turn_result"

@@ -438,11 +438,15 @@ These control how the Kernel allocates context across its OODA turns. You will n
 
 **Tool result observation**
 
-Each tool result is shown inline up to a limit with an explicit marker, and is kept whole so the agent can read the rest with `read_turn_result`. Nothing is cut: older results are released whole, and the agent is told why.
+Each tool result is shown to the agent whole, once: in the conversation while it
+is among the agent's recent exchanges, and in the list of recent actions after
+that. Results of the last few turns also stay readable with `read_turn_result`,
+a page at a time. Nothing is cut: older results are released whole, and the
+agent is told why.
 
 | Variable | Default | Description |
 |---|---|---|
-| `SUBAGENT_OBSERVATION_LIMIT` | `800` | Characters of each tool result shown inline before the retrieval marker. |
+| `SUBAGENT_OBSERVATION_LIMIT` | removed | Tool results are no longer clipped; the agent sees each one whole. The setting is ignored. |
 | `SUBAGENT_TURN_RESULT_WINDOW` | `10` | Number of recent tool results kept whole for `read_turn_result`. |
 | `SUBAGENT_TURN_RESULT_BUDGET` | `2000000` | Total characters kept across those results; older results are released whole when exceeded. |
 | `SUBAGENT_READ_PAGE_LIMIT` | `20000` | Largest page `read_turn_result` returns; each page is shown whole. |
