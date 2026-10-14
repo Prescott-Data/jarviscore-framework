@@ -1,6 +1,7 @@
 .env
 .jarviscore/secrets.local
 .jarviscore/build/
+.jarviscore/dev/
 .venv/
 __pycache__/
 *.pyc
