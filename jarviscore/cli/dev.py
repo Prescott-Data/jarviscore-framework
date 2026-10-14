@@ -382,6 +382,7 @@ def dev_command(
 
     try:
         session.start_all()
+        write_session_file(loaded, redis.url)
         _banner(session, reload)
         if reload:
             import watchfiles
@@ -400,9 +401,24 @@ def dev_command(
         session.say(f"✗ {exc}")
     finally:
         session.say("Stopping agents…")
+        session_file(loaded).unlink(missing_ok=True)
         session.stop()
         redis.cleanup()
         session.say("Stopped.")
+
+
+def session_file(loaded: LoadedProject) -> Path:
+    return loaded.root / ".jarviscore" / "dev" / "session.json"
+
+
+def write_session_file(loaded: LoadedProject, redis_url: str) -> None:
+    import json
+
+    path = session_file(loaded)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"pid": os.getpid(), "redis_url": redis_url,
+                                "environment": loaded.environment}))
+    path.chmod(0o600)
 
 
 def _select_roles(loaded: LoadedProject, requested: list[str]) -> list[str]:
