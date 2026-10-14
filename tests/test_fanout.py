@@ -247,7 +247,7 @@ class TestAggregation:
         with pytest.raises(ValueError, match="concurrency"):
             asyncio.run(
                 run_fanout(
-                    fanout_id="f", find_agent=lambda s: None, agent="a",
+                    fanout_id="f", lease_agent=None, agent="a",
                     items=[], task="t", concurrency=0,
                 )
             )

@@ -277,11 +277,13 @@ mesh.add(Verifier, pool=Pool(min=1, max=16, idle_seconds=60, lane="bulk"))
 | Field | Default | Meaning |
 |---|---|---|
 | `min` | `1` | Members kept warm, including the registered agent. |
-| `max` | `8` | Most members running steps at once in this process. |
+| `max` | `8` | Most members running work at once in this process. |
 | `idle_seconds` | `60.0` | An idle member above `min` retires after this long. |
 | `lane` | `"interactive"` | `"bulk"` lets the provider governor hold capacity back for interactive work. |
 
-`get_diagnostics()` reports each pool. See [Scaling one agent: pools](../guides/production.md#scaling-one-agent-pools).
+`get_diagnostics()` reports each pool. An agent added without `pool` runs one
+piece of work at a time, whether it arrives as a goal step, a `workflow()` step,
+a `fanout()` item, a `delegate()` call or a peer request. See [Scaling one agent: pools](../guides/production.md#scaling-one-agent-pools).
 
 Raises `ValueError` if an agent with the same `agent_id` is already registered, or if a class-based agent with the same `role` is added without an explicit `agent_id`. Raises `TypeError` if the class does not inherit from `Agent`.
 

@@ -49,7 +49,11 @@ slots that disappear mid-checkout.
   queues up, up to `max` in the process. Members above `min` retire after
   `idle_seconds` without work, and `lane="bulk"` marks the pool's model calls
   as background work for the provider governor. `Mesh.get_diagnostics()`
-  reports each pool. In our Evidence Engine benchmark, verifying 196 claims on
+  reports each pool. Every way work reaches an agent goes through its pool:
+  goal steps, capability needs from other agents, `workflow()` steps,
+  `fanout()` items, `delegate()` calls and peer requests each hold a member
+  while they run, so a pooled agent answers them in parallel. In our Evidence
+  Engine benchmark, verifying 196 claims on
   one laptop took 9.4 minutes with 32 pool slots, against 202 minutes with
   fixed workers. See [RFC 0002](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0002-elastic-execution.md).
 - **Draining.** `Mesh.drain()` stops a node from starting new goals or claiming
@@ -127,6 +131,16 @@ slots that disappear mid-checkout.
 
 ### Changed
 
+- **An agent instance runs one piece of work at a time.** A running task keeps
+  its routing decisions and bound workspace on the agent instance, but
+  `workflow()` steps, `fanout()` items, `delegate()` calls and peer requests
+  used to run concurrently on the first registered agent for a role, so two
+  tasks could act on each other's state. Each now holds an instance from the
+  agent's pool while it runs. An agent added without a `Pool` is one instance
+  and runs its work in turn; add `pool=Pool(max=N)` to run up to N at once.
+  A call chain that would wait on an instance it already holds raises an error
+  naming the agent instead of hanging. Among several agents registered for a
+  role, work goes to the one with the most free instances.
 - **Agents see every tool result whole.** A result was clipped to 800
   characters in the conversation, with the full text repeated in the list of
   recent actions. Each result is now shown whole, once: in the conversation
@@ -348,6 +362,9 @@ the configuration reference. Check these behaviour changes:
 3. A turn that emits `RESULT` without `DONE` no longer completes a step.
 4. Browser approvals no longer use the private `_approved_actions` context
    token; resolve waiting actions with `Mesh.resolve_hitl()`.
+5. **Parallel work for one agent needs a pool.** Independent `workflow()` steps
+   or `fanout()` items for an agent added without `pool` now run one at a time.
+   Add `pool=Pool(max=N)` to the agent to keep them parallel.
 
 </div>
 

@@ -22,8 +22,6 @@ import json
 import logging
 import time
 from typing import Any, Dict, List, Optional, Set
-
-from .claimer import StepClaimer
 from .dependency import DependencyManager
 from .state import WorkflowState
 from .status import StatusManager, StepStatus
@@ -59,7 +57,6 @@ class WorkflowEngine:
         self.redis_store = redis_store  # Phase 7: optional Redis backing
 
         # Core components
-        self.claimer = StepClaimer(mesh.agents)
         self.status_manager = StatusManager()
 
         # Working memory (step_id → result)
@@ -421,10 +418,22 @@ class WorkflowEngine:
         step_timeout: float = 300.0,
     ) -> Dict[str, Any]:
         """Execute a single step and return its result dict."""
-        step_id = step["id"]
+        required = step.get("agent") or step.get("role") or step.get("capability")
+        # Parallel steps for one agent each hold their own instance from its pool.
+        async with self.mesh._lease_agent(required) as agent:
+            return await self._execute_step_on(
+                agent, workflow_id, step, dep_outputs, step_timeout
+            )
 
-        # Find agent
-        agent = self.claimer.find_agent(step)
+    async def _execute_step_on(
+        self,
+        agent: Any,
+        workflow_id: str,
+        step: Dict[str, Any],
+        dep_outputs: Dict[str, Any],
+        step_timeout: float,
+    ) -> Dict[str, Any]:
+        step_id = step["id"]
         if not agent:
             if self.redis_store:
                 # No local agent — reset to "pending" so a distributed node can claim it

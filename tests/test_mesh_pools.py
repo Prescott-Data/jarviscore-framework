@@ -33,6 +33,18 @@ class PooledVerifier(Agent):
         await super().teardown()
 
     async def execute_task(self, task):
+        await self._work()
+        return {"status": "success", "output": {"verified": task.get("id") or task.get("task")}}
+
+    async def execute_capability_request(self, capability, question, context):
+        await self._work()
+        return {"status": "success", "output": {"answered": question}}
+
+    async def _handle_peer_request(self, message):
+        await self._work()
+        return {"status": "success", "by": id(self)}
+
+    async def _work(self):
         cls = type(self)
         cls.instances.add(id(self))
         cls.agent_ids.add(self.agent_id)
@@ -42,7 +54,6 @@ class PooledVerifier(Agent):
             await asyncio.sleep(cls.seconds)
         finally:
             cls.running -= 1
-        return {"status": "success", "output": {"verified": task["id"]}}
 
 
 def _mesh(monkeypatch, store, **config):
@@ -277,3 +288,196 @@ def test_only_idle_members_beyond_min_retire_and_never_the_registered_agent():
 
     assert base not in retiring
     assert len(retiring) == 1
+
+
+# ── Every way work reaches an agent goes through its pool ─────────────────────
+
+@pytest.mark.asyncio
+async def test_fanout_items_each_hold_their_own_member(monkeypatch):
+    PooledVerifier.reset()
+    mesh = _mesh(monkeypatch, MockRedisContextStore())
+    mesh.add(PooledVerifier, agent_id="verifier", pool=Pool(max=4))
+
+    await mesh.start()
+    try:
+        result = await mesh.fanout(
+            "claims", agent="verifier", items=list(range(8)), task="verify", concurrency=8,
+        )
+    finally:
+        await mesh.stop()
+
+    assert len(result.succeeded) == 8
+    assert PooledVerifier.peak == 4
+    assert len(PooledVerifier.instances) == 4
+
+
+@pytest.mark.asyncio
+async def test_fanout_on_an_agent_without_a_pool_runs_one_item_at_a_time(monkeypatch):
+    PooledVerifier.reset()
+    mesh = _mesh(monkeypatch, MockRedisContextStore())
+    mesh.add(PooledVerifier, agent_id="verifier")
+
+    await mesh.start()
+    try:
+        result = await mesh.fanout(
+            "claims", agent="verifier", items=list(range(4)), task="verify", concurrency=4,
+        )
+    finally:
+        await mesh.stop()
+
+    assert len(result.succeeded) == 4
+    assert PooledVerifier.peak == 1
+
+
+@pytest.mark.asyncio
+async def test_capability_needs_are_answered_on_as_many_members_as_allowed(monkeypatch):
+    PooledVerifier.reset()
+    PooledVerifier.seconds = 0.2
+    store = MockRedisContextStore()
+    mesh = _mesh(monkeypatch, store)
+    mesh.add(PooledVerifier, agent_id="verifier", pool=Pool(max=4))
+    store.publish_workflow(
+        "asks", goal="Check four claims", obligations=[],
+        steps=[{"id": "plan", "capability": "planning", "effect": "read",
+                "task": "Plan", "depends_on": []}],
+    )
+    need_ids = [
+        store.publish_capability_need(
+            "asks", requester_agent_id="planner", requester_step_id="plan",
+            capability="verify", question=f"Claim {i}?", context={},
+        )
+        for i in range(4)
+    ]
+
+    await mesh.start()
+    started = time.monotonic()
+    try:
+        deadline = started + 5
+        while time.monotonic() < deadline:
+            needs = [store.get_capability_need("asks", need_id) for need_id in need_ids]
+            if all(need["status"] == "fulfilled" for need in needs):
+                break
+            await asyncio.sleep(0.01)
+        elapsed = time.monotonic() - started
+    finally:
+        PooledVerifier.seconds = 0.05
+        await mesh.stop()
+
+    assert [need["result"]["output"]["answered"] for need in needs] == [
+        f"Claim {i}?" for i in range(4)
+    ]
+    assert PooledVerifier.peak == 4
+    # One at a time would take four times as long.
+    assert elapsed < 0.2 * 4 * 0.75
+
+
+@pytest.mark.asyncio
+async def test_peer_requests_are_answered_on_separate_members(monkeypatch):
+    PooledVerifier.reset()
+    mesh = _mesh(monkeypatch, MockRedisContextStore())
+    agent = mesh.add(PooledVerifier, agent_id="verifier", pool=Pool(max=3))
+
+    await mesh.start()
+    try:
+        answers = await asyncio.gather(*(agent.peers._request_handler(object()) for _ in range(3)))
+    finally:
+        await mesh.stop()
+
+    assert PooledVerifier.peak == 3
+    assert len({answer["by"] for answer in answers}) == 3
+
+
+@pytest.mark.asyncio
+async def test_delegated_tasks_hold_an_instance_each(monkeypatch):
+    PooledVerifier.reset()
+    mesh = _mesh(monkeypatch, MockRedisContextStore())
+    mesh.add(PooledVerifier, agent_id="verifier")
+
+    await mesh.start()
+    try:
+        results = await asyncio.gather(*(mesh.delegate(to="verifier", task="go") for _ in range(3)))
+    finally:
+        await mesh.stop()
+
+    assert all(result["status"] == "success" for result in results)
+    assert PooledVerifier.peak == 1
+
+
+class SelfDelegating(Agent):
+    role = "looper"
+    capabilities: ClassVar[list[str]] = ["looping"]
+
+    async def execute_task(self, task):
+        return await self._mesh.delegate(to="looper", task="again")
+
+
+@pytest.mark.asyncio
+async def test_an_agent_waiting_on_its_only_instance_is_told_instead_of_hanging(monkeypatch):
+    mesh = _mesh(monkeypatch, MockRedisContextStore())
+    mesh.add(SelfDelegating, agent_id="looper")
+
+    await mesh.start()
+    try:
+        with pytest.raises(RuntimeError, match="waiting on itself"):
+            await asyncio.wait_for(mesh.delegate(to="looper", task="start"), timeout=2)
+    finally:
+        await mesh.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_released_member_goes_to_the_longest_waiter_first():
+    base = object()
+    state = PoolState(spec=Pool(min=1, max=1), factory=None, base=base, declared=False)
+    held = await state.acquire()
+    first = asyncio.create_task(state.acquire())
+    second = asyncio.create_task(state.acquire())
+    await asyncio.sleep(0)
+
+    state.release(held)
+    assert await asyncio.wait_for(first, timeout=1) is base
+    assert not second.done()
+
+    state.release(base)
+    assert await asyncio.wait_for(second, timeout=1) is base
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_waiter_does_not_lose_the_member():
+    base = object()
+    state = PoolState(spec=Pool(min=1, max=1), factory=None, base=base, declared=False)
+    held = await state.acquire()
+    waiter = asyncio.create_task(state.acquire())
+    await asyncio.sleep(0)
+    waiter.cancel()
+    await asyncio.gather(waiter, return_exceptions=True)
+
+    state.release(held)
+
+    assert state.idle == [base]
+
+
+@pytest.mark.asyncio
+async def test_a_pool_grows_to_max_and_no_further_under_concurrent_demand():
+    grown = []
+
+    async def grow():
+        await asyncio.sleep(0.01)
+        member = object()
+        state.members.append(member)
+        grown.append(member)
+        return member
+
+    state = PoolState(spec=Pool(min=1, max=3), factory=object, base=object())
+    state.grow = grow
+    taken = await asyncio.gather(*(state.try_acquire() for _ in range(5)))
+
+    assert len(grown) == 2
+    assert sum(member is not None for member in taken) == 3
+
+
+def test_only_declared_pools_are_reported(monkeypatch):
+    mesh = _mesh(monkeypatch, MockRedisContextStore())
+    mesh.add(PooledVerifier, agent_id="verifier", pool=Pool(max=2))
+    mesh.add(SelfDelegating, agent_id="looper")
+
+    assert set(mesh.get_diagnostics()["pools"]) == {"verifier"}

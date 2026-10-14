@@ -664,7 +664,11 @@ async def test_capability_request_receives_isolated_workflow_workspace(tmp_path)
         context={},
     )
 
-    await mesh._service_capability_needs(peer, {"runtime_diagnosis"})
+    [(workflow_id, need)] = list(mesh._open_capability_needs())
+    assert redis.claim_capability_need(
+        workflow_id, need_id, "peer:claim", {"runtime_diagnosis"}
+    )
+    await mesh._run_capability_need(peer, workflow_id, need, "peer:claim", 60)
 
     need = redis.get_capability_need("wf-capability-workspace", need_id)
     assert need["status"] == "fulfilled"
