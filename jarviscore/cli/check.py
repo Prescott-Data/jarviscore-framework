@@ -465,6 +465,47 @@ class HealthChecker:
         return self.print_summary()
 
 
+def run_production_profile(destination, as_json: bool, connect: bool = True) -> int:
+    """Production checklist for a jarviscore.yaml project. Exit 1 on any error."""
+    import json
+
+    from jarviscore.project import ProjectError, load_project
+    from jarviscore.project.checks import ERROR, has_errors
+    from jarviscore.project.checks.production import run_production_checks
+
+    try:
+        loaded = load_project(destination=destination)
+    except ProjectError as exc:
+        if as_json:
+            print(json.dumps({"ok": False, "error": str(exc), "results": []}, indent=2))
+        else:
+            print(f"✗ {exc}")
+        return 2
+
+    results = run_production_checks(loaded, dict(os.environ), connect=connect)
+    ok = not has_errors(results)
+    if as_json:
+        print(json.dumps({
+            "ok": ok,
+            "service": loaded.project.service,
+            "environment": loaded.environment,
+            "results": [r.as_dict() for r in results],
+        }, indent=2))
+        return 0 if ok else 1
+
+    print(f"\nProduction checks: {loaded.project.service} ({loaded.environment})\n")
+    icons = {True: "✓", ERROR: "✗"}
+    for r in sorted(results, key=lambda r: (r.ok, r.severity != ERROR)):
+        icon = icons[True] if r.ok else icons.get(r.severity, "⚠")
+        print(f"  {icon} {r.message}")
+        if not r.ok and r.fix:
+            print(f"      → {r.fix}")
+    errors = sum(1 for r in results if not r.ok and r.severity == ERROR)
+    warnings = sum(1 for r in results if not r.ok and r.severity != ERROR)
+    print(f"\n{'✓ Ready' if ok else '✗ Not ready'}: {errors} error(s), {warnings} warning(s)\n")
+    return 0 if ok else 1
+
+
 def main():
     """CLI entry point."""
     import argparse
@@ -487,8 +528,30 @@ def main():
         action='store_true',
         help='Show detailed information'
     )
+    parser.add_argument(
+        '--profile',
+        choices=['prod'],
+        help='Run the production checklist against jarviscore.yaml instead of the local health check'
+    )
+    parser.add_argument(
+        '-d', '--destination',
+        help='Environment overlay for --profile prod (jarviscore.<destination>.yaml)'
+    )
+    parser.add_argument(
+        '--json',
+        action='store_true',
+        help='Machine-readable output for --profile prod'
+    )
+    parser.add_argument(
+        '--no-connect',
+        action='store_true',
+        help='With --profile prod, skip checks that connect to external services'
+    )
 
     args = parser.parse_args()
+
+    if args.profile == 'prod':
+        sys.exit(run_production_profile(args.destination, args.json, connect=not args.no_connect))
 
     checker = HealthChecker(
         validate_llm=args.validate_llm,
