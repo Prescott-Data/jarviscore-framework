@@ -5,13 +5,21 @@ one member started and checkpointed can be resumed by any other, and the step-cl
 lease stays the only thing that decides who runs a step. Members are separate
 instances because an agent's kernel, subagent cache and sandbox serve one step at
 a time.
+
+All work reaches an agent through its pool: durable steps, capability needs,
+``Mesh.workflow``, ``Mesh.fanout``, ``Mesh.delegate`` and peer requests each lease
+a member for as long as they run.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
+from collections import deque
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Callable, List
+from typing import Any, AsyncIterator, Awaitable, Callable, Deque, Iterator, List, Optional
 
 from jarviscore.execution.governor import BULK, INTERACTIVE
 
@@ -42,17 +50,41 @@ class Pool:
             raise ValueError(f"Pool.lane must be {INTERACTIVE!r} or {BULK!r}")
 
 
+# Members held by the current call chain, so a chain that already holds every
+# member of a pool is told so instead of waiting on itself forever.
+_HELD: ContextVar[frozenset] = ContextVar("jarviscore_pool_members_held", default=frozenset())
+
+
+@contextmanager
+def holding(member: Any) -> Iterator[None]:
+    """Mark ``member`` as held by the current call chain while the block runs."""
+    token = _HELD.set(_HELD.get() | {id(member)})
+    try:
+        yield
+    finally:
+        _HELD.reset(token)
+
+
 @dataclass
 class PoolState:
-    """A pool's members in this process."""
+    """A pool's members in this process.
+
+    Every agent the mesh runs has one: an agent registered without a ``Pool`` is a
+    pool of exactly one instance, so all work reaches an instance the same way and
+    no instance ever runs two pieces of work at once.
+    """
 
     spec: Pool
-    factory: Callable[[], Any]
+    factory: Optional[Callable[[], Any]]
     base: Any
+    declared: bool = True
+    grow: Optional[Callable[[], Awaitable[Any]]] = None
     members: List[Any] = field(default_factory=list)
     idle: List[Any] = field(default_factory=list)
     last_active: dict = field(default_factory=dict)
     steps_started: int = 0
+    growing: int = 0
+    waiters: Deque[asyncio.Future] = field(default_factory=deque)
 
     def __post_init__(self) -> None:
         self.members = [self.base]
@@ -63,10 +95,71 @@ class PoolState:
     def busy(self) -> int:
         return len(self.members) - len(self.idle)
 
+    def can_grow(self) -> bool:
+        return (
+            self.grow is not None
+            and len(self.members) + self.growing < self.spec.max
+        )
+
+    def free(self) -> int:
+        """Members available now or that could be added without waiting on work."""
+        room = self.spec.max - len(self.members) - self.growing if self.grow else 0
+        return len(self.idle) + max(0, room)
+
+    async def try_acquire(self) -> Optional[Any]:
+        """An idle member, or a new one if the pool may grow; None when it is full."""
+        if self.idle:
+            return self.idle.pop()
+        if not self.can_grow():
+            return None
+        self.growing += 1
+        try:
+            return await self.grow()
+        finally:
+            self.growing -= 1
+
+    async def acquire(self) -> Any:
+        """A member for one piece of work, waiting for one to be released if all are busy."""
+        member = await self.try_acquire()
+        if member is not None:
+            return member
+        held = _HELD.get()
+        if all(id(m) in held for m in self.members) and not self.growing:
+            raise RuntimeError(
+                f"Agent {getattr(self.base, 'agent_id', '?')!r} is waiting on itself: "
+                f"this call chain already holds all {len(self.members)} of its "
+                f"instance(s). Give it a Pool with a larger max to let work it "
+                f"starts run on another instance."
+            )
+        waiter = asyncio.get_running_loop().create_future()
+        self.waiters.append(waiter)
+        try:
+            return await waiter
+        except asyncio.CancelledError:
+            if waiter.done() and not waiter.cancelled():
+                self.release(waiter.result())
+            raise
+
+    @asynccontextmanager
+    async def lease(self) -> AsyncIterator[Any]:
+        """Hold one member for the duration of the block."""
+        member = await self.acquire()
+        try:
+            with holding(member):
+                yield member
+        finally:
+            self.release(member)
+
     def release(self, member: Any) -> None:
         self.last_active[id(member)] = time.monotonic()
-        if member in self.members and member not in self.idle:
-            self.idle.append(member)
+        if member not in self.members or member in self.idle:
+            return
+        while self.waiters:
+            waiter = self.waiters.popleft()
+            if not waiter.done():
+                waiter.set_result(member)
+                return
+        self.idle.append(member)
 
     def retirable(self) -> List[Any]:
         """Idle members beyond ``min`` that have waited out ``idle_seconds``."""

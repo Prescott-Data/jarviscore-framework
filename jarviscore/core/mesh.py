@@ -29,7 +29,7 @@ Usage:
     )
     await mesh.run_forever()         # Start run() loops for agents that have them
 """
-from typing import List, Dict, Any, Optional, Set
+from typing import AsyncIterator, List, Dict, Any, Optional, Set
 import asyncio
 import copy
 import json
@@ -42,7 +42,7 @@ from uuid import uuid4
 
 from .agent import Agent
 from .envelope import attach_result_summary
-from .pool import Pool, PoolState
+from .pool import Pool, PoolState, holding
 from jarviscore.orchestration.envelopes import (
     ExecutionBudget,
     neutral_context,
@@ -303,11 +303,15 @@ class Mesh:
 
         if pool is not None:
             member_class, member_id = agent_class_or_instance, agent.agent_id
-            self._pools[agent.agent_id] = PoolState(
+            state = PoolState(
                 spec=pool,
                 factory=lambda: member_class(agent_id=member_id, **kwargs),
                 base=agent,
             )
+            state.grow = lambda state=state: self._grow_pool(state)
+        else:
+            state = PoolState(spec=Pool(min=1, max=1), factory=None, base=agent, declared=False)
+        self._pools[agent.agent_id] = state
 
         self._logger.info(
             f"Registered agent: {agent.agent_id} "
@@ -530,9 +534,7 @@ class Mesh:
                 )
             self._distributed_worker_tasks = [
                 asyncio.create_task(
-                    self._run_pool(self._pools[agent.agent_id])
-                    if agent.agent_id in self._pools
-                    else self._run_distributed_worker(agent),
+                    self._run_pool(self._pools[agent.agent_id]),
                     name=f"distributed-worker-{agent.agent_id}",
                 )
                 for agent in self.agents
@@ -1780,7 +1782,10 @@ class Mesh:
                          result order.
             task:        Task string, or callable ``item -> str``.
             context:     Static dict, or callable ``item -> dict``.
-            concurrency: Max items in flight (default 5). Always bounded.
+            concurrency: Max items in flight (default 5). Always bounded. Each
+                         item also holds one instance of the agent while it
+                         runs, so an agent registered without a ``Pool`` runs
+                         one item at a time; ``Pool(max=N)`` lets N run at once.
             budget:      Optional cap on items attempted; the remainder is
                          reported in ``result.skipped``, never dropped silently.
             on_error:    "collect" (default) — failures land in ``result.failed``
@@ -1814,7 +1819,7 @@ class Mesh:
         self._logger.info("Executing fanout: %s (agent=%s)", fanout_id, agent)
         return await run_fanout(
             fanout_id=fanout_id,
-            find_agent=self._find_agent_for_step,
+            lease_agent=self._lease_agent,
             agent=agent,
             items=items,
             task=task,
@@ -1978,55 +1983,6 @@ class Mesh:
     # Distributed worker (autonomous step claiming across nodes)
     # ─────────────────────────────────────────────────────────────────
 
-    async def _run_distributed_worker(self, agent: Agent) -> None:
-        """
-        Background task: scans active workflows in Redis for pending steps
-        that match this node's agent capabilities, claims them atomically
-        via SETNX, and executes them.
-
-        Agents declare their capabilities via `role` and `capabilities` — the
-        Mesh handles all routing. No manual wiring or step-ID knowledge needed.
-        Runs only in distributed mode when a redis_store is available.
-        """
-        capabilities = {agent.role, *getattr(agent, "capabilities", [])}
-        if not capabilities:
-            return
-
-        self._logger.info(
-            "[DistributedWorker] %s online | capabilities: %s",
-            agent.agent_id,
-            sorted(capabilities),
-        )
-
-        while self._started and not self._stopping:
-            mark = self._activity_generation
-            try:
-                await self._service_capability_needs(agent, capabilities)
-                ready = await asyncio.to_thread(
-                    lambda: list(self._ready_steps(agent.agent_id, capabilities))
-                )
-                for workflow_id, step_id, step_def in ready:
-                    claim_id = f"{agent.agent_id}:{uuid4().hex}"
-                    lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
-                    if self._redis_store.claim_step(
-                        workflow_id, step_id, claim_id, lease_seconds=lease_seconds
-                    ):
-                        self._logger.info(
-                            f"[DistributedWorker] Claimed '{step_id}' "
-                            f"in '{workflow_id}' → {agent.agent_id}"
-                        )
-                        await self._execute_distributed_step(
-                            agent, workflow_id, step_id, step_def,
-                            claim_id=claim_id,
-                            lease_seconds=lease_seconds,
-                        )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self._logger.warning(f"[DistributedWorker] Error: {exc}")
-
-            await self._idle(float(self.config.get("distributed_poll_interval", 2.0)), mark)
-
     def _ready_steps(self, agent_id: str, capabilities: set[str]):
         """Pending steps this agent may claim now, recovering expired claims on the way.
 
@@ -2078,9 +2034,11 @@ class Mesh:
                 yield workflow_id, step_id, step_def
 
     async def _run_pool(self, state: PoolState) -> None:
-        """Dispatch a pooled agent's ready steps to idle members, adding members up to max.
+        """Dispatch an agent's capability needs and ready steps to free members.
 
-        One dispatcher scans per pool: members do not each poll Redis.
+        One dispatcher scans per agent: members do not each poll Redis. A member
+        is taken only when one is idle or the pool may grow, so the dispatcher never
+        waits on work in flight; each piece of work runs as its own task.
         """
         base = state.base
         capabilities = {base.role, *getattr(base, "capabilities", [])}
@@ -2095,21 +2053,32 @@ class Mesh:
             try:
                 while len(state.members) < state.spec.min:
                     state.release(await self._grow_pool(state))
-                if state.idle:
-                    member = state.idle.pop()
-                    try:
-                        await self._service_capability_needs(member, capabilities)
-                    finally:
+                needs = await asyncio.to_thread(
+                    lambda: list(self._open_capability_needs())
+                )
+                for workflow_id, need in needs:
+                    member = await state.try_acquire()
+                    if member is None:
+                        break
+                    claim_id = f"{member.agent_id}:{uuid4().hex}"
+                    if not self._redis_store.claim_capability_need(
+                        workflow_id, str(need.get("id") or ""), claim_id, capabilities,
+                        lease_seconds=lease_seconds,
+                    ):
                         state.release(member)
+                        continue
+                    self._start_pool_work(
+                        state, member, f"need '{need.get('id')}'",
+                        self._run_capability_need(
+                            member, workflow_id, need, claim_id, lease_seconds
+                        ),
+                    )
                 ready = await asyncio.to_thread(
                     lambda: list(self._ready_steps(base.agent_id, capabilities))
                 )
                 for workflow_id, step_id, step_def in ready:
-                    if state.idle:
-                        member = state.idle.pop()
-                    elif len(state.members) < state.spec.max:
-                        member = await self._grow_pool(state)
-                    else:
+                    member = await state.try_acquire()
+                    if member is None:
                         break
                     claim_id = f"{member.agent_id}:{uuid4().hex}"
                     if not self._redis_store.claim_step(
@@ -2122,15 +2091,13 @@ class Mesh:
                         "[Pool] Claimed '%s' in '%s' → %s (%d/%d busy)",
                         step_id, workflow_id, member.agent_id, state.busy, len(state.members),
                     )
-                    task = asyncio.create_task(
-                        self._run_pool_step(
-                            state, member, workflow_id, step_id, step_def,
-                            claim_id, lease_seconds,
+                    self._start_pool_work(
+                        state, member, f"step '{step_id}'",
+                        self._execute_distributed_step(
+                            member, workflow_id, step_id, step_def,
+                            claim_id=claim_id, lease_seconds=lease_seconds,
                         ),
-                        name=f"pool-step-{step_id}",
                     )
-                    self._distributed_step_tasks.add(task)
-                    task.add_done_callback(self._distributed_step_tasks.discard)
                 for member in state.retirable():
                     await self._retire_pool_member(state, member)
             except asyncio.CancelledError:
@@ -2139,27 +2106,31 @@ class Mesh:
                 self._logger.warning("[Pool] %s dispatch error: %s", base.agent_id, exc)
             await self._idle(poll, mark)
 
-    async def _run_pool_step(
-        self, state: PoolState, member: Any, workflow_id: str, step_id: str,
-        step_def: dict, claim_id: str, lease_seconds: int,
+    def _start_pool_work(
+        self, state: PoolState, member: Any, label: str, work: Any,
     ) -> None:
-        from jarviscore.execution.governor import lane_scope
+        """Run claimed work on ``member`` as its own task and hand the member back after."""
 
-        try:
-            with lane_scope(state.spec.lane):
-                await self._execute_distributed_step(
-                    member, workflow_id, step_id, step_def,
-                    claim_id=claim_id, lease_seconds=lease_seconds,
+        async def run() -> None:
+            from jarviscore.execution.governor import lane_scope
+
+            try:
+                with lane_scope(state.spec.lane), holding(member):
+                    await work
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._logger.warning(
+                    "[Pool] %s %s failed outside its result: %s",
+                    member.agent_id, label, exc,
                 )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            self._logger.warning(
-                "[Pool] %s step '%s' failed outside its result: %s",
-                member.agent_id, step_id, exc,
-            )
-        finally:
-            state.release(member)
+            finally:
+                state.release(member)
+                self._wake_workers()
+
+        task = asyncio.create_task(run(), name=f"pool-{label}")
+        self._distributed_step_tasks.add(task)
+        task.add_done_callback(self._distributed_step_tasks.discard)
 
     async def _grow_pool(self, state: PoolState) -> Any:
         """Create, wire and set up one more member sharing the pooled agent's identity."""
@@ -2194,11 +2165,8 @@ class Mesh:
             "[Pool] %s shrank to %d member(s)", state.base.agent_id, len(state.members)
         )
 
-    async def _service_capability_needs(
-        self, agent: Agent, capabilities: set[str]
-    ) -> None:
-        """Claim peer-resolvable gaps by capability, never by central assignment."""
-        lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
+    def _open_capability_needs(self):
+        """Open capability needs in workflows this node takes work for."""
         for workflow_id in self._redis_store.get_workflows_with_capability_needs():
             if not self._takes_work_for(workflow_id):
                 continue
@@ -2213,82 +2181,84 @@ class Mesh:
                     need = self._redis_store.get_capability_need(
                         workflow_id, need_id
                     ) or need
-                if need.get("status") != "open":
-                    continue
-                claim_id = f"{agent.agent_id}:{uuid4().hex}"
-                if not self._redis_store.claim_capability_need(
+                if need.get("status") == "open":
+                    yield workflow_id, need
+
+    async def _run_capability_need(
+        self,
+        agent: Agent,
+        workflow_id: str,
+        need: dict,
+        claim_id: str,
+        lease_seconds: int,
+    ) -> None:
+        """Answer one claimed capability need and record the result on its mandate."""
+        need_id = str(need.get("id") or "")
+        workflow = self._redis_store.get_workflow_definition(workflow_id) or {}
+        context = {
+            **neutral_context(workflow.get("context") or {}),
+            **dict(need.get("context") or {}),
+        }
+        context.setdefault("objective", workflow.get("goal", ""))
+        lineage = [
+            str(agent_id)
+            for agent_id in context.get("peer_request_lineage", [])
+            if agent_id
+        ]
+        requester_id = str(need.get("requester_agent_id") or "")
+        for agent_id in (requester_id, agent.agent_id):
+            if agent_id and agent_id not in lineage:
+                lineage.append(agent_id)
+        context.update({
+            "workflow_id": workflow_id,
+            "step_id": f"need:{need_id}",
+            "execution_epoch_id": claim_id,
+            "execution_budget": ExecutionBudget.from_record(
+                workflow.get("budget")
+            ).to_record(),
+            "peer_requester_agent_id": need.get("requester_agent_id"),
+            "peer_requester_step_id": need.get("requester_step_id"),
+            "peer_request_lineage": lineage,
+            "workspace_dependency_step_id": need.get("requester_step_id"),
+        })
+        heartbeat = asyncio.create_task(
+            self._renew_capability_need_claim(
+                workflow_id, need_id, claim_id, lease_seconds
+            ),
+            name=f"capability-need-heartbeat-{need_id}",
+        )
+        try:
+            try:
+                with workflow_budget_scope(
+                    self._redis_store,
                     workflow_id,
-                    need_id,
-                    claim_id,
-                    capabilities,
-                    lease_seconds=lease_seconds,
+                    epoch_id=f"capability:{claim_id}",
                 ):
-                    continue
-                workflow = self._redis_store.get_workflow_definition(workflow_id) or {}
-                context = {
-                    **neutral_context(workflow.get("context") or {}),
-                    **dict(need.get("context") or {}),
+                    capability_task = {
+                        "id": f"need:{need_id}",
+                        "context": context,
+                    }
+                    async with self._bound_step_workspace(
+                        agent, capability_task
+                    ):
+                        result = await agent.execute_capability_request(
+                            str(need.get("capability") or ""),
+                            str(need.get("question") or ""),
+                            context,
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                result = {
+                    "status": "failure",
+                    "error": f"{type(exc).__name__}: {exc}",
                 }
-                context.setdefault("objective", workflow.get("goal", ""))
-                lineage = [
-                    str(agent_id)
-                    for agent_id in context.get("peer_request_lineage", [])
-                    if agent_id
-                ]
-                requester_id = str(need.get("requester_agent_id") or "")
-                for agent_id in (requester_id, agent.agent_id):
-                    if agent_id and agent_id not in lineage:
-                        lineage.append(agent_id)
-                context.update({
-                    "workflow_id": workflow_id,
-                    "step_id": f"need:{need_id}",
-                    "execution_epoch_id": claim_id,
-                    "execution_budget": ExecutionBudget.from_record(
-                        workflow.get("budget")
-                    ).to_record(),
-                    "peer_requester_agent_id": need.get("requester_agent_id"),
-                    "peer_requester_step_id": need.get("requester_step_id"),
-                    "peer_request_lineage": lineage,
-                    "workspace_dependency_step_id": need.get("requester_step_id"),
-                })
-                heartbeat = asyncio.create_task(
-                    self._renew_capability_need_claim(
-                        workflow_id, need_id, claim_id, lease_seconds
-                    ),
-                    name=f"capability-need-heartbeat-{need_id}",
-                )
-                try:
-                    try:
-                        with workflow_budget_scope(
-                            self._redis_store,
-                            workflow_id,
-                            epoch_id=f"capability:{claim_id}",
-                        ):
-                            capability_task = {
-                                "id": f"need:{need_id}",
-                                "context": context,
-                            }
-                            async with self._bound_step_workspace(
-                                agent, capability_task
-                            ):
-                                result = await agent.execute_capability_request(
-                                    str(need.get("capability") or ""),
-                                    str(need.get("question") or ""),
-                                    context,
-                                )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        result = {
-                            "status": "failure",
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
-                finally:
-                    heartbeat.cancel()
-                    await asyncio.gather(heartbeat, return_exceptions=True)
-                self._redis_store.fulfill_capability_need(
-                    workflow_id, need_id, claim_id, result
-                )
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+        self._redis_store.fulfill_capability_need(
+            workflow_id, need_id, claim_id, result
+        )
 
     async def _renew_capability_need_claim(
         self,
@@ -3130,6 +3100,9 @@ class Mesh:
             agent.peers = peer_client
             request_handler = getattr(agent, "_handle_peer_request", None)
             if callable(request_handler):
+                pool = self._pools.get(agent.agent_id)
+                if pool is not None and pool.base is agent:
+                    request_handler = self._pooled_request_handler(pool)
                 peer_client.set_request_handler(request_handler)
             notification_handler = getattr(agent, "_handle_peer_notify", None)
             if callable(notification_handler):
@@ -3144,6 +3117,18 @@ class Mesh:
                 "Injected PeerClient into agent: %s (local_only=%s)",
                 agent.agent_id, not is_p2p,
             )
+
+    def _pooled_request_handler(self, pool: PoolState):
+        """Answer each peer request on an instance of the agent held for it alone."""
+
+        async def handle(message):
+            try:
+                async with pool.lease() as member:
+                    return await member._handle_peer_request(message)
+            finally:
+                self._wake_workers()
+
+        return handle
 
     async def run_forever(self):
         """
@@ -3257,31 +3242,28 @@ class Mesh:
                 backoff = min(backoff * 2, max_backoff)
 
 
-    def _find_agent_for_step(self, step: Dict[str, Any]) -> Optional[Agent]:
+    @asynccontextmanager
+    async def _lease_agent(self, required: Optional[str]) -> AsyncIterator[Optional[Agent]]:
+        """Hold an instance of an agent that can do ``required`` for the block.
+
+        ``required`` is a role, else a capability. Among the registered agents that
+        match, the one with the most free instances is used; the block waits for an
+        instance when all are busy. Yields None when no agent matches.
         """
-        Find agent capable of executing a step.
-
-        Args:
-            step: Step specification with 'agent' field (role or capability)
-
-        Returns:
-            Agent instance or None if no capable agent found
-        """
-        required = step.get("agent")
-        if not required:
-            return None
-
-        # Try exact role match first
-        if required in self._agent_registry:
-            agents = self._agent_registry[required]
-            return agents[0] if agents else None
-
-        # Try capability match
-        if required in self._capability_index:
-            agents = self._capability_index[required]
-            return agents[0] if agents else None
-
-        return None
+        candidates = (
+            self._agent_registry.get(required)
+            or self._capability_index.get(required)
+            or []
+        ) if required else []
+        if not candidates:
+            yield None
+            return
+        state = max((self._pools[agent.agent_id] for agent in candidates), key=PoolState.free)
+        try:
+            async with state.lease() as member:
+                yield member
+        finally:
+            self._wake_workers()
 
     def get_agent(self, role: str) -> Optional[Agent]:
         """
@@ -3383,6 +3365,9 @@ class Mesh:
             2. Capability match  →  ``mesh.get_agents_by_capability(capability or to)``
             3. ``ValueError`` if nothing found
 
+        The task runs on an instance of the target held for it alone, from the
+        target's pool; it waits for one if every instance is busy.
+
         Args:
             to:         Role name of the target agent (e.g. ``"coder"``).
             task:       Natural language task description passed to the agent.
@@ -3422,42 +3407,36 @@ class Mesh:
                 task="Convert the attached HTML report to a branded PDF",
             )
         """
-        # 1. Resolve target agent
-        agent = self.get_agent(to)
-
-        if agent is None and capability:
-            agents = self.get_agents_by_capability(capability)
-            agent = agents[0] if agents else None
-
-        if agent is None:
-            # Try capability fallback using the ``to`` string itself
-            agents = self.get_agents_by_capability(to)
-            agent = agents[0] if agents else None
-
-        if agent is None:
-            registered_roles = list(self._agent_registry.keys())
-            raise ValueError(
-                f"mesh.delegate(): no agent found for role='{to}' "
-                f"or capability='{capability or to}'. "
-                f"Registered roles: {registered_roles}"
-            )
-
-        if not hasattr(agent, "execute_task"):
-            raise RuntimeError(
-                f"mesh.delegate(): agent '{agent.agent_id}' (role={agent.role}) "
-                f"has no execute_task() method. It must inherit from AutoAgent."
-            )
-
-        self._logger.info(
-            "mesh.delegate: %s → %s  task=%s",
-            "caller", agent.agent_id, task[:80],
-        )
+        # 1. Resolve the target: the role, else the capability, else ``to`` as a capability.
+        required = to
+        if to not in self._agent_registry and capability and capability in self._capability_index:
+            required = capability
 
         payload: Dict[str, Any] = {"task": task}
         if context:
             payload["context"] = context
 
-        return await agent.execute_task(payload)
+        # 2. Run on an instance of it held for this task alone.
+        async with self._lease_agent(required) as agent:
+            if agent is None:
+                registered_roles = list(self._agent_registry.keys())
+                raise ValueError(
+                    f"mesh.delegate(): no agent found for role='{to}' "
+                    f"or capability='{capability or to}'. "
+                    f"Registered roles: {registered_roles}"
+                )
+
+            if not hasattr(agent, "execute_task"):
+                raise RuntimeError(
+                    f"mesh.delegate(): agent '{agent.agent_id}' (role={agent.role}) "
+                    f"has no execute_task() method. It must inherit from AutoAgent."
+                )
+
+            self._logger.info(
+                "mesh.delegate: %s → %s  task=%s",
+                "caller", agent.agent_id, task[:80],
+            )
+            return await agent.execute_task(payload)
 
     async def run_task(
         self,
@@ -3542,7 +3521,10 @@ class Mesh:
             "local_agents": self._get_local_agents_info(),
             "connectivity_status": self._assess_connectivity_status(),
             "llm_governor": governor.snapshot(),
-            "pools": {agent_id: state.snapshot() for agent_id, state in self._pools.items()},
+            "pools": {
+                agent_id: state.snapshot()
+                for agent_id, state in self._pools.items() if state.declared
+            },
         }
 
         # Add P2P-specific diagnostics if coordinator is available

@@ -11,7 +11,7 @@ Run after starting the synthesizer (port 7949):
 Phases exercised (node 3)
 --------------------------
 Phase 2  : SWIM P2P joins synthesizer cluster
-Phase 7  : Mesh._run_distributed_worker() claims "reg" step via atomic Redis SETNX
+Phase 7  : Mesh._run_pool() claims "reg" step via atomic Redis SETNX
 Phase 8  : EpisodicLedger + LTM (policy summaries persist across weekly runs)
 Phase 9  : Auto-injected redis + blob + mailbox
 """

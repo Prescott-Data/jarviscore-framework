@@ -94,7 +94,7 @@ for every setting.
 
 ### Scaling one agent: pools
 
-A pool runs one logical agent across as many members as its queued steps need,
+A pool runs one logical agent across as many members as its queued work needs,
 in one process:
 
 ```python
@@ -129,6 +129,26 @@ Because members run in parallel, a batch of independent steps takes about as
 long as its slowest step. Their model calls still pass through the
 [provider governor](../reference/configuration.md#provider-governor), so a
 larger pool cannot push a deployment past its rate limits.
+
+#### All work goes through the pool
+
+An agent instance runs one piece of work at a time: a running task keeps its
+routing decisions and its bound workspace on the instance. So every way work
+reaches an agent takes a member from its pool for as long as the work runs:
+
+- durable goal steps and capability needs from other agents, claimed by the
+  dispatcher;
+- steps of `mesh.workflow()`;
+- items of `mesh.fanout()`;
+- `mesh.delegate()` and `mesh.run_task()`;
+- requests from peers.
+
+An agent registered without a pool is a pool of one instance: its work runs one
+piece at a time, and work arriving while it is busy waits for it. Give it a
+`Pool` to let that work run in parallel. If a call chain waits on an agent
+whose every instance that chain already holds (an agent delegating to its own
+role, for example), the call raises an error naming the agent instead of
+waiting forever.
 
 #### Draining before shutdown
 

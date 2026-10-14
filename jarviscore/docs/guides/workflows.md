@@ -240,7 +240,7 @@ result = await mesh.fanout(
     items=symbols,                         # your runtime list
     task=lambda s: f"Deep-read {s} and return a thesis JSON.",
     context=lambda s: {"symbol": s},       # per-item context (or a static dict)
-    concurrency=5,                         # how many run at once
+    concurrency=5,                         # most items in flight (see pools below)
     budget=20,                             # optional cap on items attempted
     on_error="collect",                    # or "fail_fast"
     timeout=120,                           # optional per-item seconds
@@ -264,7 +264,8 @@ What you can rely on:
 - Every result carries its `item` and a unique `step_id`. Items that run at the same time cannot mix up each other's results.
 - `result.results` is always in the same order as your `items` list.
 - One failed item does not stop the others. In `collect` mode (the default) failures land in `result.failed` with their error messages. In `fail_fast` mode the first failure cancels the items that have not started yet, and finished results are kept.
-- Nothing is dropped silently. Items skipped by `budget` are listed in `result.skipped`. When `summarize()` has to shorten an item's output for the LLM, it marks the cut and includes every failure in the evidence.
+- Nothing is dropped silently. Items skipped by `budget` are listed in `result.skipped`. `summarize()` gives the LLM every item's output whole and lists every failure.
+- Each item runs on its own instance of the agent, held from the agent's pool while the item runs. An agent registered without a pool is one instance, so its items run one at a time; register it with `pool=Pool(max=N)` to run up to N at once. See [Scaling one agent: pools](production.md#scaling-one-agent-pools).
 
 ---
 
