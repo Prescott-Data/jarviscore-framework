@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 
 import pytest
 
@@ -950,7 +951,7 @@ def test_perception_is_observed_whole():
     index = "x" * 5000
 
     assert _observe("snapshot", index, 1, "snapshot" in BrowserSubAgent.whole_observation_tools) == index
-    assert len(_observe("get_text", index, 1)) < 1200
+    assert _observe("get_text", index, 1) == index
 
 
 def test_only_the_latest_snapshot_stays_in_view():
@@ -1045,6 +1046,36 @@ def test_the_page_text_shows_what_form_fields_hold():
     assert field == "[Sun 10:00]"
 
 
+def test_long_page_text_comes_in_whole_pages_with_nothing_lost():
+    async_api = pytest.importorskip("playwright.async_api")
+    body = "".join(f"line {i:05d}\n" for i in range(4000))
+
+    async def read():
+        async with async_api.async_playwright() as p:
+            try:
+                browser = await p.chromium.launch(headless=True)
+            except Exception as exc:
+                pytest.skip(f"no Playwright browser: {exc}")
+            page = await browser.new_page()
+            await page.set_content(f"<pre>{body}</pre>")
+            agent = BrowserSubAgent("b", None)
+            agent._page = page
+            pages, offset = [], 0
+            while True:
+                result = await agent._tool_get_text(selector="pre", offset=offset)
+                pages.append(result)
+                if "next_offset" not in result:
+                    break
+                offset = result["next_offset"]
+            await browser.close()
+            return pages
+
+    pages = asyncio.run(read())
+    assert len(pages) > 1 and pages[-1]["remaining_chars"] == 0
+    assert "".join(page["text"] for page in pages) == body.strip()
+    assert all("truncated" not in page["text"] for page in pages)
+
+
 def test_navigate_declares_the_load_states_it_accepts():
     agent = BrowserSubAgent("b", None)
     specs, _ = agent._native_tool_specs({})
@@ -1052,3 +1083,97 @@ def test_navigate_declares_the_load_states_it_accepts():
     assert navigate["parameters"]["properties"]["wait_for"] == {
         "enum": ["load", "domcontentloaded", "networkidle", "commit"], "type": "string",
     }
+
+
+JOURNEY_FORM = """
+<form id="journey">
+  <label>Departing from <input id="from" role="combobox" aria-autocomplete="list"
+    aria-controls="from-list" aria-expanded="false"></label>
+  <ul id="from-list" role="listbox"></ul>
+  <label>Hour <select id="hour"><option>07</option><option>08</option></select></label>
+  <label>Adults <select id="adults"><option value="1">One</option><option value="2">Two</option></select></label>
+  <label><input type="checkbox" id="hotels" checked> Booking.com</label>
+  <label>Name <input id="person"></label>
+  <button type="submit">Get times</button>
+</form>
+<p id="out"></p>
+<script>
+  const stations = ['London Euston (EUS)', 'London Bridge (LBG)', 'Manchester Piccadilly (MAN)'];
+  const from = document.getElementById('from'), list = document.getElementById('from-list');
+  from.addEventListener('input', () => setTimeout(() => {
+    list.innerHTML = '';
+    for (const name of stations.filter(s => s.toLowerCase().includes(from.value.toLowerCase()))) {
+      const item = document.createElement('li');
+      item.setAttribute('role', 'option');
+      item.textContent = name;
+      item.onclick = () => { from.value = name; list.innerHTML = ''; };
+      list.appendChild(item);
+    }
+  }, 300));
+  document.getElementById('journey').onsubmit = event => {
+    event.preventDefault();
+    document.getElementById('out').textContent = JSON.stringify({
+      from: from.value, hour: hour.value, adults: adults.value,
+      hotels: hotels.checked, person: person.value,
+    });
+  };
+</script>
+"""
+
+
+def _fill_journey(fields):
+    async_api = pytest.importorskip("playwright.async_api")
+
+    async def run():
+        async with async_api.async_playwright() as p:
+            try:
+                browser = await p.chromium.launch(headless=True)
+            except Exception as exc:
+                pytest.skip(f"no Playwright browser: {exc}")
+            page = await browser.new_page()
+            await page.set_content(JOURNEY_FORM)
+            agent = BrowserSubAgent("b", None)
+            agent._page = page
+            view = (await agent._tool_snapshot())["page"]
+
+            def ref(label):
+                return re.search(r"\[([^\]]+)\] " + re.escape(label), view).group(1)
+
+            result = await agent._tool_fill_form(
+                fields=[{**field, "ref": ref(field.pop("label"))} for field in fields],
+                submit=ref('button "Get times'),
+            )
+            submitted = await page.text_content("#out")
+            await browser.close()
+            return result, submitted
+
+    return asyncio.run(run())
+
+
+def test_one_call_fills_every_kind_of_field_and_submits():
+    result, submitted = _fill_journey([
+        {"label": 'combobox "Departing from', "value": "London Euston"},
+        {"label": 'combobox "Hour', "value": "08"},
+        {"label": 'combobox "Adults', "value": "Two"},
+        {"label": 'checkbox "Booking.com', "checked": False},
+        {"label": 'textbox "Name', "value": "Ada"},
+    ])
+
+    assert result["status"] == "success" and result["submitted"] is True
+    assert result["results"][0]["chose"] == "London Euston (EUS)"
+    assert json.loads(submitted) == {
+        "from": "London Euston (EUS)", "hour": "08", "adults": "2",
+        "hotels": False, "person": "Ada",
+    }
+
+
+def test_an_ambiguous_suggestion_is_handed_back_and_the_form_is_not_submitted():
+    result, submitted = _fill_journey([
+        {"label": 'combobox "Departing from', "value": "London"},
+    ])
+
+    assert result["status"] == "partial" and result["submitted"] is False
+    choice = result["results"][0]
+    assert choice["status"] == "needs_choice"
+    assert choice["suggestions"] == ["London Euston (EUS)", "London Bridge (LBG)"]
+    assert not submitted

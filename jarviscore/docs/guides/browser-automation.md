@@ -114,7 +114,7 @@ An element that is disabled, hidden, or covered by something else (a cookie dial
 |---|---|---|
 | `click` | Click an element | `ref`, or `selector` (CSS), or `text` (visible text) |
 | `type_text` | Type text into an input, clears field first by default | `ref` or `selector`, `text`, `clear_first` (default true), `delay_ms` (default 50) |
-| `fill_form` | Fill multiple form fields in one call | `fields: [{"ref" or "selector": "...", "value": "..."}]` |
+| `fill_form` | Fill a whole form in one call, then optionally submit it | `fields: [{"ref" or "selector": "...", "value": "..."}]` (`"checked": true/false` for checkboxes and radios), optional `submit` ref |
 | `select_option` | Select a `<select>` dropdown value by value or label | `ref` or `selector`, `value` |
 | `scroll` | Scroll the page | `direction` (`down`\|`up`\|`top`\|`bottom`), `pixels` (default 500) |
 

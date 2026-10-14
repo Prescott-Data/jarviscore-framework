@@ -337,6 +337,22 @@ _SEEN = """el => {
     }
     return true;
 }"""
+# How a form field takes input: a dropdown, a box to tick, or text that may be completed from suggestions.
+_FIELD_KIND = """el => {
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const completes = (el.getAttribute('aria-autocomplete') || '').toLowerCase();
+    return {
+        tag: el.tagName.toLowerCase(),
+        checkable: ['checkbox', 'radio'].includes(type) || ['checkbox', 'radio', 'switch'].includes(role),
+        suggests: el.tagName !== 'SELECT' && (role === 'combobox' || completes === 'list' || completes === 'both'
+            || el.getAttribute('aria-haspopup') === 'listbox' || !!el.getAttribute('list')),
+        listbox: el.getAttribute('aria-controls') || el.getAttribute('aria-owns') || '',
+    };
+}"""
+_OPTION_NAME = "el => el.getAttribute('aria-label') || el.innerText || el.textContent || ''"
+# A get_text page is shown whole; longer text continues from next_offset.
+_TEXT_PAGE_CHARS = 20000
 _TREE_FRAME = re.compile(r"^(\s*)- iframe\b.*\[ref=([^\]]+)\]")
 
 
@@ -373,7 +389,7 @@ class BrowserSubAgent(BaseSubAgent):
     - wait_for: Wait for an element to appear or disappear
     - evaluate: Run JavaScript on the page
     - get_links: Extract all links from the current page
-    - fill_form: Fill multiple form fields at once
+    - fill_form: Fill a whole form (dropdowns, checkboxes, suggestion fields) and optionally submit
     - select_option: Select an option from a <select> dropdown
     - scroll: Scroll the page or a specific element
     - get_cookies: Get current page cookies
@@ -540,7 +556,9 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self.register_tool(
             "get_text",
             self._tool_get_text,
-            'Get text from an element or page. Params: {"ref": "<snapshot ref>" or "selector": "<css>", or neither for the full page; "max_chars": 5000}',
+            'Get text from an element or page, in pages of up to 20000 characters. Params: '
+            '{"ref": "<snapshot ref>" or "selector": "<css>", or neither for the full page; '
+            '"offset": 0 to continue from where the last page ended}',
             phase="thinking",
         )
         self.register_tool(
@@ -576,7 +594,14 @@ Your job: navigate and interact with web pages to extract data or complete tasks
         self.register_tool(
             "fill_form",
             self._tool_fill_form,
-            'Fill multiple form fields; returns the page afterwards. Params: {"fields": [{"ref": "<ref>" or "selector": "<css>", "value": "<text>"}]}',
+            'Fill a whole form in one call and optionally submit it; returns the page afterwards. '
+            'Each field gets its value the way its element takes input: a dropdown has the option '
+            'selected, a checkbox or radio takes "checked": true/false, and a field that suggests '
+            'as you type has the text typed and the matching suggestion chosen (when several '
+            'match, they are returned for you to pick). "submit" is the ref of the button to '
+            'press once every field is set. Params: {"fields": [{"ref": "<ref>" or "selector": '
+            '"<css>", "value": "<text or option>"} or {"ref": "<ref>", "checked": true}], '
+            '"submit": "<optional button ref>"}',
             phase="action",
         )
         self.register_tool(
@@ -719,11 +744,15 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                 fields = [
                     {
                         "element": await self._fingerprint(field.get("selector", ""), ref=field.get("ref", "")),
-                        "value": field.get("value"),
+                        "value": field.get("value", field.get("checked")),
                     }
                     for field in params.get("fields") or []
                 ]
-                return {"page": where, "fields": fields}
+                submit = params.get("submit")
+                return {
+                    "page": where, "fields": fields,
+                    **({"submit": await self._fingerprint("", ref=submit)} if submit else {}),
+                }
             return {"page": where, "params": params}
         except Exception:
             return None
@@ -1150,11 +1179,11 @@ Your job: navigate and interact with web pages to extract data or complete tasks
     async def _tool_get_text(
         self,
         selector: str = "",
-        max_chars: int = 5000,
         ref: str = "",
+        offset: int = 0,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Extract text from an element or the full page."""
+        """Extract text from an element or the full page, a page at a time."""
         err = self._ensure_page()
         if err:
             return err
@@ -1171,14 +1200,16 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                     f"() => ({_READ_WITH_FIELDS})(document.body, true)"
                 )
             text = str(text).strip()
-            truncated = len(text) > max_chars
-            if truncated:
-                text = text[:max_chars] + "\n... [truncated]"
+            offset = max(0, int(offset))
+            page = text[offset:offset + _TEXT_PAGE_CHARS]
+            remaining = max(0, len(text) - offset - len(page))
             return {
                 "status": "success",
-                "text": text,
-                "char_count": len(text),
-                "truncated": truncated,
+                "text": page,
+                "offset": offset,
+                "total_chars": len(text),
+                "remaining_chars": remaining,
+                **({"next_offset": offset + len(page)} if remaining else {}),
                 "url": self._page.url,
             }
         except Exception as e:
@@ -1487,10 +1518,11 @@ Your job: navigate and interact with web pages to extract data or complete tasks
 
     async def _tool_fill_form(
         self,
-        fields: List[Dict[str, str]],
+        fields: List[Dict[str, Any]],
+        submit: str = "",
         **kwargs,
     ) -> Dict[str, Any]:
-        """Fill multiple form fields at once."""
+        """Set every field the way its element takes input, then optionally submit."""
         err = self._ensure_page()
         if err:
             return err
@@ -1499,7 +1531,6 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             ref = field.get("ref", "")
             selector = field.get("selector", "")
             target = ref or selector
-            value = field.get("value", "")
             if not target:
                 results.append({"target": target, "status": "error", "error": "No ref or selector"})
                 continue
@@ -1509,19 +1540,81 @@ Your job: navigate and interact with web pages to extract data or complete tasks
                     if refusal:
                         results.append({"target": ref, **refusal})
                         continue
-                    await locator.fill(value, timeout=10000)
                 else:
-                    await self._page.fill(selector, value, timeout=10000)
-                results.append({"target": target, "status": "success"})
+                    locator = self._page.locator(selector).first
+                results.append({"target": target, **await self._set_field(locator, field)})
             except Exception as e:
                 results.append({"target": target, "status": "error", "error": str(e)})
-        success_count = sum(1 for r in results if r["status"] == "success")
-        return await self._observed({
-            "status": "success" if success_count == len(fields) else "partial",
-            "filled": success_count,
+        done = sum(1 for r in results if r["status"] == "success")
+        outcome = {
+            "status": "success" if done == len(fields) else "partial",
+            "filled": done,
             "total": len(fields),
             "results": results,
-        })
+        }
+        if not submit:
+            return await self._observed(outcome)
+        if done != len(fields):
+            return await self._observed({
+                **outcome, "submitted": False,
+                "submit_skipped": "not every field is set; the form was not submitted",
+            })
+        clicked = await self._tool_click(ref=submit)
+        return {**clicked, **outcome, "submitted": clicked.get("status") == "success",
+                **({"submit_error": clicked["error"]} if clicked.get("error") else {})}
+
+    async def _set_field(self, locator, field: Dict[str, Any]) -> Dict[str, Any]:
+        """Give one field its value as a person would: pick, tick, or type and choose a suggestion."""
+        kind = await locator.evaluate(_FIELD_KIND)
+        value = str(field.get("value", ""))
+        if kind["tag"] == "select":
+            selected = await locator.select_option(value=value, timeout=10000)
+            if not selected:
+                selected = await locator.select_option(label=value, timeout=10000)
+            return {"status": "success", "selected": selected}
+        if kind["checkable"]:
+            if not isinstance(field.get("checked"), bool):
+                return {"status": "error", "error": 'A checkbox or radio takes "checked": true or false.'}
+            await locator.set_checked(field["checked"], timeout=10000)
+            return {"status": "success", "checked": field["checked"]}
+        if not kind["suggests"]:
+            await locator.fill(value, timeout=10000)
+            return {"status": "success"}
+        # A field that suggests as you type only takes a value once a suggestion is chosen.
+        await locator.fill("", timeout=10000)
+        await locator.press_sequentially(value, delay=20)
+        await self._settle()
+        listbox = self._page.locator(f'[id="{kind["listbox"]}"]') if kind["listbox"] else self._page
+        try:
+            # Suggestions usually come back from a request a moment after the typing stops.
+            await listbox.get_by_role("option").first.wait_for(
+                state="visible", timeout=self.settle_timeout_ms
+            )
+        except Exception:
+            pass
+        options = [
+            option for option in await listbox.get_by_role("option").all()
+            if await option.is_visible()
+        ]
+        names = [
+            " ".join(str(await option.evaluate(_OPTION_NAME)).split()) for option in options
+        ]
+        wanted = " ".join(value.split()).casefold()
+        exact = [i for i, name in enumerate(names) if name.casefold() == wanted]
+        containing = [i for i, name in enumerate(names) if wanted in name.casefold()]
+        chosen = exact if len(exact) == 1 else containing
+        if len(chosen) == 1:
+            await options[chosen[0]].click(timeout=10000)
+            await self._settle()
+            return {"status": "success", "chose": names[chosen[0]]}
+        if names:
+            return {
+                "status": "needs_choice",
+                "typed": value,
+                "suggestions": names,
+                "note": "No single suggestion matches what was typed; click the right one by its ref.",
+            }
+        return {"status": "success", "note": "Typed; the field offered no suggestions."}
 
     async def _tool_select_option(
         self,

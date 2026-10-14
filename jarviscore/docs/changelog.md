@@ -127,6 +127,20 @@ slots that disappear mid-checkout.
 
 ### Changed
 
+- **Agents see every tool result whole.** A result was clipped to 800
+  characters in the conversation, with the full text repeated in the list of
+  recent actions. Each result is now shown whole, once: in the conversation
+  while it is among the agent's recent exchanges, where the action list points
+  to it, and in the action list after that. Browser `get_text` returns pages of
+  up to 20,000 characters with `next_offset` instead of cutting at 5,000, and
+  errors and pre-execute review results reach the agent in full.
+  `SUBAGENT_OBSERVATION_LIMIT` is ignored.
+- **`fill_form` fills every kind of field.** Selects are chosen by value or
+  label, checkboxes and radios take `checked`, and fields that suggest values
+  as you type (station or address pickers) are typed into and the matching
+  suggestion is chosen. When several suggestions match, the call returns them
+  instead of guessing, and the form is not submitted. An optional `submit` ref
+  is clicked only once every field is set.
 - **The runtime records what an agent did instead of policing how it works.**
   Live traces showed agents that still had budget stopping after three tool
   calls because the runtime told them to. The runtime no longer refuses or
