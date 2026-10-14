@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from jarviscore.config.paths import runtime_path
 from .events import TraceEventType
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class TraceManager:
         workflow_id: str,
         step_id: str,
         redis_store=None,
-        trace_dir: str = "traces",
+        trace_dir: str = runtime_path("traces"),
     ):
         self.workflow_id = workflow_id
         self.step_id = step_id

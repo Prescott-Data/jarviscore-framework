@@ -461,6 +461,7 @@ class SandboxBinding:
         *,
         ignored_names: tuple[str, ...] = (
             ".git",
+            ".jarviscore",
             ".tmp",
             ".venv",
             "__pycache__",

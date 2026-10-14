@@ -2153,6 +2153,7 @@ class Mesh:
                                             )
                                             or (
                                                 ".git",
+                                                ".jarviscore",
                                                 ".tmp",
                                                 ".venv",
                                                 "__pycache__",
@@ -2659,7 +2660,7 @@ class Mesh:
           agent._blob_storage  — BlobStorage (or None)
           agent.decisions      — JevDecisionClient (or None)
           agent.mailbox        — MailboxManager (always; in-memory when no Redis)
-          agent.hitl           — HITLQueue (always, writes to hitl_inbox/)
+          agent.hitl           — HITLQueue (always, writes to .jarviscore/hitl_inbox/)
         """
         from jarviscore.mailbox import MailboxManager
 

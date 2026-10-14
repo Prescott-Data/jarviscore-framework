@@ -44,6 +44,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from jarviscore.config.paths import runtime_path
+
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────
@@ -471,7 +473,7 @@ class CoderSandbox:
         - nexus_call     : async fn(method, url, **kwargs) → HTTP response via Nexus
         - Path           : pathlib.Path — for path manipulation
         - common libs    : json, os, re, datetime, dataclasses, etc.
-        - blob_path(name): helper to get a path inside workspace/output/
+        - blob_path(name): helper to get a path inside workspace/.jarviscore/output/
 
     Agents NEVER see raw credentials — nexus_call() internally resolves
     the DynamicStrategy via NexusCallProxy.
@@ -482,7 +484,7 @@ class CoderSandbox:
         workspace_dir: Optional[Path] = None,
         timeout: int = 300,
         bash_timeout: int = 120,
-        output_subdir: str = "output",
+        output_subdir: str = runtime_path("output"),
         nexus_call_proxy=None,  # Optional[NexusCallProxy]
         mesh_proxy=None,
         blob_storage=None,      # Optional[BlobStorage]
@@ -492,9 +494,11 @@ class CoderSandbox:
         allow_unsafe_local_execution: bool = False,
     ):
         self.workspace = Path(workspace_dir) if workspace_dir else Path.cwd()
+        self.workspace.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
+        self.output_subdir = output_subdir
+        # created lazily per run; an idle sandbox leaves no dir behind
         self.output_dir = self.workspace / output_subdir
-        self.output_dir.mkdir(parents=True, exist_ok=True)
         # Where a run's files end up is the developer's choice: any BlobStorage
         # backend, local or remote. The sandbox only decides that they leave.
         self.blob_storage = blob_storage
@@ -531,7 +535,7 @@ class CoderSandbox:
             workspace_dir=workspace_dir,
             timeout=self.timeout,
             bash_timeout=bash_timeout or self._bash.timeout,
-            output_subdir=self.output_dir.name,
+            output_subdir=self.output_subdir,
             nexus_call_proxy=self._nexus_call_proxy,
             mesh_proxy=self._mesh_proxy,
             blob_storage=self.blob_storage,
@@ -1247,7 +1251,7 @@ class CoderSandbox:
         git = self._git
 
         def blob_path(filename: str) -> Path:
-            """Return a path inside workspace/output/ — safe write location."""
+            """Return a path inside workspace/.jarviscore/output/ — safe write location."""
             p = output_dir / filename
             p.parent.mkdir(parents=True, exist_ok=True)
             return p
@@ -1425,6 +1429,8 @@ class CoderSandbox:
 
     def _snapshot_output(self) -> Dict[str, float]:
         """Modification times under output_dir, to tell apart what a run produced."""
+        # runs before every execution, so generated code always finds output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         snapshot = {}
         for path in self.output_dir.rglob("*"):
             if path.is_file():
@@ -1538,7 +1544,7 @@ Store the final outcome in a variable called `result` (dict matching the contrac
 Your code runs inside CoderSandbox with these pre-injected names:
 
   workspace   : pathlib.Path  — project root (safe to read/write recursively)
-  output_dir  : pathlib.Path  — workspace/output/ (preferred write location)
+  output_dir  : pathlib.Path  — workspace/.jarviscore/output/ (preferred write location)
   blob_path(n): Path          — shorthand: output_dir / n (creates parent dirs)
   bash(cmd)   : BashExecutor  — run allowed shell commands (git, pip, pandoc, etc.)
   git         : GitHelper     — high-level git: checkout_branch, add_all, commit, push

@@ -11,6 +11,7 @@ import time
 from typing import Optional, Dict, List, Any
 from enum import Enum
 
+from jarviscore.config.paths import runtime_path
 from jarviscore.context.context_manager import ContextManager
 from jarviscore.execution import multimodal
 from jarviscore.promo import PROMO_MODEL
@@ -214,7 +215,7 @@ class UnifiedLLMClient:
             self.promo_client = PromoLLMClient(
                 token=promo_token,
                 timeout=self.config.get("llm_timeout", 120),
-                artifact_dir=self.config.get("promo_raw_artifact_dir", "./traces/promo_calls"),
+                artifact_dir=self.config.get("promo_raw_artifact_dir", runtime_path("traces", "promo_calls")),
             )
             self.provider_order.append(LLMProvider.PROMO)
             logger.info("✓ JarvisCore promotional LLM access configured")

@@ -1,10 +1,10 @@
 .env
+# Runtime state (traces, logs, blob_storage, ...) lives under .jarviscore/; only secrets is committed.
+.jarviscore/*
+!.jarviscore/secrets
 .jarviscore/secrets.local
 .jarviscore/build/
 .jarviscore/dev/
 .venv/
 __pycache__/
 *.pyc
-traces/
-logs/
-blob_storage/
