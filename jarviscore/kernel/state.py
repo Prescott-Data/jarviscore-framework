@@ -183,6 +183,8 @@ class KernelState(BaseModel):
 
     # Structured tool execution history (OODA loop audit trail)
     tool_history: List[ToolResult] = Field(default_factory=list)
+    # Tool results ever recorded in this state; compaction shortens tool_history, never this.
+    tool_results_recorded: int = 0
 
     # Working memory — thoughts, scratchpad notes
     thoughts: List[str] = Field(default_factory=list)
@@ -259,6 +261,8 @@ class KernelState(BaseModel):
                 if not error:
                     error = tool_output.get("error")
 
+        # Receipt ids must never be reissued: compaction drops the oldest entries.
+        self.tool_results_recorded = max(self.tool_results_recorded, len(self.tool_history)) + 1
         result = ToolResult(
             tool_name=tool_name,
             tool_input=tool_input,
@@ -269,7 +273,7 @@ class KernelState(BaseModel):
             duration_ms=max(0, int(duration_ms)),
             receipt_id=(
                 f"tool:{self.workflow_id or f'local-{self.agent_id}-{int(self.started_at * 1_000_000)}'}:"
-                f"{self.step_id or self.agent_id}:{len(self.tool_history) + 1}"
+                f"{self.step_id or self.agent_id}:{self.tool_results_recorded}"
             ),
         )
         self.tool_history.append(result)

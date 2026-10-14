@@ -1043,3 +1043,12 @@ def test_the_page_text_shows_what_form_fields_hold():
     assert "[4]" in whole and "[1]" in whole and "[Sun 10:00]" in whole and "[x]" in whole
     assert "milk-2l" in row and "[1]" in row and "hidden" not in row
     assert field == "[Sun 10:00]"
+
+
+def test_navigate_declares_the_load_states_it_accepts():
+    agent = BrowserSubAgent("b", None)
+    specs, _ = agent._native_tool_specs({})
+    navigate = next(spec["function"] for spec in specs if spec["function"]["name"] == "navigate")
+    assert navigate["parameters"]["properties"]["wait_for"] == {
+        "enum": ["load", "domcontentloaded", "networkidle", "commit"], "type": "string",
+    }

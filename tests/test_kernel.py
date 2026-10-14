@@ -1291,6 +1291,29 @@ class TestSubagentCreation:
         assert "capability (required)" in description
         assert "question (required)" in description
 
+    def test_native_turns_give_peer_tools_their_declared_parameters(self, kernel):
+        from jarviscore.p2p.peer_tool import PeerTool
+
+        peers = SimpleNamespace(
+            my_id="requester",
+            list_peers=lambda: [],
+            list_roles=lambda: [],
+            get_cognitive_context=lambda: "",
+        )
+
+        class FakePeers:
+            def as_tool(self):
+                return PeerTool(peers)
+
+        kernel.attach_mesh_capabilities(peers=FakePeers())
+        specs, _ = kernel._create_subagent("browser", "requester")._native_tool_specs({})
+        ask = next(
+            spec["function"] for spec in specs if spec["function"]["name"] == "ask_capability"
+        )
+        # The wrapper takes **kwargs; the model must still see the adapter's schema.
+        assert {"capability", "question"} <= set(ask["parameters"]["properties"])
+        assert "_name" not in ask["parameters"]["properties"]
+
     @pytest.mark.asyncio
     async def test_every_subagent_can_inspect_its_workflow_and_read_step_output(
         self, kernel

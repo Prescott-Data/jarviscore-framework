@@ -550,6 +550,7 @@ class Kernel:
                     execute_peer_tool,
                     definition["description"] + (f" Params: {params}." if params else ""),
                     phase=phase,
+                    parameters=schema or None,
                 )
         if self.redis_store is None:
             return

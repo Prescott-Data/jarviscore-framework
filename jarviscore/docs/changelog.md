@@ -184,6 +184,17 @@ slots that disappear mid-checkout.
   had been placed. Resuming a step now reopens every final response that
   depends on it, and a response still being written from the paused state is
   discarded when it finishes.
+- **Peer tools show the model their real parameters on native turns.** The
+  schema was read from the tool wrapper's signature, so the model saw an
+  internal `_name` argument and none of `ask_capability`'s `capability` and
+  `question`. A tool can now declare its JSON Schema with `register_tool(...,
+  parameters=)`, and arguments annotated with `Literal` are offered as a fixed
+  set of values. `navigate` uses this for `wait_for`, which a model had set to
+  an unsupported value.
+- **Tool receipt ids are never reused.** They were numbered from the length of
+  the tool history, which compaction shortens, so a later receipt could take
+  the id of an archived one. Receipts are now numbered from a count that only
+  grows, and archived turns keep their ids.
 - **Pools no longer block the event loop.** The function registry is built
   once per directory per process, outside the event loop; step outputs are
   indexed per workflow instead of found by scanning the Redis keyspace; active

@@ -45,6 +45,7 @@ OODA Loop Architecture:
 
 import ast
 import asyncio
+import copy
 import inspect
 import json
 import logging
@@ -258,6 +259,10 @@ _JSON_SCALARS = {str: "string", bool: "boolean", int: "integer", float: "number"
 def _json_schema_for(annotation: Any) -> Dict[str, Any]:
     """JSON Schema for one annotated argument; an empty schema where none is declared."""
     origin = typing.get_origin(annotation)
+    if origin is typing.Literal:
+        values = list(typing.get_args(annotation))
+        kinds = {_JSON_SCALARS.get(type(value)) for value in values}
+        return {"enum": values, **({"type": kinds.pop()} if len(kinds) == 1 else {})}
     if origin in (Union, types.UnionType):
         options = [arg for arg in typing.get_args(annotation) if arg is not type(None)]
         return _json_schema_for(options[0]) if len(options) == 1 else {}
@@ -426,11 +431,14 @@ class ToolDefinition:
     """A registered tool available to a subagent."""
 
     def __init__(
-        self, name: str, func: Callable, description: str, phase: Optional[str] = None
+        self, name: str, func: Callable, description: str, phase: Optional[str] = None,
+        parameters: Optional[Dict[str, Any]] = None,
     ):
         self.name = name
         self.func = func
         self.description = description
+        # A declared JSON Schema wins over the signature, which wrappers taking **kwargs hide.
+        self.parameters = parameters
         # The phase the registrant declared, if any. Only a declared phase
         # overrides the cognition name sets when budgeting the tool.
         self.declared_phase = phase
@@ -521,10 +529,11 @@ class BaseSubAgent(ABC):
         return str(target)
 
     def register_tool(
-        self, name: str, func: Callable, description: str, phase: Optional[str] = None
+        self, name: str, func: Callable, description: str, phase: Optional[str] = None,
+        parameters: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Register a tool available to this subagent."""
-        self._tools[name] = ToolDefinition(name, func, description, phase)
+        self._tools[name] = ToolDefinition(name, func, description, phase, parameters)
 
     async def _keep_notes(self, state: KernelState, notes) -> None:
         """Write the agent's notes to its step scratchpad and its every-turn view."""
@@ -634,7 +643,10 @@ class BaseSubAgent(ABC):
             while function in tools_by_function or function == _DONE_FUNCTION:
                 function = f"{function[:56]}_{len(tools_by_function)}"
             tools_by_function[function] = tool.name
-            parameters = _parameters_schema(tool.func)
+            parameters = (
+                copy.deepcopy(tool.parameters) if tool.parameters else _parameters_schema(tool.func)
+            )
+            parameters.setdefault("properties", {})
             if _NOTES_ARGUMENT in parameters["properties"]:
                 raise ValueError(
                     f"Tool {tool.name!r} declares {_NOTES_ARGUMENT!r}, which native turns "

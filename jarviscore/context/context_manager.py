@@ -750,6 +750,7 @@ class ContextManager:
         archive = state.internal_variables.setdefault("_archived_turns", [])
         for tr in old_entries:
             archive.append({
+                "receipt_id": getattr(tr, "receipt_id", None),
                 "tool_name": tr.tool_name,
                 "tool_input": json.loads(json.dumps(tr.tool_input, default=str)),
                 "tool_output": str(tr.tool_output),

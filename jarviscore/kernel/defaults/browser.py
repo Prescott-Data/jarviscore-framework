@@ -33,7 +33,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from jarviscore.contracts.hitl import HITLAction
 from jarviscore.core.egress import Egress
@@ -984,7 +984,7 @@ Your job: navigate and interact with web pages to extract data or complete tasks
     async def _tool_navigate(
         self,
         url: str,
-        wait_for: str = "domcontentloaded",
+        wait_for: Literal["load", "domcontentloaded", "networkidle", "commit"] = "domcontentloaded",
         timeout_ms: int = 30000,
         **kwargs,
     ) -> Dict[str, Any]:

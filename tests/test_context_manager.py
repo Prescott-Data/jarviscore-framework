@@ -350,6 +350,21 @@ class TestZeroLossSummarization:
         assert len(state.tool_history) == 7
 
     @pytest.mark.asyncio
+    async def test_receipts_after_compaction_never_reuse_an_issued_id(self):
+        cm = _compressing_cm()
+        state = _state_ready_to_compress()
+        issued = {result.receipt_id for result in state.tool_history}
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "- discovered things"})
+
+        assert await cm._summarize_state(state, llm) is True
+        archived = {turn["receipt_id"] for turn in state.internal_variables["_archived_turns"]}
+        later = state.add_tool_result("web_search", {"query": "next"}, {"status": "success"})
+
+        assert archived <= issued
+        assert later.receipt_id not in issued
+
+    @pytest.mark.asyncio
     async def test_summary_is_labeled_lossy(self):
         cm = _compressing_cm()
         state = _state_ready_to_compress()
