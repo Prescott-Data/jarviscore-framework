@@ -89,6 +89,17 @@ async def test_a_fact_kept_minutes_ago_is_recalled_before_consolidation(memory):
     assert recalled == ["Drive holds 100 files", "Sam is vegetarian"]
 
 
+async def test_recall_keeps_to_its_limit_and_labels_what_search_cannot_see_yet(memory):
+    for fact in ("Sam is vegetarian", "Ada starts school on 3 Sept", "Bins go out Tuesday"):
+        await memory.remember(fact)
+
+    recalled = await memory.recall("family dinner", limit=2)
+
+    assert [item["content"] for item in recalled] == ["Drive holds 100 files", "Sam is vegetarian"]
+    assert "match" not in recalled[0]
+    assert recalled[1]["match"] == "kept recently, not yet searchable"
+
+
 async def test_the_agent_decides_what_persists(memory):
     kept = await memory.remember("Handled Gmail messages 101, 102, 103", kind="progress")
     assert kept is True

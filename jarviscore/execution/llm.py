@@ -12,7 +12,7 @@ import logging
 import random
 import re
 import time
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Tuple
 from enum import Enum
 
 from jarviscore.context.context_manager import ContextManager
@@ -200,6 +200,40 @@ TOKEN_PRICING = {
     "claude-sonnet-4": {"input": 3.00, "output": 15.00, "cached": 0.75},
     "claude-haiku-3.5": {"input": 1.00, "output": 5.00, "cached": 0.25},
 }
+
+_DEFAULT_PRICING = {"input": 3.0, "output": 15.0}
+_UNPRICED_WARNED: set = set()
+
+
+def _call_cost(
+    model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0,
+    default: Optional[Dict[str, float]] = None,
+) -> Tuple[float, str]:
+    """A call's cost in USD and where its price came from: declared, builtin or default."""
+    from jarviscore.config import settings
+
+    declared = (getattr(settings, "llm_prices", None) or {}).get(model)
+    if declared:
+        pricing, source = declared, "declared"
+    elif model in TOKEN_PRICING:
+        pricing, source = TOKEN_PRICING[model], "builtin"
+    else:
+        pricing, source = default or _DEFAULT_PRICING, "default"
+        if model not in _UNPRICED_WARNED:
+            _UNPRICED_WARNED.add(model)
+            logger.warning(
+                "No price is known for model %r; its costs are estimates at $%s/$%s per 1M "
+                "input/output tokens. Declare its real price in LLM_PRICES.",
+                model, pricing["input"], pricing["output"],
+            )
+    cached = min(max(int(cached_tokens or 0), 0), int(input_tokens or 0))
+    cached_rate = pricing.get("cached", pricing["input"])
+    cost = (
+        (int(input_tokens or 0) - cached) * pricing["input"]
+        + cached * cached_rate
+        + int(output_tokens or 0) * pricing["output"]
+    ) / 1_000_000
+    return cost, source
 
 
 class UnifiedLLMClient:
@@ -1025,15 +1059,20 @@ class UnifiedLLMClient:
                 logger.info("Azure content filter retry succeeded with opt-in provider prompt repair.")
 
             # Calculate cost
-            pricing = TOKEN_PRICING.get(deployment, {"input": 3.0, "output": 15.0})
-            cost = (prompt_tokens * pricing['input'] +
-                    completion_tokens * pricing['output']) / 1_000_000
+            details = getattr(usage, "prompt_tokens_details", None) or getattr(
+                usage, "input_tokens_details", None
+            )
+            cost, price_source = _call_cost(
+                deployment, prompt_tokens, completion_tokens,
+                getattr(details, "cached_tokens", 0) or 0,
+            )
 
             return {
                 "content": content,
                 "provider": "azure",
                 **completion,
                 "tool_calls": function_calls,
+                "price_source": price_source,
                 "tokens": {
                     "input": prompt_tokens,
                     "output": completion_tokens,
@@ -1159,12 +1198,16 @@ class UnifiedLLMClient:
         if finish_reason is None:
             finish_reason = getattr(prompt_feedback, "block_reason", None)
 
-        pricing = TOKEN_PRICING.get(model_name, default_pricing)
-        cost = (input_tokens * pricing['input'] + output_tokens * pricing['output']) / 1_000_000
+        cost, price_source = _call_cost(
+            model_name, input_tokens, output_tokens,
+            getattr(usage_metadata, "cached_content_token_count", 0) or 0,
+            default_pricing,
+        )
 
         return {
             "content": content,
             "provider": provider_label,
+            "price_source": price_source,
             **_completion_fields(
                 finish_reason, usage=usage_metadata,
                 finish_message=getattr(candidate, "finish_message", None),
@@ -1296,14 +1339,17 @@ class UnifiedLLMClient:
             if getattr(block, "text", None)
         )
 
-        # Calculate cost
-        pricing = TOKEN_PRICING.get(model, {"input": 3.0, "output": 15.0})
-        cost = (response.usage.input_tokens * pricing['input'] +
-                response.usage.output_tokens * pricing['output']) / 1_000_000
+        # Calculate cost; Claude's input_tokens excludes cache reads, which bill at the cached rate.
+        cache_reads = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+        cost, price_source = _call_cost(
+            model, response.usage.input_tokens + cache_reads,
+            response.usage.output_tokens, cache_reads,
+        )
 
         return {
             "content": content,
             "provider": "claude",
+            "price_source": price_source,
             **_completion_fields(
                 getattr(response, "stop_reason", None),
                 stop_reason=getattr(response, "stop_reason", None),

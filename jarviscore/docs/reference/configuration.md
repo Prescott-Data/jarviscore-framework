@@ -106,6 +106,7 @@ These become important once you run more than two agents concurrently against a 
 | `LLM_429_BASE_DELAY` | `2.0` | Exponential backoff base delay in seconds. Actual delay: `min(base × 2^attempt, 60s)`. |
 | `LLM_MODEL_OUTPUT_LIMITS` | `{}` | JSON map of model or deployment name to its completion-token ceiling, e.g. `{"gpt-5.2-chat": 128000}`. Calls that do not set `max_tokens` receive the serving model's declared ceiling, bounded by the remaining workflow budget. Declare reasoning models here: their hidden reasoning is billed against the same allowance. |
 | `LLM_DEFAULT_MAX_TOKENS` | `4000` | Output allowance for calls to models without a declared ceiling. |
+| `LLM_PRICES` | `{}` | JSON map of model or deployment name to its price per 1M tokens, e.g. `{"gpt-5.6-luna": {"input": 1.25, "output": 10.0, "cached": 0.125}}`. Declared prices override the built-in table. Cached input is billed at `cached` when given. A model with no known price is costed at $3/$15 per 1M input/output tokens, logged once as an estimate, and its calls report `price_source: "default"`. |
 | `AZURE_CONTENT_FILTER_REPAIR_ENABLED` | `false` | Opt into an Azure-specific content-filter retry that applies a provider-safe preamble and neutral wording after the raw prompt is rejected. Off by default so prompt rewriting never hides developer intent. |
 
 ### Provider governor

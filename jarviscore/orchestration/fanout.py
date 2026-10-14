@@ -87,27 +87,21 @@ class FanoutResult:
         llm: Any,
         prompt: str,
         *,
-        evidence_limit: int = 800,
+        evidence_limit: Optional[int] = None,
     ) -> str:
-        """LLM reduce: one completion over per-item evidence windows.
+        """LLM reduce: one completion over every item's whole evidence.
 
-        Evidence follows the honest-context rules: each item contributes up
-        to ``evidence_limit`` chars WITH an explicit truncation marker when
-        clipped — a summarizer that cannot see the evidence confabulates
-        (see #59). Failures are listed so the summary reflects reality.
+        A summarizer that cannot see the evidence confabulates (see #59), so each
+        item's output and error go in whole. ``evidence_limit`` is accepted for
+        compatibility and no longer shortens anything. Failures are listed so the
+        summary reflects reality.
         """
         lines: List[str] = []
         for r in self.succeeded:
             payload = r.get("payload", r.get("output"))
-            text = str(payload)
-            if len(text) > evidence_limit:
-                text = (
-                    f"{text[:evidence_limit]}"
-                    f"…[truncated: showing {evidence_limit} of {len(text)} chars]"
-                )
-            lines.append(f"- {r['item']}: {text}")
+            lines.append(f"- {r['item']}: {payload}")
         for r in self.failed:
-            lines.append(f"- {r['item']}: FAILED — {str(r.get('error', 'unknown'))[:200]}")
+            lines.append(f"- {r['item']}: FAILED — {r.get('error', 'unknown')}")
         if self.skipped:
             lines.append(f"- ({len(self.skipped)} items skipped by budget: {self.skipped})")
 

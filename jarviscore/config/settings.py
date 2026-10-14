@@ -105,6 +105,9 @@ class Settings(BaseSettings):
     # LLM_MODEL_OUTPUT_LIMITS='{"gpt-5.2-chat": 128000}'. Declared models get
     # their full ceiling, bounded by the remaining workflow budget.
     llm_model_output_limits: Dict[str, int] = Field(default_factory=dict)
+    # Price per 1M tokens for models the built-in table lacks, or to override it, e.g.
+    # LLM_PRICES='{"gpt-5.6-luna": {"input": 1.25, "output": 10.0, "cached": 0.125}}'.
+    llm_prices: Dict[str, Dict[str, float]] = Field(default_factory=dict)
 
     # JarvisCore launch promotion. This is a revocable Prescott entitlement
     # token, never an upstream model-provider API key. The endpoint and model

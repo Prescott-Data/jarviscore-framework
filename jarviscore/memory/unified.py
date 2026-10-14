@@ -139,7 +139,9 @@ class UnifiedMemory:
         Tiers written (when available):
           - WorkingScratchpad (blob) — working notes for this step
           - EpisodicLedger (Redis Stream) — full chronological history
-          - AthenaMemory (Athena STM) — semantically searchable cross-session
+
+        Athena is not written: a turn is not a memory. ``remember()`` is how
+        something reaches cross-session memory.
 
         Args:
             turn_id: Unique identifier for this turn (e.g. "t1", "t2")
@@ -208,8 +210,12 @@ class UnifiedMemory:
             return []
         # Search covers consolidated memory only; a fact the agent kept stays
         # short-term until Athena consolidates it, and must still be recallable.
-        seen = {str(item.get("content")) for item in found if isinstance(item, dict)}
+        # It is not a relevance match, so it is labelled and counted in the limit.
+        found = [item for item in found if isinstance(item, dict)][:limit]
+        seen = {str(item.get("content")) for item in found}
         for event in recent:
+            if len(found) >= limit:
+                break
             if not isinstance(event, dict):
                 continue
             if (event.get("metadata") or {}).get("event") != "remembered":
@@ -217,7 +223,7 @@ class UnifiedMemory:
             content = str(event.get("content") or "")
             if content and content not in seen:
                 seen.add(content)
-                found.append(event)
+                found.append({**event, "match": "kept recently, not yet searchable"})
         return found
 
 

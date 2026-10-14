@@ -76,7 +76,15 @@ Athena operates its own three-tier pipeline internally:
 | Mid-Term Memory (MTM) | MongoDB and Milvus | Cognitive chains grouped by topic with heat scoring |
 | Long-Term Memory (LTM) | ArangoDB | Knowledge graph built from consolidated chains |
 
-When Athena is configured, `UnifiedMemory.log_turn()` writes the thought and action outcome to Athena STM on every turn. On `rehydrate_bundle()`, the Kernel receives `athena_context`, which includes recent STM events and the highest-heat MTM chains. This context spans sessions: an agent restarted after a crash recovers not just its last checkpoint but its accumulated semantic understanding of the domain.
+When Athena is configured, it holds what lasts beyond a session: the outcomes
+an agent reports and the facts it chooses to keep with `remember()`. Individual
+turns are not written there; they stay in the step's scratchpad and episodic
+ledger, which recover a session after a crash. `recall()` searches Athena by
+relevance, and also returns facts kept so recently that Athena has not indexed
+them yet, labelled as such. On `rehydrate_bundle()`, the Kernel receives
+`athena_context`, which includes recent STM events and the highest-heat MTM
+chains, so an agent restarted after a crash recovers not just its last
+checkpoint but what earlier sessions established.
 
 **Activates when:** `ATHENA_URL` is set and `athena_client` is passed to `UnifiedMemory`.
 

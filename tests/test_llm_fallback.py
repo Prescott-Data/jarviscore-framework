@@ -1154,3 +1154,14 @@ async def test_gemini_forwards_tools_kwarg():
         or {}
     )
     assert "tools" in sent_config, "tools kwarg was not forwarded to generate_content"
+
+
+def test_a_call_says_where_its_price_came_from(monkeypatch):
+    from jarviscore.config import settings
+
+    monkeypatch.setattr(settings, "llm_prices", {"luna": {"input": 2.0, "output": 8.0, "cached": 0.5}})
+    # 600k uncached at $2, 400k cached at $0.50 and 100k output at $8, per 1M tokens.
+    cost, source = _llm_module._call_cost("luna", 1_000_000, 100_000, 400_000)
+    assert (round(cost, 6), source) == (2.2, "declared")
+    assert _llm_module._call_cost("gpt-4o", 1_000_000, 0)[1] == "builtin"
+    assert _llm_module._call_cost("unpriced-model", 1_000_000, 0) == (3.0, "default")

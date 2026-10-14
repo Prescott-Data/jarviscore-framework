@@ -195,6 +195,21 @@ slots that disappear mid-checkout.
   the tool history, which compaction shortens, so a later receipt could take
   the id of an archived one. Receipts are now numbered from a count that only
   grows, and archived turns keep their ids.
+- **Costs say where their price came from.** A model missing from the price
+  table was silently costed at $3/$15 per 1M tokens. `LLM_PRICES` now declares
+  prices per model, cached input is billed at its cached rate, every call
+  reports `price_source` (`declared`, `builtin` or `default`), and a model still
+  on the default is named once in the log.
+- **`FanoutResult.summarize` passes every item's evidence whole.** It cut each
+  output at 800 characters and each error at 200. `evidence_limit` is still
+  accepted and no longer shortens anything.
+- **`recall()` keeps to its limit.** Facts kept so recently that Athena has not
+  indexed them were appended after the search results, beyond `limit` and
+  unlabelled. They now count towards `limit` and are marked
+  `"match": "kept recently, not yet searchable"`.
+- **The memory guide said every turn is written to Athena.** Turns stay in the
+  step's scratchpad and episodic ledger; Athena receives outcomes and what the
+  agent keeps with `remember()`.
 - **Pools no longer block the event loop.** The function registry is built
   once per directory per process, outside the event loop; step outputs are
   indexed per workflow instead of found by scanning the Redis keyspace; active
