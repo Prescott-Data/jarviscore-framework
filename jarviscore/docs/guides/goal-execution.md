@@ -242,6 +242,13 @@ history, mutation receipts, and file state therefore advance together. A request
 larger than an entire epoch is terminal because starting another identical epoch
 cannot make it fit.
 
+A run that stops without an accepted answer, whether its last epoch ran out or
+its answer was refused, carries what it established in `progress`: the agent's
+working notes and its last refused answer with the reason, marked
+`"verified": false`. A step that reaches `max_epochs_per_step` keeps that
+`progress` in its `EXECUTION_EPOCH_LIMIT_REACHED` record, so the replanner and
+the final answer can report what was found and what remains.
+
 Kernel coroutine tools execute on the asyncio event loop. Synchronous tools run
 in a worker thread with the current workflow context propagated, so a blocking
 provider or sandbox call cannot starve distributed claim renewal. Redis fencing

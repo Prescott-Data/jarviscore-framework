@@ -225,6 +225,19 @@ class _CheckpointMemory:
         return []
 
 
+class _PlainAgent(BaseSubAgent):
+    """No product gate: only the runtime's own receipt grounding decides."""
+
+    def __init__(self, llm):
+        super().__init__(agent_id="plain", role="browser", llm_client=llm)
+
+    def get_system_prompt(self, *args, **kwargs) -> str:
+        return "system"
+
+    def setup_tools(self) -> None:
+        return None
+
+
 class _ActionGatedAgent(BaseSubAgent):
     def __init__(self, llm):
         super().__init__(agent_id="action-gated", role="coder", llm_client=llm)
@@ -262,6 +275,39 @@ def _observations(llm: _ScriptedLLM) -> List[str]:
 
 
 class TestRejectionReachesTheAgent:
+
+    def test_a_run_that_stops_unanswered_carries_what_it_established(self):
+        """Live (Hightouch run O): a refused answer on the last turn lost every finding."""
+        refused = _done(
+            '{"tool_receipt_id": "tool:wf-1", "failures": ["2299131 run 1272015726: 1 row rejected"]}'
+        )
+        llm = _ScriptedLLM([
+            "THOUGHT: looking\nNOTE: 2299131 run 1272015726 rejected 1 row (event_time > 1 week)\n"
+            + refused.split("\n", 1)[1],
+        ])
+        agent = _PlainAgent(llm)
+
+        result = asyncio.run(agent.run(task="t", context={"workflow_id": "wf-1"}, max_turns=1))
+
+        assert result.status != "success"
+        progress = result.metadata["progress"]
+        assert progress["verified"] is False
+        assert progress["working_notes"] == [
+            "2299131 run 1272015726 rejected 1 row (event_time > 1 week)"
+        ]
+        assert progress["refused_answer"]["result"]["failures"] == [
+            "2299131 run 1272015726: 1 row rejected"
+        ]
+        assert "Unknown tool receipt 'tool:wf-1'" in progress["refused_answer"]["refused_because"]
+
+    def test_an_accepted_answer_carries_no_progress(self):
+        llm = _ScriptedLLM(["THOUGHT: t\nNOTE: found it\n" + _done().split("\n", 1)[1]])
+        agent = _PlainAgent(llm)
+
+        result = asyncio.run(agent.run(task="t", max_turns=1))
+
+        assert result.status == "success"
+        assert "progress" not in result.metadata
 
     def test_the_agent_is_shown_the_evidence(self):
         llm = _ScriptedLLM([_done(), _done('{"a": 2}')])

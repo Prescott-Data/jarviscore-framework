@@ -77,12 +77,12 @@ class TestStateDrivenExit:
 
     def test_state_completed_check_exists_in_run(self):
         """run() must check state.status == 'completed' after tool execution."""
-        source = inspect.getsource(BaseSubAgent.run)
+        source = inspect.getsource(BaseSubAgent._run_turns)
         assert 'state.status' in source or "status\", None) == \"completed\"" in source
 
     def test_state_driven_exit_returns_success(self):
         """When state.status == 'completed', run() returns status='success'."""
-        source = inspect.getsource(BaseSubAgent.run)
+        source = inspect.getsource(BaseSubAgent._run_turns)
         # Find the state-driven exit block
         idx = source.index("state_driven")
         block = source[max(0, idx - 500):idx + 500]
@@ -90,14 +90,14 @@ class TestStateDrivenExit:
 
     def test_state_driven_exit_after_tool_execution(self):
         """State-driven exit must appear AFTER _execute_tool, not before."""
-        source = inspect.getsource(BaseSubAgent.run)
+        source = inspect.getsource(BaseSubAgent._run_turns)
         exec_pos = source.index("_execute_tool")
         state_exit_pos = source.index("state_driven")
         assert state_exit_pos > exec_pos
 
     def test_state_driven_exit_uses_tool_result_as_payload(self):
         """The exit payload should be the tool_result, not parsed content."""
-        source = inspect.getsource(BaseSubAgent.run)
+        source = inspect.getsource(BaseSubAgent._run_turns)
         idx = source.index("state_driven")
         block = source[max(0, idx - 300):idx + 100]
         assert "payload=tool_result" in block
@@ -144,14 +144,14 @@ class TestPreExecuteHook:
 
     def test_hook_called_before_execute_in_source(self):
         """_pre_execute_hook must be called BEFORE _execute_tool."""
-        source = inspect.getsource(BaseSubAgent.run)
+        source = inspect.getsource(BaseSubAgent._run_turns)
         hook_pos = source.index("_pre_execute_hook")
         exec_pos = source.index("_execute_tool")
         assert hook_pos < exec_pos
 
     def test_hook_block_uses_continue(self):
         """When hook returns a result, the loop should continue (not execute)."""
-        source = inspect.getsource(BaseSubAgent.run)
+        source = inspect.getsource(BaseSubAgent._run_turns)
         hook_idx = source.index("_pre_execute_hook")
         # Find the continue after the hook block
         block = source[hook_idx:hook_idx + 1500]
@@ -277,7 +277,7 @@ class TestGuardOrdering:
     """
 
     def test_full_guard_order(self):
-        source = inspect.getsource(BaseSubAgent.run)
+        source = inspect.getsource(BaseSubAgent._run_turns)
         positions = {
             "pre_execute_hook": source.index("_pre_execute_hook"),
             "execute_tool": source.index("_execute_tool"),
@@ -293,7 +293,7 @@ class TestGuardOrdering:
 
     def test_done_gate_before_done_exit(self):
         """_can_complete appears before the AgentOutput return in DONE handler."""
-        source = inspect.getsource(BaseSubAgent.run)
+        source = inspect.getsource(BaseSubAgent._run_turns)
         done_idx = source.index("Handle DONE")
         done_block = source[done_idx:done_idx + 3500]
         gate_pos = done_block.index("_can_complete")

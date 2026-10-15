@@ -461,18 +461,35 @@ class KernelState(BaseModel):
         """
         return self.output
 
-    def unfinished_account(self) -> Optional[str]:
-        """What the agent was doing when the run stopped, for a run with no answer."""
+    def refuse_answer(self, parsed: Dict[str, Any], reason: str) -> None:
+        """Keep an answer the runtime did not accept, with why, so it is not lost."""
+        self.internal_variables["refused_answer"] = {
+            "turn": self.turn,
+            "summary": parsed.get("summary"),
+            "result": parsed.get("result"),
+            "refused_because": reason,
+        }
+
+    def progress(self) -> Optional[Dict[str, Any]]:
+        """What a run that stopped without an accepted answer had established.
+
+        Its working notes and the last answer it gave that the runtime refused, labelled
+        as unverified, so the step that reads this can report what was found and what
+        remains instead of only that the run stopped.
+        """
         if self.output is not None:
             return None
-        parts = []
-        if self.thoughts:
-            parts.append(f"Last reasoning: {self.thoughts[-1]}")
-        for tr in reversed(self.tool_history):
-            if tr.succeeded and tr.tool_output is not None:
-                parts.append(f"Last tool: {tr.tool_name}")
-                break
-        return " | ".join(parts) or None
+        notes = [entry.get("note") for entry in self.working_notes if entry.get("note")]
+        refused = self.internal_variables.get("refused_answer")
+        if not notes and not refused:
+            return None
+        return {
+            "verified": False,
+            "meaning": "The run stopped before an answer was accepted; this is what it had established.",
+            "working_notes": notes,
+            **({"refused_answer": refused} if refused else {}),
+            **({"last_error": self.last_error} if self.last_error else {}),
+        }
 
 
 def hydrate_receipt_evidence(

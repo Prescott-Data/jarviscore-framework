@@ -2552,6 +2552,7 @@ class Mesh:
                         "reaching a terminal result"
                     ),
                     "typed_outcome": "EXECUTION_EPOCH_LIMIT_REACHED",
+                    **({"progress": result["progress"]} if result.get("progress") else {}),
                     "last_epoch": result,
                 }
                 self._redis_store.finish_claimed_step(

@@ -203,7 +203,7 @@ class TestConversationHistoryWindow:
         """run() threads history through _thread_history, which keeps 10 turns."""
         import inspect
         from jarviscore.kernel.subagent import _thread_history
-        assert "_thread_history(messages, conversation_history)" in inspect.getsource(BaseSubAgent.run)
+        assert "_thread_history(messages, conversation_history)" in inspect.getsource(BaseSubAgent._run_turns)
         messages = []
         _thread_history(messages, [{"assistant": str(i), "observation": str(i)} for i in range(15)])
         assert len(messages) == 20
@@ -251,6 +251,6 @@ class TestTurnDigest:
     def test_observation_format_in_source(self):
         """The observation string should include turn number and reflection prompt."""
         import inspect
-        source = inspect.getsource(BaseSubAgent.run)
+        source = inspect.getsource(BaseSubAgent._run_turns)
         assert "Reflect:" in source
         assert "[Turn {turn}]" in source or "Turn {turn}" in source

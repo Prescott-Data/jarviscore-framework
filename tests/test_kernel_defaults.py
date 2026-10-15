@@ -310,6 +310,53 @@ class TestCoderSubAgent:
             assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
             memory.save_checkpoint.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_a_refused_landing_answer_leaves_with_the_step(self):
+        """The last epoch's landing answer, refused, must not take the findings with it."""
+        from jarviscore.kernel.cognition import AgentCognitionManager
+        from jarviscore.kernel.lease import ExecutionLease
+
+        class LandingLLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def generate(self, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "content": "THOUGHT: reading\nNOTE: revenue row is 4.2m in FY25",
+                        "tokens": {"input": 4, "output": 4, "total": 8},
+                    }
+                return {
+                    "content": 'DONE: Partial\nRESULT: {"tool_receipt_id": "tool:wf-epochs", "revenue": "4.2m"}',
+                    "tokens": {"input": 4, "output": 4, "total": 8},
+                }
+
+        lease = ExecutionLease.for_role("coder")
+        lease.action_budget = 1
+        memory = AsyncMock()
+        memory.load_checkpoint.return_value = None
+        coder = CoderSubAgent(agent_id="r1", llm_client=LandingLLM())
+
+        result = await coder.run(
+            task="Find the revenue row",
+            context={
+                "workflow_id": "wf-epochs",
+                "step_id": "step-1",
+                "execution_budget": {"max_epochs_per_step": 8},
+                "execution_epoch": 8,
+            },
+            max_turns=3,
+            cognition=AgentCognitionManager(lease=lease, agent_id="r1"),
+            memory=memory,
+        )
+
+        assert result.status == "epoch_exhausted"
+        progress = result.metadata["progress"]
+        assert progress["working_notes"] == ["revenue row is 4.2m in FY25"]
+        assert progress["refused_answer"]["result"]["revenue"] == "4.2m"
+        assert "Unknown tool receipt" in progress["refused_answer"]["refused_because"]
+
     """Tests for CoderSubAgent."""
 
     def test_registers_expected_tools(self, mock_llm):

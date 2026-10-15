@@ -941,6 +941,7 @@ class BaseSubAgent(ABC):
                 evidence = as_evidence(reject_reason)
                 state.add_thought(f"[LANDING_DONE_GATE] {evidence.render()}")
                 state.last_error = evidence.render()
+                state.refuse_answer(parsed, evidence.render())
                 await self._persist_memory(state)
                 self._log.info(
                     "Landing completion rejected: check=%s",
@@ -1015,6 +1016,33 @@ class BaseSubAgent(ABC):
     # ──────────────────────────────────────────────────────────────────────
 
     async def run(
+        self,
+        task: str,
+        context: Optional[Dict] = None,
+        max_turns: int = 15,
+        model: Optional[str] = None,
+        cognition: Optional[AgentCognitionManager] = None,
+        context_manager=None,
+        memory=None,
+        trace=None,  # Optional[TraceManager] — injected by Kernel
+    ) -> AgentOutput:
+        """Execute the subagent's task via the OODA loop.
+
+        A run that ends without an accepted answer carries what it established in
+        ``metadata["progress"]``, whichever way it stopped.
+        """
+        self._current_state = None
+        output = await self._run_turns(
+            task, context, max_turns, model, cognition, context_manager, memory, trace,
+        )
+        state = self._current_state
+        if output.status != "success" and state is not None:
+            progress = state.progress()
+            if progress is not None:
+                output.metadata = {**(output.metadata or {}), "progress": progress}
+        return output
+
+    async def _run_turns(
         self,
         task: str,
         context: Optional[Dict] = None,
@@ -1330,6 +1358,7 @@ class BaseSubAgent(ABC):
                     can_exit, reject_reason = self._can_complete(state, parsed)
                 if not can_exit:
                     evidence = as_evidence(reject_reason)
+                    state.refuse_answer(parsed, evidence.render())
                     attempts = state.internal_variables.setdefault("done_gate_attempts", [])
                     _, streak, previous = record_attempt(
                         attempts,

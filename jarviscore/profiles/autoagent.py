@@ -830,6 +830,7 @@ class AutoAgent(Profile):
                     "dispatches": meta.get("dispatches", []),
                     "_tool_receipts": meta.get("tool_receipts", []),
                     "kept_memories": meta.get("kept_memories", []),
+                    **({"progress": meta["progress"]} if meta.get("progress") else {}),
                     "yield_metadata": {
                         key: meta.get(key)
                         for key in (

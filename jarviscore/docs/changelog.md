@@ -195,6 +195,14 @@ slots that disappear mid-checkout.
 
 ### Fixed
 
+- **A step that runs out of budget keeps what it found.** When a step used its
+  last execution epoch, or its final answer was refused, the failure record held
+  only that it stopped; the agent's notes and answer stayed in a checkpoint
+  nothing read. Live, a step that had checked 15 syncs and found a failing run
+  reached the final answer as "Step exhausted 8 execution epochs". A run without
+  an accepted answer now carries `progress` (its working notes and its last
+  refused answer with the reason, marked unverified) through the kernel,
+  `AutoAgent` and the `EXECUTION_EPOCH_LIMIT_REACHED` record.
 - **A question about a period is planned over each item's record for that
   period.** Asked how syncs did "today", the planner judged each one from the
   listing's status column, which describes only the latest run. Listing

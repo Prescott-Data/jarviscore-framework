@@ -1154,6 +1154,7 @@ class Kernel:
             logger.debug("[Kernel] TraceManager init failed (non-fatal): %s", _te)
             _kernel_trace = create_noop_trace()
 
+        meta: Dict[str, Any] = {}
         for dispatch_num in range(max_dispatches):
             # ─────────────────────────────────────────────────────
             # OPTION A: Registry-first fast path
@@ -1454,6 +1455,7 @@ class Kernel:
                         "dispatches": dispatches,
                         "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
                         "checkpointed": meta.get("checkpointed", False),
+                        **({"progress": meta["progress"]} if meta.get("progress") else {}),
                     },
                 )
 
@@ -1565,5 +1567,6 @@ class Kernel:
                 "dispatches": dispatches,
                 "elapsed_ms": elapsed,
                 "typed_outcome": "FAIL_ALL_DISPATCHES_EXHAUSTED",
+                **({"progress": meta["progress"]} if meta.get("progress") else {}),
             },
         )

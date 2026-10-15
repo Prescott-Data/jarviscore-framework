@@ -481,3 +481,42 @@ def test_only_declared_pools_are_reported(monkeypatch):
     mesh.add(SelfDelegating, agent_id="looper")
 
     assert set(mesh.get_diagnostics()["pools"]) == {"verifier"}
+
+
+class OutOfEpochs(Agent):
+    role = "reader"
+    capabilities: ClassVar[list[str]] = ["read_history"]
+    progress = {
+        "verified": False,
+        "working_notes": ["2299131 run 1272015726 rejected 1 row"],
+    }
+
+    async def execute_task(self, task):
+        return {"status": "epoch_exhausted", "output": None, "payload": None,
+                "error": "lease exhausted", "progress": type(self).progress}
+
+
+@pytest.mark.asyncio
+async def test_a_step_out_of_epochs_keeps_what_it_established(monkeypatch):
+    store = MockRedisContextStore()
+    mesh = _mesh(monkeypatch, store)
+    mesh.add(OutOfEpochs, agent_id="reader")
+    store.publish_workflow(
+        "history", goal="Check the day's runs", obligations=[],
+        steps=[{"id": "read", "capability": "read_history", "effect": "read",
+                "task": "Read every run", "depends_on": []}],
+        budget={"max_epochs_per_step": 1},
+    )
+
+    await mesh.start()
+    try:
+        deadline = time.monotonic() + 5
+        while store.get_step_status("history", "read") != "failed" and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        saved = store.get_step_output("history", "read")
+    finally:
+        await mesh.stop()
+
+    record = saved.get("output", saved)
+    assert record["typed_outcome"] == "EXECUTION_EPOCH_LIMIT_REACHED"
+    assert record["progress"] == OutOfEpochs.progress
