@@ -21,7 +21,11 @@ PROPORTIONAL_INSPECTION_RULE = (
     "the provider's listing metadata and summaries (sender, subject, title, date, status, "
     "preview) and read full content only for items that evidence marks as possibly "
     "relevant; full-content readback of every item is required only when the source goal "
-    "asks for it. State this coverage in the step's task and success criterion. A listing "
+    "asks for it. Listing metadata can only rule an item out for what it actually "
+    "summarises: a current status or latest result speaks for the latest state, not for "
+    "a period. When the goal asks about a period (today, this week, since a date), cover "
+    "each item's record for that whole period, such as its run, event or change history. "
+    "State this coverage in the step's task and success criterion. A listing "
     "is complete when the provider returns no further page; a provider's result-count "
     "estimate is not a total to reconcile against."
 )
@@ -1488,6 +1492,9 @@ content. Resource existence, title, identifier, link or MIME type alone is insuf
 When the goal asks which items of a collection matter, coverage of the whole collection
 through listing metadata and summaries, with full reads of the candidates they identify,
 is complete; do not require full-content readback of every item unless the goal asks for it.
+Listing metadata rules an item out only for what it summarises: a current status or latest
+result speaks for the latest state. When the goal asks about a period, flag a plan that judges
+items from their current status instead of their record for that whole period.
 A listing is complete when the provider returns no further page; never require
 reconciliation against a provider's result-count estimate.
 Treat each direct dependency as supplying only the artifact promised by its own task,

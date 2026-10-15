@@ -292,8 +292,11 @@ async def test_remembering_for_later_is_agent_memory_not_a_provider_write():
         assert "uses effect `propose` with empty systems" in prompt
         assert "read full content only for items that evidence marks as possibly" in prompt
         assert "estimate is not a total to reconcile against" in prompt
+        assert "a current status or latest result speaks for the latest state, not for" in prompt
+        assert "cover each item's record for that whole period" in prompt
     assert "every agent has its own cross-session\nmemory, so it needs no provider system" in audit_prompt
     assert "do not require full-content readback of every item unless the goal asks for it" in audit_prompt
+    assert "flag a plan that judges\nitems from their current status" in audit_prompt
 
 
 def test_mesh_planning_brief_reaches_amendment_and_reconciliation_prompts():
