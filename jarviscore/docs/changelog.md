@@ -33,7 +33,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## 2.2.0 <span class="changelog-date">Unreleased</span>
+## 2.2.0 <span class="changelog-date">2026-10-15</span>
 
 One agent can now run as several workers when its queue grows, every model call
 is paced against the provider's real limits, and agents act through native tool
@@ -208,6 +208,10 @@ slots that disappear mid-checkout.
   metadata now rules items out only for what it summarises, and a goal about
   a period covers each item's history for the whole period; the plan audit
   flags plans that do not.
+- **A cut-short receipt id is reported as unknown.** An agent that cited only
+  the workflow part of a tool receipt id was told the receipt belonged to
+  another workflow, which it could not act on. It is now told the receipt is
+  unknown and to cite the id exactly as the tool result gave it.
 - **Only `DONE` completes a step.** A turn with a `RESULT` but no `DONE` (for
   example `{"status": "in_progress"}`) was recorded as a completed step.
 - **A goal whose record had expired could stall a node.** Its id stayed in the

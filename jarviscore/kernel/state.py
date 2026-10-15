@@ -27,6 +27,17 @@ class ToolReceiptError(ValueError):
     """A final artifact references missing or incompatible tool evidence."""
 
 
+def _foreign_receipt(receipt_id: str, workflow_prefix: str) -> bool:
+    """Whether ``receipt_id`` names another workflow (a cut-short id of this one does not)."""
+    return bool(workflow_prefix) and not f"{receipt_id}:".startswith(workflow_prefix)
+
+
+def _unknown_receipt(receipt_id: str) -> ToolReceiptError:
+    return ToolReceiptError(
+        f"Unknown tool receipt {receipt_id!r}; cite a receipt id exactly as a tool result gave it"
+    )
+
+
 class ArtifactReferenceError(ValueError):
     """A composed artifact references missing or incompatible dependency output."""
 
@@ -345,7 +356,7 @@ class KernelState(BaseModel):
                 for field in ("sha256", "bytes", "executable")
             )
             if receipt_id:
-                if workflow_prefix and not receipt_id.startswith(workflow_prefix):
+                if _foreign_receipt(receipt_id, workflow_prefix):
                     raise ToolReceiptError(
                         f"Tool receipt {receipt_id!r} belongs to another workflow"
                     )
@@ -367,7 +378,7 @@ class KernelState(BaseModel):
                         receipt_id
                     )
                 if evidence is None:
-                    raise ToolReceiptError(f"Unknown tool receipt {receipt_id!r}")
+                    raise _unknown_receipt(receipt_id)
                 return evidence.model_dump(mode="json")
             if require_command_receipts and command_claim:
                 raise ToolReceiptError(
@@ -523,7 +534,7 @@ def hydrate_receipt_evidence(
             field in candidate for field in ("sha256", "bytes", "executable")
         )
         if receipt_id:
-            if workflow_prefix and not receipt_id.startswith(workflow_prefix):
+            if _foreign_receipt(receipt_id, workflow_prefix):
                 raise ToolReceiptError(
                     f"Tool receipt {receipt_id!r} belongs to another workflow"
                 )
@@ -542,7 +553,7 @@ def hydrate_receipt_evidence(
                 if not mutation_claim:
                     return {key: hydrate(item) for key, item in candidate.items()}
             if evidence is None:
-                raise ToolReceiptError(f"Unknown tool receipt {receipt_id!r}")
+                raise _unknown_receipt(receipt_id)
             return evidence.model_dump(mode="json")
         if require_receipts and command_claim:
             raise ToolReceiptError(

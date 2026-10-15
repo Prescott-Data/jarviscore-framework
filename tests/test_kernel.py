@@ -714,6 +714,19 @@ def test_post_normalization_hydrator_rejects_cross_workflow_receipt():
         )
 
 
+def test_a_cut_short_receipt_id_is_unknown_not_another_workflows():
+    """Live: an agent cited only the workflow part of an id and was told it was foreign."""
+    state = KernelState(workflow_id="desk:run-1", step_id="s", task="t", role="browser")
+
+    with pytest.raises(ToolReceiptError, match="Unknown tool receipt 'tool:desk:run-1'; cite"):
+        state.hydrate_tool_receipts(
+            {"status": "partial", "tool_receipt_id": "tool:desk:run-1"},
+            require_command_receipts=True,
+        )
+    with pytest.raises(ToolReceiptError, match="another workflow"):
+        state.hydrate_tool_receipts({"tool_receipt_id": "tool:desk:run-2:s:1"})
+
+
 def test_artifact_reference_hydrator_preserves_exact_dependency_evidence():
     mutation = {
         "tool_receipt_id": "tool:wf-1:repair:1",
