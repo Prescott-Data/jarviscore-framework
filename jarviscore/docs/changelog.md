@@ -195,13 +195,6 @@ slots that disappear mid-checkout.
 
 ### Fixed
 
-- **Labelled buttons with an icon keep their name in the browser view.**
-  Playwright's AI snapshot credits a button's text to the boxed wrapper around
-  its icon, then folds that wrapper away, so a pager's "Next" arrived as a
-  nameless `button`. An agent asked about a day's sync history read the first
-  page of runs and never saw the way to the rest. A control left with only a
-  ref is now read again on its own, where Playwright computes the accessible
-  name a screen reader gets.
 - **A question about a period is planned over each item's record for that
   period.** Asked how syncs did "today", the planner judged each one from the
   listing's status column, which describes only the latest run. Listing
