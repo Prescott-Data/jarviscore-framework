@@ -354,6 +354,19 @@ _OPTION_NAME = "el => el.getAttribute('aria-label') || el.innerText || el.textCo
 # A get_text page is shown whole; longer text continues from next_offset.
 _TEXT_PAGE_CHARS = 20000
 _TREE_FRAME = re.compile(r"^(\s*)- iframe\b.*\[ref=([^\]]+)\]")
+# A node with a ref and nothing else: no name, no text, no children.
+_TREE_BARE = re.compile(r"^(\s*- (?!generic\b)[\w-]+)((?: \[[^\]]*\])* \[ref=([^\]]+)\](?: \[[^\]]*\])*)$")
+_FIRST_NAME = re.compile(r'^- [\w-]+ ("(?:[^"\\]|\\.)*")')
+
+
+def _with_names(tree: str, names: Dict[str, str]) -> str:
+    """The tree with ``names`` (quoted, by ref) restored on the nodes that lost them."""
+    lines = []
+    for line in tree.splitlines():
+        match = _TREE_BARE.match(line)
+        name = names.get(match.group(3)) if match else None
+        lines.append(f"{match.group(1)} {name}{match.group(2)}" if name else line)
+    return "\n".join(lines)
 
 
 def _without_subtrees(tree: str, refs: set) -> str:
@@ -1221,6 +1234,12 @@ Your job: navigate and interact with web pages to extract data or complete tasks
     async def _aria(self, locator) -> str:
         """An aria snapshot of what a person can see, remembering which refs it made resolvable."""
         tree = await locator.aria_snapshot(mode="ai")
+        names = await self._dropped_names(tree)
+        if names:
+            # Reading a name takes a snapshot of its own, and Playwright resolves refs
+            # against its latest snapshot; take the view again so its refs stay live.
+            # An element keeps its ref across snapshots.
+            tree = _with_names(await locator.aria_snapshot(mode="ai"), names)
         # A widget frame faded to transparent stays in the accessibility tree but not on screen.
         unseen = set()
         for line in tree.splitlines():
@@ -1235,6 +1254,29 @@ Your job: navigate and interact with web pages to extract data or complete tasks
             tree = _without_subtrees(tree, unseen)
         self._live_refs = (await self._document(), frozenset(_TREE_REF.findall(tree)))
         return tree
+
+    async def _dropped_names(self, tree: str) -> Dict[str, str]:
+        """Accessible names the AI view left off controls, by ref.
+
+        Playwright's AI view credits a control's name to a descendant with a ref (the
+        boxed wrapper of a button's icon), then folds that descendant away, so "Next"
+        and similar labelled icon buttons arrive nameless. A control left with only a
+        ref is read on its own, where Playwright computes the accessible name a screen
+        reader gets.
+        """
+        refs = [match.group(3) for line in tree.splitlines() if (match := _TREE_BARE.match(line))]
+        if not refs:
+            return {}
+
+        async def name_of(ref: str) -> str:
+            try:
+                found = _FIRST_NAME.match(await self._ref(ref).aria_snapshot(timeout=2000))
+            except Exception:
+                return ""
+            return found.group(1) if found else ""
+
+        names = await asyncio.gather(*(name_of(ref) for ref in refs))
+        return {ref: name for ref, name in zip(refs, names) if name}
 
     async def _document(self):
         return await self._page.evaluate("performance.timeOrigin")

@@ -195,6 +195,19 @@ slots that disappear mid-checkout.
 
 ### Fixed
 
+- **Labelled buttons with an icon keep their name in the browser view.**
+  Playwright's AI snapshot credits a button's text to the boxed wrapper around
+  its icon, then folds that wrapper away, so a pager's "Next" arrived as a
+  nameless `button`. An agent asked about a day's sync history read the first
+  page of runs and never saw the way to the rest. A control left with only a
+  ref is now read again on its own, where Playwright computes the accessible
+  name a screen reader gets.
+- **A question about a period is planned over each item's record for that
+  period.** Asked how syncs did "today", the planner judged each one from the
+  listing's status column, which describes only the latest run. Listing
+  metadata now rules items out only for what it summarises, and a goal about
+  a period covers each item's history for the whole period; the plan audit
+  flags plans that do not.
 - **Only `DONE` completes a step.** A turn with a `RESULT` but no `DONE` (for
   example `{"status": "in_progress"}`) was recorded as a completed step.
 - **A goal whose record had expired could stall a node.** Its id stayed in the

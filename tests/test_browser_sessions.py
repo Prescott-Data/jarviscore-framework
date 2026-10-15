@@ -1177,3 +1177,53 @@ def test_an_ambiguous_suggestion_is_handed_back_and_the_form_is_not_submitted():
     assert choice["status"] == "needs_choice"
     assert choice["suggestions"] == ["London Euston (EUS)", "London Bridge (LBG)"]
     assert not submitted
+
+
+# A pager as component libraries draw it: a text label with an icon in a boxed span.
+PAGED_TABLE = """
+<style>button { display: inline-flex; cursor: pointer } .icon { display: inline-flex; margin-left: 8px }</style>
+<table><tr><th>Run</th></tr><tr><td>Today 11:08 PM</td></tr></table>
+<div>
+  <button type="button" disabled>Previous<span class="icon"><svg aria-hidden="true"
+    width="12" height="12"><path d="M9 1L3 6l6 5"/></svg></span></button>
+  <button type="button">Next<span class="icon"><svg aria-hidden="true"
+    width="12" height="12"><path d="M3 1l6 5-6 5"/></svg></span></button>
+  <button type="button"><span class="icon"><svg aria-hidden="true"
+    width="12" height="12"><path d="M1 1h10"/></svg></span></button>
+</div>
+<p id="page">page 1</p>
+<script>
+  document.querySelectorAll("button")[1].onclick = () => { document.getElementById("page").textContent = "page 2"; };
+</script>
+"""
+
+
+def test_a_labelled_button_with_an_icon_keeps_its_name_in_the_page_view():
+    async_api = pytest.importorskip("playwright.async_api")
+
+    async def run():
+        async with async_api.async_playwright() as p:
+            try:
+                browser = await p.chromium.launch(headless=True)
+            except Exception as exc:
+                pytest.skip(f"no Playwright browser: {exc}")
+            page = await browser.new_page()
+            await page.set_content(PAGED_TABLE)
+            agent = BrowserSubAgent("b", None)
+            agent._page = page
+            view = (await agent._tool_snapshot())["page"]
+            # The refs in that view still act: reading names must not cost the agent its refs.
+            next_ref = re.search(r'\[(\w+)\] button "Next"', view)
+            clicked = await agent._tool_click(ref=next_ref.group(1)) if next_ref else {}
+            shown = await page.text_content("#page")
+            await browser.close()
+            return view, clicked, shown
+
+    view, clicked, shown = asyncio.run(run())
+
+    assert re.search(r'\[\w+\] button "Next"', view), view
+    assert 'button "Previous"' in view, view
+    # A button with no name at all is shown without one, not given an invented name.
+    assert re.search(r'\[\w+\] button(?! ")', view), view
+    assert clicked.get("status") == "success", clicked
+    assert shown == "page 2"
