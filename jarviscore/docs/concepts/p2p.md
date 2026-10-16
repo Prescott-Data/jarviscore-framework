@@ -203,7 +203,7 @@ if response:
 | `timeout` | `float` | `30.0` | Seconds to wait for a response |
 | `context` | `dict` | `None` | Optional metadata |
 
-Returns the response dict, or `None` if the timeout was reached or the send failed.
+Returns the response dict. If no response arrives within the timeout, it returns an error dict with `"semantic_error": "PEER_RESPONSE_TIMEOUT"`; if the target can't be resolved or the send fails, it returns `None`. A timeout doesn't mean the peer did nothing: see [Retries and Lost Replies](#retries-and-lost-replies).
 
 #### respond
 
@@ -293,6 +293,41 @@ Checks for a response to a previously sent async request.
 | `remove` | `bool` | `True` | Remove the entry from the inbox after reading |
 
 Returns the response dict if available, or `None`.
+
+---
+
+## Retries and Lost Replies
+
+A timed-out request is ambiguous. The peer may never have received it, or it may have done the work and the reply was lost on the way back. The caller can't tell which, and every retry is sent as a new request, so a peer that writes something (charges a card, sends an email, opens a ticket) will do it again on each retry.
+
+How you avoid that depends on how the work is sent.
+
+**Workflow steps** are covered already. A peer claims the step in Redis, runs it, and records its status and output there. The caller reads the result from Redis rather than from a reply, so a lost reply doesn't lose the work, and a completed step isn't claimed again. See [Distributed Mesh Goals](../guides/autoagent.md#distributed-mesh-goals).
+
+**Direct requests** need an idempotency key. The caller makes one key per piece of work and sends the same key on every retry. The peer records the result under that key and answers a repeat from the record:
+
+```python
+# Caller: one key per order, reused on every retry
+payload = {"request_key": str(uuid4()), "amount": 40.0}
+reply = await self.peers.request("billing", payload, timeout=3)
+if reply is None or "error" in reply:
+    reply = await self.peers.request("billing", payload, timeout=3)
+```
+
+```python
+# Peer: claim the key before doing the work
+async def handle(self, msg):
+    key = msg.data["request_key"]
+    if key not in self.results:
+        self.results[key] = asyncio.ensure_future(self.charge(msg.data["amount"]))
+    await self.peers.respond(msg, await self.results[key])
+```
+
+Claiming the key before the work starts matters: a retry that arrives while the first attempt is still running waits for that attempt instead of starting a second one.
+
+The dict above only works within one process. In production, keep the records in Redis so they survive restarts and every replica of the peer sees them. Claim each key with `SET key value NX EX <ttl>`, so only one replica does the work, and store the result under the key when it finishes.
+
+[`examples/p2p_lost_reply_retry.py`](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/p2p_lost_reply_retry.py) runs all three cases with no LLM key and no Redis: the retry without a key that charges twice, the keyed retry that charges once, and the retry that arrives mid-charge.
 
 ---
 
