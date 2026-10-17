@@ -183,6 +183,23 @@ class BlobSnapshotStore:
 
             entries.sort(key=lambda entry: entry.path)
 
+        return await self.compose(source, resolved_revision, entries)
+
+    async def compose(
+        self,
+        source: SourceRef,
+        resolved_revision: str,
+        entries: "list[SnapshotEntry] | tuple[SnapshotEntry, ...]",
+    ) -> SourceSnapshot:
+        """Persist a snapshot whose file blobs are already in BlobStorage.
+
+        For a source assembled from earlier snapshots and deltas, such as a
+        shared room's current state, without re-reading or re-writing bytes.
+        """
+        seen_paths: dict[str, str] = {}
+        for entry in entries:
+            _register_workspace_path(entry.path, seen_paths)
+        entries = sorted(entries, key=lambda entry: entry.path)
         identity = json.dumps({
             "source": asdict(source),
             "resolved_revision": resolved_revision,
@@ -319,6 +336,22 @@ class BlobSnapshotStore:
             target.write_bytes(payload)
             if entry.executable:
                 target.chmod(target.stat().st_mode | 0o100)
+
+
+class WorkspaceAccess:
+    """The least an agent needs for the Mesh to give each of its steps a workspace.
+
+    AutoAgent has a full code sandbox. Any other agent can set
+    ``self.sandbox = WorkspaceAccess()``; on a step whose goal has a workspace
+    source, the step's files are then at ``task["context"]["workspace_binding"]["path"]``
+    and whatever the agent changes there becomes the step's workspace delta.
+    """
+
+    def __init__(self, workspace: Path | None = None):
+        self.workspace = workspace
+
+    def for_workspace(self, workspace_dir: Path, **_options) -> "WorkspaceAccess":
+        return WorkspaceAccess(Path(workspace_dir))
 
 
 class SandboxBinding:

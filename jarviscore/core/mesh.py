@@ -48,6 +48,7 @@ from jarviscore.orchestration.envelopes import (
     terminal_step_status,
 )
 from jarviscore.orchestration.budget import workflow_budget_scope
+from jarviscore.auth.principal import act_for
 from jarviscore.kernel.state import ToolReceiptError, hydrate_receipt_evidence
 
 logger = logging.getLogger(__name__)
@@ -1948,7 +1949,7 @@ class Mesh:
                 )
                 try:
                     try:
-                        with workflow_budget_scope(
+                        with act_for(self._acting_for(workflow)), workflow_budget_scope(
                             self._redis_store,
                             workflow_id,
                             epoch_id=f"capability:{claim_id}",
@@ -2077,7 +2078,7 @@ class Mesh:
         )
         try:
             try:
-                with workflow_budget_scope(
+                with act_for(self._acting_for(workflow)), workflow_budget_scope(
                     self._redis_store,
                     workflow_id,
                     epoch_id=f"step:{claim_id}",
@@ -2368,6 +2369,17 @@ class Mesh:
             if ancestor_id in direct
         }
         return [step_id for step_id in direct if step_id not in shadowed]
+
+    @staticmethod
+    def _acting_for(workflow: Dict[str, Any]) -> Optional[str]:
+        """The person a workflow's steps act for, as registered with its goal.
+
+        Read only from the workflow definition, which trusted application code
+        registered: never from peer or capability-need context, which agents
+        write and could use to borrow someone else's accounts.
+        """
+        value = (workflow.get("context") or {}).get("acting_for")
+        return str(value) if value else None
 
     def _node_can_access_workspace(self, workflow_id: str) -> bool:
         workflow = self._redis_store.get_workflow_definition(workflow_id) or {}

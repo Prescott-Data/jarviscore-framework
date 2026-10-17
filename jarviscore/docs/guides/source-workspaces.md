@@ -138,6 +138,12 @@ Coder receives six direct tools when a workspace is attached:
 | `workspace_edit` | Replace an inclusive line range in an existing UTF-8 file after matching the `sha256` returned by `workspace_read`. |
 | `workspace_run` | Run a trusted allow-listed command in a workspace directory. |
 
+Agents other than AutoAgent can work on a step's files too: set
+`self.sandbox = WorkspaceAccess()` and read
+`task["context"]["workspace_binding"]["path"]`; whatever the agent changes
+there becomes the step's delta. For a workspace that a team's people and
+agents change together over time, see [Rooms](rooms.md).
+
 These tools avoid generating Python merely to inspect or author files. Agents
 should use `workspace_write` for new fixtures and complete-file replacement,
 never for a partial source edit. Existing source files should be read first and

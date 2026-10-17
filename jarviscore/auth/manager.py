@@ -35,6 +35,7 @@ from jarviscore.nexus.lifecycle import LifecycleMonitor
 from jarviscore.nexus.models import DynamicStrategy
 from jarviscore.nexus.providers import get_scopes, get_provider
 from jarviscore.auth.oauth_flow import OAuthFlowHandler, CLIFlowHandler
+from jarviscore.auth.principal import acting_for
 from jarviscore.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -106,30 +107,48 @@ class AuthenticationManager:
             open_browser=config.get("auth_open_browser", True)
         )
 
-        # Opaque connection handles — keyed by provider name
-        self._connections: Dict[str, str] = {}
+        # Opaque connection handles per person, keyed by provider name. Each
+        # person's accounts live in their own Nexus workspace; a step uses the
+        # accounts of whoever it is acting for (see jarviscore.auth.principal).
+        self._connections_by_person: Dict[str, Dict[str, str]] = {}
 
         # Providers whose connection the broker says can no longer sign a call.
-        self._needs_attention: set = set()
+        self._attention_by_person: Dict[str, set] = {}
 
-        # Handles for connections found at the gateway rather than made here.
-        self._discovered: Dict[str, str] = {}
+        # Handles for connections found at the gateway: handle -> (person, provider).
+        self._discovered: Dict[str, Tuple[str, str]] = {}
 
         # _strategy_cache is package-private — only NexusCallProxy reads it
         self._strategy_cache: Dict[str, Tuple[DynamicStrategy, float]] = {}
+
+    # ── Who the work is for ──────────────────────────────────────────────────────
+
+    def _person(self) -> str:
+        """The person whose accounts this call uses: whoever the step acts for."""
+        return acting_for.get() or self.user_id
+
+    @property
+    def _connections(self) -> Dict[str, str]:
+        """The current person's connection handles, keyed by provider."""
+        return self._connections_by_person.setdefault(self._person(), {})
+
+    @property
+    def _needs_attention(self) -> set:
+        return self._attention_by_person.setdefault(self._person(), set())
 
     # ── Lifecycle ────────────────────────────────────────────────────────────────
 
     def _connection_needs_attention(self, connection_id: str) -> None:
         """The broker says this connection can no longer sign. Stop handing it out."""
-        for provider, held in list(self._connections.items()):
-            if held == connection_id:
-                del self._connections[provider]
-                self._needs_attention.add(provider)
-                logger.warning(
-                    "Connection for %s needs re-consent; its handle is withdrawn "
-                    "until a person approves access again.", provider,
-                )
+        for person, connections in self._connections_by_person.items():
+            for provider, held in list(connections.items()):
+                if held == connection_id:
+                    del connections[provider]
+                    self._attention_by_person.setdefault(person, set()).add(provider)
+                    logger.warning(
+                        "Connection for %s needs re-consent; its handle is withdrawn "
+                        "until a person approves access again.", provider,
+                    )
         self._strategy_cache.pop(connection_id, None)
 
     def providers_needing_attention(self) -> List[str]:
@@ -157,8 +176,9 @@ class AuthenticationManager:
             return self._connections[provider]
         if not self.nexus_client:
             return None
+        person = self._person()
         try:
-            found = await self.nexus_client.resolve_active(provider, self.user_id)
+            found = await self.nexus_client.resolve_active(provider, person)
         except Exception as exc:
             logger.debug("Discovery for %s failed: %s", provider, exc)
             return None
@@ -166,9 +186,12 @@ class AuthenticationManager:
             return None
         # The gateway resolves by workspace and provider, not by connection id,
         # so the handle names what it is and resolve_strategy knows to ask again.
-        handle = f"resolved:{provider}"
+        handle = (
+            f"resolved:{provider}" if person == self.user_id
+            else f"resolved:{person}:{provider}"
+        )
         self._connections[provider] = handle
-        self._discovered[handle] = provider
+        self._discovered[handle] = (person, provider)
         self._needs_attention.discard(provider)
         logger.info("Discovered active %s connection at the gateway", provider)
         return handle
@@ -282,7 +305,7 @@ class AuthenticationManager:
         await self._ensure_provider(provider)
         return await self.nexus_client.request_connection(
             provider=provider,
-            user_id=user_id or self.user_id,
+            user_id=user_id or self._person(),
             scopes=scopes or get_scopes(provider),
             return_url=return_url or self.return_url,
         )
@@ -354,9 +377,10 @@ class AuthenticationManager:
             if time.time() - cached_at < self.cache_ttl and not strategy.is_expired():
                 return strategy
 
-        provider = self._discovered.get(connection_id)
-        if provider is not None:
-            payload = await self.nexus_client.resolve_active(provider, self.user_id)
+        discovered = self._discovered.get(connection_id)
+        if discovered is not None:
+            person, provider = discovered
+            payload = await self.nexus_client.resolve_active(provider, person)
             if payload is None:
                 self._connection_needs_attention(connection_id)
                 raise RuntimeError(

@@ -46,6 +46,8 @@ class WorkItem:
     workflow_id: str = ""
     step_id: str = ""
     upstream: Dict[str, str] = field(default_factory=dict)
+    #: When the work is on files: a folder of them, editable until you answer.
+    workspace: str = ""
     asked_at: float = field(default_factory=time.time)
 
     def to_record(self) -> Dict[str, Any]:
@@ -136,7 +138,7 @@ class TerminalChannel(HumanChannel):
         threading.Thread(target=self._read, name="human-console", daemon=True).start()
         self._console = asyncio.create_task(self._run_console(), name=f"human-console-{agent.role}")
         caps = ", ".join(c for c in agent.capabilities if c != "human")
-        self._print(f"\nYou are on the mesh as {agent.role} ({caps}).")
+        self._print(f"\nYou are on the mesh as {agent.role}" + (f" ({caps})." if caps else "."))
         self._print("Tasks for you will appear here. /help for commands.\n")
 
     async def stop(self) -> None:
@@ -222,6 +224,9 @@ class TerminalChannel(HumanChannel):
         self._print(item.task)
         for step, summary in item.upstream.items():
             self._print(f"  ↳ {step}: {summary}")
+        if item.workspace:
+            self._print(f"  📂 {item.workspace}")
+            self._print("     Edit the files there in your editor; your changes go in when you answer.")
         more = f"  {len(self._waiting)} more waiting." if self._waiting else ""
         self._print(f"Answer, or /approve [note] · /reject <why> · /decline <why>.{more}")
 

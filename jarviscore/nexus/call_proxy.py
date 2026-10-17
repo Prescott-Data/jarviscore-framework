@@ -71,6 +71,9 @@ class NexusCallProxy:
         for provider, cid in connections.items():
             if cid == connection_id:
                 return str(provider).lower()
+        # A gateway-discovered handle names its provider last: "resolved:[person:]github".
+        if connection_id.startswith("resolved:"):
+            return connection_id.rsplit(":", 1)[-1].lower()
         # Local-vault mode: the handle is the provider name ("github:user123").
         return connection_id.split(":")[0].lower()
 

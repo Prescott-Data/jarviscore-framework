@@ -43,6 +43,36 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   answer` work an inbox. See [People as Peers](guides/human-peers.md) and
   `examples/human_peer_review.py`.
 
+- **Rooms: multiplayer work on one shared workspace.** A room is a versioned
+  workspace that a team's people and agents change together. `room.ask(goal,
+  asked_by=...)` runs the goal on the room's current files and returns the
+  agents' changes as a proposal; people `diff`, `accept`, or `reject` it with
+  a reason that reaches the next attempt (`revision_of`). Accepting merges
+  over newer changes file by file and refuses with `RoomConflict` where two
+  changes disagree. People `checkout`, edit, and `push` under the same rules,
+  and a HumanAgent routed a step gets that step's files to edit. Plans, step
+  claims, proposals and decisions go to the room's event log. Rooms live in
+  Redis when the Mesh has it, otherwise on the machine. `jarviscore room`
+  covers all of it from a terminal. See [Rooms](guides/rooms.md).
+- **Steps act for the person who asked.** A workflow registered with
+  `context["acting_for"]` runs its steps for that person: Nexus lookups,
+  consents and calls use that person's own workspace instead of the
+  deployment's single identity, so their access applies and provider audit
+  logs show them. The identity is read only from the registered workflow,
+  never from peer or capability-need context. Rooms set it to the asker.
+- **`WorkspaceAccess`** lets any agent, not only AutoAgent, work on a step's
+  files, and **`BlobSnapshotStore.compose`** builds a snapshot from blobs
+  already stored.
+
+### Changed
+
+- The mesh planner is told that reading and editing a goal's workspace files
+  calls no provider: file changes are `propose` steps, and only publishing to
+  a provider is a `write`. It used to plan edits as writes to a made-up
+  "source workspace" system, which validation then refused.
+- `HumanAgent` lives in `jarviscore.human` (and `jarviscore.HumanAgent`), not
+  among the agent profiles, which stay AutoAgent and CustomAgent.
+
 ### Fixed
 
 - **A peer's first request to a node that just joined is no longer dropped.**

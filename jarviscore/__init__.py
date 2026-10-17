@@ -71,9 +71,11 @@ from jarviscore.execution.workspace import (
     SnapshotEntry,
     SourceRef,
     SourceSnapshot,
+    WorkspaceAccess,
     WorkspaceDelta,
     WorkspaceDeltaConflict,
 )
+from jarviscore.room import Proposal, Room, RoomConflict
 from jarviscore.execution.sources import (
     SourceAdapter,
     SourceAdapterError,
@@ -152,6 +154,12 @@ __all__ = [
     "WorkspaceDeltaConflict",
     "BlobSnapshotStore",
     "SandboxBinding",
+    "WorkspaceAccess",
+
+    # Rooms: shared workspaces people and agents change together
+    "Room",
+    "Proposal",
+    "RoomConflict",
     "SourceAdapter",
     "SourceAdapterError",
     "SourceContractError",

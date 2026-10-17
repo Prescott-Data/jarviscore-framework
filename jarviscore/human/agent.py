@@ -33,6 +33,7 @@ from uuid import uuid4
 
 from jarviscore.core.envelope import attach_result_summary
 from jarviscore.core.profile import Profile
+from jarviscore.execution.workspace import WorkspaceAccess
 from jarviscore.human.channels import HumanChannel, TerminalChannel, WorkItem
 
 #: Shown to a person per upstream result; enough to judge, not a data dump.
@@ -88,6 +89,9 @@ class HumanAgent(Profile):
         self.channel = channel or TerminalChannel()
         if answer_timeout is not None:
             self.answer_timeout = answer_timeout
+        # On a step whose goal works on files (a room, a repository), the Mesh
+        # hands the person a copy of them; what they change is their work.
+        self.sandbox = WorkspaceAccess()
 
     async def setup(self):
         await super().setup()
@@ -112,6 +116,7 @@ class HumanAgent(Profile):
             workflow_id=str(context.get("workflow_id") or ""),
             step_id=str(context.get("step_id") or ""),
             upstream=_summaries(context.get("previous_step_results")),
+            workspace=str((context.get("workspace_binding") or {}).get("path") or ""),
         )
         try:
             answer = await asyncio.wait_for(self.channel.ask(item), timeout=self.answer_timeout)

@@ -15,6 +15,14 @@ AGENT_MEMORY_RULE = (
     "keeping such facts uses effect `propose` with empty systems; otherwise it belongs "
     "in the step whose task establishes the fact."
 )
+WORKSPACE_RULE = (
+    "- when PUBLIC CONTEXT has a source_snapshot, each step gets its own copy of those files. "
+    "Reading, searching, building, testing and editing them calls no provider and names no "
+    "system: a step that changes the files uses effect `propose` (its changes are proposed "
+    "for people to review, never written anywhere), and one that only inspects them uses "
+    "`read`. Only publishing the files to a provider, such as opening a pull request, is a "
+    "`write` to that provider."
+)
 PROPORTIONAL_INSPECTION_RULE = (
     "- size inspection to the requested outcome. When the goal asks which items in a "
     "collection matter (triage, finding, selecting), cover the whole collection through "
@@ -893,6 +901,7 @@ expected_findings, depends_on, covers, dependency_policy.
 - systems lists every provider the step will call and must be authorized by the capability.
 - write, notify and destructive outcomes must name exactly one provider in systems.
 {AGENT_MEMORY_RULE}
+{WORKSPACE_RULE}
 {PROPORTIONAL_INSPECTION_RULE}
 - covers contains obligation ids satisfied by the step.
 - dependency_policy is `satisfied` unless this step intentionally diagnoses or
@@ -973,6 +982,7 @@ Return one valid json object using exactly one repair shape:
     return concrete identifiers or links needed by dependents.
 - mutating outcomes use exactly one provider and an effect authorized by capability.
 {AGENT_MEMORY_RULE}
+{WORKSPACE_RULE}
 {PROPORTIONAL_INSPECTION_RULE}
 - never make required downstream work depend on an optional mutation-only branch.
 - repair missing information dependencies: every outcome must receive each required artifact
@@ -1029,6 +1039,7 @@ success_criterion, expected_findings, depends_on, covers, dependency_policy.
 - preserve real data dependencies and use only capabilities and effect authority from
     LIVE CAPABILITY CATALOG.
 {AGENT_MEMORY_RULE}
+{WORKSPACE_RULE}
 {PROPORTIONAL_INSPECTION_RULE}
 - resolve the stated validation error without executing work or adding requirements.
 """
@@ -1096,6 +1107,7 @@ expected_findings, depends_on, covers, dependency_policy.
 - systems lists every provider the step will call and must be authorized by the capability.
 - write, notify and destructive outcomes must name exactly one provider in systems.
 {AGENT_MEMORY_RULE}
+{WORKSPACE_RULE}
 {PROPORTIONAL_INSPECTION_RULE}
 - use capabilities, never an agent ID or named instance.
 

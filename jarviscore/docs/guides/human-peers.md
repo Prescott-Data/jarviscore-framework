@@ -104,6 +104,10 @@ results = await mesh.workflow("launch-post", [
 
 The person sees the task with a summary of each upstream result. A rejection fails the step with the person's reason, which reaches the workflow caller. People are never blocked by upstream uncertainty: they see the upstream results and judge for themselves.
 
+## Work on files
+
+When a person is routed a step whose goal works on files, a [room](rooms.md) or a repository, the task shows a folder with the step's files, earlier steps' changes included. The person edits there in their own editor; what they change goes into the result when they answer, attributed to them.
+
 ## Results
 
 A person's result has the usual envelope:

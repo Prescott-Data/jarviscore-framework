@@ -361,6 +361,22 @@ jarviscore human join alice --capabilities review --seed 127.0.0.1:7949  # you
 
 See [People as Peers](https://jarviscore.developers.prescottdata.io/guides/human-peers/).
 
+### Rooms: multiplayer work
+
+A room is a shared workspace a team's people and agents change together. Agents work on their own copy of the room's files and propose their changes; people review the diff, accept, or reject with a reason the agents act on; people edit by hand under the same rules; concurrent work merges and real conflicts are never silently overwritten. Steps run with the asking person's own connected accounts.
+
+```python
+room = Room.for_mesh(mesh, "pricing")
+asked = await room.ask("Fix the failing test in calc.py", asked_by="alice")
+await room.accept(asked.proposal.id, by="bob")
+```
+
+```bash
+jarviscore room watch pricing     # live: plan, who took which step, proposals, decisions
+```
+
+See [Rooms](https://jarviscore.developers.prescottdata.io/guides/rooms/).
+
 ### Observability
 
 | Signal | Backend |
@@ -405,6 +421,7 @@ jarviscore memory init       # Initialize Athena MemOS backend
 jarviscore memory status     # Check Athena health
 jarviscore memory search     # Query the knowledge graph
 jarviscore human join        # Join the mesh as a person (review, approve, ...)
+jarviscore room ask          # Have agents work on a shared room; review, accept, reject
 ```
 
 ## Framework Integrations

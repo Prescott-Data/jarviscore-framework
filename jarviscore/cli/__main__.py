@@ -17,6 +17,7 @@ Usage:
     jarviscore inspect                       # List recorded runs
     jarviscore inspect <workflow_id>         # Timeline for one run
     jarviscore human join alice --capabilities review --seed HOST:PORT
+    jarviscore room watch launch
 """
 
 import sys
@@ -34,6 +35,7 @@ def main():
         print("  atom       - Validate, test, and list integration atoms")
         print("  inspect    - Read recorded traces: what did my agents do?")
         print("  human      - Join the mesh as a person (join, inbox, answer)")
+        print("  room       - Work together on a shared workspace (ask, diff, accept, watch)")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -63,9 +65,12 @@ def main():
     elif command == 'human':
         from .human import main as human_main
         human_main()
+    elif command == 'room':
+        from .room import main as room_main
+        room_main()
     else:
         print(f"Unknown command: {command}")
-        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom, inspect, human")
+        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom, inspect, human, room")
         sys.exit(1)
 
 

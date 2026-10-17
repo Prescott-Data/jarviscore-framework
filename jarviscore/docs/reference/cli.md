@@ -24,6 +24,7 @@ Commands:
   atom        Validate, test, and list integration atoms
   inspect     Read recorded traces from past runs
   human       Join the mesh as a person
+  room        Work together on a shared workspace
 ```
 
 ---
@@ -465,6 +466,30 @@ jarviscore human answer TASK_ID --decline "Not my area"
 | `--decline [WHY]` | | You will not or cannot do it |
 | `--by` | the task's owner | Who is answering |
 | `--dir` | `human_inbox` | Inbox directory |
+
+---
+
+## jarviscore room
+
+A shared workspace that people and agents change together. See [Rooms](../guides/rooms.md). Rooms are found the way a Mesh with the same settings finds them: in Redis with `REDIS_URL` or `--redis-url`, otherwise on this machine.
+
+| Command | What it does |
+|---|---|
+| `room create ROOM [--from DIR] [--as NAME]` | Open a room, optionally with a directory's files |
+| `room status ROOM` | Current version and open proposals |
+| `room watch ROOM [--once] [--since N]` | Live feed of plans, steps, proposals and decisions |
+| `room ask ROOM "GOAL" --as NAME [--timeout S]` | Ask the mesh's agents to do it on the room's files; needs Redis |
+| `room diff ROOM PROPOSAL` | What a proposal changes |
+| `room accept ROOM PROPOSAL --as NAME` | Merge it; exits 1 on a conflict |
+| `room reject ROOM PROPOSAL "WHY" --as NAME [--redo]` | Turn it down; `--redo` asks the agents again with your reason |
+| `room checkout ROOM DIR` | Copy the current files into an empty directory |
+| `room push DIR [-m TITLE] --as NAME [--accept]` | Propose what changed in a checkout |
+
+```bash
+jarviscore room ask pricing "Fix the failing test in calc.py" --as alice
+jarviscore room diff pricing p-789486bf
+jarviscore room reject pricing p-789486bf "Also document add()" --as bob --redo
+```
 
 ---
 
