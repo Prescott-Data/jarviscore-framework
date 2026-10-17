@@ -64,6 +64,7 @@ from jarviscore.core.mesh import Mesh, MeshMode
 # Execution profiles
 from jarviscore.profiles.autoagent import AutoAgent
 from jarviscore.profiles.customagent import CustomAgent
+from jarviscore.profiles.humanagent import HumanAgent
 from jarviscore.execution.workspace import (
     BlobSnapshotStore,
     SandboxBinding,
@@ -141,6 +142,7 @@ __all__ = [
     # Profiles
     "AutoAgent",
     "CustomAgent",
+    "HumanAgent",
 
     # Durable source snapshots and ephemeral execution bindings
     "SourceRef",

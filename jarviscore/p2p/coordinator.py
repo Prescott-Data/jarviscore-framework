@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 # How often the roster is checked against SWIM membership, in seconds.
 MEMBERSHIP_CHECK_INTERVAL = 2.0
 
+# How long a request for one of this node's agents waits for its PeerClient
+# to be registered while the Mesh is still starting.
+PEER_CLIENT_WAIT_SECONDS = 10.0
+
 
 class P2PCoordinator:
     """
@@ -825,7 +829,7 @@ class P2PCoordinator:
             target = payload.get('target')
 
             # Find target agent's PeerClient
-            target_client = self._find_peer_client_by_role_or_id(target)
+            target_client = await self._await_peer_client(target)
             if not target_client:
                 logger.warning(f"Peer notify: target '{target}' not found")
                 return
@@ -856,7 +860,7 @@ class P2PCoordinator:
             logger.info(f"[COORDINATOR] Target: {target}, Payload keys: {list(payload.keys())}")
 
             # Find target agent's PeerClient
-            target_client = self._find_peer_client_by_role_or_id(target)
+            target_client = await self._await_peer_client(target)
             if not target_client:
                 logger.warning(f"Peer request: target '{target}' not found")
                 logger.warning(f"Available agents: {[a.agent_id for a in self.agents]}")
@@ -910,6 +914,25 @@ class P2PCoordinator:
 
         except Exception as e:
             logger.error(f"Error handling peer response: {e}")
+
+    async def _await_peer_client(self, target: str, timeout: float = PEER_CLIENT_WAIT_SECONDS):
+        """
+        The PeerClient for a target, waiting briefly when it is one of this
+        node's agents whose client is not registered yet.
+
+        This node answers capability requests as soon as SWIM starts, before the
+        Mesh has injected PeerClients, so a peer can learn of an agent and ask it
+        something inside that window. Dropping the request there leaves the
+        asker waiting out its whole timeout.
+        """
+        client = self._find_peer_client_by_role_or_id(target)
+        if client or not any(target in (a.agent_id, a.role) for a in self.agents):
+            return client
+        deadline = asyncio.get_running_loop().time() + timeout
+        while client is None and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+            client = self._find_peer_client_by_role_or_id(target)
+        return client
 
     def _find_peer_client_by_role_or_id(self, target: str):
         """

@@ -144,6 +144,7 @@ nav:
         - Durable Goal Execution: guides/goal-execution.md
         - Source Workspaces: guides/source-workspaces.md
         - HITL Escalation: guides/hitl.md
+        - People as Peers: guides/human-peers.md
       - Connect Capabilities:
         - Integrations: guides/integrations.md
         - Nexus Credentials: guides/nexus.md

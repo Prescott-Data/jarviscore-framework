@@ -205,6 +205,7 @@ Real systems built on JarvisCore, recorded end to end.
 |---------|-----------|-------------------|
 | **AutoAgent** | `role`, `capabilities`, `system_prompt` | Kernel OODA loop, tool generation, sandboxed execution, self-repair, planning |
 | **CustomAgent** | `execute_task()` and/or `on_peer_request()` | Mesh routing, discovery, lifecycle, full infrastructure injection |
+| **HumanAgent** | A name and capabilities | A person on the mesh: discovered, asked, and routed steps like any agent |
 
 ### Kernel and Planning
 
@@ -352,6 +353,15 @@ Attempts remain immutable across revisions. Reconciliation appends work only for
 unresolved obligation IDs, while satisfied obligations retain their evidence.
 See [Durable Goal Execution](https://jarviscore.developers.prescottdata.io/guides/goal-execution/).
 
+People join the same mesh as peers. A person owns capabilities, agents ask them by capability or route workflow steps to them, and they can ask agents back from their terminal:
+
+```bash
+python examples/human_peer_review.py                                     # an agent node
+jarviscore human join alice --capabilities review --seed 127.0.0.1:7949  # you
+```
+
+See [People as Peers](https://jarviscore.developers.prescottdata.io/guides/human-peers/).
+
 ### Observability
 
 | Signal | Backend |
@@ -395,6 +405,7 @@ jarviscore nexus test        # Open browser OAuth flow for a provider
 jarviscore memory init       # Initialize Athena MemOS backend
 jarviscore memory status     # Check Athena health
 jarviscore memory search     # Query the knowledge graph
+jarviscore human join        # Join the mesh as a person (review, approve, ...)
 ```
 
 ## Framework Integrations

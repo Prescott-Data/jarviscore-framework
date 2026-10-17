@@ -399,6 +399,7 @@ class Mesh:
                 if knob in self._settings.model_fields_set:
                     self.config.setdefault(knob, getattr(self._settings, knob))
 
+        peers_injected = False
         if self.config.get("p2p_enabled", False):
             self._logger.info("Initializing P2P coordinator (SWIM)...")
             try:
@@ -409,6 +410,13 @@ class Mesh:
                 await self._p2p_coordinator.start()
                 self._capabilities.add("peer_swim")
                 self._logger.info("✓ P2P coordinator started")
+
+                # The coordinator answers capability requests from here on, and
+                # announcing can take a minute when known peers are unreachable.
+                # Register PeerClients now, or a peer that already learned of an
+                # agent has its request dropped for want of a client to deliver to.
+                self._inject_peer_clients()
+                peers_injected = True
 
                 # Wait for SWIM to stabilise: if seed_nodes are configured,
                 # poll until at least one peer is known (up to 5s); otherwise
@@ -434,7 +442,10 @@ class Mesh:
                 self._logger.warning("P2P coordinator init failed (continuing without): %s", exc)
 
         # ── 5. PeerClients — always injected, transport depends on capabilities
-        self._inject_peer_clients()
+        # With P2P they already were, as the coordinator started; replacing them
+        # would orphan any request already in flight.
+        if not peers_injected:
+            self._inject_peer_clients()
         self._capabilities.add("peer_local")
         self._logger.info(
             "✓ PeerClients injected (transports: %s)",

@@ -26,6 +26,41 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## Unreleased
+
+### Added
+
+- **People as peers on the mesh.** `HumanAgent` puts a person on the mesh
+  with a role and capabilities. Other nodes see them in their roster, reach
+  them with `request_capability`, and route workflow steps to them from the
+  shared ledger; every person also carries the `human` capability. Each task
+  is put in front of the person through a channel and their answer is the
+  result: `approved` and `answered` succeed, `rejected` and `declined` fail
+  with the person's reason. `TerminalChannel` queues tasks in a console that
+  also lets the person `/ask` any capability and list `/peers`;
+  `InboxChannel` writes tasks to files. `jarviscore human join` puts you on a
+  mesh from a terminal, and `jarviscore human inbox` and `jarviscore human
+  answer` work an inbox. See [People as Peers](guides/human-peers.md) and
+  `examples/human_peer_review.py`.
+
+### Fixed
+
+- **A peer's first request to a node that just joined is no longer dropped.**
+  A starting node answers capability requests as soon as SWIM is up, but
+  registered its PeerClients only after announcing, which can take a minute
+  when known peers are unreachable. A peer that learned of an agent in that
+  window had its request dropped and waited out its whole timeout. The Mesh
+  now registers PeerClients as soon as the coordinator starts, and the
+  coordinator holds a request for one of its own agents briefly until its
+  client is registered.
+- **A step that fails on another node keeps its reason.** The workflow
+  reported every remote failure as "Remote node reported step failure"; it
+  now returns the failure the remote node stored.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.1.1 <span class="changelog-date">2026-10-16</span>
 
 ### Fixed

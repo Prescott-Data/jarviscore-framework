@@ -23,6 +23,7 @@ Commands:
   memory      Manage agent memory infrastructure
   atom        Validate, test, and list integration atoms
   inspect     Read recorded traces from past runs
+  human       Join the mesh as a person
 ```
 
 ---
@@ -412,6 +413,58 @@ These totals change as bundles and atoms are added or removed. Use `atom test`
 for structural validation; listing an atom is not a validation result.
 
 See [Testing Atoms](../guides/testing-atoms.md) for the full workflow: from writing a new atom to promoting it to `verified`.
+
+---
+
+## jarviscore human
+
+Puts a person on the mesh as a peer. See [People as Peers](../guides/human-peers.md).
+
+### human join
+
+Starts a mesh node whose only agent is a `HumanAgent` for you. Other nodes see you in their roster and route work for your capabilities to you; you can `/ask` any of them in return.
+
+```bash
+jarviscore human join alice --capabilities review,approve --seed 10.0.0.5:7949
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `name` | (required) | Your role on the mesh |
+| `--capabilities` | (required) | Comma-separated capabilities; `human` is always added |
+| `--seed` | (none) | `host:port` of any node already on the mesh |
+| `--host` | `127.0.0.1` | Address to listen on; use a LAN or VPN address to be reachable |
+| `--port` | `7960` | SWIM port; messages use this port + 1000 |
+| `--redis-url` | (none) | Shared Redis, to claim workflow steps from the ledger |
+| `--inbox` | (none) | Write tasks to this directory instead of the terminal |
+| `--describe` | (none) | How planners and peers should think of you |
+
+### human inbox
+
+Lists tasks waiting in an inbox directory.
+
+```bash
+jarviscore human inbox [--dir human_inbox]
+```
+
+### human answer
+
+Answers a task in an inbox directory.
+
+```bash
+jarviscore human answer TASK_ID "Swap the second sentence"
+jarviscore human answer TASK_ID --approve "ship it"
+jarviscore human answer TASK_ID --reject "The numbers are wrong"
+jarviscore human answer TASK_ID --decline "Not my area"
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--approve [NOTE]` | | Sign it off |
+| `--reject [WHY]` | | Refuse it; the step fails with your reason |
+| `--decline [WHY]` | | You will not or cannot do it |
+| `--by` | the task's owner | Who is answering |
+| `--dir` | `human_inbox` | Inbox directory |
 
 ---
 
