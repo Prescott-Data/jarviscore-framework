@@ -49,13 +49,21 @@ class NexusClient:
 
     Instantiate with the NEXUS_GATEWAY_URL from settings:
         client = NexusClient(gateway_url=settings.nexus_gateway_url)
+
+    The Gateway requires X-API-Key on every route except /health. The key is
+    NEXUS_GATEWAY_API_KEY unless one is passed; it grants Gateway access only,
+    never the broker's encryption key.
     """
 
-    def __init__(self, gateway_url: str, timeout: float = 30.0):
+    def __init__(self, gateway_url: str, timeout: float = 30.0, api_key: Optional[str] = None):
+        import os
+
         self.gateway_url = gateway_url.rstrip("/")
+        api_key = api_key or os.environ.get("NEXUS_GATEWAY_API_KEY")
         self.client = httpx.AsyncClient(
             base_url=self.gateway_url,
             timeout=timeout,
+            headers={"X-API-Key": api_key} if api_key else None,
         )
 
     # ── Control Plane ─────────────────────────────────────────────

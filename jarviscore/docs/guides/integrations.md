@@ -64,9 +64,7 @@ Register the connection required by your deployment:
 
 ```bash
 jarviscore nexus init
-jarviscore nexus register github \
-  --client-id=YOUR_ID \
-  --client-secret=YOUR_SECRET
+jarviscore nexus register github --client-id=YOUR_ID   # prompts for the secret
 jarviscore nexus test github
 ```
 

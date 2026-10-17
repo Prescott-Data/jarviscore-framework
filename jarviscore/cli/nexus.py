@@ -2,10 +2,11 @@
 jarviscore nexus — Developer setup tool for Nexus auth infrastructure.
 
 Usage:
+    python -m jarviscore.cli nexus init
     python -m jarviscore.cli nexus status
     python -m jarviscore.cli nexus up
-    python -m jarviscore.cli nexus register github --client-id=GH_ID --client-secret=GH_SECRET
-    python -m jarviscore.cli nexus register stripe --api-key=sk_live_...
+    python -m jarviscore.cli nexus register github --client-id=GH_ID      # secret is prompted for
+    python -m jarviscore.cli nexus register stripe                        # API key is prompted for
     python -m jarviscore.cli nexus list
     python -m jarviscore.cli nexus test github
 
@@ -73,6 +74,177 @@ def _gateway_url() -> Optional[str]:
     return None
 
 
+def _gateway_api_key() -> Optional[str]:
+    """Read NEXUS_GATEWAY_API_KEY from env or the project .env."""
+    key = os.environ.get("NEXUS_GATEWAY_API_KEY", "")
+    if key:
+        return key
+    return _read_env_file(Path.cwd() / ".env").get("NEXUS_GATEWAY_API_KEY") or None
+
+
+def _gateway_headers(extra: Optional[dict] = None) -> dict:
+    headers = dict(extra or {})
+    key = _gateway_api_key()
+    if key:
+        headers["X-API-Key"] = key
+    return headers
+
+
+# ── Stack secrets ────────────────────────────────────────────────────────────
+#
+# The broker's secrets belong to the broker. A project .env is loaded by every
+# agent process, and a process holding NEXUS_ENCRYPTION_KEY can decrypt every
+# stored credential; one agent already listed it into a user-facing answer.
+# Agents get the Gateway URL and a Gateway API key, which is all they use.
+
+#: Only the broker and gateway containers read these.
+STACK_SECRETS = (
+    "NEXUS_ENCRYPTION_KEY",
+    "NEXUS_STATE_KEY",
+    "NEXUS_BROKER_API_KEY",
+    "NEXUS_GATEWAY_API_KEY",
+)
+
+#: Never written to, and moved out of, the project .env.
+BROKER_ONLY_SECRETS = ("NEXUS_ENCRYPTION_KEY", "NEXUS_STATE_KEY", "NEXUS_BROKER_API_KEY")
+
+#: The placeholder older stacks shipped as the broker API key.
+_DEV_BROKER_KEY = "dev-broker-api-key-change-in-prod"
+
+
+def _stack_env_path() -> Path:
+    return Path.home() / ".jarviscore" / "nexus" / "stack.env"
+
+
+def _read_env_file(path: Path) -> dict:
+    values = {}
+    if not path.exists():
+        return values
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _write_private(path: Path, text: str, private_dir: bool = True) -> None:
+    """Write a file only the current user can read; optionally lock its directory to 0700."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if private_dir:
+        os.chmod(path.parent, 0o700)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(text)
+    os.chmod(path, 0o600)
+
+
+def _generate_secret(name: str) -> str:
+    import base64, secrets
+    if name in ("NEXUS_ENCRYPTION_KEY", "NEXUS_STATE_KEY"):
+        return base64.b64encode(secrets.token_bytes(32)).decode()
+    return secrets.token_urlsafe(32)
+
+
+def ensure_stack_secrets(project_env: Path, stack_env: Path) -> tuple:
+    """
+    Make sure the stack's secrets exist in ``stack_env`` and only there.
+
+    Keys an older ``nexus init`` wrote to the project .env are adopted rather
+    than regenerated: a new ENCRYPTION_KEY would leave every stored credential
+    unreadable. A broker-only key is removed from the project .env only when
+    ``stack_env`` holds the same value, so the copy that decrypts an existing
+    database is never the one deleted.
+
+    Returns (secrets, notes): the stack's secrets and what was done, for display.
+    """
+    notes = []
+    stack = _read_env_file(stack_env)
+    project = _read_env_file(project_env)
+
+    for name in STACK_SECRETS:
+        if stack.get(name):
+            continue
+        legacy = project.get(name) or os.environ.get(name, "")
+        if legacy and legacy != _DEV_BROKER_KEY:
+            stack[name] = legacy
+            notes.append(f"Moved {name} from {project_env.name} to {stack_env}")
+        else:
+            stack[name] = _generate_secret(name)
+            notes.append(f"Generated {name}")
+
+    _write_private(
+        stack_env,
+        "# Nexus stack secrets. Read by the broker and gateway containers only.\n"
+        "# Do not copy NEXUS_ENCRYPTION_KEY into a project .env: any process that\n"
+        "# can read it can decrypt every stored credential. Back this file up.\n"
+        + "".join(f"{name}={stack[name]}\n" for name in STACK_SECRETS),
+    )
+
+    kept, removed, conflicting = [], [], []
+    lines = project_env.read_text().splitlines() if project_env.exists() else []
+    for line in lines:
+        name, _, value = line.partition("=")
+        name = name.strip()
+        if name in BROKER_ONLY_SECRETS and not line.lstrip().startswith("#"):
+            value = value.strip().strip('"').strip("'")
+            if value in (stack[name], _DEV_BROKER_KEY):
+                removed.append(name)
+                continue
+            conflicting.append(name)
+        kept.append(line)
+
+    wanted = {
+        "NEXUS_GATEWAY_URL": f"http://localhost:{os.environ.get('NEXUS_GATEWAY_PORT', '8090')}",
+        "NEXUS_RETURN_URL": "http://localhost:8000/oauth/callback",
+        "NEXUS_GATEWAY_API_KEY": stack["NEXUS_GATEWAY_API_KEY"],
+    }
+    present = {line.partition("=")[0].strip() for line in kept}
+    for index, line in enumerate(kept):
+        if line.partition("=")[0].strip() == "NEXUS_GATEWAY_API_KEY":
+            kept[index] = f"NEXUS_GATEWAY_API_KEY={stack['NEXUS_GATEWAY_API_KEY']}"
+    kept += [f"{name}={value}" for name, value in wanted.items() if name not in present]
+
+    new_text = "\n".join(kept).strip("\n") + "\n"
+    if not project_env.exists():
+        _write_private(project_env, new_text, private_dir=False)
+    elif new_text != project_env.read_text():
+        project_env.write_text(new_text)
+    for name in removed:
+        notes.append(f"Removed {name} from {project_env.name}; agents no longer hold it")
+    for name in conflicting:
+        notes.append(
+            f"WARNING {project_env.name} has a {name} that differs from {stack_env}. "
+            "Left in place: find out which one encrypted your data, keep it in "
+            f"{stack_env}, and delete the other"
+        )
+    return stack, notes
+
+
+def _compose(stack_env: Path, secrets: dict, *args: str) -> int:
+    """Run docker compose on the bundled stack with its secrets."""
+    compose = _compose_file()
+    print(_info(f"Compose file: {compose}"))
+    return subprocess.run(
+        ["docker", "compose", "-f", str(compose), "--env-file", str(stack_env), *args],
+        text=True,
+        # Explicit values win over anything exported from an older setup.
+        env={**os.environ, **secrets},
+    ).returncode
+
+
+def _wait_healthy(url: str, seconds: int = 60) -> bool:
+    import time, urllib.request
+    for _ in range(seconds):
+        try:
+            urllib.request.urlopen(url, timeout=2)
+            return True
+        except Exception:
+            time.sleep(1)
+    return False
+
+
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 def cmd_status(args):
@@ -99,7 +271,16 @@ def cmd_status(args):
             print(_err(f"Gateway not reachable: {e}"))
             print(_info("  Run: python -m jarviscore.cli nexus up"))
 
-    # 3. Docker container state
+    # 3. Secrets are where they belong
+    stack_env = _stack_env_path()
+    if stack_env.exists():
+        print(_ok(f"Stack secrets: {stack_env}"))
+    leaked = [n for n in BROKER_ONLY_SECRETS if n in _read_env_file(Path.cwd() / ".env")]
+    if leaked:
+        print(_warn(f"{', '.join(leaked)} in ./.env — agents can read it and decrypt every credential"))
+        print(_info("  Run: jarviscore nexus up   (moves them to the stack's private file)"))
+
+    # 4. Docker container state
     if shutil.which("docker"):
         try:
             for name in ("nexus-broker", "nexus-gateway", "nexus-db"):
@@ -125,123 +306,71 @@ def cmd_status(args):
 def cmd_init(args):
     """
     One-command first-time setup:
-      1. Generate NEXUS_ENCRYPTION_KEY + NEXUS_STATE_KEY
-      2. Write them to .env (creates file if it doesn't exist)
-      3. Start the local Docker stack
-      4. Wait for broker health
-      5. Print next-step instructions
+      1. Generate the stack's secrets into ~/.jarviscore/nexus/stack.env (0600),
+         adopting keys an older init left in the project .env
+      2. Give the project .env what agents use: Gateway URL and Gateway API key
+      3. Start the local Docker stack and wait for broker and gateway health
     """
-    import base64, secrets, time, urllib.request, urllib.error
-
     print(_bold("\nJarvisCore — Nexus Init\n"))
+    _start_stack(first_run=True)
 
-    if not shutil.which("docker"):
-        print(_err("Docker not found. Install Docker Desktop: https://www.docker.com/products/docker-desktop"))
-        sys.exit(1)
-
-    env_file = Path.cwd() / ".env"
-    env_text = env_file.read_text() if env_file.exists() else ""
-
-    changed = False
-    for var in ("NEXUS_ENCRYPTION_KEY", "NEXUS_STATE_KEY"):
-        if var not in env_text:
-            key = base64.b64encode(secrets.token_bytes(32)).decode()
-            env_text += f"\n{var}={key}"
-            print(_ok(f"Generated {var}"))
-            changed = True
-        else:
-            print(_ok(f"{var} already set — keeping existing"))
-
-    if "NEXUS_GATEWAY_URL" not in env_text:
-        env_text += "\nNEXUS_GATEWAY_URL=http://localhost:8090"
-        env_text += "\nNEXUS_RETURN_URL=http://localhost:8000/oauth/callback"
-        changed = True
-
-    if changed:
-        env_file.write_text(env_text.lstrip())
-        print(_ok(f"Wrote keys to {env_file}"))
-
-    print()
-    compose = _compose_file()
-    print(_info(f"Compose file: {compose}"))
-
-    # Load the generated keys into the current process env
-    for line in env_text.splitlines():
-        if "=" in line and not line.startswith("#"):
-            k, _, v = line.partition("=")
-            os.environ.setdefault(k.strip(), v.strip())
-
-    result = subprocess.run(
-        ["docker", "compose", "-f", str(compose), "up", "-d", "--pull", "missing"],
-        text=True,
-    )
-    if result.returncode != 0:
-        print(_err("Docker Compose failed — check output above."))
-        sys.exit(1)
-
-    # Wait for broker to be healthy (up to 30s)
-    broker_port = os.environ.get("NEXUS_BROKER_PORT", "8080")
-    print()
-    print(_info("Waiting for broker to be ready..."))
-    for _ in range(30):
-        try:
-            urllib.request.urlopen(f"http://localhost:{broker_port}/health", timeout=2)
-            break
-        except Exception:
-            time.sleep(1)
-    else:
-        print(_warn("Broker didn't respond in 30s — check `docker logs nexus-broker`"))
-        sys.exit(1)
-
-    print(_ok("Nexus stack is up and healthy!"))
-    print()
     print(_bold("  Next step — register your OAuth apps:"))
     print()
-    print("    jarviscore nexus register linkedin \\")
-    print("        --client-id=YOUR_LI_CLIENT_ID \\")
-    print("        --client-secret=YOUR_LI_CLIENT_SECRET")
-    print()
-    print("    jarviscore nexus register github \\")
-    print("        --client-id=YOUR_GH_CLIENT_ID \\")
-    print("        --client-secret=YOUR_GH_CLIENT_SECRET")
+    print("    jarviscore nexus register github --client-id=YOUR_GH_CLIENT_ID")
+    print("    # the client secret is prompted for, so it stays out of shell history")
     print()
     print("  Then connect an account:")
-    print("    jarviscore nexus test linkedin")
+    print("    jarviscore nexus test github")
     print()
 
 
 def cmd_up(args):
-    """Start local Nexus stack via Docker Compose (assumes keys already in .env)."""
+    """Start the local Nexus stack with the secrets from ~/.jarviscore/nexus/stack.env."""
     print(_bold("\nStarting local Nexus stack...\n"))
+    _start_stack(first_run=False)
 
+
+def _start_stack(first_run: bool) -> None:
     if not shutil.which("docker"):
-        print(_err("Docker not found. Install Docker Desktop first."))
-        print(_info("  https://www.docker.com/products/docker-desktop"))
+        print(_err("Docker not found. Install Docker Desktop: https://www.docker.com/products/docker-desktop"))
         sys.exit(1)
 
-    compose = _compose_file()
-    if not compose.exists():
-        print(_err(f"docker-compose.nexus.yml not found at {compose}"))
-        print(_info("  Run: jarviscore nexus init"))
+    project_env = Path.cwd() / ".env"
+    stack_env = _stack_env_path()
+    secrets, notes = ensure_stack_secrets(project_env, stack_env)
+    for note in notes:
+        print(_warn(note[len("WARNING "):]) if note.startswith("WARNING ") else _ok(note))
+    if first_run or notes:
+        print(_ok(f"Stack secrets: {stack_env} (readable by you only)"))
+        print(_ok(f"Agent settings: {project_env} (NEXUS_GATEWAY_URL, NEXUS_GATEWAY_API_KEY)"))
+    print()
+
+    if _compose(stack_env, secrets, "up", "-d", "--pull", "missing") != 0:
+        print(_err("Docker Compose failed — check output above."))
         sys.exit(1)
 
-    print(_info(f"Compose file: {compose}"))
-    result = subprocess.run(
-        ["docker", "compose", "-f", str(compose), "up", "-d", "--pull", "missing"],
-        text=True,
-    )
-
-    if result.returncode == 0:
-        print()
-        print(_ok("Nexus stack is up!"))
-        print()
-        print("  Add to your .env if not already set:")
-        print("    NEXUS_GATEWAY_URL=http://localhost:8090")
-        print("    NEXUS_RETURN_URL=http://localhost:8000/oauth/callback")
-        print()
-    else:
-        print(_err("Docker Compose failed. Check the output above."))
+    broker_port = os.environ.get("NEXUS_BROKER_PORT", "8080")
+    gateway_port = os.environ.get("NEXUS_GATEWAY_PORT", "8090")
+    print()
+    print(_info("Waiting for broker and gateway to be ready..."))
+    if not _wait_healthy(f"http://localhost:{broker_port}/health"):
+        print(_warn("Broker didn't respond in 60s — check `docker logs nexus-broker`"))
         sys.exit(1)
+    if not _wait_healthy(f"http://localhost:{gateway_port}/health"):
+        print(_warn("Gateway didn't respond in 60s — check `docker logs nexus-gateway`"))
+        sys.exit(1)
+
+    print(_ok("Nexus stack is up and healthy!"))
+    print(_info(f"  Gateway: http://localhost:{gateway_port}  (requires NEXUS_GATEWAY_API_KEY)"))
+    print()
+
+
+def _prompt_secret(label: str) -> Optional[str]:
+    """Ask for a secret without echoing it; a flag would leave it in shell history."""
+    if not sys.stdin.isatty():
+        return None
+    import getpass
+    return getpass.getpass(f"  {label} (input hidden): ").strip() or None
 
 
 def _placement_from_args(args) -> dict:
@@ -284,6 +413,7 @@ def cmd_register(args):
 
     # Build credentials dict based on auth type
     if auth_type == "oauth2":
+        args.client_secret = args.client_secret or _prompt_secret(f"{label} client secret")
         if not args.client_id or not args.client_secret:
             print(_err(f"{label} requires --client-id and --client-secret"))
             _print_console_url(provider)
@@ -295,7 +425,7 @@ def cmd_register(args):
             "scopes":        catalog_entry.get("scopes", []),
         }
     elif auth_type == "api_key":
-        api_key = args.api_key or args.client_id
+        api_key = args.api_key or args.client_id or _prompt_secret(f"{label} API key")
         if not api_key:
             print(_err(f"{label} requires --api-key"))
             _print_console_url(provider)
@@ -314,6 +444,7 @@ def cmd_register(args):
             "api_key": api_key,
         }
     elif auth_type == "basic_auth":
+        args.client_secret = args.client_secret or _prompt_secret(f"{label} password or token")
         if not args.client_id or not args.client_secret:
             print(_err(f"{label} requires --client-id (username) and --client-secret (token)"))
             sys.exit(1)
@@ -374,7 +505,7 @@ def cmd_register(args):
             req = urllib.request.Request(
                 f"{gateway_url}/v1/providers",
                 data=payload,
-                headers={"Content-Type": "application/json"},
+                headers=_gateway_headers({"Content-Type": "application/json"}),
                 method="POST",
             )
             resp = urllib.request.urlopen(req, timeout=10)
@@ -527,7 +658,10 @@ def cmd_list(args):
     if gateway_url:
         import urllib.request, urllib.error
         try:
-            req = urllib.request.urlopen(f"{gateway_url}/v1/providers", timeout=5)
+            req = urllib.request.urlopen(
+                urllib.request.Request(f"{gateway_url}/v1/providers", headers=_gateway_headers()),
+                timeout=5,
+            )
             providers = json.loads(req.read())
             if providers:
                 print(_bold("  Gateway providers:"))
@@ -558,7 +692,7 @@ def cmd_test(args):
         try:
             sys.path.insert(0, str(Path(__file__).parent.parent.parent))
             from jarviscore.nexus.client import NexusClient
-            client = NexusClient(gateway_url)
+            client = NexusClient(gateway_url, api_key=_gateway_api_key())
             # Request a connection (this will open a browser for OAuth)
             user_id = args.user_id or "jarviscore-test"
             from jarviscore.nexus.providers import get_scopes

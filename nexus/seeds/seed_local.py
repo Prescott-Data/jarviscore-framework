@@ -5,7 +5,7 @@ nexus/seeds/seed_local.py
 Seed the local Nexus Broker database with OAuth provider credentials
 from the JarvisCore NexusLocalStore (the encrypted local credential store).
 
-Run this ONCE after `docker compose -f docker-compose.nexus.yml up -d`
+Run this ONCE after `jarviscore nexus init`
 and before running any agent workflows.
 
 Usage:

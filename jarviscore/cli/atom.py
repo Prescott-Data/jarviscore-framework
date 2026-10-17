@@ -351,7 +351,11 @@ def run_integration(bundle: str, atom: str, connection_id: str, nexus_url: str) 
         import asyncio
 
         async def _resolve():
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            import os
+
+            api_key = os.environ.get("NEXUS_GATEWAY_API_KEY")
+            headers = {"X-API-Key": api_key} if api_key else None
+            async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
                 # Health check first
                 try:
                     health = await client.get(f"{nexus_url}/health")
@@ -367,15 +371,16 @@ def run_integration(bundle: str, atom: str, connection_id: str, nexus_url: str) 
                 # Attempt to resolve the connection
                 try:
                     resp = await client.get(
-                        f"{nexus_url}/v1/connections/{connection_id}/token",
+                        f"{nexus_url}/v1/token/{connection_id}",
                     )
                     if resp.status_code == 200:
                         payload = resp.json()
                         print(f"  {_ok(f'connection_id resolved — token payload received')}")
                         # Show non-sensitive fields
+                        # Credentials sit under "credentials"; every field there is secret.
                         safe_payload = {
                             k: v for k, v in payload.items()
-                            if k not in ("access_token", "refresh_token", "client_secret", "api_key")
+                            if k not in ("credentials", "access_token", "refresh_token", "client_secret", "api_key")
                         }
                         if safe_payload:
                             print(f"  {_dim('Token fields (secrets redacted):')}")

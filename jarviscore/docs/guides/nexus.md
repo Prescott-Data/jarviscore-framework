@@ -140,7 +140,7 @@ The gateway is managed entirely via the `jarviscore` CLI: no separate install re
 jarviscore nexus init
 ```
 
-This generates encryption keys, adds `NEXUS_GATEWAY_URL` and `NEXUS_RETURN_URL` to `.env`, and starts the Docker stack. After `init`, subsequent starts use:
+This generates the stack's keys into `~/.jarviscore/nexus/stack.env` (readable by you only), adds `NEXUS_GATEWAY_URL`, `NEXUS_RETURN_URL` and `NEXUS_GATEWAY_API_KEY` to `.env`, and starts the Docker stack. Agents hold the Gateway key only; the encryption key stays with the broker. After `init`, subsequent starts use:
 
 ```bash
 jarviscore nexus up
