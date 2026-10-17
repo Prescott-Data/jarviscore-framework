@@ -53,7 +53,7 @@ Every person also carries the `human` capability, so a step or a peer can ask fo
 
 ```python
 from jarviscore import Mesh
-from jarviscore.profiles import HumanAgent
+from jarviscore import HumanAgent
 
 mesh = Mesh(config={"p2p_enabled": True, "bind_port": 7960, "seed_nodes": "10.0.0.5:7949"})
 mesh.add(HumanAgent("alice", ["review", "approve"]))

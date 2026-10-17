@@ -64,7 +64,7 @@ from jarviscore.core.mesh import Mesh, MeshMode
 # Execution profiles
 from jarviscore.profiles.autoagent import AutoAgent
 from jarviscore.profiles.customagent import CustomAgent
-from jarviscore.profiles.humanagent import HumanAgent
+from jarviscore.human import HumanAgent
 from jarviscore.execution.workspace import (
     BlobSnapshotStore,
     SandboxBinding,

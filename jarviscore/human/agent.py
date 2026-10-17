@@ -1,6 +1,9 @@
 """
 HumanAgent — a person as a peer on the mesh.
 
+Not one of the agent profiles (AutoAgent, CustomAgent): a profile is how an
+agent does work, and here a person does it.
+
 A HumanAgent is registered, announced and discovered like any agent: it has a
 role and capabilities, other nodes see it in their roster, mesh planners can
 route steps to it, it claims workflow steps from the shared ledger, and peers
@@ -8,8 +11,7 @@ reach it with ``request_capability``. The difference is who does the work:
 each task is put in front of a person through a channel, and the person's
 answer is the result.
 
-    from jarviscore import Mesh
-    from jarviscore.profiles import HumanAgent
+    from jarviscore import Mesh, HumanAgent
 
     mesh = Mesh(config={"p2p_enabled": True, "seed_nodes": "10.0.0.5:7949"})
     mesh.add(HumanAgent("alice", ["review", "approve"]))

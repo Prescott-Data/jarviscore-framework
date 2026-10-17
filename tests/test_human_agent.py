@@ -8,6 +8,7 @@ import os
 import pytest
 
 from jarviscore.human import (
+    HumanAgent,
     HumanAnswer,
     HumanChannel,
     InboxChannel,
@@ -17,7 +18,7 @@ from jarviscore.human import (
     open_items,
 )
 from jarviscore.human.channels import readable
-from jarviscore.profiles import CustomAgent, HumanAgent
+from jarviscore.profiles import CustomAgent
 
 
 class ScriptedChannel(HumanChannel):

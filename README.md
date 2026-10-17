@@ -205,7 +205,6 @@ Real systems built on JarvisCore, recorded end to end.
 |---------|-----------|-------------------|
 | **AutoAgent** | `role`, `capabilities`, `system_prompt` | Kernel OODA loop, tool generation, sandboxed execution, self-repair, planning |
 | **CustomAgent** | `execute_task()` and/or `on_peer_request()` | Mesh routing, discovery, lifecycle, full infrastructure injection |
-| **HumanAgent** | A name and capabilities | A person on the mesh: discovered, asked, and routed steps like any agent |
 
 ### Kernel and Planning
 

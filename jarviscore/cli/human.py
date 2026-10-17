@@ -25,8 +25,7 @@ def _err(msg: str) -> str: return f"\033[31m✗\033[0m  {msg}"
 
 async def _join(args) -> None:
     from jarviscore import Mesh
-    from jarviscore.human import InboxChannel, TerminalChannel
-    from jarviscore.profiles import HumanAgent
+    from jarviscore.human import HumanAgent, InboxChannel, TerminalChannel
 
     capabilities = [c.strip() for c in args.capabilities.split(",") if c.strip()]
     config = {
