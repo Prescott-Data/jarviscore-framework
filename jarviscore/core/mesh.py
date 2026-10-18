@@ -509,6 +509,7 @@ class Mesh:
                     name=f"distributed-worker-{agent.agent_id}",
                 )
                 for agent in self.agents
+                if getattr(agent, "mesh_worker", True)
             ]
             self._scheduler_task = asyncio.create_task(
                 self._run_scheduler(), name=f"mesh-scheduler-{self._node_id}"
@@ -1127,6 +1128,8 @@ class Mesh:
     def _mesh_capability_catalog(self) -> Dict[str, Any]:
         catalog: Dict[str, Any] = {}
         for agent in self.agents:
+            if not getattr(agent, "mesh_worker", True):
+                continue
             role_description = str(
                 getattr(agent, "description", "") or agent.role
             )

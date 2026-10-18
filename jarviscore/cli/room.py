@@ -12,6 +12,7 @@ Usage:
     jarviscore room checkout launch ./my-copy
     jarviscore room push ./my-copy -m "Tighter copy" --as alice [--accept]
     jarviscore room role launch bob editor --as alice   # makes the room members-only
+    jarviscore room slack launch --channel C0123ABC --seed 10.0.0.5:7949   # in Slack
 
 Rooms live in the mesh's Redis (REDIS_URL or --redis-url), so every person
 and agent node that shares it sees the same rooms.
@@ -209,6 +210,54 @@ def _mesh_redis(args) -> str:
     return redis_url
 
 
+async def cmd_slack(args):
+    """Serve the room in a Slack channel: a RoomAgent talks with the people there."""
+    import os
+
+    from jarviscore import Mesh
+    from jarviscore.human import HumanAgent
+    from jarviscore.room import Room, RoomAgent
+    from jarviscore.room.slack import SLACK_API, SlackApi, SlackError, SlackRoom
+
+    config = {"redis_url": _mesh_redis(args), "p2p_enabled": False}
+    if args.seed or args.port:
+        # On the mesh's transport, planners and agents find the channel's people.
+        config.update(p2p_enabled=True, bind_host=args.host, bind_port=args.port or 7961,
+                      node_name=f"slack-{args.room}")
+        if args.seed:
+            config["seed_nodes"] = args.seed
+    mesh = Mesh(config=config)
+    agent = mesh.add(RoomAgent)
+    agent.ask_options = {"timeout": args.timeout}
+    capabilities = [c.strip() for c in args.capabilities.split(",") if c.strip()]
+    mesh.add(HumanAgent(
+        args.people, capabilities, channel=None,
+        description=(f"The people in Slack channel {args.channel}: anyone there can answer, "
+                     "confirm, approve or decide. Answers take minutes, not seconds."),
+    ))
+    await mesh.start()
+    if config["p2p_enabled"] and "peer_swim" not in mesh.capabilities:
+        print(_err("Could not join the mesh transport; check --seed/--host/--port and the logs."))
+        await mesh.stop()
+        sys.exit(1)
+    try:
+        room = Room.for_mesh(mesh, args.room)
+        room.head()
+        api = await SlackApi.through_nexus(mesh, api_url=os.environ.get("SLACK_API_URL", SLACK_API))
+        bridge = SlackRoom(room, agent, args.channel, people=args.people, api=api)
+        try:
+            await bridge.start()
+        except (SlackError, RuntimeError) as exc:
+            print(_err(f"Could not reach Slack: {exc}"))
+            print("   Connect the workspace's bot (slack) and app-level (slack_app) tokens in Nexus;")
+            print("   see the Rooms in Slack guide. Check the bot is in the channel.")
+            sys.exit(1)
+        print(_ok(f"Room {room.id} is in Slack channel {args.channel}. Ctrl-C to stop."))
+        await bridge.run()
+    finally:
+        await mesh.stop()
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="jarviscore room", description="Work together in a shared room")
     p.add_argument("--redis-url", default=None, help="Redis shared by the mesh (default: REDIS_URL)")
@@ -265,6 +314,18 @@ def build_parser() -> argparse.ArgumentParser:
     push.add_argument("--as", dest="as_", required=True)
     push.add_argument("--accept", action="store_true", help="Accept it straight away")
 
+    slack = with_room("slack", "Serve the room in a Slack channel (Slack connected through Nexus)")
+    slack.add_argument("--channel", required=True, help="Slack channel id, e.g. C0123ABC")
+    slack.add_argument("--people", default="team",
+                       help="Name the channel's people go by on the mesh (default: team)")
+    slack.add_argument("--capabilities", default="",
+                       help="What the channel's people do for agents, e.g. approval,review "
+                            "(they always have 'human')")
+    slack.add_argument("--seed", default=None,
+                       help="host:port of a node on the mesh, so planners and agents find the people")
+    slack.add_argument("--host", default="127.0.0.1", help="Address to join the mesh on")
+    slack.add_argument("--port", type=int, default=0, help="Port to join the mesh on (default 7961)")
+    slack.add_argument("--timeout", type=float, default=1800, help="Seconds each piece of work may take")
     return p
 
 

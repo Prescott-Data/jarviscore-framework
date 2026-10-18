@@ -51,6 +51,10 @@ class Agent(ABC):
     p2p_responder: bool = False  # Set to True for agents that run a continuous listener loop (e.g. CustomAgent)
     output_schema: Optional[Any] = None  # Pydantic BaseModel class for output validation
     final_response_passthrough: bool = False
+    #: False for an agent people reach directly (a conversational interface, such
+    #: as a RoomAgent): it uses the mesh, but planners never route steps to it,
+    #: it claims none, and its capabilities are not announced to peers.
+    mesh_worker: bool = True
 
     def __init__(self, agent_id: Optional[str] = None):
         """

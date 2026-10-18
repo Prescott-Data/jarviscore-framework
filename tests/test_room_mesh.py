@@ -280,3 +280,32 @@ def test_a_custom_agent_keeps_its_own_sandbox():
         sandbox = "mine"
 
     assert Own().sandbox == "mine"
+
+
+async def test_the_room_agent_is_reached_by_people_not_routed_work(tmp_path, monkeypatch):
+    """Planners never route steps to the room's agent, so a step for a person goes to the person."""
+    from jarviscore.p2p.coordinator import P2PCoordinator
+    from jarviscore.room import RoomAgent
+
+    redis = RedisContextStore(client=fakeredis.FakeRedis(decode_responses=True))
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: redis)
+    monkeypatch.setattr(Mesh, "_init_blob_storage",
+                        lambda self, settings: LocalBlobStorage(str(tmp_path / "blobs")))
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.02})
+    room_agent = mesh.add(RoomAgent)
+    mesh.add(HumanAgent("team", ["approval"], channel=None))
+    await mesh.start()
+    try:
+        catalog = mesh._mesh_capability_catalog()
+        assert "approval" in catalog and "human" in catalog
+        assert "room-conversation" not in catalog and "room" not in catalog
+        workers = {task.get_name() for task in mesh._distributed_worker_tasks}
+        assert f"distributed-worker-{room_agent.agent_id}" not in workers
+        node = type("Node", (), {"agents": mesh.agents, "_get_node_id": lambda self: "node-1"})()
+        payload = P2PCoordinator._capability_payload(node)
+        assert room_agent.agent_id not in payload["agents"]
+        assert "room-conversation" not in payload["capabilities"]
+    finally:
+        await mesh.stop()

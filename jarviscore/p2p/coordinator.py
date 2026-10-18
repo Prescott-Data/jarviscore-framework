@@ -268,6 +268,8 @@ class P2PCoordinator:
         capabilities: Dict[str, List[str]] = {}
         agents_info = {}
         for agent in self.agents:
+            if not getattr(agent, "mesh_worker", True):
+                continue  # reached directly by people, not offered to the mesh
             for cap in agent.capabilities:
                 capabilities.setdefault(cap, []).append(agent.agent_id)
             agents_info[agent.agent_id] = {
