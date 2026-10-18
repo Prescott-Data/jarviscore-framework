@@ -486,6 +486,7 @@ A shared workspace that people and agents change together. See [Rooms](../guides
 | `room role ROOM PERSON viewer\|editor\|owner\|none --as NAME` | Set or remove a role; the first one makes an open room members-only |
 | `room checkout ROOM DIR` | Copy the current files into an empty directory |
 | `room push DIR [-m TITLE] --as NAME [--accept]` | Propose what changed in a checkout |
+| `room slack ROOM --channel ID [--seed HOST:PORT] [--capabilities LIST] [--people NAME]` | Serve the room in a Slack channel (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`); see [In Slack](../guides/rooms.md#in-slack) |
 
 ```bash
 jarviscore room ask pricing "Fix the failing test in calc.py" --as alice

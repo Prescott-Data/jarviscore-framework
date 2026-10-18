@@ -1637,3 +1637,18 @@ async def test_mesh_planner_requires_one_provider_for_mutating_outcomes(systems)
 
     with pytest.raises(MeshPlanError, match="exactly one system"):
         await planner.plan("Find evidence")
+
+@pytest.mark.asyncio
+async def test_the_audit_knows_proposing_is_how_shared_files_change():
+    """A redo on a room's files was refused: the audit demanded a `write` nobody can do."""
+    llm = MockLLMClient(responses=responses() + responses())
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    await planner.plan("Find evidence", {"source_snapshot": {"snapshot_id": "s1"}})
+    await planner.plan("Find evidence", {})
+
+    with_files = llm.calls[2]["messages"][0]["content"]
+    without_files = llm.calls[5]["messages"][0]["content"]
+    assert "Never require a `write` or a system to edit them" in with_files
+    assert "including a redo of an earlier attempt" in with_files
+    assert "Never require a `write` or a system to edit them" not in without_files

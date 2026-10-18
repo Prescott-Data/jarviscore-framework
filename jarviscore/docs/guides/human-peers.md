@@ -132,6 +132,10 @@ jarviscore human answer task-cdad289372 --reject "The numbers are wrong"
 
 A channel is any object with `async ask(item) -> HumanAnswer`; `start`, `notify`, and `stop` are optional. Notifications sent to a person (`peers.notify`) are printed in the terminal or appended to `notices.jsonl` in the inbox.
 
+## Answer from Slack
+
+`SlackPeopleChannel` puts a team's Slack channel on the mesh as one person: a task is posted in the thread of the room work that raised it, and whoever in the channel answers there answers it. `approve`, `reject <why>` and `decline <why>` decide instead. See [Rooms in Slack](rooms.md#in-slack).
+
 ## Joining across machines
 
 `--seed` is the `host:port` of any node already on the mesh. Set `--host` to an address the other nodes can reach. A node listens on its SWIM `--port` and on that port plus 1000 for messages, so both must be open between the machines.

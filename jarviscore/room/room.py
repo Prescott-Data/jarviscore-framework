@@ -213,8 +213,8 @@ class Room:
         Returns an ``AskResult`` whose ``proposal`` holds their changes for
         people to review, or None if they changed nothing. ``revision_of``
         names a rejected proposal; its reason is passed on to the agents.
-        Options are passed to ``Mesh.execute_goal`` (``timeout``,
-        ``plan_template``).
+        Options: ``timeout`` and ``plan_template`` (passed to
+        ``Mesh.execute_goal``), ``workflow_id`` to choose the run's id.
         """
         mesh = getattr(self, "mesh", None)
         if mesh is None:
@@ -475,7 +475,7 @@ class Room:
         self._event("proposal.opened", proposal=proposal.id, by=proposal.author,
                     asked_by=proposal.asked_by, title=proposal.title,
                     base_version=proposal.base_version, paths=proposal.paths,
-                    revision_of=proposal.revision_of)
+                    revision_of=proposal.revision_of, workflow_id=proposal.workflow_id)
         return proposal
 
     async def diff(self, proposal_id: str) -> List[FileChange]:
@@ -556,6 +556,16 @@ class Room:
                         version=version, paths=proposal.paths,
                         merged_over=head.version - proposal.base_version,
                         line_merged=sorted(line_merged))
+            if proposal.revision_of:
+                # A revision that lands replaces the proposal it revised.
+                replaced = self.ledger.get_proposal(self.id, proposal.revision_of) or {}
+                if replaced.get("status") == "open" and self.ledger.decide_proposal(
+                        self.id, proposal.revision_of, {
+                            "status": "rejected", "decided_by": by, "decided_at": time.time(),
+                            "reason": f"replaced by {proposal_id}"}):
+                    self._event("proposal.rejected", proposal=proposal.revision_of, by=by,
+                                author=replaced.get("author", ""),
+                                reason=f"replaced by {proposal_id}")
             return new_head
         raise RuntimeError(f"Could not accept {proposal_id}: the room kept changing")
 

@@ -101,3 +101,15 @@ def test_members_only_from_the_terminal(here, capsys):
     with pytest.raises(SystemExit):
         main(["push", str(here / "bob"), "--as", "bob"])
     assert "bob cannot propose changes" in capsys.readouterr().out
+
+
+def test_slack_needs_its_tokens_and_the_mesh(here, capsys, monkeypatch):
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    with pytest.raises(SystemExit):
+        main(["slack", "launch", "--channel", "C1"])
+    assert "SLACK_BOT_TOKEN" in capsys.readouterr().out
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    with pytest.raises(SystemExit):
+        main(["slack", "launch", "--channel", "C1"])
+    assert "REDIS_URL" in capsys.readouterr().out

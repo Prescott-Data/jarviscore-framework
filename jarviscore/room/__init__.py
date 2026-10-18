@@ -12,6 +12,7 @@ from jarviscore.room.room import (
     RoomConflict,
     RoomPermissionError,
 )
+from jarviscore.room.slack import SlackPeopleChannel, SlackRoom
 from jarviscore.room.work import AskResult, RoomSource
 
 __all__ = [
@@ -29,4 +30,6 @@ __all__ = [
     "RoomLedger",
     "RoomPermissionError",
     "RoomSource",
+    "SlackPeopleChannel",
+    "SlackRoom",
 ]

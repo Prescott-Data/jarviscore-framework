@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Optional
 
 
 DEPENDENCY_POLICIES = frozenset({"satisfied", "terminal_evidence"})
@@ -236,7 +236,7 @@ class MeshPlanner:
                     f"Initial Mesh DAG repair failed: {repair_error}"
                 ) from repair_error
         plan = MeshPlan(goal=source, obligations=obligations, steps=steps)
-        audit = await self._call_json(self._audit_prompt(plan))
+        audit = await self._call_json(self._audit_prompt(plan, context))
         first_failure = audit.get("missing") or audit
         for repair_attempt in range(1, 3):
             if audit.get("complete") is True and not audit.get("missing"):
@@ -254,7 +254,7 @@ class MeshPlanner:
                     )
                 elif audit.get("corrections") is not None:
                     plan = self._apply_audit_corrections(plan, audit)
-                    audit = await self._call_json(self._audit_prompt(plan))
+                    audit = await self._call_json(self._audit_prompt(plan, context))
                     continue
                 else:
                     repair_raw = await self._call_json(
@@ -262,7 +262,7 @@ class MeshPlanner:
                     )
                     if repair_raw.get("corrections") is not None:
                         plan = self._apply_audit_corrections(plan, repair_raw)
-                        audit = await self._call_json(self._audit_prompt(plan))
+                        audit = await self._call_json(self._audit_prompt(plan, context))
                         continue
                 repaired_steps = self._ensure_declared_artifact_dependencies(
                     self._ensure_response_step(self._parse_steps(repair_raw, obligations))
@@ -272,7 +272,7 @@ class MeshPlanner:
                     obligations=obligations,
                     steps=repaired_steps,
                 )
-                audit = await self._call_json(self._audit_prompt(plan))
+                audit = await self._call_json(self._audit_prompt(plan, context))
             except Exception as exc:
                 raise MeshPlanError(
                     f"Mesh plan failed coverage audit: {first_failure}; "
@@ -1436,7 +1436,18 @@ or copy runtime fields."""
     a verified no-op; do not omit the stage merely because its mutation may be unnecessary.
 - A negative result may complete only when it meets the brief's declared evidence standard."""
 
-    def _audit_prompt(self, plan: MeshPlan) -> str:
+    @staticmethod
+    def _workspace_audit_rule(context: Optional[dict[str, Any]]) -> str:
+        if not (context or {}).get("source_snapshot"):
+            return ""
+        return (
+            " The steps work on their own copies of a shared set of files. A `propose` step"
+            " with empty systems that changes those files fully delivers a requested change"
+            " to them, including a redo of an earlier attempt: people review its changes,"
+            " which is how those files change. Never require a `write` or a system to edit them."
+        )
+
+    def _audit_prompt(self, plan: MeshPlan, context: Optional[dict[str, Any]] = None) -> str:
         source_blocks = self._source_blocks(plan.goal)
         return f"""Audit a proposed mesh DAG against its immutable source goal.
 
@@ -1460,7 +1471,7 @@ limit and evidence requirement in SOURCE GOAL exists in the obligation ledger
 and is covered by an executable DAG step. Keeping something for later sessions is
 covered by any step whose task establishes it: every agent has its own cross-session
 memory, so it needs no provider system, and a `propose` step with empty systems is
-correct for it. For every write, notify, or destructive
+correct for it.{self._workspace_audit_rule(context)} For every write, notify, or destructive
 step, verify that information needed to perform the intended action is supplied by the
 source goal or a producer directly listed in `depends_on`. Runtime context contains direct
 dependency artifacts only. Transitive ancestry establishes ordering only and does not deliver

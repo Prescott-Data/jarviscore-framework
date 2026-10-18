@@ -156,7 +156,69 @@ The creator becomes an owner when the first member is added, and a room always k
 | `proposal.accepted`, `proposal.rejected`, `proposal.conflicted` | Decisions, with who made them and why; `line_merged` lists files combined line by line |
 | `member.changed` | Someone's role was set or removed |
 
+## In Slack
+
+A room can live in a Slack channel, so the team asks, watches, reviews, takes over and decides where it already talks. Mention the bot with what you need; your message becomes the thread where the work happens:
+
+```text
+alice:  @jarvis Fill in the Risks section of plan.md from the concerns in brief.md
+  bot:  On it, alice. Progress shows up here.
+  bot:  plan: inspect-source-files (editing) → fill-risks-section (editing)
+  bot:  writer took fill-risks-section
+  bot:  ▲ p-6ceeb0ca proposed by writer for alice: Fill in the Risks section… (1 file, on v1)
+        (the diff)                                              [Accept] [Full diff]
+  bob:  redo too long; max 12 words per bullet and name Sam for support
+  bot:  ✗ bob rejected p-6ceeb0ca: too long; max 12 words per bullet and name Sam for support
+  bot:  ▲ p-094191ba proposed by writer for bob: … (1 file, on v2)
+carol:  [Accept]
+  bot:  ✓ carol accepted p-094191ba → v3
+```
+
+| In the thread | Does |
+|---|---|
+| `accept`, or the Accept button | Merge the proposal |
+| `reject <why>` | Turn it down |
+| `redo <why>` | Turn it down and have the agents do it again with your reason (also redoes a conflicted proposal) |
+| `diff` | The whole change |
+| `edit <file>` and your version in a code block | Propose your own version; accepting it closes the one it replaces |
+| `show <file>`, `status`, `help` | Look around |
+
+Requests that merely start with one of these words ("edit the plan to add a FAQ") are requests. Everyone acts as themselves: the Slack user who asked, accepted or rejected is `asked_by`/`by`, so roles apply and the agents use the asker's own accounts. Members are Slack handles, or map users yourself with `people={"U0123": "alice@acme.com"}`. Work done on the room anywhere else, from the CLI or another channel, shows up in the channel too.
+
+**When the agents need a person.** The channel's people are on the mesh as one [HumanAgent](human-peers.md). A step that needs a person (a confirmation, a sign-off, a decision) is posted in the thread of the work that raised it, and whoever answers there answers it:
+
+```text
+  bot:  🙋 A person is needed: Obtain confirmation of the send date for the waitlist email…
+  bob:  Confirmed: send it Wednesday at 09:30, right after the announcement.
+  bot:  Thanks bob, passed on to the agents.
+  bot:  team finished step-confirm-send-date
+```
+
+Replies `approve`, `reject <why>` and `decline <why>` decide instead of answering; a rejection fails the step with the reason.
+
+**Running it.** Create a Slack app with Socket Mode on (so it needs no public URL), an app-level token with `connections:write`, a bot token with `chat:write`, `channels:history`, `groups:history`, `users:read` and `app_mentions:read`, event subscriptions `app_mention`, `message.channels` and `message.groups`, and Interactivity on. Invite the bot to the channel, then:
+
+```bash
+export SLACK_BOT_TOKEN=xoxb-…  SLACK_APP_TOKEN=xapp-…
+jarviscore room slack launch --channel C0123ABC --seed 10.0.0.5:7949 --capabilities approval
+```
+
+`--seed` joins the mesh's transport so planners and agents find the channel's people (`--capabilities` says what they do for agents, besides `human`). In your own process:
+
+```python
+from jarviscore.human import HumanAgent
+from jarviscore.room import Room, SlackPeopleChannel, SlackRoom
+
+people = SlackPeopleChannel()
+mesh.add(HumanAgent("team", ["approval"], channel=people))
+await mesh.start()
+await SlackRoom(Room.for_mesh(mesh, "launch"), "C0123ABC", people_channel=people).run()
+```
+
+The bridge keeps its place in the room (which events it has posted, which thread is whose), so a restart picks up where it left off. To try it without a workspace, `jarviscore.testing.slack.FakeSlack` speaks the same Web API and Socket Mode protocol (`SLACK_API_URL` points the client at it).
+
 ## Limits
 
 - Lines are merged exactly: two edits to the same line conflict even if they are compatible in meaning.
-- Who someone is comes from your application (`asked_by`, `by`) or the CLI's `--as`; connect a chat surface or SSO for real identities.
+- Who someone is comes from your application (`asked_by`, `by`), a chat surface such as Slack, or the CLI's `--as`.
+- Slack is the first chat surface; `SlackRoom` is a thin adapter over the room's events and actions, so others (Teams, Discord) follow the same shape.

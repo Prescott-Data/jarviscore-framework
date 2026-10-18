@@ -50,6 +50,10 @@ class AskResult:
     result: Dict[str, Any]
 
 
+def new_workflow_id(room_id: str) -> str:
+    return f"room-{room_id}-{uuid4().hex[:8]}"
+
+
 def install(mesh, room: Room) -> None:
     """Let goals on this mesh use rooms stored where ``room`` is stored."""
     adapters = mesh.config.setdefault("workspace_source_adapters", {})
@@ -66,10 +70,11 @@ async def ask(
     plan_template: Optional[Dict[str, Any]] = None,
     timeout: Optional[float] = None,
     poll_interval: float = 0.5,
+    workflow_id: str = "",
 ) -> AskResult:
     room.require(asked_by, "editor", "ask for work")
     head = room.head()
-    workflow_id = f"room-{room.id}-{uuid4().hex[:8]}"
+    workflow_id = workflow_id or new_workflow_id(room.id)
     task = goal
     room_context: Dict[str, Any] = {"id": room.id, "asked_by": asked_by, "version": head.version}
     if revision_of:
@@ -80,11 +85,18 @@ async def ask(
             "by": previous.decided_by,
             "reason": previous.reason,
         }
-        task = (
-            f"{goal}\n\nA previous attempt ({revision_of}) was rejected by "
-            f"{previous.decided_by or 'a reviewer'}: {previous.reason or 'no reason given'}. "
-            "Address that and redo the work on the current files."
-        )
+        if previous.status == "conflicted":
+            task = (
+                f"{goal}\n\nA previous attempt ({revision_of}) could not be merged: "
+                f"{', '.join(previous.conflicts) or 'its files'} changed in the meantime. "
+                "Redo the work on the current files."
+            )
+        else:
+            task = (
+                f"{goal}\n\nA previous attempt ({revision_of}) was rejected by "
+                f"{previous.decided_by or 'a reviewer'}: {previous.reason or 'no reason given'}. "
+                "Address that and redo the work on the current files."
+            )
     room.note("ask.started", by=asked_by, goal=goal, workflow_id=workflow_id,
               version=head.version, revision_of=revision_of)
     cursor: Dict[str, int] = {}

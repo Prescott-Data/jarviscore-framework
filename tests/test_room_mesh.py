@@ -152,6 +152,23 @@ async def test_a_rejection_is_passed_to_the_next_attempt(team):
     assert second.proposal.revision_of == first.proposal.id
 
 
+async def test_a_conflict_is_explained_to_the_next_attempt(team):
+    room, coder = team
+    first = await room.ask("Fix the app", asked_by="alice", timeout=20,
+                           plan_template=plan("Fix the app", ("fix", "coding", [])))
+    mine = await room.propose({"src/app.py": "VERSION = 'v9'\n"}, author="bob")
+    await room.accept(mine.id, by="bob")
+    with pytest.raises(Exception):
+        await room.accept(first.proposal.id, by="alice")
+
+    await room.ask("Fix the app", asked_by="alice", revision_of=first.proposal.id,
+                   timeout=20, plan_template=plan("Fix the app", ("fix", "coding", [])))
+
+    objective = coder.tasks[-1]["context"]["objective"]
+    assert "could not be merged: src/app.py changed in the meantime" in objective
+    assert "rejected by" not in objective
+
+
 async def test_work_that_changes_nothing_proposes_nothing(team):
     room, coder = team
     coder.execute_task = _no_edits

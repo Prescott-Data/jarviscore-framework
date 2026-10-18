@@ -26,7 +26,7 @@ def describe(event: Dict[str, Any]) -> str:
     if kind.startswith("step."):
         verb = {"claimed": "took", "completed": "finished", "blocked": "is blocked on",
                 "requeued": "handed back", "claim_expired": "lost hold of",
-                "resumed": "resumed"}.get(kind[5:], kind[5:])
+                "resumed": "resumed", "epoch_continued": "kept working on"}.get(kind[5:], kind[5:])
         who = event.get("by") or "a peer"
         extra = f": {event.get('error') or event.get('reason')}" if (
             event.get("error") or event.get("reason")) else ""
@@ -37,7 +37,7 @@ def describe(event: Dict[str, Any]) -> str:
     if kind == "ask.failed":
         return f"the work stopped: {event.get('error', '')}"
     if kind == "proposal.opened":
-        ask = f" for {event['asked_by']}" if event.get("asked_by") else ""
+        ask = f" for {event['asked_by']}" if event.get("asked_by") not in ("", None, by) else ""
         title = f": {event['title']}" if event.get("title") else ""
         return f"▲ {proposal} proposed by {by}{ask}{title} ({files}, on v{event.get('base_version')})"
     if kind == "proposal.accepted":

@@ -54,6 +54,18 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   claims, proposals and decisions go to the room's event log. Rooms live in
   Redis when the Mesh has it, otherwise on the machine. `jarviscore room`
   covers all of it from a terminal. See [Rooms](guides/rooms.md).
+- **Rooms in Slack.** `jarviscore room slack ROOM --channel ID` (or
+  `SlackRoom(room, channel).run()`) puts a room in a Slack channel over
+  Socket Mode, with no public URL. Mentioning the bot asks the agents, and the
+  message becomes the thread where the plan, each step, and the proposal with
+  its diff appear. In the thread people `accept` (or press Accept), `reject`,
+  `redo` with a reason, see the `diff`, or `edit` a file to propose their own
+  version, which closes the one it replaces once accepted. The Slack user is
+  who asked or decided, so room roles and per-person accounts apply. Work done
+  on the room elsewhere shows up in the channel. With `SlackPeopleChannel`,
+  the channel's people are a HumanAgent on the mesh: a step that needs a
+  person is asked in the work's thread and whoever answers there answers it.
+  `jarviscore.testing.slack.FakeSlack` stands in for Slack in tests.
 - **Steps act for the person who asked.** A workflow registered with
   `context["acting_for"]` runs its steps for that person: Nexus lookups,
   consents and calls use that person's own workspace instead of the
@@ -93,6 +105,12 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Fixed
 
+- **Redoing work on shared files no longer fails planning.** The plan audit
+  did not know that a `propose` step is how a goal's shared files change, so
+  it could demand a provider `write` for a redo and fail the plan; it now
+  gets the same rule as the planner when the goal has files.
+- **A redo of a conflicted proposal says what happened.** The agents are told
+  which files changed in the meantime instead of "rejected: no reason given".
 - **A peer's first request to a node that just joined is no longer dropped.**
   A starting node answers capability requests as soon as SWIM is up, but
   registered its PeerClients only after announcing, which can take a minute

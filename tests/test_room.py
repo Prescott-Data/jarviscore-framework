@@ -143,6 +143,27 @@ class TestAccepting:
         assert files["a.txt"] == b"a\n" and files["b.txt"] == b"b\n"
 
 
+class TestRevising:
+
+    async def test_accepting_a_revision_closes_the_proposal_it_replaces(self, room):
+        theirs = await room.propose({"README.md": "# Launch\n\nAgent draft.\n"}, author="writer")
+        mine = await room.propose({"README.md": "# Launch\n\nBetter.\n"}, author="carol",
+                                  revision_of=theirs.id)
+        await room.accept(mine.id, by="alice")
+        replaced = room.proposal(theirs.id)
+        assert (replaced.status, replaced.decided_by, replaced.reason) == (
+            "rejected", "alice", f"replaced by {mine.id}")
+        assert room.events()[-1]["type"] == "proposal.rejected"
+
+    async def test_a_revision_leaves_an_already_decided_original_alone(self, room):
+        theirs = await room.propose({"README.md": "# Launch\n\nAgent draft.\n"}, author="writer")
+        await room.reject(theirs.id, by="bob", reason="too long")
+        redo = await room.propose({"README.md": "# Launch\n\nShort.\n"}, author="writer",
+                                  revision_of=theirs.id)
+        await room.accept(redo.id, by="bob")
+        assert room.proposal(theirs.id).reason == "too long"
+
+
 class TestRejecting:
 
     async def test_a_rejection_keeps_its_reason(self, room):
