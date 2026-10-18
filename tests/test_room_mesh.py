@@ -114,6 +114,7 @@ async def test_agents_work_on_the_room_and_propose_their_changes(team):
     proposal = asked.proposal
     assert proposal.asked_by == "alice" and proposal.base_version == 1
     assert coder.acting_for == ["alice"], "the step ran as the person who asked"
+    assert coder.tasks[0]["context"]["room_id"] == "repo", "so memory_scope_field='room_id' scopes it"
     assert proposal.author == "coder, writer"
     assert proposal.paths == ["README.md", "src/app.py", "test_app.py"]
     assert await text(room, "src/app.py") == "VERSION = 'v1'\n", "nothing lands until accepted"

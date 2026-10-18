@@ -124,7 +124,8 @@ class TestTheAgent:
     def test_the_room_role_is_a_kernel_role_with_its_own_tools(self):
         tools = RoomSubAgent("room-1", llm_client=None, room_agent=RoomAgent())._tools
         assert {"ask_agents", "request_changes", "accept", "reject", "propose_version",
-                "answer_question", "room_status", "read_file", "show_change", "stay_quiet"} <= set(tools)
+                "answer_question", "room_status", "room_history", "read_file", "show_change",
+                "stay_quiet"} <= set(tools)
         assert "person" not in tools["accept"].description, "who acts is never a parameter"
 
 
@@ -284,6 +285,25 @@ class TestAgentsAskingPeople:
 
 
 class TestRemembering:
+
+    async def test_the_room_remembers_what_was_decided_and_why(self, room, talk):
+        with_agents(room)
+        seen = []
+
+        async def turns_it_down(tools, turn):
+            await tools._tool_reject(reason="Tuesday is fixed by the board")
+
+        async def recalls(tools, turn):
+            seen.append((await tools._tool_room_history())["history"])
+            return "Carol turned it down: Tuesday is fixed by the board."
+
+        conversation, _, surface = await talk(room, asks_for_work, turns_it_down, recalls)
+        await conversation.hear("alice", "move it", message_id="m1", addressed=True)
+        await wait_for_proposal(surface, "m1")
+        await conversation.hear("carol", "no, Tuesday is fixed by the board", thread="m1", message_id="m2")
+        await conversation.hear("dave", "why didn't we move the launch?", message_id="m3", addressed=True)
+        assert any("✗ carol rejected" in line and "Tuesday is fixed by the board" in line for line in seen[0])
+        assert surface.texts("m3")[-1] == "Carol turned it down: Tuesday is fixed by the board."
 
     async def test_a_restart_keeps_the_threads_and_does_not_greet_again(self, room, talk):
         with_agents(room)

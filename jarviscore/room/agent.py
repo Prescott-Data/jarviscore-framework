@@ -101,7 +101,8 @@ agents read the files and do the work; do not do it for them in the request.
 - their own complete version of a file: propose_version
 - an answer to a question the agents asked the people here: answer_question
 - a question you can answer from the room itself (what a file says, what a change does, \
-where things stand): look with room_status, read_file or show_change, and answer it
+where things stand, what was decided before and why): look with room_status, room_history, \
+read_file or show_change, and answer it
 Work you start goes on after your turn: its progress and the proposal appear in the thread \
 on their own, and the people review it there. Do not wait for it, check on it, or start it again.
 
@@ -127,6 +128,10 @@ Finish as soon as you have acted, or decided to stay quiet."""
         self.register_tool("room_status", self._tool_room_status,
                            "Where the room stands: version, files, open proposals, work in progress. "
                            "Params: {}", phase="thinking")
+        self.register_tool("room_history", self._tool_room_history,
+                           "What the team has asked for and decided in this room, newest last: "
+                           "requests, proposals, who accepted or rejected what and why. "
+                           "Params: {\"limit\": 30}", phase="thinking")
         self.register_tool("read_file", self._tool_read_file,
                            "A file as it is in the room now. Params: {\"path\": \"plan.md\"}",
                            phase="thinking")
@@ -193,6 +198,12 @@ Finish as soon as you have acted, or decided to stay quiet."""
                                 "files": p.paths, "on_version": p.base_version}
                                for p in room.proposals("open")],
         }
+
+    async def _tool_room_history(self, limit: int = 30, **_) -> Dict[str, Any]:
+        from jarviscore.room.feed import describe
+
+        events = self._turn().room.events()[-max(1, min(int(limit), 200)):]
+        return {"status": "success", "history": [describe(e) for e in events]}
 
     async def _tool_read_file(self, path: str, **_) -> Dict[str, Any]:
         room = self._turn().room
