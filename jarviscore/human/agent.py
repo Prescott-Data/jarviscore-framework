@@ -143,6 +143,7 @@ class HumanAgent(Profile):
             resolution = await self.hitl.wait(item_id, timeout=self.answer_timeout,
                                               poll_interval=self.poll_interval)
         except TimeoutError:
+            self.hitl.expire(item_id)
             if self.channel is not None:
                 await self.channel.withdraw(item_id)
             return attach_result_summary({

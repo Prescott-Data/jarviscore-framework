@@ -1,140 +1,119 @@
 ---
-icon: material/account-group
-title: "People as Peers on the Agent Mesh"
-description: "Put a person on the JarvisCore mesh as a peer: discovered by capability, routed workflow steps, asked by agents, and able to ask agents back."
+icon: material/account-multiple-outline
+title: "People as Peers on the Mesh"
+description: "Put people on the JarvisCore mesh with HumanAgent: planners route steps to them by capability, agents ask them directly, and their work waits in the HITL store until they answer from a terminal, the CLI, a dashboard or a room's chat."
 ---
 
 # People as Peers
 
-A `HumanAgent` puts a person on the mesh the same way an agent is put there. It has a role and capabilities, other nodes see it in their roster, mesh planners can route steps to it, it claims workflow steps from the shared ledger, and peers reach it with `request_capability`. The difference is who does the work: each task is put in front of the person, and their answer is the result.
+Some work belongs to a person: a review, a sign-off, a decision only someone accountable can make, or a judgement no model should make alone. A `HumanAgent` puts a person, or a team, on the mesh as a peer with capabilities, such as `review`, `legal-review` or `approval`. Planners route steps to them like to any other node, agents ask them by capability, and they appear in every node's roster.
 
-The person is a full peer, not only an approver. From the same terminal they can `/ask` any capability on the mesh and see who is online.
+What differs is who does the work. Each piece of work for a person becomes an item in JarvisCore's HITL store, addressed to them. It waits there, through restarts, until someone answers it: in a terminal, with `jarviscore human answer`, from a review dashboard, or in the thread of a [room's chat](chat-surfaces.md). The answer is the step's result.
 
-This is different from [HITL Escalation](hitl.md). HITL is an agent stopping to get a responsible person's sign-off on a narrow set of risky actions. A human peer is someone who owns capabilities, such as `review`, `legal`, or `pricing`, and is routed work for them like any other node.
+This is different from [HITL escalation](hitl.md). Escalation is an agent pausing for a person's sign-off on one risky action. A human peer owns part of the work and is planned for from the start.
 
-## Join from a terminal
-
-Start any mesh node, for example the example launch desk:
-
-```bash
-python examples/human_peer_review.py
-```
-
-Then join it as a person:
-
-```bash
-jarviscore human join alice --capabilities review --seed 127.0.0.1:7949
-```
-
-Tasks appear in the terminal as they arrive:
-
-```text
-━━ Task for you  (review · from launch_desk)  [task-cdad289372]
-Review this launch post before it goes out:
-
-JarvisCore 2.2: agents and the people they work with, on one mesh.
-Answer, or /approve [note] · /reject <why> · /decline <why>.
-```
-
-| Input | Meaning |
-|---|---|
-| any text | The answer to the task in front of you |
-| `/approve [note]` | Sign it off |
-| `/reject <why>` | Refuse it. The step fails and the asker receives your reason |
-| `/decline <why>` | You will not or cannot do it |
-| `/ask <capability> <question>` | Ask whoever on the mesh owns that capability |
-| `/peers` | List agents and people on the mesh |
-
-Tasks that arrive while you are answering another are queued and shown in order. A task that reaches its `answer_timeout`, or whose node stops, is withdrawn from the queue. An asker that gives up waiting does not withdraw it: your answer is still recorded on your side but reaches no one.
-
-Every person also carries the `human` capability, so a step or a peer can ask for "a person" without knowing who is online.
-
-## Add a person in code
+## Add a person
 
 ```python
 from jarviscore import Mesh
-from jarviscore import HumanAgent
+from jarviscore.human import HumanAgent
 
-mesh = Mesh(config={"p2p_enabled": True, "bind_port": 7960, "seed_nodes": "10.0.0.5:7949"})
+mesh = Mesh(config={"redis_url": "redis://localhost:6379/0"})
 mesh.add(HumanAgent("alice", ["review", "approve"]))
 await mesh.start()
 ```
 
-Or declare a standing role:
+Or declare a standing role for a team:
 
 ```python
 class Legal(HumanAgent):
     role = "legal"
-    capabilities = ["contract_review"]
+    capabilities = ["contract-review"]
     description = "The legal team. Answers within a working day."
 ```
 
-`description` and `capability_descriptions` are announced to the mesh and shown to planners. By default they say the peer is a person and that answers take minutes, not seconds.
+Every HumanAgent also has the capability `human`, so a step or a peer can ask for "a person" without knowing who is around. `description` and `capability_descriptions` are what planners and peers see. By default they say this peer is a person and that answers take minutes, not seconds, so planners use people for what needs them.
 
-| Parameter | Default | Description |
+| Parameter | Default | What it does |
 |---|---|---|
-| `name` | class `role` | Role on the mesh |
-| `capabilities` | class `capabilities` | What the person can be asked for; `human` is always added |
-| `channel` | `TerminalChannel()` | How tasks reach the person |
-| `answer_timeout` | `3600` | Seconds before an unanswered task fails |
+| `name` | the class `role` | The person's role on the mesh |
+| `capabilities` | the class `capabilities` | What they can be asked for; `human` is always added |
+| `channel` | `TerminalChannel()` | Where their work is shown; `None` leaves it in the HITL inbox |
+| `answer_timeout` | `3600` | Seconds before unanswered work fails |
 | `description` | "a person, not a model…" | How planners and peers see this peer |
 
 ## How work reaches a person
 
-**Peer requests.** Any agent can ask by capability:
+Work arrives three ways, and all three end the same way:
 
-```python
-result = await self.peers.request_capability("review", f"Approve this draft?\n\n{draft}")
-if result["status"] == "success":
-    answer = result["result"]["output"]   # {"response", "decision", "answered_by"}
-else:
-    reason = result["error"]              # e.g. "alice rejected: numbers are wrong"
+- **A workflow step.** The planner routes a step with one of the person's capabilities to them, and their node claims it from the shared ledger.
+- **A peer request.** An agent asks for a capability with `peers.request_capability("review", "Is the draft ready?")`.
+- **A step in a room's work.** The same as a workflow step, with the room's files to work on (see below).
+
+In each case the HumanAgent files an item in the HITL store with `HITLQueue.assign`: what is asked, what came before it (earlier steps' results), and who it is for. It shows the item on the person's channel and waits for an answer.
+
+## How a person answers
+
+**In a terminal.** `TerminalChannel` shows each item as it arrives. The person types their answer, then picks how to send it:
+
+```text
+━━ Work for you  (review · for writer · wf-launch/review-post)
+Is the launch post ready to publish?
+
+draft:
+Orbit launches Wednesday ...
+Type your answer and press Enter.
+> Cut the second paragraph, the rest is good
+  Send it as: 1 answer · 2 approval · 3 rejection · 4 decline  [1]
+> 3
+  ✓ sent as rejected
 ```
 
-`request_capability` waits at most 300 seconds outside a workflow; inside one, the workflow budget's `peer_timeout_seconds` sets the limit. For work that takes a person longer, route it as a workflow step, which waits for the step timeout instead.
+**From anywhere else.** With `channel=None` (or `jarviscore human join --no-terminal`), items wait in the HITL inbox and anything can answer them: a script, your dashboard, or a colleague's terminal.
 
-**Workflow steps.** With Redis shared between nodes, a person's node claims pending steps for their capabilities from the ledger, like any distributed worker:
-
-```python
-results = await mesh.workflow("launch-post", [
-    {"id": "draft", "agent": "writer", "task": "Write the launch post"},
-    {"id": "review", "agent": "review", "task": "Approve the post", "depends_on": ["draft"]},
-])
+```bash
+jarviscore human inbox alice
+jarviscore human answer hitl-20261018-153012-1a2b3c4d "Looks good, ship it" --approve
+jarviscore human answer hitl-20261018-153012-1a2b3c4d --reject "The price is wrong"
 ```
 
-The person sees the task with a summary of each upstream result. A rejection fails the step with the person's reason, which reaches the workflow caller. People are never blocked by upstream uncertainty: they see the upstream results and judge for themselves.
+In code, `agent.waiting()` lists a person's open items and `agent.answer(item_id, decision, response)` answers one. A review surface can also use the HITL store directly: `HITLQueue.inbox("alice")` and `HITLQueue.resolve(...)`.
+
+**In a room's chat.** A HumanAgent can stand for everyone in a chat channel (`HumanAgent("team", ["approval"], channel=None)`). Its questions are asked in the thread of the work that raised them, and whoever answers there in their own words answers for the team. See [Chat Surfaces](chat-surfaces.md).
+
+## What an answer means
+
+| Decision | Meaning | The step |
+|---|---|---|
+| `answered` | They did the work or gave the answer | Succeeds; the response is the result |
+| `approved` | They signed it off | Succeeds |
+| `rejected` | They refused it | Fails, with their reason |
+| `declined` | They will not or cannot do it | Fails, with their reason |
+
+The step's output is `{"response": ..., "decision": ..., "answered_by": ...}`. When no one answers within `answer_timeout`, the step fails with "alice did not answer within 3600s", and the item is withdrawn from the person's channel.
 
 ## Work on files
 
-When a person is routed a step whose goal works on files, a [room](rooms.md) or a repository, the task shows a folder with the step's files, earlier steps' changes included. The person edits there in their own editor; what they change goes into the result when they answer, attributed to them.
+When a person's step is part of work on a [room](rooms.md) or another workspace, they get that step's copy of the files, with every earlier step's changes applied. The item shows where the files are:
 
-## Results
-
-A person's result has the usual envelope:
-
-```python
-{"status": "success", "output": {"response": "ship it", "decision": "approved", "answered_by": "alice"}}
-{"status": "failure", "error": "alice rejected: too vague", "output": {...}}
+```text
+━━ Work for you  (editing · for bob · room-launch-1a2b3c4d/polish)
+Polish the announcement email
+  📂 /tmp/jarviscore-workspace-k3j2/workspace
+     Edit the files there in your editor; your changes go in when you answer.
 ```
 
-`decision` is `answered`, `approved`, `rejected`, or `declined`. Rejected and declined tasks fail; silence past `answer_timeout` fails with `alice did not answer within 3600s`.
+What they change there before answering becomes part of the work's proposal, attributed to them alongside the agents.
 
-## Answer from files instead
+## Join from a terminal
 
-`InboxChannel` writes each task to `<directory>/<role>/<task-id>.json` and waits for it to be answered. Use it for a dashboard, a chat bridge, or a person who is not at a terminal:
+A person can join a mesh with no code:
 
 ```bash
-jarviscore human join alice --capabilities review --seed 10.0.0.5:7949 --inbox human_inbox
-jarviscore human inbox
-jarviscore human answer task-cdad289372 "Swap the second sentence"
-jarviscore human answer task-cdad289372 --reject "The numbers are wrong"
+jarviscore human join alice --capabilities review,approve --seed 10.0.0.5:7949
 ```
 
-A channel is any object with `async ask(item) -> HumanAnswer`; `start`, `notify`, and `stop` are optional. Notifications sent to a person (`peers.notify`) are printed in the terminal or appended to `notices.jsonl` in the inbox.
-
-## Answer from Slack
-
-`SlackPeopleChannel` puts a team's Slack channel on the mesh as one person: a task is posted in the thread of the room work that raised it, and whoever in the channel answers there answers it. `approve`, `reject <why>` and `decline <why>` decide instead. See [Rooms in Slack](rooms.md#in-slack).
+This starts a node whose only agent is a HumanAgent for Alice, with her work shown in the terminal. Add `--no-terminal` to leave it in the HITL inbox instead, or `--redis-url` to claim workflow steps from the shared ledger.
 
 ## Joining across machines
 
@@ -142,3 +121,29 @@ A channel is any object with `async ask(item) -> HumanAnswer`; `start`, `notify`
 
 !!! warning "Use a private network"
     Mesh traffic is not authenticated or encrypted. Join over a LAN or a VPN such as Tailscale, not the open internet.
+
+## Write your own channel
+
+A channel decides where a person sees their work: a mobile push, an email, a ticket. Subclass `HumanChannel`. Each new item is passed to `show`, and the person's answer goes back through the agent:
+
+```python
+from jarviscore.human import HumanChannel
+
+
+class EmailChannel(HumanChannel):
+    async def show(self, item):
+        await send_email(to=self.agent.role, subject=item["title"], body=item["content"],
+                         reply_link=f"https://review.acme.com/items/{item['id']}")
+
+
+# Later, when the person answers from your page:
+alice.answer(item_id, "approved", "Looks right")
+```
+
+`start`, `withdraw`, `notify` and `stop` are optional. The item stays in the HITL store until it is answered, so a channel can be lost or restarted without losing work.
+
+## Further reading
+
+- [HITL Escalation](hitl.md): an agent pausing for a person's sign-off
+- [Rooms](rooms.md): people and agents changing shared work together
+- [Chat Surfaces](chat-surfaces.md): people answering in a room's chat

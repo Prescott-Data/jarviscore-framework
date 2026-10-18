@@ -352,30 +352,22 @@ Attempts remain immutable across revisions. Reconciliation appends work only for
 unresolved obligation IDs, while satisfied obligations retain their evidence.
 See [Durable Goal Execution](https://jarviscore.developers.prescottdata.io/guides/goal-execution/).
 
-People join the same mesh as peers. A person owns capabilities, agents ask them by capability or route workflow steps to them, and they can ask agents back from their terminal:
+### Multiplayer: teams and agents on the same work
 
-```bash
-python examples/human_peer_review.py                                     # an agent node
-jarviscore human join alice --capabilities review --seed 127.0.0.1:7949  # you
-```
-
-See [People as Peers](https://jarviscore.developers.prescottdata.io/guides/human-peers/).
-
-### Rooms: multiplayer work
-
-A room is a shared workspace a team's people and agents change together. Agents work on their own copy of the room's files and propose their changes; people review the diff, accept, or reject with a reason the agents act on; people edit by hand under the same rules; concurrent work merges and real conflicts are never silently overwritten. Steps run with the asking person's own connected accounts.
+A team and its agents work on the same work at once, where the team already talks. Anyone asks for something in their own words; your agents do it on the team's shared files and propose the change; people review it in the thread, say what to change, approve it or paste their own version, and the room agent acts on what they meant, as them. When the agents need a person, they ask in that thread. Every decision is kept with who made it and why.
 
 ```python
-room = Room.for_mesh(mesh, "pricing")
-asked = await room.ask("Fix the failing test in calc.py", asked_by="alice")
-await room.accept(asked.proposal.id, by="bob")
+room = Room.for_mesh(mesh, "launch")
+room_agent = mesh.add(RoomAgent)                 # the agent people talk to
+mesh.add(HumanAgent("team", ["approval"], channel=None))   # the team, as a peer
+await SlackRoom(room, room_agent, "C0123ABC", people="team").run()
 ```
 
 ```bash
-jarviscore room watch pricing     # live: plan, who took which step, proposals, decisions
+jarviscore room slack launch --channel C0123ABC --seed 10.0.0.5:7949   # or from the terminal
 ```
 
-See [Rooms](https://jarviscore.developers.prescottdata.io/guides/rooms/).
+Steps run with the asking person's own connected accounts, Slack is reached through Nexus with no tokens in your code, and any other surface plugs in through one small interface. See [Multiplayer](https://jarviscore.developers.prescottdata.io/concepts/multiplayer/) and [Build a Multiplayer Agent](https://jarviscore.developers.prescottdata.io/guides/multiplayer-agents/).
 
 ### Observability
 

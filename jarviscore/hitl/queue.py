@@ -448,6 +448,20 @@ class HITLQueue:
             self._logger.error("Failed to resolve HITL item %s: %s", request_id, exc)
             return False
 
+    def expire(self, request_id: str) -> bool:
+        """Close a pending item nobody answered in time, so it leaves every inbox."""
+        filepath = self._inbox_dir / f"{request_id}.json"
+        try:
+            data = json.loads(filepath.read_text())
+        except (OSError, json.JSONDecodeError):
+            return False
+        if data.get("status") != "pending":
+            return False
+        data["status"] = HITLStatus.expired.value
+        data["decided_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        filepath.write_text(json.dumps(data, indent=2))
+        return True
+
     # ─────────────────────────────────────────────────────────────────────────
     # Internals
     # ─────────────────────────────────────────────────────────────────────────

@@ -63,7 +63,7 @@ class LaunchDesk(CustomAgent):
             reason = result.get("error", "")
             print(f"✗ {reason}")
             notes.append(reason.split(": ", 1)[-1])
-        print("\nStill here: the reviewer can /ask drafting <topic> for a draft of their own.")
+        print("\nDone. Ctrl-C to stop.")
         await listener
 
 

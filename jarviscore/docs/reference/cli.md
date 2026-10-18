@@ -419,11 +419,11 @@ See [Testing Atoms](../guides/testing-atoms.md) for the full workflow: from writ
 
 ## jarviscore human
 
-Puts a person on the mesh as a peer. See [People as Peers](../guides/human-peers.md).
+Puts a person on the mesh as a peer, and answers the work that waits for people. See [People as Peers](../guides/human-peers.md).
 
 ### human join
 
-Starts a mesh node whose only agent is a `HumanAgent` for you. Other nodes see you in their roster and route work for your capabilities to you; you can `/ask` any of them in return.
+Starts a mesh node whose only agent is a `HumanAgent` for you. Other nodes see you in their roster and route work for your capabilities to you. Each piece of work appears in your terminal, where you type your answer and choose how to send it.
 
 ```bash
 jarviscore human join alice --capabilities review,approve --seed 10.0.0.5:7949
@@ -437,26 +437,26 @@ jarviscore human join alice --capabilities review,approve --seed 10.0.0.5:7949
 | `--host` | `127.0.0.1` | Address to listen on; use a LAN or VPN address to be reachable |
 | `--port` | `7960` | SWIM port; messages use this port + 1000 |
 | `--redis-url` | (none) | Shared Redis, to claim workflow steps from the ledger |
-| `--inbox` | (none) | Write tasks to this directory instead of the terminal |
+| `--no-terminal` | off | Leave work in the HITL inbox instead of showing it here |
 | `--describe` | (none) | How planners and peers should think of you |
 
 ### human inbox
 
-Lists tasks waiting in an inbox directory.
+Lists work waiting for people in the HITL inbox: everyone's, or one person's.
 
 ```bash
-jarviscore human inbox [--dir human_inbox]
+jarviscore human inbox [PERSON] [--dir hitl_inbox]
 ```
 
 ### human answer
 
-Answers a task in an inbox directory.
+Answers a piece of work. The answer is the step's result; a rejection or a refusal fails the step with your reason.
 
 ```bash
-jarviscore human answer TASK_ID "Swap the second sentence"
-jarviscore human answer TASK_ID --approve "ship it"
-jarviscore human answer TASK_ID --reject "The numbers are wrong"
-jarviscore human answer TASK_ID --decline "Not my area"
+jarviscore human answer ITEM_ID "Swap the second sentence"
+jarviscore human answer ITEM_ID --approve "ship it"
+jarviscore human answer ITEM_ID --reject "The numbers are wrong"
+jarviscore human answer ITEM_ID --decline "Not my area"
 ```
 
 | Option | Default | Description |
@@ -464,21 +464,21 @@ jarviscore human answer TASK_ID --decline "Not my area"
 | `--approve [NOTE]` | | Sign it off |
 | `--reject [WHY]` | | Refuse it; the step fails with your reason |
 | `--decline [WHY]` | | You will not or cannot do it |
-| `--by` | the task's owner | Who is answering |
-| `--dir` | `human_inbox` | Inbox directory |
+| `--by` | the person it is for | Who is answering |
+| `--dir` | `hitl_inbox` | HITL inbox directory |
 
 ---
 
 ## jarviscore room
 
-A shared workspace that people and agents change together. See [Rooms](../guides/rooms.md). Rooms are found the way a Mesh with the same settings finds them: in Redis with `REDIS_URL` or `--redis-url`, otherwise on this machine.
+Shared work that people and agents change together. See [Rooms](../guides/rooms.md). Rooms live in the mesh's Redis: set `REDIS_URL` or pass `--redis-url`.
 
 | Command | What it does |
 |---|---|
 | `room create ROOM [--from DIR] [--as NAME]` | Open a room, optionally with a directory's files |
 | `room status ROOM` | Current version and open proposals |
-| `room watch ROOM [--once] [--since N]` | Live feed of plans, steps, proposals and decisions |
-| `room ask ROOM "GOAL" --as NAME [--timeout S]` | Ask the mesh's agents to do it on the room's files; needs Redis |
+| `room watch ROOM [--once] [--new]` | Follow the room: requests, plans, steps, proposals and decisions. `--new` starts from now |
+| `room ask ROOM "GOAL" --as NAME [--timeout S]` | Ask the mesh's agents to do it on the room's files |
 | `room diff ROOM PROPOSAL` | What a proposal changes |
 | `room accept ROOM PROPOSAL --as NAME` | Merge it; exits 1 on a conflict |
 | `room reject ROOM PROPOSAL "WHY" --as NAME [--redo]` | Turn it down; `--redo` asks the agents again with your reason |
@@ -486,13 +486,15 @@ A shared workspace that people and agents change together. See [Rooms](../guides
 | `room role ROOM PERSON viewer\|editor\|owner\|none --as NAME` | Set or remove a role; the first one makes an open room members-only |
 | `room checkout ROOM DIR` | Copy the current files into an empty directory |
 | `room push DIR [-m TITLE] --as NAME [--accept]` | Propose what changed in a checkout |
-| `room slack ROOM --channel ID [--seed HOST:PORT] [--capabilities LIST] [--people NAME]` | Serve the room in a Slack channel (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`); see [In Slack](../guides/rooms.md#in-slack) |
+| `room slack ROOM --channel ID [--seed HOST:PORT] [--people NAME] [--capabilities LIST] [--timeout S]` | Serve the room in a Slack channel, with Slack connected through Nexus; see [Chat Surfaces](../guides/chat-surfaces.md#slack) |
 
 ```bash
-jarviscore room ask pricing "Fix the failing test in calc.py" --as alice
-jarviscore room diff pricing p-789486bf
-jarviscore room reject pricing p-789486bf "Also document add()" --as bob --redo
+jarviscore room ask launch "Fill in the Risks section of plan.md from brief.md" --as alice
+jarviscore room diff launch p-789486bf
+jarviscore room reject launch p-789486bf "One line per risk, please" --as bob --redo
 ```
+
+`--as` names who acts. It is for a single trusted machine; a chat surface takes the person from its own authentication.
 
 ---
 

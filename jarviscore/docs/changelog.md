@@ -30,48 +30,54 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Added
 
-- **People as peers on the mesh.** `HumanAgent` puts a person on the mesh
-  with a role and capabilities. Other nodes see them in their roster, reach
-  them with `request_capability`, and route workflow steps to them from the
-  shared ledger; every person also carries the `human` capability. Each task
-  is put in front of the person through a channel and their answer is the
-  result: `approved` and `answered` succeed, `rejected` and `declined` fail
-  with the person's reason. `TerminalChannel` queues tasks in a console that
-  also lets the person `/ask` any capability and list `/peers`;
-  `InboxChannel` writes tasks to files. `jarviscore human join` puts you on a
-  mesh from a terminal, and `jarviscore human inbox` and `jarviscore human
-  answer` work an inbox. See [People as Peers](guides/human-peers.md) and
-  `examples/human_peer_review.py`.
-
-- **Rooms: multiplayer work on one shared workspace.** A room is a versioned
-  workspace that a team's people and agents change together. `room.ask(goal,
-  asked_by=...)` runs the goal on the room's current files and returns the
-  agents' changes as a proposal; people `diff`, `accept`, or `reject` it with
-  a reason that reaches the next attempt (`revision_of`). Accepting merges
-  over newer changes file by file and refuses with `RoomConflict` where two
-  changes disagree. People `checkout`, edit, and `push` under the same rules,
-  and a HumanAgent routed a step gets that step's files to edit. Plans, step
-  claims, proposals and decisions go to the room's event log. Rooms live in
-  Redis when the Mesh has it, otherwise on the machine. `jarviscore room`
-  covers all of it from a terminal. See [Rooms](guides/rooms.md).
-- **Rooms in Slack.** `jarviscore room slack ROOM --channel ID` (or
-  `SlackRoom(room, channel).run()`) puts a room in a Slack channel over
-  Socket Mode, with no public URL. Mentioning the bot asks the agents, and the
-  message becomes the thread where the plan, each step, and the proposal with
-  its diff appear. In the thread people `accept` (or press Accept), `reject`,
-  `redo` with a reason, see the `diff`, or `edit` a file to propose their own
-  version, which closes the one it replaces once accepted. The Slack user is
-  who asked or decided, so room roles and per-person accounts apply. Work done
-  on the room elsewhere shows up in the channel. With `SlackPeopleChannel`,
-  the channel's people are a HumanAgent on the mesh: a step that needs a
-  person is asked in the work's thread and whoever answers there answers it.
-  `jarviscore.testing.slack.FakeSlack` stands in for Slack in tests.
+- **Multiplayer: a team and its agents on the same work.** Anyone on a team
+  asks for something in their own words, the team's agents do it on shared
+  files, and people review, change and decide where they already talk, with
+  every action taken as the person who said it. See
+  [Multiplayer](concepts/multiplayer.md) and
+  [Build a Multiplayer Agent](guides/multiplayer-agents.md). It is made of:
+    - **Rooms** (`jarviscore.room.Room`): versioned shared files. Asking a
+      room runs an ordinary goal on its current files; the agents' changes
+      come back as a proposal people accept or reject with a reason the next
+      attempt receives. Accepting merges over newer work line by line and
+      stops with `RoomConflict` where changes really clash. People check out,
+      edit and push under the same rules. Rooms have viewer, editor and owner
+      roles and keep their history for good, in `RedisContextStore`. Progress
+      is read from each piece of work's own workflow ledger (`Room.progress`,
+      `RoomFeed`). `jarviscore room` covers it from a terminal.
+    - **`RoomAgent`**: the agent a team talks to. An AutoAgent with a `room`
+      Kernel role whose tools are the room's own operations; it works out
+      what each message means (a request, feedback, a decision, a pasted
+      version, an answer to the agents, or colleagues talking among
+      themselves), acts as the person who spoke, reads the room's decision
+      history, and replies in the thread. Subclass it for your team's voice
+      and tools (`system_prompt`, `subagent_class`).
+    - **People as peers** (`jarviscore.human.HumanAgent`): a person or a team
+      on the mesh with capabilities. Planners route steps to them and agents
+      ask them; each piece of their work is a HITL item they answer from a
+      terminal, `jarviscore human answer`, a dashboard or a room's chat.
+      `jarviscore human join` puts you on a mesh from a terminal.
+    - **Chat surfaces**: `RoomConversation` connects a room and its agent to
+      any surface through `ChatSurface`. Slack is built in (`SlackRoom`,
+      `jarviscore room slack`): Socket Mode, so no public URL, and no Slack
+      token in your code; calls go through Nexus with the workspace's `slack`
+      connection, and a new `slack_app` atom opens the connection with the
+      app-level token.
+    - **Testing**: `jarviscore.testing.rooms` (`MemorySurface`,
+      `ScriptedRoomAgent`) and `jarviscore.testing.slack.FakeSlack` test rooms,
+      conversations and Slack without a model or a workspace.
 - **Steps act for the person who asked.** A workflow registered with
   `context["acting_for"]` runs its steps for that person: Nexus lookups,
   consents and calls use that person's own workspace instead of the
   deployment's single identity, so their access applies and provider audit
   logs show them. The identity is read only from the registered workflow,
-  never from peer or capability-need context. Rooms set it to the asker.
+  never from peer or capability-need context.
+- **HITL work routed to people.** `HITLQueue.assign` files work routed to a
+  person (type `input_request`, no escalation category), `inbox(target)`
+  lists what waits for a person across agents, and `expire` closes items
+  nobody answered.
+- **`mesh_worker = False`** marks an agent people reach directly: planners
+  never route steps to it, it claims none, and P2P does not announce it.
 - **CustomAgent works on files with no extra code.** Every CustomAgent gets
   `WorkspaceAccess` unless it has its own sandbox, so its steps find the
   workspace's files at `context["workspace_binding"]["path"]`.
@@ -80,28 +86,27 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   to the same lines that differ conflict.
 - **`STORAGE_BACKEND=redis`** keeps file contents in the Mesh's Redis, so one
   Redis is all people and agents on different machines need.
-- **Room roles.** Rooms are open by default; their creator can make them
-  members-only with viewer, editor and owner roles, enforced on asking,
-  pushing, accepting, rejecting and managing members.
-- **`BlobSnapshotStore.compose`** builds a snapshot from blobs already stored.
+- **`HITL_TARGETS`** names who responds to escalations; a request can name
+  its own with `targets=`.
+- `RedisContextStore` ledgers can be kept beyond the context TTL
+  (`append_ledger_entry(..., expires=False)`) and read after an entry
+  (`get_ledger_after`); a step claim records the claiming agent's role.
+- `BlobSnapshotStore.compose` builds a snapshot from blobs already stored.
 
 ### Changed
 
-- **A step bound to a workspace runs in the Coder harness**, the only one with
-  workspace tools, whatever the task: writing a plan or summarising a brief
-  went to the communicator, which could not open the files and either returned
-  the work as text or reported itself blocked. An explicit role still wins.
-  A workspace step that changes files but finishes without editing any is
-  asked once to put its work in the files.
+- **Every Kernel role can work on a step's files.** The file tools
+  (`workspace_read`, `workspace_edit`, `workspace_write`, ...) are shared and
+  given to whichever sub-agent the router picks for a step bound to files, so
+  a writing task goes to the writer and a coding task to the coder, and both
+  can open and change the files. Running commands stays with the coder.
 - **The node that runs a step decides its workspace commands** with its own
   `workspace_allowed_commands`; the asking node's list applies only when the
   running node sets none.
-- The mesh planner is told that reading and editing a goal's workspace files
-  calls no provider: file changes are `propose` steps, and only publishing to
-  a provider is a `write`. It used to plan edits as writes to a made-up
-  "source workspace" system, which validation then refused.
-- `HumanAgent` lives in `jarviscore.human` (and `jarviscore.HumanAgent`), not
-  among the agent profiles, which stay AutoAgent and CustomAgent.
+- The mesh planner and its audit are told that reading and editing a goal's
+  workspace files calls no provider: file changes are `propose` steps, and
+  only publishing to a provider is a `write`. Plans used to describe edits as
+  writes to a made-up "source workspace" system, which validation refused.
 
 ### Fixed
 
@@ -110,12 +115,11 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   founder" could supply missing data. A request now goes to the people the
   deployment names (`HITL_TARGETS`, default `reviewer`) or to `targets=` on
   the request, and the prompts speak of a person.
-- **Redoing work on shared files no longer fails planning.** The plan audit
-  did not know that a `propose` step is how a goal's shared files change, so
-  it could demand a provider `write` for a redo and fail the plan; it now
-  gets the same rule as the planner when the goal has files.
-- **A redo of a conflicted proposal says what happened.** The agents are told
-  which files changed in the meantime instead of "rejected: no reason given".
+- **A HITL reviewer's reason reaches the agent.** `resolve()` stored the
+  reason where `check()` and `wait()` never read it; it now comes back as the
+  resolution's `note`. The HITL guide's examples read a `reason` attribute
+  that does not exist and edited inbox files into a shape `check()` ignores;
+  they now use `note` and `resolve()`.
 - **A peer's first request to a node that just joined is no longer dropped.**
   A starting node answers capability requests as soon as SWIM is up, but
   registered its PeerClients only after announcing, which can take a minute

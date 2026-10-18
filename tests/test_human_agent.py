@@ -102,6 +102,7 @@ class TestHumanAgent:
         result = await alice.execute_task({"task": "Anyone?", "context": {}})
         assert result["status"] == "failure" and "did not answer" in result["error"]
         assert len(channel.withdrawn) == 1
+        assert alice.waiting() == [], "an expired item leaves the inbox"
 
     async def test_work_waits_in_the_hitl_inbox_and_anyone_can_answer_it(self, here):
         alice = await person(channel=None)

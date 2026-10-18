@@ -1,7 +1,7 @@
 """Rooms: shared workspaces that people and agents change together."""
 
 from jarviscore.room.agent import RoomAgent, RoomSubAgent, Turn
-from jarviscore.room.conversation import ChatSurface, RoomConversation
+from jarviscore.room.conversation import ACCEPT, SHOW_CHANGE, ChatSurface, RoomConversation
 from jarviscore.room.feed import FeedItem, RoomFeed
 from jarviscore.room.room import (
     CHECKOUT_MARKER,
@@ -17,6 +17,8 @@ from jarviscore.room.room import (
 from jarviscore.room.work import AskResult, RoomSource
 
 __all__ = [
+    "ACCEPT",
+    "SHOW_CHANGE",
     "AskResult",
     "CHECKOUT_MARKER",
     "ChatSurface",

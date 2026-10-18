@@ -139,10 +139,10 @@ Coder receives six direct tools when a workspace is attached:
 | `workspace_edit` | Replace an inclusive line range in an existing UTF-8 file after matching the `sha256` returned by `workspace_read`. |
 | `workspace_run` | Run a trusted allow-listed command in a workspace directory. |
 
-Agents other than AutoAgent can work on a step's files too: set
-`self.sandbox = WorkspaceAccess()` and read
-`task["context"]["workspace_binding"]["path"]`; whatever the agent changes
-there becomes the step's delta. For a workspace that a team's people and
+A CustomAgent works on a step's files too, with no setup: it finds them at
+`task["context"]["workspace_binding"]["path"]`, and whatever it changes there
+becomes the step's delta. In an AutoAgent, whichever Kernel sub-agent does the
+step gets tools to read, search and edit them. For a workspace that a team's people and
 agents change together over time, see [Rooms](rooms.md).
 
 These tools avoid generating Python merely to inspect or author files. Agents

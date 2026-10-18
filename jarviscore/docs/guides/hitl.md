@@ -130,7 +130,7 @@ if resolution is not None:
     if resolution.is_approved:
         await self._proceed()
     else:
-        logger.warning("Action rejected: %s", resolution.reason)
+        logger.warning("Action rejected: %s", resolution.note)
 ```
 
 The resolution is checked against the flat JSON file first (always available), then against Redis if configured.
@@ -147,7 +147,7 @@ try:
     if resolution.is_approved:
         await self._send_email_campaign()
     else:
-        return {"status": "cancelled", "reason": resolution.reason}
+        return {"status": "cancelled", "reason": resolution.note}
 except TimeoutError:
     return {"status": "timeout", "message": "No decision received within 1 hour."}
 ```
@@ -175,18 +175,18 @@ if not already_waiting:
 
 ### resolve
 
-Programmatically resolves a HITL item. Intended for testing and auto-approval logic. In production, items are resolved by human reviewers writing to the JSON file or the Redis store.
+Records a person's decision on an item. A review dashboard calls it when the reviewer decides (see [Resolving Items from a Dashboard](#resolving-items-from-a-dashboard)); tests call it to stand in for one.
 
 ```python
-# In a test
-self.hitl.resolve(item_id, decision="approved", reason="Test auto-approval")
+self.hitl.resolve(item_id, decision="approved", reason="Numbers checked", by="dana")
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
 | `request_id` | `str` | ID of the item to resolve |
 | `decision` | `str` | `"approved"` or `"rejected"` |
-| `reason` | `str` | Optional explanation stored on the resolution |
+| `reason` | `str` | The reviewer's explanation; `check()` and `wait()` return it as `resolution.note` |
+| `by` | `str` | Who decided; returned as `resolution.resolved_by` |
 
 ---
 
@@ -236,7 +236,7 @@ class CampaignSenderAgent(CustomAgent):
             return {
                 "status": "cancelled",
                 "campaign_id": campaign["id"],
-                "reason": resolution.reason,
+                "reason": resolution.note,
             }
 ```
 
@@ -262,23 +262,24 @@ A resolution written to either store is detected by `check()` and `wait()` autom
 
 ## Resolving Items from a Dashboard
 
-To resolve an item from a custom dashboard, update the JSON file:
+A dashboard lists what is waiting and records decisions through a `HITLQueue` on the same inbox directory (and Redis, when the agents use it):
 
 ```python
-import json
-from pathlib import Path
+from jarviscore.hitl import HITLQueue
 
-def resolve_item(request_id: str, decision: str, reason: str = ""):
-    filepath = Path("hitl_inbox") / f"{request_id}.json"
-    data = json.loads(filepath.read_text())
-    data["status"] = decision        # "approved" or "rejected"
-    data["decision"] = decision
-    data["decision_reason"] = reason
-    data["decided_at"] = "2026-05-01T15:30:00"
-    filepath.write_text(json.dumps(data, indent=2))
+queue = HITLQueue(agent_id="review-dashboard", inbox_dir="hitl_inbox")
+
+for item in queue.inbox("finance-approver"):          # pending items for these targets, from every agent
+    show(item["title"], item["content"], item["category"])
+
+queue.resolve(request_id, decision="rejected", reason="Wrong supplier", by="dana")
 ```
 
-The agent's `wait()` loop detects the status change on its next poll cycle.
+The agent's `wait()` returns the decision on its next poll. Write through `resolve()` rather than editing the JSON files: it records the decision in the shape `check()` reads, in both stores.
+
+## Work routed to people
+
+The same store holds work that is routed to a person rather than escalated by an agent. When a [human peer](human-peers.md) on the mesh is given a step, their HumanAgent files it with `HITLQueue.assign(...)` (type `input_request`, no escalation category), and it is answered with `resolve()` like any other item: from the person's terminal, `jarviscore human answer`, your dashboard, or a [room's chat](chat-surfaces.md). One review surface can therefore show everything waiting on a person.
 
 ---
 

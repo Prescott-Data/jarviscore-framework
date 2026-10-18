@@ -219,7 +219,8 @@ async def cmd_slack(args):
     from jarviscore.room import Room, RoomAgent
     from jarviscore.room.slack import SLACK_API, SlackApi, SlackError, SlackRoom
 
-    config = {"redis_url": _mesh_redis(args), "p2p_enabled": False}
+    # The room's conversation remembers by room (with Athena configured).
+    config = {"redis_url": _mesh_redis(args), "p2p_enabled": False, "memory_scope_field": "room_id"}
     if args.seed or args.port:
         # On the mesh's transport, planners and agents find the channel's people.
         config.update(p2p_enabled=True, bind_host=args.host, bind_port=args.port or 7961,

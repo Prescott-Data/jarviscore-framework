@@ -127,6 +127,8 @@ nav:
       - State and Coordination:
         - Memory: concepts/memory.md
         - P2P Communication: concepts/p2p.md
+      - People and Agents:
+        - Multiplayer: concepts/multiplayer.md
       - Tools and Trust:
         - Contracts and Boundaries: concepts/contracts.md
         - System Bundles & Atoms: concepts/system-bundles.md
@@ -144,8 +146,11 @@ nav:
         - Durable Goal Execution: guides/goal-execution.md
         - Source Workspaces: guides/source-workspaces.md
         - HITL Escalation: guides/hitl.md
+      - Multiplayer:
+        - Build a Multiplayer Agent: guides/multiplayer-agents.md
+        - Rooms: guides/rooms.md
         - People as Peers: guides/human-peers.md
-        - Rooms (multiplayer work): guides/rooms.md
+        - Chat Surfaces: guides/chat-surfaces.md
       - Connect Capabilities:
         - Integrations: guides/integrations.md
         - Nexus Credentials: guides/nexus.md
@@ -173,6 +178,7 @@ nav:
       - Agent API: reference/agent-api.md
       - Execution and Evidence API: reference/execution-api.md
       - Chat API: reference/chat-api.md
+      - Multiplayer API: reference/multiplayer-api.md
       - CLI Reference: reference/cli.md
       - Troubleshooting: TROUBLESHOOTING.md
       - Changelog: changelog.md

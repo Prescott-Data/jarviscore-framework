@@ -330,9 +330,9 @@ class RoomKernel(Kernel):
     def _create_subagent(self, role: str, agent_id: str):
         if role != ROOM_ROLE:
             return super()._create_subagent(role, agent_id)
-        subagent = RoomSubAgent(agent_id=agent_id, llm_client=self.llm_client,
-                                room_agent=self._room_agent, redis_store=self.redis_store,
-                                blob_storage=self.blob_storage)
+        subagent = self._room_agent.subagent_class(
+            agent_id=agent_id, llm_client=self.llm_client, room_agent=self._room_agent,
+            redis_store=self.redis_store, blob_storage=self.blob_storage)
         self._attach_mesh_tools(subagent)
         return subagent
 
@@ -350,6 +350,8 @@ class RoomAgent(AutoAgent):
 
     #: Options passed to ``Room.ask`` when someone asks for work (timeout, plan_template).
     ask_options: Dict[str, Any] = {}
+    #: The ``room`` role's harness. Subclass RoomSubAgent to add tools or change its prompt.
+    subagent_class = RoomSubAgent
 
     def __init__(self, agent_id: Optional[str] = None):
         super().__init__(agent_id)

@@ -89,6 +89,40 @@ status. Learn Workflow DAGs first if you are new to multi-step execution.
 
 </div>
 
+## Multiplayer: teams and agents working together
+
+<div class="grid cards" markdown>
+
+-   :material-account-group-outline: **Build a Multiplayer Agent**
+
+    From nothing to a team using it in Slack: the agents that do the work, a
+    shared room, the team on the mesh, and a room agent people talk to.
+
+    [Build one →](multiplayer-agents.md)
+
+-   :material-google-classroom: **Rooms**
+
+    Shared files that agents propose changes to and people review, with merging,
+    roles and a permanent record of every decision.
+
+    [Work in rooms →](rooms.md)
+
+-   :material-account-multiple-outline: **People as Peers**
+
+    Put people on the mesh with capabilities, route work to them, and let them
+    answer from wherever they are.
+
+    [Add people →](human-peers.md)
+
+-   :material-forum-outline: **Chat Surfaces**
+
+    Serve a room in Slack through Nexus, or in your own product through one
+    small interface.
+
+    [Connect a surface →](chat-surfaces.md)
+
+</div>
+
 ## 3. Connect capabilities
 
 <div class="grid cards" markdown>
