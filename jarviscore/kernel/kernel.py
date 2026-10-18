@@ -112,7 +112,7 @@ already granted, or could grant with one click.
 
 Use the task, context summary, agent default role, and available registry/handoff context.
 For custom roles, use role_catalog from the payload as the authoritative contract.
-Do not use keyword matching. If the task asks for missing access/data/founder input, route to
+Do not use keyword matching. If the task asks for missing access/data/a person's input, route to
 communicator unless it explicitly requires browser UI work. Prefer coder only when executable
 processing is actually required.
 """

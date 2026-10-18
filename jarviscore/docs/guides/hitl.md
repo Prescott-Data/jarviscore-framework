@@ -19,7 +19,7 @@ The HITL system enforces a strict **category gate**. Every escalation request mu
 | Category | When to use |
 |---|---|
 | `auth_required` | A Nexus credential is missing, expired, or has insufficient scope. The agent cannot proceed without a human supplying or re-authorising a credential. |
-| `data_required` | A piece of data that only a human can supply is missing (e.g., a founder's personal bank details, an unpublished contract, internal pricing). |
+| `data_required` | A piece of data that only a person can supply is missing (e.g., a client's bank details, an unpublished contract, internal pricing). |
 | `critical_action` | The next action is irreversible or high-consequence (e.g., sending a bulk email campaign, triggering a payment, deploying to production). |
 
 **Do not escalate for:**
@@ -29,7 +29,24 @@ The HITL system enforces a strict **category gate**. Every escalation request mu
 - General uncertainty where the agent can take a safe fallback action
 - Routine content review
 
-Agents must handle those cases autonomously. The HITL queue is for the founder's inbox, not for the agent's confidence management.
+Agents must handle those cases autonomously. The HITL queue is for decisions only a person can make, not for the agent's confidence management.
+
+### Who responds
+
+An escalation goes to whoever your deployment makes responsible for it: an on-call engineer for an expired credential, a finance approver for a payment, the account owner for a client's data. JarvisCore does not assume who that is. Each request carries `targets`, the people or roles that should respond, and your review surface (a dashboard, a Slack channel, a ticket queue) uses them to put the item in front of the right person.
+
+Set the default for a deployment with `HITL_TARGETS` (comma-separated, default `reviewer`) or `Mesh(config={"hitl_targets": [...]})`, and name someone for a single request with `targets=`:
+
+```python
+self.hitl.request(
+    title="Approve the €40,000 supplier payment",
+    content="Invoice INV-2291 from Northwind, due Friday.",
+    category="critical_action",
+    targets=["finance-approver"],
+)
+```
+
+HITL is a gate on one agent's action. When a person should do part of the work itself, such as reviewing a draft, deciding between options, or editing a file, put them on the mesh as a [human peer](human-peers.md) instead, or let the whole team work on it together in a [room](rooms.md).
 
 ```mermaid
 stateDiagram-v2
@@ -97,6 +114,7 @@ item_id = self.hitl.request(
 | `urgency` | `str` | No | One of `"low"`, `"normal"`, `"high"`, `"critical"`. Default: `"normal"`. |
 | `category` | `str` | Yes | One of `"auth_required"`, `"data_required"`, `"critical_action"`. Any other value raises `ValueError`. |
 | `context` | `dict` | No | Structured metadata. String values are truncated to 1,000 characters. |
+| `targets` | `list[str]` | No | Who should respond, e.g. `["finance-approver"]`. Default: the deployment's `hitl_targets`. |
 
 Raises `ValueError` if `urgency` or `category` is invalid.
 

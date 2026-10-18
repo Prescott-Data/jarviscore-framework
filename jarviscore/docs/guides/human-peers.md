@@ -10,7 +10,7 @@ A `HumanAgent` puts a person on the mesh the same way an agent is put there. It 
 
 The person is a full peer, not only an approver. From the same terminal they can `/ask` any capability on the mesh and see who is online.
 
-This is different from [HITL Escalation](hitl.md). HITL is an agent stopping to get a founder's sign-off on a narrow set of risky actions. A human peer is someone who owns capabilities, such as `review`, `legal`, or `pricing`, and is routed work for them like any other node.
+This is different from [HITL Escalation](hitl.md). HITL is an agent stopping to get a responsible person's sign-off on a narrow set of risky actions. A human peer is someone who owns capabilities, such as `review`, `legal`, or `pricing`, and is routed work for them like any other node.
 
 ## Join from a terminal
 

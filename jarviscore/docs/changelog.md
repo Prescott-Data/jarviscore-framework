@@ -105,6 +105,11 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Fixed
 
+- **Escalations no longer assume a founder.** HITL requests were addressed to
+  a hard-coded `founder`, and the agent prompts told the model that only "the
+  founder" could supply missing data. A request now goes to the people the
+  deployment names (`HITL_TARGETS`, default `reviewer`) or to `targets=` on
+  the request, and the prompts speak of a person.
 - **Redoing work on shared files no longer fails planning.** The plan audit
   did not know that a `propose` step is how a goal's shared files change, so
   it could demand a provider `write` for a redo and fail the plan; it now

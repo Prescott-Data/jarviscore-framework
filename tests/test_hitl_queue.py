@@ -105,6 +105,24 @@ class TestRequestCreation:
         assert hitl_data is not None
         assert "pending" in hitl_data["status"]
 
+    def test_requests_go_to_the_people_the_deployment_names(self, inbox_dir, redis_store):
+        """Escalations target whoever is responsible, never a hard-coded person."""
+        def targets(agent, item):
+            value = redis_store.get_hitl_request(agent, item)["targets"]
+            return json.loads(value) if isinstance(value, str) else value
+
+        default = HITLQueue(agent_id="a", inbox_dir=str(inbox_dir), redis_store=redis_store)
+        item = default.request(title="t", content="c", category="auth_required")
+        assert targets("a", item) == ["reviewer"]
+
+        ops = HITLQueue(agent_id="b", inbox_dir=str(inbox_dir), redis_store=redis_store,
+                        targets=["ops-oncall"])
+        item = ops.request(title="t", content="c", category="auth_required")
+        assert targets("b", item) == ["ops-oncall"]
+        item = ops.request(title="t", content="c", category="critical_action",
+                           targets=["finance-approver"])
+        assert targets("b", item) == ["finance-approver"]
+
     def test_returns_unique_ids(self, queue):
         """Two calls return different IDs."""
         id1 = queue.request(title="First", content="a", urgency="normal", category="auth_required")

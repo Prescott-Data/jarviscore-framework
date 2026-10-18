@@ -48,6 +48,9 @@ logger = logging.getLogger("jarviscore.hitl")
 
 # ── Content size guards ──────────────────────────────────────────────────────
 # HITL payloads are human-readable summaries, not data dumps.
+#: Who responds when neither the deployment nor the request names anyone.
+DEFAULT_TARGETS = ("reviewer",)
+
 MAX_CONTENT_CHARS = 2000   # ~2 KB — plenty for a review summary
 MAX_CONTEXT_CHARS = 1000   # structured context field — keep lean
 
@@ -100,8 +103,11 @@ class HITLQueue:
         agent_id: str,
         inbox_dir: Optional[str] = None,
         redis_store=None,
+        targets: Optional[List[str]] = None,
     ):
         self._agent_id = agent_id
+        #: Who responds to this agent's requests unless a request names someone.
+        self._targets = list(targets or DEFAULT_TARGETS)
         self._inbox_dir = Path(inbox_dir) if inbox_dir else self._DEFAULT_INBOX
         self._inbox_dir.mkdir(parents=True, exist_ok=True)
         self._redis_store = redis_store
@@ -118,6 +124,7 @@ class HITLQueue:
         urgency: str = "normal",
         context: Optional[Dict[str, Any]] = None,
         category: str = "",
+        targets: Optional[List[str]] = None,
     ) -> str:
         """
         Submit a human review request.
@@ -125,14 +132,14 @@ class HITLQueue:
         CATEGORY IS REQUIRED and must be one of the three permitted values:
 
           auth_required   — Nexus/API credentials missing or expired.
-          data_required   — Critical data only the founder can supply.
+          data_required   — Critical data only a person can supply.
           critical_action — Irreversible or sensitive action needing sign-off.
 
         Any other reason (output quality checks, self-validation, content
         completeness doubts, "the output looked truncated", etc.) is NOT
         a valid escalation.  Agents must handle those autonomously.
         Passing an invalid category raises ValueError so the agent is forced
-        to reconsider before the item reaches the founder's inbox.
+        to reconsider before the item reaches a person.
 
         Args:
             title:    Headline shown in the review list — never truncated, keep it descriptive
@@ -141,6 +148,8 @@ class HITLQueue:
             context:  Arbitrary dict for structured metadata (file paths,
                       downstream actions, agent state snapshots, etc.)
             category: One of "auth_required", "data_required", "critical_action"
+            targets:  Who should respond, e.g. ["finance-approver"]. Defaults to
+                      the queue's targets (Mesh config ``hitl_targets``).
 
         Returns:
             request_id: Unique identifier for this review request.
@@ -161,7 +170,7 @@ class HITLQueue:
             raise ValueError(
                 f"Invalid HITL category '{category}'. "
                 f"Permitted values: {sorted(valid_categories)}. "
-                "Only escalate for auth failures, missing founder-supplied data, "
+                "Only escalate for auth failures, data only a person can supply, "
                 "or irreversible/sensitive actions. "
                 "Everything else must be handled autonomously."
             )
@@ -193,7 +202,7 @@ class HITLQueue:
                 "category": hitl_category.value,
                 "content": safe_content,
             },
-            targets=["founder"],
+            targets=list(targets or self._targets),
             channels=["dashboard"],
             mode="adaptive",
             metadata={

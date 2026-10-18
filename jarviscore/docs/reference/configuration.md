@@ -377,6 +377,7 @@ Advanced execution parameters for the OODA loop Kernel. The defaults are appropr
 | `HITL_ENABLED` | `false` | Enable Human-in-the-Loop escalation. |
 | `HITL_MAX_CONFIDENCE` | `0.8` | Escalate when the Kernel's action confidence is below this value. |
 | `HITL_MIN_RISK_SCORE` | `0.7` | Escalate when the evaluated risk score exceeds this value. |
+| `HITL_TARGETS` | `reviewer` | Who responds to escalations, comma-separated (e.g. `ops-oncall,finance-approver`). Carried on every request as `targets`; a request can name its own. See [Who responds](../guides/hitl.md#who-responds). |
 | `MAX_GOAL_STEPS` | `30` | Hard ceiling on plan steps for goal-oriented agents before the goal is marked `blocked`. |
 | `MAX_REPLAN_ATTEMPTS` | `8` | Maximum replanning cycles before the Kernel returns a failure result. |
 

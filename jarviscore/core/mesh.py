@@ -347,6 +347,7 @@ class Mesh:
             "browser_model",
             "browser_profile_dir",
             "browser_control_url",
+            "hitl_targets",
         ):
             if knob in self._settings.model_fields_set:
                 self.config.setdefault(knob, getattr(self._settings, knob))
@@ -2712,6 +2713,10 @@ class Mesh:
 
         # Resolve hitl_inbox path from config or use package-relative default
         inbox_dir = self.config.get("hitl_inbox_dir", None)
+        # Who responds to escalations: whichever people this deployment names.
+        hitl_targets = self.config.get("hitl_targets") or None
+        if isinstance(hitl_targets, str):
+            hitl_targets = [t.strip() for t in hitl_targets.split(",") if t.strip()]
 
         # Import framework-native HITLQueue
         try:
@@ -2738,6 +2743,7 @@ class Mesh:
                     agent_id=agent.agent_id,
                     inbox_dir=inbox_dir,
                     redis_store=self._redis_store,
+                    targets=hitl_targets,
                 )
             else:
                 agent.hitl = None  # degraded — log once

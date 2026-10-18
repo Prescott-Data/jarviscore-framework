@@ -229,6 +229,8 @@ class Settings(BaseSettings):
     hitl_enabled: bool = False
     hitl_max_confidence: float = 0.8
     hitl_min_risk_score: float = 0.7
+    #: Who responds to escalations (comma-separated), e.g. "ops-oncall,finance-approver".
+    hitl_targets: str = "reviewer"
 
     # === Auth / Nexus ===
     # Nexus is the ONLY auth path — there is no dev-mode bypass.
