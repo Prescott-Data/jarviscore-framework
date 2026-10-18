@@ -1872,7 +1872,8 @@ class Mesh:
                         claim_id = f"{agent.agent_id}:{uuid4().hex}"
                         lease_seconds = int(self.config.get("distributed_claim_lease_seconds", 60))
                         if self._redis_store.claim_step(
-                            workflow_id, step_id, claim_id, lease_seconds=lease_seconds
+                            workflow_id, step_id, claim_id, lease_seconds=lease_seconds,
+                            role=agent.role,
                         ):
                             self._logger.info(
                                 f"[DistributedWorker] Claimed '{step_id}' "
@@ -2013,7 +2014,7 @@ class Mesh:
         claim_id = claim_id or f"{agent.agent_id}:{uuid4().hex}"
         if self._redis_store.get_step_status(workflow_id, step_id) == "pending":
             if not self._redis_store.claim_step(
-                workflow_id, step_id, claim_id, lease_seconds=lease_seconds
+                workflow_id, step_id, claim_id, lease_seconds=lease_seconds, role=agent.role,
             ):
                 return
         workflow = self._redis_store.get_workflow_definition(workflow_id) or {}

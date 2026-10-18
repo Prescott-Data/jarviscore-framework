@@ -1943,8 +1943,13 @@ class RedisContextStore:
         step_id: str,
         agent_id: str,
         lease_seconds: int = 60,
+        role: str = "",
     ) -> bool:
-        """Atomically lease a step to one execution identity."""
+        """Atomically lease a step to one execution identity.
+
+        ``role`` is recorded with the claim so anyone following the workflow
+        can say who is doing the step.
+        """
         lock_key = f"step_lock:{workflow_id}:{step_id}"
         cancelled_key = f"workflow_cancelled:{workflow_id}"
         lease_seconds = max(1, int(lease_seconds))
@@ -2006,6 +2011,7 @@ class RedisContextStore:
                     "step_id": step_id,
                     "agent_id": owner_id,
                     "claim_id": agent_id,
+                    **({"role": role} if role else {}),
                     "timestamp": str(now),
                 })
                 pipe.expire(f"ledgers:{workflow_id}", self._ttl_seconds)
@@ -2369,14 +2375,33 @@ class RedisContextStore:
     # Episodic Ledger
     # ------------------------------------------------------------------
 
-    def append_ledger_entry(self, workflow_id: str, entry: Dict) -> str:
-        """Append entry to episodic ledger (Redis Stream)."""
+    def append_ledger_entry(self, workflow_id: str, entry: Dict, *, expires: bool = True) -> str:
+        """Append entry to episodic ledger (Redis Stream).
+
+        ``expires=False`` keeps the ledger beyond the context TTL, for histories
+        that must outlive any one workflow (a room's).
+        """
         key = f"ledgers:{workflow_id}"
         entry_data = {k: json.dumps(v) if not isinstance(v, str) else v
                       for k, v in entry.items()}
         entry_id = self._redis.xadd(key, entry_data)
-        self._redis.expire(key, self._ttl_seconds)
+        if expires:
+            self._redis.expire(key, self._ttl_seconds)
         return entry_id
+
+    def get_ledger_after(self, workflow_id: str, after_id: str = "") -> List[Dict]:
+        """Ledger entries after ``after_id`` (exclusive), or all, in order."""
+        start = f"({after_id}" if after_id else "-"
+        results = []
+        for entry_id, data in self._redis.xrange(f"ledgers:{workflow_id}", min=start):
+            parsed = {"_id": entry_id}
+            for k, v in data.items():
+                try:
+                    parsed[k] = json.loads(v)
+                except (json.JSONDecodeError, TypeError):
+                    parsed[k] = v
+            results.append(parsed)
+        return results
 
     def get_ledger_tail(self, workflow_id: str,
                         count: int = 10) -> List[Dict]:
@@ -2408,6 +2433,104 @@ class RedisContextStore:
                     parsed[k] = v
             results.append(parsed)
         return results
+
+    # ------------------------------------------------------------------
+    # Rooms: shared workspaces people and agents change together
+    # ------------------------------------------------------------------
+    #
+    # File bytes live in BlobStorage like any workspace snapshot. Here is the
+    # small mutable part: the head (which snapshot is current, moved by
+    # compare-and-swap so two people accepting at once cannot both win), the
+    # proposals, members, and the room's history in a ledger that never expires.
+
+    @staticmethod
+    def _room_key(room_id: str, part: str) -> str:
+        return f"room:{room_id}:{part}"
+
+    def create_room_head(self, room_id: str, head: Dict) -> bool:
+        """Set the first head; False if the room already exists."""
+        return bool(self._redis.set(self._room_key(room_id, "head"), json.dumps(head), nx=True))
+
+    def get_room_head(self, room_id: str) -> Optional[Dict]:
+        raw = self._redis.get(self._room_key(room_id, "head"))
+        return json.loads(raw) if raw else None
+
+    def swap_room_head(self, room_id: str, expected_version: int, head: Dict) -> bool:
+        """Move the head only if it is still at ``expected_version``."""
+        key = self._room_key(room_id, "head")
+        with self._redis.pipeline() as pipe:
+            try:
+                pipe.watch(key)
+                raw = pipe.get(key)
+                if not raw or int(json.loads(raw)["version"]) != int(expected_version):
+                    pipe.unwatch()
+                    return False
+                pipe.multi()
+                pipe.set(key, json.dumps(head))
+                pipe.execute()
+                return True
+            except redis.WatchError:
+                return False
+
+    def put_room_proposal(self, room_id: str, proposal: Dict) -> None:
+        self._redis.hset(self._room_key(room_id, "proposals"), proposal["id"], json.dumps(proposal))
+
+    def get_room_proposal(self, room_id: str, proposal_id: str) -> Optional[Dict]:
+        raw = self._redis.hget(self._room_key(room_id, "proposals"), proposal_id)
+        return json.loads(raw) if raw else None
+
+    def list_room_proposals(self, room_id: str) -> List[Dict]:
+        values = self._redis.hvals(self._room_key(room_id, "proposals"))
+        return sorted((json.loads(v) for v in values), key=lambda p: p.get("created_at", 0))
+
+    def decide_room_proposal(self, room_id: str, proposal_id: str, fields: Dict) -> bool:
+        """Apply ``fields`` to a proposal that is still open; False if it is not."""
+        key = self._room_key(room_id, "proposals")
+        while True:
+            with self._redis.pipeline() as pipe:
+                try:
+                    pipe.watch(key)
+                    raw = pipe.hget(key, proposal_id)
+                    proposal = json.loads(raw) if raw else None
+                    if not proposal or proposal.get("status") != "open":
+                        pipe.unwatch()
+                        return False
+                    proposal.update(fields)
+                    pipe.multi()
+                    pipe.hset(key, proposal_id, json.dumps(proposal))
+                    pipe.execute()
+                    return True
+                except redis.WatchError:
+                    continue
+
+    def get_room_meta(self, room_id: str) -> Dict:
+        raw = self._redis.get(self._room_key(room_id, "meta"))
+        return json.loads(raw) if raw else {}
+
+    def update_room_meta(self, room_id: str, change) -> Dict:
+        """Apply ``change(meta) -> meta`` atomically; returns the new meta."""
+        key = self._room_key(room_id, "meta")
+        while True:
+            with self._redis.pipeline() as pipe:
+                try:
+                    pipe.watch(key)
+                    raw = pipe.get(key)
+                    meta = change(json.loads(raw) if raw else {})
+                    pipe.multi()
+                    pipe.set(key, json.dumps(meta))
+                    pipe.execute()
+                    return meta
+                except redis.WatchError:
+                    continue
+
+    def append_room_event(self, room_id: str, event: Dict) -> str:
+        """Record something that happened in a room; returns its id in the room's history."""
+        return self.append_ledger_entry(f"room:{room_id}", event, expires=False)
+
+    def get_room_events(self, room_id: str, after: str = "") -> List[Dict]:
+        """The room's history after event id ``after`` (all of it by default)."""
+        return [{**entry, "seq": entry.pop("_id")}
+                for entry in self.get_ledger_after(f"room:{room_id}", after)]
 
     # ------------------------------------------------------------------
     # Long-Term Memory (LTM)

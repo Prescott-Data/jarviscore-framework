@@ -2,6 +2,7 @@
 
 import asyncio
 
+import fakeredis
 import pytest
 
 from jarviscore.cli.room import main
@@ -11,7 +12,11 @@ from jarviscore.room import Room
 @pytest.fixture
 def here(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("REDIS_URL", raising=False)
+    # The team's Redis, as every CLI invocation and mesh node would reach it.
+    server = fakeredis.FakeServer()
+    monkeypatch.setattr("redis.Redis.from_url", lambda url, **kwargs: fakeredis.FakeRedis(
+        server=server, decode_responses=kwargs.get("decode_responses", False)))
+    monkeypatch.setenv("REDIS_URL", "redis://team-redis:6379/0")
     site = tmp_path / "site"
     (site / "pages").mkdir(parents=True)
     (site / "index.html").write_text("<h1>Launch</h1>\n")
@@ -101,15 +106,3 @@ def test_members_only_from_the_terminal(here, capsys):
     with pytest.raises(SystemExit):
         main(["push", str(here / "bob"), "--as", "bob"])
     assert "bob cannot propose changes" in capsys.readouterr().out
-
-
-def test_slack_needs_its_tokens_and_the_mesh(here, capsys, monkeypatch):
-    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
-    with pytest.raises(SystemExit):
-        main(["slack", "launch", "--channel", "C1"])
-    assert "SLACK_BOT_TOKEN" in capsys.readouterr().out
-
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    with pytest.raises(SystemExit):
-        main(["slack", "launch", "--channel", "C1"])
-    assert "REDIS_URL" in capsys.readouterr().out

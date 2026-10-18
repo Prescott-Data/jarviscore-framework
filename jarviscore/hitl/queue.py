@@ -174,8 +174,70 @@ class HITLQueue:
                 "or irreversible/sensitive actions. "
                 "Everything else must be handled autonomously."
             )
-        hitl_category = HITLCategory(category)
+        return self._submit(
+            title, content, urgency=urgency, context=context,
+            category=HITLCategory(category), kind=HITLType.approval,
+            targets=list(targets or self._targets),
+        )
 
+    def assign(
+        self,
+        title: str,
+        content: str,
+        *,
+        targets: List[str],
+        context: Optional[Dict[str, Any]] = None,
+        urgency: str = "normal",
+    ) -> str:
+        """
+        Put work routed to a person in front of them, and return its id.
+
+        This is not an escalation: a person on the mesh owns a capability (a
+        review, a sign-off, a decision) and a workflow step was routed to them,
+        so there is no category gate. The item is stored like any HITL request
+        and is answered with ``resolve()``; ``wait()`` returns the answer, with
+        the person's words in ``note``.
+
+        Args:
+            title:    What is asked, in a line
+            content:  The full task, with what came before it
+            targets:  Who it is for (the person's role on the mesh)
+            context:  workflow_id, step_id and anything a review surface shows
+        """
+        if urgency not in self.VALID_URGENCY:
+            raise ValueError(f"Invalid urgency '{urgency}'. Must be one of: {self.VALID_URGENCY}")
+        return self._submit(title, content, urgency=urgency, context=context, category=None,
+                            kind=HITLType.input_request, targets=list(targets))
+
+    def inbox(self, target: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Pending items for ``target`` (a person or role), from every agent, oldest first.
+
+        Without a target, every pending item in this inbox directory.
+        """
+        items = []
+        for f in sorted(self._inbox_dir.glob("hitl-*.json")):
+            try:
+                data = json.loads(f.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if data.get("type") != "hitl" or data.get("status") != "pending":
+                continue
+            if target is None or target in (data.get("targets") or []):
+                items.append(data)
+        return items
+
+    def _submit(
+        self,
+        title: str,
+        content: str,
+        *,
+        urgency: str,
+        context: Optional[Dict[str, Any]],
+        category: Optional[HITLCategory],
+        kind: HITLType,
+        targets: List[str],
+    ) -> str:
         ts = time.strftime("%Y%m%d-%H%M%S")
         request_id = f"hitl-{ts}-{uuid.uuid4().hex[:8]}"
         now_iso = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -192,17 +254,17 @@ class HITLQueue:
             request_id=request_id,
             workflow_id=safe_context.get("workflow_id", self._agent_id),
             step_id=safe_context.get("step_id", request_id),
-            type=HITLType.approval,
+            type=kind,
             status=HITLStatus.pending,
-            category=hitl_category,
+            category=category,
             description=safe_content,
             payload={
                 "title": safe_title,
                 "urgency": urgency,
-                "category": hitl_category.value,
+                "category": category.value if category else "",
                 "content": safe_content,
             },
-            targets=list(targets or self._targets),
+            targets=targets,
             channels=["dashboard"],
             mode="adaptive",
             metadata={
@@ -213,7 +275,7 @@ class HITLQueue:
 
         # ── Persist to flat file (always) ────────────────────────────────────
         self._write_file(request_id, hitl_request, safe_title, safe_content,
-                         urgency, hitl_category.value, safe_context, now_iso)
+                         urgency, category.value if category else "", safe_context, now_iso)
 
         # ── Persist to Redis (when available) ────────────────────────────────
         if self._redis_store:
@@ -225,10 +287,11 @@ class HITLQueue:
                 )
 
         self._logger.info(
-            "HITL request submitted: id=%s category=%s urgency=%s title=%r",
-            request_id, hitl_category.value, urgency, safe_title[:60],
+            "HITL %s submitted: id=%s category=%s urgency=%s title=%r",
+            kind.value, request_id, category.value if category else "-", urgency, safe_title[:60],
         )
         return request_id
+
 
     def check(self, request_id: str) -> Optional[HITLResolution]:
         """
@@ -332,14 +395,16 @@ class HITLQueue:
         request_id: str,
         decision: str,
         reason: str = "",
+        by: str = "",
     ) -> bool:
         """
-        Programmatically resolve a HITL item (for testing or auto-approval).
+        Resolve a HITL item: a person's decision, or auto-approval in tests.
 
         Args:
             request_id: Item to resolve
-            decision:   "approved" or "rejected"
-            reason:     Optional reason string
+            decision:   "approved", "rejected", or another HITLDecision value
+            reason:     The person's reason or answer, returned as the resolution's note
+            by:         Who decided
 
         Returns:
             True if item was found and updated, False otherwise
@@ -358,8 +423,9 @@ class HITLQueue:
             data["status"] = HITLStatus.resolved.value
             data["decision"] = normalized.value
             data["decision_reason"] = reason
+            data["note"] = reason
             data["request_id"] = request_id
-            data["resolved_by"] = data.get("resolved_by") or "auto"
+            data["resolved_by"] = by or data.get("resolved_by") or "auto"
             data["resolved_at"] = time.time()
             data["decided_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             filepath.write_text(json.dumps(data, indent=2))
@@ -371,7 +437,7 @@ class HITLQueue:
                     step_id = data.get("context", {}).get("step_id", request_id)
                     self._redis_store.resolve_hitl_request(
                         wf_id, step_id, decision=normalized.value,
-                        responder="auto", comment=reason,
+                        responder=by or "auto", comment=reason,
                     )
                 except Exception as exc:
                     self._logger.warning("Redis HITL resolve failed: %s", exc)
@@ -401,6 +467,8 @@ class HITLQueue:
         data = {
             "id": request_id,
             "agent": self._agent_id,
+            "kind": hitl_request.type.value,
+            "targets": list(hitl_request.targets),
             "title": title,
             "content": content,
             "urgency": urgency,

@@ -327,3 +327,32 @@ class TestDualWrite:
         # Redis entry exists
         redis_data = redis_store.get_hitl_request("test-agent", item_id)
         assert redis_data is not None
+
+
+class TestWorkRoutedToAPerson:
+    """A step routed to a person is a HITL item too, without the escalation gate."""
+
+    def test_assigned_work_waits_in_the_persons_inbox_across_agents(self, inbox_dir):
+        planner = HITLQueue(agent_id="planner-agent", inbox_dir=str(inbox_dir))
+        reviewer = HITLQueue(agent_id="review-agent", inbox_dir=str(inbox_dir))
+        first = planner.assign("Pick a launch date", "Tuesday or Wednesday?", targets=["alice"])
+        reviewer.assign("Approve the copy", "...", targets=["bob"])
+        reviewer.request(title="Token expired", content="...", category="auth_required")
+
+        [item] = HITLQueue(agent_id="dashboard", inbox_dir=str(inbox_dir)).inbox("alice")
+        assert item["id"] == first and item["kind"] == "input_request" and item["category"] == ""
+        assert len(planner.inbox()) == 3
+
+    async def test_the_persons_words_come_back_with_the_decision(self, inbox_dir):
+        queue = HITLQueue(agent_id="planner-agent", inbox_dir=str(inbox_dir))
+        item = queue.assign("Pick a launch date", "Tuesday or Wednesday?", targets=["alice"])
+        queue.resolve(item, "continue", "Wednesday, after the holiday", by="alice")
+        resolution = await queue.wait(item, timeout=1, poll_interval=0.01)
+        assert resolution.note == "Wednesday, after the holiday"
+        assert resolution.resolved_by == "alice"
+        assert queue.inbox("alice") == []
+
+    def test_an_escalation_still_needs_its_category(self, inbox_dir):
+        queue = HITLQueue(agent_id="a", inbox_dir=str(inbox_dir))
+        with pytest.raises(ValueError):
+            queue.request(title="Looks off", content="...", category="quality")

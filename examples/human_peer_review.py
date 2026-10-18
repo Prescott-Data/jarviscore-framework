@@ -2,8 +2,9 @@
 A person and an agent on one mesh — no LLM key needed.
 
 The launch desk drafts a post, finds whoever on the mesh can `review`, and asks
-them. If they reject it, it revises with their reason and asks again. The
-person can /ask the desk for a draft of their own at any time.
+them. The draft appears in the person's terminal; they type their answer and
+choose to send it as an approval or a rejection. If they reject it, the desk
+revises with their reason and asks again.
 
     Terminal 1:  python examples/human_peer_review.py
     Terminal 2:  jarviscore human join alice --capabilities review --seed 127.0.0.1:7949

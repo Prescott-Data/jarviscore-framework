@@ -13,7 +13,7 @@ silently overwriting someone's work.
 Every change records who made it and who asked for it, and every step is in
 the room's event log, so anyone can see what happened and why.
 
-    room = Room.local("launch")
+    room = Room.open("launch")                 # or Room.for_mesh(mesh, "launch")
     await room.ensure({"README.md": "# Launch"}, by="alice")
     proposal = await room.propose({"README.md": "# Launch\\n\\nShip Tuesday."},
                                   author="writer", asked_by="alice", title="Add date")
@@ -42,7 +42,6 @@ from jarviscore.execution.workspace import (
     WorkspaceDeltaConflict,
     _register_workspace_path,
 )
-from jarviscore.room.ledger import FileRoomLedger, RedisRoomLedger, RoomLedger
 from jarviscore.execution.merge import merge_text
 
 #: Provider name a goal uses to work on a room: workspace_source={"provider": "room", ...}
@@ -153,54 +152,42 @@ def _bytes(content) -> bytes:
 class Room:
     """A shared, versioned workspace. See the module docstring."""
 
-    def __init__(self, room_id: str, *, blob_storage, ledger: RoomLedger):
+    def __init__(self, room_id: str, *, blob_storage, redis_store):
         _register_workspace_path(room_id, {}, label="room id")
         if "/" in room_id:
             raise ValueError(f"Room ids cannot contain '/': {room_id!r}")
         self.id = room_id
         self.store = BlobSnapshotStore(blob_storage)
-        self.ledger = ledger
+        #: The mesh's RedisContextStore: head, proposals, members and history.
+        self.redis_store = redis_store
 
     # ── Construction ────────────────────────────────────────────────────────
 
     @classmethod
-    def local(cls, room_id: str, root: str = ".jarviscore") -> "Room":
-        """A room on this machine, with no Redis or shared storage."""
-        from jarviscore.storage.local import LocalBlobStorage
-
-        return cls(room_id, blob_storage=LocalBlobStorage(str(Path(root) / "blobs")),
-                   ledger=FileRoomLedger(str(Path(root) / "rooms")))
-
-    @classmethod
     def open(cls, room_id: str, *, redis_url: Optional[str] = None, settings=None) -> "Room":
-        """The room as a Mesh with the same settings sees it: same storage, same Redis."""
+        """The room as a Mesh with the same settings sees it: same Redis, same file storage."""
         from jarviscore.config.settings import Settings
         from jarviscore.storage import get_blob_storage
+        from jarviscore.storage.redis_store import RedisContextStore
 
         settings = settings or Settings()
         url = redis_url or getattr(settings, "redis_url", None)
-        if url:
-            import redis
+        if not url:
+            raise ValueError("Rooms live in the mesh's Redis: set REDIS_URL")
+        import redis
 
-            ledger: RoomLedger = RedisRoomLedger(redis.Redis.from_url(url, decode_responses=True))
-        else:
-            ledger = FileRoomLedger()
-        return cls(room_id, blob_storage=get_blob_storage(settings), ledger=ledger)
+        store = RedisContextStore(client=redis.Redis.from_url(url, decode_responses=True))
+        return cls(room_id, blob_storage=get_blob_storage(settings), redis_store=store)
 
     @classmethod
     def for_mesh(cls, mesh, room_id: str) -> "Room":
-        """A room on a started Mesh: its BlobStorage, and its Redis when it has one.
+        """A room on a started Mesh, using its Redis and BlobStorage.
 
         The room can then ``ask`` the mesh's agents to work on it.
         """
-        if getattr(mesh, "_blob_storage", None) is None:
-            raise RuntimeError("A room needs a started Mesh with BlobStorage")
-        redis_store = getattr(mesh, "_redis_store", None)
-        ledger = (
-            RedisRoomLedger(redis_store._redis) if redis_store is not None
-            else FileRoomLedger()
-        )
-        room = cls(room_id, blob_storage=mesh._blob_storage, ledger=ledger)
+        if getattr(mesh, "_blob_storage", None) is None or getattr(mesh, "_redis_store", None) is None:
+            raise RuntimeError("A room needs a started Mesh with Redis and BlobStorage")
+        room = cls(room_id, blob_storage=mesh._blob_storage, redis_store=mesh._redis_store)
         from jarviscore.room.work import install
 
         install(mesh, room)
@@ -225,37 +212,37 @@ class Room:
 
     async def ensure(self, files: Optional[Mapping[str, Any]] = None, *, by: str = "") -> Head:
         """Create the room with these files if it does not exist; return its head."""
-        existing = self.ledger.get_head(self.id)
+        existing = self.redis_store.get_room_head(self.id)
         if existing:
             return Head.from_record(existing)
         snapshot = await self.store.capture(self._source(1), "v1", dict(files or {}))
         head = Head(1, snapshot.snapshot_id, snapshot.manifest_blob_path, by, time.time())
-        if self.ledger.create_room(self.id, head.to_record()):
-            self.ledger.update_meta(self.id, lambda meta: {**meta, "created_by": by})
+        if self.redis_store.create_room_head(self.id, head.to_record()):
+            self.redis_store.update_room_meta(self.id, lambda meta: {**meta, "created_by": by})
             self._event("room.created", by=by, version=1, files=len(snapshot.entries))
             return head
-        return Head.from_record(self.ledger.get_head(self.id))
+        return Head.from_record(self.redis_store.get_room_head(self.id))
 
     async def ensure_from(self, snapshot: SourceSnapshot, *, by: str = "") -> Head:
         """Create the room from an existing snapshot, such as a captured repository."""
-        existing = self.ledger.get_head(self.id)
+        existing = self.redis_store.get_room_head(self.id)
         if existing:
             return Head.from_record(existing)
         await self.store.validate(snapshot)
         first = await self.store.compose(self._source(1), "v1", list(snapshot.entries))
         head = Head(1, first.snapshot_id, first.manifest_blob_path, by, time.time())
-        if self.ledger.create_room(self.id, head.to_record()):
-            self.ledger.update_meta(self.id, lambda meta: {**meta, "created_by": by})
+        if self.redis_store.create_room_head(self.id, head.to_record()):
+            self.redis_store.update_room_meta(self.id, lambda meta: {**meta, "created_by": by})
             self._event("room.created", by=by, version=1, files=len(first.entries),
                         source=f"{snapshot.source.provider}:{snapshot.source.locator}"
                                f"@{snapshot.resolved_revision}")
             return head
-        return Head.from_record(self.ledger.get_head(self.id))
+        return Head.from_record(self.redis_store.get_room_head(self.id))
 
     # ── Reading ─────────────────────────────────────────────────────────────
 
     def head(self) -> Head:
-        record = self.ledger.get_head(self.id)
+        record = self.redis_store.get_room_head(self.id)
         if not record:
             raise KeyError(f"Room {self.id!r} does not exist")
         return Head.from_record(record)
@@ -298,24 +285,30 @@ class Room:
         return _bytes(payload)
 
     def proposal(self, proposal_id: str) -> Proposal:
-        record = self.ledger.get_proposal(self.id, proposal_id)
+        record = self.redis_store.get_room_proposal(self.id, proposal_id)
         if not record:
             raise KeyError(f"No proposal {proposal_id!r} in room {self.id!r}")
         return Proposal.from_record(record)
 
     def proposals(self, status: Optional[str] = None) -> List[Proposal]:
-        return [Proposal.from_record(r) for r in self.ledger.list_proposals(self.id)
+        return [Proposal.from_record(r) for r in self.redis_store.list_room_proposals(self.id)
                 if status is None or r.get("status") == status]
 
-    def events(self, since: int = 0) -> List[Dict[str, Any]]:
-        return self.ledger.events(self.id, since)
+    def events(self, after: str = "") -> List[Dict[str, Any]]:
+        """The room's history after event ``after`` (an event's ``seq``), oldest first."""
+        return self.redis_store.get_room_events(self.id, after)
 
-    def note(self, kind: str, **fields) -> int:
+    def progress(self, workflow_id: str, after: str = "") -> List[Dict[str, Any]]:
+        """How the work asked for in ``workflow_id`` is going: that workflow's own ledger
+        (plan published, each step claimed by whom, completed, blocked), after entry ``after``."""
+        return self.redis_store.get_ledger_after(workflow_id, after)
+
+    def note(self, kind: str, **fields) -> str:
         """Record something that happened in the room, for everyone watching it."""
         return self._event(kind, **fields)
 
-    def _event(self, kind: str, **fields) -> int:
-        return self.ledger.append_event(self.id, {"type": kind, "at": time.time(), **fields})
+    def _event(self, kind: str, **fields) -> str:
+        return self.redis_store.append_room_event(self.id, {"type": kind, "at": time.time(), **fields})
 
     # ── Who may do what ─────────────────────────────────────────────────────
     #
@@ -326,10 +319,10 @@ class Room:
 
     def members(self) -> Dict[str, str]:
         """Person -> role. Empty for an open room."""
-        return dict(self.ledger.get_meta(self.id).get("members") or {})
+        return dict(self.redis_store.get_room_meta(self.id).get("members") or {})
 
     def role_of(self, person: str) -> Optional[str]:
-        meta = self.ledger.get_meta(self.id)
+        meta = self.redis_store.get_room_meta(self.id)
         members = meta.get("members") or {}
         if members:
             return members.get(person)
@@ -376,7 +369,7 @@ class Room:
                 raise RoomPermissionError(f"Room {self.id} must keep at least one owner")
             return {**meta, "members": members}
 
-        members = self.ledger.update_meta(self.id, change)["members"]
+        members = self.redis_store.update_room_meta(self.id, change)["members"]
         self._event("member.changed", by=by, person=person, role=role or "removed")
         return dict(members)
 
@@ -471,7 +464,7 @@ class Room:
             changes=entries,
             **fields,
         )
-        self.ledger.put_proposal(self.id, proposal.to_record())
+        self.redis_store.put_room_proposal(self.id, proposal.to_record())
         self._event("proposal.opened", proposal=proposal.id, by=proposal.author,
                     asked_by=proposal.asked_by, title=proposal.title,
                     base_version=proposal.base_version, paths=proposal.paths,
@@ -525,7 +518,7 @@ class Room:
                         continue
                 conflicts.append(path)
             if conflicts:
-                if self.ledger.decide_proposal(self.id, proposal_id, {
+                if self.redis_store.decide_room_proposal(self.id, proposal_id, {
                     "status": "conflicted", "conflicts": conflicts,
                     "decided_by": by, "decided_at": time.time(),
                 }):
@@ -545,9 +538,9 @@ class Room:
                                                 list(merged.values()))
             new_head = Head(version, snapshot.snapshot_id, snapshot.manifest_blob_path,
                             by, time.time(), proposal_id)
-            if not self.ledger.swap_head(self.id, head.version, new_head.to_record()):
+            if not self.redis_store.swap_room_head(self.id, head.version, new_head.to_record()):
                 continue  # someone moved the head; merge against the new one
-            self.ledger.decide_proposal(self.id, proposal_id, {
+            self.redis_store.decide_room_proposal(self.id, proposal_id, {
                 "status": "accepted", "decided_by": by, "decided_at": time.time(),
                 "accepted_version": version,
             })
@@ -558,8 +551,8 @@ class Room:
                         line_merged=sorted(line_merged))
             if proposal.revision_of:
                 # A revision that lands replaces the proposal it revised.
-                replaced = self.ledger.get_proposal(self.id, proposal.revision_of) or {}
-                if replaced.get("status") == "open" and self.ledger.decide_proposal(
+                replaced = self.redis_store.get_room_proposal(self.id, proposal.revision_of) or {}
+                if replaced.get("status") == "open" and self.redis_store.decide_room_proposal(
                         self.id, proposal.revision_of, {
                             "status": "rejected", "decided_by": by, "decided_at": time.time(),
                             "reason": f"replaced by {proposal_id}"}):
@@ -572,7 +565,7 @@ class Room:
     async def reject(self, proposal_id: str, *, by: str, reason: str) -> Proposal:
         """Turn down an open proposal with a reason its author can act on."""
         self.require(by, "editor", "reject changes")
-        if not self.ledger.decide_proposal(self.id, proposal_id, {
+        if not self.redis_store.decide_room_proposal(self.id, proposal_id, {
             "status": "rejected", "decided_by": by, "decided_at": time.time(),
             "reason": reason,
         }):

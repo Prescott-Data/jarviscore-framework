@@ -4,7 +4,8 @@ import fakeredis
 import pytest
 
 from jarviscore.execution.workspace import BlobSnapshotStore, SandboxBinding, SourceRef
-from jarviscore.room import FileRoomLedger, Room
+from jarviscore.room import Room
+from jarviscore.storage.redis_store import RedisContextStore
 from jarviscore.storage import get_blob_storage
 from jarviscore.storage.redis_blob import RedisBlobStorage
 
@@ -47,9 +48,11 @@ async def test_a_workspace_written_on_one_machine_is_materialized_on_another(ser
 
 
 async def test_people_on_two_machines_share_one_room(server, tmp_path):
-    ledger = FileRoomLedger(str(tmp_path / "rooms"))  # stands in for the shared Redis ledger
-    alice = Room("launch", blob_storage=storage(server), ledger=ledger)
-    bob = Room("launch", blob_storage=storage(server), ledger=ledger)
+    def team_redis():
+        return RedisContextStore(client=fakeredis.FakeRedis(server=server, decode_responses=True))
+
+    alice = Room("launch", blob_storage=storage(server), redis_store=team_redis())
+    bob = Room("launch", blob_storage=storage(server), redis_store=team_redis())
     await alice.ensure({"plan.md": "# Plan\n"}, by="alice")
 
     proposal = await bob.propose({"plan.md": "# Plan\n\nShip Tuesday\n"}, author="bob")

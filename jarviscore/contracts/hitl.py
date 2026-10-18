@@ -188,9 +188,10 @@ class HITLRequest(BaseModel):
     type: HITLType = HITLType.approval
     status: HITLStatus = HITLStatus.pending
 
-    # Mandatory: why this escalation is valid. Must be one of the three
-    # permitted categories — queue.py rejects requests without a valid one.
-    category: HITLCategory = HITLCategory.critical_action
+    # Why this escalation is valid: one of the three permitted categories, and
+    # queue.py rejects escalations without one. Work routed to a person who
+    # owns a capability (type input_request) is not an escalation and has none.
+    category: Optional[HITLCategory] = HITLCategory.critical_action
 
     description: str = ""
     payload: Dict[str, Any] = Field(default_factory=dict)

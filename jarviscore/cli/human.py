@@ -3,15 +3,16 @@ jarviscore human — put a person on the mesh.
 
 Usage:
     jarviscore human join alice --capabilities review,approve --seed 10.0.0.5:7949
-    jarviscore human join alice --capabilities review --inbox human_inbox   # answer from files
-    jarviscore human inbox [--dir human_inbox]
-    jarviscore human answer TASK_ID "Looks good, ship it"
-    jarviscore human answer TASK_ID --reject "The numbers are wrong"
+    jarviscore human join alice --capabilities review --no-terminal   # answer later
+    jarviscore human inbox [alice]
+    jarviscore human answer ITEM_ID "Looks good, ship it"
+    jarviscore human answer ITEM_ID --reject "The numbers are wrong"
 
 `join` starts a mesh node whose only agent is a HumanAgent for you. Other nodes
-see you in their roster, route work for your capabilities to you, and you can
-/ask any of them in return. With --inbox, tasks are written to files instead of
-the terminal and answered with `jarviscore human answer`.
+see you in their roster and route work for your capabilities to you. Each
+piece of work is a HITL item: it appears in your terminal, and stays in the
+HITL inbox (HITL_INBOX_DIR, default hitl_inbox) until it is answered from the
+terminal, with `jarviscore human answer`, or from any review surface.
 """
 
 import argparse
@@ -25,7 +26,7 @@ def _err(msg: str) -> str: return f"\033[31m✗\033[0m  {msg}"
 
 async def _join(args) -> None:
     from jarviscore import Mesh
-    from jarviscore.human import HumanAgent, InboxChannel, TerminalChannel
+    from jarviscore.human import HumanAgent, TerminalChannel
 
     capabilities = [c.strip() for c in args.capabilities.split(",") if c.strip()]
     config = {
@@ -39,7 +40,7 @@ async def _join(args) -> None:
     if args.redis_url:
         config["redis_url"] = args.redis_url
 
-    channel = InboxChannel(args.inbox) if args.inbox else TerminalChannel()
+    channel = None if args.no_terminal else TerminalChannel()
     mesh = Mesh(config=config)
     mesh.add(HumanAgent(args.name, capabilities, channel=channel, description=args.describe))
     await mesh.start()
@@ -49,8 +50,8 @@ async def _join(args) -> None:
         sys.exit(1)
     where = f"seed {args.seed}" if args.seed else f"{args.host}:{args.port} (others use this as --seed)"
     print(_ok(f"{args.name} joined the mesh via {where}"))
-    if args.inbox:
-        print(_ok(f"Tasks go to {args.inbox}/{args.name}/; answer with `jarviscore human answer`"))
+    if args.no_terminal:
+        print(_ok(f"Work for you waits in the HITL inbox: `jarviscore human inbox {args.name}`"))
     try:
         while True:
             await asyncio.sleep(3600)
@@ -65,23 +66,26 @@ def cmd_join(args) -> None:
         print("\nLeft the mesh.")
 
 
-def cmd_inbox(args) -> None:
-    from jarviscore.human import open_items
+def _queue(args):
+    from jarviscore.hitl import HITLQueue
 
-    items = open_items(args.dir)
+    return HITLQueue(agent_id="cli", inbox_dir=args.dir)
+
+
+def cmd_inbox(args) -> None:
+    items = [i for i in _queue(args).inbox(args.person) if i.get("kind") == "input_request"]
     if not items:
         print("Nothing waiting.")
         return
     for item in items:
-        origin = " · ".join(p for p in (item.get("capability"), item.get("asked_by")) if p)
-        print(f"{item['id']}  for {item.get('for')}  ({origin})")
-        print(f"  {item.get('task')}")
-        for step, summary in (item.get("upstream") or {}).items():
-            print(f"  ↳ {step}: {summary[:200]}")
+        context = item.get("context") or {}
+        origin = " · ".join(p for p in (context.get("capability"), context.get("asked_by")) if p)
+        print(f"{item['id']}  for {', '.join(item.get('targets') or [])}" + (f"  ({origin})" if origin else ""))
+        print(f"  {item.get('content') or item.get('title')}")
 
 
 def cmd_answer(args) -> None:
-    from jarviscore.human import answer_item
+    from jarviscore.human.channels import to_hitl_decision
 
     decision, response = "answered", args.response
     for name, flag in (("approved", args.approve), ("rejected", args.reject), ("declined", args.decline)):
@@ -90,12 +94,14 @@ def cmd_answer(args) -> None:
     if decision == "answered" and not response:
         print(_err("Give an answer, or use --approve / --reject / --decline"))
         sys.exit(1)
-    try:
-        answer_item(args.task_id, decision, response or "", by=args.by or "", directory=args.dir)
-    except LookupError as exc:
-        print(_err(str(exc)))
+    queue = _queue(args)
+    waiting = {i["id"]: i for i in queue.inbox()}
+    if args.item_id not in waiting:
+        print(_err(f"No item {args.item_id} is waiting for an answer"))
         sys.exit(1)
-    print(_ok(f"{args.task_id}: {decision}"))
+    by = args.by or ", ".join(waiting[args.item_id].get("targets") or [])
+    queue.resolve(args.item_id, to_hitl_decision(decision), response or "", by=by)
+    print(_ok(f"{args.item_id}: {decision}"))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -113,21 +119,23 @@ def build_parser() -> argparse.ArgumentParser:
                       help="SWIM port to listen on (default 7960); messages use this port + 1000")
     join.add_argument("--redis-url", default=None,
                       help="Shared Redis, to claim workflow steps from the ledger")
-    join.add_argument("--inbox", default=None, help="Write tasks to this directory instead of the terminal")
+    join.add_argument("--no-terminal", action="store_true",
+                      help="Do not show work in this terminal; answer it with `jarviscore human answer`")
     join.add_argument("--describe", default=None, help="How planners should think of you")
 
-    inbox = sub.add_parser("inbox", help="List tasks waiting in an inbox directory")
-    inbox.add_argument("--dir", default="human_inbox")
+    inbox = sub.add_parser("inbox", help="Work waiting for a person (everyone's, without a name)")
+    inbox.add_argument("person", nargs="?", default=None)
+    inbox.add_argument("--dir", default=None, help="HITL inbox directory (default: hitl_inbox)")
 
-    answer = sub.add_parser("answer", help="Answer a task in an inbox directory")
-    answer.add_argument("task_id")
+    answer = sub.add_parser("answer", help="Answer a piece of work")
+    answer.add_argument("item_id")
     answer.add_argument("response", nargs="?", default="")
     group = answer.add_mutually_exclusive_group()
     group.add_argument("--approve", nargs="?", const="", metavar="NOTE", help="Sign it off")
     group.add_argument("--reject", nargs="?", const="", metavar="WHY", help="Refuse it; the step fails")
     group.add_argument("--decline", nargs="?", const="", metavar="WHY", help="You will not or cannot do it")
-    answer.add_argument("--by", default=None, help="Who is answering (defaults to the task's owner)")
-    answer.add_argument("--dir", default="human_inbox")
+    answer.add_argument("--by", default=None, help="Who is answering (defaults to the person it is for)")
+    answer.add_argument("--dir", default=None, help="HITL inbox directory (default: hitl_inbox)")
     return p
 
 

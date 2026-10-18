@@ -30,6 +30,7 @@ from jarviscore.execution.llm import LLMProvider
 from jarviscore.kernel.lease import ExecutionLease, ROLE_LEASE_PROFILES
 from jarviscore.orchestration.envelopes import ExecutionBudget, neutral_context
 from jarviscore.kernel.cognition import AgentCognitionManager
+from jarviscore.kernel.workspace_tools import register_workspace_tools
 from jarviscore.context.fidelity import Record, select_whole
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
 from jarviscore.orchestration.budget import WorkflowBudgetExceeded
@@ -757,15 +758,6 @@ class Kernel:
                 confidence=1.0,
                 reason="Explicit planner/profile role.",
             )
-        if (context or {}).get("workspace_binding"):
-            # Writing a plan, reviewing a brief and fixing code all happen in the
-            # files, and only the Coder harness has the workspace tools to open
-            # and change them; any other role can only describe the work.
-            return RoutingDecision(
-                role="coder",
-                confidence=1.0,
-                reason="The step works on workspace files; only the Coder harness can read and change them.",
-            )
         routing_context = dict(context or {})
         credentialed = False
         if system_name:
@@ -948,6 +940,15 @@ class Kernel:
         subagent.workspace_root = getattr(self.sandbox, "workspace", None)
         self._attach_mesh_tools(subagent)
         return subagent
+
+    def _equip_for_step(self, subagent, context: Optional[Dict[str, Any]]) -> None:
+        """Give the sub-agent what this step needs beyond its own tools.
+
+        A step bound to files (a room, a repository) is done in those files,
+        whichever role the router chose, so that role can open and change them.
+        """
+        if (context or {}).get("workspace_binding") and "workspace_write" not in subagent._tools:
+            register_workspace_tools(subagent, lambda: self.sandbox)
 
     def _memory_scope(self, context: Optional[Dict[str, Any]]) -> Optional[str]:
         """Which tenant this step's memory belongs to.
@@ -1292,6 +1293,7 @@ class Kernel:
             subagent = self._get_or_create_subagent(
                 role, agent_id, step_id
             )
+            self._equip_for_step(subagent, context)
 
             # Build enriched context with system prompt
             enriched_context["workflow_id"] = workflow_id

@@ -5,36 +5,31 @@ back as a proposal.
 ``Room.for_mesh`` installs ``RoomSource`` so a goal can name a room as its
 workspace. ``ask`` runs the goal on the room's head; every agent step works on
 its own copy of those files, and the run's final changes are filed as one
-proposal that people review like any other. While it runs, each step's
-progress is written to the room's event log for everyone watching.
+proposal that people review like any other. The room's history records who
+asked and which workflow does the work; the steps' progress stays in that
+workflow's own ledger (``Room.progress``).
 """
 
 from __future__ import annotations
 
-import asyncio
-import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from jarviscore.execution.workspace import SourceRef, SourceSnapshot
 
-from jarviscore.room.ledger import RoomLedger
 from jarviscore.room.room import ROOM_PROVIDER, Proposal, Room
-
-
-_GENERATED_ID = re.compile(r"^(.+)-[0-9a-f]{8}$")
 
 
 class RoomSource:
     """Workspace source adapter: ``{"provider": "room", "locator": <room>, "revision": <version>}``."""
 
-    def __init__(self, blob_storage, ledger: RoomLedger):
+    def __init__(self, blob_storage, redis_store):
         self._blob_storage = blob_storage
-        self._ledger = ledger
+        self._redis_store = redis_store
 
     async def capture(self, source: SourceRef) -> SourceSnapshot:
-        room = Room(source.locator, blob_storage=self._blob_storage, ledger=self._ledger)
+        room = Room(source.locator, blob_storage=self._blob_storage, redis_store=self._redis_store)
         version = int(source.revision) if source.revision else room.head().version
         return await room.snapshot(version)
 
@@ -57,7 +52,7 @@ def new_workflow_id(room_id: str) -> str:
 def install(mesh, room: Room) -> None:
     """Let goals on this mesh use rooms stored where ``room`` is stored."""
     adapters = mesh.config.setdefault("workspace_source_adapters", {})
-    adapters.setdefault(ROOM_PROVIDER, RoomSource(room.store.blob_storage, room.ledger))
+    adapters.setdefault(ROOM_PROVIDER, RoomSource(room.store.blob_storage, room.redis_store))
 
 
 async def ask(
@@ -69,7 +64,6 @@ async def ask(
     revision_of: str = "",
     plan_template: Optional[Dict[str, Any]] = None,
     timeout: Optional[float] = None,
-    poll_interval: float = 0.5,
     workflow_id: str = "",
 ) -> AskResult:
     room.require(asked_by, "editor", "ask for work")
@@ -99,11 +93,6 @@ async def ask(
             )
     room.note("ask.started", by=asked_by, goal=goal, workflow_id=workflow_id,
               version=head.version, revision_of=revision_of)
-    cursor: Dict[str, int] = {}
-    watcher = asyncio.create_task(
-        _report_steps(room, mesh, workflow_id, poll_interval, cursor),
-        name=f"room-{room.id}-progress",
-    )
     try:
         result = await mesh.execute_goal(
             task,
@@ -115,6 +104,9 @@ async def ask(
                     "revision": str(head.version),
                 },
                 "room": room_context,
+                # With memory_scope_field="room_id", every agent working in the
+                # room shares the room's memory across workflows.
+                "room_id": room.id,
                 # Steps use the asker's own accounts (jarviscore.auth.principal).
                 "acting_for": asked_by,
             },
@@ -125,10 +117,6 @@ async def ask(
         room.note("ask.failed", by=asked_by, workflow_id=workflow_id,
                   error=f"{type(exc).__name__}: {exc}")
         raise
-    finally:
-        watcher.cancel()
-        await asyncio.gather(watcher, return_exceptions=True)
-        await _report_steps_once(room, mesh, workflow_id, cursor)
 
     steps = result.get("steps") or []
     deltas, authors = await _final_deltas(room, mesh, workflow_id, steps)
@@ -166,59 +154,13 @@ async def _final_deltas(room: Room, mesh, workflow_id: str, steps: List[Dict[str
     final = mesh._maximal_workspace_dependency_ids(list(changed), plan)
     deltas = [await room.store.load_delta(changed[step_id][1]) for step_id in final]
     # Deltas are cumulative, so everyone whose step changed files is in the result.
+    roles = {
+        entry.get("step_id"): entry.get("role") or entry.get("agent_id")
+        for entry in room.progress(workflow_id) if entry.get("event") == "step_claimed"
+    }
     authors = []
-    for step, _ in changed.values():
-        who = _role_of(mesh, str(step.get("claimed_by") or "")) or str(step.get("capability") or "")
+    for step_id, (step, _) in changed.items():
+        who = roles.get(step_id) or str(step.get("capability") or "")
         if who and who not in authors:
             authors.append(who)
     return deltas, authors
-
-
-def _role_of(mesh, agent_id: str) -> str:
-    """A readable name for whoever ran a step: its role, local or remote."""
-    agent_id = agent_id.split(":", 1)[0]
-    if not agent_id:
-        return ""
-    for agent in getattr(mesh, "agents", []):
-        if agent.agent_id == agent_id:
-            return agent.role
-    remote = getattr(getattr(mesh, "_p2p_coordinator", None), "_remote_agent_registry", {})
-    role = (remote.get(agent_id) or {}).get("role")
-    if role:
-        return str(role)
-    # An agent on a node this one cannot see: generated ids are "<role>-<8 hex>".
-    match = _GENERATED_ID.match(agent_id)
-    return match.group(1) if match else agent_id
-
-
-async def _report_steps(room: Room, mesh, workflow_id: str, interval: float,
-                        cursor: Dict[str, int]) -> None:
-    while True:
-        await _report_steps_once(room, mesh, workflow_id, cursor)
-        await asyncio.sleep(interval)
-
-
-async def _report_steps_once(room: Room, mesh, workflow_id: str, cursor: Dict[str, int]) -> None:
-    """Relay new entries of the workflow's own ledger: complete and in order, not sampled."""
-    store = mesh._redis_store
-    get_ledger = getattr(store, "get_ledger_full", None)
-    if not callable(get_ledger):
-        return
-    entries = get_ledger(workflow_id)
-    for entry in entries[cursor.get("seen", 0):]:
-        event = str(entry.get("event") or "")
-        if event == "dag_published":
-            definition = store.get_workflow_definition(workflow_id) or {}
-            room.note("plan.ready", workflow_id=workflow_id, steps=[
-                {"step": s.get("id"), "capability": s.get("capability", ""),
-                 "task": s.get("task", ""), "depends_on": s.get("depends_on", [])}
-                for s in definition.get("steps", [])
-            ])
-        elif event == "plan_template_rejected":
-            room.note("plan.rejected", workflow_id=workflow_id, error=entry.get("error", ""))
-        elif event.startswith("step_"):
-            room.note(f"step.{event[len('step_'):]}", workflow_id=workflow_id,
-                      step=entry.get("step_id", ""),
-                      by=_role_of(mesh, str(entry.get("agent_id") or "")),
-                      **{k: entry[k] for k in ("error", "reason") if entry.get(k)})
-    cursor["seen"] = len(entries)

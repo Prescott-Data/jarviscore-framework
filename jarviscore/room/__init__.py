@@ -1,6 +1,6 @@
 """Rooms: shared workspaces that people and agents change together."""
 
-from jarviscore.room.ledger import FileRoomLedger, RedisRoomLedger, RoomLedger
+from jarviscore.room.feed import FeedItem, RoomFeed
 from jarviscore.room.room import (
     CHECKOUT_MARKER,
     ROOM_PROVIDER,
@@ -12,24 +12,20 @@ from jarviscore.room.room import (
     RoomConflict,
     RoomPermissionError,
 )
-from jarviscore.room.slack import SlackPeopleChannel, SlackRoom
 from jarviscore.room.work import AskResult, RoomSource
 
 __all__ = [
     "AskResult",
     "CHECKOUT_MARKER",
-    "ROOM_PROVIDER",
+    "FeedItem",
     "FileChange",
-    "FileRoomLedger",
     "Head",
     "Proposal",
-    "RedisRoomLedger",
+    "ROLES",
+    "ROOM_PROVIDER",
     "Room",
     "RoomConflict",
-    "ROLES",
-    "RoomLedger",
+    "RoomFeed",
     "RoomPermissionError",
     "RoomSource",
-    "SlackPeopleChannel",
-    "SlackRoom",
 ]

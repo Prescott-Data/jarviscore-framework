@@ -9,10 +9,10 @@ import pytest
 from jarviscore import Mesh
 from jarviscore.auth.principal import acting_for
 from jarviscore.orchestration.envelopes import DependencyAuthorization
-from jarviscore.human import InboxChannel, answer_item, open_items
 from jarviscore.profiles import CustomAgent
+from jarviscore.hitl import HITLQueue
 from jarviscore.human import HumanAgent
-from jarviscore.room import Room
+from jarviscore.room import Room, RoomFeed
 from jarviscore.storage.local import LocalBlobStorage
 from jarviscore.storage.redis_store import RedisContextStore
 
@@ -123,16 +123,23 @@ async def test_agents_work_on_the_room_and_propose_their_changes(team):
     assert await text(room, "README.md") == "# Repo\n\nNow at v2.\n"
 
     kinds = [event["type"] for event in room.events()]
-    assert kinds[:2] == ["room.created", "ask.started"]
-    assert kinds.count("step.claimed") == 2 and kinds.count("step.completed") == 2
-    ready = next(e for e in room.events() if e["type"] == "plan.ready")
-    assert [s["capability"] for s in ready["steps"]] == ["coding", "docs"]
-    assert kinds.index("ask.finished") < kinds.index("proposal.accepted")
-    assert kinds.index("proposal.opened") < kinds.index("ask.finished")
+    assert kinds == ["room.created", "ask.started", "proposal.opened", "ask.finished",
+                     "proposal.accepted"], "the room records decisions, not the workflow's steps"
     finished = next(e for e in room.events() if e["type"] == "ask.finished")
     assert finished["proposal"] == proposal.id
-    claimed = next(e for e in room.events() if e["type"] == "step.claimed" and e["step"] == "fix")
-    assert claimed["by"] == "coder"
+
+    # Each claim in the workflow's ledger names the role that took the step.
+    claims = {e["step_id"]: e["role"] for e in room.progress(asked.workflow_id)
+              if e["event"] == "step_claimed"}
+    assert claims == {"fix": "coder", "docs": "writer"}
+
+    # Progress is read from the workflow's own ledger, with who did each step.
+    lines = [item.text for item in RoomFeed(room).poll()]
+    assert "plan: fix (coding) → docs (docs)" in lines
+    assert "coder took fix" in lines and "coder finished fix" in lines
+    assert "writer took docs" in lines and "writer finished docs" in lines
+    assert lines.index("writer finished docs") < lines.index(
+        f"▲ {proposal.id} proposed by coder, writer for alice: {goal} (3 files, on v1)")
 
 
 async def test_a_rejection_is_passed_to_the_next_attempt(team):
@@ -189,21 +196,22 @@ class Editor(HumanAgent):
 
 async def test_a_person_edits_the_files_and_their_edits_are_in_the_proposal(team, tmp_path):
     room, coder = team
-    inbox = tmp_path / "inbox"
-    alice = Editor(agent_id="alice-1", channel=InboxChannel(str(inbox), poll_interval=0.02))
+    alice = Editor(agent_id="alice-1", channel=None)
+    alice.poll_interval = 0.02
+    alice.hitl = HITLQueue(agent_id="alice-1", inbox_dir=str(tmp_path / "hitl"))
     await alice.setup()
     room.mesh.agents.append(alice)  # what Mesh.add + start do, for an agent joining late
     room.mesh._distributed_worker_tasks.append(
         asyncio.create_task(room.mesh._run_distributed_worker(alice)))
 
     async def person():
-        while not open_items(str(inbox)):
+        while not alice.waiting():
             await asyncio.sleep(0.02)
-        [item] = open_items(str(inbox))
-        folder = Path(item["workspace"])
+        [item] = alice.waiting()
+        folder = Path(item["context"]["workspace"])
         assert (folder / "src" / "app.py").read_text() == "VERSION = 'v2'\n", "sees the coder's work"
         (folder / "README.md").write_text("# Repo\n\nEdited by Alice.\n")
-        answer_item(item["id"], "approved", "Tweaked the README", directory=str(inbox))
+        alice.answer(item["id"], "approved", "Tweaked the README")
 
     reviewer = asyncio.create_task(person())
     goal = "Fix the app and let Alice polish the docs"
@@ -216,17 +224,6 @@ async def test_a_person_edits_the_files_and_their_edits_are_in_the_proposal(team
     await room.accept(asked.proposal.id, by="bob")
     assert await text(room, "README.md") == "# Repo\n\nEdited by Alice.\n"
     assert await text(room, "src/app.py") == "VERSION = 'v2'\n"
-
-
-def test_agents_on_unseen_nodes_are_named_by_role():
-    from jarviscore.room.work import _role_of
-
-    class Lonely:
-        agents = []
-
-    assert _role_of(Lonely, "coder-853b9765:claim") == "coder"
-    assert _role_of(Lonely, "release-bot") == "release-bot"
-    assert _role_of(Lonely, "") == ""
 
 
 class PlainFixer(CustomAgent):

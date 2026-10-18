@@ -8,8 +8,10 @@ A HumanAgent is registered, announced and discovered like any agent: it has a
 role and capabilities, other nodes see it in their roster, mesh planners can
 route steps to it, it claims workflow steps from the shared ledger, and peers
 reach it with ``request_capability``. The difference is who does the work:
-each task is put in front of a person through a channel, and the person's
-answer is the result.
+each task becomes a HITL item addressed to the person (``HITLQueue.assign``),
+a channel puts it in front of them, and their answer is the result. Because
+the item lives in the HITL store, it can be answered from wherever the person
+is: their terminal, ``jarviscore human answer``, a dashboard, or a room's chat.
 
     from jarviscore import Mesh, HumanAgent
 
@@ -26,15 +28,20 @@ a peer can ask for "a person" without knowing who is online.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any, Dict, Iterable, Optional
-from uuid import uuid4
 
 from jarviscore.core.envelope import attach_result_summary
 from jarviscore.core.profile import Profile
 from jarviscore.execution.workspace import WorkspaceAccess
-from jarviscore.human.channels import HumanChannel, TerminalChannel, WorkItem
+from jarviscore.human.channels import (
+    HumanChannel,
+    TerminalChannel,
+    from_hitl_decision,
+    to_hitl_decision,
+)
+
+_TERMINAL: Any = object()
 
 #: Shown to a person per upstream result; enough to judge, not a data dump.
 UPSTREAM_SUMMARY_CHARS = 1500
@@ -51,17 +58,19 @@ def _summaries(previous: Any) -> Dict[str, str]:
 
 
 class HumanAgent(Profile):
-    """A person on the mesh, reached through a channel (terminal by default)."""
+    """A person on the mesh. Their work is HITL items; a channel shows them (terminal by default)."""
 
     #: Seconds to wait for the person before the task fails.
     answer_timeout: float = 3600.0
+    #: How often to look for the person's answer.
+    poll_interval: float = 1.0
 
     def __init__(
         self,
         name: Optional[str] = None,
         capabilities: Optional[Iterable[str]] = None,
         *,
-        channel: Optional[HumanChannel] = None,
+        channel: Optional[HumanChannel] = _TERMINAL,
         description: Optional[str] = None,
         capability_descriptions: Optional[Dict[str, str]] = None,
         answer_timeout: Optional[float] = None,
@@ -86,7 +95,8 @@ class HumanAgent(Profile):
         for capability in self.capabilities:
             descriptions.setdefault(capability, f"{capability}, done by {self.role} (a person)")
         self.capability_descriptions = descriptions
-        self.channel = channel or TerminalChannel()
+        # The terminal unless told otherwise; None leaves items in the HITL inbox.
+        self.channel = TerminalChannel() if channel is _TERMINAL else channel
         if answer_timeout is not None:
             self.answer_timeout = answer_timeout
         # On a step whose goal works on files (a room, a repository), the Mesh
@@ -95,49 +105,73 @@ class HumanAgent(Profile):
 
     async def setup(self):
         await super().setup()
-        await self.channel.start(self)
+        if getattr(self, "hitl", None) is None:  # the Mesh injects the deployment's queue
+            from jarviscore.hitl import HITLQueue
+
+            self.hitl = HITLQueue(agent_id=self.agent_id)
+        if self.channel is not None:
+            await self.channel.start(self)
 
     async def teardown(self):
-        await self.channel.stop()
+        if self.channel is not None:
+            await self.channel.stop()
         await super().teardown()
 
     async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """Put the task in front of the person and return their answer."""
         context = task.get("context") or {}
-        item = WorkItem(
-            id=f"task-{uuid4().hex[:10]}",
-            task=str(task.get("task") or ""),
-            asked_by=str(
-                context.get("peer_sender")
-                or context.get("peer_requester_agent_id")
-                or ("workflow" if context.get("workflow_id") else "")
-            ),
-            capability=str(context.get("capability") or ""),
-            workflow_id=str(context.get("workflow_id") or ""),
-            step_id=str(context.get("step_id") or ""),
-            upstream=_summaries(context.get("previous_step_results")),
-            workspace=str((context.get("workspace_binding") or {}).get("path") or ""),
+        text = str(task.get("task") or "")
+        upstream = _summaries(context.get("previous_step_results"))
+        content = text + "".join(f"\n\n{step}:\n{summary}" for step, summary in upstream.items())
+        item_id = self.hitl.assign(
+            title=text.splitlines()[0][:200] if text else "Work for you",
+            content=content,
+            targets=[self.role],
+            context={
+                "workflow_id": str(context.get("workflow_id") or ""),
+                "step_id": str(context.get("step_id") or ""),
+                "capability": str(context.get("capability") or ""),
+                "asked_by": str(context.get("peer_sender") or context.get("peer_requester_agent_id")
+                                or context.get("acting_for") or ""),
+                "upstream": upstream,
+                "workspace": str((context.get("workspace_binding") or {}).get("path") or ""),
+            },
         )
+        if self.channel is not None:
+            await self.channel.show(self._item(item_id))
         try:
-            answer = await asyncio.wait_for(self.channel.ask(item), timeout=self.answer_timeout)
-        except asyncio.TimeoutError:
+            resolution = await self.hitl.wait(item_id, timeout=self.answer_timeout,
+                                              poll_interval=self.poll_interval)
+        except TimeoutError:
+            if self.channel is not None:
+                await self.channel.withdraw(item_id)
             return attach_result_summary({
                 "status": "failure",
                 "error": f"{self.role} did not answer within {self.answer_timeout:.0f}s.",
             })
 
-        output = {
-            "response": answer.response,
-            "decision": answer.decision,
-            "answered_by": answer.by or self.role,
-        }
-        if answer.decision in ("rejected", "declined"):
+        decision = from_hitl_decision(resolution.decision)
+        response = resolution.note or ""
+        output = {"response": response, "decision": decision,
+                  "answered_by": resolution.resolved_by or self.role}
+        if decision in ("rejected", "declined"):
             return attach_result_summary({
                 "status": "failure",
-                "error": f"{self.role} {answer.decision}: {answer.response or 'no reason given'}",
+                "error": f"{self.role} {decision}: {response or 'no reason given'}",
                 "output": output,
             })
         return attach_result_summary({"status": "success", "output": output})
+
+    def answer(self, item_id: str, decision: str, response: str = "", by: str = "") -> bool:
+        """Answer one of this person's items: ``decision`` is answered, approved, rejected or declined."""
+        return self.hitl.resolve(item_id, to_hitl_decision(decision), response, by=by or self.role)
+
+    def waiting(self):
+        """This person's items that are still waiting for an answer, oldest first."""
+        return self.hitl.inbox(self.role)
+
+    def _item(self, item_id: str) -> Dict[str, Any]:
+        return next((i for i in self.hitl.inbox(self.role) if i["id"] == item_id), {"id": item_id})
 
     async def authorize_dependencies(self, task, artifacts, interpretations):
         """The person sees upstream results with the task and decides for themselves."""

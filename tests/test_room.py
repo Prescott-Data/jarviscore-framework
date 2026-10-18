@@ -9,19 +9,17 @@ import pytest
 from jarviscore.execution.workspace import SandboxBinding
 from jarviscore.room import (
     CHECKOUT_MARKER,
-    FileRoomLedger,
-    RedisRoomLedger,
     Room,
     RoomConflict,
 )
 from jarviscore.storage.local import LocalBlobStorage
+from jarviscore.storage.redis_store import RedisContextStore
 
 
-@pytest.fixture(params=["file", "redis"])
-async def room(request, tmp_path):
-    ledger = (FileRoomLedger(str(tmp_path / "rooms")) if request.param == "file"
-              else RedisRoomLedger(fakeredis.FakeRedis(decode_responses=True)))
-    room = Room("launch", blob_storage=LocalBlobStorage(str(tmp_path / "blobs")), ledger=ledger)
+@pytest.fixture
+async def room(tmp_path):
+    store = RedisContextStore(client=fakeredis.FakeRedis(decode_responses=True))
+    room = Room("launch", blob_storage=LocalBlobStorage(str(tmp_path / "blobs")), redis_store=store)
     await room.ensure({"README.md": "# Launch\n", "src/app.py": "print('v1')\n"}, by="alice")
     return room
 
@@ -45,7 +43,7 @@ class TestTheHead:
         assert await text(room, "other.txt") is None
 
     async def test_an_unknown_room_says_so(self, room):
-        stranger = Room("nobody", blob_storage=room.store.blob_storage, ledger=room.ledger)
+        stranger = Room("nobody", blob_storage=room.store.blob_storage, redis_store=room.redis_store)
         with pytest.raises(KeyError):
             stranger.head()
 

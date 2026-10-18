@@ -1684,11 +1684,11 @@ class TestTenantMemoryScope:
         assert seen and seen[0]["matter_id"] == "matter-a"
 
 
-class TestWorkspaceStepsGoToTheHarnessThatCanOpenFiles:
+class TestStepsOnFiles:
 
     @pytest.mark.asyncio
-    async def test_a_writing_task_on_workspace_files_goes_to_the_coder(self, mock_llm, mock_sandbox):
-        router = SimpleNamespace(route=AsyncMock())
+    async def test_the_router_decides_who_does_work_on_files(self, mock_llm, mock_sandbox):
+        router = SimpleNamespace(route=AsyncMock(return_value=SimpleNamespace(role="communicator")))
         kernel = Kernel(llm_client=mock_llm, sandbox=mock_sandbox)
         kernel._task_router = router
 
@@ -1697,20 +1697,27 @@ class TestWorkspaceStepsGoToTheHarnessThatCanOpenFiles:
             {"effect": "propose", "workspace_binding": {"path": "/tmp/w", "mode": "copy_on_write"}},
         )
 
-        assert decision.role == "coder"
-        router.route.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_reading_workspace_documents_also_needs_it(self, mock_llm, mock_sandbox):
-        kernel = Kernel(llm_client=mock_llm, sandbox=mock_sandbox)
-        decision = await kernel._route_task(
-            "Summarise brief.md", {"effect": "read", "workspace_binding": {"path": "/tmp/w"}})
-        assert decision.role == "coder"
-
-    @pytest.mark.asyncio
-    async def test_an_explicit_role_still_wins(self, mock_llm, mock_sandbox):
-        kernel = Kernel(llm_client=mock_llm, sandbox=mock_sandbox)
-        decision = await kernel._route_task(
-            "Draft the announcement", {"workspace_binding": {"path": "/tmp/w"}},
-            agent_default_role="communicator")
+        router.route.assert_awaited_once()
         assert decision.role == "communicator"
+
+    def test_whichever_role_does_it_can_open_and_change_the_files(self, mock_llm, tmp_path):
+        from jarviscore.execution.coder_sandbox import create_coder_sandbox
+
+        (tmp_path / "plan.md").write_text("# Plan\n\n## Goals\n")
+        kernel = Kernel(llm_client=mock_llm, sandbox=create_coder_sandbox(workspace_dir=tmp_path))
+        for role in ("communicator", "researcher"):
+            subagent = kernel._create_subagent(role, f"{role}-1")
+            kernel._equip_for_step(subagent, {"workspace_binding": {"path": str(tmp_path)}})
+            tools = subagent._tools
+            assert {"workspace_read", "workspace_edit", "workspace_write"} <= set(tools)
+            assert "workspace_run" not in tools, "running commands stays with the coder"
+            read = tools["workspace_read"].func(path="plan.md")
+            assert read["status"] == "success"
+        tools["workspace_write"].func(path="notes.md", content="Goals drafted\n")
+        assert (tmp_path / "notes.md").read_text() == "Goals drafted\n"
+
+    def test_a_step_without_files_gets_no_file_tools(self, mock_llm, mock_sandbox):
+        kernel = Kernel(llm_client=mock_llm, sandbox=mock_sandbox)
+        subagent = kernel._create_subagent("communicator", "c-1")
+        kernel._equip_for_step(subagent, {"effect": "read"})
+        assert "workspace_write" not in subagent._tools
