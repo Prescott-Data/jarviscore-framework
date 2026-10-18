@@ -18,7 +18,7 @@ import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 class RoomLedger:
@@ -46,6 +46,14 @@ class RoomLedger:
 
     def decide_proposal(self, room_id: str, proposal_id: str, fields: Dict[str, Any]) -> bool:
         """Close an open proposal; False if it is no longer open."""
+        raise NotImplementedError
+
+    def get_meta(self, room_id: str) -> Dict[str, Any]:
+        """Room settings, such as who created it and its members."""
+        raise NotImplementedError
+
+    def update_meta(self, room_id: str, change: Callable[[Dict[str, Any]], Dict[str, Any]]) -> Dict[str, Any]:
+        """Apply ``change`` to the settings atomically and return the result."""
         raise NotImplementedError
 
     def append_event(self, room_id: str, event: Dict[str, Any]) -> int:
@@ -133,6 +141,15 @@ class FileRoomLedger(RoomLedger):
             self._write(directory / "proposals.json", proposals)
             return True
 
+    def get_meta(self, room_id):
+        return self._read(self._dir(room_id) / "meta.json", {})
+
+    def update_meta(self, room_id, change):
+        with self._locked(room_id) as directory:
+            meta = change(dict(self._read(directory / "meta.json", {})))
+            self._write(directory / "meta.json", meta)
+            return meta
+
     def append_event(self, room_id, event):
         with self._locked(room_id) as directory:
             path = directory / "events.jsonl"
@@ -219,6 +236,27 @@ class RedisRoomLedger(RoomLedger):
                     return True
                 except WatchError:
                     continue  # another proposal changed; check this one again
+
+    def get_meta(self, room_id):
+        raw = self.redis.get(self._key(room_id, "meta"))
+        return json.loads(raw) if raw else {}
+
+    def update_meta(self, room_id, change):
+        from redis.exceptions import WatchError
+
+        key = self._key(room_id, "meta")
+        while True:
+            with self.redis.pipeline() as pipe:
+                try:
+                    pipe.watch(key)
+                    raw = pipe.get(key)
+                    meta = change(json.loads(raw) if raw else {})
+                    pipe.multi()
+                    pipe.set(key, json.dumps(meta))
+                    pipe.execute()
+                    return meta
+                except WatchError:
+                    continue
 
     def append_event(self, room_id, event):
         seq = int(self.redis.incr(self._key(room_id, "seq")))

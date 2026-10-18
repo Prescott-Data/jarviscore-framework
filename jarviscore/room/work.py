@@ -67,6 +67,7 @@ async def ask(
     timeout: Optional[float] = None,
     poll_interval: float = 0.5,
 ) -> AskResult:
+    room.require(asked_by, "editor", "ask for work")
     head = room.head()
     workflow_id = f"room-{room.id}-{uuid4().hex[:8]}"
     task = goal

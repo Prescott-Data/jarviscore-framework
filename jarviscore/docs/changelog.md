@@ -60,12 +60,30 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   deployment's single identity, so their access applies and provider audit
   logs show them. The identity is read only from the registered workflow,
   never from peer or capability-need context. Rooms set it to the asker.
-- **`WorkspaceAccess`** lets any agent, not only AutoAgent, work on a step's
-  files, and **`BlobSnapshotStore.compose`** builds a snapshot from blobs
-  already stored.
+- **CustomAgent works on files with no extra code.** Every CustomAgent gets
+  `WorkspaceAccess` unless it has its own sandbox, so its steps find the
+  workspace's files at `context["workspace_binding"]["path"]`.
+- **Line-level merging.** Edits to different lines of the same text file are
+  combined, in rooms and when a step builds on parallel branches; only edits
+  to the same lines that differ conflict.
+- **`STORAGE_BACKEND=redis`** keeps file contents in the Mesh's Redis, so one
+  Redis is all people and agents on different machines need.
+- **Room roles.** Rooms are open by default; their creator can make them
+  members-only with viewer, editor and owner roles, enforced on asking,
+  pushing, accepting, rejecting and managing members.
+- **`BlobSnapshotStore.compose`** builds a snapshot from blobs already stored.
 
 ### Changed
 
+- **A step bound to a workspace runs in the Coder harness**, the only one with
+  workspace tools, whatever the task: writing a plan or summarising a brief
+  went to the communicator, which could not open the files and either returned
+  the work as text or reported itself blocked. An explicit role still wins.
+  A workspace step that changes files but finishes without editing any is
+  asked once to put its work in the files.
+- **The node that runs a step decides its workspace commands** with its own
+  `workspace_allowed_commands`; the asking node's list applies only when the
+  running node sets none.
 - The mesh planner is told that reading and editing a goal's workspace files
   calls no provider: file changes are `propose` steps, and only publishing to
   a provider is a `write`. It used to plan edits as writes to a made-up

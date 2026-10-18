@@ -7,8 +7,10 @@ from jarviscore.room.room import (
     FileChange,
     Head,
     Proposal,
+    ROLES,
     Room,
     RoomConflict,
+    RoomPermissionError,
 )
 from jarviscore.room.work import AskResult, RoomSource
 
@@ -23,6 +25,8 @@ __all__ = [
     "RedisRoomLedger",
     "Room",
     "RoomConflict",
+    "ROLES",
     "RoomLedger",
+    "RoomPermissionError",
     "RoomSource",
 ]

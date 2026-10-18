@@ -11,6 +11,7 @@ Usage:
     jarviscore room reject launch p-1a2b3c4d "Prices are wrong" --as bob [--redo]
     jarviscore room checkout launch ./my-copy
     jarviscore room push ./my-copy -m "Tighter copy" --as alice [--accept]
+    jarviscore room role launch bob editor --as alice   # makes the room members-only
 
 Rooms are found the way a Mesh with the same settings finds them: REDIS_URL
 (or --redis-url) for a room shared across machines, otherwise this machine.
@@ -122,6 +123,23 @@ async def cmd_reject(args):
         await _ask(args, room, proposal.title or args.reason, revision_of=args.proposal)
 
 
+async def cmd_members(args):
+    room = _room(args)
+    members = room.members()
+    if not members:
+        print(f"{room.id} is open: everyone can ask, propose, accept and reject.")
+        return
+    for person, role in sorted(members.items(), key=lambda m: (-["viewer", "editor", "owner"].index(m[1]), m[0])):
+        print(f"  {role:<7} {person}")
+
+
+async def cmd_role(args):
+    room = _room(args)
+    role = None if args.role == "none" else args.role
+    room.set_role(args.person, role, by=args.as_)
+    print(_ok(f"{args.person}: {role or 'removed'} in {room.id}"))
+
+
 async def cmd_checkout(args):
     room = _room(args)
     head = await room.checkout(args.directory)
@@ -226,6 +244,13 @@ def build_parser() -> argparse.ArgumentParser:
     reject.add_argument("--redo", action="store_true", help="Ask the agents to redo it with your reason")
     reject.add_argument("--timeout", type=float, default=1800)
 
+    with_room("members", "Who is in the room and their roles")
+
+    role = with_room("role", "Set someone's role (makes an open room members-only)")
+    role.add_argument("person")
+    role.add_argument("role", choices=["viewer", "editor", "owner", "none"])
+    role.add_argument("--as", dest="as_", required=True)
+
     checkout = with_room("checkout", "Copy the room's files into an empty directory")
     checkout.add_argument("directory")
 
@@ -248,7 +273,7 @@ def main(argv=None) -> None:
         asyncio.run(handler(args))
     except KeyboardInterrupt:
         pass
-    except (KeyError, ValueError, FileExistsError) as exc:
+    except (KeyError, ValueError, FileExistsError, PermissionError) as exc:
         print(_err(str(exc).strip("'\"")))
         sys.exit(1)
 

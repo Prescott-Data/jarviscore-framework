@@ -223,3 +223,110 @@ class TestAgentWork:
             delta = await binding.export_delta("workflows/wf-2/workspace_deltas/x")
         with pytest.raises(ValueError):
             await room.propose_deltas([delta], base_version=2, author="coder")
+
+
+PLAN = "# Launch plan\n\n## Goals\nGrow signups\n\n## Dates\nShip Tuesday\n\n## Owners\nAlice\n"
+
+
+class TestTwoPeopleOnOneDocument:
+
+    async def test_edits_to_different_sections_both_land(self, room):
+        setup = await room.propose({"plan.md": PLAN}, author="alice")
+        await room.accept(setup.id, by="alice")
+        goals = await room.propose({"plan.md": PLAN.replace("Grow signups", "Grow signups 20%")},
+                                   author="alice")
+        dates = await room.propose({"plan.md": PLAN.replace("Ship Tuesday", "Ship Wednesday")},
+                                   author="bob")
+        await room.accept(goals.id, by="alice")
+        await room.accept(dates.id, by="bob")
+
+        assert await text(room, "plan.md") == PLAN.replace(
+            "Grow signups", "Grow signups 20%").replace("Ship Tuesday", "Ship Wednesday")
+        assert room.events()[-1]["line_merged"] == ["plan.md"]
+
+    async def test_different_edits_to_the_same_line_still_conflict(self, room):
+        setup = await room.propose({"plan.md": PLAN}, author="alice")
+        await room.accept(setup.id, by="alice")
+        monday = await room.propose({"plan.md": PLAN.replace("Tuesday", "Monday")}, author="alice")
+        friday = await room.propose({"plan.md": PLAN.replace("Tuesday", "Friday")}, author="bob")
+        await room.accept(monday.id, by="alice")
+        with pytest.raises(RoomConflict):
+            await room.accept(friday.id, by="bob")
+
+
+class TestParallelAgentsOnOneDocument:
+
+    async def _branch(self, room, snapshot, name, edit):
+        async with SandboxBinding(room.store, snapshot) as binding:
+            path = binding.workspace / "README.md"
+            path.write_text(edit(path.read_text()))
+            return await binding.export_delta(f"workflows/wf/workspace_deltas/{name}")
+
+    async def test_sections_written_in_parallel_are_combined(self, room):
+        setup = await room.propose({"README.md": "# Launch\n\nIntro\n\nOutro\n"}, author="alice")
+        await room.accept(setup.id, by="alice")
+        snapshot = await room.snapshot()
+        top = await self._branch(room, snapshot, "top", lambda t: t.replace("Intro", "Intro, by writer"))
+        bottom = await self._branch(room, snapshot, "bottom", lambda t: t.replace("Outro", "Outro, by editor"))
+
+        proposal = await room.propose_deltas([top, bottom], base_version=2, author="writer, editor")
+        await room.accept(proposal.id, by="alice")
+
+        assert await text(room, "README.md") == "# Launch\n\nIntro, by writer\n\nOutro, by editor\n"
+
+    async def test_parallel_rewrites_of_one_line_conflict(self, room):
+        snapshot = await room.snapshot()
+        one = await self._branch(room, snapshot, "one", lambda t: "# One\n")
+        two = await self._branch(room, snapshot, "two", lambda t: "# Two\n")
+        from jarviscore.execution.workspace import WorkspaceDeltaConflict
+        with pytest.raises(WorkspaceDeltaConflict):
+            await room.propose_deltas([one, two], base_version=1, author="a, b")
+
+
+class TestRoles:
+
+    async def test_a_room_is_open_until_it_has_members(self, room):
+        assert room.members() == {}
+        assert room.role_of("alice") == "owner"      # the creator
+        assert room.role_of("anyone") == "editor"
+        proposal = await room.propose({"README.md": "x\n"}, author="anyone")
+        await room.accept(proposal.id, by="anyone")
+
+    async def test_only_the_creator_makes_it_members_only_and_stays_owner(self, room):
+        with pytest.raises(PermissionError):
+            room.set_role("mallory", "owner", by="mallory")
+        members = room.set_role("bob", "editor", by="alice")
+        assert members == {"alice": "owner", "bob": "editor"}
+        assert room.events()[-1]["type"] == "member.changed"
+
+    async def test_roles_are_enforced(self, room):
+        room.set_role("bob", "editor", by="alice")
+        room.set_role("vic", "viewer", by="alice")
+        proposal = await room.propose({"README.md": "x\n"}, author="bob")
+
+        for person in ("vic", "stranger"):
+            with pytest.raises(PermissionError, match="accept"):
+                await room.accept(proposal.id, by=person)
+            with pytest.raises(PermissionError):
+                await room.reject(proposal.id, by=person, reason="no")
+        with pytest.raises(PermissionError):
+            room.set_role("vic", "owner", by="bob")
+        await room.accept(proposal.id, by="bob")
+
+    async def test_viewers_cannot_push(self, room, tmp_path):
+        room.set_role("vic", "viewer", by="alice")
+        await room.checkout(str(tmp_path / "vic"))
+        (tmp_path / "vic" / "README.md").write_text("mine\n")
+        with pytest.raises(PermissionError, match="propose"):
+            await room.push(str(tmp_path / "vic"), author="vic")
+
+    async def test_the_last_owner_cannot_leave(self, room):
+        room.set_role("bob", "owner", by="alice")
+        room.set_role("alice", None, by="bob")
+        with pytest.raises(PermissionError, match="at least one owner"):
+            room.set_role("bob", "editor", by="bob")
+        assert room.members() == {"bob": "owner"}
+
+    async def test_unknown_roles_are_refused(self, room):
+        with pytest.raises(ValueError):
+            room.set_role("bob", "admin", by="alice")

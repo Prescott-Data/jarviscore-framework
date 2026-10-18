@@ -387,7 +387,21 @@ like any other.
             "impossible; inspect progress and use a narrower or preparatory command before "
             "declaring an environment blocker. Create fixtures with workspace_write rather "
             "than shell redirection, heredocs, or generated writer commands."
+            f"{self._workspace_deliverable_note(state)}"
             f"{first_attempt}"
+        )
+
+    @staticmethod
+    def _workspace_deliverable_note(state: KernelState) -> str:
+        context = state.context or {}
+        if not context.get("workspace_binding") or str(context.get("effect") or "") != "propose":
+            return ""
+        return (
+            "\n\n## WORKSPACE DELIVERABLE\n"
+            "This step's result is the workspace files. Make the requested changes in "
+            "the files themselves with workspace_edit (existing files) or workspace_write "
+            "(new files); people review those changes. A document or code you only "
+            "return as text is not delivered."
         )
 
     # ─────────────────────────────────────────────────────────────
@@ -436,7 +450,46 @@ like any other.
                     observed={"tool_calls": 0},
                 ),
             )
+        unchanged = self._workspace_left_unchanged(state, parsed)
+        if unchanged is not None:
+            return (False, unchanged)
         return super()._can_complete(state, parsed)
+
+    @staticmethod
+    def _workspace_left_unchanged(state: KernelState, parsed: Dict[str, Any]):
+        """A step whose work is changing workspace files, finishing with none changed.
+
+        Raised once: the files are what the step delivers, and text returned in
+        their place is lost. A second finish without edits is accepted, since
+        the files may already be right.
+        """
+        context = state.context or {}
+        result = parsed.get("result")
+        status = str(result.get("status") or "success") if isinstance(result, dict) else "success"
+        if (
+            not context.get("workspace_binding")
+            or str(context.get("effect") or "") != "propose"
+            or status not in {"success", "completed", "done"}
+            or state.internal_variables.get("workspace_deliverable_reminded")
+            or any(
+                item.tool_name in {"workspace_write", "workspace_edit"} and not item.error
+                for item in state.tool_history
+            )
+        ):
+            return None
+        state.internal_variables["workspace_deliverable_reminded"] = True
+        return GateEvidence(
+            check="workspace_deliverable",
+            requirement=(
+                "this step's work is the state of the workspace files: make the changes "
+                "in them with workspace_edit or workspace_write; the text answer is only "
+                "a summary of what changed"
+            ),
+            observed={
+                "workspace_writes": 0,
+                "tools_used": sorted({item.tool_name for item in state.tool_history}),
+            },
+        )
 
     async def _pre_execute_hook(
         self,

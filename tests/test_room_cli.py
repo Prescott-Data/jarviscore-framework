@@ -86,3 +86,18 @@ def test_an_unknown_room_is_reported(here, capsys):
     with pytest.raises(SystemExit):
         main(["status", "nowhere"])
     assert "does not exist" in capsys.readouterr().out
+
+
+def test_members_only_from_the_terminal(here, capsys):
+    main(["members", "launch"])
+    assert "is open" in capsys.readouterr().out
+    main(["role", "launch", "bob", "viewer", "--as", "alice"])
+    main(["members", "launch"])
+    out = capsys.readouterr().out
+    assert "owner   alice" in out and "viewer  bob" in out
+
+    main(["checkout", "launch", str(here / "bob")])
+    (here / "bob" / "index.html").write_text("<h1>Bob</h1>\n")
+    with pytest.raises(SystemExit):
+        main(["push", str(here / "bob"), "--as", "bob"])
+    assert "bob cannot propose changes" in capsys.readouterr().out

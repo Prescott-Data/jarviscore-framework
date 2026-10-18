@@ -757,6 +757,15 @@ class Kernel:
                 confidence=1.0,
                 reason="Explicit planner/profile role.",
             )
+        if (context or {}).get("workspace_binding"):
+            # Writing a plan, reviewing a brief and fixing code all happen in the
+            # files, and only the Coder harness has the workspace tools to open
+            # and change them; any other role can only describe the work.
+            return RoutingDecision(
+                role="coder",
+                confidence=1.0,
+                reason="The step works on workspace files; only the Coder harness can read and change them.",
+            )
         routing_context = dict(context or {})
         credentialed = False
         if system_name:

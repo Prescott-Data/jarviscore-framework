@@ -915,7 +915,10 @@ class Mesh:
             ],
             "storage_scope": (
                 "shared"
-                if getattr(self._settings, "storage_backend", "local") != "local"
+                if (
+                    getattr(self, "_storage_backend", None)
+                    or getattr(self._settings, "storage_backend", "local")
+                ) != "local"
                 else "node"
             ),
             "materializer_node_id": self._node_id,
@@ -2472,9 +2475,18 @@ class Mesh:
                 )
                 if manifest_path:
                     await binding.apply_delta(await store.load_delta(manifest_path))
+            # Running a command is the authority of the node that runs it: its own
+            # workspace_allowed_commands, when set, rather than what the asking
+            # node allowed. Without its own, the asking node's still applies.
+            node_commands = self.config.get("workspace_allowed_commands")
+            allowed_commands = (
+                {str(command) for command in node_commands if str(command)}
+                if node_commands is not None
+                else set(snapshot_data.get("allowed_commands") or ())
+            )
             bound_sandbox = sandbox.for_workspace(
                 binding.workspace,
-                allowed_commands=set(snapshot_data.get("allowed_commands") or ()),
+                allowed_commands=allowed_commands,
                 bash_timeout=int(
                     self.config.get("workspace_command_timeout_seconds", 120)
                 ),
@@ -2558,9 +2570,21 @@ class Mesh:
     def _init_blob_storage(self, settings):
         """Init BlobStorage from settings. Always succeeds (local backend is default)."""
         try:
+            from types import SimpleNamespace
             from jarviscore.storage import get_blob_storage
-            storage = get_blob_storage(settings)
-            backend = getattr(settings, "storage_backend", "local")
+
+            backend = self.config.get("storage_backend") or getattr(
+                settings, "storage_backend", "local")
+            self._storage_backend = backend
+            redis_url = (
+                self.config.get("redis_store_url")
+                or self.config.get("redis_url")
+                or getattr(settings, "redis_url", None)
+            )
+            # The Mesh's own Redis, so STORAGE_BACKEND=redis follows a config-given URL.
+            storage = get_blob_storage(SimpleNamespace(
+                **{**vars(settings), "storage_backend": backend, "redis_url": redis_url}
+            ) if hasattr(settings, "__dict__") else settings)
             self._logger.info(f"✓ BlobStorage initialized ({backend})")
             return storage
         except Exception as exc:

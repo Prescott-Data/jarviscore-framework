@@ -466,8 +466,18 @@ class SandboxBinding:
                 target.chmod(target.stat().st_mode | 0o100)
 
     async def apply_deltas(self, deltas: list[WorkspaceDelta]) -> None:
-        """Apply compatible dependency deltas and reject ambiguous merges."""
+        """Apply compatible dependency deltas and reject ambiguous merges.
+
+        Branches that changed different lines of the same text file are
+        combined line by line; changes to the same lines that differ, or a file
+        deleted on one branch and changed on another, are a conflict.
+        """
+        from jarviscore.execution.merge import merge_text
+
+        baseline = {entry.path.casefold(): entry for entry in self.snapshot.entries}
         decisions: dict[str, tuple[str, str, str | None]] = {}
+        contents: dict[str, bytes] = {}
+        merged: dict[str, bytes] = {}
         for delta in deltas:
             if delta.snapshot_id != self.snapshot.snapshot_id:
                 raise ValueError("Workspace delta belongs to a different source snapshot")
@@ -481,12 +491,38 @@ class SandboxBinding:
                 key = entry.path.casefold()
                 decision = (entry.path, "content", entry.sha256)
                 if key in decisions and decisions[key] != decision:
-                    raise WorkspaceDeltaConflict(
-                        f"Conflicting workspace deltas for {entry.path!r}"
+                    earlier = decisions[key]
+                    combined = None
+                    if earlier[1] == "content" and key in baseline:
+                        combined = merge_text(
+                            await self._read(baseline[key].blob_path),
+                            contents[key],
+                            await self._read(entry.blob_path),
+                        )
+                    if combined is None:
+                        raise WorkspaceDeltaConflict(
+                            f"Conflicting workspace deltas for {entry.path!r}"
+                        )
+                    merged[key] = contents[key] = combined
+                    decisions[key] = (
+                        entry.path, "content", hashlib.sha256(combined).hexdigest()
                     )
+                    continue
                 decisions[key] = decision
+                contents[key] = await self._read(entry.blob_path)
         for delta in deltas:
             await self.apply_delta(delta)
+        for key, payload in merged.items():
+            target = self.workspace.joinpath(
+                *_safe_relative_path(decisions[key][0]).parts
+            )
+            target.write_bytes(payload)
+
+    async def _read(self, blob_path: str) -> bytes:
+        payload = await self.store.blob_storage.read(blob_path)
+        if payload is None:
+            raise FileNotFoundError(blob_path)
+        return _bytes(payload)
 
     async def export_delta(
         self,

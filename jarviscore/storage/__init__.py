@@ -48,7 +48,7 @@ def get_blob_storage(settings=None) -> BlobStorage:
         settings: Settings instance or None (uses global settings)
 
     Returns:
-        BlobStorage implementation (Local or Azure)
+        BlobStorage implementation (Local, Azure, or Redis)
     """
     if settings is None:
         from jarviscore.config.settings import settings as default_settings
@@ -61,6 +61,16 @@ def get_blob_storage(settings=None) -> BlobStorage:
         return AzureBlobStorage(
             connection_string=settings.azure_storage_connection_string,
             container_name=settings.azure_storage_container,
+        )
+
+    if backend == "redis":
+        url = getattr(settings, "redis_url", None)
+        if not url:
+            raise ValueError("STORAGE_BACKEND=redis needs REDIS_URL")
+        from .redis_blob import RedisBlobStorage
+        return RedisBlobStorage(
+            url, max_blob_bytes=getattr(settings, "storage_redis_max_blob_bytes",
+                                        32 * 1024 * 1024),
         )
 
     return LocalBlobStorage(

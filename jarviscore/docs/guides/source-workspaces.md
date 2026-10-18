@@ -110,9 +110,10 @@ exported under:
 workflows/<workflow-id>/workspace_deltas/<step-id>/
 ```
 
-Parallel branches may change different files. If two dependency branches change
-the same path to different content, JarvisCore rejects the merge instead of
-choosing one silently. Runtime and build directories such as `.tmp`, `output`,
+Parallel branches may change different files, or different lines of the same
+text file; both are combined. If two dependency branches change the same lines
+to different content, or one deletes a file the other changed, JarvisCore
+rejects the merge instead of choosing one silently. Runtime and build directories such as `.tmp`, `output`,
 `target`, `node_modules`, and `.venv` are excluded from deltas by default.
 
 Final-response steps consume prior artifacts and do not materialize the source

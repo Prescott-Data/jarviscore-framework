@@ -20,8 +20,9 @@ WORKSPACE_RULE = (
     "Reading, searching, building, testing and editing them calls no provider and names no "
     "system: a step that changes the files uses effect `propose` (its changes are proposed "
     "for people to review, never written anywhere), and one that only inspects them uses "
-    "`read`. Only publishing the files to a provider, such as opening a pull request, is a "
-    "`write` to that provider."
+    "`read`. Its task names the files to change and the change to make in them; it never "
+    "asks for the new content to be returned as text. Only publishing the files to a "
+    "provider is a `write` to that provider."
 )
 PROPORTIONAL_INSPECTION_RULE = (
     "- size inspection to the requested outcome. When the goal asks which items in a "

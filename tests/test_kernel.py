@@ -1682,3 +1682,35 @@ class TestTenantMemoryScope:
         )
 
         assert seen and seen[0]["matter_id"] == "matter-a"
+
+
+class TestWorkspaceStepsGoToTheHarnessThatCanOpenFiles:
+
+    @pytest.mark.asyncio
+    async def test_a_writing_task_on_workspace_files_goes_to_the_coder(self, mock_llm, mock_sandbox):
+        router = SimpleNamespace(route=AsyncMock())
+        kernel = Kernel(llm_client=mock_llm, sandbox=mock_sandbox)
+        kernel._task_router = router
+
+        decision = await kernel._route_task(
+            "Fill in the Goals section of plan.md from brief.md",
+            {"effect": "propose", "workspace_binding": {"path": "/tmp/w", "mode": "copy_on_write"}},
+        )
+
+        assert decision.role == "coder"
+        router.route.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reading_workspace_documents_also_needs_it(self, mock_llm, mock_sandbox):
+        kernel = Kernel(llm_client=mock_llm, sandbox=mock_sandbox)
+        decision = await kernel._route_task(
+            "Summarise brief.md", {"effect": "read", "workspace_binding": {"path": "/tmp/w"}})
+        assert decision.role == "coder"
+
+    @pytest.mark.asyncio
+    async def test_an_explicit_role_still_wins(self, mock_llm, mock_sandbox):
+        kernel = Kernel(llm_client=mock_llm, sandbox=mock_sandbox)
+        decision = await kernel._route_task(
+            "Draft the announcement", {"workspace_binding": {"path": "/tmp/w"}},
+            agent_default_role="communicator")
+        assert decision.role == "communicator"

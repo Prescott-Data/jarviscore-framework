@@ -482,6 +482,8 @@ A shared workspace that people and agents change together. See [Rooms](../guides
 | `room diff ROOM PROPOSAL` | What a proposal changes |
 | `room accept ROOM PROPOSAL --as NAME` | Merge it; exits 1 on a conflict |
 | `room reject ROOM PROPOSAL "WHY" --as NAME [--redo]` | Turn it down; `--redo` asks the agents again with your reason |
+| `room members ROOM` | Who is in the room and their roles (or that it is open) |
+| `room role ROOM PERSON viewer\|editor\|owner\|none --as NAME` | Set or remove a role; the first one makes an open room members-only |
 | `room checkout ROOM DIR` | Copy the current files into an empty directory |
 | `room push DIR [-m TITLE] --as NAME [--accept]` | Propose what changed in a checkout |
 

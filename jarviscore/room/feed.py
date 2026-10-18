@@ -45,6 +45,10 @@ def describe(event: Dict[str, Any]) -> str:
         return f"✓ {by} accepted {proposal} → v{event.get('version')}{merged}"
     if kind == "proposal.rejected":
         return f"✗ {by} rejected {proposal}: {event.get('reason', '')}"
+    if kind == "member.changed":
+        role = event.get("role", "")
+        who = event.get("person", "")
+        return f"{by} removed {who} from the room" if role == "removed" else f"{by} made {who} {role}"
     if kind == "proposal.conflicted":
         return f"⚠ {proposal} conflicts with newer changes to {', '.join(paths)}"
     return f"{kind} {by}"

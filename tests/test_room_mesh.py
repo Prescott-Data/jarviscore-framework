@@ -210,3 +210,59 @@ def test_agents_on_unseen_nodes_are_named_by_role():
     assert _role_of(Lonely, "coder-853b9765:claim") == "coder"
     assert _role_of(Lonely, "release-bot") == "release-bot"
     assert _role_of(Lonely, "") == ""
+
+
+class PlainFixer(CustomAgent):
+    """What a developer writes: no sandbox, no overrides."""
+    role = "fixer"
+    capabilities = ["fixing"]
+
+    async def execute_task(self, task):
+        root = Path(task["context"]["workspace_binding"]["path"])
+        (root / "plan.md").write_text("# Launch plan\n\n- Ship Tuesday\n")
+        return {"status": "success", "output": "Wrote the plan"}
+
+
+class PlainEditor(CustomAgent):
+    role = "editor"
+    capabilities = ["editing_docs"]
+
+    async def on_peer_request(self, msg):
+        root = Path(msg.data["context"]["workspace_binding"]["path"])
+        plan = root / "plan.md"
+        plan.write_text(plan.read_text() + "- Announce Wednesday\n")
+        return "Added the announcement"
+
+
+async def test_plain_custom_agents_work_in_a_room_with_no_extra_code(tmp_path, monkeypatch):
+    redis = RedisContextStore(client=fakeredis.FakeRedis(decode_responses=True))
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: redis)
+    monkeypatch.setattr(Mesh, "_init_blob_storage",
+                        lambda self, settings: LocalBlobStorage(str(tmp_path / "blobs")))
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.02})
+    mesh.add(PlainFixer)
+    mesh.add(PlainEditor)
+    await mesh.start()
+    try:
+        room = Room.for_mesh(mesh, "launch")
+        await room.ensure({"brief.md": "# Brief\n"}, by="alice")
+        goal = "Draft the launch plan and add the announcement"
+        asked = await room.ask(goal, asked_by="alice", timeout=20, plan_template=plan(
+            goal, ("draft", "fixing", []), ("announce", "editing_docs", ["draft"])))
+        assert asked.status == "completed", asked.result
+        await room.accept(asked.proposal.id, by="bob")
+        assert (await room.read("plan.md")).decode() == (
+            "# Launch plan\n\n- Ship Tuesday\n- Announce Wednesday\n")
+    finally:
+        await mesh.stop()
+
+
+def test_a_custom_agent_keeps_its_own_sandbox():
+    class Own(CustomAgent):
+        role = "own"
+        capabilities = ["x"]
+        sandbox = "mine"
+
+    assert Own().sandbox == "mine"

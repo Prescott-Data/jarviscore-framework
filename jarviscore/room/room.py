@@ -4,10 +4,11 @@ A room: one shared workspace that people and agents change together.
 The room's current state is an immutable source snapshot, its *head*. Nobody
 writes to the head directly. Agents and people make **proposals** against a
 version of it; accepting one moves the head forward. If the head moved since a
-proposal was made, the proposal is merged file by file: a path only one side
-changed is taken, a path both sides changed to the same content is fine, and a
-path both sides changed differently is a conflict that stops the accept rather
-than silently overwriting someone's work.
+proposal was made, the proposal is merged: a file only one side changed is
+taken, and in a text file both sides changed, edits to different lines are
+both kept. Edits to the same lines that differ, or a file deleted on one side
+and changed on the other, are a conflict that stops the accept rather than
+silently overwriting someone's work.
 
 Every change records who made it and who asked for it, and every step is in
 the room's event log, so anyone can see what happened and why.
@@ -42,6 +43,7 @@ from jarviscore.execution.workspace import (
     _register_workspace_path,
 )
 from jarviscore.room.ledger import FileRoomLedger, RedisRoomLedger, RoomLedger
+from jarviscore.execution.merge import merge_text
 
 #: Provider name a goal uses to work on a room: workspace_source={"provider": "room", ...}
 ROOM_PROVIDER = "room"
@@ -53,6 +55,14 @@ CHECKOUT_MARKER = ".jarviscore-room.json"
 IGNORED_NAMES = (".git", ".venv", "__pycache__", "node_modules", ".tmp", ".DS_Store")
 
 _ACCEPT_ATTEMPTS = 20
+
+
+#: Each role can do what the ones before it can.
+ROLES = ("viewer", "editor", "owner")
+
+
+class RoomPermissionError(PermissionError):
+    """The person's role in a members-only room does not allow this."""
 
 
 class RoomConflict(RuntimeError):
@@ -221,6 +231,7 @@ class Room:
         snapshot = await self.store.capture(self._source(1), "v1", dict(files or {}))
         head = Head(1, snapshot.snapshot_id, snapshot.manifest_blob_path, by, time.time())
         if self.ledger.create_room(self.id, head.to_record()):
+            self.ledger.update_meta(self.id, lambda meta: {**meta, "created_by": by})
             self._event("room.created", by=by, version=1, files=len(snapshot.entries))
             return head
         return Head.from_record(self.ledger.get_head(self.id))
@@ -234,6 +245,7 @@ class Room:
         first = await self.store.compose(self._source(1), "v1", list(snapshot.entries))
         head = Head(1, first.snapshot_id, first.manifest_blob_path, by, time.time())
         if self.ledger.create_room(self.id, head.to_record()):
+            self.ledger.update_meta(self.id, lambda meta: {**meta, "created_by": by})
             self._event("room.created", by=by, version=1, files=len(first.entries),
                         source=f"{snapshot.source.provider}:{snapshot.source.locator}"
                                f"@{snapshot.resolved_revision}")
@@ -271,6 +283,14 @@ class Room:
         snapshot = await self.snapshot(version)
         return {entry.path: await self._blob(entry.blob_path) for entry in snapshot.entries}
 
+    async def _store(self, path: str, payload: bytes, executable: bool = False) -> Dict[str, Any]:
+        """Save content once, by hash, and return its snapshot entry fields."""
+        digest = hashlib.sha256(payload).hexdigest()
+        blob_path = f"rooms/{self.id}/objects/{digest}"
+        if await self.store.blob_storage.read(blob_path) is None:
+            await self.store.blob_storage.save(blob_path, payload)
+        return asdict(SnapshotEntry(path, blob_path, digest, len(payload), executable))
+
     async def _blob(self, blob_path: str) -> bytes:
         payload = await self.store.blob_storage.read(blob_path)
         if payload is None:
@@ -297,6 +317,69 @@ class Room:
     def _event(self, kind: str, **fields) -> int:
         return self.ledger.append_event(self.id, {"type": kind, "at": time.time(), **fields})
 
+    # ── Who may do what ─────────────────────────────────────────────────────
+    #
+    # A room is open by default: everyone on the team can ask, propose, accept
+    # and reject, and sees everything ("work with the door open"). Once it has
+    # members it is members-only: viewers watch, editors also ask, push, accept
+    # and reject, owners also manage members.
+
+    def members(self) -> Dict[str, str]:
+        """Person -> role. Empty for an open room."""
+        return dict(self.ledger.get_meta(self.id).get("members") or {})
+
+    def role_of(self, person: str) -> Optional[str]:
+        meta = self.ledger.get_meta(self.id)
+        members = meta.get("members") or {}
+        if members:
+            return members.get(person)
+        return "owner" if person and person == meta.get("created_by") else "editor"
+
+    def can(self, person: str, role: str) -> bool:
+        held = self.role_of(person)
+        return held is not None and ROLES.index(held) >= ROLES.index(role)
+
+    def require(self, person: str, role: str, action: str) -> None:
+        if not self.can(person, role):
+            held = self.role_of(person)
+            raise RoomPermissionError(
+                f"{person or 'Someone unnamed'} cannot {action} in room {self.id}: "
+                + (f"they are a {held}" if held else "they are not a member")
+                + f" and it needs {role}"
+            )
+
+    def set_role(self, person: str, role: Optional[str], *, by: str) -> Dict[str, str]:
+        """Give ``person`` a role, or None to remove them. Owners only.
+
+        The first member makes an open room members-only; only its creator can
+        do that, and the creator becomes an owner with it.
+        """
+        if role is not None and role not in ROLES:
+            raise ValueError(f"role must be one of {ROLES} or None, not {role!r}")
+
+        def change(meta):
+            members = dict(meta.get("members") or {})
+            creator = meta.get("created_by") or ""
+            if members:
+                if members.get(by) != "owner":
+                    raise RoomPermissionError(f"Only an owner of room {self.id} can change members")
+            else:
+                if by != creator or not creator:
+                    raise RoomPermissionError(
+                        f"Only {creator or 'the creator'} can make room {self.id} members-only")
+                members[creator] = "owner"
+            if role is None:
+                members.pop(person, None)
+            else:
+                members[person] = role
+            if "owner" not in members.values():
+                raise RoomPermissionError(f"Room {self.id} must keep at least one owner")
+            return {**meta, "members": members}
+
+        members = self.ledger.update_meta(self.id, change)["members"]
+        self._event("member.changed", by=by, person=person, role=role or "removed")
+        return dict(members)
+
     # ── Proposing ───────────────────────────────────────────────────────────
 
     async def propose(
@@ -322,14 +405,10 @@ class Room:
                     entries[path] = None
                 continue
             payload = _bytes(content)
-            digest = hashlib.sha256(payload).hexdigest()
-            if path in current and current[path].sha256 == digest:
+            if path in current and current[path].sha256 == hashlib.sha256(payload).hexdigest():
                 continue
-            blob_path = f"rooms/{self.id}/objects/{digest}"
-            if await self.store.blob_storage.read(blob_path) is None:
-                await self.store.blob_storage.save(blob_path, payload)
             executable = current[path].executable if path in current else False
-            entries[path] = asdict(SnapshotEntry(path, blob_path, digest, len(payload), executable))
+            entries[path] = await self._store(path, payload, executable)
         return self._open(entries, base, author=author, title=title, asked_by=asked_by,
                           workflow_id=workflow_id, revision_of=revision_of)
 
@@ -353,7 +432,20 @@ class Room:
                 raise ValueError("Workspace delta was not made against this room version")
             for entry in (*delta.added, *delta.modified):
                 change = asdict(entry)
-                if entry.path in entries and entries[entry.path] != change:
+                earlier = entries.get(entry.path, change)
+                if earlier is not None and earlier["sha256"] != change["sha256"]:
+                    # Parallel branches changed one file: keep both where they don't overlap.
+                    combined = None
+                    if entry.path in current:
+                        combined = merge_text(
+                            await self._blob(current[entry.path].blob_path),
+                            await self._blob(earlier["blob_path"]),
+                            await self._blob(change["blob_path"]),
+                        )
+                    if combined is None:
+                        raise WorkspaceDeltaConflict(f"Agents disagree about {entry.path!r}")
+                    change = await self._store(entry.path, combined, entry.executable)
+                elif earlier is None:
                     raise WorkspaceDeltaConflict(f"Agents disagree about {entry.path!r}")
                 entries[entry.path] = change
             for path in delta.deleted:
@@ -403,6 +495,7 @@ class Room:
 
     async def accept(self, proposal_id: str, *, by: str) -> Head:
         """Merge an open proposal into the room. Raises RoomConflict on overlapping edits."""
+        self.require(by, "editor", "accept changes")
         proposal = self.proposal(proposal_id)
         if proposal.status != "open":
             raise ValueError(f"{proposal_id} is {proposal.status}, not open")
@@ -411,12 +504,26 @@ class Room:
         for _ in range(_ACCEPT_ATTEMPTS):
             head = self.head()
             current = {e.path: e for e in (await self.store.load(head.manifest_blob_path)).entries}
-            conflicts = [
-                path for path, change in proposal.changes.items()
-                if (current[path].sha256 if path in current else None)
-                not in (base[path].sha256 if path in base else None,
-                        change["sha256"] if change else None)
-            ]
+            conflicts: List[str] = []
+            line_merged: Dict[str, Dict[str, Any]] = {}
+            for path, change in proposal.changes.items():
+                head_sha = current[path].sha256 if path in current else None
+                base_sha = base[path].sha256 if path in base else None
+                our_sha = change["sha256"] if change else None
+                if head_sha in (base_sha, our_sha):
+                    continue
+                if None not in (head_sha, base_sha, our_sha):
+                    # Both sides edited this file since the proposal's version.
+                    combined = merge_text(
+                        await self._blob(base[path].blob_path),
+                        await self._blob(change["blob_path"]),
+                        await self._blob(current[path].blob_path),
+                    )
+                    if combined is not None:
+                        line_merged[path] = await self._store(
+                            path, combined, current[path].executable)
+                        continue
+                conflicts.append(path)
             if conflicts:
                 if self.ledger.decide_proposal(self.id, proposal_id, {
                     "status": "conflicted", "conflicts": conflicts,
@@ -428,6 +535,7 @@ class Room:
 
             merged = dict(current)
             for path, change in proposal.changes.items():
+                change = line_merged.get(path, change)
                 if change is None:
                     merged.pop(path, None)
                 else:
@@ -446,12 +554,14 @@ class Room:
             self._event("proposal.accepted", proposal=proposal_id, by=by,
                         author=proposal.author, asked_by=proposal.asked_by,
                         version=version, paths=proposal.paths,
-                        merged_over=head.version - proposal.base_version)
+                        merged_over=head.version - proposal.base_version,
+                        line_merged=sorted(line_merged))
             return new_head
         raise RuntimeError(f"Could not accept {proposal_id}: the room kept changing")
 
     async def reject(self, proposal_id: str, *, by: str, reason: str) -> Proposal:
         """Turn down an open proposal with a reason its author can act on."""
+        self.require(by, "editor", "reject changes")
         if not self.ledger.decide_proposal(self.id, proposal_id, {
             "status": "rejected", "decided_by": by, "decided_at": time.time(),
             "reason": reason,
@@ -483,6 +593,7 @@ class Room:
     async def push(self, directory: str, *, author: str, title: str = "",
                    asked_by: str = "") -> Optional[Proposal]:
         """Propose what changed in a checkout since it was made. None if nothing did."""
+        self.require(author, "editor", "propose changes")
         root = Path(directory)
         marker = json.loads((root / CHECKOUT_MARKER).read_text())
         if marker.get("room") != self.id:

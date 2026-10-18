@@ -156,8 +156,9 @@ class Settings(BaseSettings):
     redis_max_step_output_bytes: int = 10 * 1024 * 1024
 
     # === Blob Storage ===
-    storage_backend: str = "local"  # "local" or "azure"
+    storage_backend: str = "local"  # "local", "azure", or "redis" (uses REDIS_URL)
     storage_base_path: str = "./blob_storage"
+    storage_redis_max_blob_bytes: int = 32 * 1024 * 1024  # per file, with storage_backend="redis"
     azure_storage_connection_string: Optional[str] = None
     azure_storage_container: str = "jarviscore"
 
