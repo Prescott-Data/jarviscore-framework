@@ -319,7 +319,9 @@ async def test_carol_ships_it(room, proposal_in_thread, carol):
 - **Tenants**: give each customer of your product its own tenant. A tenant's people, rooms and questions never reach another.
 - **People leaving**: `Identities.deprovision(person)` ends everything they could do at once.
 - **Shared systems**: decide per room which connected systems everyone may see (`set_shared_connectors`). Anything else stays with the person whose access it was.
-- **Spend**: each piece of work runs under the mesh's workflow budget (see [Goal Execution](goal-execution.md)); set `ask_options={"timeout": ...}` on your room agent to bound how long work may run. Work that times out is stopped, not left running.
+- **Spend**: model use is charged to the person each piece of work is for; cap it per tenant and per person with `Spending.set_caps` (see [Rooms: spending](rooms.md#spending)). Each piece of work also runs under the mesh's workflow budget (see [Goal Execution](goal-execution.md)), and `ask_options={"timeout": ...}` bounds how long it may run: work that times out is stopped, not left running.
+- **Memory**: run [Athena](../concepts/memory.md#setting-up-athena) and set `ATHENA_URL`; every room then has a shared memory in its tenant, with private memory for what came from someone's own access. Check Athena's log once that it summarises: without a working chat and embedding model it keeps events but makes nothing searchable.
+- **Audit**: `room.audit()` and `Identities.log(tenant)` are what an auditor asks for; export them on a schedule if you keep audit records elsewhere.
 
 ## Where to go next
 

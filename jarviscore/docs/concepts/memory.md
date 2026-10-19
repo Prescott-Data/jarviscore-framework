@@ -15,18 +15,18 @@ The tiers compose automatically. You interact with all of them through a single 
 ## The Four Memory Tiers
 
 ```mermaid
-flowchart LR
-    Turn["Agent turn"] --> Log["UnifiedMemory.log_turn()"]
-    Log --> Scratch["Tier 1<br/>Working scratchpad<br/>current step"]
-    Log --> Episodic["Tier 2<br/>Episodic ledger<br/>ordered workflow history"]
-    Episodic --> Compress["Tier 3<br/>Compressed LTM<br/>Redis and blob backup"]
-    Log --> Athena["Tier 4<br/>Athena MemOS<br/>cross-session semantics"]
-
+flowchart TB
+    Turn["Agent turn"] --> Log["log_turn()"]
+    Log --> Scratch["Tier 1: scratchpad"]
+    Log --> Episodic["Tier 2: episodic ledger"]
+    Episodic --> Compress["Tier 3: compressed LTM"]
+    Keep["remember()"] --> Athena["Tier 4: Athena"]
+    Athena --> Recall["recall()"]
     Scratch --> Rehydrate["rehydrate_bundle()"]
     Episodic --> Rehydrate
     Compress --> Rehydrate
-    Athena --> Rehydrate
-    Rehydrate --> Context["Next Kernel context"]
+    Recall --> Context["Kernel context"]
+    Rehydrate --> Context
 ```
 
 ### Tier 1: Working Scratchpad
@@ -64,19 +64,30 @@ On `load_summary()`, Redis is tried first. If the key has expired (for example a
 
 ### Tier 4: Athena MemOS
 
-Athena is an external memory service that provides cross-session, semantically searchable memory. It is the only tier that persists context beyond a single workflow execution.
+Athena is an external memory service that gives agents cross-session, semantically searchable memory. It is the only tier that outlives a workflow.
 
-Athena operates its own three-tier pipeline internally:
+How Athena works decides how JarvisCore uses it:
 
-| Athena tier | Storage backend | Purpose |
-|---|---|---|
-| Short-Term Memory (STM) | Redis | Timestamped event stream for the active session |
-| Mid-Term Memory (MTM) | MongoDB and Milvus | Cognitive chains grouped by topic with heat scoring |
-| Long-Term Memory (LTM) | ArangoDB | Knowledge graph built from consolidated chains |
+| What Athena does | What follows for JarvisCore |
+|---|---|
+| Keeps each session's recent events as short-term memory (Redis) | An agent sees its own recent events directly |
+| Follows the conversation (`user` messages), splits it where the topic changes, summarises each part and embeds it (MongoDB and Milvus) | What should become searchable memory is written as conversation and outcomes, not as a stream of thoughts |
+| Searches every agent's summaries under one tenant and one scope (Athena's `user_id`) | Agents that share a scope share memory; agents that should not, must not share a scope |
+| Isolates tenants, and nothing finer: metadata filters are not access control | Private material is never written to a shared scope |
 
-When Athena is configured, `UnifiedMemory.log_turn()` writes the thought and action outcome to Athena STM on every turn. On `rehydrate_bundle()`, the Kernel receives `athena_context`, which includes recent STM events and the highest-heat MTM chains. This context spans sessions: an agent restarted after a crash recovers not just its last checkpoint but its accumulated semantic understanding of the domain.
+JarvisCore writes to Athena what an agent chooses to keep (the `remember` tool) and lifecycle outcomes, never every turn: a mid-run guess written as memory returns the next day as a premise. At the start of each Kernel task it asks Athena what bears on the task (`recall`), and the answer is shown to the agent as evidence from the past, apart from the task.
 
-**Activates when:** `ATHENA_URL` is set and `athena_client` is passed to `UnifiedMemory`.
+**Activates when:** `ATHENA_URL` is set. Athena's long-term knowledge graph is not served by its API yet, so JarvisCore uses short-term and summarised (mid-term) memory.
+
+### Memory in a room
+
+Work in a [room](../guides/rooms.md) and the room's conversation remember in the room, with no configuration:
+
+- **One memory per room.** Every step of work in a room, and every turn of its room agent, uses the room's tenant as Athena's tenant and the room as the scope. Whatever any agent keeps while working in the room, every agent working in the room later recalls. Nothing crosses to other rooms or tenants.
+- **The team's memory.** What people say to the room's agent, its replies to everyone, and what the room records (requests, finished work, decisions and their reasons) are written to the room's team session in Athena, as the conversation Athena is built to follow. "Sam owns support", said once in a thread, is recalled by an agent writing the support section a week later.
+- **Private stays private.** What a piece of work learns through its asker's own access to a system the room does not share is kept in that person's private memory in the room, never the room's. Only work done for them recalls it, and work that recalls it is private work: its result is held for them like any other. Replies and work shown to one person are never written to the team's memory.
+
+Outside rooms, `Mesh(config={"memory_scope_field": "..."})` names the context field that separates your tenants; without it, an agent's memory is one pool.
 
 ---
 
@@ -99,7 +110,7 @@ mem = UnifiedMemory(
 
 ### log_turn
 
-Records a single OODA loop turn to all active tiers.
+Records a single OODA loop turn to the scratchpad and the episodic ledger. Turns are not written to Athena: what persists across sessions is what the agent chooses to `remember`.
 
 ```python
 await mem.log_turn(
@@ -217,26 +228,29 @@ call it unconditionally and treat the result as optional.
 
 ## Setting Up Athena
 
-Athena runs as a Docker-composed stack. The `jarviscore memory init` command
-pulls the published Athena image and starts the complete memory stack.
+Athena runs as a Docker-composed stack. `jarviscore memory init` pulls the published Athena image and starts it with its backing services.
 
 ```bash
 jarviscore memory init
 ```
 
-`memory init` performs the following steps automatically:
-
-1. Detects an LLM API key from the current environment.
-2. Pulls and starts the published Athena image and its backing services.
-3. Keeps `--from-source` available for Athena contributors with a local checkout.
-4. Waits up to 90 seconds for the Athena health endpoint to return `ok`.
-5. Writes `ATHENA_URL=http://localhost:8080` to the project `.env` file.
-
-After setup, verify that all memory tiers are reachable:
+It finds a model key in your environment (Gemini, Azure OpenAI, or OpenAI; Athena has no Anthropic provider), starts the stack, waits for Athena's health endpoint, and writes `ATHENA_URL` to `.env`. Then check every tier:
 
 ```bash
 jarviscore memory status
 ```
+
+Athena needs two models: a chat model to summarise conversation, and an embedding model to search it. With Azure OpenAI, Athena calls the deployment URLs it is given, so `memory init` builds them from `AZURE_OPENAI_ENDPOINT` and two deployments, and checks both answer before starting:
+
+| Variable | Default | |
+|---|---|---|
+| `ATHENA_AZURE_CHAT_DEPLOYMENT` | `gpt-4o-mini` | Must accept `max_tokens` and `temperature`: reasoning deployments (gpt-5 and later) refuse them |
+| `ATHENA_AZURE_EMBEDDING_DEPLOYMENT` | `text-embedding-3-small` | 1536 dimensions (`ATHENA_VECTOR_DIMENSION`) |
+
+!!! warning "If memory never becomes searchable"
+    Look at Athena's log (`docker logs athena`) for embedding or summarisation errors: a rejected key or a missing deployment makes Athena keep events but never summarise them, and nothing says so to the agents. The stack also sizes Athena's short-term memory above the count that forces a summary (`ATHENA_STM_MAX_EVENTS=60`, `ATHENA_STM_FLUSH_EVENTS=20`); with Athena's own defaults (10 and 20) events older than the newest ten are dropped before they are ever summarised.
+
+What Athena does not do yet, so JarvisCore does not rely on it: deleting a session or a person's memory (its delete endpoint is not implemented), long-term graph memory over its API, time-range queries, and de-duplicating a repeated write. Deleting a room deletes the room's files and history in JarvisCore; its memory in Athena stays until Athena can delete it.
 
 !!! note "Developing Athena itself"
     Run `jarviscore memory init --from-source` to build from `ATHENA_DIR`,

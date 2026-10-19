@@ -182,6 +182,38 @@ the agents finished (completed) → p-6ceeb0ca to review
 
 An item with `held_for` belongs to work held for that person: show them `text` and `detail`, and everyone else `withheld`.
 
+## Memory
+
+With [Athena](../concepts/memory.md) configured (`ATHENA_URL`), a room remembers. Every agent working in the room shares one memory, in the room's tenant: what any of them keeps, and what the team said and decided in the room's conversation, the next one recalls. "Sam owns support", said once in a thread, is what an agent writing the support section a week later knows. What work learns from someone's own access stays in their private memory in the room, and work that recalls it is held for them. See [Memory in a room](../concepts/memory.md#memory-in-a-room).
+
+The room's team memory is `room.memory` (a `RoomMemory`); set it to None to keep none, or to your own to keep it elsewhere.
+
+## Spending
+
+Work runs for whoever asked, so its model use is theirs. Every model call made while working for a person, including the room agent's own turns when they speak, is charged to them per UTC day and month, and a tenant can cap it:
+
+```python
+from jarviscore.auth.spending import Spending
+
+spending = Spending(mesh._redis_store)
+spending.set_caps("acme", tokens_per_day=2_000_000, usd_per_month=200)   # everyone in Acme
+spending.set_caps("acme", person="u_1842", usd_per_month=500)           # Alice may spend more
+spending.usage("acme/u_1842")       # {"day": {...tokens, usd, calls}, "month": {...}}
+```
+
+Asking for work over a cap is refused before anything starts, with when the allowance renews; the room agent tells the person so. A model call that would go over a cap during work is not made, and the work stops with the same reason rather than retrying. From the terminal: `jarviscore room caps alice --usd-per-month 500`.
+
+## Audit
+
+`room.audit(since=..., until=...)` returns everything done in the room as records for an auditor: when, who, what, to what, and why; for each piece of work, the connected systems it used and whose access each was, and what its model use cost. Records of private work say it was held, and for whom, never what it found.
+
+```python
+for record in room.audit(since=time.time() - 7 * 86400):
+    print(record["at"], record["by_name"], record["action"], record.get("target"), record.get("detail"))
+```
+
+Who was added to the tenant, linked an account, unlinked one or was removed is in `Identities(store).log("acme")`. From the terminal: `jarviscore room audit launch --days 7 --json`.
+
 ## From the terminal
 
 The `jarviscore room` commands are for developers and operators. They act with the access of whoever holds the Redis URL; `--as` names the person an action is recorded for and whose role is checked, and is not a login.

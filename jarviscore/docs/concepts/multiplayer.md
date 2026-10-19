@@ -124,14 +124,18 @@ A shared agent in a shared channel fails in ways a personal assistant never does
 | Who may do what | Private rooms, roles, owners who open rooms and name shared systems | Room settings |
 | Private data | Work held for its asker when it used their own access | Credential use recorded by Nexus |
 | People in the loop | Questions that wait, survive restarts and are answered where the team talks | The HITL store |
-| The team's record | Every request, proposal and decision, with who and why | The room's history |
+| The team's record | Every request, proposal and decision, with who and why; an audit of who did what with whose access, at what cost | The room's history |
+| The team's memory | What the team said and decided, and what its agents kept, recalled by every agent working in the room | Athena, scoped to the room and its tenant |
+| Spend | Model use charged to the person each piece of work is for, with caps per tenant and person | `Spending`, on every model call |
 | Where people talk | Slack built in, any other surface through one interface | `SlackApp`, `ChatSurface` |
 
 You write the agents that do the work and, if you want, the room agent's instructions and tools. Everything else on this page exists already.
 
-## The team's record
+## The team's record and memory
 
-A room keeps its history: every request, proposal, acceptance and rejection, with the person and the reason. The room agent reads it to answer questions such as "why didn't we move the launch?", and a redo always carries what people said about the earlier attempt. This history, and the room's files, are what every agent and person in the room shares.
+A room keeps its history: every request, proposal, acceptance and rejection, with the person and the reason. The room agent reads it to answer questions such as "why didn't we move the launch?", a redo always carries what people said about the earlier attempt, and `room.audit()` turns it into records for an auditor, with whose access each piece of work used and what it cost.
+
+With [Athena](memory.md) configured, the room also remembers what its history does not hold: what people said in its conversation and what its agents chose to keep. Every agent working in the room shares that memory, and nothing reaches another room or tenant. What came from one person's own access stays in their private memory. See [Memory in a room](memory.md#memory-in-a-room).
 
 ## When to use which
 

@@ -71,6 +71,22 @@ All notable changes to JarvisCore Framework are documented here. This project fo
     - **Testing**: `jarviscore.testing.rooms` (`MemorySurface`,
       `ScriptedRoomAgent`) and `jarviscore.testing.slack.FakeSlack` test rooms,
       conversations and Slack without a model or a workspace.
+- **A room remembers, in Athena.** Work in a room and the room's conversation
+  use the room's tenant and the room as Athena's scope, with no configuration,
+  so every agent working in a room shares one memory and nothing crosses rooms
+  or tenants. What people say to the room, the agent's public replies and what
+  the room records are written to the room's team memory (`RoomMemory`), as the
+  conversation Athena summarises. What work learns through its asker's own
+  access goes to their private memory in the room; work that recalls it is
+  held for them.
+- **Per-person spending caps.** Every model call made for a person is charged
+  to them per UTC day and month (`Spending`); tenants cap it, per person if
+  they like. Asking over a cap is refused up front with when it renews; a call
+  that would go over during work is not made, and the work stops
+  (`SpendCapReached`) instead of retrying. `jarviscore room caps`.
+- **Audit.** `Room.audit()` records who did what, why, with whose access and at
+  what cost; `Identities.log()` records who was added, linked or removed.
+  `jarviscore room audit`.
 - **HITL items know their work and tenant; answering resumes it.** Items
   record the mesh step that raised them and the tenant of the person the work
   runs for (`inbox(..., tenant=)`). Resolving an escalation that paused a mesh
@@ -120,6 +136,15 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Fixed
 
+- **The bundled Athena stack did not start, and lost memory when it did.**
+  `minio/mc` is no longer published (the setup step now uses the MinIO server
+  image's own client); Athena's short-term memory was smaller than the count
+  that forces a summary, so events beyond the newest ten were dropped unsummarised;
+  with Azure, `memory init` never gave Athena its chat and embedding deployment
+  URLs, so it summarised nothing. `memory init` now builds them, checks both
+  deployments answer, and no longer offers Anthropic, which Athena does not support.
+- **Athena memory used the deployment's default tenant** for every customer;
+  room work now uses the room's tenant.
 - **HITL requests stored their status as `HITLStatus.pending`** in Redis
   (the enum's name); they now store `pending`.
 - **The local Nexus vault derived its key on every credential read**, a

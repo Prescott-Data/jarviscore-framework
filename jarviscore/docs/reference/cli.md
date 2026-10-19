@@ -487,6 +487,8 @@ Rooms from a terminal, for developers and operators. See [Rooms](../guides/rooms
 | `room role ROOM PERSON viewer\|editor\|owner\|none --as NAME` | Set or remove a role (owners) |
 | `room visibility ROOM members\|tenant --as NAME [--tenant-role viewer\|editor]` | Who can see the room (owners) |
 | `room connectors ROOM [PROVIDER ...] --as NAME` | Systems whose data everyone in the room may see (owners) |
+| `room audit ROOM [--days N] [--json]` | Everything done in the room: who, what, why, with whose access, at what cost |
+| `room caps [PERSON] [--tokens-per-day N] [--tokens-per-month N] [--usd-per-day X] [--usd-per-month X] [--clear ...]` | Spending caps for the tenant, or one person in it, and their usage |
 | `room checkout ROOM DIR --as NAME` | Copy the current files into an empty directory |
 | `room push DIR [-m TITLE] --as NAME [--accept]` | Propose what changed in a checkout |
 | `room slack ROOM --channel ID [--seed HOST:PORT] [--people NAME] [--capabilities LIST] [--timeout S]` | Serve the room in a Slack channel, with Slack connected through Nexus; see [Chat Surfaces](../guides/chat-surfaces.md#slack) |

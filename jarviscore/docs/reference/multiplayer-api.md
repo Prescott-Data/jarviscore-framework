@@ -31,6 +31,19 @@ The classes behind [Multiplayer](../concepts/multiplayer.md), with their methods
 | `people.begin_link(person)` / `people.complete_link(account, code)` | A one-time code (10 minutes) that makes another account the same person |
 | `people.accounts(person)`, `people.unlink(account)` | A person's accounts; let an account be someone else |
 | `people.deprovision(person)` | Remove someone: their roles stop applying and their accounts are refused |
+| `people.log(tenant, since=0)` | Who was added, linked, unlinked or removed, oldest first |
+
+## Spending
+
+`from jarviscore.auth.spending import Spending, SpendCapReached`
+
+| Member | |
+|---|---|
+| `Spending(redis_store)` | Per-person ledgers and caps, in the mesh's Redis |
+| `spending.set_caps(tenant, *, person="", tokens_per_day=, tokens_per_month=, usd_per_day=, usd_per_month=)` | The tenant's caps, or one person's (which override); None clears one |
+| `spending.caps_for("tenant/person")`, `spending.usage("tenant/person")` | The caps that apply; tokens, USD and calls this UTC day and month |
+| `spending.check("tenant/person")` | Raises `SpendCapReached` if a cap is reached |
+| `SpendCapReached` | `.person`, `.period`; a model call over a cap raises it before it is made |
 
 ## Room
 
@@ -68,6 +81,8 @@ Reading methods are for trusted code; check `room.require(person, "viewer", ...)
 | `room.release(proposal_id, *, by)` | Show held work to the room (only the person it is held for) |
 | `await room.checkout(directory, *, by)`, `await room.push(directory, *, by, title="")` | Work by hand |
 | `room.private_sources(workflow_id)` | The connected systems a piece of work used that the room does not share |
+| `room.audit(since=0, until=None)` | Records of everything done: `at`, `by`, `by_name`, `action`, `target`, `detail`, `held_for`; for work, `workflow_id`, `sources` and `usage` |
+| `room.memory` | The room's team memory (`RoomMemory`) when Athena is configured; assignable |
 | `room.delete(*, by)` | Delete it (owners) |
 
 A `Proposal` has `id`, `title`, `author`, `asked_by`, `base_version`, `changes`, `paths`, `status` (`open`, `accepted`, `rejected`, `conflicted`), `revision_of`, `decided_by`, `reason`, `conflicts`, `held_for` and `sources`.
@@ -94,6 +109,16 @@ A `Proposal` has `id`, `title`, `author`, `asked_by`, `base_version`, `changes`,
 | `proposal.opened`, `proposal.released` | `proposal`, `author`, `title`, `paths`, `base_version`, `revision_of`, `workflow_id`, `held_for` |
 | `proposal.accepted`, `proposal.rejected`, `proposal.conflicted` | `proposal`, `by`, `by_name`, `version`, `merged_over`, `line_merged`; `reason`; `paths` |
 | `member.changed`, `room.visibility`, `room.connectors` | `person`, `role`; `visibility`, `tenant_role`; `shared` |
+
+## RoomMemory
+
+`from jarviscore.room.memory import RoomMemory`
+
+| Member | |
+|---|---|
+| `RoomMemory(room, athena_client)`, `RoomMemory.from_env(room)` | A room's team memory in Athena (tenant: the room's; scope: the room; session agent `room`) |
+| `await memory.said(person, text, *, thread="")`, `await memory.replied(text, *, thread="")` | Keep a public message, or the agent's public reply |
+| `await memory.sync()` | Keep what the room recorded since the last sync, once per room (`RoomConversation.follow` calls it) |
 
 ## RoomFeed
 
