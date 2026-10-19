@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from jarviscore.cli.atom import DEFAULT_NEXUS_URL, _resolve_nexus_url
 from jarviscore.cli.nexus import _gateway_api_key, _gateway_headers, _gateway_open, _gateway_url
 
 
@@ -112,3 +113,31 @@ def test_plain_urlopen_would_have_forwarded_the_key(redirecting_gateway):
     req = urllib.request.Request(f"{base}/v1/providers", headers={"X-API-Key": "gw-secret"})
     urllib.request.urlopen(req, timeout=5).read()
     assert seen["elsewhere"] and seen["elsewhere"][0].get("X-Api-Key") == "gw-secret"
+
+
+# ── atom test resolves the Gateway URL where it resolves the key ───
+
+def test_atom_test_uses_dotenv_gateway_when_only_the_file_configures_it(monkeypatch, tmp_path):
+    """File-only configuration: the key must go to the file's Gateway, never to localhost."""
+    monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+    monkeypatch.delenv("NEXUS_GATEWAY_API_KEY", raising=False)
+    (tmp_path / ".env").write_text(
+        "NEXUS_GATEWAY_URL=https://gw.example.com\nNEXUS_GATEWAY_API_KEY=gw-secret\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert _resolve_nexus_url(None) == "https://gw.example.com"
+    assert _gateway_headers() == {"X-API-Key": "gw-secret"}
+
+
+def test_atom_test_explicit_url_wins(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text("NEXUS_GATEWAY_URL=https://gw.example.com\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NEXUS_GATEWAY_URL", "https://env.example.com")
+    assert _resolve_nexus_url("https://flag.example.com") == "https://flag.example.com"
+    assert _resolve_nexus_url(None) == "https://env.example.com"
+
+
+def test_atom_test_falls_back_to_localhost_when_nothing_is_configured(monkeypatch, tmp_path):
+    monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert _resolve_nexus_url(None) == DEFAULT_NEXUS_URL

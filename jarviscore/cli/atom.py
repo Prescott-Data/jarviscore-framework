@@ -433,8 +433,20 @@ def _get_all_bundles() -> List[str]:
 
 # ── Sub-command: test ─────────────────────────────────────────────────────────
 
+DEFAULT_NEXUS_URL = "http://localhost:8090"
+
+
+def _resolve_nexus_url(explicit: "str | None") -> str:
+    """The Gateway for `atom test`: --nexus-url, else NEXUS_GATEWAY_URL from the
+    environment or ./.env (the same lookup that supplies the API key), else the
+    local default. Resolving URL and key from the same place keeps a key read
+    from ./.env from being sent to localhost."""
+    from jarviscore.cli.nexus import _gateway_url
+    return explicit or _gateway_url() or DEFAULT_NEXUS_URL
+
+
 def cmd_test(args):
-    nexus_url = args.nexus_url or os.getenv("NEXUS_GATEWAY_URL", "http://localhost:8090")
+    nexus_url = _resolve_nexus_url(args.nexus_url)
 
     print(f"\n{_bold('JarvisCore Atom Test Harness')}")
     print(f"{_dim('Mode: ' + args.mode)}")
@@ -574,9 +586,9 @@ Examples:
                         help="Nexus connection_id (required for --mode integration)")
     test_p.add_argument("--mode",          choices=["dry-run", "integration"], default="dry-run",
                         help="Test mode (default: dry-run)")
-    test_p.add_argument("--nexus-url",     dest="nexus_url",
-                        default=os.getenv("NEXUS_GATEWAY_URL", "http://localhost:8090"),
-                        help="Nexus Gateway URL (default: NEXUS_GATEWAY_URL env var or http://localhost:8090)")
+    test_p.add_argument("--nexus-url",     dest="nexus_url", default=None,
+                        help="Nexus Gateway URL (default: NEXUS_GATEWAY_URL from the environment or ./.env, "
+                             "else http://localhost:8090)")
     test_p.add_argument("--all",           action="store_true",
                         help="Test every atom across all bundles (dry-run only)")
 
