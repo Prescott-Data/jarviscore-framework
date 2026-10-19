@@ -258,6 +258,25 @@ def _find_athena_repo() -> Optional[Path]:
     return None
 
 
+def _check_azure_deployments(key: str, chat: str, embedding: str) -> None:
+    """Warn now, not after memory silently stops forming, when a deployment is missing."""
+    import json
+    import urllib.request
+
+    for name, url, body in (
+        (chat, os.environ["ATHENA_LLM_BASE_URL"], {"messages": [{"role": "user", "content": "ok"}], "max_tokens": 1}),
+        (embedding, os.environ["ATHENA_EMBEDDING_BASE_URL"], {"input": "ok"}),
+    ):
+        request = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                         headers={"api-key": key, "Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(request, timeout=15)
+        except Exception as exc:
+            _warn(f"Azure deployment '{name}' did not answer ({exc}). Athena needs a chat deployment that "
+                  "accepts max_tokens (ATHENA_AZURE_CHAT_DEPLOYMENT, default gpt-4o-mini) and an embedding "
+                  "deployment (ATHENA_AZURE_EMBEDDING_DEPLOYMENT, default text-embedding-3-small).")
+
+
 def _pick_llm_key() -> tuple[str, str, str]:
     """
     Find an LLM API key from the current environment.
@@ -267,20 +286,29 @@ def _pick_llm_key() -> tuple[str, str, str]:
     # Azure needs the endpoint too; the compose passes AZURE_OPENAI_* through
     azure_key = os.environ.get("AZURE_OPENAI_API_KEY", "").strip() or os.environ.get("AZURE_API_KEY", "").strip()
     azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip() or os.environ.get("AZURE_ENDPOINT", "").strip()
+    # Athena's providers are Gemini, Azure OpenAI and OpenAI (it has no Anthropic provider).
     checks = [
         ("gemini", "GEMINI_API_KEY", "gemini-2.0-flash"),
         ("gemini", "GOOGLE_API_KEY", "gemini-2.0-flash"),
         ("openai", "OPENAI_API_KEY", "gpt-4o-mini"),
-        ("anthropic", "ANTHROPIC_API_KEY", "claude-3-haiku-20240307"),
     ]
     for provider, env_var, model in checks[:2]:
         key = os.environ.get(env_var, "").strip()
         if key:
             return provider, key, model
     if azure_key and azure_endpoint:
-        model = os.environ.get("AZURE_DEPLOYMENT", "").strip() or "gpt-4o"
+        # Athena summarises with max_tokens and temperature, which reasoning
+        # deployments (gpt-5 and later) refuse: it needs a chat deployment of its own.
+        model = os.environ.get("ATHENA_AZURE_CHAT_DEPLOYMENT", "").strip() or "gpt-4o-mini"
+        embedding = os.environ.get("ATHENA_AZURE_EMBEDDING_DEPLOYMENT", "").strip() or "text-embedding-3-small"
+        base = azure_endpoint.rstrip("/")
         os.environ.setdefault("AZURE_OPENAI_API_KEY", azure_key)
-        os.environ.setdefault("AZURE_OPENAI_ENDPOINT", azure_endpoint)
+        os.environ.setdefault("AZURE_OPENAI_ENDPOINT", base)
+        os.environ.setdefault("ATHENA_LLM_BASE_URL",
+                              f"{base}/openai/deployments/{model}/chat/completions?api-version=2024-08-01-preview")
+        os.environ.setdefault("ATHENA_EMBEDDING_BASE_URL",
+                              f"{base}/openai/deployments/{embedding}/embeddings?api-version=2023-05-15")
+        _check_azure_deployments(azure_key, model, embedding)
         return "azure", azure_key, model
     if azure_key and not azure_endpoint:
         _warn("AZURE_OPENAI_API_KEY is set but AZURE_OPENAI_ENDPOINT is not; skipping Azure")
@@ -334,7 +362,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     # LLM key
     provider, llm_key, model = _pick_llm_key()
     if not llm_key:
-        _err("No LLM API key found. Set one of: GEMINI_API_KEY, AZURE_OPENAI_API_KEY (+ AZURE_OPENAI_ENDPOINT), OPENAI_API_KEY, ANTHROPIC_API_KEY")
+        _err("No LLM API key found. Set one of: GEMINI_API_KEY, AZURE_OPENAI_API_KEY (+ AZURE_OPENAI_ENDPOINT), OPENAI_API_KEY")
         sys.exit(1)
     print(f"  ✅  LLM: {provider} / {model}")
 

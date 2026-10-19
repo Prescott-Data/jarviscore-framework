@@ -56,9 +56,19 @@ services:
       LLM_API_KEY: ${ATHENA_LLM_API_KEY:?Set ATHENA_LLM_API_KEY or run 'jarviscore memory init'}
       LLM_MODEL_NAME: ${ATHENA_LLM_MODEL:-gemini-2.0-flash}
       EMBEDDING_MODEL_NAME: ${ATHENA_EMBEDDING_MODEL:-gemini-embedding-001}
-      # Azure OpenAI (needed when LLM_PROVIDER=azure)
+      # Azure OpenAI (needed when LLM_PROVIDER=azure): Athena posts to these URLs
+      # as given, so they name the deployments (set by 'jarviscore memory init').
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
       AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      LLM_BASE_URL: ${ATHENA_LLM_BASE_URL:-}
+      EMBEDDING_BASE_URL: ${ATHENA_EMBEDDING_BASE_URL:-}
+      MILVUS_VECTOR_DIMENSION: ${ATHENA_VECTOR_DIMENSION:-1536}
+
+      # Short-term memory must hold more events than the count that forces a
+      # summary, or events older than the newest STM_CACHE_MAX_TURNS are dropped
+      # before they are ever summarised (Athena's defaults are 10 and 20).
+      STM_CACHE_MAX_TURNS: ${ATHENA_STM_MAX_EVENTS:-60}
+      STM_MAX_EVENTS_BEFORE_FLUSH: ${ATHENA_STM_FLUSH_EVENTS:-20}
 
       # MongoDB — both prefixed (config.go) and unprefixed (cache layer)
       MEMORY_OS_MONGODB_URI: "mongodb://admin:admin123@mongodb:27017/memory_os?authSource=admin"
@@ -182,7 +192,8 @@ services:
     restart: unless-stopped
 
   minio-setup:
-    image: minio/mc
+    # The server image carries the mc client (minio/mc is no longer published).
+    image: minio/minio:RELEASE.2024-01-01T16-36-33Z
     container_name: athena-minio-setup
     depends_on:
       - minio
