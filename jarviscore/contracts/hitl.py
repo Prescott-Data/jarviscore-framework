@@ -216,7 +216,7 @@ class HITLRequest(BaseModel):
     def to_redis_mapping(self) -> Dict[str, str]:
         """Flatten for Redis HSET — all values must be strings."""
         import json
-        d = self.model_dump()
+        d = self.model_dump(mode="json")
         return {k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                 for k, v in d.items()}
 

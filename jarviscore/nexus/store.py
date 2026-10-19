@@ -39,6 +39,7 @@ Security:
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import hmac
 import json
@@ -184,13 +185,14 @@ def _derive_key() -> bytes:
             "[NexusStore] NEXUS_SECRET not set — using machine UUID for key derivation. "
             "Set NEXUS_SECRET in .env for stronger encryption."
         )
-    return hashlib.pbkdf2_hmac(
-        "sha256",
-        secret.encode(),
-        salt,
-        _PBKDF2_ITERATIONS,
-        dklen=_KEY_LEN,
-    )
+    return _stretch(secret, salt)
+
+
+@functools.lru_cache(maxsize=8)
+def _stretch(secret: str, salt: bytes) -> bytes:
+    # Deliberately slow (PBKDF2), so derived once per secret and salt: every
+    # credential read would otherwise stall the event loop of the agent using it.
+    return hashlib.pbkdf2_hmac("sha256", secret.encode(), salt, _PBKDF2_ITERATIONS, dklen=_KEY_LEN)
 
 
 # ── Store ─────────────────────────────────────────────────────────────────────
