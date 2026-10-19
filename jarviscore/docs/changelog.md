@@ -26,6 +26,16 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## Unreleased
+
+### Fixed
+
+- **Nexus Gateway caller authentication.** `NexusClient` sent no `X-API-Key`, so a Gateway deployed with `GATEWAY_REQUIRE_API_KEY=true` (nexus-framework 0.6.0 and later) refused every call with 401 and no connected app could work. New setting `NEXUS_GATEWAY_API_KEY` (`Settings.nexus_gateway_api_key`); `NexusClient(gateway_url, api_key=...)` sends it as a default header, `AuthenticationManager` passes it through (config key `nexus_gateway_api_key`, settings as fallback), and the `nexus register`, `nexus status`, `nexus test` and `atom test` CLI paths carry it on their raw Gateway calls. Unset means no header, so Gateways without caller auth behave as before.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.1.1 <span class="changelog-date">2026-10-16</span>
 
 ### Fixed

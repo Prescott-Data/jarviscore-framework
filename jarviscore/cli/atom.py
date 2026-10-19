@@ -351,7 +351,9 @@ def run_integration(bundle: str, atom: str, connection_id: str, nexus_url: str) 
         import asyncio
 
         async def _resolve():
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            api_key = os.getenv("NEXUS_GATEWAY_API_KEY")
+            headers = {"X-API-Key": api_key} if api_key else {}
+            async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
                 # Health check first
                 try:
                     health = await client.get(f"{nexus_url}/health")

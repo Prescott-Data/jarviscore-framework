@@ -429,6 +429,7 @@ For production, set these environment variables instead of relying on developmen
 ```bash
 NEXUS_SECRET=<long-random-string>       # Do not rely on machine-UUID fallback
 NEXUS_GATEWAY_URL=https://nexus.yours   # Point to your deployed Nexus Gateway
+NEXUS_GATEWAY_API_KEY=<gateway key>     # Sent as X-API-Key; required when the Gateway enforces caller auth
 REDIS_URL=redis://<persistent-host>     # External Redis with persistence enabled
 STORAGE_BACKEND=azure                   # Or mount a persistent volume for local mode
 SANDBOX_MODE=remote                     # Isolate code execution from the host

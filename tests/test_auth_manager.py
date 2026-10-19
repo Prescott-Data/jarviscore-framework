@@ -418,3 +418,25 @@ class TestCleanup:
 
         manager.lifecycle_monitor.stop_all.assert_called_once()
         manager.nexus_client.close.assert_called_once()
+
+
+class TestGatewayApiKey:
+    """The manager hands the Gateway caller key to its NexusClient."""
+
+    def test_config_key_reaches_nexus_client(self):
+        manager = AuthenticationManager({
+            "nexus_gateway_url": "https://gateway.test.com",
+            "nexus_gateway_api_key": "gw-secret",
+        })
+        assert manager.nexus_client is not None
+        assert manager.nexus_client.client.headers["X-API-Key"] == "gw-secret"
+
+    def test_settings_key_is_the_fallback(self, monkeypatch):
+        monkeypatch.setenv("NEXUS_GATEWAY_API_KEY", "from-env")
+        manager = AuthenticationManager({"nexus_gateway_url": "https://gateway.test.com"})
+        assert manager.nexus_client.client.headers["X-API-Key"] == "from-env"
+
+    def test_no_key_sends_no_header(self, monkeypatch):
+        monkeypatch.delenv("NEXUS_GATEWAY_API_KEY", raising=False)
+        manager = AuthenticationManager({"nexus_gateway_url": "https://gateway.test.com"})
+        assert "x-api-key" not in manager.nexus_client.client.headers

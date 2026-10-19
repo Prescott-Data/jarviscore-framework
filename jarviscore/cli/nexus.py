@@ -60,17 +60,33 @@ def _compose_file() -> Path:
 
 # ── Nexus Gateway URL ─────────────────────────────────────────────────────────
 
-def _gateway_url() -> Optional[str]:
-    """Read NEXUS_GATEWAY_URL from env or .env file."""
-    url = os.environ.get("NEXUS_GATEWAY_URL", "")
-    if url:
-        return url
+def _env_or_dotenv(name: str) -> Optional[str]:
+    """Read one variable from the environment, else from ./.env."""
+    value = os.environ.get(name, "")
+    if value:
+        return value
     env_file = Path.cwd() / ".env"
     if env_file.exists():
         for line in env_file.read_text().splitlines():
-            if line.startswith("NEXUS_GATEWAY_URL="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
+            if line.startswith(f"{name}="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'") or None
     return None
+
+
+def _gateway_url() -> Optional[str]:
+    """Read NEXUS_GATEWAY_URL from env or .env file."""
+    return _env_or_dotenv("NEXUS_GATEWAY_URL")
+
+
+def _gateway_api_key() -> Optional[str]:
+    """Read NEXUS_GATEWAY_API_KEY from env or .env file (None when unset)."""
+    return _env_or_dotenv("NEXUS_GATEWAY_API_KEY")
+
+
+def _gateway_headers() -> dict:
+    """Headers every raw CLI call to the Gateway must carry: the caller API key, if set."""
+    key = _gateway_api_key()
+    return {"X-API-Key": key} if key else {}
 
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -374,7 +390,7 @@ def cmd_register(args):
             req = urllib.request.Request(
                 f"{gateway_url}/v1/providers",
                 data=payload,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **_gateway_headers()},
                 method="POST",
             )
             resp = urllib.request.urlopen(req, timeout=10)
@@ -527,8 +543,8 @@ def cmd_list(args):
     if gateway_url:
         import urllib.request, urllib.error
         try:
-            req = urllib.request.urlopen(f"{gateway_url}/v1/providers", timeout=5)
-            providers = json.loads(req.read())
+            req = urllib.request.Request(f"{gateway_url}/v1/providers", headers=_gateway_headers())
+            providers = json.loads(urllib.request.urlopen(req, timeout=5).read())
             if providers:
                 print(_bold("  Gateway providers:"))
                 for p in providers:
@@ -558,7 +574,7 @@ def cmd_test(args):
         try:
             sys.path.insert(0, str(Path(__file__).parent.parent.parent))
             from jarviscore.nexus.client import NexusClient
-            client = NexusClient(gateway_url)
+            client = NexusClient(gateway_url, api_key=_gateway_api_key())
             # Request a connection (this will open a browser for OAuth)
             user_id = args.user_id or "jarviscore-test"
             from jarviscore.nexus.providers import get_scopes
