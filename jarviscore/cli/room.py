@@ -13,6 +13,9 @@ Usage:
     jarviscore room checkout launch ./my-copy --as alice
     jarviscore room push ./my-copy -m "Tighter copy" --as alice [--accept]
     jarviscore room members launch
+    jarviscore room audit launch --days 7 [--json]
+    jarviscore room caps --usd-per-month 200               # everyone in the tenant
+    jarviscore room caps alice --tokens-per-day 2000000    # one person, and their usage
     jarviscore room role launch bob editor --as alice
     jarviscore room visibility launch tenant --as alice
     jarviscore room connectors launch google_drive --as alice
@@ -199,6 +202,57 @@ async def cmd_connectors(args):
     print(_ok(f"Shared systems in {room.id}: {', '.join(args.providers) or 'none'}"))
 
 
+async def cmd_audit(args):
+    import time
+
+    room = _room(args)
+    records = room.audit(since=time.time() - args.days * 86400 if args.days else 0.0)
+    if args.json:
+        for record in records:
+            print(json.dumps(record, default=str))
+        return
+    for r in records:
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(r["at"]))
+        who = r.get("by_name") or r.get("by") or "-"
+        line = f"{stamp}  {who:<18} {r['action']:<20} {r.get('target', '')}  {r.get('detail', '')}"
+        if r.get("held_for"):
+            line += f"  [held for {room.name_of(r['held_for'])}]"
+        if r.get("sources"):
+            line += "  used: " + ", ".join(f"{s['provider']} as {s['person'] or 'the deployment'}"
+                                           for s in r["sources"])
+        if r.get("usage"):
+            line += f"  ({r['usage']['tokens']:,} tokens, ${r['usage']['usd']:.4f})"
+        print(line)
+
+
+async def cmd_caps(args):
+    from jarviscore.auth.spending import Spending
+
+    spending = Spending(_store(args))
+    changes = {k: v for k, v in (("tokens_per_day", args.tokens_per_day), ("tokens_per_month", args.tokens_per_month),
+                                 ("usd_per_day", args.usd_per_day), ("usd_per_month", args.usd_per_month))
+               if v is not None}
+    for name in args.clear or []:
+        changes[name.replace("-", "_")] = None
+    if changes:
+        spending.set_caps(args.tenant, person=args.person or "", **changes)
+    who = f"{args.tenant}/{args.person}" if args.person else f"{args.tenant}/*"
+    caps = spending.caps_for(who)   # "tenant/*" names no person: the tenant's own caps
+    print(f"Caps for {'everyone in ' + args.tenant if not args.person else who}: "
+          + (", ".join(f"{k}={v}" for k, v in vars(caps).items() if v is not None) or "none"))
+    if args.person:
+        for period, used in spending.usage(who).items():
+            print(f"  {period} {used['period']}: {used['tokens']:,} tokens, ${used['usd']:.4f}, {used['calls']} calls")
+
+
+def _store(args):
+    import redis as redis_lib
+
+    from jarviscore.storage.redis_store import RedisContextStore
+
+    return RedisContextStore(client=redis_lib.Redis.from_url(_mesh_redis(args), decode_responses=True))
+
+
 async def cmd_checkout(args):
     room = _room(args)
     head = await room.checkout(args.directory, by=_person(args, room))
@@ -377,6 +431,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     connectors = with_room("connectors", "Systems whose data the whole room may see (owners only)")
     connectors.add_argument("providers", nargs="*", help="Nexus providers, e.g. google_drive; none to clear")
+
+    audit = with_room("audit", "Everything done in the room: who, what, why, with whose access, at what cost",
+                      person=False)
+    audit.add_argument("--days", type=float, default=0, help="Only the last N days")
+    audit.add_argument("--json", action="store_true", help="One JSON record per line")
+
+    caps = sub.add_parser("caps", help="Spending caps for a tenant, or one person in it, and their usage")
+    caps.add_argument("person", nargs="?", default="", help="A person's id (default: everyone in the tenant)")
+    caps.add_argument("--tokens-per-day", type=int)
+    caps.add_argument("--tokens-per-month", type=int)
+    caps.add_argument("--usd-per-day", type=float)
+    caps.add_argument("--usd-per-month", type=float)
+    caps.add_argument("--clear", nargs="*", choices=["tokens-per-day", "tokens-per-month", "usd-per-day",
+                                                     "usd-per-month"], help="Remove these caps")
 
     checkout = with_room("checkout", "Copy the room's files into an empty directory")
     checkout.add_argument("directory")

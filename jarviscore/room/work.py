@@ -80,6 +80,9 @@ async def ask(
     workflow_id: str = "",
 ) -> AskResult:
     room.require(asked_by, "editor", "ask for work")
+    from jarviscore.auth.spending import Spending
+
+    Spending(room.redis_store).check(asked_by.key)   # SpendCapReached: their allowance is used up
     head = room.head()
     workflow_id = workflow_id or new_workflow_id(room.id)
     task = goal

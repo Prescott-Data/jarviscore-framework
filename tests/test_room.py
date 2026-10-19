@@ -537,3 +537,51 @@ class TestIdentities:
             people.person_for(Account("acme", "slack:T1", "U2", "new name"))
         monkeypatch.undo()
         assert not people.is_active(person)
+
+
+class TestAudit:
+
+    async def test_every_action_is_a_record_with_who_what_and_why(self, room):
+        proposal = await room.propose({"README.md": "v2\n"}, by=bob, title="Tighter intro")
+        await room.reject(proposal.id, by=carol, reason="keep it")
+        room.set_shared_connectors(["google_drive"], by=alice)
+        records = room.audit()
+        assert [r["action"] for r in records] == [
+            "room.created", "member.changed", "member.changed", "proposal.opened",
+            "proposal.rejected", "room.connectors"]
+        rejected = records[4]
+        assert (rejected["by"], rejected["by_name"], rejected["target"], rejected["detail"]) == (
+            "carol", "Carol", proposal.id, "keep it")
+        assert records[-1]["detail"] == "google_drive"
+        assert all(r["room"] == "acme/launch" for r in records)
+
+    async def test_work_records_name_whose_access_it_used_and_what_it_cost(self, room):
+        room.note("ask.started", by="bob", by_name="Bob", goal="read my inbox", workflow_id="wf-1")
+        room.redis_store.record_workflow_source("wf-1", "gmail", "acme/bob")
+        room.redis_store.reserve_workflow_tokens("wf-1", "e", "r1", 100)
+        room.redis_store.settle_workflow_tokens("wf-1", "e", "r1", 80, 0.002)
+        room.note("ask.finished", by="bob", by_name="Bob", workflow_id="wf-1", status="completed",
+                  held_for="bob", summary="secret findings")
+        started, finished = room.audit()[-2:]
+        assert started["sources"] == [{"provider": "gmail", "person": "acme/bob"}]
+        assert finished["usage"] == {"tokens": 80, "usd": 0.002, "calls": 1}
+        assert finished["held_for"] == "bob"
+        assert "secret" not in str(finished), "what private work found is not in the audit"
+
+    async def test_a_time_window(self, room):
+        import time
+        cut = time.time()
+        await room.propose({"README.md": "later\n"}, by=bob)
+        assert [r["action"] for r in room.audit(since=cut)] == ["proposal.opened"]
+
+    def test_identity_changes_are_logged(self, room):
+        from jarviscore.room import Account
+
+        people = Identities(room.redis_store)
+        slack = Account("acme", "slack:T1", "U7", "Uma")
+        uma = people.person_for(slack)
+        people.complete_link(Account("acme", "app", "uma"), people.begin_link(uma))
+        people.deprovision(uma)
+        assert [e["action"] for e in people.log("acme")] == [
+            "person.added", "account.linked", "person.removed"]
+        assert people.log("globex") == []

@@ -117,3 +117,29 @@ def test_tenants_are_separate(here, capsys):
     with pytest.raises(SystemExit):
         main(["--tenant", "globex", "status", "launch", "--as", "alice"])
     assert room("acme").exists() and not room("globex").exists()
+
+
+def test_the_audit_from_the_terminal(here, capsys):
+    main(["checkout", "launch", str(here / "mine"), "--as", "alice"])
+    (here / "mine" / "index.html").write_text("<h1>v2</h1>\n")
+    main(["push", str(here / "mine"), "-m", "New title", "--as", "alice"])
+    [proposal] = room().proposals("open")
+    main(["reject", "launch", proposal.id, "Keep the old title", "--as", "bob"])
+    capsys.readouterr()
+    main(["audit", "launch"])
+    out = capsys.readouterr().out
+    assert "proposal.rejected" in out and "Keep the old title" in out and "bob" in out
+    main(["audit", "launch", "--json"])
+    import json
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert lines[-1]["action"] == "proposal.rejected"
+
+
+def test_spending_caps_from_the_terminal(here, capsys):
+    main(["caps", "--usd-per-month", "200"])
+    main(["caps", "alice", "--tokens-per-day", "5000"])
+    out = capsys.readouterr().out
+    assert "everyone in acme: usd_per_month=200.0" in out
+    assert "tokens_per_day=5000" in out and "usd_per_month=200.0" in out and "day " in out
+    main(["caps", "alice", "--clear", "tokens-per-day"])
+    assert "tokens_per_day" not in capsys.readouterr().out

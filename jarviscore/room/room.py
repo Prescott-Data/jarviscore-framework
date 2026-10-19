@@ -166,6 +166,9 @@ def _who(person: Person) -> Dict[str, str]:
     return {"by": person.id, "by_name": person.display}
 
 
+_UNSET = object()
+
+
 class Room:
     """Shared, versioned work in a tenant. See the module docstring."""
 
@@ -182,6 +185,21 @@ class Room:
         #: The mesh's RedisContextStore: head, proposals, settings and history.
         self.redis_store = redis_store
         self.identities = Identities(redis_store)
+        self._memory: Any = _UNSET
+
+    @property
+    def memory(self):
+        """The room's team memory in Athena (``RoomMemory``), or None without Athena
+        (``ATHENA_URL``). Assign your own, or None to keep none."""
+        if self._memory is _UNSET:
+            from jarviscore.room.memory import RoomMemory
+
+            self._memory = RoomMemory.from_env(self)
+        return self._memory
+
+    @memory.setter
+    def memory(self, value) -> None:
+        self._memory = value
 
     # ── Construction ────────────────────────────────────────────────────────
 
@@ -339,6 +357,43 @@ class Room:
         shared = set(self.settings().get("shared_connectors") or [])
         return [s for s in self.redis_store.workflow_sources(workflow_id)
                 if str(s.get("provider", "")).lower() not in shared]
+
+    def audit(self, since: float = 0.0, until: Optional[float] = None) -> List[Dict[str, Any]]:
+        """Everything done in the room, as records for an auditor, oldest first.
+
+        Each record says when, who (``by`` and ``by_name``), what (``action``),
+        to what (``target``), and why (``detail``: a goal, a reason, a role).
+        A piece of work's records also name its ``workflow_id``, the connected
+        systems it used and whose access each was (``sources``), and what its
+        model use cost (``usage``). Private work's records say that it was held,
+        and for whom, not what it found.
+        """
+        records = []
+        for event in self.events():
+            at = float(event.get("at") or 0)
+            if at < since or (until is not None and at > until):
+                continue
+            kind = event.get("type", "")
+            target = event.get("proposal") or event.get("person") or event.get("workflow_id") or ""
+            detail = (event.get("goal") or event.get("reason") or event.get("error")
+                      or event.get("role") or event.get("visibility") or "")
+            if kind == "room.connectors":
+                detail = ", ".join(event.get("shared") or []) or "none"
+            if kind == "ask.finished":
+                detail = event.get("status") or ""
+            record = {"at": at, "room": self.key, "action": kind, "by": event.get("by", ""),
+                      "by_name": event.get("by_name", ""), "target": target, "detail": str(detail),
+                      "version": event.get("version"), "held_for": event.get("held_for") or ""}
+            workflow = event.get("workflow_id") or ""
+            if workflow and kind in ("ask.started", "ask.finished", "ask.failed"):
+                record["workflow_id"] = workflow
+                record["sources"] = self.redis_store.workflow_sources(workflow)
+                if kind != "ask.started":
+                    usage = self.redis_store.get_workflow_budget_usage(workflow) or {}
+                    record["usage"] = {"tokens": usage.get("used_tokens", 0),
+                                       "usd": usage.get("cost_usd", 0.0), "calls": usage.get("call_count", 0)}
+            records.append({k: v for k, v in record.items() if v not in (None, "")})
+        return records
 
     def visible_to(self, person: Person, proposal: Proposal) -> bool:
         """Whether ``person`` may see a proposal's contents (held work is for its asker only)."""

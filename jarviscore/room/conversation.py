@@ -137,6 +137,7 @@ class RoomConversation:
         self._lease = ""                     # the delivery lease, while follow() runs
         self._lease_seconds = max(10.0, poll_interval * 10)
         self._failures: Dict[str, int] = {}  # item -> failed posts in a row
+        self._memory_task: Optional[asyncio.Task] = None
 
     # ── Saved state ─────────────────────────────────────────────────────────
     #
@@ -206,6 +207,9 @@ class RoomConversation:
                 try:
                     if self.store.take_lease(lease, self.instance, seconds):
                         await self.sync()
+                    if self.room.memory is not None and not self._memory_task:
+                        # Its own loop: a slow Athena never holds back what is posted.
+                        self._memory_task = self._spawn(self._keep_memory())
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -219,6 +223,17 @@ class RoomConversation:
                 self.store.release_lease(lease, self.instance)
             except Exception:
                 pass
+
+    async def _keep_memory(self) -> None:
+        while True:
+            try:
+                await self.room.memory.sync()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Room %s: team memory is behind (%s); will retry", self.room.key, exc)
+                await asyncio.sleep(30)
+            await asyncio.sleep(max(self.poll_interval, 2.0))
 
     async def close(self) -> None:
         for task in list(self._tasks):
@@ -507,6 +522,9 @@ class RoomConversation:
             "kind": "person", "person": person.id, "name": person.display, "text": text,
             "message_id": record["message_id"], "at": record.get("at", time.time())},
             retention_days=self.retention_days)
+        memory = self.room.memory
+        if memory is not None:
+            memory.said_later(person, text, thread=root)   # queued: never delays the turn
         if in_thread and not history:
             history = await self.surface.history(root)
         waiting, private = [], False
@@ -536,6 +554,7 @@ class RoomConversation:
         turn = await self.agent.converse(
             self.room, person, text, thread=root, message_id=record["message_id"],
             proposal=self._latest.get(root, ""), addressed=bool(record.get("addressed")),
+            private=private,
             history=history, questions=waiting, on_work=on_work, on_proposal=on_proposal,
             on_decision=decisions.append,
         )
@@ -546,6 +565,8 @@ class RoomConversation:
         for reply in turn.replies:
             if reply:
                 await self.surface.say(root, reply, to=to)
+                if to is None and memory is not None:
+                    memory.replied_later(reply, thread=root)
                 self.store.append_transcript(self.room.key, self.surface.key, root, {
                     "kind": "agent", "name": "agent", "text": reply, "at": time.time(),
                     **({"to": person.id} if to else {})},

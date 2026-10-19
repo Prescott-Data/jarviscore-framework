@@ -42,6 +42,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from jarviscore.auth.people import Person
 from jarviscore.auth.principal import act_for
+from jarviscore.auth.spending import SpendCapReached, Spending, spending_scope
 from jarviscore.kernel.kernel import Kernel
 from jarviscore.kernel.subagent import BaseSubAgent
 from jarviscore.profiles.autoagent import AutoAgent
@@ -157,6 +158,15 @@ Finish as soon as you have acted, or decided to stay quiet."""
 
     def get_system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
+
+    async def _tool_remember(self, fact: str, kind: str = "fact") -> Dict[str, Any]:
+        # The room's memory is shared by everyone in it; a turn that showed work
+        # held for one person keeps nothing there.
+        turn = _turn.get()
+        if turn is not None and turn.private:
+            return {"status": "error", "error": (
+                "This turn involved work held for one person; it is not kept in the room's shared memory.")}
+        return await super()._tool_remember(fact, kind)
 
     def setup_tools(self) -> None:
         self.register_tool("room_status", self._tool_room_status,
@@ -476,9 +486,16 @@ class RoomAgent(AutoAgent):
             turn.replies.append(f"You're not a member of the {room.id} room, so I can't help with it. "
                                 "Ask one of its owners to add you.")
             return turn
+        try:
+            Spending(room.redis_store).check(person.key)
+        except SpendCapReached as exc:
+            turn.private = True   # about their allowance: for them alone
+            turn.replies.append(str(exc).replace(person.key, person.display))
+            return turn
         token = _turn.set(turn)
         try:
-            with act_for(person.key):
+            # The conversation's own model use is charged to the person who spoke.
+            with act_for(person.key), spending_scope(room.redis_store):
                 await self._handle(turn)
         finally:
             _turn.reset(token)
@@ -508,7 +525,15 @@ class RoomAgent(AutoAgent):
         else:
             logger.warning("Room %s: could not handle %s's message: %s", room.key, turn.person.key,
                            result.get("error"))
-            turn.replies.append("Sorry, I couldn't handle that just now. Could you say it again?")
+            failure = " ".join(str(result.get(k) or "") for k in ("error", "result_summary", "summary"))
+            match = re.search(r"This (day|month)'s allowance for work done for \S+ is used up[^\n]*?admin can raise it\.",
+                              failure)
+            if match:
+                # Their allowance ran out during the turn: say so, not "try again".
+                turn.private = True
+                turn.replies.append(match.group(0).replace(turn.person.key, turn.person.display))
+            else:
+                turn.replies.append("Sorry, I couldn't handle that just now. Could you say it again?")
 
     @staticmethod
     def _brief(turn: Turn) -> str:
@@ -630,6 +655,10 @@ class RoomAgent(AutoAgent):
             return _error(exc)
         if getattr(room, "mesh", None) is None:
             return {"status": "error", "error": "No agents are connected to this room here."}
+        try:
+            Spending(room.redis_store).check(person.key)
+        except SpendCapReached as exc:
+            return {"status": "error", "error": str(exc).replace(person.key, person.display)}
         from jarviscore.room.work import _started, new_workflow_id
 
         effect = turn.effect_id("work")

@@ -654,6 +654,13 @@ class AutoAgent(Profile):
                     complexity = await classifier.classify(task_desc, context=ctx)
                     self._complexity_decision = complexity
             except WorkflowBudgetExceeded as budget_exc:
+                from jarviscore.auth.spending import SpendCapReached
+
+                if isinstance(budget_exc, SpendCapReached):
+                    return {"status": "failure", "output": None, "payload": None,
+                            "error": str(budget_exc), "result_summary": str(budget_exc),
+                            "tokens": {"input": 0, "output": 0, "total": 0}, "cost_usd": 0.0,
+                            "repairs": 0, "agent_id": self.agent_id, "role": self.role}
                 return {
                     "status": "epoch_exhausted",
                     "output": None,

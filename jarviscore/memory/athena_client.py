@@ -179,6 +179,7 @@ class AthenaClient:
         metadata: Optional[Dict[str, str]] = None,
         *,
         user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Create an Athena memory session for an agent.
@@ -190,6 +191,7 @@ class AthenaClient:
             agent_id:  Unique agent identifier (e.g. "researcher", "analyst")
             metadata:  Optional k/v tags (e.g. {"team": "data"})
             user_id:   Athena user scope. Defaults to ``agent_id`` for compatibility.
+            tenant_id: Athena tenant; defaults to the client's. Athena isolates tenants.
 
         Returns:
             Athena session_id string, or None on failure.
@@ -197,7 +199,7 @@ class AthenaClient:
         try:
             http = await self._http()
             payload: Dict[str, Any] = {
-                "tenant_id": self._tenant_id,
+                "tenant_id": tenant_id or self._tenant_id,
                 "user_id": user_id or agent_id,
                 "agent_id": agent_id,
                 "metadata": {
@@ -223,6 +225,7 @@ class AthenaClient:
         metadata: Optional[Dict[str, str]] = None,
         *,
         user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Return the existing Athena session for this agent, or create one.
@@ -243,13 +246,14 @@ class AthenaClient:
             session_id string, or None if creation fails.
         """
         resolved_user_id = user_id or agent_id
-        if user_id:
+        tenant = tenant_id or self._tenant_id
+        if user_id or tenant_id:
             # An explicit scope lives in its own namespace, with each part
             # encoded: it can never resolve to an agent's default session, to
             # the legacy key (which belongs to no scope), or to a mapping
             # written before scoping existed.
             redis_key = "athena_session:scoped:" + ":".join(
-                quote(part, safe="") for part in (self._tenant_id, user_id, agent_id)
+                quote(part, safe="") for part in (tenant, resolved_user_id, agent_id)
             )
             legacy_redis_key = None
         else:
@@ -281,7 +285,7 @@ class AthenaClient:
 
         # 2. Create new session
         session_id = await self.create_session(
-            agent_id, metadata, user_id=resolved_user_id
+            agent_id, metadata, user_id=resolved_user_id, tenant_id=tenant
         )
         if not session_id:
             return None

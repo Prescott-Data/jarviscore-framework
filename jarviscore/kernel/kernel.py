@@ -33,6 +33,7 @@ from jarviscore.kernel.cognition import AgentCognitionManager
 from jarviscore.kernel.workspace_tools import register_workspace_tools
 from jarviscore.context.fidelity import Record, select_whole
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
+from jarviscore.auth.spending import SpendCapReached
 from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 from jarviscore.promo import PROMO_MODEL
 
@@ -950,6 +951,42 @@ class Kernel:
         if (context or {}).get("workspace_binding") and "workspace_write" not in subagent._tools:
             register_workspace_tools(subagent, lambda: self.sandbox)
 
+    def _room_memory(self, context: Optional[Dict[str, Any]], workflow_id: str) -> Dict[str, Any]:
+        """Memory for a step in a room: the room's tenant and scope, the team's
+        session, and, for work done for someone, their private memory in the room.
+
+        Every agent working in a room shares what the room's agents and people
+        keep there. What a piece of work learns through its asker's own access to
+        a system the room does not share goes to that person's private memory
+        instead, and work that recalls private memory is private work: its result
+        is held for that person like any other private work.
+        """
+        context = context or {}
+        room_key = str(context.get("room_id") or "")
+        if "/" not in room_key:
+            return {}
+        tenant = room_key.split("/", 1)[0]
+        target: Dict[str, Any] = {"memory_scope": room_key, "memory_tenant": tenant, "team_agent": "room"}
+        person = str(context.get("acting_for") or "")
+        if not person.startswith(f"{tenant}/") or not isinstance(context.get("room"), dict):
+            return target  # the room's conversation, or work for no one: shared memory only
+        store = self.redis_store
+        target["private_scope"] = f"{room_key}#private:{person.split('/', 1)[1]}"
+
+        def is_private() -> bool:
+            if store is None:
+                return True  # cannot tell: keep it private
+            shared = set((store.get_room_meta(room_key) or {}).get("shared_connectors") or [])
+            return any(str(s.get("provider", "")).lower() not in shared
+                       for s in store.workflow_sources(workflow_id))
+
+        def on_private_recall() -> None:
+            if store is not None:
+                store.record_workflow_source(workflow_id, "memory", person)
+
+        target.update(is_private=is_private, on_private_recall=on_private_recall)
+        return target
+
     def _memory_scope(self, context: Optional[Dict[str, Any]]) -> Optional[str]:
         """Which tenant this step's memory belongs to.
 
@@ -998,7 +1035,8 @@ class Kernel:
                     else:
                         logger.debug("[Kernel] Athena memory tier not configured: %s", exc)
 
-                memory_scope = self._memory_scope(context)
+                room = self._room_memory(context, workflow_id)
+                memory_scope = room.get("memory_scope") or self._memory_scope(context)
                 scope_field = self.config.get("memory_scope_field")
                 if athena_client is not None and scope_field and memory_scope is None:
                     # The mesh separates tenants by this field and the step
@@ -1019,6 +1057,7 @@ class Kernel:
                     blob_storage=self.blob_storage,
                     athena_client=athena_client,
                     memory_scope=memory_scope,
+                    **{k: v for k, v in room.items() if k != "memory_scope"},
                 )
         except ImportError:
             logger.debug("[Kernel] UnifiedMemory not available — running without memory")
@@ -1182,6 +1221,13 @@ class Kernel:
                     use_default_role_as_fallback=use_default_role_as_fallback,
                 )
             except WorkflowBudgetExceeded as budget_exc:
+                if isinstance(budget_exc, SpendCapReached):
+                    return AgentOutput(
+                        status="failure", payload={"error": str(budget_exc), "stage": "spend_cap"},
+                        summary=str(budget_exc), trajectory=[],
+                        metadata={"tokens": total_tokens, "cost_usd": total_cost, "dispatches": dispatches,
+                                  "typed_outcome": "SPEND_CAP_REACHED"},
+                    )
                 logger.info("[Kernel] Routing exhausted the active workflow epoch")
                 return AgentOutput(
                     status="epoch_exhausted",

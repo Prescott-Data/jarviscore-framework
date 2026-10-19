@@ -49,6 +49,7 @@ from jarviscore.orchestration.envelopes import (
 )
 from jarviscore.orchestration.budget import workflow_budget_scope
 from jarviscore.orchestration.step_context import in_step
+from jarviscore.auth.spending import spending_scope
 from jarviscore.auth.principal import act_for
 from jarviscore.kernel.state import ToolReceiptError, hydrate_receipt_evidence
 
@@ -1089,7 +1090,9 @@ class Mesh:
                             ),
                             planning_brief=self.config.get("mesh_planning_brief"),
                         )
-                        with workflow_budget_scope(
+                        # Planning is model use for the person the goal is for, too.
+                        with act_for(self._acting_for(source)), spending_scope(self._redis_store), \
+                                workflow_budget_scope(
                             self._redis_store,
                             workflow_id,
                             epoch_id=f"planning:{self._node_id}",
@@ -1958,7 +1961,7 @@ class Mesh:
                 )
                 try:
                     try:
-                        with act_for(self._acting_for(workflow)), workflow_budget_scope(
+                        with act_for(self._acting_for(workflow)), spending_scope(self._redis_store), workflow_budget_scope(
                             self._redis_store,
                             workflow_id,
                             epoch_id=f"capability:{claim_id}",
@@ -2087,7 +2090,7 @@ class Mesh:
         )
         try:
             try:
-                with act_for(self._acting_for(workflow)), in_step(workflow_id, step_id), \
+                with act_for(self._acting_for(workflow)), spending_scope(self._redis_store), in_step(workflow_id, step_id), \
                         workflow_budget_scope(
                     self._redis_store,
                     workflow_id,

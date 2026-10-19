@@ -1053,6 +1053,74 @@ class RedisContextStore:
             except redis.WatchError:
                 continue
 
+    # ── Per-person spending (jarviscore.auth.spending) ──────────────────────
+
+    @staticmethod
+    def _spend_key(person_key: str, *parts: str) -> str:
+        tenant, _, person_id = str(person_key).partition("/")
+        return ":".join((f"spend:{{{tenant}}}", person_id, *parts))
+
+    def person_spend(self, person_key: str, period: str, stamp: str) -> Dict[str, Any]:
+        raw = self._redis.hgetall(self._spend_key(person_key, period, stamp))
+        return {"period": stamp, "tokens": int(float(raw.get("tokens") or 0)),
+                "usd": round(float(raw.get("usd") or 0.0), 6), "calls": int(float(raw.get("calls") or 0))}
+
+    def reserve_person_spend(self, person_key: str, periods: Dict[str, str],
+                             limits: Dict[str, Dict[str, Optional[float]]], reservation_id: str,
+                             tokens: int, lease_seconds: float) -> Optional[tuple]:
+        """Hold ``tokens`` for a person if it fits every cap; returns None, or the
+        (period, "used of limit") that refused it."""
+        reservations = self._spend_key(person_key, "reservations")
+        period_keys = {p: self._spend_key(person_key, p, stamp) for p, stamp in periods.items()}
+        with self._redis.pipeline() as pipe:
+            while True:
+                try:
+                    pipe.watch(reservations, *period_keys.values())
+                    now = time.time()
+                    live, stale = 0, []
+                    for rid, raw in pipe.hgetall(reservations).items():
+                        held = json.loads(raw)
+                        if now - float(held.get("at") or 0) > lease_seconds:
+                            stale.append(rid)
+                        else:
+                            live += int(held.get("tokens") or 0)
+                    for period, key in period_keys.items():
+                        used = pipe.hgetall(key)
+                        used_tokens = int(float(used.get("tokens") or 0))
+                        used_usd = float(used.get("usd") or 0.0)
+                        cap = limits.get(period) or {}
+                        if cap.get("tokens") is not None and used_tokens + live + tokens > cap["tokens"]:
+                            pipe.unwatch()
+                            return (period, f"{used_tokens + live:,} of {int(cap['tokens']):,} tokens in use, "
+                                            f"{tokens:,} more needed")
+                        if cap.get("usd") is not None and used_usd >= cap["usd"]:
+                            pipe.unwatch()
+                            return (period, f"${used_usd:.2f} of ${cap['usd']:.2f}")
+                    pipe.multi()
+                    if stale:
+                        pipe.hdel(reservations, *stale)
+                    pipe.hset(reservations, reservation_id, json.dumps({"tokens": tokens, "at": now}))
+                    pipe.expire(reservations, int(lease_seconds) * 4)
+                    pipe.execute()
+                    return None
+                except redis.WatchError:
+                    continue
+
+    def settle_person_spend(self, person_key: str, periods: Dict[str, str], reservation_id: str,
+                            tokens: int, cost_usd: float) -> None:
+        pipe = self._redis.pipeline()
+        pipe.hdel(self._spend_key(person_key, "reservations"), reservation_id)
+        for period, stamp in periods.items():
+            key = self._spend_key(person_key, period, stamp)
+            pipe.hincrby(key, "tokens", int(tokens))
+            pipe.hincrbyfloat(key, "usd", float(cost_usd))
+            pipe.hincrby(key, "calls", 1)
+            pipe.expire(key, (3 if period == "day" else 62) * 86400)
+        pipe.execute()
+
+    def release_person_spend(self, person_key: str, reservation_id: str) -> None:
+        self._redis.hdel(self._spend_key(person_key, "reservations"), reservation_id)
+
     def get_workflow_budget_usage(
         self,
         workflow_id: str,

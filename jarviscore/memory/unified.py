@@ -13,7 +13,7 @@ Tier availability:
 """
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Callable, Any, Dict, List, Optional
 
 from .scratchpad import WorkingScratchpad
 from .episodic import EpisodicLedger
@@ -42,6 +42,18 @@ class UnifiedMemory:
         bundle = await mem.rehydrate_bundle()
     """
 
+    # Defaults for an instance built without __init__ (tests, subclasses).
+    _memory_tenant: Optional[str] = None
+    _private_scope: Optional[str] = None
+    _on_private_recall: Optional[Callable[[], None]] = None
+    _team_agent: Optional[str] = None
+    _private_memory = None
+    _team_memory = None
+
+    @staticmethod
+    def _is_private() -> bool:
+        return False
+
     def __init__(
         self,
         workflow_id: str,
@@ -51,12 +63,28 @@ class UnifiedMemory:
         blob_storage=None,
         athena_client=None,   # Optional AthenaClient — enables 4th memory tier
         memory_scope: Optional[str] = None,
+        memory_tenant: Optional[str] = None,
+        private_scope: Optional[str] = None,
+        is_private: Optional[Callable[[], bool]] = None,
+        on_private_recall: Optional[Callable[[], None]] = None,
+        team_agent: Optional[str] = None,
     ):
         self._wf = workflow_id
         self._step = step_id
         self._agent = agent_id
         self._redis = redis_store
         self._memory_scope = memory_scope
+        #: Athena tenant: the room's, for work in a room. Athena never mixes tenants.
+        self._memory_tenant = memory_tenant
+        #: Where what this work learns from someone's own access is kept: theirs alone.
+        self._private_scope = private_scope
+        if is_private is not None:
+            self._is_private = is_private
+        self._on_private_recall = on_private_recall
+        #: The shared session the team's conversation and decisions are written to.
+        self._team_agent = team_agent
+        self._private_memory = None
+        self._team_memory = None
 
         self.working: Optional[WorkingScratchpad] = (
             WorkingScratchpad(blob_storage, workflow_id, step_id, agent_id)
@@ -103,6 +131,7 @@ class UnifiedMemory:
                 client=self._athena_client,
                 redis_store=self._redis,
                 user_id=self._memory_scope,
+                tenant_id=self._memory_tenant,
             )
         except Exception as exc:
             # Athena restarting is a condition to recover from, not a reason to
@@ -110,6 +139,21 @@ class UnifiedMemory:
             # keeps the retry cheap while it is down (#128).
             logger.warning("[UnifiedMemory] Athena init failed (non-fatal): %s", exc)
         return self._athena_memory
+
+    async def _session(self, attr: str, user_id: Optional[str], agent_id: str):
+        """Another Athena session in this step's tenant (the person's private memory,
+        the team's), created on first use."""
+        if getattr(self, attr) is not None or self._athena_client is None or not user_id:
+            return getattr(self, attr)
+        try:
+            from .athena_memory import AthenaMemory
+
+            setattr(self, attr, await AthenaMemory.create(
+                agent_id=agent_id, client=self._athena_client, redis_store=self._redis,
+                user_id=user_id, tenant_id=self._memory_tenant))
+        except Exception as exc:
+            logger.warning("[UnifiedMemory] Athena session for %s failed (non-fatal): %s", user_id, exc)
+        return getattr(self, attr)
 
     @property
     def athena_delivery_stats(self) -> Optional[Dict[str, Any]]:
@@ -120,9 +164,11 @@ class UnifiedMemory:
 
     async def close(self, timeout: float = 5.0) -> bool:
         """Flush queued memory writes. False if anything was still unsent."""
-        if self._athena_memory is None:
-            return True
-        return await self._athena_memory.close(timeout=timeout)
+        closed = True
+        for am in (self._athena_memory, self._private_memory, self._team_memory):
+            if am is not None:
+                closed = await am.close(timeout=timeout) and closed
+        return closed
 
 
     async def log_turn(
@@ -177,6 +223,11 @@ class UnifiedMemory:
         say so instead of believing something was kept.
         """
         am = await self._get_athena_memory()
+        if am and self._private_scope and self._is_private():
+            # This work used someone's own access: what it learned is theirs, never
+            # the shared scope's, where everyone else's work would recall it.
+            am = await self._session("_private_memory", self._private_scope, self._agent)
+            metadata = {**metadata, "private": "true"}
         if not am:
             return False
         try:
@@ -201,11 +252,37 @@ class UnifiedMemory:
         if not am:
             return []
         try:
+            # Search covers every agent's consolidated memory in this scope, the
+            # team's conversation and decisions included.
             found = await am.search(query, limit=limit)
             recent = (await am.get_memory_context(limit=50)).get("stm_events") or []
         except Exception as exc:
             logger.debug("[UnifiedMemory] recall failed (non-fatal): %s", exc)
             return []
+        if self._team_agent:
+            team = await self._session("_team_memory", self._memory_scope, self._team_agent)
+            if team is not None:
+                try:
+                    # What the team said and decided lately, before Athena consolidates it.
+                    for event in ((await team.get_memory_context(limit=20)).get("stm_events") or [])[:20]:
+                        if isinstance(event, dict) and event.get("content"):
+                            found.append({**event, "source": "team"})
+                except Exception as exc:
+                    logger.debug("[UnifiedMemory] team recall failed (non-fatal): %s", exc)
+        if self._private_scope and self._on_private_recall is not None:
+            mine = await self._session("_private_memory", self._private_scope, self._agent)
+            if mine is not None:
+                try:
+                    private = await mine.search(query, limit=limit)
+                    private += [e for e in ((await mine.get_memory_context(limit=50)).get("stm_events") or [])
+                                if isinstance(e, dict) and (e.get("metadata") or {}).get("event") == "remembered"]
+                except Exception as exc:
+                    logger.debug("[UnifiedMemory] private recall failed (non-fatal): %s", exc)
+                    private = []
+                if private:
+                    # Work that draws on someone's private memory is private work.
+                    self._on_private_recall()
+                    found.extend({**item, "private": True} for item in private if isinstance(item, dict))
         # Search covers consolidated memory only; a fact the agent kept stays
         # short-term until Athena consolidates it, and must still be recallable.
         seen = {str(item.get("content")) for item in found if isinstance(item, dict)}

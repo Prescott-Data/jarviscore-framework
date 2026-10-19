@@ -109,6 +109,20 @@ class Identities:
     def _key(tenant: str, *parts: str) -> str:
         return ":".join(("people", "{" + tenant + "}", *parts))
 
+    # ── The tenant's record of identity changes ────────────────────────────
+
+    def _log(self, tenant: str, action: str, **fields) -> None:
+        self._redis.xadd(self._key(tenant, "log"), {"action": action, "at": str(time.time()),
+                                                     **{k: str(v) for k, v in fields.items()}})
+
+    def log(self, tenant: str, since: float = 0.0) -> List[Dict[str, Any]]:
+        """Who was added, linked, unlinked or removed in a tenant, oldest first."""
+        entries = []
+        for entry_id, data in self._redis.xrange(self._key(tenant, "log")):
+            if float(data.get("at") or 0) >= since:
+                entries.append({"id": entry_id, **data, "at": float(data.get("at") or 0)})
+        return entries
+
     # ── Resolving ───────────────────────────────────────────────────────────
 
     def person_for(self, account: Account, *, auto_provision: bool = True) -> Person:
@@ -144,6 +158,7 @@ class Identities:
             candidate = f"{base}.{secrets.token_hex(3)}"
         # Two surfaces seeing a new account at once agree on one person.
         if self._redis.set(account_key, candidate, nx=True):
+            self._log(account.tenant, "person.added", person=candidate, account=account.ref)
             return candidate
         self._redis.delete(self._key(account.tenant, "person", candidate))
         return self._redis.get(account_key)
@@ -200,6 +215,8 @@ class Identities:
             existing = json.loads(self._redis.get(key))
             if existing.get("status") == "removed":
                 raise IdentityError(f"{person.display} has been removed from {person.tenant}")
+        else:
+            self._log(person.tenant, "person.registered", person=person.id)
         return person
 
     # ── Linking accounts ────────────────────────────────────────────────────
@@ -228,6 +245,8 @@ class Identities:
         record = self._update(account.tenant, person_id, lambda r: {
             **r, "accounts": sorted(set(r.get("accounts", [])) | {account.ref})})
         self._redis.set(account_key, person_id)
+        self._log(account.tenant, "account.linked", person=person_id, account=account.ref,
+                  previously=previous or "")
         if previous and previous != person_id:
             try:
                 self._update(account.tenant, previous, lambda r: {
@@ -246,6 +265,7 @@ class Identities:
         if person_id is None:
             return
         self._redis.delete(account_key)
+        self._log(account.tenant, "account.unlinked", person=person_id, account=account.ref)
         self._update(account.tenant, person_id, lambda r: {
             **r, "accounts": [a for a in r.get("accounts", []) if a != account.ref]}, allow_removed=True)
 
@@ -258,3 +278,4 @@ class Identities:
         """
         self._update(person.tenant, person.id, lambda r: {**r, "status": "removed", "removed_at": time.time()},
                      allow_removed=True)
+        self._log(person.tenant, "person.removed", person=person.id)
