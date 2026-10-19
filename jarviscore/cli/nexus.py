@@ -92,6 +92,22 @@ def _gateway_headers() -> dict:
     return {"X-API-Key": key} if key else {}
 
 
+def _gateway_open(req, timeout: float):
+    """urlopen for an authenticated Gateway call that never follows a redirect.
+
+    urllib copies request headers onto the redirected request, so a redirect
+    to another origin, or from https to http, would forward the caller API key.
+    The Gateway API never redirects; a 3xx is surfaced as an HTTPError instead.
+    """
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    return urllib.request.build_opener(_NoRedirect()).open(req, timeout=timeout)
+
+
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 def cmd_status(args):
@@ -396,7 +412,7 @@ def cmd_register(args):
                 headers={"Content-Type": "application/json", **_gateway_headers()},
                 method="POST",
             )
-            resp = urllib.request.urlopen(req, timeout=10)
+            resp = _gateway_open(req, timeout=10)
             body = json.loads(resp.read())
             print(_ok(f"{label} registered with gateway"))
             print(_info(f"  Provider ID: {body.get('id', body.get('provider_id', provider))}"))
@@ -547,7 +563,7 @@ def cmd_list(args):
         import urllib.request, urllib.error
         try:
             req = urllib.request.Request(f"{gateway_url}/v1/providers", headers=_gateway_headers())
-            providers = json.loads(urllib.request.urlopen(req, timeout=5).read())
+            providers = json.loads(_gateway_open(req, timeout=5).read())
             if providers:
                 print(_bold("  Gateway providers:"))
                 for p in providers:
