@@ -12,9 +12,12 @@ from jarviscore.orchestration.envelopes import DependencyAuthorization
 from jarviscore.profiles import CustomAgent
 from jarviscore.hitl import HITLQueue
 from jarviscore.human import HumanAgent
-from jarviscore.room import Room, RoomFeed
+from jarviscore.room import Person, Room, RoomFeed
 from jarviscore.storage.local import LocalBlobStorage
 from jarviscore.storage.redis_store import RedisContextStore
+
+
+alice, bob = Person("acme", "alice", "Alice"), Person("acme", "bob", "Bob")
 
 
 class FileSandbox:
@@ -93,8 +96,9 @@ async def team(tmp_path, monkeypatch):
     coder = mesh.add(Coder)
     mesh.add(Writer)
     await mesh.start()
-    room = Room.for_mesh(mesh, "repo")
-    await room.ensure({"src/app.py": "VERSION = 'v1'\n", "README.md": "# Repo\n"}, by="alice")
+    room = Room.for_mesh(mesh, "repo", tenant="acme")
+    await room.ensure({"src/app.py": "VERSION = 'v1'\n", "README.md": "# Repo\n"}, by=alice)
+    room.set_role(bob, "editor", by=alice)
     yield room, coder
     await mesh.stop()
 
@@ -107,24 +111,24 @@ async def test_agents_work_on_the_room_and_propose_their_changes(team):
     room, coder = team
 
     goal = "Bump the app to v2 and document it"
-    asked = await room.ask(goal, asked_by="alice", timeout=20, plan_template=plan(
+    asked = await room.ask(goal, asked_by=alice, timeout=20, plan_template=plan(
         goal, ("fix", "coding", []), ("docs", "docs", ["fix"])))
 
     assert asked.status == "completed", asked.result
     proposal = asked.proposal
     assert proposal.asked_by == "alice" and proposal.base_version == 1
-    assert coder.acting_for == ["alice"], "the step ran as the person who asked"
-    assert coder.tasks[0]["context"]["room_id"] == "repo", "so memory_scope_field='room_id' scopes it"
+    assert coder.acting_for == ["acme/alice"], "the step ran as the person who asked"
+    assert coder.tasks[0]["context"]["room_id"] == "acme/repo", "so memory_scope_field='room_id' scopes it"
     assert proposal.author == "coder, writer"
     assert proposal.paths == ["README.md", "src/app.py", "test_app.py"]
     assert await text(room, "src/app.py") == "VERSION = 'v1'\n", "nothing lands until accepted"
 
-    await room.accept(proposal.id, by="bob")
+    await room.accept(proposal.id, by=bob)
     assert await text(room, "src/app.py") == "VERSION = 'v2'\n"
     assert await text(room, "README.md") == "# Repo\n\nNow at v2.\n"
 
     kinds = [event["type"] for event in room.events()]
-    assert kinds == ["room.created", "ask.started", "proposal.opened", "ask.finished",
+    assert kinds == ["room.created", "member.changed", "ask.started", "proposal.opened", "ask.finished",
                      "proposal.accepted"], "the room records decisions, not the workflow's steps"
     finished = next(e for e in room.events() if e["type"] == "ask.finished")
     assert finished["proposal"] == proposal.id
@@ -140,36 +144,36 @@ async def test_agents_work_on_the_room_and_propose_their_changes(team):
     assert "coder took fix" in lines and "coder finished fix" in lines
     assert "writer took docs" in lines and "writer finished docs" in lines
     assert lines.index("writer finished docs") < lines.index(
-        f"▲ {proposal.id} proposed by coder, writer for alice: {goal} (3 files, on v1)")
+        f"▲ {proposal.id} proposed by coder, writer for Alice: {goal} (3 files, on v1)")
 
 
 async def test_a_rejection_is_passed_to_the_next_attempt(team):
     room, coder = team
-    first = await room.ask("Fix the app", asked_by="alice", timeout=20,
+    first = await room.ask("Fix the app", asked_by=alice, timeout=20,
                            plan_template=plan("Fix the app", ("fix", "coding", [])))
-    await room.reject(first.proposal.id, by="bob", reason="Keep the old test name")
+    await room.reject(first.proposal.id, by=bob, reason="Keep the old test name")
 
-    second = await room.ask("Fix the app", asked_by="alice", revision_of=first.proposal.id,
+    second = await room.ask("Fix the app", asked_by=alice, revision_of=first.proposal.id,
                             timeout=20, plan_template=plan("Fix the app", ("fix", "coding", [])))
 
     retry = coder.tasks[-1]["context"]
     assert retry["room"]["feedback"] == {"proposal": first.proposal.id, "decision": "rejected",
-                                         "by": "bob", "reason": "Keep the old test name"}
-    assert "rejected by bob: Keep the old test name" in retry["objective"]
+                                         "by": "Bob", "reason": "Keep the old test name"}
+    assert "rejected by Bob: Keep the old test name" in retry["objective"]
     assert "feedback" not in coder.tasks[0]["context"]["room"]
     assert second.proposal.revision_of == first.proposal.id
 
 
 async def test_a_conflict_is_explained_to_the_next_attempt(team):
     room, coder = team
-    first = await room.ask("Fix the app", asked_by="alice", timeout=20,
+    first = await room.ask("Fix the app", asked_by=alice, timeout=20,
                            plan_template=plan("Fix the app", ("fix", "coding", [])))
-    mine = await room.propose({"src/app.py": "VERSION = 'v9'\n"}, author="bob")
-    await room.accept(mine.id, by="bob")
+    mine = await room.propose({"src/app.py": "VERSION = 'v9'\n"}, by=bob)
+    await room.accept(mine.id, by=bob)
     with pytest.raises(Exception):
-        await room.accept(first.proposal.id, by="alice")
+        await room.accept(first.proposal.id, by=alice)
 
-    await room.ask("Fix the app", asked_by="alice", revision_of=first.proposal.id,
+    await room.ask("Fix the app", asked_by=alice, revision_of=first.proposal.id,
                    timeout=20, plan_template=plan("Fix the app", ("fix", "coding", [])))
 
     objective = coder.tasks[-1]["context"]["objective"]
@@ -180,7 +184,7 @@ async def test_a_conflict_is_explained_to_the_next_attempt(team):
 async def test_work_that_changes_nothing_proposes_nothing(team):
     room, coder = team
     coder.execute_task = _no_edits
-    asked = await room.ask("Read the code", asked_by="alice", timeout=20,
+    asked = await room.ask("Read the code", asked_by=alice, timeout=20,
                            plan_template=plan("Read the code", ("look", "coding", [])))
     assert asked.status == "completed"
     assert asked.proposal is None
@@ -216,13 +220,13 @@ async def test_a_person_edits_the_files_and_their_edits_are_in_the_proposal(team
 
     reviewer = asyncio.create_task(person())
     goal = "Fix the app and let Alice polish the docs"
-    asked = await room.ask(goal, asked_by="bob", timeout=20, plan_template=plan(
+    asked = await room.ask(goal, asked_by=bob, timeout=20, plan_template=plan(
         goal, ("fix", "coding", []), ("polish", "editing", ["fix"])))
     await reviewer
 
     assert asked.status == "completed", asked.result
     assert asked.proposal.author == "coder, alice"
-    await room.accept(asked.proposal.id, by="bob")
+    await room.accept(asked.proposal.id, by=bob)
     assert await text(room, "README.md") == "# Repo\n\nEdited by Alice.\n"
     assert await text(room, "src/app.py") == "VERSION = 'v2'\n"
 
@@ -261,13 +265,13 @@ async def test_plain_custom_agents_work_in_a_room_with_no_extra_code(tmp_path, m
     mesh.add(PlainEditor)
     await mesh.start()
     try:
-        room = Room.for_mesh(mesh, "launch")
-        await room.ensure({"brief.md": "# Brief\n"}, by="alice")
+        room = Room.for_mesh(mesh, "launch", tenant="acme")
+        await room.ensure({"brief.md": "# Brief\n"}, by=alice)
         goal = "Draft the launch plan and add the announcement"
-        asked = await room.ask(goal, asked_by="alice", timeout=20, plan_template=plan(
+        asked = await room.ask(goal, asked_by=alice, timeout=20, plan_template=plan(
             goal, ("draft", "fixing", []), ("announce", "editing_docs", ["draft"])))
         assert asked.status == "completed", asked.result
-        await room.accept(asked.proposal.id, by="bob")
+        await room.accept(asked.proposal.id, by=alice)
         assert (await room.read("plan.md")).decode() == (
             "# Launch plan\n\n- Ship Tuesday\n- Announce Wednesday\n")
     finally:
@@ -308,5 +312,230 @@ async def test_the_room_agent_is_reached_by_people_not_routed_work(tmp_path, mon
         payload = P2PCoordinator._capability_payload(node)
         assert room_agent.agent_id not in payload["agents"]
         assert "room-conversation" not in payload["capabilities"]
+    finally:
+        await mesh.stop()
+
+
+# ── Whose access, restarts, stopping, and people in the middle of work ──────
+
+
+class MailReader(CustomAgent):
+    """Reads someone's mail through Nexus (recorded as Nexus records every call) and writes notes."""
+    role = "reader"
+    capabilities = ["reading_mail"]
+    provider = "gmail"
+
+    async def execute_task(self, task):
+        from jarviscore.nexus.call_proxy import _record_source
+
+        _record_source(self.provider)  # what NexusCallProxy.request does for every call
+        root = Path(task["context"]["workspace_binding"]["path"])
+        (root / "notes.md").write_text("From the inbox: the venue moved.\n")
+        return {"status": "success", "output": "Noted the venue change"}
+
+
+@pytest.fixture
+async def mail_team(tmp_path, monkeypatch):
+    redis = RedisContextStore(client=fakeredis.FakeRedis(decode_responses=True))
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: redis)
+    monkeypatch.setattr(Mesh, "_init_blob_storage",
+                        lambda self, settings: LocalBlobStorage(str(tmp_path / "blobs")))
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.02,
+                        "hitl_inbox_dir": str(tmp_path / "hitl")})
+    reader = mesh.add(MailReader)
+    await mesh.start()
+    room = Room.for_mesh(mesh, "launch", tenant="acme")
+    await room.ensure({"plan.md": "# Plan\n"}, by=alice)
+    room.set_role(bob, "editor", by=alice)
+    yield room, reader
+    await mesh.stop()
+
+
+def notes_plan(goal="Note what changed"):
+    return plan(goal, ("read", "reading_mail", []))
+
+
+async def test_work_that_used_someones_own_access_is_held_for_them(mail_team):
+    room, _ = mail_team
+    asked = await room.ask("Note what changed", asked_by=bob, timeout=20, plan_template=notes_plan())
+
+    assert asked.held_for == "bob"
+    assert asked.sources == [{"provider": "gmail", "person": "acme/bob"}]
+    assert asked.proposal.held_for == "bob"
+    assert not room.visible_to(alice, asked.proposal) and room.visible_to(bob, asked.proposal)
+    finished = next(e for e in room.events() if e["type"] == "ask.finished")
+    assert finished["held_for"] == "bob"
+    room.release(asked.proposal.id, by=bob)
+    await room.accept(asked.proposal.id, by=alice)
+
+
+async def test_work_on_a_system_the_room_shares_is_not_held(mail_team):
+    room, reader = mail_team
+    reader.provider = "google_drive"
+    room.set_shared_connectors(["google_drive"], by=alice)
+    asked = await room.ask("Note what changed", asked_by=bob, timeout=20, plan_template=notes_plan())
+    assert asked.held_for == "" and asked.proposal.held_for == ""
+
+
+class SlowWriter(CustomAgent):
+    role = "slow"
+    capabilities = ["slow_writing"]
+
+    def __init__(self, agent_id=None):
+        super().__init__(agent_id)
+        self.started = asyncio.Event()
+        self.go = asyncio.Event()
+
+    async def execute_task(self, task):
+        self.started.set()
+        await self.go.wait()
+        root = Path(task["context"]["workspace_binding"]["path"])
+        (root / "plan.md").write_text("# Plan\n\nWritten slowly.\n")
+        return {"status": "success", "output": "Wrote it"}
+
+
+@pytest.fixture
+async def slow_team(tmp_path, monkeypatch):
+    redis = RedisContextStore(client=fakeredis.FakeRedis(decode_responses=True))
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: redis)
+    monkeypatch.setattr(Mesh, "_init_blob_storage",
+                        lambda self, settings: LocalBlobStorage(str(tmp_path / "blobs")))
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.02})
+    writer = mesh.add(SlowWriter)
+    await mesh.start()
+    room = Room.for_mesh(mesh, "launch", tenant="acme")
+    await room.ensure({"plan.md": "# Plan\n"}, by=alice)
+    yield room, writer
+    writer.go.set()
+    await mesh.stop()
+
+
+async def test_work_outlives_the_process_that_asked_and_is_filed_once(slow_team):
+    from jarviscore.room.work import resume, unfinished
+
+    room, writer = slow_team
+    asking = asyncio.create_task(room.ask("Write the plan", asked_by=alice, workflow_id="room-launch-w1",
+                                          timeout=20, plan_template=plan("Write", ("w", "slow_writing", []))))
+    await asyncio.wait_for(writer.started.wait(), 10)
+    asking.cancel()  # the process that asked stops
+    await asyncio.gather(asking, return_exceptions=True)
+
+    assert not room.redis_store.is_workflow_cancelled("room-launch-w1"), "the work goes on"
+    assert [e["workflow_id"] for e in unfinished(room)] == ["room-launch-w1"]
+
+    writer.go.set()
+    # Two processes pick it up after the restart; it is filed once.
+    results = await asyncio.gather(resume(room, room.mesh, "room-launch-w1", timeout=20),
+                                   resume(room, room.mesh, "room-launch-w1", timeout=20))
+    assert sum(r is not None for r in results) == 1
+    kinds = [e["type"] for e in room.events()]
+    assert kinds.count("proposal.opened") == 1 and kinds.count("ask.finished") == 1
+    assert unfinished(room) == []
+
+
+async def test_work_whose_asker_stopped_before_it_was_planned_is_still_finished(slow_team):
+    from jarviscore.room.work import resume
+
+    room, writer = slow_team
+    room.note("ask.started", by="alice", by_name="Alice", goal="Write the plan",
+              workflow_id="room-launch-w3", version=1)
+    following = asyncio.create_task(resume(room, room.mesh, "room-launch-w3", timeout=20))
+    await asyncio.sleep(0.3)
+    assert not following.done(), "it waits for the plan rather than giving up"
+    await room.mesh.submit_goal("Write the plan", workflow_id="room-launch-w3",
+                                context={"workspace_source": {"provider": "room", "locator": room.key,
+                                                              "revision": "1"},
+                                         "room_id": room.key, "acting_for": "acme/alice"},
+                                plan_template=plan("Write", ("w", "slow_writing", [])))
+    writer.go.set()
+    finished = await asyncio.wait_for(following, 20)
+    assert finished.proposal is not None
+    assert [e["type"] for e in room.events()].count("ask.finished") == 1
+
+
+async def test_stopped_work_proposes_nothing(slow_team):
+    from jarviscore.room.agent import RoomAgent
+
+    room, writer = slow_team
+    asking = asyncio.create_task(room.ask("Write the plan", asked_by=alice, workflow_id="room-launch-w2",
+                                          timeout=20, plan_template=plan("Write", ("w", "slow_writing", []))))
+    await asyncio.wait_for(writer.started.wait(), 10)
+    with pytest.raises(PermissionError):
+        RoomAgent().stop(room, "room-launch-w2", by=Person("acme", "mallory"))
+    assert RoomAgent().stop(room, "room-launch-w2", by=alice, reason="wrong brief")
+    writer.go.set()
+    asked = await asking
+    assert asked.status == "cancelled" and asked.proposal is None
+    assert room.proposals() == []
+
+
+class Cautious(CustomAgent):
+    """Asks a person before changing anything, and goes on once they answer."""
+    role = "cautious"
+    capabilities = ["careful_writing"]
+
+    def __init__(self, agent_id=None):
+        super().__init__(agent_id)
+        self.contexts = []
+
+    async def execute_task(self, task):
+        self.contexts.append(task["context"])
+        answer = task["context"].get("hitl_resolution")
+        if answer is None:
+            self.hitl.request("Rewrite the whole plan?", "It changes every section.",
+                              category="critical_action")
+            return {"status": "waiting", "output": "Waiting for sign-off"}
+        root = Path(task["context"]["workspace_binding"]["path"])
+        (root / "plan.md").write_text(f"# Plan\n\nRewritten ({answer['note']}).\n")
+        return {"status": "success", "output": "Rewrote it"}
+
+
+async def test_work_waits_for_a_person_and_goes_on_when_they_answer(tmp_path, monkeypatch):
+    redis = RedisContextStore(client=fakeredis.FakeRedis(decode_responses=True))
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: redis)
+    monkeypatch.setattr(Mesh, "_init_blob_storage",
+                        lambda self, settings: LocalBlobStorage(str(tmp_path / "blobs")))
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.02,
+                        "hitl_inbox_dir": str(tmp_path / "hitl-node")})
+    cautious = mesh.add(Cautious)
+    await mesh.start()
+    try:
+        room = Room.for_mesh(mesh, "launch", tenant="acme")
+        await room.ensure({"plan.md": "# Plan\n"}, by=alice)
+        asking = asyncio.create_task(room.ask(
+            "Rewrite the plan", asked_by=alice, timeout=20,
+            plan_template=plan("Rewrite", ("rewrite", "careful_writing", []))))
+
+        # Another host (a chat surface) sees the question, tagged with the work it paused.
+        elsewhere = HITLQueue(agent_id="surface", inbox_dir=str(tmp_path / "hitl-surface"),
+                              redis_store=redis)
+        for _ in range(500):
+            items = elsewhere.inbox(tenant="acme")
+            if items:
+                break
+            await asyncio.sleep(0.02)
+        [item] = items
+        assert item["context"]["mesh_step_id"] == "rewrite" and item["context"]["tenant"] == "acme"
+        assert elsewhere.inbox(tenant="globex") == []
+        await asyncio.sleep(0.2)
+        assert not asking.done(), "paused for a person is not finished"
+
+        assert elsewhere.resolve(item["id"], "approved", "yes, go ahead", by="acme/bob")
+        assert not elsewhere.resolve(item["id"], "rejected", "no", by="acme/carol"), "answered once"
+        asked = await asyncio.wait_for(asking, 20)
+
+        assert asked.status == "completed", asked.result
+        assert cautious.contexts[-1]["hitl_resolution"]["note"] == "yes, go ahead"
+        await room.accept(asked.proposal.id, by=alice)
+        assert (await room.read("plan.md")).decode() == "# Plan\n\nRewritten (yes, go ahead).\n"
     finally:
         await mesh.stop()

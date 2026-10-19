@@ -51,14 +51,18 @@ async def test_people_on_two_machines_share_one_room(server, tmp_path):
     def team_redis():
         return RedisContextStore(client=fakeredis.FakeRedis(server=server, decode_responses=True))
 
-    alice = Room("launch", blob_storage=storage(server), redis_store=team_redis())
-    bob = Room("launch", blob_storage=storage(server), redis_store=team_redis())
-    await alice.ensure({"plan.md": "# Plan\n"}, by="alice")
+    from jarviscore.room import Person
 
-    proposal = await bob.propose({"plan.md": "# Plan\n\nShip Tuesday\n"}, author="bob")
-    await alice.accept(proposal.id, by="alice")
+    alice, bob = Person("acme", "alice"), Person("acme", "bob")
+    on_alices = Room("launch", tenant="acme", blob_storage=storage(server), redis_store=team_redis())
+    on_bobs = Room("launch", tenant="acme", blob_storage=storage(server), redis_store=team_redis())
+    await on_alices.ensure({"plan.md": "# Plan\n"}, by=alice)
+    on_alices.set_role(bob, "editor", by=alice)
 
-    assert await bob.read("plan.md") == b"# Plan\n\nShip Tuesday\n"
+    proposal = await on_bobs.propose({"plan.md": "# Plan\n\nShip Tuesday\n"}, by=bob)
+    await on_alices.accept(proposal.id, by=alice)
+
+    assert await on_bobs.read("plan.md") == b"# Plan\n\nShip Tuesday\n"
 
 
 def test_the_factory_builds_it_from_settings(monkeypatch):

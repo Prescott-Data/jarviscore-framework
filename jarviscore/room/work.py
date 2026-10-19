@@ -8,28 +8,37 @@ its own copy of those files, and the run's final changes are filed as one
 proposal that people review like any other. The room's history records who
 asked and which workflow does the work; the steps' progress stays in that
 workflow's own ledger (``Room.progress``).
+
+Work runs as the person who asked: their connected accounts, their access.
+Every use of a connected system is recorded against the workflow, and work
+that used anyone's connection to a system the room does not share is *held*:
+its proposal and summary are for the asker alone until they release them.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from jarviscore.auth.people import Person
 from jarviscore.execution.workspace import SourceRef, SourceSnapshot
-
-from jarviscore.room.room import ROOM_PROVIDER, Proposal, Room
+from jarviscore.room.room import ROOM_PROVIDER, Proposal, Room, _who
 
 
 class RoomSource:
-    """Workspace source adapter: ``{"provider": "room", "locator": <room>, "revision": <version>}``."""
+    """Workspace source adapter: ``{"provider": "room", "locator": "<tenant>/<room>", "revision": <version>}``."""
 
     def __init__(self, blob_storage, redis_store):
         self._blob_storage = blob_storage
         self._redis_store = redis_store
 
     async def capture(self, source: SourceRef) -> SourceSnapshot:
-        room = Room(source.locator, blob_storage=self._blob_storage, redis_store=self._redis_store)
+        tenant, _, room_id = source.locator.partition("/")
+        room = Room(room_id, tenant=tenant, blob_storage=self._blob_storage,
+                    redis_store=self._redis_store)
         version = int(source.revision) if source.revision else room.head().version
         return await room.snapshot(version)
 
@@ -43,6 +52,10 @@ class AskResult:
     proposal: Optional[Proposal]
     summary: str
     result: Dict[str, Any]
+    #: The person the work is held for (it used their private access), or "".
+    held_for: str = ""
+    #: Every connected system the work used, and whose access: [{"provider", "person"}].
+    sources: List[Dict[str, str]] = None
 
 
 def new_workflow_id(room_id: str) -> str:
@@ -60,7 +73,7 @@ async def ask(
     mesh,
     goal: str,
     *,
-    asked_by: str,
+    asked_by: Person,
     revision_of: str = "",
     plan_template: Optional[Dict[str, Any]] = None,
     timeout: Optional[float] = None,
@@ -70,13 +83,14 @@ async def ask(
     head = room.head()
     workflow_id = workflow_id or new_workflow_id(room.id)
     task = goal
-    room_context: Dict[str, Any] = {"id": room.id, "asked_by": asked_by, "version": head.version}
+    room_context: Dict[str, Any] = {"id": room.id, "tenant": room.tenant, "asked_by": asked_by.id,
+                                    "asked_by_name": asked_by.display, "version": head.version}
     if revision_of:
         previous = room.proposal(revision_of)
         room_context["feedback"] = {
             "proposal": revision_of,
             "decision": previous.status,
-            "by": previous.decided_by,
+            "by": room.name_of(previous.decided_by) if previous.decided_by else "",
             "reason": previous.reason,
         }
         if previous.status == "conflicted":
@@ -85,57 +99,177 @@ async def ask(
                 f"{', '.join(previous.conflicts) or 'its files'} changed in the meantime. "
                 "Redo the work on the current files."
             )
+        elif previous.status == "open":
+            task = f"{goal}\n\nThis revises an earlier attempt ({revision_of}). Redo the work on the current files."
         else:
             task = (
                 f"{goal}\n\nA previous attempt ({revision_of}) was rejected by "
-                f"{previous.decided_by or 'a reviewer'}: {previous.reason or 'no reason given'}. "
+                f"{room_context['feedback']['by'] or 'a reviewer'}: {previous.reason or 'no reason given'}. "
                 "Address that and redo the work on the current files."
             )
-    room.note("ask.started", by=asked_by, goal=goal, workflow_id=workflow_id,
+    room.note("ask.started", **_who(asked_by), goal=goal, workflow_id=workflow_id,
               version=head.version, revision_of=revision_of)
     try:
-        result = await mesh.execute_goal(
+        # Submitted, not executed: the work belongs to the mesh and goes on if this
+        # process stops; whichever process is running then finishes it (``resume``).
+        await mesh.submit_goal(
             task,
             workflow_id=workflow_id,
             context={
                 "workspace_source": {
                     "provider": ROOM_PROVIDER,
-                    "locator": room.id,
+                    "locator": room.key,
                     "revision": str(head.version),
                 },
                 "room": room_context,
-                # With memory_scope_field="room_id", every agent working in the
-                # room shares the room's memory across workflows.
-                "room_id": room.id,
+                # The room's memory scope: unique across tenants.
+                "room_id": room.key,
                 # Steps use the asker's own accounts (jarviscore.auth.principal).
-                "acting_for": asked_by,
+                "acting_for": asked_by.key,
             },
             plan_template=plan_template,
             timeout=timeout,
         )
+        result = await _wait(room, mesh, workflow_id, timeout)
+    except asyncio.CancelledError:
+        raise  # this process is stopping, not the work
     except BaseException as exc:
-        room.note("ask.failed", by=asked_by, workflow_id=workflow_id,
+        if isinstance(exc, TimeoutError):
+            # Nobody is waiting for it any more: stop it rather than let it change things later.
+            mesh.cancel_goal(workflow_id, reason="the room stopped waiting for it")
+        room.note("ask.failed", **_who(asked_by), workflow_id=workflow_id,
                   error=f"{type(exc).__name__}: {exc}")
         raise
+    return await finish(room, mesh, workflow_id, result)
 
-    steps = result.get("steps") or []
-    deltas, authors = await _final_deltas(room, mesh, workflow_id, steps)
-    proposal = None
-    if deltas:
-        proposal = await room.propose_deltas(
-            deltas,
-            base_version=head.version,
-            author=", ".join(authors) or "agents",
-            asked_by=asked_by,
-            title=goal,
-            workflow_id=workflow_id,
-            revision_of=revision_of,
-        )
-    summary = str(result.get("result_summary") or "")
-    room.note("ask.finished", by=asked_by, workflow_id=workflow_id,
-              status=result.get("status"), summary=summary,
-              proposal=proposal.id if proposal else "")
-    return AskResult(workflow_id, str(result.get("status")), proposal, summary, result)
+
+async def finish(room: Room, mesh, workflow_id: str, result: Dict[str, Any]) -> Optional[AskResult]:
+    """File what finished work in ``room`` changed as one proposal, and record that it finished.
+
+    Safe to call more than once and from several processes: the work is
+    finished once, and a finish interrupted by a restart is completed by the
+    next (``resume``). Returns None if it was already finished.
+    """
+    started = _started(room, workflow_id)
+    if started is None:
+        raise KeyError(f"No work {workflow_id} was asked for in room {room.id}")
+    lock, holder = f"{room.key}:finishing:{workflow_id}", uuid4().hex
+    while not room.redis_store.take_lease(lock, holder, 300):
+        await asyncio.sleep(0.1)
+    try:
+        if _ended(room, workflow_id):
+            return None
+        asked_by = room.identities.get(room.tenant, started.get("by", "")) or Person(
+            room.tenant, started.get("by", ""), started.get("by_name", ""))
+        sources = room.redis_store.workflow_sources(workflow_id)
+        held_for = asked_by.id if room.private_sources(workflow_id) else ""
+        steps = result.get("steps") or []
+        proposal = None
+        # Stopped work proposes nothing: whoever stopped it did not want its changes.
+        deltas, authors = ([], []) if result.get("status") == "cancelled" else \
+            await _final_deltas(room, mesh, workflow_id, steps)
+        if deltas and not room.can(asked_by, "editor"):
+            # The asker was removed, or lost the right to propose, while it ran.
+            room.note("ask.failed", **_who(asked_by), workflow_id=workflow_id,
+                      error=f"{asked_by.display} can no longer propose changes in this room")
+            return None
+        if deltas:
+            proposal = await room.propose_deltas(
+                deltas,
+                base_version=int(started.get("version") or 0),
+                author=", ".join(authors) or "agents",
+                asked_by=asked_by,
+                title=started.get("goal", ""),
+                workflow_id=workflow_id,
+                revision_of=started.get("revision_of", ""),
+                held_for=held_for,
+                sources=sources,
+            )
+        summary = str(result.get("result_summary") or "")
+        room.note("ask.finished", **_who(asked_by), workflow_id=workflow_id,
+                  status=result.get("status"), summary=summary,
+                  proposal=proposal.id if proposal else "", held_for=held_for)
+        return AskResult(workflow_id, str(result.get("status")), proposal, summary, result,
+                         held_for, sources)
+    finally:
+        room.redis_store.release_lease(lock, holder)
+
+
+def _started(room: Room, workflow_id: str) -> Optional[Dict[str, Any]]:
+    return next((e for e in room.events() if e.get("type") == "ask.started"
+                 and e.get("workflow_id") == workflow_id), None)
+
+
+def _ended(room: Room, workflow_id: str) -> bool:
+    return any(e.get("type") in ("ask.finished", "ask.failed") and e.get("workflow_id") == workflow_id
+               for e in room.events())
+
+
+def unfinished(room: Room) -> List[Dict[str, Any]]:
+    """The ``ask.started`` events of work that has not finished or failed."""
+    running: Dict[str, Dict[str, Any]] = {}
+    for event in room.events():
+        workflow = event.get("workflow_id", "")
+        if event.get("type") == "ask.started" and workflow:
+            running[workflow] = event
+        elif event.get("type") in ("ask.finished", "ask.failed"):
+            running.pop(workflow, None)
+    return list(running.values())
+
+
+async def resume(room: Room, mesh, workflow_id: str, *, timeout: Optional[float] = None,
+                 lost_after: float = 900.0) -> Optional[AskResult]:
+    """Wait for work started in ``room`` by a process that has since stopped, and finish it.
+
+    Work whose plan never reached the mesh (its process stopped while planning)
+    is recorded as failed once ``lost_after`` seconds have passed.
+    """
+    started = _started(room, workflow_id)
+    if started is None or _ended(room, workflow_id):
+        return None
+    definition = room.redis_store.get_workflow_definition(workflow_id)
+    if definition is None:
+        # Still being planned (the mesh's planner does that, not the process that asked):
+        # wait for the plan, up to ``lost_after`` from when the work was asked for.
+        left = float(started.get("at") or 0) + lost_after - time.time()
+        if left > 0:
+            definition = await mesh._wait_for_workflow_definition(workflow_id, left)
+        if definition is None:
+            if _ended(room, workflow_id):
+                return None
+            room.note("ask.failed", by=started.get("by", ""), by_name=started.get("by_name", ""),
+                      workflow_id=workflow_id, error="the work was lost before it started; ask again")
+            return None
+    try:
+        result = await _wait(room, mesh, workflow_id, timeout)
+    except TimeoutError as exc:
+        mesh.cancel_goal(workflow_id, reason="the room stopped waiting for it")
+        room.note("ask.failed", by=started.get("by", ""), by_name=started.get("by_name", ""),
+                  workflow_id=workflow_id, error=f"TimeoutError: {exc}")
+        return None
+    return await finish(room, mesh, workflow_id, result)
+
+
+async def _wait(room: Room, mesh, workflow_id: str, timeout: Optional[float]) -> Dict[str, Any]:
+    """Wait until the work is done. Work paused for a person is not done: it
+    goes on once they answer (``HITLQueue.resolve`` resumes it)."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout if timeout is not None else None
+
+    def left() -> Optional[float]:
+        return None if deadline is None else max(0.0, deadline - loop.time())
+
+    definition = room.redis_store.get_workflow_definition(workflow_id) \
+        or await mesh._wait_for_workflow_definition(workflow_id, left())
+    if definition is None:
+        raise TimeoutError("the agents did not make a plan in time")
+    while True:
+        result = await mesh._wait_for_workflow_terminal(workflow_id, definition, left())
+        if result.get("status") != "waiting":
+            return result
+        if deadline is not None and loop.time() >= deadline:
+            raise TimeoutError(f"the work waited for a person for more than {timeout:.0f}s")
+        await asyncio.sleep(float(mesh.config.get("distributed_poll_interval", 2.0)))
 
 
 async def _final_deltas(room: Room, mesh, workflow_id: str, steps: List[Dict[str, Any]]):

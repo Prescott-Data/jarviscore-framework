@@ -1,25 +1,27 @@
 """
-A room: one shared workspace that people and agents change together.
+A room: shared work that a team's people and agents change together.
 
-The room's current state is an immutable source snapshot, its *head*. Nobody
-writes to the head directly. Agents and people make **proposals** against a
-version of it; accepting one moves the head forward. If the head moved since a
-proposal was made, the proposal is merged: a file only one side changed is
-taken, and in a text file both sides changed, edits to different lines are
-both kept. Edits to the same lines that differ, or a file deleted on one side
-and changed on the other, are a conflict that stops the accept rather than
-silently overwriting someone's work.
+A room belongs to a tenant and holds a set of files. Its current state is an
+immutable snapshot, its *head*. Nobody writes to the head directly. Agents and
+people make **proposals** against a version of it; accepting one moves the head
+forward. If the head moved since a proposal was made, accepting merges it: a
+file only one side changed is taken, and in a text file both sides changed,
+edits to different lines are both kept. Edits to the same lines that differ, or
+a file deleted on one side and changed on the other, are a conflict that stops
+the accept instead of overwriting anyone.
 
-Every change records who made it and who asked for it, and every step is in
-the room's event log, so anyone can see what happened and why.
+Every change to a room is one atomic transition that also records who did it
+and why in the room's history, so the history is complete and every surface
+reads the same account of what happened.
 
-    room = Room.open("launch")                 # or Room.for_mesh(mesh, "launch")
-    await room.ensure({"README.md": "# Launch"}, by="alice")
-    proposal = await room.propose({"README.md": "# Launch\\n\\nShip Tuesday."},
-                                  author="writer", asked_by="alice", title="Add date")
-    for change in await room.diff(proposal.id):
-        print(change.unified())
-    await room.accept(proposal.id, by="bob")
+A room is private: only people with a role can see it or act in it. Its owner
+can open it to everyone in the tenant. Every operation a person performs takes
+the ``Person`` who performs it, from the surface's own authentication.
+
+    room = Room.for_mesh(mesh, "launch", tenant="acme")
+    await room.ensure({"plan.md": plan}, by=alice)
+    asked = await room.ask("Fill in the risks from brief.md", asked_by=alice)
+    await room.accept(asked.proposal.id, by=bob)
 """
 
 from __future__ import annotations
@@ -33,6 +35,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from uuid import uuid4
 
+from jarviscore.auth.people import Identities, Person
+from jarviscore.execution.merge import merge_text
 from jarviscore.execution.workspace import (
     BlobSnapshotStore,
     SnapshotEntry,
@@ -42,7 +46,7 @@ from jarviscore.execution.workspace import (
     WorkspaceDeltaConflict,
     _register_workspace_path,
 )
-from jarviscore.execution.merge import merge_text
+from jarviscore.storage.errors import RoomStateChanged
 
 #: Provider name a goal uses to work on a room: workspace_source={"provider": "room", ...}
 ROOM_PROVIDER = "room"
@@ -55,13 +59,15 @@ IGNORED_NAMES = (".git", ".venv", "__pycache__", "node_modules", ".tmp", ".DS_St
 
 _ACCEPT_ATTEMPTS = 20
 
-
 #: Each role can do what the ones before it can.
 ROLES = ("viewer", "editor", "owner")
 
+#: Who can see a room besides its members.
+VISIBILITIES = ("members", "tenant")
+
 
 class RoomPermissionError(PermissionError):
-    """The person's role in a members-only room does not allow this."""
+    """The person may not do this in the room."""
 
 
 class RoomConflict(RuntimeError):
@@ -94,7 +100,9 @@ class Head:
 class Proposal:
     id: str
     title: str
+    #: Who wrote the change: agent roles, or the person's name.
     author: str
+    #: The person responsible for it (who asked, or who wrote it): a person id.
     asked_by: str
     base_version: int
     base_manifest: str
@@ -109,6 +117,10 @@ class Proposal:
     reason: str = ""
     accepted_version: int = 0
     conflicts: List[str] = field(default_factory=list)
+    #: Made with someone's private access: only they see it until they release it.
+    held_for: str = ""
+    #: Which connected systems the work used, and whose access.
+    sources: List[Dict[str, str]] = field(default_factory=list)
 
     def to_record(self) -> Dict[str, Any]:
         return asdict(self)
@@ -149,22 +161,33 @@ def _bytes(content) -> bytes:
     return content.encode("utf-8") if isinstance(content, str) else bytes(content)
 
 
-class Room:
-    """A shared, versioned workspace. See the module docstring."""
+def _who(person: Person) -> Dict[str, str]:
+    """How a person appears in history events: stable id, and the name people see."""
+    return {"by": person.id, "by_name": person.display}
 
-    def __init__(self, room_id: str, *, blob_storage, redis_store):
+
+class Room:
+    """Shared, versioned work in a tenant. See the module docstring."""
+
+    def __init__(self, room_id: str, *, tenant: str, blob_storage, redis_store):
         _register_workspace_path(room_id, {}, label="room id")
-        if "/" in room_id:
-            raise ValueError(f"Room ids cannot contain '/': {room_id!r}")
+        for label, value in (("room id", room_id), ("tenant", tenant)):
+            if not value or any(c in value for c in "/{}"):
+                raise ValueError(f"A {label} cannot be empty or contain '/', '{{' or '}}': {value!r}")
         self.id = room_id
+        self.tenant = tenant
+        #: Unique across tenants; every key of the room carries it.
+        self.key = f"{tenant}/{room_id}"
         self.store = BlobSnapshotStore(blob_storage)
-        #: The mesh's RedisContextStore: head, proposals, members and history.
+        #: The mesh's RedisContextStore: head, proposals, settings and history.
         self.redis_store = redis_store
+        self.identities = Identities(redis_store)
 
     # ── Construction ────────────────────────────────────────────────────────
 
     @classmethod
-    def open(cls, room_id: str, *, redis_url: Optional[str] = None, settings=None) -> "Room":
+    def open(cls, room_id: str, *, tenant: str, redis_url: Optional[str] = None,
+             settings=None) -> "Room":
         """The room as a Mesh with the same settings sees it: same Redis, same file storage."""
         from jarviscore.config.settings import Settings
         from jarviscore.storage import get_blob_storage
@@ -177,78 +200,81 @@ class Room:
         import redis
 
         store = RedisContextStore(client=redis.Redis.from_url(url, decode_responses=True))
-        return cls(room_id, blob_storage=get_blob_storage(settings), redis_store=store)
+        return cls(room_id, tenant=tenant, blob_storage=get_blob_storage(settings), redis_store=store)
 
     @classmethod
-    def for_mesh(cls, mesh, room_id: str) -> "Room":
+    def for_mesh(cls, mesh, room_id: str, *, tenant: str) -> "Room":
         """A room on a started Mesh, using its Redis and BlobStorage.
 
         The room can then ``ask`` the mesh's agents to work on it.
         """
         if getattr(mesh, "_blob_storage", None) is None or getattr(mesh, "_redis_store", None) is None:
             raise RuntimeError("A room needs a started Mesh with Redis and BlobStorage")
-        room = cls(room_id, blob_storage=mesh._blob_storage, redis_store=mesh._redis_store)
+        room = cls(room_id, tenant=tenant, blob_storage=mesh._blob_storage,
+                   redis_store=mesh._redis_store)
         from jarviscore.room.work import install
 
         install(mesh, room)
         room.mesh = mesh
         return room
 
-    async def ask(self, goal: str, *, asked_by: str, revision_of: str = "", **options):
-        """Have the mesh's agents do ``goal`` on the room's current files.
+    async def ask(self, goal: str, *, asked_by: Person, revision_of: str = "", **options):
+        """Have the mesh's agents do ``goal`` on the room's current files, as ``asked_by``.
 
         Returns an ``AskResult`` whose ``proposal`` holds their changes for
         people to review, or None if they changed nothing. ``revision_of``
-        names a rejected proposal; its reason is passed on to the agents.
-        Options: ``timeout`` and ``plan_template`` (passed to
+        names a proposal this one revises; its feedback is passed on to the
+        agents. Options: ``timeout`` and ``plan_template`` (passed to
         ``Mesh.execute_goal``), ``workflow_id`` to choose the run's id.
         """
         mesh = getattr(self, "mesh", None)
         if mesh is None:
-            raise RuntimeError("Use Room.for_mesh(mesh, room_id) to have agents work in a room")
+            raise RuntimeError("Use Room.for_mesh(mesh, room_id, tenant=...) to have agents work in a room")
         from jarviscore.room.work import ask
 
         return await ask(self, mesh, goal, asked_by=asked_by, revision_of=revision_of, **options)
 
-    async def ensure(self, files: Optional[Mapping[str, Any]] = None, *, by: str = "") -> Head:
-        """Create the room with these files if it does not exist; return its head."""
-        existing = self.redis_store.get_room_head(self.id)
+    async def ensure(self, files: Optional[Mapping[str, Any]] = None, *, by: Person) -> Head:
+        """Create the room with these files, owned by ``by``, if it does not exist; return its head."""
+        existing = self.redis_store.get_room_head(self.key)
         if existing:
             return Head.from_record(existing)
         snapshot = await self.store.capture(self._source(1), "v1", dict(files or {}))
-        head = Head(1, snapshot.snapshot_id, snapshot.manifest_blob_path, by, time.time())
-        if self.redis_store.create_room_head(self.id, head.to_record()):
-            self.redis_store.update_room_meta(self.id, lambda meta: {**meta, "created_by": by})
-            self._event("room.created", by=by, version=1, files=len(snapshot.entries))
-            return head
-        return Head.from_record(self.redis_store.get_room_head(self.id))
+        return self._create(snapshot, by, files=len(snapshot.entries))
 
-    async def ensure_from(self, snapshot: SourceSnapshot, *, by: str = "") -> Head:
+    async def ensure_from(self, snapshot: SourceSnapshot, *, by: Person) -> Head:
         """Create the room from an existing snapshot, such as a captured repository."""
-        existing = self.redis_store.get_room_head(self.id)
+        existing = self.redis_store.get_room_head(self.key)
         if existing:
             return Head.from_record(existing)
         await self.store.validate(snapshot)
         first = await self.store.compose(self._source(1), "v1", list(snapshot.entries))
-        head = Head(1, first.snapshot_id, first.manifest_blob_path, by, time.time())
-        if self.redis_store.create_room_head(self.id, head.to_record()):
-            self.redis_store.update_room_meta(self.id, lambda meta: {**meta, "created_by": by})
-            self._event("room.created", by=by, version=1, files=len(first.entries),
-                        source=f"{snapshot.source.provider}:{snapshot.source.locator}"
-                               f"@{snapshot.resolved_revision}")
-            return head
-        return Head.from_record(self.redis_store.get_room_head(self.id))
+        return self._create(first, by, files=len(first.entries),
+                            source=f"{snapshot.source.provider}:{snapshot.source.locator}"
+                                   f"@{snapshot.resolved_revision}")
 
-    # ── Reading ─────────────────────────────────────────────────────────────
+    def _create(self, snapshot: SourceSnapshot, by: Person, **fields) -> Head:
+        self._same_tenant(by)
+        head = Head(1, snapshot.snapshot_id, snapshot.manifest_blob_path, by.id, time.time())
+        meta = {"created_by": by.id, "visibility": "members", "tenant_role": "editor",
+                "members": {by.id: "owner"}, "names": {by.id: by.display}, "shared_connectors": []}
+        event = {"type": "room.created", "at": time.time(), "version": 1, **_who(by), **fields}
+        self.redis_store.create_room(self.key, head.to_record(), meta, event)
+        return Head.from_record(self.redis_store.get_room_head(self.key))
+
+    def exists(self) -> bool:
+        return self.redis_store.get_room_head(self.key) is not None
+
+    # ── Reading (trusted code: check ``require(person, "viewer", ...)`` for people) ──
 
     def head(self) -> Head:
-        record = self.redis_store.get_room_head(self.id)
+        record = self.redis_store.get_room_head(self.key)
         if not record:
             raise KeyError(f"Room {self.id!r} does not exist")
         return Head.from_record(record)
 
     def _source(self, version: int) -> SourceRef:
-        return SourceRef(ROOM_PROVIDER, self.id, str(version))
+        return SourceRef(ROOM_PROVIDER, self.key, str(version))
 
     async def snapshot(self, version: Optional[int] = None) -> SourceSnapshot:
         """The room as it was at ``version`` (default: now)."""
@@ -273,7 +299,7 @@ class Room:
     async def _store(self, path: str, payload: bytes, executable: bool = False) -> Dict[str, Any]:
         """Save content once, by hash, and return its snapshot entry fields."""
         digest = hashlib.sha256(payload).hexdigest()
-        blob_path = f"rooms/{self.id}/objects/{digest}"
+        blob_path = f"rooms/{self.tenant}/{self.id}/objects/{digest}"
         if await self.store.blob_storage.read(blob_path) is None:
             await self.store.blob_storage.save(blob_path, payload)
         return asdict(SnapshotEntry(path, blob_path, digest, len(payload), executable))
@@ -285,18 +311,18 @@ class Room:
         return _bytes(payload)
 
     def proposal(self, proposal_id: str) -> Proposal:
-        record = self.redis_store.get_room_proposal(self.id, proposal_id)
+        record = self.redis_store.get_room_proposal(self.key, proposal_id)
         if not record:
             raise KeyError(f"No proposal {proposal_id!r} in room {self.id!r}")
         return Proposal.from_record(record)
 
     def proposals(self, status: Optional[str] = None) -> List[Proposal]:
-        return [Proposal.from_record(r) for r in self.redis_store.list_room_proposals(self.id)
+        return [Proposal.from_record(r) for r in self.redis_store.list_room_proposals(self.key)
                 if status is None or r.get("status") == status]
 
     def events(self, after: str = "") -> List[Dict[str, Any]]:
         """The room's history after event ``after`` (an event's ``seq``), oldest first."""
-        return self.redis_store.get_room_events(self.id, after)
+        return self.redis_store.get_room_events(self.key, after)
 
     def progress(self, workflow_id: str, after: str = "") -> List[Dict[str, Any]]:
         """How the work asked for in ``workflow_id`` is going: that workflow's own ledger
@@ -304,74 +330,107 @@ class Room:
         return self.redis_store.get_ledger_after(workflow_id, after)
 
     def note(self, kind: str, **fields) -> str:
-        """Record something that happened in the room, for everyone watching it."""
-        return self._event(kind, **fields)
+        """Record something that happened in the room, for everyone following it."""
+        return self.redis_store.append_room_event(self.key, {"type": kind, "at": time.time(), **fields})
 
-    def _event(self, kind: str, **fields) -> str:
-        return self.redis_store.append_room_event(self.id, {"type": kind, "at": time.time(), **fields})
+    def private_sources(self, workflow_id: str) -> List[Dict[str, Any]]:
+        """Connected systems a piece of work used that the room does not share
+        (someone's own mail, drive, CRM...): their data is for that person only."""
+        shared = set(self.settings().get("shared_connectors") or [])
+        return [s for s in self.redis_store.workflow_sources(workflow_id)
+                if str(s.get("provider", "")).lower() not in shared]
+
+    def visible_to(self, person: Person, proposal: Proposal) -> bool:
+        """Whether ``person`` may see a proposal's contents (held work is for its asker only)."""
+        return self.can(person, "viewer") and (not proposal.held_for or proposal.held_for == person.id)
 
     # ── Who may do what ─────────────────────────────────────────────────────
-    #
-    # A room is open by default: everyone on the team can ask, propose, accept
-    # and reject, and sees everything ("work with the door open"). Once it has
-    # members it is members-only: viewers watch, editors also ask, push, accept
-    # and reject, owners also manage members.
+
+    def settings(self) -> Dict[str, Any]:
+        meta = self.redis_store.get_room_meta(self.key)
+        return {k: meta.get(k) for k in ("created_by", "visibility", "tenant_role", "shared_connectors")}
 
     def members(self) -> Dict[str, str]:
-        """Person -> role. Empty for an open room."""
-        return dict(self.redis_store.get_room_meta(self.id).get("members") or {})
+        """Person id -> role."""
+        return dict(self.redis_store.get_room_meta(self.key).get("members") or {})
 
-    def role_of(self, person: str) -> Optional[str]:
-        meta = self.redis_store.get_room_meta(self.id)
-        members = meta.get("members") or {}
-        if members:
-            return members.get(person)
-        return "owner" if person and person == meta.get("created_by") else "editor"
+    def name_of(self, person_id: str) -> str:
+        names = self.redis_store.get_room_meta(self.key).get("names") or {}
+        return names.get(person_id) or person_id
 
-    def can(self, person: str, role: str) -> bool:
+    def role_of(self, person: Person) -> Optional[str]:
+        """The person's role here, or None if they cannot see the room."""
+        if person.tenant != self.tenant or not self.identities.is_active(person):
+            return None
+        meta = self.redis_store.get_room_meta(self.key)
+        role = (meta.get("members") or {}).get(person.id)
+        if role is None and meta.get("visibility") == "tenant":
+            role = meta.get("tenant_role") or "editor"
+        return role
+
+    def can(self, person: Person, role: str) -> bool:
         held = self.role_of(person)
         return held is not None and ROLES.index(held) >= ROLES.index(role)
 
-    def require(self, person: str, role: str, action: str) -> None:
+    def require(self, person: Person, role: str, action: str) -> None:
+        if not isinstance(person, Person):
+            raise TypeError(f"{action} needs the Person who does it, not {person!r}")
         if not self.can(person, role):
             held = self.role_of(person)
             raise RoomPermissionError(
-                f"{person or 'Someone unnamed'} cannot {action} in room {self.id}: "
+                f"{person.display} cannot {action} in room {self.id}: "
                 + (f"they are a {held}" if held else "they are not a member")
                 + f" and it needs {role}"
             )
 
-    def set_role(self, person: str, role: Optional[str], *, by: str) -> Dict[str, str]:
-        """Give ``person`` a role, or None to remove them. Owners only.
+    def _same_tenant(self, person: Person) -> None:
+        if not isinstance(person, Person) or person.tenant != self.tenant:
+            raise RoomPermissionError(f"{person!r} is not in tenant {self.tenant}")
 
-        The first member makes an open room members-only; only its creator can
-        do that, and the creator becomes an owner with it.
-        """
+    def set_role(self, person: Person, role: Optional[str], *, by: Person) -> Dict[str, str]:
+        """Give ``person`` a role, or None to remove them. Owners only; one owner always stays."""
         if role is not None and role not in ROLES:
             raise ValueError(f"role must be one of {ROLES} or None, not {role!r}")
+        self.require(by, "owner", "change members")
+        self._same_tenant(person)
 
         def change(meta):
             members = dict(meta.get("members") or {})
-            creator = meta.get("created_by") or ""
-            if members:
-                if members.get(by) != "owner":
-                    raise RoomPermissionError(f"Only an owner of room {self.id} can change members")
-            else:
-                if by != creator or not creator:
-                    raise RoomPermissionError(
-                        f"Only {creator or 'the creator'} can make room {self.id} members-only")
-                members[creator] = "owner"
             if role is None:
-                members.pop(person, None)
+                members.pop(person.id, None)
             else:
-                members[person] = role
+                members[person.id] = role
             if "owner" not in members.values():
                 raise RoomPermissionError(f"Room {self.id} must keep at least one owner")
-            return {**meta, "members": members}
+            names = {**(meta.get("names") or {}), person.id: person.display}
+            return {**meta, "members": members, "names": names}
 
-        members = self.redis_store.update_room_meta(self.id, change)["members"]
-        self._event("member.changed", by=by, person=person, role=role or "removed")
-        return dict(members)
+        meta = self.redis_store.update_room_meta(self.key, change, event={
+            "type": "member.changed", "at": time.time(), **_who(by),
+            "person": person.id, "person_name": person.display, "role": role or "removed"})
+        return dict(meta["members"])
+
+    def set_visibility(self, visibility: str, *, by: Person, tenant_role: str = "editor") -> None:
+        """``members`` (only people with a role) or ``tenant`` (everyone in the tenant, as ``tenant_role``)."""
+        if visibility not in VISIBILITIES or tenant_role not in ROLES[:2]:
+            raise ValueError(f"visibility must be one of {VISIBILITIES}, tenant_role viewer or editor")
+        self.require(by, "owner", "change who can see the room")
+        self.redis_store.update_room_meta(
+            self.key, lambda meta: {**meta, "visibility": visibility, "tenant_role": tenant_role},
+            event={"type": "room.visibility", "at": time.time(), **_who(by),
+                   "visibility": visibility, "tenant_role": tenant_role})
+
+    def set_shared_connectors(self, providers: Iterable[str], *, by: Person) -> None:
+        """Connected systems whose data everyone in the room may see, such as a team drive.
+
+        Work that uses only these (or none) is shown to the room directly; work
+        that used anyone's other connections is held for that person to release.
+        """
+        self.require(by, "owner", "change the room's shared connectors")
+        providers = sorted({str(p).lower() for p in providers})
+        self.redis_store.update_room_meta(
+            self.key, lambda meta: {**meta, "shared_connectors": providers},
+            event={"type": "room.connectors", "at": time.time(), **_who(by), "shared": providers})
 
     # ── Proposing ───────────────────────────────────────────────────────────
 
@@ -379,14 +438,15 @@ class Room:
         self,
         changes: Mapping[str, Any],
         *,
-        author: str,
+        by: Person,
+        author: str = "",
         title: str = "",
-        asked_by: str = "",
         base_version: Optional[int] = None,
         workflow_id: str = "",
         revision_of: str = "",
     ) -> Optional[Proposal]:
-        """Propose new content per path (``None`` deletes). None if nothing changes."""
+        """Propose new content per path (``None`` deletes), as ``by``. None if nothing changes."""
+        self.require(by, "editor", "propose changes")
         base = await self.snapshot(base_version)
         current = {entry.path: entry for entry in base.entries}
         entries: Dict[str, Optional[Dict[str, Any]]] = {}
@@ -402,7 +462,7 @@ class Room:
                 continue
             executable = current[path].executable if path in current else False
             entries[path] = await self._store(path, payload, executable)
-        return self._open(entries, base, author=author, title=title, asked_by=asked_by,
+        return self._open(entries, base, by, author=author or by.display, title=title,
                           workflow_id=workflow_id, revision_of=revision_of)
 
     async def propose_deltas(
@@ -410,13 +470,16 @@ class Room:
         deltas: Iterable[WorkspaceDelta],
         *,
         base_version: int,
+        asked_by: Person,
         author: str,
         title: str = "",
-        asked_by: str = "",
         workflow_id: str = "",
         revision_of: str = "",
+        held_for: str = "",
+        sources: Optional[List[Dict[str, str]]] = None,
     ) -> Optional[Proposal]:
-        """Turn the workspace deltas of an agent run into one proposal."""
+        """Turn the workspace deltas of work ``asked_by`` asked for into one proposal."""
+        self.require(asked_by, "editor", "propose changes")
         base = await self.snapshot(base_version)
         current = {entry.path: entry for entry in base.entries}
         entries: Dict[str, Optional[Dict[str, Any]]] = {}
@@ -451,24 +514,35 @@ class Room:
                     and current[path].sha256 == change["sha256"])
             and not (change is None and path not in current)
         }
-        return self._open(entries, base, author=author, title=title, asked_by=asked_by,
-                          workflow_id=workflow_id, revision_of=revision_of)
+        return self._open(entries, base, asked_by, author=author, title=title,
+                          workflow_id=workflow_id, revision_of=revision_of,
+                          held_for=held_for, sources=list(sources or []))
 
-    def _open(self, entries, base: SourceSnapshot, **fields) -> Optional[Proposal]:
+    def _open(self, entries, base: SourceSnapshot, by: Person, **fields) -> Optional[Proposal]:
         if not entries:
             return None
+        workflow = fields.get("workflow_id") or ""
+        # Work files one proposal: finishing it again (after a restart) finds the same one.
+        proposal_id = f"p-{hashlib.sha256(f'{self.key}:{workflow}'.encode()).hexdigest()[:8]}" \
+            if workflow else f"p-{uuid4().hex[:8]}"
         proposal = Proposal(
-            id=f"p-{uuid4().hex[:8]}",
+            id=proposal_id,
+            asked_by=by.id,
             base_version=int(base.source.revision),
             base_manifest=base.manifest_blob_path,
             changes=entries,
             **fields,
         )
-        self.redis_store.put_room_proposal(self.id, proposal.to_record())
-        self._event("proposal.opened", proposal=proposal.id, by=proposal.author,
-                    asked_by=proposal.asked_by, title=proposal.title,
-                    base_version=proposal.base_version, paths=proposal.paths,
-                    revision_of=proposal.revision_of, workflow_id=proposal.workflow_id)
+        try:
+            self.redis_store.room_transition(self.key, {
+                "type": "proposal.opened", "at": time.time(), "proposal": proposal.id,
+                "author": proposal.author, **_who(by), "title": proposal.title,
+                "base_version": proposal.base_version, "paths": proposal.paths,
+                "revision_of": proposal.revision_of, "workflow_id": proposal.workflow_id,
+                "held_for": proposal.held_for,
+            }, proposal_id=proposal.id, require_status="missing", proposal=proposal.to_record())
+        except RoomStateChanged:
+            return self.proposal(proposal.id)
         return proposal
 
     async def diff(self, proposal_id: str) -> List[FileChange]:
@@ -480,18 +554,37 @@ class Room:
             change = proposal.changes[path]
             before = await self._blob(base[path].blob_path) if path in base else None
             after = await self._blob(change["blob_path"]) if change else None
-            status = "deleted" if change is None else "modified" if path in base else "added"
+            status = "deleted" if after is None else ("added" if before is None else "modified")
             out.append(FileChange(path, status, before, after))
         return out
 
     # ── Deciding ────────────────────────────────────────────────────────────
 
-    async def accept(self, proposal_id: str, *, by: str) -> Head:
+    def release(self, proposal_id: str, *, by: Person) -> Proposal:
+        """Show held work to the room. Only the person it is held for can release it."""
+        self.require(by, "editor", "release work")
+        proposal = self.proposal(proposal_id)
+        if proposal.held_for != by.id:
+            raise RoomPermissionError(f"Only the person it is held for can release {proposal_id}")
+        try:
+            self.redis_store.room_transition(self.key, {
+                "type": "proposal.released", "at": time.time(), "proposal": proposal_id, **_who(by),
+                "title": proposal.title, "paths": proposal.paths, "workflow_id": proposal.workflow_id,
+            }, proposal_id=proposal_id, require_status="open", proposal_fields={"held_for": ""})
+        except RoomStateChanged as exc:
+            raise ValueError(f"{proposal_id} is {exc.proposal_status}, not open") from exc
+        return self.proposal(proposal_id)
+
+    async def accept(self, proposal_id: str, *, by: Person) -> Head:
         """Merge an open proposal into the room. Raises RoomConflict on overlapping edits."""
         self.require(by, "editor", "accept changes")
         proposal = self.proposal(proposal_id)
         if proposal.status != "open":
             raise ValueError(f"{proposal_id} is {proposal.status}, not open")
+        if proposal.held_for:
+            raise RoomPermissionError(
+                f"{proposal_id} used {self.name_of(proposal.held_for)}'s private access; "
+                "they must release it before it can be accepted")
         base = {e.path: e for e in (await self.store.load(proposal.base_manifest)).entries}
 
         for _ in range(_ACCEPT_ATTEMPTS):
@@ -518,12 +611,17 @@ class Room:
                         continue
                 conflicts.append(path)
             if conflicts:
-                if self.redis_store.decide_room_proposal(self.id, proposal_id, {
-                    "status": "conflicted", "conflicts": conflicts,
-                    "decided_by": by, "decided_at": time.time(),
-                }):
-                    self._event("proposal.conflicted", proposal=proposal_id, by=by,
-                                paths=conflicts, version=head.version)
+                try:
+                    self.redis_store.room_transition(self.key, {
+                        "type": "proposal.conflicted", "at": time.time(), "proposal": proposal_id,
+                        **_who(by), "paths": conflicts, "version": head.version,
+                    }, proposal_id=proposal_id, require_status="open", expected_version=head.version,
+                        proposal_fields={"status": "conflicted", "conflicts": conflicts,
+                                         "decided_by": by.id, "decided_at": time.time()})
+                except RoomStateChanged as exc:
+                    if exc.head_moved:
+                        continue  # the room moved; the conflict may be different now
+                    raise ValueError(f"{proposal_id} is {exc.proposal_status}, not open") from exc
                 raise RoomConflict(proposal_id, conflicts)
 
             merged = dict(current)
@@ -537,48 +635,64 @@ class Room:
             snapshot = await self.store.compose(self._source(version), f"v{version}",
                                                 list(merged.values()))
             new_head = Head(version, snapshot.snapshot_id, snapshot.manifest_blob_path,
-                            by, time.time(), proposal_id)
-            if not self.redis_store.swap_room_head(self.id, head.version, new_head.to_record()):
-                continue  # someone moved the head; merge against the new one
-            self.redis_store.decide_room_proposal(self.id, proposal_id, {
-                "status": "accepted", "decided_by": by, "decided_at": time.time(),
-                "accepted_version": version,
-            })
-            self._event("proposal.accepted", proposal=proposal_id, by=by,
-                        author=proposal.author, asked_by=proposal.asked_by,
-                        version=version, paths=proposal.paths,
-                        merged_over=head.version - proposal.base_version,
-                        line_merged=sorted(line_merged))
+                            by.id, time.time(), proposal_id)
+            try:
+                self.redis_store.room_transition(self.key, {
+                    "type": "proposal.accepted", "at": time.time(), "proposal": proposal_id,
+                    **_who(by), "author": proposal.author, "asked_by": proposal.asked_by,
+                    "version": version, "paths": proposal.paths,
+                    "merged_over": head.version - proposal.base_version,
+                    "line_merged": sorted(line_merged), "workflow_id": proposal.workflow_id,
+                }, proposal_id=proposal_id, require_status="open", expected_version=head.version,
+                    head=new_head.to_record(),
+                    proposal_fields={"status": "accepted", "decided_by": by.id,
+                                     "decided_at": time.time(), "accepted_version": version})
+            except RoomStateChanged as exc:
+                if exc.head_moved:
+                    continue  # someone moved the head; merge against the new one
+                raise ValueError(f"{proposal_id} is {exc.proposal_status}, not open") from exc
             if proposal.revision_of:
-                # A revision that lands replaces the proposal it revised.
-                replaced = self.redis_store.get_room_proposal(self.id, proposal.revision_of) or {}
-                if replaced.get("status") == "open" and self.redis_store.decide_room_proposal(
-                        self.id, proposal.revision_of, {
-                            "status": "rejected", "decided_by": by, "decided_at": time.time(),
-                            "reason": f"replaced by {proposal_id}"}):
-                    self._event("proposal.rejected", proposal=proposal.revision_of, by=by,
-                                author=replaced.get("author", ""),
-                                reason=f"replaced by {proposal_id}")
+                self._close_replaced(proposal.revision_of, proposal_id, by)
             return new_head
         raise RuntimeError(f"Could not accept {proposal_id}: the room kept changing")
 
-    async def reject(self, proposal_id: str, *, by: str, reason: str) -> Proposal:
+    def _close_replaced(self, replaced_id: str, proposal_id: str, by: Person) -> None:
+        """A revision that lands replaces the proposal it revised."""
+        replaced = self.redis_store.get_room_proposal(self.key, replaced_id) or {}
+        try:
+            self.redis_store.room_transition(self.key, {
+                "type": "proposal.rejected", "at": time.time(), "proposal": replaced_id, **_who(by),
+                "author": replaced.get("author", ""), "reason": f"replaced by {proposal_id}",
+                "workflow_id": replaced.get("workflow_id", ""),
+            }, proposal_id=replaced_id, require_status="open",
+                proposal_fields={"status": "rejected", "decided_by": by.id, "decided_at": time.time(),
+                                 "reason": f"replaced by {proposal_id}"})
+        except RoomStateChanged:
+            pass  # it was already decided
+
+    async def reject(self, proposal_id: str, *, by: Person, reason: str) -> Proposal:
         """Turn down an open proposal with a reason its author can act on."""
         self.require(by, "editor", "reject changes")
-        if not self.redis_store.decide_room_proposal(self.id, proposal_id, {
-            "status": "rejected", "decided_by": by, "decided_at": time.time(),
-            "reason": reason,
-        }):
-            raise ValueError(f"{proposal_id} is not open")
         proposal = self.proposal(proposal_id)
-        self._event("proposal.rejected", proposal=proposal_id, by=by,
-                    author=proposal.author, reason=reason)
-        return proposal
+        if proposal.held_for and proposal.held_for != by.id:
+            raise RoomPermissionError(f"{proposal_id} is held for {self.name_of(proposal.held_for)}; "
+                                      "only they can discard it")
+        try:
+            self.redis_store.room_transition(self.key, {
+                "type": "proposal.rejected", "at": time.time(), "proposal": proposal_id, **_who(by),
+                "author": proposal.author, "reason": reason, "workflow_id": proposal.workflow_id,
+            }, proposal_id=proposal_id, require_status="open",
+                proposal_fields={"status": "rejected", "decided_by": by.id,
+                                 "decided_at": time.time(), "reason": reason})
+        except RoomStateChanged as exc:
+            raise ValueError(f"{proposal_id} is {exc.proposal_status}, not open") from exc
+        return self.proposal(proposal_id)
 
     # ── Local copies for people ─────────────────────────────────────────────
 
-    async def checkout(self, destination: str) -> Head:
+    async def checkout(self, destination: str, *, by: Person) -> Head:
         """Write the room's current files into an empty directory to work on by hand."""
+        self.require(by, "viewer", "check out the room")
         target = Path(destination)
         if target.exists() and any(target.iterdir()):
             raise FileExistsError(f"{destination} is not empty")
@@ -588,18 +702,17 @@ class Room:
         snapshot = await self.store.load(head.manifest_blob_path)
         await self.store.materialize(snapshot, target)
         (target / CHECKOUT_MARKER).write_text(json.dumps({
-            "room": self.id, "version": head.version,
+            "room": self.id, "tenant": self.tenant, "version": head.version,
             "files": {e.path: e.sha256 for e in snapshot.entries},
         }, indent=2))
         return head
 
-    async def push(self, directory: str, *, author: str, title: str = "",
-                   asked_by: str = "") -> Optional[Proposal]:
+    async def push(self, directory: str, *, by: Person, title: str = "") -> Optional[Proposal]:
         """Propose what changed in a checkout since it was made. None if nothing did."""
-        self.require(author, "editor", "propose changes")
+        self.require(by, "editor", "propose changes")
         root = Path(directory)
         marker = json.loads((root / CHECKOUT_MARKER).read_text())
-        if marker.get("room") != self.id:
+        if marker.get("room") != self.id or marker.get("tenant", self.tenant) != self.tenant:
             raise ValueError(f"{directory} is a checkout of room {marker.get('room')!r}")
         known: Dict[str, str] = marker.get("files", {})
         changes: Dict[str, Optional[bytes]] = {}
@@ -618,5 +731,11 @@ class Room:
         for relative in known:
             if relative not in seen:
                 changes[relative] = None
-        return await self.propose(changes, author=author, title=title, asked_by=asked_by,
-                                  base_version=int(marker["version"]))
+        return await self.propose(changes, by=by, title=title, base_version=int(marker["version"]))
+
+    # ── Lifecycle ───────────────────────────────────────────────────────────
+
+    def delete(self, *, by: Person) -> None:
+        """Remove the room's state and history for good. Owners only."""
+        self.require(by, "owner", "delete the room")
+        self.redis_store.delete_room(self.key)

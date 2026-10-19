@@ -48,6 +48,7 @@ from jarviscore.orchestration.envelopes import (
     terminal_step_status,
 )
 from jarviscore.orchestration.budget import workflow_budget_scope
+from jarviscore.orchestration.step_context import in_step
 from jarviscore.auth.principal import act_for
 from jarviscore.kernel.state import ToolReceiptError, hydrate_receipt_evidence
 
@@ -2086,7 +2087,8 @@ class Mesh:
         )
         try:
             try:
-                with act_for(self._acting_for(workflow)), workflow_budget_scope(
+                with act_for(self._acting_for(workflow)), in_step(workflow_id, step_id), \
+                        workflow_budget_scope(
                     self._redis_store,
                     workflow_id,
                     epoch_id=f"step:{claim_id}",
