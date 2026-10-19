@@ -13,6 +13,7 @@
 #
 # Required environment variables (set by `jarviscore memory init`):
 #   ATHENA_LLM_API_KEY     — Gemini / OpenAI API key for MTM summarisation
+#   ATHENA_API_KEY         — service key JarvisCore uses to call Athena (generated)
 #
 # ── HOST PORTS ───────────────────────────────────────────────────────────────
 # Every published port is overridable, so the stack can co-locate with
@@ -93,6 +94,13 @@ services:
       MILVUS_HOST: milvus
       MILVUS_PORT: 19530
 
+      # Authentication. Athena refuses to start without it. JarvisCore serves many
+      # tenants (one per room), so it holds a service key ("<key>=*") and names the
+      # tenant in each request. 'jarviscore memory init' generates ATHENA_API_KEY.
+      MEMORY_OS_REQUIRE_API_KEY: "true"
+      MEMORY_OS_API_KEYS: "${ATHENA_API_KEY:?Set ATHENA_API_KEY or run 'jarviscore memory init'}=*"
+      MEMORY_OS_API_KEY: ${ATHENA_API_KEY}   # read by Athena releases before tenant keys
+
       # ArangoDB — LTM knowledge graph (read by cmd/memory-server/main.go)
       ARANGODB_URL: http://arangodb:8529
       ARANGODB_USER: root
@@ -113,6 +121,8 @@ services:
         condition: service_started
       arangodb:
         condition: service_started
+      athena-ltm-init:
+        condition: service_completed_successfully
     networks:
       - athena_net
     restart: unless-stopped
@@ -122,6 +132,24 @@ services:
       timeout: 5s
       retries: 8
       start_period: 30s
+
+  # ── LTM graph schema (one-shot) ─────────────────────────────────────────────
+  # Creates the athena_ltm database and collections; without them Athena runs
+  # with long-term memory silently disabled. Safe to re-run.
+  athena-ltm-init:
+    image: ${ATHENA_IMAGE:-ghcr.io/prescott-data/athena:latest}
+    container_name: athena-ltm-init
+    command: ["./init-ltm"]
+    environment:
+      ARANGODB_URL: http://arangodb:8529
+      ARANGODB_USER: root
+      ARANGODB_PASSWORD: athena_dev
+    depends_on:
+      arangodb:
+        condition: service_started
+    networks:
+      - athena_net
+    restart: on-failure:20
 
   # ── Redis — STM hot cache ────────────────────────────────────────────────────
   redis:

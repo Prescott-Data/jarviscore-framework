@@ -234,7 +234,7 @@ Athena runs as a Docker-composed stack. `jarviscore memory init` pulls the publi
 jarviscore memory init
 ```
 
-It finds a model key in your environment (Gemini, Azure OpenAI, or OpenAI; Athena has no Anthropic provider), starts the stack, waits for Athena's health endpoint, and writes `ATHENA_URL` to `.env`. Then check every tier:
+It finds a model key in your environment (Gemini, Azure OpenAI, or OpenAI; Athena has no Anthropic provider), creates an API key for Athena, starts the stack, waits for Athena's health endpoint, and writes `ATHENA_URL` and `ATHENA_API_KEY` to `.env`. Then check every tier:
 
 ```bash
 jarviscore memory status
@@ -251,6 +251,9 @@ Athena needs two models: a chat model to summarise conversation, and an embeddin
     Look at Athena's log (`docker logs athena`) for embedding or summarisation errors: a rejected key or a missing deployment makes Athena keep events but never summarise them, and nothing says so to the agents. The stack also sizes Athena's short-term memory above the count that forces a summary (`ATHENA_STM_MAX_EVENTS=60`, `ATHENA_STM_FLUSH_EVENTS=20`); with Athena's own defaults (10 and 20) events older than the newest ten are dropped before they are ever summarised.
 
 What Athena does not do yet, so JarvisCore does not rely on it: deleting a session or a person's memory (its delete endpoint is not implemented), long-term graph memory over its API, time-range queries, and de-duplicating a repeated write. Deleting a room deletes the room's files and history in JarvisCore; its memory in Athena stays until Athena can delete it.
+
+!!! info "Athena's API key"
+    Athena refuses requests without a key. JarvisCore serves many tenants (each room is one), so it holds a **service key**: Athena trusts it to name the tenant in each request. The stack starts Athena with `ATHENA_API_KEY` as its service key, and JarvisCore sends it on every call. Treat it like a database password, and in production keep Athena on a private network. Athena's own guide covers tenant keys and JWTs for other clients.
 
 !!! note "Developing Athena itself"
     Run `jarviscore memory init --from-source` to build from `ATHENA_DIR`,

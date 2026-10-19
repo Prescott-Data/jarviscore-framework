@@ -247,10 +247,11 @@ ATHENA_DIR=/path/to/athena jarviscore memory init --from-source
 
 The `init` command:
 
-1. Detects an LLM API key from the environment (Gemini, then Anthropic, then OpenAI).
-2. Starts all Athena services with `docker compose up -d`.
-3. Waits up to 90 seconds for the health endpoint at `http://localhost:8080/api/v1/health` to return `ok`.
-4. Writes `ATHENA_URL=http://localhost:8080` to the project `.env` file.
+1. Detects an LLM API key from the environment (Gemini, then Azure OpenAI, then OpenAI).
+2. Uses `ATHENA_API_KEY` from the environment or `.env`, or creates one. Athena requires it; JarvisCore uses it as a service key.
+3. Starts all Athena services with `docker compose up -d`, including a one-time step that creates Athena's long-term memory graph.
+4. Waits up to 90 seconds for the health endpoint at `http://localhost:8080/api/v1/health` to report healthy.
+5. Writes `ATHENA_URL=http://localhost:8080` and, if it created one, `ATHENA_API_KEY` to the project `.env` file.
 
 !!! note "First-start duration"
     The first run takes about two minutes to pull images. Subsequent starts complete in under 10 seconds.

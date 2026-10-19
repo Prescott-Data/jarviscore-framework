@@ -319,6 +319,17 @@ def _pick_llm_key() -> tuple[str, str, str]:
     return "gemini", "", "gemini-2.0-flash"
 
 
+def _dotenv_value(path: Path, name: str) -> str:
+    """Return NAME's value from a .env file, or "" if the file or line is absent."""
+    if not path.exists():
+        return ""
+    for line in path.read_text().splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == name:
+            return value.strip().strip('"').strip("'")
+    return ""
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     """
     One-command Athena setup — same philosophy as 'jarviscore nexus init'.
@@ -327,7 +338,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     2. Pull + start all 7 services via docker compose
        (--from-source builds Athena from a local clone instead)
     3. Wait for Athena to be healthy (up to 90s — Milvus is slow)
-    4. Write ATHENA_URL to the project .env
+    4. Write ATHENA_URL and ATHENA_API_KEY to the project .env
     """
     import shutil
     import subprocess
@@ -366,9 +377,19 @@ def cmd_init(args: argparse.Namespace) -> None:
         sys.exit(1)
     print(f"  ✅  LLM: {provider} / {model}")
 
+    # Athena requires authentication. JarvisCore holds a service key: it serves
+    # many tenants and names the tenant in each request.
+    env_file = Path.cwd() / ".env"
+    api_key = os.environ.get("ATHENA_API_KEY", "").strip() or _dotenv_value(env_file, "ATHENA_API_KEY")
+    generated_key = not api_key
+    if generated_key:
+        import secrets
+        api_key = secrets.token_hex(32)
+
     # Prepare env for compose
     env = {
         **os.environ,
+        "ATHENA_API_KEY":       api_key,
         "ATHENA_LLM_API_KEY":   llm_key,
         "ATHENA_LLM_PROVIDER":  provider,
         "ATHENA_LLM_MODEL":     model,
@@ -406,7 +427,8 @@ def cmd_init(args: argparse.Namespace) -> None:
     athena_url = f"http://localhost:{athena_port}"
     for attempt in range(90):
         try:
-            resp = urllib.request.urlopen(f"{athena_url}/api/v1/health", timeout=2)
+            req = urllib.request.Request(f"{athena_url}/api/v1/health", headers={"X-API-Key": api_key})
+            resp = urllib.request.urlopen(req, timeout=2)
             data = json.loads(resp.read())
             if data.get("status") in ("ok", "healthy", "pass", "UP"):
                 break
@@ -419,15 +441,19 @@ def cmd_init(args: argparse.Namespace) -> None:
         _warn("Athena didn't become healthy in 90s — check: docker logs athena")
         sys.exit(1)
 
-    # 5. Write ATHENA_URL to .env
-    env_file = Path.cwd() / ".env"
+    # 5. Write ATHENA_URL and ATHENA_API_KEY to .env
     env_text = env_file.read_text() if env_file.exists() else ""
-    if "ATHENA_URL" not in env_text:
-        env_text += f"\nATHENA_URL={athena_url}\n"
-        env_file.write_text(env_text)
-        print(f"  ✅  Wrote ATHENA_URL={athena_url} to {env_file}")
-    else:
+    if _dotenv_value(env_file, "ATHENA_URL"):
         print("  ✅  ATHENA_URL already set")
+    else:
+        env_text += f"\nATHENA_URL={athena_url}\n"
+        print(f"  ✅  Wrote ATHENA_URL={athena_url} to {env_file}")
+    if _dotenv_value(env_file, "ATHENA_API_KEY") or not generated_key:
+        print("  ✅  ATHENA_API_KEY already set")
+    else:
+        env_text += f"ATHENA_API_KEY={api_key}\n"
+        print(f"  ✅  Wrote a new ATHENA_API_KEY to {env_file} (keep it secret)")
+    env_file.write_text(env_text)
 
     print()
     _banner("Athena is live!", "─")

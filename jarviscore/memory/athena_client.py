@@ -572,7 +572,7 @@ class AthenaClient:
         session_id: str,
         query: str,
         limit: int = 5,
-        similarity_threshold: float = 0.7,
+        similarity_threshold: float = 0.0,
         metadata_filter: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -584,7 +584,10 @@ class AthenaClient:
             session_id:           Athena session_id
             query:                Natural language query
             limit:                Max results to return
-            similarity_threshold: Min cosine similarity (0.0–1.0)
+            similarity_threshold: Min cosine similarity (-1.0–1.0) for chain results.
+                                  0 (default) returns the ``limit`` most similar. Related
+                                  memories typically score 0.4–0.7 with OpenAI embeddings,
+                                  so high thresholds drop relevant results.
 
         Returns:
             List of SearchResult dicts with content, similarity_score, source_type.
