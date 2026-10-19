@@ -471,30 +471,34 @@ jarviscore human answer ITEM_ID --decline "Not my area"
 
 ## jarviscore room
 
-Shared work that people and agents change together. See [Rooms](../guides/rooms.md). Rooms live in the mesh's Redis: set `REDIS_URL` or pass `--redis-url`.
+Rooms from a terminal, for developers and operators. See [Rooms](../guides/rooms.md). Rooms live in the mesh's Redis (`REDIS_URL` or `--redis-url`), in a tenant (`JARVISCORE_TENANT` or `--tenant`, default `default`).
 
 | Command | What it does |
 |---|---|
-| `room create ROOM [--from DIR] [--as NAME]` | Open a room, optionally with a directory's files |
-| `room status ROOM` | Current version and open proposals |
-| `room watch ROOM [--once] [--new]` | Follow the room: requests, plans, steps, proposals and decisions. `--new` starts from now |
-| `room ask ROOM "GOAL" --as NAME [--timeout S]` | Ask the mesh's agents to do it on the room's files |
-| `room diff ROOM PROPOSAL` | What a proposal changes |
+| `room create ROOM --as NAME [--from DIR]` | Open a private room owned by NAME, optionally with a directory's files |
+| `room status ROOM --as NAME` | Current version and open proposals NAME can see |
+| `room watch ROOM --as NAME [--once] [--new]` | Follow the room: requests, plans, steps, proposals and decisions. `--new` starts from now |
+| `room ask ROOM "GOAL" --as NAME [--timeout S]` | Ask the mesh's agents to do it on the room's files, as NAME |
+| `room diff ROOM PROPOSAL --as NAME` | What a proposal changes |
 | `room accept ROOM PROPOSAL --as NAME` | Merge it; exits 1 on a conflict |
 | `room reject ROOM PROPOSAL "WHY" --as NAME [--redo]` | Turn it down; `--redo` asks the agents again with your reason |
-| `room members ROOM` | Who is in the room and their roles (or that it is open) |
-| `room role ROOM PERSON viewer\|editor\|owner\|none --as NAME` | Set or remove a role; the first one makes an open room members-only |
-| `room checkout ROOM DIR` | Copy the current files into an empty directory |
+| `room release ROOM PROPOSAL --as NAME` | Release work held for NAME to the room |
+| `room members ROOM` | Who can see the room, their roles, and its shared systems |
+| `room role ROOM PERSON viewer\|editor\|owner\|none --as NAME` | Set or remove a role (owners) |
+| `room visibility ROOM members\|tenant --as NAME [--tenant-role viewer\|editor]` | Who can see the room (owners) |
+| `room connectors ROOM [PROVIDER ...] --as NAME` | Systems whose data everyone in the room may see (owners) |
+| `room checkout ROOM DIR --as NAME` | Copy the current files into an empty directory |
 | `room push DIR [-m TITLE] --as NAME [--accept]` | Propose what changed in a checkout |
 | `room slack ROOM --channel ID [--seed HOST:PORT] [--people NAME] [--capabilities LIST] [--timeout S]` | Serve the room in a Slack channel, with Slack connected through Nexus; see [Chat Surfaces](../guides/chat-surfaces.md#slack) |
 
 ```bash
+export JARVISCORE_TENANT=acme
 jarviscore room ask launch "Fill in the Risks section of plan.md from brief.md" --as alice
-jarviscore room diff launch p-789486bf
+jarviscore room diff launch p-789486bf --as bob
 jarviscore room reject launch p-789486bf "One line per risk, please" --as bob --redo
 ```
 
-`--as` names who acts. It is for a single trusted machine; a chat surface takes the person from its own authentication.
+These commands act with the access of whoever holds the Redis URL. `--as` names the person an action is recorded for and whose room role is checked; it is not a login. People use rooms through your product or a chat surface, which take the person from their own authentication.
 
 ---
 

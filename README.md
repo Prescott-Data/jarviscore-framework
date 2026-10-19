@@ -354,20 +354,18 @@ See [Durable Goal Execution](https://jarviscore.developers.prescottdata.io/guide
 
 ### Multiplayer: teams and agents on the same work
 
-A team and its agents work on the same work at once, where the team already talks. Anyone asks for something in their own words; your agents do it on the team's shared files and propose the change; people review it in the thread, say what to change, approve it or paste their own version, and the room agent acts on what they meant, as them. When the agents need a person, they ask in that thread. Every decision is kept with who made it and why.
+A team and its agents work on the same work at once, where the team already talks. Anyone asks for something in their own words; your agents do it on the team's shared files and propose the change; people review it in the thread, say what to change or paste their own version, and decide with one tap. When the agents need a person, they ask in that thread. Every decision is kept with who made it and why.
 
 ```python
-room = Room.for_mesh(mesh, "launch")
+room = Room.for_mesh(mesh, "launch", tenant="acme")
 room_agent = mesh.add(RoomAgent)                 # the agent people talk to
-mesh.add(HumanAgent("team", ["approval"], channel=None))   # the team, as a peer
-await SlackRoom(room, room_agent, "C0123ABC", people="team").run()
+
+slack = SlackApp(room_agent, tenant="acme")      # or your own product, through ChatSurface
+slack.connect(room, "C0123ABC")
+await slack.run()
 ```
 
-```bash
-jarviscore room slack launch --channel C0123ABC --seed 10.0.0.5:7949   # or from the terminal
-```
-
-Steps run with the asking person's own connected accounts, Slack is reached through Nexus with no tokens in your code, and any other surface plugs in through one small interface. See [Multiplayer](https://jarviscore.developers.prescottdata.io/concepts/multiplayer/) and [Build a Multiplayer Agent](https://jarviscore.developers.prescottdata.io/guides/multiplayer-agents/).
+Every action is taken as the person who spoke, with their room role and their own connected accounts; work that used someone's private access is shown to them first; a room is only shown where everyone may see it; and nothing is lost or done twice across restarts and processes. Slack is reached through Nexus with no tokens in your code. See [Multiplayer](https://jarviscore.developers.prescottdata.io/concepts/multiplayer/) and [Build a Multiplayer Agent](https://jarviscore.developers.prescottdata.io/guides/multiplayer-agents/).
 
 ### Observability
 

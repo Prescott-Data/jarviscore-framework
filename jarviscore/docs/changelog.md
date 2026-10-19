@@ -36,36 +36,46 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   every action taken as the person who said it. See
   [Multiplayer](concepts/multiplayer.md) and
   [Build a Multiplayer Agent](guides/multiplayer-agents.md). It is made of:
-    - **Rooms** (`jarviscore.room.Room`): versioned shared files. Asking a
-      room runs an ordinary goal on its current files; the agents' changes
-      come back as a proposal people accept or reject with a reason the next
-      attempt receives. Accepting merges over newer work line by line and
-      stops with `RoomConflict` where changes really clash. People check out,
-      edit and push under the same rules. Rooms have viewer, editor and owner
-      roles and keep their history for good, in `RedisContextStore`. Progress
-      is read from each piece of work's own workflow ledger (`Room.progress`,
-      `RoomFeed`). `jarviscore room` covers it from a terminal.
+    - **People** (`Person`, `Account`, `Identities`): people in tenants,
+      accounts on surfaces resolved to them, one-time-code linking of one
+      person's accounts, and removal that ends everything they could do.
+    - **Rooms** (`jarviscore.room.Room`): versioned shared files in a
+      tenant, private to their members until an owner opens them. Asking a
+      room runs an ordinary goal on its current files as the person who
+      asked; the agents' changes come back as one proposal. Accepting merges
+      over newer work line by line and stops with `RoomConflict` where
+      changes really clash. Every decision is atomic and made once. Work that
+      used someone's own access to a system the room does not share is held
+      for them until they release it; owners name the systems a room shares.
+      Work belongs to the mesh: if the process that asked stops, another
+      finishes it and files its proposal once.
     - **`RoomAgent`**: the agent a team talks to. An AutoAgent with a `room`
-      Kernel role whose tools are the room's own operations; it works out
-      what each message means (a request, feedback, a decision, a pasted
-      version, an answer to the agents, or colleagues talking among
-      themselves), acts as the person who spoke, reads the room's decision
-      history, and replies in the thread. Subclass it for your team's voice
-      and tools (`system_prompt`, `subagent_class`).
+      Kernel role whose tools are the room's own operations. It asks the
+      agents, has proposals redone in the person's own words, files pasted
+      versions exactly, answers from the room's files and history, and stays
+      out of conversations that are not for it. It never decides: accepting,
+      rejecting, releasing, stopping work and signing off are prepared for the
+      person to confirm with one tap.
+    - **Chat surfaces**: `RoomConversation` connects a room to any surface
+      through `ChatSurface`: messages recorded before they are acknowledged
+      and handled once, in order per thread, across processes; each update
+      posted once; held work shown only to its asker; nothing posted where
+      someone who may not see the room would see it. Slack is built in
+      (`SlackApp`, `jarviscore room slack`): one app for every room of a
+      tenant, Socket Mode, workspace members only, and no Slack token in your
+      code (calls go through Nexus; a new `slack_app` atom opens Socket Mode).
     - **People as peers** (`jarviscore.human.HumanAgent`): a person or a team
       on the mesh with capabilities. Planners route steps to them and agents
       ask them; each piece of their work is a HITL item they answer from a
       terminal, `jarviscore human answer`, a dashboard or a room's chat.
-      `jarviscore human join` puts you on a mesh from a terminal.
-    - **Chat surfaces**: `RoomConversation` connects a room and its agent to
-      any surface through `ChatSurface`. Slack is built in (`SlackRoom`,
-      `jarviscore room slack`): Socket Mode, so no public URL, and no Slack
-      token in your code; calls go through Nexus with the workspace's `slack`
-      connection, and a new `slack_app` atom opens the connection with the
-      app-level token.
     - **Testing**: `jarviscore.testing.rooms` (`MemorySurface`,
       `ScriptedRoomAgent`) and `jarviscore.testing.slack.FakeSlack` test rooms,
       conversations and Slack without a model or a workspace.
+- **HITL items know their work and tenant; answering resumes it.** Items
+  record the mesh step that raised them and the tenant of the person the work
+  runs for (`inbox(..., tenant=)`). Resolving an escalation that paused a mesh
+  step resumes the step with the answer (`hitl_resolution`). An item is
+  resolved once across hosts, and `inbox` reads Redis as the truth.
 - **Steps act for the person who asked.** A workflow registered with
   `context["acting_for"]` runs its steps for that person: Nexus lookups,
   consents and calls use that person's own workspace instead of the
@@ -110,6 +120,11 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Fixed
 
+- **HITL requests stored their status as `HITLStatus.pending`** in Redis
+  (the enum's name); they now store `pending`.
+- **The local Nexus vault derived its key on every credential read**, a
+  deliberately slow computation that stalled the event loop of every agent
+  making calls; the key is now derived once per secret.
 - **Escalations no longer assume a founder.** HITL requests were addressed to
   a hard-coded `founder`, and the agent prompts told the model that only "the
   founder" could supply missing data. A request now goes to the people the

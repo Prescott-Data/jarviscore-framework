@@ -1,22 +1,23 @@
 ---
 icon: material/account-group-outline
 title: "Build a Multiplayer Agent"
-description: "Step by step: the agents that do the work, a shared room, the team on the mesh, a room agent people talk to in plain words, Slack, tests without a model, and what changes for production."
+description: "Step by step: the agents that do the work, people and a shared room, a room agent people talk to in their own words, your own product or Slack, people in the loop, tests without a model, and production."
 ---
 
 # Build a Multiplayer Agent
 
-This guide builds a working multiplayer agent from nothing: a launch team and its agents writing a launch plan and an announcement email together in Slack. Each step adds one piece and ends with something you can run. If you haven't yet, read [Multiplayer](../concepts/multiplayer.md) first for the model behind it.
+This guide builds a working multiplayer agent from nothing: a launch team and its agents writing a launch plan together, first in your own product and then in Slack. Each step adds one piece and ends with something you can run. If you haven't yet, read [Multiplayer](../concepts/multiplayer.md) first for the model behind it.
 
 By the end:
 
-- Anyone on the team mentions the bot in Slack with what they need, in their own words.
+- Anyone on the team asks for something in their own words, where the team already talks.
 - Your agents do the work on the team's shared files and propose the change in a thread.
-- People review it there. They say what to change, approve it, turn it down, or paste their own version, and the agent acts on what they meant, as them.
-- When the agents need a person, for a confirmation or a decision, they ask in that thread.
-- Every decision is remembered with who made it and why.
+- People review it there. They say what to change, paste their own version, or decide, and the agent acts on what they meant, as them. Decisions take one tap from the person who made them.
+- When the agents need a person, they ask in that thread.
+- Work that used someone's own access is shown to them first.
+- Every decision is kept with who made it and why.
 
-You write two things: the agents that do the work, and, if you want, how the room agent speaks for your team. JarvisCore provides the rest.
+You write two things: the agents that do the work, and, if you want, how the room agent speaks for your team. JarvisCore provides the rest: identity, permissions, the conversation, delivery, people in the loop and the guarantees behind them.
 
 ## Before you start
 
@@ -64,17 +65,36 @@ class Formatter(CustomAgent):
         return {"status": "success", "output": "Normalised the indentation in plan.md"}
 ```
 
-## Step 2: a room for the shared work
+## Step 2: people and a room
 
-A room holds the files the team works on and every change to them. Create it on a mesh, then ask the agents for something:
+Everything multiplayer happens in a **tenant**: the company or team using your product. People are `Person`s in a tenant, and a room belongs to one tenant.
 
-```python title="step2.py"
+Where do people come from? From whatever authenticates them. Your application already knows who is signed in; Slack knows who posted. You turn that into a `Person`, in one of two ways:
+
+```python
+from jarviscore.room import Account, Identities, Person
+
+# Your app manages its own users: use your ids directly.
+alice = Person("acme", "u_1842", "Alice")
+
+# Or let JarvisCore keep track of accounts on surfaces and the people they are.
+people = Identities(mesh._redis_store)
+alice = people.person_for(Account("acme", issuer="app", subject="u_1842", name="Alice"))
+```
+
+`Identities` is what the Slack surface uses, so it is the right choice when one person reaches the team through more than one surface: link their accounts and they are one person with one set of roles. See [Rooms: people](rooms.md#people) for linking and removing people.
+
+A room holds the files the team works on and every change to them. Create it on a started mesh, as the person who owns it, and add the team:
+
+```python title="team.py"
 import asyncio
-from pathlib import Path
 
 from jarviscore import Mesh
-from jarviscore.room import Room
+from jarviscore.room import Person, Room
 from agents import Writer
+
+alice, bob, carol = (Person("acme", id, name) for id, name in
+                     (("u_1842", "Alice"), ("u_2077", "Bob"), ("u_3310", "Carol")))
 
 
 async def main():
@@ -82,103 +102,137 @@ async def main():
     mesh.add(Writer)
     await mesh.start()
 
-    room = Room.for_mesh(mesh, "launch")
-    await room.ensure({
-        "plan.md": Path("plan.md").read_text(),
-        "brief.md": Path("brief.md").read_text(),
-    }, by="alice")
+    room = Room.for_mesh(mesh, "launch", tenant="acme")
+    await room.ensure({"plan.md": "# Launch plan\n\n## Risks\n\nTBD\n"}, by=alice)
+    room.set_role(bob, "editor", by=alice)
+    room.set_role(carol, "editor", by=alice)
 
-    asked = await room.ask("Fill in the Risks section of plan.md from the concerns in brief.md",
-                           asked_by="alice")
+    asked = await room.ask("Fill in the risks: the venue, the press embargo, support load",
+                           asked_by=alice)
     for change in await room.diff(asked.proposal.id):
         print(change.unified())
-    await room.accept(asked.proposal.id, by="bob")
-    print(f"The room is at version {room.head().version}")
+    await room.accept(asked.proposal.id, by=bob)
     await mesh.stop()
 
 asyncio.run(main())
 ```
 
-`room.ask` runs the request as a normal JarvisCore goal. The planner breaks it into steps, the writer takes them, and each step works on its own copy of the room's current files. The result is a **proposal**: nothing in the room changes until someone accepts it. If the room changed in the meantime, accepting merges the proposal over the newer work, and if two changes really clash, it stops with a conflict instead of overwriting anyone.
+What happened:
 
-Notice `asked_by="alice"` and `by="bob"`. Every request and decision belongs to a person. The steps of Alice's request use Alice's own connected accounts, and the room's history records that Bob accepted it. See [Rooms](rooms.md) for proposals, merging, roles and history in full.
+- The room is **private**: only Alice (its owner), Bob and Carol can see it. `room.set_visibility("tenant", by=alice)` would open it to everyone in Acme.
+- `ask` ran an ordinary goal as Alice. The planner chose the writer; the writer worked in its own copy of the room's files; its change came back as a proposal. Nothing changed in the room until Bob accepted it.
+- Had the writer read Alice's own mailbox through Nexus on the way, the proposal would have been **held** for Alice: Bob could not see or accept it until she released it (`room.release(id, by=alice)`). Owners name the systems everyone in a room may see with `room.set_shared_connectors(["google_drive"], by=alice)`.
 
-## Step 3: the team as a peer
+[Rooms](rooms.md) covers the room API in full. From here on, people talk instead of calling it.
 
-Some work needs a person: a confirmation, a sign-off, a judgement call. Put the team on the mesh as a `HumanAgent`, and the planner can route those steps to them:
+## Step 3: a room agent people talk to
 
-```python
-from jarviscore.human import HumanAgent
+People don't call `room.ask`. They say "can you fill in the risks?", "too wordy", "ship it", or "why did we drop the venue risk?". A `RoomAgent` understands that and acts on it with the room's own operations, as the person who spoke:
 
-mesh.add(HumanAgent("team", ["approval"], channel=None))
-```
-
-Now a request such as "Draft the waitlist email in email.md. Someone on the team has to confirm the send date first" plans a step for `team`. That step becomes a question in the HITL store and waits for an answer. The rest of the work continues once someone answers:
-
-```bash
-jarviscore human inbox team
-jarviscore human answer hitl-20261018-153012-1a2b3c4d "Wednesday 14 October, 09:30 Nairobi time"
-```
-
-In Step 5 the same question appears in Slack instead, in the thread of the work that raised it. See [People as Peers](human-peers.md) for individual people, terminals and decisions.
-
-## Step 4: a room agent people talk to
-
-People don't want to call `room.accept`. They want to say "looks good, ship it". A `RoomAgent` is the agent they talk to. It reads each message with its context and acts on it with the room's own operations, as the person who spoke:
-
-```python
+```python title="team.py"
 from jarviscore.room import RoomAgent
 
-room_agent = mesh.add(RoomAgent)
-await mesh.start()
-room = Room.for_mesh(mesh, "launch")
-
-turn = await room_agent.converse(room, "alice", "Can you fill in the risks from Dana's brief?")
-print(turn.replies)   # ["I've asked the agents to fill in the Risks section from Dana's brief. ..."]
+mesh = Mesh(config={"redis_url": "redis://localhost:6379/0"})
+agent = mesh.add(RoomAgent)
+mesh.add(Writer)
 ```
 
-The room agent is an AutoAgent with one extra Kernel role, `room`. It reasons, remembers and is traced like any other agent. Its tools are what a person can do in a room: ask the agents for work, request changes to a proposal with their feedback, accept, reject, propose their own version of a file, answer a question the agents asked, and look at the files, the changes and the history. It decides what a message means and whether it is for it at all, so people can keep talking to each other in the same thread. Its final answer is its reply.
+That is all the room agent needs. It is an AutoAgent with one more Kernel role, `room`, whose tools are the room's actions:
 
-`converse` returns once the message is handled. Work it starts carries on after it, and the progress and proposal are posted to wherever the conversation is shown (next step).
+| People say | The room agent |
+|---|---|
+| "Can you fill in the risks from Dana's brief?" | asks your agents, in the person's words |
+| "Too wordy, one line per risk" | has the agents redo the proposal with exactly those words |
+| A complete file pasted in a ``` block | files it, exactly as pasted, as that person's proposal |
+| "Ship it", "No, the board fixed Tuesday", "Stop that, wrong brief" | prepares the decision for that person to confirm with one tap |
+| "What does the plan say about support?", "What's running?", "Why didn't we move the launch?" | answers from the room's files, work and history |
+| An answer to a question the agents asked | passes it on, in the person's words |
+| "@carol are you around tomorrow?" | stays out of it |
 
-To make it speak for your team, subclass it. Your `system_prompt` leads its instructions, and `subagent_class` lets you give it tools of your own:
+It cannot accept, reject or approve anything itself: it has no tool that does. Make it sound like your team with `system_prompt`, or give it more tools by subclassing `RoomSubAgent` and setting `subagent_class` (see [Custom Subagents](custom-subagents.md)):
 
 ```python
-from jarviscore.room import RoomAgent, RoomSubAgent
-
-
-class LaunchDeskTools(RoomSubAgent):
-    def setup_tools(self):
-        super().setup_tools()
-        self.register_tool("launch_calendar", self._tool_launch_calendar,
-                           "Dates already booked for launches. Params: {}", phase="thinking")
-
-    async def _tool_launch_calendar(self, **_):
-        return {"status": "success", "booked": ["2026-10-14", "2026-10-21"]}
-
-
 class LaunchDesk(RoomAgent):
-    system_prompt = """
-    You work with the Orbit launch team. Dana owns marketing decisions and Sam owns support.
-    Dates are in Nairobi time.
-    """
-    subagent_class = LaunchDeskTools
+    system_prompt = "You are the launch team's desk. Be brief; the team is busy."
+    ask_options = {"timeout": 1800}   # how long a piece of work may take
 ```
+
+## Step 4: in your own product
+
+A room's conversation needs a place to happen. `RoomConversation` connects one room to one surface and does everything multiplayer about it: it records each message durably, hands it to the room agent as the person who sent it, posts the work's progress and proposals in the right thread, asks people to confirm decisions, shows held work only to its asker, and checks who can see the surface before it posts anything.
+
+A surface only moves messages. For your product, implement `ChatSurface`:
+
+```python title="web_surface.py"
+from jarviscore.room import ChatSurface
+
+
+class TeamPage(ChatSurface):
+    """The launch room's page in our web app: a thread of messages per piece of work."""
+
+    def __init__(self, db, room_page_id):
+        self.db = db
+        self.key = f"web:{room_page_id}"         # unique per place a room is shown
+
+    async def say(self, thread, text, *, detail="", code="", to=None):
+        # `to` means: show it to this person only.
+        return await self.db.post(self.key, thread, text, detail=detail, code=code,
+                                  visible_to=to.id if to else None)
+
+    async def show_proposal(self, thread, text, diff, proposal_id, *, to=None, held=False):
+        # Buttons: Accept and Full change; or, when held, Release and Discard.
+        buttons = ["release", "discard"] if held else ["accept", "show_change"]
+        return await self.db.post(self.key, thread, text, code=diff, buttons=buttons,
+                                  target=proposal_id, visible_to=to.id if to else None)
+
+    async def confirm(self, thread, decision, *, to):
+        # Only `to` sees this, with Confirm and Cancel.
+        return await self.db.post(self.key, thread, decision["summary"] + "?",
+                                  buttons=["confirm", "cancel"], target=decision["id"],
+                                  visible_to=to.id)
+```
+
+Your page shows each person what everyone sees plus what is `visible_to` them, so `audience` can keep its default (anyone may be shown it). Wire it to your web handlers:
+
+```python title="app.py"
+from jarviscore.room import RoomConversation
+
+conversation = RoomConversation(room, agent, TeamPage(db, "launch"))
+await conversation.start()                       # picks up where it left off
+asyncio.create_task(conversation.follow())       # posts the room's progress, forever
+
+
+@app.post("/rooms/launch/messages")
+async def post_message(body: MessageIn, user=Depends(signed_in_user)):
+    person = Person("acme", user.id, user.name)             # from your login, never from the body
+    message_id = await db.save_message(user, body)          # your own id for it
+    conversation.receive(person, body.text, message_id=message_id,
+                         thread=body.thread, addressed=body.to_agent)
+    asyncio.create_task(conversation.handle(message_id))
+    return {"ok": True}
+
+
+@app.post("/rooms/launch/buttons")
+async def press(body: PressIn, user=Depends(signed_in_user)):
+    person = Person("acme", user.id, user.name)
+    await conversation.press(person, body.action, body.target, body.thread)
+```
+
+Three things matter here:
+
+- **Who the person is comes from your login.** The room agent acts as that person, with their room role. A message body naming someone else changes nothing.
+- **`receive` before you answer the request.** Once it returns, the message will be handled even if this process stops right after; a second `receive` of the same `message_id` is ignored. `handle` handles messages in order within each thread, across all your processes. (`hear` does both, for when you don't need the split.)
+- **Run as many processes as you like.** Every one can receive and handle messages. Only one at a time posts updates (`follow` holds a lease), and each update is posted once.
+
+A person sends `addressed=True` when they speak to the agent, for example with an @-mention or a "Ask the agents" box. Replies in a thread the room started reach the agent on their own; other conversation in your page does not.
 
 ## Step 5: in Slack
 
-Slack is supported natively. A room is served in a channel: a mention starts a thread, the work happens in it, and people reply there in their own words.
+JarvisCore supports Slack natively: `SlackApp` is the surface, Socket Mode included, so you need no public URL. One `SlackApp` serves every room of a tenant in its Slack workspace, each in its own channel.
 
-**Create the Slack app.** In your Slack workspace, create an app with:
+**Create the Slack app** at [api.slack.com/apps](https://api.slack.com/apps): turn on Socket Mode and Interactivity; give the bot the scopes `chat:write`, `im:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, `users:read` and `app_mentions:read`; subscribe to `app_mention`, `message.channels`, `message.groups`, `member_joined_channel`, `member_left_channel` and `channel_shared`. Install it, and create an app-level token with `connections:write`.
 
-- **Socket Mode** on. Slack then pushes events to your process, so it needs no public URL.
-- The bot scopes `chat:write`, `channels:history`, `groups:history`, `users:read` and `app_mentions:read`.
-- The event subscriptions `app_mention`, `message.channels` and `message.groups`.
-- **Interactivity** on, for the Accept and Full change buttons.
-
-Install it to the workspace and invite the bot to the team's channel.
-
-**Connect it through Nexus.** JarvisCore never holds Slack tokens in your code or environment. They live in Nexus, like every other credential. The bot token signs the Web API calls, and the app-level token opens the Socket Mode connection:
+**Give Nexus the tokens**, never your code. Slack calls go through Nexus with the workspace's bot token, and Socket Mode with the app-level token:
 
 ```bash
 jarviscore nexus register slack --auth-type api_key --api-key xoxb-... \
@@ -187,72 +241,89 @@ jarviscore nexus register slack_app --auth-type api_key --api-key xapp-... \
     --header-name Authorization --value-prefix "Bearer "
 ```
 
-With a Nexus gateway, connect `slack` and `slack_app` there instead. See [Nexus Credentials](nexus.md).
+(With a [Nexus gateway](nexus.md), connect them there instead.)
 
-**Serve the room.** From the terminal, on any machine that reaches the mesh:
+**Serve the rooms:**
 
-```bash
-jarviscore room slack launch --channel C0123ABC --seed 10.0.0.5:7949 --capabilities approval
-```
+```python title="slack_desk.py"
+from jarviscore.room.slack import SlackApp
 
-This starts a node with a room agent, and a HumanAgent named `team` (change it with `--people`) standing for the people in the channel, and joins the mesh at `--seed` so planners can route steps to them. Or in your own process, with your own room agent:
-
-```python
-from jarviscore.room import Room
-from jarviscore.room.slack import SlackRoom
-
-desk = mesh.add(LaunchDesk)
-mesh.add(HumanAgent("team", ["approval"], channel=None))
+agent = mesh.add(LaunchDesk)
+mesh.add(Writer)
 await mesh.start()
-await SlackRoom(Room.for_mesh(mesh, "launch"), desk, "C0123ABC", people="team").run()
+
+slack = SlackApp(agent, tenant="acme")
+slack.connect(Room.for_mesh(mesh, "launch", tenant="acme"), "C0LAUNCH")   # a private channel
+await slack.run()
 ```
 
-The person who posts in Slack is who the agent acts as. By default a room member is their Slack handle. Map Slack users to the identities your organisation uses with `members={"U0123ABC": "alice@acme.com"}`. See [Chat Surfaces](chat-surfaces.md) for everything Slack does, and for adding a surface of your own.
+Invite the bot to the channel. People mention it with what they need, and the thread that follows is where the work happens.
 
-## Step 6: test it without a model or a workspace
+**Who is who in Slack.** A full member of the workspace is a person in the tenant; their first message makes them one, through `Identities`. Guests, people from other organisations in shared channels, and bots are not, and the bot tells them it can only act for the workspace's members. If your product has its own directory, pass `identify=` to map each Slack user to your `Person`.
 
-Two test helpers ship with JarvisCore. `ScriptedRoomAgent` runs the real room tools from a script you write instead of a model, so a test decides what each message means and checks what the room does. `MemorySurface` keeps what the conversation posts:
+**Who sees what in Slack.** A private room is shown only in a private channel whose members are all in the room, and no room is shown in a channel shared with another organisation. Add the room's members to the channel and the room's people to the room. If someone joins the channel who is not in the room, the bot stops posting the room there, and says so, until they leave or are added. Work held for someone goes to them in a direct message with Release and Discard buttons (or, without `im:write`, as a message only they see in the thread). Confirmations are always messages only the person deciding sees.
+
+`jarviscore room slack launch --channel C0LAUNCH --tenant acme` does all of this from the terminal, for trying it out.
+
+## Step 6: when the agents need a person
+
+Sometimes the work needs a person: a figure only finance has, a sign-off before an email goes to 40,000 people. You don't wire anything for the room to handle this.
+
+- **An agent asks for sign-off.** When an AutoAgent stops a step for a person ([HITL](hitl.md)), the step waits. The question appears in the work's thread, marked as needing sign-off. Someone says "yes, send it"; the room agent prepares the approval; they confirm; the step resumes with their answer.
+- **The planner routes a step to people.** Put the team on the mesh as a [human peer](human-peers.md) with the capabilities only people have:
+
+    ```python
+    from jarviscore.human import HumanAgent
+
+    mesh.add(HumanAgent("launch-team", ["approval", "legal-review"], channel=None))
+    ```
+
+    A plan that needs `legal-review` routes that step to the team. The question appears in the work's thread, and the first editor to answer it answers for the team, in their own words.
+
+Questions are scoped: a room shows only questions raised by its own work, in its own tenant. If the work used someone's private access, the question is asked without the private details.
+
+## Step 7: test it without a model or a workspace
+
+`jarviscore.testing.rooms` has a `MemorySurface` that keeps everything posted (including what was shown to one person, and confirmations), and a `ScriptedRoomAgent` that runs the real room tools from a script instead of a model. Tests decide what each message means and check what the room and the surface do:
 
 ```python title="test_launch_room.py"
-from jarviscore.room import RoomConversation
+from jarviscore.room import CONFIRM, RoomConversation
 from jarviscore.testing.rooms import MemorySurface, ScriptedRoomAgent
 
 
-async def test_a_reviewer_ships_the_proposal(room):          # a Room fixture
-    async def ships_it(tools, turn):
-        await tools._tool_accept()
-        return "Accepted."
+async def ship_it(tools, turn):
+    await tools._tool_prepare_decision(action="accept")
+    return "Tap Confirm and it's in."
 
+
+async def test_carol_ships_it(room, proposal_in_thread, carol):
     surface = MemorySurface()
-    conversation = RoomConversation(room, ScriptedRoomAgent(ships_it), surface)
+    conversation = RoomConversation(room, ScriptedRoomAgent(ship_it), surface)
     await conversation.start()
-    await conversation.hear("bob", "ship it", thread="m1", message_id="m2")
-    assert room.head().updated_by == "bob"
+
+    await conversation.hear(carol, "looks good, ship it", thread="t1", message_id="m2")
+    assert room.proposal(proposal_in_thread).status == "open"      # nothing from text alone
+
+    [decision] = surface.confirmations
+    await conversation.press(carol, CONFIRM, decision["id"], "t1")
+    assert room.proposal(proposal_in_thread).status == "accepted"
 ```
 
-For Slack itself, `jarviscore.testing.slack.FakeSlack` speaks Slack's Web API and Socket Mode protocol on a local port. Point the `slack` and `slack_app` Nexus connections at it, and `SlackRoom` runs against it exactly as it would against Slack.
+`jarviscore.testing.slack.FakeSlack` speaks Slack's Web API and Socket Mode on a local port, with Slack's behaviour where correctness depends on it: events shared between connections, redelivery of unacknowledged events, private and shared channels, guests, and messages only one person sees. Point the `slack` and `slack_app` Nexus connections at it (with a `base_url` of its address) and `SlackApp` runs against it unchanged.
 
-## Step 7: to production
+## Step 8: to production
 
-The pieces above run unchanged in production. What changes is where they run and what you configure.
-
-**Topology.** Run your working agents on as many nodes as you need, all on one mesh with one Redis. Run the room's surface (`jarviscore room slack`, or your `SlackRoom`) as its own small service. It holds the room agent and the people's HumanAgent, and joins the mesh with `--seed`. Nodes find each other over [P2P](../concepts/p2p.md). Rooms, proposals, history and work all live in Redis, so any node can serve any room.
-
-**Files.** Set `STORAGE_BACKEND=redis` so every node sees the same files through the same Redis (single files up to 32 MB by default), or `azure` for large files. See [Configuration](../reference/configuration.md).
-
-**Identity and access.** Each person connects their own accounts in Nexus, in their own workspace, under the identity your surface reports (`members`). Steps of their requests then use their access, and provider audit logs show them. Never set `asked_by` or `by` from text a user typed.
-
-**Who may do what.** A room is open to everyone in it until its creator adds members. Then viewers watch, editors ask and decide, and owners manage members. See [Who can do what](rooms.md#who-can-do-what).
-
-**Memory.** Rooms keep their decision history in Redis without anything else. For semantic memory shared by every agent working in a room, configure [Athena](../concepts/memory.md) and `Mesh(config={"memory_scope_field": "room_id"})` on your agent nodes. `jarviscore room slack` scopes the room agent's memory this way already.
-
-**Limits and time.** Bound how long a request's work may run with `RoomAgent.ask_options = {"timeout": 1800}` (seconds; `jarviscore room slack --timeout` sets it, 30 minutes by default). A question to people waits up to `HumanAgent.answer_timeout` (an hour by default) before its step fails.
-
-**Seeing what happened.** Every message to the room agent runs under the workflow `room-<room>-conversation` and every request under its own workflow, so the usual [traces and observability](observability.md) apply. `jarviscore room watch ROOM` follows a room from a terminal.
+- **Redis** holds rooms, people, conversations and questions; every process of your deployment uses the same one. Use a managed Redis with persistence.
+- **File storage**: rooms keep file contents in the mesh's blob storage. Redis suits documents and code; set `STORAGE_BACKEND=azure` for large media.
+- **Processes**: run the surface (your web app, or `SlackApp`) in as many processes as you like, and your agents on as many nodes as you like. Messages are handled once, updates posted once, and work started by a process that stops is finished by another (`RoomConversation.start` picks it up).
+- **Tenants**: give each customer of your product its own tenant. A tenant's people, rooms and questions never reach another.
+- **People leaving**: `Identities.deprovision(person)` ends everything they could do at once.
+- **Shared systems**: decide per room which connected systems everyone may see (`set_shared_connectors`). Anything else stays with the person whose access it was.
+- **Spend**: each piece of work runs under the mesh's workflow budget (see [Goal Execution](goal-execution.md)); set `ask_options={"timeout": ...}` on your room agent to bound how long work may run. Work that times out is stopped, not left running.
 
 ## Where to go next
 
-- [Rooms](rooms.md): proposals, merging, conflicts, roles, history, and working by hand
-- [People as Peers](human-peers.md): individuals on the mesh, and how they answer
-- [Chat Surfaces](chat-surfaces.md): Slack in depth, and your own surface
+- [Rooms](rooms.md): the room API, people and roles, private access, merging and history
+- [Chat Surfaces](chat-surfaces.md): the surface contract in full, and Slack in detail
+- [People as Peers](human-peers.md): people the planner routes work to
 - [Multiplayer API](../reference/multiplayer-api.md): every class and method

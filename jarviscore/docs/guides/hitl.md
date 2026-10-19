@@ -279,6 +279,8 @@ The agent's `wait()` returns the decision on its next poll. Write through `resol
 
 ## Work routed to people
 
+Every item records which mesh step raised it (`context["mesh_workflow_id"]` and `context["mesh_step_id"]`) and, when the work runs for someone, their tenant (`context["tenant"]`). `inbox(target, tenant="acme")` lists one tenant's items only. When an agent's escalation paused a step of mesh work, answering it with `resolve()` resumes that step, with the answer in its context as `hitl_resolution`. An item is answered once: with Redis, the first answer from any host stands and later ones return False.
+
 The same store holds work that is routed to a person rather than escalated by an agent. When a [human peer](human-peers.md) on the mesh is given a step, their HumanAgent files it with `HITLQueue.assign(...)` (type `input_request`, no escalation category), and it is answered with `resolve()` like any other item: from the person's terminal, `jarviscore human answer`, your dashboard, or a [room's chat](chat-surfaces.md). One review surface can therefore show everything waiting on a person.
 
 ---

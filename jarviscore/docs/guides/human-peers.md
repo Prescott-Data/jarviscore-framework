@@ -79,7 +79,7 @@ jarviscore human answer hitl-20261018-153012-1a2b3c4d --reject "The price is wro
 
 In code, `agent.waiting()` lists a person's open items and `agent.answer(item_id, decision, response)` answers one. A review surface can also use the HITL store directly: `HITLQueue.inbox("alice")` and `HITLQueue.resolve(...)`.
 
-**In a room's chat.** A HumanAgent can stand for everyone in a chat channel (`HumanAgent("team", ["approval"], channel=None)`). Its questions are asked in the thread of the work that raised them, and whoever answers there in their own words answers for the team. See [Chat Surfaces](chat-surfaces.md).
+**In a room's chat.** When a step of a room's work is routed to a HumanAgent, its question is asked in the thread of that work, in the room's chat, and the first of the room's editors to answer there, in their own words, answers it. Questions are shown only in the room whose work raised them, in its tenant. See [Chat Surfaces](chat-surfaces.md).
 
 ## What an answer means
 

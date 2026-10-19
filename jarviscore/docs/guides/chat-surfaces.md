@@ -1,221 +1,130 @@
 ---
-icon: material/forum-outline
-title: "Chat Surfaces: Rooms Where Your Team Talks"
-description: "Serve a room where people already work: Slack natively, through Nexus with no tokens in your code, or any other chat or product UI through the ChatSurface interface."
+icon: material/forum
+title: "Chat Surfaces: Rooms Where the Team Talks"
+description: "Connect a room's conversation to Slack or to your own product: the ChatSurface contract, what RoomConversation guarantees, who sees what, and Slack in detail."
 ---
 
 # Chat Surfaces
 
-A multiplayer agent is used where the team already talks. A chat surface connects a [room](rooms.md) to such a place. Requests become threads, the work's progress and proposals are posted in them, the agents' questions to people are asked there, and everything people say there goes to the [room agent](multiplayer-agents.md#step-4-a-room-agent-people-talk-to), which acts on it as them.
+A room's conversation happens where the team already talks: Slack, your product's own pages, Microsoft Teams, Discord. JarvisCore splits this in two:
 
-JarvisCore supports Slack natively. Anything else, such as Microsoft Teams, Discord or your own product, is a small adapter you write. The multiplayer behavior lives in `RoomConversation`, which every surface shares; a surface only moves messages.
+- **`RoomConversation`** does everything multiplayer: it records messages, hands them to the room agent as the person who sent them, posts the work in the right thread, asks people to confirm decisions, keeps held work private, asks the agents' questions, and checks who can see the surface before posting.
+- **A `ChatSurface`** only moves messages to and from one place. JarvisCore ships `SlackApp` for Slack; for anything else you write one class.
 
-## What people can do
+```mermaid
+flowchart TB
+    Person["A person"]
+    Surface["Your surface<br/>(authenticates them)"]
+    Conversation["RoomConversation"]
+    Agent["RoomAgent"]
+    Room["Room"]
 
-In a room's channel, people talk in their own words. There is no command syntax:
-
-| They say | The room agent |
-|---|---|
-| "@bot can you fill in the risks from Dana's brief?" | Asks the agents, as them; the work and its proposal appear in that thread |
-| "Too wordy. One line per risk, and say Sam handles support." | Turns the proposal down with their words as the reason, and has it redone |
-| "Looks good, ship it" (or the Accept button) | Accepts the proposal, as them |
-| "No, Dana is rewriting the plan herself" | Rejects it, with that reason |
-| A pasted file in a code block: "here's mine" | Proposes it, exactly as pasted, as theirs; accepting it closes the agents' version |
-| "Why didn't we move the launch?" | Answers from the room's history and files |
-| An answer to a question the agents asked | Passes it to the agents, from them |
-| "@carol can you look at this tomorrow?" | Nothing: it was for Carol |
-
-When it is unsure what someone means, especially before accepting or rejecting, it asks. Roles still apply: a viewer who says "ship it" is told they can't accept, and why.
-
-## Slack
-
-### Set up the Slack app
-
-Create an app in your Slack workspace with:
-
-- **Socket Mode** on. Slack pushes events over a connection your process opens, so it needs no public URL and runs anywhere, a laptop included.
-- The bot scopes `chat:write`, `channels:history`, `groups:history`, `users:read` and `app_mentions:read`.
-- The event subscriptions `app_mention`, `message.channels` and `message.groups`.
-- **Interactivity** on, for the Accept and Full change buttons on proposals.
-
-Install it to the workspace, note the bot token (`xoxb-…`) and an app-level token (`xapp-…`) with `connections:write`, and invite the bot to the channel.
-
-### Connect it through Nexus
-
-Slack tokens live in [Nexus](nexus.md) like every other credential, never in your code or environment. JarvisCore's Slack calls go through `nexus_call` with the workspace's `slack` connection (the bot token), and the Socket Mode connection is opened by the `slack_app` atom with the app-level token:
-
-```bash
-jarviscore nexus register slack --auth-type api_key --api-key xoxb-... \
-    --header-name Authorization --value-prefix "Bearer "
-jarviscore nexus register slack_app --auth-type api_key --api-key xapp-... \
-    --header-name Authorization --value-prefix "Bearer "
+    Person -->|message, button| Surface
+    Surface -->|receive, handle, press| Conversation
+    Conversation --> Agent
+    Agent --> Room
+    Conversation -->|say, show_proposal, confirm| Surface
 ```
 
-With a Nexus gateway, add both connections there instead. Either way, Nexus only sends each token to `slack.com`.
+[Build a Multiplayer Agent](multiplayer-agents.md) walks through both with a running example. This page is the reference for building a surface.
 
-### Serve a room
-
-From the terminal:
-
-```bash
-jarviscore room slack launch --channel C0123ABC --seed 10.0.0.5:7949 --capabilities approval
-```
-
-| Option | Meaning |
-|---|---|
-| `--channel` | The Slack channel id |
-| `--people` | The name the channel's people go by on the mesh (default `team`) |
-| `--capabilities` | What the channel's people do for agents, such as `approval,review`; they always have `human` |
-| `--seed`, `--host`, `--port` | Join the mesh's P2P transport, so planners and agents on other nodes find the channel's people |
-| `--timeout` | How long one request's work may run, in seconds (default 1800) |
-
-This starts a node with a room agent and a HumanAgent standing for the channel's people, and serves the room until stopped. Or, in your own process with your own room agent:
-
-```python
-from jarviscore.human import HumanAgent
-from jarviscore.room import Room
-from jarviscore.room.slack import SlackRoom
-
-desk = mesh.add(LaunchDesk)                                   # your RoomAgent subclass
-mesh.add(HumanAgent("team", ["approval"], channel=None))
-await mesh.start()
-
-await SlackRoom(Room.for_mesh(mesh, "launch"), desk, "C0123ABC", people="team").run()
-```
-
-### Who is who
-
-The Slack user who posts or presses a button is who the room agent acts as. That identity comes from Slack, so typing someone else's name changes nothing. By default a room member is their Slack handle. Map Slack users to the identities your organisation uses, so room roles and each person's Nexus connections line up:
-
-```python
-SlackRoom(room, desk, "C0123ABC", people="team",
-          members={"U0123ABC": "alice@acme.com", "U0456DEF": "bob@acme.com"})
-```
-
-`members` can also be a function that receives the Slack user (`{"id", "name", "profile", ...}`) and returns the member.
-
-### What it does in the channel
-
-- A message that mentions the bot is read; a reply in one of the room's threads is read; anything else in the channel is not.
-- Each request's message becomes its thread. The plan, each step, the proposal with its diff and buttons, and the agents' summary are posted there.
-- Proposals show their change inline. Slack limits a message's size, so a long diff is cut short; the Full change button posts all of it.
-- Work started anywhere else (the CLI, another surface, code) gets its own thread when it starts, so the channel always shows what is happening to the room.
-- A question from the agents to the channel's people is posted in the thread of the work that raised it. The room agent passes on whoever answers it there.
-- Where the conversation is (which thread belongs to which work, what has been posted) is saved with the room, so a restart picks up where it left off, with nothing posted twice.
-
-## Your own surface
-
-A surface is a class with two methods, plus an optional third:
+## What a surface implements
 
 ```python
 from jarviscore.room import ChatSurface
 
 
 class MySurface(ChatSurface):
-    key = "web:launch"        # unique per place a room is shown; keys its saved state
+    key = "web:launch"           # unique per place a room is shown; keys the saved state
 
-    async def say(self, thread, text, *, detail="", code=""):
-        """Post text in a thread (None: top level). detail is quoted context, code is verbatim.
-        Return the new message's id: a thread is the id of the message it hangs off."""
+    async def say(self, thread, text, *, detail="", code="", to=None) -> str: ...
+    async def show_proposal(self, thread, text, diff, proposal_id, *, to=None, held=False) -> str: ...
+    async def confirm(self, thread, decision, *, to) -> str: ...
 
-    async def show_proposal(self, thread, text, diff, proposal_id):
-        """Post a proposal for review, ideally with an Accept button. Return its id."""
-
-    async def history(self, thread):
-        """Optional: earlier messages in a thread, as [{"person": ..., "text": ...}]."""
+    # Optional:
+    async def notice(self, thread, text, *, to) -> str: ...          # default: say(..., to=to)
+    async def audience(self, room) -> str | None: ...               # default: None (may show it)
+    async def history(self, thread) -> list[dict]: ...              # default: []
 ```
 
-A `RoomConversation` drives it. Call `hear` for every message a person posts and `press` for every button, with the person your application authenticated:
+| Method | Called to | Your surface |
+|---|---|---|
+| `say` | post a line of the room's work, the agent's reply, or a question from the agents | posts `text` in `thread` (None for the top level), with `detail` as quoted context and `code` verbatim. With `to`, shows it to that person only, durably |
+| `show_proposal` | show a proposal | posts `text` and the `diff` with **Accept** and **Full change** buttons; when `held`, shown `to` the person it is held for, with **Release** and **Discard** |
+| `confirm` | ask one person to confirm a decision the agent prepared | shows `decision["summary"]` to `to` alone, with **Confirm** and **Cancel**, whose target is `decision["id"]` |
+| `notice` | tell one person something brief (a refusal, "Cancelled.") | may be transient, like a Slack message only they see |
+| `audience` | check, before posting, that everyone who can see this place may see the room | returns why not, or None |
+| `history` | give the agent the thread's earlier messages it never received | returns `{"person", "text"}` |
+
+Every posting method returns your id for what it posted. A thread is your id of the message a conversation hangs off: the first message of a piece of work becomes its thread.
+
+The button names are constants in `jarviscore.room`: `ACCEPT`, `SHOW_CHANGE`, `RELEASE`, `DISCARD`, `CONFIRM`, `CANCEL`. When someone presses one, call `press` with the person, the button and its target.
+
+## Driving the conversation
 
 ```python
-from jarviscore.room import RoomConversation, ACCEPT, SHOW_CHANGE
+conversation = RoomConversation(room, agent, MySurface())
+await conversation.start()                     # resume saved state and unfinished work
+asyncio.create_task(conversation.follow())     # post the room's progress until cancelled
 
-conversation = RoomConversation(room, desk, MySurface(), people="team")
-await conversation.start()                    # introduces the room the first time
-follower = asyncio.create_task(conversation.follow())   # posts progress, proposals, questions
+# For each message, with the person from your own authentication:
+if conversation.receive(person, text, message_id=id, thread=thread_id, addressed=to_the_agent):
+    asyncio.create_task(conversation.handle(id))
 
-await conversation.hear("alice@acme.com", "Can you draft the waitlist email?",
-                        message_id="m1", addressed=True)
-await conversation.hear("bob@acme.com", "Make it shorter", thread="m1", message_id="m2")
-await conversation.press("carol@acme.com", ACCEPT, "p-221bf36b", thread="m1")
+# For each button press:
+await conversation.press(person, action, target, thread_id)
 ```
 
-`addressed` says the message is for the agent (in Slack, a mention). Replies in the room's threads are read either way. In a product UI built for the room, every top-level message is usually addressed.
+| Call | What it guarantees |
+|---|---|
+| `receive` | Records the message once, durably. Call it before you acknowledge the message: once it returns, the message is handled even if the process stops. A redelivery returns False |
+| `handle` | Handles a received message once, in order within its thread, across every process |
+| `hear` | `receive` and `handle` together |
+| `press` | Carries out a button for the person who pressed it, with their room role; a confirmation only for the person it was meant for, once, before it expires (10 minutes) |
+| `start` | Picks up the saved threads, any message received but not handled, and work started before a restart |
+| `follow` | Posts each update, holding a lease so one process posts at a time; the place in the feed is saved only after each post succeeds, so a failure retries instead of skipping. An update is posted once, unless the process stops in the instant between the surface accepting it and it being recorded: then that one update is posted again |
 
-### Example: a room in your web app
+`addressed` says the person spoke to the agent (an @-mention, an "ask the agents" box). Replies in threads the room started reach the agent without it; anything else does not, so colleagues can talk in the same place.
 
-A complete surface for a FastAPI app. The browser receives everything over a websocket and posts messages to an endpoint, with the user from your own authentication:
+## Who sees what
 
-```python title="room_web.py"
-import asyncio
-from uuid import uuid4
+A surface that is a shared space, such as a channel, shows everything to everyone in it. So before posting anything, `RoomConversation` asks the surface's `audience`. If it returns a reason, the room stops posting there and says why, once, and the room agent does not work there. It checks again regularly, at once when the room's members or visibility change, and when you call `recheck_audience()` (call it when someone joins or leaves your space). When the reason goes away, it says so and catches up.
 
-from fastapi import Depends, FastAPI, WebSocket
-from jarviscore.room import ACCEPT, ChatSurface, RoomConversation
+A surface that shows each person their own view, like a web page that checks the signed-in user, keeps the default: it filters per person instead, using `to` and `conversation.can_see(person, item)`.
 
+Held work and confirmations are always addressed with `to`: show them to that person only.
 
-class WebSurface(ChatSurface):
-    def __init__(self, room_id):
-        self.key = f"web:{room_id}"
-        self.sockets = set()
-        self.messages = []
+## Slack
 
-    async def _post(self, message):
-        message["id"] = uuid4().hex
-        self.messages.append(message)
-        for socket in list(self.sockets):
-            await socket.send_json(message)
-        return message["id"]
+`SlackApp` is the Slack surface, with Slack reached through Nexus and events over Socket Mode (no public URL). One `SlackApp` serves every room of a tenant in its workspace, each room in its own channel:
 
-    async def say(self, thread, text, *, detail="", code=""):
-        return await self._post({"thread": thread, "by": "agent", "text": text,
-                                 "detail": detail, "code": code})
+```python
+from jarviscore.room.slack import SlackApp
 
-    async def show_proposal(self, thread, text, diff, proposal_id):
-        return await self._post({"thread": thread, "by": "agent", "text": text,
-                                 "code": diff, "proposal": proposal_id})
-
-    async def history(self, thread):
-        return [{"person": m["by"], "text": m["text"]}
-                for m in self.messages if m["thread"] == thread]
-
-
-app = FastAPI()
-surface = WebSurface("launch")
-conversation = None          # a RoomConversation(room, desk, surface, people="team"), set at startup
-
-
-@app.websocket("/rooms/launch")
-async def watch(socket: WebSocket):
-    await socket.accept()
-    surface.sockets.add(socket)
-    try:
-        while True:
-            await socket.receive_text()
-    finally:
-        surface.sockets.discard(socket)
-
-
-@app.post("/rooms/launch/messages")
-async def post_message(body: dict, user: str = Depends(current_user)):   # your authentication
-    message_id = await surface._post({"thread": body.get("thread"), "by": user, "text": body["text"]})
-    asyncio.create_task(conversation.hear(user, body["text"], thread=body.get("thread"),
-                                          message_id=message_id, addressed=True))
-    return {"id": message_id}
-
-
-@app.post("/rooms/launch/proposals/{proposal_id}/accept")
-async def accept(proposal_id: str, body: dict, user: str = Depends(current_user)):
-    await conversation.press(user, ACCEPT, proposal_id, body.get("thread"))
+slack = SlackApp(agent, tenant="acme")
+slack.connect(launch_room, "C0LAUNCH")
+slack.connect(hiring_room, "C0HIRING")
+await slack.run()
 ```
 
-The same shape fits any chat product: receive its events, call `hear` and `press` with the authenticated user, and implement `say` and `show_proposal` with its API. `jarviscore.room.slack` is a complete, small example.
+Set up the Slack app and its tokens as in [Build a Multiplayer Agent: in Slack](multiplayer-agents.md#step-5-in-slack). Run `SlackApp` in as many processes as you like: Slack shares events between their connections, and each message is handled once and each update posted once.
 
-## Testing
+| | In Slack |
+|---|---|
+| A person | A full member of the workspace the app is installed in, resolved through `Identities` (first message makes them a person). Guests, people from other organisations and bots are refused. `identify=` maps Slack users to your own people instead |
+| A message for the room | A mention of the bot in the room's channel, or any reply in a thread the room started |
+| Receiving | Recorded before Socket Mode is acknowledged; if recording fails, Slack sends it again |
+| Proposals | A threaded message with the diff and **Accept** and **Full change** buttons |
+| Held work | A direct message to the asker with **Release** and **Discard** (a message only they see in the thread, if the app has no `im:write`); the channel sees a line saying it is waiting for them |
+| Confirmations and refusals | Messages only that person sees |
+| Who may see it | A private room needs a private channel; every member of the channel must be able to see the room; no room is shown in a channel shared with another organisation. Joining and leaving the channel is noticed at once |
 
-`jarviscore.testing.rooms` has an in-memory `MemorySurface` and a `ScriptedRoomAgent` that runs the real room tools from a script instead of a model, so conversations are tested without a model, a chat product or a network. `jarviscore.testing.slack.FakeSlack` speaks Slack's Web API and Socket Mode protocol on a local port. Point the `slack` and `slack_app` Nexus connections at it (with a `base_url` of its address), and `SlackRoom` runs against it as it would against Slack. See [Build a Multiplayer Agent](multiplayer-agents.md#step-6-test-it-without-a-model-or-a-workspace).
+## Testing a surface
+
+`jarviscore.testing.rooms.MemorySurface` records everything a conversation posts, including what was shown to one person (`to`) and the confirmations it asked for, and lets you set `audience_problem` or make posts fail (`fail_next`). `ScriptedRoomAgent` runs the real room tools from scripts instead of a model. `jarviscore.testing.slack.FakeSlack` speaks Slack's Web API and Socket Mode on a local port, with Slack's behaviour where correctness depends on it. See [Build a Multiplayer Agent: test it](multiplayer-agents.md#step-7-test-it-without-a-model-or-a-workspace).
 
 ## Further reading
 
-- [Build a Multiplayer Agent](multiplayer-agents.md): a room the team talks to, from nothing to production
-- [Multiplayer API](../reference/multiplayer-api.md): `RoomConversation`, `ChatSurface`, `SlackRoom` and the rest
+- [Build a Multiplayer Agent](multiplayer-agents.md): a surface in your product and in Slack, step by step
+- [Rooms](rooms.md): what the conversation acts on
+- [Multiplayer API](../reference/multiplayer-api.md): every class and method

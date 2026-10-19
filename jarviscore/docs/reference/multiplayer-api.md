@@ -1,7 +1,7 @@
 ---
 icon: material/api
 title: "Multiplayer API Reference"
-description: "Reference for JarvisCore's multiplayer classes: Room, RoomFeed, RoomAgent, RoomConversation, ChatSurface, SlackRoom, HumanAgent and the HITL methods people's work uses."
+description: "Reference for JarvisCore's multiplayer classes: Person, Identities, Room, RoomFeed, RoomAgent, RoomConversation, ChatSurface, SlackApp, HumanAgent and the HITL methods people's work uses."
 ---
 
 # Multiplayer API
@@ -10,134 +10,137 @@ The classes behind [Multiplayer](../concepts/multiplayer.md), with their methods
 
 | Import | Classes |
 |---|---|
-| `jarviscore.room` | `Room`, `AskResult`, `Proposal`, `Head`, `FileChange`, `RoomFeed`, `FeedItem`, `RoomAgent`, `RoomSubAgent`, `Turn`, `RoomConversation`, `ChatSurface`, `ACCEPT`, `SHOW_CHANGE`, `RoomConflict`, `RoomPermissionError` |
-| `jarviscore.room.slack` | `SlackRoom`, `SlackApi`, `SlackError` |
+| `jarviscore.room` | `Person`, `Account`, `Identities`, `IdentityError`, `Room`, `AskResult`, `Proposal`, `Head`, `FileChange`, `RoomFeed`, `FeedItem`, `RoomAgent`, `RoomSubAgent`, `Turn`, `RoomConversation`, `ChatSurface`, `ACCEPT`, `SHOW_CHANGE`, `RELEASE`, `DISCARD`, `CONFIRM`, `CANCEL`, `ROLES`, `VISIBILITIES`, `RoomConflict`, `RoomPermissionError` |
+| `jarviscore.room.slack` | `SlackApp`, `SlackApi`, `SlackSurface`, `SlackError` |
+| `jarviscore.room.work` | `resume`, `finish`, `unfinished` |
 | `jarviscore.human` | `HumanAgent`, `HumanChannel`, `TerminalChannel` |
 | `jarviscore.hitl` | `HITLQueue` |
 | `jarviscore.testing.rooms` | `MemorySurface`, `ScriptedRoomAgent` |
 | `jarviscore.testing.slack` | `FakeSlack` |
 
-## Room
+## People
 
-A versioned set of files a team and its agents change together. See [Rooms](../guides/rooms.md).
+| Member | |
+|---|---|
+| `Person(tenant, id, name="")` | A person in a tenant. `.key` is `"tenant/id"`: what credentials and audit records are keyed by. `.display` is the name others see |
+| `Account(tenant, issuer, subject, name="")` | An authenticated account on a surface, such as `issuer="slack:T0123"` |
+| `Identities(redis_store)` | Accounts, people, links and removals, in the mesh's Redis |
+| `people.person_for(account, *, auto_provision=True)` | The person an account belongs to; a new account becomes a new person unless `auto_provision=False`. Raises `IdentityError` for removed people |
+| `people.register(person)` | Record a person your application manages |
+| `people.get(tenant, id)` | A person, or None if unknown or removed |
+| `people.begin_link(person)` / `people.complete_link(account, code)` | A one-time code (10 minutes) that makes another account the same person |
+| `people.accounts(person)`, `people.unlink(account)` | A person's accounts; let an account be someone else |
+| `people.deprovision(person)` | Remove someone: their roles stop applying and their accounts are refused |
+
+## Room
 
 ### Opening
 
-| Method | Returns | |
-|---|---|---|
-| `Room.for_mesh(mesh, room_id)` | `Room` | The room on a started Mesh, using its Redis and file storage; `ask` runs on that mesh |
-| `Room.open(room_id, *, redis_url=None, settings=None)` | `Room` | The room as any process sharing the mesh's Redis (`REDIS_URL`) and storage sees it |
-| `await room.ensure(files=None, *, by="")` | `Head` | Create the room with `{path: text or bytes}` at version 1, or return the existing head |
-| `await room.ensure_from(snapshot, *, by="")` | `Head` | Create the room from a captured source snapshot, such as a repository |
+| Member | |
+|---|---|
+| `Room.for_mesh(mesh, room_id, *, tenant)` | A room on a started mesh; it can `ask` the mesh's agents |
+| `Room.open(room_id, *, tenant, redis_url=None)` | The same room without a mesh (no `ask`) |
+| `await room.ensure(files=None, *, by)` | Create it with these files, owned by `by`, or return its head |
+| `await room.ensure_from(snapshot, *, by)` | Create it from a captured source snapshot |
+| `room.exists()`, `room.head()` | Whether it exists; its current `Head` (`version`, `updated_by`, `proposal_id`) |
+| `room.id`, `room.tenant`, `room.key` | Its id, tenant, and `"tenant/id"` |
 
 ### Reading
 
-| Method | Returns |
+Reading methods are for trusted code; check `room.require(person, "viewer", ...)` before reading for a person.
+
+| Member | |
 |---|---|
-| `room.head()` | `Head(version, snapshot_id, manifest_blob_path, updated_by, updated_at, proposal_id)` |
-| `await room.files(version=None)` | `{path: bytes}` at a version (default: current) |
-| `await room.read(path, version=None)` | The file's bytes, or `None` |
-| `await room.snapshot(version=None)` | The version's `SourceSnapshot` |
+| `await room.read(path, version=None)` | A file's bytes, or None |
+| `await room.files(version=None)`, `await room.snapshot(version=None)` | All files; the snapshot |
+| `await room.diff(proposal_id)` | `FileChange`s, each with `.unified()` |
+| `room.proposal(id)`, `room.proposals(status=None)` | A `Proposal`; all, or those in one status |
+| `room.events(after="")`, `room.progress(workflow_id, after="")` | The room's history; a piece of work's ledger |
 
 ### Work and proposals
 
-| Method | Returns | |
-|---|---|---|
-| `await room.ask(goal, *, asked_by, revision_of="", timeout=None, plan_template=None, workflow_id="")` | `AskResult` | Run `goal` on the current files as `asked_by`; a room on `for_mesh` only |
-| `await room.propose(changes, *, author, title="", asked_by="", base_version=None, workflow_id="", revision_of="")` | `Proposal` or `None` | Propose `{path: content or None}`; `None` deletes a file. `None` if nothing changes |
-| `await room.push(directory, *, author, title="", asked_by="")` | `Proposal` or `None` | Propose what changed in a checkout |
-| `await room.checkout(destination)` | `Head` | Copy the current files into an empty directory |
-| `await room.diff(proposal_id)` | `[FileChange]` | Each has `path`, `status` (`added`, `modified`, `deleted`), `before`, `after`, and `unified()` |
-| `await room.accept(proposal_id, *, by)` | `Head` | Merge it into the room; raises `RoomConflict` (with `.paths`) when changes clash |
-| `await room.reject(proposal_id, *, by, reason)` | `Proposal` | Turn it down |
-| `room.proposal(proposal_id)`, `room.proposals(status=None)` | `Proposal`, `[Proposal]` | By id; all, or those `open`, `accepted`, `rejected` or `conflicted` |
+| Member | |
+|---|---|
+| `await room.ask(goal, *, asked_by, revision_of="", timeout=None, plan_template=None, workflow_id="")` | Run a goal on the room as `asked_by`; returns `AskResult(workflow_id, status, proposal, summary, result, held_for, sources)` |
+| `await room.propose(changes, *, by, author="", title="", base_version=None, revision_of="")` | Propose content per path (`None` deletes); None if nothing changes |
+| `await room.accept(proposal_id, *, by)` | Merge it in; returns the new `Head`. Raises `RoomConflict` (with `.paths`) |
+| `await room.reject(proposal_id, *, by, reason)` | Turn it down |
+| `room.release(proposal_id, *, by)` | Show held work to the room (only the person it is held for) |
+| `await room.checkout(directory, *, by)`, `await room.push(directory, *, by, title="")` | Work by hand |
+| `room.private_sources(workflow_id)` | The connected systems a piece of work used that the room does not share |
+| `room.delete(*, by)` | Delete it (owners) |
 
-`AskResult` has `workflow_id`, `status`, `proposal` (or `None`), `summary` and `result` (the goal's full result).
-
-`Proposal` has `id`, `title`, `author`, `asked_by`, `base_version`, `changes`, `status`, `workflow_id`, `revision_of`, `decided_by`, `decided_at`, `reason`, `accepted_version` and `conflicts`.
+A `Proposal` has `id`, `title`, `author`, `asked_by`, `base_version`, `changes`, `paths`, `status` (`open`, `accepted`, `rejected`, `conflicted`), `revision_of`, `decided_by`, `reason`, `conflicts`, `held_for` and `sources`.
 
 ### Who can do what
 
-| Method | |
+| Member | |
 |---|---|
-| `room.set_role(person, role, *, by)` | `role` is `viewer`, `editor`, `owner`, or `None` to remove; owners only, and the first role makes an open room members-only |
-| `room.members()` | `{person: role}`; empty for an open room |
-| `room.role_of(person)`, `room.can(person, role)` | The person's role, or whether it reaches `role` |
-| `room.require(person, role, action)` | Raises `RoomPermissionError` with a readable reason when they can't |
+| `room.role_of(person)` | `viewer`, `editor`, `owner`, or None |
+| `room.can(person, role)`, `room.require(person, role, action)` | Check a role; `require` raises `RoomPermissionError` |
+| `room.visible_to(person, proposal)` | Whether they may see its contents (held work is for its asker) |
+| `room.members()`, `room.name_of(person_id)`, `room.settings()` | Person id to role; a name; `visibility`, `tenant_role`, `shared_connectors`, `created_by` |
+| `room.set_role(person, role_or_None, *, by)` | Owners; a room keeps one owner |
+| `room.set_visibility("members" \| "tenant", *, by, tenant_role="editor")` | Owners |
+| `room.set_shared_connectors(providers, *, by)` | Owners: systems everyone in the room may see |
 
 ### History
 
-| Method | Returns |
-|---|---|
-| `room.events(after="")` | The room's events after event id `after`, oldest first; each has `type`, `at`, `seq` and its own fields |
-| `room.progress(workflow_id, after="")` | That work's workflow ledger: `dag_published`, `step_claimed` (with `role`), `step_completed`, `step_blocked`, and so on |
-| `room.note(kind, **fields)` | Record an event of your own; returns its id |
-
 | Event | Fields |
 |---|---|
-| `room.created` | `by`, `files` |
-| `ask.started` | `by`, `goal`, `workflow_id`, `version`, `revision_of` |
-| `ask.finished` | `by`, `workflow_id`, `status`, `summary`, `proposal` |
-| `ask.failed` | `by`, `workflow_id`, `error` |
-| `proposal.opened` | `proposal`, `by`, `asked_by`, `title`, `base_version`, `paths`, `revision_of`, `workflow_id` |
-| `proposal.accepted` | `proposal`, `by`, `author`, `asked_by`, `version`, `paths`, `merged_over`, `line_merged` |
-| `proposal.rejected` | `proposal`, `by`, `author`, `reason` |
-| `proposal.conflicted` | `proposal`, `by`, `paths`, `version` |
-| `member.changed` | `by`, `person`, `role` |
+| `room.created` | `by`, `by_name`, `files`, `source` |
+| `ask.started` | `by`, `by_name`, `goal`, `workflow_id`, `version`, `revision_of` |
+| `ask.finished`, `ask.failed` | `status`, `summary`, `proposal`, `held_for`; `error` |
+| `proposal.opened`, `proposal.released` | `proposal`, `author`, `title`, `paths`, `base_version`, `revision_of`, `workflow_id`, `held_for` |
+| `proposal.accepted`, `proposal.rejected`, `proposal.conflicted` | `proposal`, `by`, `by_name`, `version`, `merged_over`, `line_merged`; `reason`; `paths` |
+| `member.changed`, `room.visibility`, `room.connectors` | `person`, `role`; `visibility`, `tenant_role`; `shared` |
 
 ## RoomFeed
 
-Reads a room's history and the progress of each piece of work as lines people can read. Nothing is stored.
-
-| Method | |
+| Member | |
 |---|---|
-| `RoomFeed(room, state=None)` | Start from the beginning, or from a saved `state` |
-| `feed.poll()` | `[FeedItem]` new since the last poll |
-| `feed.skip_history()` | Start from now |
-| `feed.state()` | Where it is, to save and resume from |
-
-`FeedItem` has `text`, `kind` (the event type, or `progress`), `at`, `workflow_id`, `proposal`, `detail` (such as the agents' summary) and `event` (the raw event or ledger entry).
+| `RoomFeed(room, state=None)` | Reads the room's history and its work's progress as lines |
+| `feed.poll()` | New `FeedItem`s: `text`, `kind`, `at`, `workflow_id`, `proposal`, `detail`, `held_for`, `withheld`, `cursor` |
+| `feed.state()`, `feed.skip_history()` | Where it is, to resume from; start from now |
 
 ## RoomAgent
 
-The agent a team talks to about a room's work: an `AutoAgent` with the Kernel role `room`. See [Build a Multiplayer Agent](../guides/multiplayer-agents.md#step-4-a-room-agent-people-talk-to).
+An AutoAgent with a `room` Kernel role. See [Build a Multiplayer Agent](../guides/multiplayer-agents.md#step-3-a-room-agent-people-talk-to).
 
 | Member | |
 |---|---|
-| `await agent.converse(room, person, message, **turn)` | Handle one message from `person` (who it acts as; from your authentication). Returns the `Turn`, whose `replies` holds what to post. Work it starts continues afterwards |
-| `system_prompt` | Leads the room role's instructions: your team, its people, its conventions |
-| `subagent_class` | The role's harness, `RoomSubAgent` by default; subclass it to add tools |
-| `ask_options` | Passed to `Room.ask` for the work it starts, such as `{"timeout": 1800}` |
-| `mesh_worker = False` | Planners never route steps to it and it claims none; people reach it through a surface |
+| `await agent.converse(room, person, message, **turn)` | Handle one message from `person`; returns a `Turn` with `replies` and `decisions` |
+| `agent.prepare(turn, action, target, reason="")` | Check and describe a decision for the person to confirm |
+| `agent.running_work(room)`, `agent.stop(room, workflow_id, *, by, reason)` | Work in progress; stop it (its asker, or an owner) |
+| `agent.resume_work(room)` | Follow work started before this process to its end |
+| `system_prompt`, `ask_options`, `subagent_class` | How it speaks; options for `room.ask`; its harness (`RoomSubAgent`) |
 
-`Turn` fields you can pass to `converse`: `thread`, `proposal` (the thread's proposal), `addressed`, `history` (`[{"person", "text"}]`), `questions` (open HITL items for the people there), `on_work(workflow_id)`, `on_proposal(proposal_id)`. `RoomConversation` fills them in.
-
-The `room` role's tools: `room_status`, `room_history`, `read_file`, `show_change`, `ask_agents`, `request_changes`, `accept`, `reject`, `propose_version`, `answer_question` and `stay_quiet`. None of them takes the acting person as a parameter: it is always the person who spoke.
+Its tools: `room_status`, `running_work`, `room_history`, `read_file`, `show_change`, `ask_agents`, `request_changes`, `propose_version`, `prepare_decision`, `answer_question`, `stay_quiet`.
 
 ## RoomConversation and ChatSurface
 
-`RoomConversation` connects a room and its agent to one surface. See [Chat Surfaces](../guides/chat-surfaces.md).
-
-| Method | |
+| Member | |
 |---|---|
-| `RoomConversation(room, agent, surface, *, people=None, poll_interval=1.0)` | `people` is the role of the HumanAgent standing for the people on this surface; its questions are posted here |
-| `await conversation.start()` | Load where this surface left off; introduce the room the first time |
-| `await conversation.follow()` | Post progress, proposals and the agents' questions until cancelled |
-| `await conversation.hear(person, text, *, thread=None, message_id="", addressed=False)` | A message from `person`. Read when `addressed` or posted in one of the room's threads |
-| `await conversation.press(person, action, proposal_id, thread)` | A button: `ACCEPT` or `SHOW_CHANGE` |
-| `conversation.threads()` | The surface's thread ids this conversation owns |
+| `RoomConversation(room, agent, surface, *, poll_interval=1.0, decision_seconds=600, retention_days=90, audience_seconds=30.0)` | One room's conversation on one surface |
+| `await conversation.start()` | Resume saved state, unhandled messages and unfinished work |
+| `await conversation.follow()` | Post updates until cancelled (one process at a time) |
+| `conversation.receive(person, text, *, message_id, thread=None, addressed=False)` | Record a message once; False for a redelivery |
+| `await conversation.handle(message_id)`, `await conversation.hear(...)` | Handle a received message; both at once |
+| `await conversation.press(person, action, target, thread)` | A button |
+| `conversation.recheck_audience()`, `conversation.can_see(person, item)` | Check who can see the surface before the next post; per-person visibility |
 
-A `ChatSurface` implements `say(thread, text, *, detail="", code="") -> id` and `show_proposal(thread, text, diff, proposal_id) -> id`, optionally `history(thread)`, and sets a unique `key`.
+`ChatSurface`: `key`, `say`, `notice`, `show_proposal`, `confirm`, `audience`, `history`. See [Chat Surfaces](../guides/chat-surfaces.md#what-a-surface-implements).
 
-## SlackRoom and SlackApi
+## SlackApp
 
 | Member | |
 |---|---|
-| `SlackRoom(room, agent, channel, *, people=None, members=None, api=None, poll_interval=1.0)` | A room in a Slack channel. `members`: `{slack_user_id: member}` or a function of the Slack user |
-| `await slack_room.run()` | Connect and serve until cancelled (`start()` connects only) |
-| `await SlackApi.through_nexus(mesh=None)` | Slack calls through Nexus: the `slack` connection signs Web API calls, `slack_app` opens Socket Mode |
+| `SlackApp(agent, *, tenant, api=None, identify=None, poll_interval=1.0)` | Serves a tenant's rooms in its Slack workspace |
+| `slack.connect(room, channel)` | Show a room in a channel (one room per channel) |
+| `await slack.start()`, `await slack.run()` | Connect; serve until cancelled |
+| `await SlackApi.through_nexus(mesh=None, *, api_url=...)` | Slack's Web API and Socket Mode through the `slack` and `slack_app` Nexus connections |
 
-`jarviscore room slack ROOM --channel ID` runs both. See [Chat Surfaces](../guides/chat-surfaces.md#slack).
+`jarviscore room slack ROOM --channel ID --tenant T` runs it from the terminal. See [Chat Surfaces](../guides/chat-surfaces.md#slack).
 
 ## HumanAgent
 
@@ -157,16 +160,16 @@ A `HumanChannel` implements any of `start(agent)`, `show(item)`, `withdraw(item_
 | Method | |
 |---|---|
 | `queue.assign(title, content, *, targets, context=None, urgency="normal")` | File work routed to a person (`input_request`): no escalation category needed |
-| `queue.inbox(target=None)` | Pending items for a person or role, from every agent, oldest first |
-| `queue.resolve(request_id, decision, reason="", by="")` | Answer an item; `reason` comes back as the resolution's `note` |
+| `queue.inbox(target=None, *, tenant=None)` | Pending items for a person or role, from every host, oldest first; only one tenant's with `tenant` |
+| `queue.resolve(request_id, decision, reason="", by="")` | Answer an item, once; resumes the mesh step an escalation paused. False if it was not pending |
 | `queue.expire(request_id)` | Close an unanswered item so it leaves every inbox |
 
-Escalations (`queue.request(...)`) are covered in [HITL Escalation](../guides/hitl.md).
+Items record the mesh step that raised them (`context["mesh_workflow_id"]`, `context["mesh_step_id"]`) and the tenant of the person the work runs for (`context["tenant"]`). Escalations (`queue.request(...)`) are covered in [HITL Escalation](../guides/hitl.md).
 
 ## Testing helpers
 
 | Helper | |
 |---|---|
-| `MemorySurface()` | A `ChatSurface` that keeps what is posted: `posts`, `thread(id)`, `texts(id)` |
+| `MemorySurface()` | A `ChatSurface` that keeps what is posted: `posts`, `confirmations`, `thread(id)`, `texts(id)`, `seen_by(person)`, `public()`; set `audience_problem` or `fail_next` |
 | `ScriptedRoomAgent(*scripts)` | The real room tools driven by scripts, `async (tools, turn) -> reply`, one per message |
-| `FakeSlack(users=...)` | Slack's Web API and Socket Mode on a local port; people play with `say` and `click` |
+| `FakeSlack(users=..., channels=...)` | Slack's Web API and Socket Mode on a local port; people play with `say`, `click`, `join` and `leave` |
