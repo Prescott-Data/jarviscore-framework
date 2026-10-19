@@ -25,3 +25,30 @@ def test_no_key_means_no_header(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     assert _gateway_api_key() is None
     assert _gateway_headers() == {}
+
+
+def test_dotenv_inline_comment_and_quotes_are_not_part_of_the_key(monkeypatch, tmp_path):
+    monkeypatch.delenv("NEXUS_GATEWAY_API_KEY", raising=False)
+    (tmp_path / ".env").write_text(
+        "# caller key for the Gateway\n"
+        "NEXUS_GATEWAY_API_KEY=gw-secret   # inline comment\n"
+        "OTHER='single quoted'\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert _gateway_api_key() == "gw-secret"
+    assert _gateway_headers() == {"X-API-Key": "gw-secret"}
+
+
+def test_dotenv_empty_value_means_unset(monkeypatch, tmp_path):
+    monkeypatch.delenv("NEXUS_GATEWAY_API_KEY", raising=False)
+    (tmp_path / ".env").write_text("NEXUS_GATEWAY_API_KEY=\n")
+    monkeypatch.chdir(tmp_path)
+    assert _gateway_api_key() is None
+    assert _gateway_headers() == {}
+
+
+def test_environment_wins_over_dotenv(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text("NEXUS_GATEWAY_API_KEY=from-file\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NEXUS_GATEWAY_API_KEY", "from-env")
+    assert _gateway_api_key() == "from-env"

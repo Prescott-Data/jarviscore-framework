@@ -61,15 +61,18 @@ def _compose_file() -> Path:
 # ── Nexus Gateway URL ─────────────────────────────────────────────────────────
 
 def _env_or_dotenv(name: str) -> Optional[str]:
-    """Read one variable from the environment, else from ./.env."""
+    """Read one variable from the environment, else from ./.env.
+
+    The file is parsed with python-dotenv, so quoting and inline comments
+    (`KEY=value # note`) are handled the way Settings handles them.
+    """
     value = os.environ.get(name, "")
     if value:
         return value
     env_file = Path.cwd() / ".env"
     if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            if line.startswith(f"{name}="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'") or None
+        from dotenv import dotenv_values
+        return dotenv_values(env_file).get(name) or None
     return None
 
 

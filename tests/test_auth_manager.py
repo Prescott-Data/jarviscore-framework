@@ -436,7 +436,9 @@ class TestGatewayApiKey:
         manager = AuthenticationManager({"nexus_gateway_url": "https://gateway.test.com"})
         assert manager.nexus_client.client.headers["X-API-Key"] == "from-env"
 
-    def test_no_key_sends_no_header(self, monkeypatch):
+    def test_no_key_sends_no_header(self, monkeypatch, tmp_path):
+        # Settings() also reads ./.env, so run where there is none.
         monkeypatch.delenv("NEXUS_GATEWAY_API_KEY", raising=False)
+        monkeypatch.chdir(tmp_path)
         manager = AuthenticationManager({"nexus_gateway_url": "https://gateway.test.com"})
         assert "x-api-key" not in manager.nexus_client.client.headers
