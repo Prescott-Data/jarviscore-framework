@@ -337,7 +337,9 @@ class TestWhoIsWho:
         slack.channels[CHANNEL]["members"] += ["U4", "U5"]
         for user in ("U4", "U5"):
             await slack.say(user, mention(slack, "show me the plan"), channel=CHANNEL)
-        await until(lambda: len([m for m in slack.ephemeral if "only act for members" in m["text"]]) == 2)
+        await until(lambda: len([m for m in slack.ephemeral if "only act for members" in m["text"]]) >= 2)
+        await asyncio.sleep(0.5)
+        assert len([m for m in slack.ephemeral if "only act for members" in m["text"]]) == 2, "once per person"
         assert heard == []
 
     async def test_someone_removed_from_the_tenant_is_refused(self, slack, served, room):

@@ -58,6 +58,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -547,7 +548,10 @@ class SlackApp:
             return ""  # people talking among themselves
         person = await self.person(user)
         if person is None:
-            if addressed:
+            # Slack delivers a mention more than once (app_mention and message, and
+            # redeliveries): say it once per message, whichever process hears it.
+            if addressed and conversation.store.take_lease(
+                    f"{conversation.room.key}:slack:refused:{event['channel']}:{ts}", uuid.uuid4().hex, 86400):
                 self._spawn(self.api.post_ephemeral(
                     event["channel"], user, "I can only act for members of this workspace.", thread_ts=thread))
             return ""

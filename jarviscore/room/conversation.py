@@ -105,6 +105,19 @@ class ChatSurface:
         return []
 
 
+async def _cancellable(coro):
+    """Await ``coro`` so that cancelling the caller always stops the caller, even when
+    a library inside ``coro`` (an HTTP client, say) catches the cancellation and
+    carries on. The work runs as its own task behind a shield: the caller's
+    cancellation is raised in the caller, and the work is cancelled as well."""
+    inner = asyncio.ensure_future(coro)
+    try:
+        return await asyncio.shield(inner)
+    except asyncio.CancelledError:
+        inner.cancel()
+        raise
+
+
 class RoomConversation:
     """One room's conversation on one surface. See the module docstring."""
 
@@ -134,6 +147,7 @@ class RoomConversation:
         self._paused: str = ""
         self._audience_checked = 0.0
         self._tasks: set = set()
+        self._closing = False
         self._lease = ""                     # the delivery lease, while follow() runs
         self._lease_seconds = max(10.0, poll_interval * 10)
         self._failures: Dict[str, int] = {}  # item -> failed posts in a row
@@ -206,7 +220,7 @@ class RoomConversation:
             while True:
                 try:
                     if self.store.take_lease(lease, self.instance, seconds):
-                        await self.sync()
+                        await _cancellable(self.sync())
                     if self.room.memory is not None and not self._memory_task:
                         # Its own loop: a slow Athena never holds back what is posted.
                         self._memory_task = self._spawn(self._keep_memory())
@@ -214,8 +228,7 @@ class RoomConversation:
                     raise
                 except Exception:
                     logger.exception("Could not post the room's progress")
-                if asyncio.current_task().cancelling():
-                    # A library under an HTTP call swallowed our cancellation; stop anyway.
+                if self._closing:
                     raise asyncio.CancelledError
                 await asyncio.sleep(self.poll_interval)
         finally:
@@ -227,7 +240,7 @@ class RoomConversation:
     async def _keep_memory(self) -> None:
         while True:
             try:
-                await self.room.memory.sync()
+                await _cancellable(self.room.memory.sync())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -236,6 +249,7 @@ class RoomConversation:
             await asyncio.sleep(max(self.poll_interval, 2.0))
 
     async def close(self) -> None:
+        self._closing = True
         for task in list(self._tasks):
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
