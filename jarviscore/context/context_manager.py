@@ -22,6 +22,7 @@ Two responsibilities:
 3. Auto-summarisation trigger — when cumulative token use crosses
    the configured threshold, signals the Kernel to compress and archive.
 """
+import importlib.util
 import json
 import logging
 import time
@@ -48,14 +49,24 @@ logger = logging.getLogger(__name__)
 
 # ── Token counting ──────────────────────────────────────────────────
 
-# Try tiktoken for exact counting; fall back to heuristic
-try:
-    import tiktoken
-    _ENCODER = tiktoken.get_encoding("cl100k_base")
-    _HAS_TIKTOKEN = True
-except ImportError:
-    _ENCODER = None
-    _HAS_TIKTOKEN = False
+# tiktoken counts exactly; its encoding is loaded on first use, not at import: it may
+# be downloaded, which fails offline (and in the code sandbox) and slows startup.
+_ENCODER = None
+_HAS_TIKTOKEN = importlib.util.find_spec("tiktoken") is not None
+
+
+def _encoder():
+    """The cl100k_base encoder, or None (heuristic counting) when it cannot be loaded."""
+    global _ENCODER, _HAS_TIKTOKEN
+    if _ENCODER is None and _HAS_TIKTOKEN:
+        try:
+            import tiktoken
+
+            _ENCODER = tiktoken.get_encoding("cl100k_base")
+        except Exception as exc:
+            logger.debug("tiktoken unavailable, counting tokens by words: %s", exc)
+            _HAS_TIKTOKEN = False
+    return _ENCODER
 
 # Tokens-per-word heuristic (matches llm.py Gemini fallback)
 _TOKENS_PER_WORD: float = 1.3
@@ -148,9 +159,10 @@ class ContextManager:
         """
         if not text:
             return 0
-        if _HAS_TIKTOKEN and _ENCODER is not None:
+        encoder = _encoder()
+        if encoder is not None:
             try:
-                return len(_ENCODER.encode(text))
+                return len(encoder.encode(text))
             except Exception:
                 pass  # fall through to heuristic
         return max(1, int(len(text.split()) * _TOKENS_PER_WORD))

@@ -46,6 +46,24 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _user_site_environment() -> Dict[str, str]:
+    """Give the scrubbed child the parent's user site-packages, and nothing else.
+
+    The child's HOME is the workspace, so Python would otherwise look for user
+    packages there: a `pip install --user` of JarvisCore could not import its
+    own dependencies, and code could plant packages for later runs. Pointing
+    PYTHONUSERBASE at the parent's (read-only under confinement) user base, or
+    disabling user site when the parent has none, mirrors the parent exactly.
+    """
+    import site
+
+    user_site = site.getusersitepackages() if site.ENABLE_USER_SITE else None
+    if user_site and user_site in sys.path:
+        return {"PYTHONUSERBASE": site.getuserbase()}
+    return {"PYTHONNOUSERSITE": "1"}
+
+
 # ─────────────────────────────────────────────────────────────────
 # Result Model
 # ─────────────────────────────────────────────────────────────────
@@ -847,6 +865,7 @@ class CoderSandbox:
             "TMPDIR": str(self.workspace / ".tmp"),
             "LANG": "C.UTF-8",
             "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+            **_user_site_environment(),
         }
         Path(safe_env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
         from jarviscore.execution.isolation import confinement_prefix

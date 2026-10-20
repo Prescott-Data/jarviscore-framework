@@ -1,9 +1,12 @@
 import os
+import site
+import sys
 from typing import ClassVar
 
 import pytest
 
 from jarviscore import Mesh
+from jarviscore.execution.coder_sandbox import _user_site_environment
 from jarviscore.execution.coder_sandbox import create_coder_sandbox as _create_coder_sandbox
 from jarviscore.profiles.autoagent import AutoAgent, _AutoAgentMeshProxy
 
@@ -54,6 +57,34 @@ async def test_generated_code_runs_in_a_different_process(monkeypatch):
     assert result["status"] == "success"
     assert result["data"]["pid"] != os.getpid()
     assert result["data"]["secret"] is None
+
+
+@pytest.mark.asyncio
+async def test_child_imports_from_the_parents_user_site_without_the_parents_home(tmp_path):
+    parent_user_site = site.getusersitepackages()
+    if not site.ENABLE_USER_SITE or parent_user_site not in sys.path:
+        pytest.skip("this interpreter imports nothing from a user site-packages")
+    sandbox = create_coder_sandbox(timeout=10, workspace_dir=tmp_path)
+
+    result = await sandbox.execute(
+        "import os, site, sys\n"
+        "result = {\n"
+        "    'user_site': site.getusersitepackages(),\n"
+        "    'on_path': site.getusersitepackages() in sys.path,\n"
+        "    'home': os.path.expanduser('~'),\n"
+        "}\n"
+    )
+
+    assert result["status"] == "success", result.get("error")
+    assert result["data"]["user_site"] == parent_user_site
+    assert result["data"]["on_path"] is True
+    assert result["data"]["home"] == str(sandbox.workspace)
+
+
+def test_child_has_no_user_site_when_the_parent_has_none(monkeypatch):
+    monkeypatch.setattr(site, "ENABLE_USER_SITE", False)
+
+    assert _user_site_environment() == {"PYTHONNOUSERSITE": "1"}
 
 
 @pytest.mark.asyncio

@@ -4,18 +4,16 @@ Embedding model wrapper for RAG.
 Uses sentence-transformers for local embedding generation.
 Optional dependency — install with: pip install jarviscore[rag]
 """
+import importlib.util
 import logging
 import os
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-try:
-    from sentence_transformers import SentenceTransformer
-    _HAS_ST = True
-except ImportError:
-    _HAS_ST = False
-    SentenceTransformer = None  # type: ignore[assignment,misc]
+# sentence-transformers (and torch under it) is imported when a model is built, not
+# when jarviscore is: importing it takes seconds, and most agents never embed.
+_HAS_ST = importlib.util.find_spec("sentence_transformers") is not None
 
 
 class EmbeddingModel:
@@ -31,6 +29,8 @@ class EmbeddingModel:
                 "sentence-transformers is required for embeddings. "
                 "Install with: pip install jarviscore[rag]"
             )
+        from sentence_transformers import SentenceTransformer
+
         resolved = None
         if model_path:
             candidate = os.path.abspath(model_path)
