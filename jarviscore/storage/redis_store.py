@@ -2654,8 +2654,19 @@ class RedisContextStore:
     def delete_room(self, room_key: str) -> None:
         """Remove a room's state and history (its file blobs are the caller's to remove)."""
         self._redis.delete(self._room_key(room_key, "head"), self._room_key(room_key, "proposals"),
-                           self._room_key(room_key, "meta"),
+                           self._room_key(room_key, "meta"), self._room_key(room_key, "memory_scopes"),
                            f"ledgers:{self._room_history(room_key)}")
+
+    def record_room_memory_scope(self, room_key: str, scope: str) -> None:
+        """Note an Athena scope that holds memory of this room (a person's private
+        memory in it), so erasing the room's memory can find it after they leave."""
+        self._redis.sadd(self._room_key(room_key, "memory_scopes"), scope)
+
+    def room_memory_scopes(self, room_key: str) -> List[str]:
+        return sorted(self._redis.smembers(self._room_key(room_key, "memory_scopes")) or [])
+
+    def forget_room_memory_scope(self, room_key: str, scope: str) -> None:
+        self._redis.srem(self._room_key(room_key, "memory_scopes"), scope)
 
     # ── A room's conversations on its surfaces ──────────────────────────────
     #

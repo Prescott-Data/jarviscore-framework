@@ -188,6 +188,8 @@ With [Athena](../concepts/memory.md) configured (`ATHENA_URL`), a room remembers
 
 The room's team memory is `room.memory` (a `RoomMemory`); set it to None to keep none, or to your own to keep it elsewhere.
 
+To erase what a room remembers, an owner calls `await room.forget(by=owner)`: the team's memory and everyone's private memory in the room go, including people who have left. A person erases their own private memory in the room with `await room.forget_person(person, by=person)`. Do this before `room.delete`, which removes only the room's own state and history. Both raise unless Athena confirms the erasure, including when the calling process has no `ATHENA_URL`; a room you gave `memory = None` has nothing to erase.
+
 ## Spending
 
 Work runs for whoever asked, so its model use is theirs. Every model call made while working for a person, including the room agent's own turns when they speak, is charged to them per UTC day and month, and a tenant can cap it:

@@ -145,6 +145,16 @@ class UnifiedMemory:
         the team's), created on first use."""
         if getattr(self, attr) is not None or self._athena_client is None or not user_id:
             return getattr(self, attr)
+        if attr == "_private_memory" and self._memory_scope:
+            record = getattr(self._redis, "record_room_memory_scope", None)
+            if record is not None:
+                try:
+                    # Before anything is written, so erasing the room always finds it.
+                    record(self._memory_scope, user_id)
+                except Exception as exc:
+                    # Write nothing private that the room could not later erase.
+                    logger.warning("[UnifiedMemory] private memory off: could not note scope %s: %s", user_id, exc)
+                    return None
         try:
             from .athena_memory import AthenaMemory
 

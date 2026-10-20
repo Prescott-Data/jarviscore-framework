@@ -87,7 +87,9 @@ Work in a [room](../guides/rooms.md) and the room's conversation remember in the
 - **The team's memory.** What people say to the room's agent, its replies to everyone, and what the room records (requests, finished work, decisions and their reasons) are written to the room's team session in Athena, as the conversation Athena is built to follow. "Sam owns support", said once in a thread, is recalled by an agent writing the support section a week later.
 - **Private stays private.** What a piece of work learns through its asker's own access to a system the room does not share is kept in that person's private memory in the room, never the room's. Only work done for them recalls it, and work that recalls it is private work: its result is held for them like any other. Replies and work shown to one person are never written to the team's memory.
 
-Outside rooms, `Mesh(config={"memory_scope_field": "..."})` names the context field that separates your tenants; without it, an agent's memory is one pool.
+- **Forgetting.** `await room.forget(by=owner)` erases everything the room remembers: the team's memory and every person's private memory in it, including people who have since left. `await room.forget_person(person, by=person)` erases one person's private memory in the room; the person or an owner can do it. Athena removes sessions, events, summaries, vectors, payloads and the long-term knowledge they produced. Call `forget` before `room.delete`, which removes the room's record of who had private memory in it.
+
+Outside rooms, `Mesh(config={"memory_scope_field": "..."})` names the context field that separates your tenants; without it, an agent's memory is one pool. To erase a scope there, call `AthenaClient.erase_memory(tenant_id, user_id, agent_id="")`; leave `user_id` empty to erase a whole tenant.
 
 ---
 
@@ -244,13 +246,13 @@ Athena needs two models: a chat model to summarise conversation, and an embeddin
 
 | Variable | Default | |
 |---|---|---|
-| `ATHENA_AZURE_CHAT_DEPLOYMENT` | `gpt-4o-mini` | Must accept `max_tokens` and `temperature`: reasoning deployments (gpt-5 and later) refuse them |
+| `ATHENA_AZURE_CHAT_DEPLOYMENT` | `gpt-4o-mini` | Any chat deployment. A reasoning deployment (gpt-5 and later, o-series) is detected and Athena is told to send the parameters it accepts; that needs an Athena image with reasoning-model support |
 | `ATHENA_AZURE_EMBEDDING_DEPLOYMENT` | `text-embedding-3-small` | 1536 dimensions (`ATHENA_VECTOR_DIMENSION`) |
 
 !!! warning "If memory never becomes searchable"
     Look at Athena's log (`docker logs athena`) for embedding or summarisation errors: a rejected key or a missing deployment makes Athena keep events but never summarise them, and nothing says so to the agents. The stack also sizes Athena's short-term memory above the count that forces a summary (`ATHENA_STM_MAX_EVENTS=60`, `ATHENA_STM_FLUSH_EVENTS=20`); with Athena's own defaults (10 and 20) events older than the newest ten are dropped before they are ever summarised.
 
-What Athena does not do yet, so JarvisCore does not rely on it: deleting a session or a person's memory (its delete endpoint is not implemented), long-term graph memory over its API, time-range queries, and de-duplicating a repeated write. Deleting a room deletes the room's files and history in JarvisCore; its memory in Athena stays until Athena can delete it.
+What Athena does not do, so JarvisCore does not rely on it: time-range queries, and de-duplicating a repeated write. Erasing memory (`room.forget`, `AthenaClient.erase_memory`) needs an Athena image with memory erasure; older images answer it with an error, which JarvisCore raises rather than reporting the memory as erased.
 
 !!! info "Athena's API key"
     Athena refuses requests without a key. JarvisCore serves many tenants (each room is one), so it holds a **service key**: Athena trusts it to name the tenant in each request. The stack starts Athena with `ATHENA_API_KEY` as its service key, and JarvisCore sends it on every call. Treat it like a database password, and in production keep Athena on a private network. Athena's own guide covers tenant keys and JWTs for other clients.

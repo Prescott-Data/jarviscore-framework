@@ -10,6 +10,7 @@ import pytest
 from jarviscore.kernel.kernel import Kernel
 from jarviscore.memory.unified import UnifiedMemory
 from jarviscore.room import Person, Room
+from jarviscore.room.room import RoomPermissionError
 from jarviscore.room.memory import RoomMemory
 from jarviscore.storage.local import LocalBlobStorage
 from jarviscore.storage.redis_store import RedisContextStore
@@ -48,6 +49,14 @@ class FakeAthena:
     async def get_context(self, session_id, limit=20, **_):
         return {"stm_events": [{"content": e["content"], "metadata": e["metadata"], "role": e["role"]}
                                for e in self.events if e["session"] == session_id][-limit:]}
+
+    async def erase_memory(self, tenant_id, user_id="", agent_id=""):
+        before = len(self.events)
+        self.events = [e for e in self.events
+                       if not (e["scope"][0] == tenant_id and (not user_id or e["scope"][1] == user_id)
+                               and (not agent_id or e["scope"][2] == agent_id))]
+        self.erased = getattr(self, "erased", []) + [(tenant_id, user_id, agent_id)]
+        return {"success": True, "events_deleted": before - len(self.events)}
 
     def contents(self, tenant="acme", user=None):
         return [e["content"] for e in self.events if e["scope"][0] == tenant and (user is None or e["scope"][1] == user)]
@@ -250,3 +259,87 @@ class TestInTheConversation:
         await conversation.hear(alice, "yes, but keep it quiet", thread=thread, message_id="m1")
         assert results[0] is True and results[1]["status"] == "error"
         assert "40k" not in " ".join(athena.contents(user="acme/launch"))
+
+
+class TestForgetting:
+
+    async def keep_private(self, room, athena, person, fact, workflow_id):
+        room.redis_store.record_workflow_source(workflow_id, "gmail", person.key)
+        mem = memory_for(room, athena, "reader", work_context(room, person), workflow_id)
+        assert await mem.remember(fact)
+        await mem.close()
+
+    async def test_forgetting_a_room_erases_team_and_private_memory_even_of_people_who_left(self, room, athena):
+        await room.memory.said(bob, "Tuesday is fixed by the board")
+        await self.keep_private(room, athena, alice, "Maria's email says the venue moved", "wf-a")
+        await self.keep_private(room, athena, bob, "Bob's calendar shows a dentist on Monday", "wf-b")
+        room.set_role(bob, None, by=alice)  # bob leaves; his private memory here must still go
+
+        totals = await room.forget(by=alice)
+
+        assert athena.contents() == []
+        assert {("acme", "acme/launch", ""), ("acme", "acme/launch#private:alice", ""),
+                ("acme", "acme/launch#private:bob", "")} <= set(athena.erased)
+        assert totals["events_deleted"] == 3
+        assert room.redis_store.room_memory_scopes(room.key) == []
+        assert any(e.get("type") == "memory_erased" for e in room.events())
+
+    async def test_only_owners_forget_a_room(self, room):
+        with pytest.raises(RoomPermissionError):
+            await room.forget(by=bob)
+
+    async def test_a_person_can_erase_their_own_private_memory_and_no_one_elses(self, room, athena):
+        await self.keep_private(room, athena, alice, "Maria's email says the venue moved", "wf-a")
+        await self.keep_private(room, athena, bob, "Bob's calendar shows a dentist on Monday", "wf-b")
+
+        with pytest.raises(RoomPermissionError):
+            await room.forget_person(alice, by=bob)
+        await room.forget_person(bob, by=bob)
+
+        assert not athena.contents(user="acme/launch#private:bob")
+        assert athena.contents(user="acme/launch#private:alice"), "someone else's memory stays"
+        await room.forget_person(alice, by=alice)
+        assert not athena.contents(user="acme/launch#private:alice")
+
+    async def test_without_athena_forgetting_is_a_no_op(self, room):
+        room.memory = None
+        assert await room.forget(by=alice) == {}
+
+    async def test_private_memory_from_before_scopes_were_recorded_is_still_erased(self, room, athena):
+        await self.keep_private(room, athena, carol, "Carol's notes on the supplier", "wf-c")
+        room.redis_store.forget_room_memory_scope(room.key, "acme/launch#private:carol")  # an older room
+
+        await room.forget(by=alice)
+
+        assert not athena.contents(user="acme/launch#private:carol"), "carol is a member, so her scope is derived"
+
+    async def test_the_same_person_under_another_display_name_may_erase_their_own(self, room, athena):
+        await self.keep_private(room, athena, bob, "Bob's calendar shows a dentist on Monday", "wf-b")
+        await room.forget_person(Person("acme", "bob", ""), by=Person("acme", "bob", "Bob B."))
+        assert not athena.contents(user="acme/launch#private:bob")
+
+    async def test_nothing_private_is_written_when_its_scope_cannot_be_recorded(self, room, athena, monkeypatch):
+        def broken(*_):
+            raise ConnectionError("redis failover")
+        monkeypatch.setattr(room.redis_store, "record_room_memory_scope", broken)
+        room.redis_store.record_workflow_source("wf-x", "gmail", alice.key)
+        mem = memory_for(room, athena, "reader", work_context(room, alice), "wf-x")
+        assert not await mem.remember("Maria's email says the venue moved")
+        assert not athena.contents(user="acme/launch#private:alice")
+
+    async def test_queued_messages_are_erased_not_written_after(self, room, athena):
+        room.memory.said_later(bob, "Tuesday is fixed by the board")
+        await room.forget(by=alice)
+        await room.memory.flush()
+        assert athena.contents() == []
+
+    async def test_an_erasure_waits_for_a_sync_running_elsewhere(self, room):
+        assert room.redis_store.take_lease(f"{room.key}:memory", "other-process", 60)
+        with pytest.raises(RuntimeError, match="retry"):
+            await room.forget(by=alice)
+
+    async def test_forgetting_without_athena_configured_is_an_error_not_a_success(self, room, monkeypatch, tmp_path):
+        monkeypatch.delenv("ATHENA_URL", raising=False)
+        fresh = Room("launch", tenant="acme", blob_storage=LocalBlobStorage(str(tmp_path)), redis_store=room.redis_store)
+        with pytest.raises(RuntimeError, match="ATHENA_URL"):
+            await fresh.forget(by=alice)

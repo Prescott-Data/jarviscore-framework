@@ -162,6 +162,27 @@ class AthenaClient:
             logger.debug(f"[Athena] get_session failed for '{session_id}': {exc}")
             return None
 
+    async def erase_memory(self, tenant_id: str, user_id: str = "", agent_id: str = "") -> Dict[str, Any]:
+        """Erase everything Athena holds for a scope: a tenant's user, one agent of a
+        user, or (``user_id`` empty) the whole tenant. Sessions, short-term memory,
+        events, summaries, vectors, payloads and long-term graph knowledge go.
+
+        Returns Athena's counts. Raises on failure: an erasure that did not happen
+        must not look as if it did. Safe to retry.
+        """
+        if not tenant_id:
+            raise ValueError("erase_memory needs a tenant_id")
+        http = await self._http()
+        resp = await http.post("/api/v1/memory/erase",
+                               json={"tenant_id": tenant_id, "user_id": user_id, "agent_id": agent_id})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Athena did not erase {tenant_id}/{user_id or '*'}"
+                               f"{'/' + agent_id if agent_id else ''}: {resp.status_code} {resp.text[:200]}")
+        data = resp.json()
+        if not data.get("success"):
+            raise RuntimeError(f"Athena did not erase {tenant_id}/{user_id or '*'}: {data}")
+        return data
+
     async def delete_session(self, session_id: str) -> bool:
         """Delete one Athena session."""
         try:

@@ -64,6 +64,8 @@ services:
       LLM_BASE_URL: ${ATHENA_LLM_BASE_URL:-}
       EMBEDDING_BASE_URL: ${ATHENA_EMBEDDING_BASE_URL:-}
       MILVUS_VECTOR_DIMENSION: ${ATHENA_VECTOR_DIMENSION:-1536}
+      # Reasoning chat deployments (gpt-5+, o-series): set by 'memory init' when detected.
+      LLM_REASONING_MODEL: ${ATHENA_LLM_REASONING:-false}
 
       # Short-term memory must hold more events than the count that forces a
       # summary, or events older than the newest STM_CACHE_MAX_TURNS are dropped

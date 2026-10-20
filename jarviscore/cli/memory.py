@@ -258,23 +258,39 @@ def _find_athena_repo() -> Optional[Path]:
     return None
 
 
-def _check_azure_deployments(key: str, chat: str, embedding: str) -> None:
-    """Warn now, not after memory silently stops forming, when a deployment is missing."""
-    import json
-    import urllib.request
+def _post_json(url: str, key: str, body: dict) -> tuple[int, str]:
+    """POST to an Azure deployment; returns (status, body text). Uses httpx, which
+    verifies TLS with certifi's CA bundle (urllib depends on the interpreter's, which
+    python.org builds on macOS do not install)."""
+    import httpx
 
-    for name, url, body in (
-        (chat, os.environ["ATHENA_LLM_BASE_URL"], {"messages": [{"role": "user", "content": "ok"}], "max_tokens": 1}),
-        (embedding, os.environ["ATHENA_EMBEDDING_BASE_URL"], {"input": "ok"}),
-    ):
-        request = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                         headers={"api-key": key, "Content-Type": "application/json"})
-        try:
-            urllib.request.urlopen(request, timeout=15)
-        except Exception as exc:
-            _warn(f"Azure deployment '{name}' did not answer ({exc}). Athena needs a chat deployment that "
-                  "accepts max_tokens (ATHENA_AZURE_CHAT_DEPLOYMENT, default gpt-4o-mini) and an embedding "
-                  "deployment (ATHENA_AZURE_EMBEDDING_DEPLOYMENT, default text-embedding-3-small).")
+    try:
+        resp = httpx.post(url, json=body, headers={"api-key": key}, timeout=30)
+        return resp.status_code, resp.text
+    except Exception as exc:
+        return 0, str(exc)
+
+
+def _check_azure_deployments(key: str, chat: str, embedding: str) -> None:
+    """Warn now, not after memory silently stops forming, when a deployment is missing.
+
+    Reasoning deployments (gpt-5 and later, o-series) reject ``max_tokens``; that is
+    detected here and passed to Athena (``ATHENA_LLM_REASONING``) so it sends the
+    parameters they accept from its first request."""
+    ask = {"messages": [{"role": "user", "content": "ok"}]}
+    status, body = _post_json(os.environ["ATHENA_LLM_BASE_URL"], key, {**ask, "max_tokens": 1})
+    if status == 400 and "max_completion_tokens" in body:
+        status, body = _post_json(os.environ["ATHENA_LLM_BASE_URL"], key, {**ask, "max_completion_tokens": 64})
+        if status == 200:
+            os.environ.setdefault("ATHENA_LLM_REASONING", "true")
+            print(f"  ✅  '{chat}' is a reasoning deployment; Athena will send it the parameters it accepts")
+    if status != 200:
+        _warn(f"Azure chat deployment '{chat}' did not answer ({status}: {body[:160]}). Set "
+              "ATHENA_AZURE_CHAT_DEPLOYMENT to a deployed chat model (default gpt-4o-mini).")
+    status, body = _post_json(os.environ["ATHENA_EMBEDDING_BASE_URL"], key, {"input": "ok"})
+    if status != 200:
+        _warn(f"Azure embedding deployment '{embedding}' did not answer ({status}: {body[:160]}). Set "
+              "ATHENA_AZURE_EMBEDDING_DEPLOYMENT to a deployed embedding model (default text-embedding-3-small).")
 
 
 def _pick_llm_key() -> tuple[str, str, str]:
@@ -330,6 +346,14 @@ def _dotenv_value(path: Path, name: str) -> str:
     return ""
 
 
+def _append_dotenv(path: Path, name: str, value: str) -> None:
+    """Add NAME=value as its own line, even when the file's last line has no newline."""
+    text = path.read_text() if path.exists() else ""
+    if text and not text.endswith("\n"):
+        text += "\n"
+    path.write_text(f"{text}{name}={value}\n")
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     """
     One-command Athena setup — same philosophy as 'jarviscore nexus init'.
@@ -368,7 +392,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             sys.exit(1)
         print(f"  ✅  Athena source: {athena_dir}")
     else:
-        print("  ✅  Athena image: ghcr.io/prescott-data/athena:latest")
+        print(f"  ✅  Athena image: {os.environ.get('ATHENA_IMAGE') or 'ghcr.io/prescott-data/athena:latest'}")
 
     # LLM key
     provider, llm_key, model = _pick_llm_key()
@@ -442,18 +466,16 @@ def cmd_init(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     # 5. Write ATHENA_URL and ATHENA_API_KEY to .env
-    env_text = env_file.read_text() if env_file.exists() else ""
     if _dotenv_value(env_file, "ATHENA_URL"):
         print("  ✅  ATHENA_URL already set")
     else:
-        env_text += f"\nATHENA_URL={athena_url}\n"
+        _append_dotenv(env_file, "ATHENA_URL", athena_url)
         print(f"  ✅  Wrote ATHENA_URL={athena_url} to {env_file}")
     if _dotenv_value(env_file, "ATHENA_API_KEY") or not generated_key:
         print("  ✅  ATHENA_API_KEY already set")
     else:
-        env_text += f"ATHENA_API_KEY={api_key}\n"
+        _append_dotenv(env_file, "ATHENA_API_KEY", api_key)
         print(f"  ✅  Wrote a new ATHENA_API_KEY to {env_file} (keep it secret)")
-    env_file.write_text(env_text)
 
     print()
     _banner("Athena is live!", "─")

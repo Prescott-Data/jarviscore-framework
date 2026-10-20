@@ -423,3 +423,33 @@ async def test_a_session_can_be_in_another_tenant_than_the_clients(monkeypatch):
     monkeypatch.setattr(client, "_http", http)
     assert await client.create_session("room", user_id="acme/launch", tenant_id="acme") == "s-acme"
     assert (sent["tenant_id"], sent["user_id"], sent["agent_id"]) == ("acme", "acme/launch", "room")
+
+
+@pytest.mark.asyncio
+async def test_erase_memory_posts_the_scope_and_returns_counts():
+    client = AthenaClient("http://athena.test")
+    http = AsyncMock()
+    response = _response({"success": True, "eventsDeleted": 9})
+    response.status_code = 200
+    http.post.return_value = response
+    client._client = http
+
+    assert await client.erase_memory("acme", "acme/launch") == {"success": True, "eventsDeleted": 9}
+    assert http.post.await_args.args[0] == "/api/v1/memory/erase"
+    assert http.post.await_args.kwargs["json"] == {"tenant_id": "acme", "user_id": "acme/launch", "agent_id": ""}
+
+
+@pytest.mark.asyncio
+async def test_erase_memory_raises_when_athena_did_not_erase():
+    client = AthenaClient("http://athena.test")
+    http = AsyncMock()
+    response = _response({})
+    response.status_code = 500
+    response.text = "failed to erase memory (safe to retry)"
+    http.post.return_value = response
+    client._client = http
+
+    with pytest.raises(RuntimeError, match="did not erase"):
+        await client.erase_memory("acme", "u")
+    with pytest.raises(ValueError):
+        await client.erase_memory("")

@@ -200,6 +200,17 @@ class Room:
     @memory.setter
     def memory(self, value) -> None:
         self._memory = value
+        self._memory_chosen = True
+
+    def _memory_to_erase(self):
+        """The room's memory, or None when the room deliberately keeps none. Raises when
+        Athena is simply not configured here: nothing could be erased, and saying
+        otherwise would leave the memory in place unnoticed."""
+        memory = self.memory
+        if memory is None and not getattr(self, "_memory_chosen", False):
+            raise RuntimeError(f"Athena is not configured in this process (ATHENA_URL), so room {self.id}'s "
+                               "memory cannot be erased from it")
+        return memory
 
     # ── Construction ────────────────────────────────────────────────────────
 
@@ -791,6 +802,35 @@ class Room:
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def delete(self, *, by: Person) -> None:
-        """Remove the room's state and history for good. Owners only."""
+        """Remove the room's state and history for good. Owners only.
+
+        What the room remembers in Athena is erased by ``forget``; await it first
+        when the room had memory (``delete`` removes the record of who had private
+        memory in it)."""
         self.require(by, "owner", "delete the room")
         self.redis_store.delete_room(self.key)
+
+    async def forget(self, *, by: Person) -> Dict[str, int]:
+        """Erase everything the room remembers in Athena: the team's memory and every
+        person's private memory in the room, including people who have left.
+        Owners only. Returns Athena's counts; raises if Athena did not confirm."""
+        self.require(by, "owner", "erase the room's memory")
+        memory = self._memory_to_erase()
+        if memory is None:
+            return {}
+        totals = await memory.erase()
+        self.note("memory_erased", by=by.id)
+        return totals
+
+    async def forget_person(self, person: Person, *, by: Person) -> Dict[str, Any]:
+        """Erase what work for ``person`` learned from their own access in this room
+        (their private memory here). The person themselves or an owner."""
+        self._same_tenant(person)
+        if by.key != person.key:
+            self.require(by, "owner", f"erase {person.display}'s memory")
+        memory = self._memory_to_erase()
+        if memory is None:
+            return {}
+        result = await memory.erase_person(person)
+        self.note("memory_erased", by=by.id, person=person.id)
+        return result

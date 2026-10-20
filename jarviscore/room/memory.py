@@ -68,6 +68,60 @@ class RoomMemory:
         await self.client.write_event(session_id=session, role=role, event_type=kind, content=content,
                                       metadata={k: str(v) for k, v in metadata.items() if v not in (None, "")})
 
+    # ── Forgetting ──────────────────────────────────────────────────────────
+
+    def private_scope(self, person) -> str:
+        """The Athena scope holding what work for ``person`` learned from their own access."""
+        return f"{self.room.key}#private:{person.id}"
+
+    async def erase(self) -> Dict[str, int]:
+        """Erase everything the room remembers in Athena: the team's memory and the
+        private memory of everyone who had private work in it. Raises if Athena
+        did not confirm it; safe to retry."""
+        # What is still queued goes first, so it is erased rather than written after.
+        if not await self.flush(timeout=30.0):
+            raise RuntimeError(f"room {self.room.key}: memory writes are still queued; retry the erasure")
+        lease = f"{self.room.key}:memory"
+        if self.store is not None and not self.store.take_lease(lease, self._holder, 300):
+            raise RuntimeError(f"room {self.room.key}: its memory is being written elsewhere; retry the erasure")
+        try:
+            totals: Dict[str, int] = {}
+            for scope in self._scopes():
+                for name, n in (await self.client.erase_memory(self.room.tenant, scope)).items():
+                    if isinstance(n, int) and not isinstance(n, bool):
+                        totals[name] = totals.get(name, 0) + n
+                if scope != self.room.key and self.store is not None:
+                    self.store.forget_room_memory_scope(self.room.key, scope)
+            self._session = None
+            return totals
+        finally:
+            if self.store is not None:
+                self.store.release_lease(lease, self._holder)
+
+    def _scopes(self) -> list:
+        """Every Athena scope that may hold this room's memory: the team's, the private
+        scopes recorded when first used, and (for memory kept before they were
+        recorded) a private scope for everyone the room has known."""
+        scopes = {self.room.key}
+        people = set(self.room.members())
+        if self.store is not None:
+            scopes.update(self.store.room_memory_scopes(self.room.key))
+            people.update((self.store.get_room_meta(self.room.key) or {}).get("names") or {})
+        for event in self.room.events():
+            for field in ("by", "person"):
+                if event.get(field):
+                    people.add(str(event[field]))
+        scopes.update(f"{self.room.key}#private:{pid}" for pid in people)
+        return [self.room.key] + sorted(scopes - {self.room.key})
+
+    async def erase_person(self, person) -> Dict[str, Any]:
+        """Erase one person's private memory in this room."""
+        scope = self.private_scope(person)
+        result = await self.client.erase_memory(self.room.tenant, scope)
+        if self.store is not None:
+            self.store.forget_room_memory_scope(self.room.key, scope)
+        return result
+
     # ── The conversation ────────────────────────────────────────────────────
 
     def said_later(self, person, text: str, *, thread: str = "") -> None:
