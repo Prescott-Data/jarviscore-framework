@@ -121,6 +121,15 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Changed
 
+- **The bundled Athena stack runs Athena v0.2.0, pinned.** Athena v0.2.0
+  requires authentication and keeps each tenant's memory apart; `memory init`
+  generates `ATHENA_API_KEY` and the stack gives it to Athena as a service key.
+  The image is pinned rather than `latest`, so a future Athena release cannot
+  break an installed JarvisCore; set `ATHENA_IMAGE` to run another version.
+  To upgrade a stack created by 2.1.x, run `jarviscore memory init` (it adds the
+  key and restarts the stack on v0.2.0), then `docker exec athena
+  ./ltm-purge-unscoped` to remove knowledge-graph entries written before
+  tenant scoping.
 - **Every Kernel role can work on a step's files.** The file tools
   (`workspace_read`, `workspace_edit`, `workspace_write`, ...) are shared and
   given to whichever sub-agent the router picks for a step bound to files, so

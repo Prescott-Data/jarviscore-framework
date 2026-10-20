@@ -392,7 +392,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             sys.exit(1)
         print(f"  ✅  Athena source: {athena_dir}")
     else:
-        print(f"  ✅  Athena image: {os.environ.get('ATHENA_IMAGE') or 'ghcr.io/prescott-data/athena:latest'}")
+        print(f"  ✅  Athena image: {os.environ.get('ATHENA_IMAGE') or 'ghcr.io/prescott-data/athena:v0.2.0'}")
 
     # LLM key
     provider, llm_key, model = _pick_llm_key()

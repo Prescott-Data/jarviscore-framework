@@ -33,8 +33,9 @@
 #   arangodb       (:8529)  — LTM knowledge graph
 #
 # ── IMAGE SOURCE ─────────────────────────────────────────────────────────────
-# Pulls ghcr.io/prescott-data/athena by default. Contributors hacking on
-# Athena itself can build from a local clone instead:
+# Pulls ghcr.io/prescott-data/athena at a pinned version, so a new Athena
+# release cannot break an installed JarvisCore; set ATHENA_IMAGE to run another
+# version. Contributors hacking on Athena itself can build from a local clone:
 #   ATHENA_IMAGE=athena-memos:local ATHENA_BUILD_CONTEXT=/path/to/athena \
 #     docker compose -f docker-compose.athena.yml up -d --build
 # ─────────────────────────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ version: "3.9"
 services:
   # ── Athena Memory Server ────────────────────────────────────────────────────
   athena:
-    image: ${ATHENA_IMAGE:-ghcr.io/prescott-data/athena:latest}
+    image: ${ATHENA_IMAGE:-ghcr.io/prescott-data/athena:v0.2.0}
     container_name: athena
     ports:
       - "${ATHENA_PORT:-8080}:8080"
@@ -139,7 +140,7 @@ services:
   # Creates the athena_ltm database and collections; without them Athena runs
   # with long-term memory silently disabled. Safe to re-run.
   athena-ltm-init:
-    image: ${ATHENA_IMAGE:-ghcr.io/prescott-data/athena:latest}
+    image: ${ATHENA_IMAGE:-ghcr.io/prescott-data/athena:v0.2.0}
     container_name: athena-ltm-init
     command: ["./init-ltm"]
     environment:
