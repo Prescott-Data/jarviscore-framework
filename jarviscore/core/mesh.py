@@ -1213,6 +1213,10 @@ class Mesh:
                                 str(source.get("goal") or ""),
                                 context=source.get("context") or {},
                             )
+                        self._redis_store.append_ledger_entry(workflow_id, {
+                            "event": "planner_calls", "purpose": "plan",
+                            "calls": planner.calls,
+                        })
                         self._redis_store.publish_workflow(
                             workflow_id,
                             goal=plan.goal,
@@ -1392,11 +1396,21 @@ class Mesh:
                     not semantic_gaps and revision > 1 and settlement is None
                     and not paused_for_person
                 ):
+                    unresolved = sorted(
+                        str(obligation_id)
+                        for obligation_id, item in obligation_projection.items()
+                        if item.get("state") != "satisfied"
+                    )
                     settlement = {
                         "event": "semantic_reconciliation_settled",
                         "revision": revision,
-                        "obligation_status": "satisfied",
-                        "reason": "The amended workflow satisfied the outstanding obligations.",
+                        "obligation_status": "blocked" if unresolved else "satisfied",
+                        "reason": (
+                            "The amended workflow left obligations "
+                            f"{', '.join(unresolved)} unresolved."
+                            if unresolved
+                            else "The amended workflow satisfied the outstanding obligations."
+                        ),
                     }
                     self._redis_store.save_workflow_reconciliation_settlement(
                         workflow_id, revision, settlement
@@ -1462,6 +1476,7 @@ class Mesh:
                                     for item in semantic_gaps
                                     if item.get("id")
                                 ),
+                                "planner_calls": planner.calls,
                             })
                             if decision["decision"] == "amend":
                                 remaining = (
@@ -1726,6 +1741,9 @@ class Mesh:
                     },
                     obligation_projection=projection,
                 )
+            self._redis_store.append_ledger_entry(workflow_id, {
+                "event": "planner_calls", "purpose": "amend", "calls": planner.calls,
+            })
             self._redis_store.amend_workflow(
                 workflow_id,
                 expected_revision=revision,
@@ -2598,6 +2616,19 @@ class Mesh:
                 agent.agent_id,
             )
             return
+        artifact = result.get("output") if isinstance(result, dict) else None
+        interpretation = result.get("interpretation") or {} if isinstance(result, dict) else {}
+        kernel = getattr(agent, "_kernel", None)
+        # A step with no semantic interpretation is accepted on completion, as its obligations are.
+        if (
+            s == "success" and interpretation.get("verdict", "satisfied") == "satisfied"
+            and isinstance(artifact, dict)
+            and (artifact.get("browser_state") or artifact.get("browser_calls"))
+            and kernel is not None
+        ):
+            await kernel.retain_browser_procedure(
+                artifact, task["context"], agent.agent_id, accepted=True,
+            )
         self._logger.info(
             "[DistributedWorker] '%s' in '%s' terminal (agent=%s, status=%s)",
             step_id,

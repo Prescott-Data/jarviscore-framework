@@ -177,8 +177,12 @@ class Agent(ABC):
         interpretations: Dict[str, Any],
     ):
         """Decide whether upstream uncertainty materially prevents this task."""
+        from jarviscore.core.envelope import handoff_view
         from jarviscore.orchestration.envelopes import DependencyAuthorization
 
+        artifacts = {
+            step_id: handoff_view(artifact, step_id) for step_id, artifact in artifacts.items()
+        }
         unresolved = {
             step_id: interpretation
             for step_id, interpretation in interpretations.items()

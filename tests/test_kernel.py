@@ -84,6 +84,62 @@ def kernel(mock_llm, mock_sandbox):
 
 
 @pytest.mark.asyncio
+async def test_only_accepted_browser_methods_reach_cross_session_memory(kernel, monkeypatch):
+    memory = SimpleNamespace(remember=AsyncMock(return_value=True), close=AsyncMock())
+    monkeypatch.setattr(kernel, "_create_memory", lambda *args: memory)
+    artifact = {"browser_state": {
+        "procedure": {"site": "https://example.test", "method": "Read all pages until the date boundary"},
+        "findings": {"health": "failed yesterday"},
+    }}
+    context = {"workflow_id": "wf", "step_id": "step", "owner_id": "owner"}
+    assert await kernel.retain_browser_procedure(artifact, context, "agent", accepted=False) is False
+    memory.remember.assert_not_awaited()
+    assert await kernel.retain_browser_procedure(artifact, context, "agent", accepted=True) is True
+    saved = json.loads(memory.remember.call_args.args[0])
+    assert saved == artifact["browser_state"]["procedure"]
+    assert memory.remember.call_args.kwargs["kind"] == "procedure"
+    memory.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_browser_method_is_kept_with_the_programs_that_produced_it(kernel, monkeypatch):
+    memory = SimpleNamespace(remember=AsyncMock(return_value=True), close=AsyncMock())
+    monkeypatch.setattr(kernel, "_create_memory", lambda *args: memory)
+    program = 'state["runs"] = await read_pages(urls, "() => document.body.innerText")'
+    artifact = {
+        "browser_state": {"procedure": {"site": "https://example.test"}, "runs": []},
+        "browser_programs": [program],
+    }
+    context = {"workflow_id": "wf", "step_id": "step", "owner_id": "owner"}
+
+    assert await kernel.retain_browser_procedure(artifact, context, "agent", accepted=True) is True
+    kept = memory.remember.call_args.args[0]
+    assert '"site": "https://example.test"' in kept and program in kept
+    open_artifact = {**artifact, "browser_reads": [{
+        "url": "https://example.test/runs", "more": True, "stop_reason": "timeout",
+    }]}
+    assert await kernel.retain_browser_procedure(open_artifact, context, "agent", accepted=True) is False
+
+
+@pytest.mark.asyncio
+async def test_the_reads_behind_accepted_findings_are_kept_as_the_method_when_none_was_written(kernel, monkeypatch):
+    memory = SimpleNamespace(remember=AsyncMock(return_value=True), close=AsyncMock())
+    monkeypatch.setattr(kernel, "_create_memory", lambda *args: memory)
+    call = {"kind": "read_pages", "urls": ["https://example.test/syncs/1/runs"],
+            "script": "() => rows()", "next_page": "button.next", "until": "() => oldest() < start"}
+    artifact = {
+        "browser_calls": [call],
+        "browser_reads": [{"url": call["urls"][0], "more": False, "stop_reason": "until", "call": 0}],
+    }
+    context = {"workflow_id": "wf", "step_id": "step"}
+
+    assert await kernel.retain_browser_procedure(artifact, context, "agent", accepted=True) is True
+    kept = memory.remember.call_args.args[0]
+    assert kept.startswith("Browser procedure:")
+    assert json.dumps(call) in kept
+
+
+@pytest.mark.asyncio
 async def test_sync_tool_execution_does_not_block_event_loop(kernel):
     subagent = kernel._create_subagent("researcher", "test_researcher")
     loop_thread_id = threading.get_ident()
@@ -130,6 +186,53 @@ async def test_async_tool_execution_stays_on_event_loop(kernel):
     result = await subagent._execute_tool("async_tool", {})
 
     assert result["thread_id"] == loop_thread_id
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_ends_with_the_steps_time(kernel):
+    from jarviscore.kernel.lease import ExecutionLease
+
+    subagent = kernel._create_subagent("researcher", "test_researcher")
+    subagent._cognition = SimpleNamespace(lease=ExecutionLease(wall_clock_ms=200))
+    subagent.tool_handback_s = 0.1
+    stopped = asyncio.Event()
+
+    async def endless_tool():
+        try:
+            await asyncio.sleep(30)
+        finally:
+            stopped.set()
+
+    subagent.register_tool("endless_tool", endless_tool, "Never returns")
+    started = time.monotonic()
+    result = await subagent._execute_tool("endless_tool", {})
+
+    assert result["status"] == "error" and result["error_type"] == "LeaseExpired"
+    assert time.monotonic() - started < 2
+    assert stopped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_runs_on_into_the_next_epoch_when_the_step_has_one(kernel):
+    from jarviscore.kernel.lease import ExecutionLease
+
+    subagent = kernel._create_subagent("researcher", "test_researcher")
+    subagent._cognition = SimpleNamespace(lease=ExecutionLease(wall_clock_ms=300))
+    subagent.tool_handback_s = 0
+
+    async def slow_read():
+        await asyncio.sleep(0.45)
+        return {"status": "success", "pages": 10}
+
+    subagent.register_tool("slow_read", slow_read, "Reads for a while")
+    assert (await subagent._execute_tool("slow_read", {}))["error_type"] == "LeaseExpired"
+
+    subagent._cognition = SimpleNamespace(lease=ExecutionLease(wall_clock_ms=300))
+    subagent._current_memory = object()
+    subagent._current_state = SimpleNamespace(context={
+        "execution_budget": {"max_epochs_per_step": 2}, "execution_epoch": 1,
+    })
+    assert await subagent._execute_tool("slow_read", {}) == {"status": "success", "pages": 10}
 
 
 def test_command_receipt_overrides_model_authored_execution_facts():
@@ -218,7 +321,9 @@ def test_a_cited_page_read_is_evidence_but_not_a_command_run():
     read = state.add_tool_result("get_text", {"ref": "e4"}, {"status": "success", "text": "Open 10:00-17:50"})
 
     claim = {"opening_hours": "10:00-17:50", "tool_receipt_id": read.receipt_id}
-    assert state.hydrate_tool_receipts(claim, require_command_receipts=True) == claim
+    hydrated = state.hydrate_tool_receipts(claim, require_command_receipts=True)
+    assert hydrated["opening_hours"] == claim["opening_hours"]
+    assert hydrated["observed_tool_result"]["tool_output"] == read.tool_output
 
     with pytest.raises(ToolReceiptError, match="not command evidence"):
         state.hydrate_tool_receipts({
@@ -239,8 +344,13 @@ def test_a_cited_page_read_survives_the_step_boundary():
     assert evidence == [{
         "tool_receipt_id": read.receipt_id, "tool_name": "get_text",
         "observed_at": read.observed_at.isoformat().replace("+00:00", "Z"),
+        "tool_input": {"ref": "e4"},
+        "tool_output": {"status": "success", "text": "Open 10:00"},
+        "status": "success", "error": None,
     }]
-    assert hydrate_receipt_evidence(claim, receipt_evidence=evidence, workflow_id="wf-1") == claim
+    hydrated = hydrate_receipt_evidence(claim, receipt_evidence=evidence, workflow_id="wf-1")
+    assert hydrated["opening_hours"] == "10:00"
+    assert hydrated["observed_tool_result"]["tool_output"] == read.tool_output
 
     with pytest.raises(ToolReceiptError, match="not command evidence"):
         hydrate_receipt_evidence(
@@ -252,6 +362,27 @@ def test_a_cited_page_read_survives_the_step_boundary():
         hydrate_receipt_evidence(
             claim, receipt_evidence=[], previous_step_results={"visit": evidence}, workflow_id="wf-1",
         )
+
+@pytest.mark.parametrize("tool_name", ["evaluate", "web_search", "provider_read"])
+def test_review_receives_original_observation_not_only_authored_claim(tool_name):
+    state = KernelState(workflow_id="wf-1", step_id="read", task="Research the requested period")
+    receipt = state.add_tool_result(
+        tool_name, {"period": "2026", "limit": 5},
+        {"period": "2025", "has_more": True, "value": "42 million"},
+    )
+    claim = {"period": "2026", "complete": True, "tool_receipt_id": receipt.receipt_id}
+
+    hydrated = state.hydrate_tool_receipts(claim)
+    assert hydrated["period"] == "2026"
+    assert hydrated["observed_tool_result"]["tool_output"]["period"] == "2025"
+    assert hydrated["observed_tool_result"]["tool_output"]["has_more"] is True
+
+    hydrated["observed_tool_result"] = {"tool_output": {"period": "2026", "has_more": False}}
+    checked = hydrate_receipt_evidence(
+        hydrated, receipt_evidence=state.receipt_evidence(claim), workflow_id="wf-1"
+    )
+    assert checked["observed_tool_result"]["tool_output"] == receipt.tool_output
+    assert checked["observed_tool_result"]["tool_input"] == receipt.tool_input
 
 
 def test_coder_done_gate_binds_authoritative_command_receipt(kernel):
@@ -1654,7 +1785,7 @@ class TestDeclaredSystemCredentials:
         assert mock_llm.calls == []
 
     @pytest.mark.asyncio
-    async def test_provider_authority_overrides_planner_browser_hint(self, kernel):
+    async def test_provider_read_honors_explicit_execution_role(self, kernel):
         decision = await kernel._route_task(
             "Search the connected Drive account",
             context={
@@ -1667,15 +1798,14 @@ class TestDeclaredSystemCredentials:
             use_default_role_as_fallback=True,
         )
 
-        assert decision.role == "coder"
-        assert decision.reason == (
-            "Connected-system work requires the credentialed Coder harness."
-        )
+        assert decision.role == "browser"
+        assert decision.reason == "Explicit planner/profile role."
 
     @pytest.mark.asyncio
-    async def test_multi_provider_read_capability_uses_credentialed_coder(
+    async def test_multi_provider_read_uses_reasoning_router(
         self, kernel, mock_llm
     ):
+        mock_llm.responses = [_router_response("coder")]
         decision = await kernel._route_task(
             "Resolve the contact from connected systems",
             {"systems": ["gmail", "hubspot"], "effect": "read"},
@@ -1684,8 +1814,24 @@ class TestDeclaredSystemCredentials:
         )
 
         assert decision.role == "coder"
-        assert decision.reason == "Connected-system work requires the credentialed Coder harness."
-        assert mock_llm.calls == []
+        assert decision.reason == "test route"
+        assert len(mock_llm.calls) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("effect", ["read", "propose"])
+    async def test_mixed_public_web_systems_do_not_force_coder(self, kernel, mock_llm, effect):
+        mock_llm.responses = [_router_response("browser")]
+
+        decision = await kernel._route_task(
+            "Research government expenditure from public sources",
+            {"systems": ["browser", "serper"], "effect": effect},
+            agent_default_role="researcher",
+            use_default_role_as_fallback=True,
+        )
+
+        assert decision.role == "browser"
+        assert decision.reason == "test route"
+        assert len(mock_llm.calls) == 1
 
     @pytest.mark.asyncio
     async def test_unconsented_app_without_channel_reports_auth_required(

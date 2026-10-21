@@ -421,7 +421,7 @@ class TestNativeToolTurns:
 
         prompt = "\n".join(str(m.get("content")) for m in llm.requests[1]["messages"])
         assert prompt.count("LAST ROW: 15 rejected") == 1
-        assert "shown in full in the conversation" in prompt
+        assert "in the conversation, under this receipt" in prompt
 
     def test_a_providers_call_signature_is_threaded_back_with_the_call(self):
         signed = _call("search", {"query": "revenue"})
@@ -517,8 +517,7 @@ class TestNativeToolTurns:
             {"input": 0, "output": 0, "total": 0}, 0.0, "turns",
         ))
 
-        assert landing.status == "success"
-        assert landing.payload == {"partial": True}
+        assert landing is None
         assert list(_functions(llm.requests[0])) == ["done"]
 
     def test_a_provider_without_native_tools_keeps_the_text_protocol(self):
@@ -658,12 +657,16 @@ class TestRuntimeRecordsAgentDecides:
                 assert phrase not in text, phrase
 
     def test_budget_facts_are_a_per_turn_notice_not_a_thought(self):
+        from datetime import datetime
+
         agent, _ = self._run(2)
 
+        today = datetime.now().astimezone().strftime("%d %B %Y")
         for messages in agent.llm_client.prompts:
             text = "\n".join(str(m.get("content")) for m in messages)
             assert text.count("## RUNTIME NOTICE (this turn)") == 1
             assert "Remaining: " in text
+            assert "Now: " in text and today in text
         assert not any("Remaining: " in t for t in agent._current_state.thoughts)
 
     def test_native_turns_carry_facts_and_no_steering(self):

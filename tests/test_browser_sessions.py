@@ -23,6 +23,9 @@ class _Page:
     def is_closed(self):
         return self.closed
 
+    def on(self, event, handler):
+        pass
+
 
 class _Session:
     def __init__(self, log):
@@ -116,7 +119,7 @@ def log(monkeypatch):
 def _state(context):
     from types import SimpleNamespace
 
-    return SimpleNamespace(context=context)
+    return SimpleNamespace(context=context, internal_variables={})
 
 
 def test_each_person_keeps_their_own_profile(tmp_path):
@@ -276,6 +279,25 @@ def test_launch_failure_is_reported_to_the_agent(log, tmp_path, monkeypatch):
 
     assert result["status"] == "error"
     assert "profile is in use by another process" in result["error"]
+
+
+def test_a_browser_that_went_away_mid_step_is_opened_again_before_the_next_tool(log):
+    agent = BrowserSubAgent("b", None, control_url="http://127.0.0.1:9222")
+    state = _state({})
+
+    async def scenario():
+        await agent._pre_run_hook(state)
+        first = agent._page
+        await agent._pre_execute_hook("navigate", {}, state)
+        assert agent._page is first
+        first.closed = True
+        await agent._pre_execute_hook("navigate", {}, state)
+        return first
+
+    first = asyncio.run(scenario())
+
+    assert agent._page is not first and not agent._page.closed
+    assert log.count(("connect_over_cdp", "http://127.0.0.1:9222")) == 2
 
 
 def test_one_run_opens_one_browser(log):
@@ -594,8 +616,27 @@ def test_an_action_proposed_by_ref_is_found_again_by_what_it_touches():
 
 def test_reversible_actions_run_without_asking():
     agent, clicks = _committing_agent({"workflow_id": "wf", "step_id": "buy"})
+    agent.decision_client = _Decisions(commits=0.03)
     assert asyncio.run(agent._execute_tool("click", {"text": "Add to cart"}))["status"] == "success"
     assert clicks == [{"text": "Add to cart"}]
+
+
+def test_an_unflagged_committing_click_waits_for_approval_and_is_not_performed():
+    agent, clicks = _committing_agent({"workflow_id": "wf", "step_id": "buy"})
+    agent.decision_client = _Decisions(commits=0.97)
+
+    result = asyncio.run(agent._execute_tool("click", {"text": "Place order"}))
+
+    assert result["semantic_error"] == "APPROVAL_REQUIRED" and result["performed"] is False
+    assert clicks == []
+
+
+def test_an_unjudgeable_click_is_not_performed():
+    agent, clicks = _committing_agent({"workflow_id": "wf", "step_id": "buy"})
+
+    result = asyncio.run(agent._execute_tool("click", {"text": "Place order"}))
+
+    assert result["status"] == "error" and clicks == []
 
 
 def test_the_browser_presents_the_chrome_that_is_running():
@@ -815,7 +856,7 @@ def test_a_ref_the_latest_snapshot_did_not_show_is_named_stale():
     agent = _indexed_agent()
     asyncio.run(agent._tool_snapshot())
 
-    result = asyncio.run(agent._tool_get_text(ref="f6e10"))
+    result = asyncio.run(agent._tool_snapshot(ref="f6e10"))
 
     assert result["semantic_error"] == "STALE_REF"
 
@@ -989,10 +1030,25 @@ def test_a_browser_result_completes_with_what_the_run_did_on_record(tools):
     state = _state_with(*tools)
     agent = BrowserSubAgent("b", None)
 
+    assert agent._can_complete(state, DONE)[1].check == "coverage_review"
     assert agent._can_complete(state, DONE) == (True, "")
     assert agent._work_record(state) == {
         name: {"calls": 1, "succeeded": 1} for name, _ in tools
     }
+
+
+def test_the_first_answer_is_checked_against_what_was_read_while_there_is_time():
+    from jarviscore.kernel.lease import ExecutionLease
+    from types import SimpleNamespace
+
+    agent = BrowserSubAgent("b", None)
+    first = agent._can_complete(_state_with(), DONE)
+    assert first[0] is False and first[1].check == "coverage_review"
+    assert "read the rest" in first[1].requirement
+
+    landing = BrowserSubAgent("b", None)
+    landing._cognition = SimpleNamespace(lease=ExecutionLease(wall_clock_ms=0))
+    assert landing._can_complete(_state_with(), DONE) == (True, "")
 
 
 def test_browser_receipts_expose_runtime_observation_timestamps():
@@ -1009,7 +1065,49 @@ def test_browser_receipts_expose_runtime_observation_timestamps():
 
 def test_an_honest_report_that_the_browser_failed_completes():
     state = _state_with(("navigate", {"status": "error", "error": "net::ERR_NAME_NOT_RESOLVED"}))
-    assert BrowserSubAgent("b", None)._can_complete(state, DONE)[0]
+    agent = BrowserSubAgent("b", None)
+    agent._can_complete(state, DONE)
+    assert agent._can_complete(state, DONE)[0]
+
+
+def test_an_open_collection_read_is_not_completion():
+    state = _state_with(("read_pages", {"status": "success", "results": []}))
+    agent = BrowserSubAgent("b", None)
+    agent._browser_reads = [{
+        "kind": "read_pages", "url": "https://example.test/runs",
+        "pages": 1, "more": True, "stop_reason": "timeout",
+        "error": "Program deadline reached",
+    }]
+
+    allowed, reason = agent._can_complete(state, DONE)
+
+    assert allowed is False
+    assert reason.check == "browser_reads_closed"
+    assert reason.observed["open_reads"][0]["stop_reason"] == "timeout"
+
+
+def test_a_closed_collection_read_can_complete():
+    state = _state_with(("read_pages", {"status": "success", "results": []}))
+    agent = BrowserSubAgent("b", None)
+    agent._browser_reads = [{
+        "kind": "read_pages", "url": "https://example.test/runs",
+        "pages": 4, "more": False, "stop_reason": "until",
+    }]
+    state.internal_variables["coverage_reviewed"] = True
+
+    assert agent._can_complete(state, DONE) == (True, "")
+
+
+def test_a_later_closed_read_replaces_an_earlier_timeout():
+    state = _state_with(("read_pages", {"status": "success", "results": []}))
+    agent = BrowserSubAgent("b", None)
+    agent._browser_reads = [
+        {"kind": "read_pages", "url": "https://example.test/runs", "stop_reason": "timeout", "more": True},
+        {"kind": "read_pages", "url": "https://example.test/runs", "stop_reason": "until", "more": False, "pages": 4},
+    ]
+    state.internal_variables["coverage_reviewed"] = True
+
+    assert agent._can_complete(state, DONE) == (True, "")
 
 
 BASKET = """<table>
@@ -1020,7 +1118,7 @@ BASKET = """<table>
 <label><input type="checkbox" checked> Substitutes</label>"""
 
 
-def test_the_page_text_shows_what_form_fields_hold():
+def test_the_page_shows_what_form_fields_hold():
     async_api = pytest.importorskip("playwright.async_api")
 
     async def read():
@@ -1031,49 +1129,17 @@ def test_the_page_text_shows_what_form_fields_hold():
                 pytest.skip(f"no Playwright browser: {exc}")
             page = await browser.new_page()
             await page.set_content(BASKET)
-            await page.fill("tr:first-child input", "4")
+            await page.fill("tr:first-child input", "5")
             agent = BrowserSubAgent("b", None)
             agent._page = page
-            whole = await agent._tool_get_text()
-            row = await agent._tool_get_text(selector="tr:last-child")
-            field = await agent._tool_get_text(selector="select")
+            view = (await agent._tool_snapshot())["page"]
             await browser.close()
-            return whole["text"], row["text"], field["text"]
+            return view
 
-    whole, row, field = asyncio.run(read())
-    assert "[4]" in whole and "[1]" in whole and "[Sun 10:00]" in whole and "[x]" in whole
-    assert "milk-2l" in row and "[1]" in row and "hidden" not in row
-    assert field == "[Sun 10:00]"
-
-
-def test_long_page_text_comes_in_whole_pages_with_nothing_lost():
-    async_api = pytest.importorskip("playwright.async_api")
-    body = "".join(f"line {i:05d}\n" for i in range(4000))
-
-    async def read():
-        async with async_api.async_playwright() as p:
-            try:
-                browser = await p.chromium.launch(headless=True)
-            except Exception as exc:
-                pytest.skip(f"no Playwright browser: {exc}")
-            page = await browser.new_page()
-            await page.set_content(f"<pre>{body}</pre>")
-            agent = BrowserSubAgent("b", None)
-            agent._page = page
-            pages, offset = [], 0
-            while True:
-                result = await agent._tool_get_text(selector="pre", offset=offset)
-                pages.append(result)
-                if "next_offset" not in result:
-                    break
-                offset = result["next_offset"]
-            await browser.close()
-            return pages
-
-    pages = asyncio.run(read())
-    assert len(pages) > 1 and pages[-1]["remaining_chars"] == 0
-    assert "".join(page["text"] for page in pages) == body.strip()
-    assert all("truncated" not in page["text"] for page in pages)
+    view = asyncio.run(read())
+    assert "textbox 5" in view and "textbox 1" in view
+    assert 'option "Sun 10:00" (selected)' in view and 'option "Sat 10:00" option' in view
+    assert 'checkbox "Substitutes" (checked)' in view and "hidden" not in view
 
 
 def test_navigate_declares_the_load_states_it_accepts():
@@ -1081,7 +1147,7 @@ def test_navigate_declares_the_load_states_it_accepts():
     specs, _ = agent._native_tool_specs({})
     navigate = next(spec["function"] for spec in specs if spec["function"]["name"] == "navigate")
     assert navigate["parameters"]["properties"]["wait_for"] == {
-        "enum": ["load", "domcontentloaded", "networkidle", "commit"], "type": "string",
+        "enum": ["load", "domcontentloaded", "commit"], "type": "string",
     }
 
 

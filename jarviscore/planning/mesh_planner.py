@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -123,6 +124,8 @@ class MeshPlanner:
         planning_brief: str | None = None,
     ):
         self.llm = llm_client
+        #: Each model call this planner made: seconds, prompt size and tokens.
+        self.calls: list[dict[str, Any]] = []
         all_effects = {
             "read", "propose", "write", "notify", "destructive", "final_response"
         }
@@ -787,6 +790,7 @@ class MeshPlanner:
         ]
 
     async def _call_json(self, prompt: str) -> dict[str, Any]:
+        started = time.monotonic()
         try:
             response = await self.llm.generate(
                 messages=[{"role": "user", "content": prompt}],
@@ -799,6 +803,11 @@ class MeshPlanner:
                 temperature=0.0,
             )
         content = response.get("content", "") if isinstance(response, dict) else str(response)
+        self.calls.append({
+            "seconds": round(time.monotonic() - started, 1),
+            "prompt_chars": len(prompt),
+            "tokens": (response.get("tokens") or {}) if isinstance(response, dict) else {},
+        })
         if isinstance(response, dict):
             reason = response.get("finish_reason")
             if reason is not None and str(reason).lower() not in _COMPLETED_REASONS:
@@ -938,6 +947,9 @@ expected_findings, depends_on, covers, dependency_policy.
     link or MIME type proves resource identity, not content sufficiency.
 - declare only real data dependencies; independent work should run in parallel only
     when neither outcome needs information discovered by the other.
+- keep reading or traversing one system or site in one step, even across several of the
+    person's categories; separate steps on the same system each repeat its discovery
+    (navigation, inventory, pagination) and cannot share what the other learned.
 - each task must include enough scope and constraints to execute independently.
 - model business outcomes, not provider calls or conditional branches.
 - keep an inspect-or-create, inspect-or-update, or check-then-act decision as one provider-owned outcome.

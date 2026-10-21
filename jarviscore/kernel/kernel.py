@@ -743,11 +743,11 @@ class Kernel:
                 confidence=1.0,
                 reason="Provider mutation requires the credentialed Coder harness.",
             )
-        if system_names and effect in {"read", "propose", "write", "notify", "destructive"}:
+        if system_names and effect in {"write", "notify", "destructive"}:
             return RoutingDecision(
                 role="coder",
                 confidence=1.0,
-                reason="Connected-system work requires the credentialed Coder harness.",
+                reason="Provider mutation requires the credentialed Coder harness.",
             )
         if explicit_role:
             normalized_role = str(explicit_role).lower().strip()
@@ -945,6 +945,9 @@ class Kernel:
                 egress=configured_egress(self.config),
                 locale=self.config.get("browser_locale"),
                 timezone=self.config.get("browser_timezone"),
+                allow_unsafe_local_execution=(
+                    getattr(self.sandbox, "allow_unsafe_local_execution", False) is True
+                ),
             )
         else:
             raise ValueError(f"Unknown subagent role: {role}")
@@ -1026,6 +1029,56 @@ class Kernel:
             logger.debug("[Kernel] UnifiedMemory not available — running without memory")
         return None
 
+
+    async def retain_browser_procedure(
+        self, artifact: Any, context: Dict[str, Any], agent_id: str, *, accepted: bool,
+    ) -> bool:
+        if not accepted or not isinstance(artifact, dict):
+            return False
+        from jarviscore.kernel.defaults.browser import reads_closed
+
+        if not reads_closed(artifact.get("browser_reads")):
+            return False
+        state = artifact.get("browser_state") or {}
+        procedure = state.get("procedure") if isinstance(state, dict) else None
+        calls = [call for call in artifact.get("browser_calls") or [] if isinstance(call, dict)]
+        if not procedure and not calls:
+            return False
+        memory = self._create_memory(
+            str(context.get("workflow_id") or ""), str(context.get("step_id") or ""),
+            agent_id, context,
+        )
+        if memory is None:
+            return False
+        programs = [str(code) for code in artifact.get("browser_programs") or []]
+        kept = (
+            json.dumps(procedure, ensure_ascii=False, default=str) if procedure
+            else "the collection reads below"
+        )
+        sections = []
+        if calls:
+            sections.append(
+                "Collection reads behind its accepted findings, in order; adapt dates, "
+                "scope and boundaries to the new task:\n"
+                + "\n".join(json.dumps(call, ensure_ascii=False, default=str) for call in calls)
+            )
+        if programs:
+            sections.append(
+                "Programs that produced its accepted findings, in order:\n"
+                + "\n".join(f"```python\n{code}\n```" for code in programs)
+            )
+        if sections:
+            kept = "\n".join([f"Browser procedure: {kept}", *sections])
+        try:
+            return await memory.remember(
+                kept, kind="procedure",
+                role="browser", verification="accepted_workflow_step",
+            )
+        except Exception as exc:
+            logger.warning("Browser procedure was not retained: %s", exc)
+            return False
+        finally:
+            await memory.close()
 
     def _create_context_manager(self, role: str) -> ContextManager:
         """Create a ContextManager with role-appropriate budget config."""
@@ -1466,6 +1519,7 @@ class Kernel:
                     for key in (
                         "typed_outcome", "hitl_type", "system", "connection_id",
                         "workflow_id", "step_id", "action_id", "action", "consequence",
+                        "progress",
                     )
                     if meta.get(key) is not None
                 }

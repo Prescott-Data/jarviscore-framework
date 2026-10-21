@@ -79,17 +79,17 @@ class WorkspaceMutation(BaseModel):
 
 
 class ObservationReceipt(BaseModel):
-    """A cited tool result that is neither a command run nor a file mutation.
-
-    A page read or a search has no fact to bind over the claim; the receipt
-    proves the citation is real, and the claim stands as the agent wrote it.
-    """
+    """Original tool evidence alongside the agent's interpretation of it."""
 
     model_config = ConfigDict(extra="forbid")
 
     tool_receipt_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
     observed_at: datetime
+    tool_input: Dict[str, Any] = Field(default_factory=dict)
+    tool_output: Any = None
+    status: Literal["success", "failure", "blocked"] = "success"
+    error: Optional[str] = None
 
 
 class ToolResult(BaseModel):
@@ -111,6 +111,17 @@ class ToolResult(BaseModel):
     @property
     def observed_at(self) -> datetime:
         return datetime.fromtimestamp(self.timestamp, tz=timezone.utc)
+
+    def observation(self) -> ObservationReceipt:
+        return ObservationReceipt(
+            tool_receipt_id=self.receipt_id,
+            tool_name=self.tool_name,
+            observed_at=self.observed_at,
+            tool_input=self.tool_input,
+            tool_output=self.tool_output,
+            status=self.status,
+            error=self.error,
+        )
 
     def command_observation(self) -> CommandObservation:
         """Project a workspace command result into immutable evidence."""
@@ -370,9 +381,13 @@ class KernelState(BaseModel):
                 elif receipt is not None and (receipt.tool_name == "workspace_run" or command_claim):
                     evidence = receipt.command_observation()
                 elif receipt is not None:
-                    # A cited observation (a page read, a search): it exists, and there is
-                    # no command or mutation fact to bind, so the claim stands as written.
-                    return {key: hydrate(item) for key, item in candidate.items()}
+                    return {
+                        **{key: hydrate(item) for key, item in candidate.items()
+                           if key != "observed_tool_result"},
+                        "observed_tool_result": receipt.observation().model_dump(
+                            mode="json", exclude={"tool_receipt_id"}
+                        ),
+                    }
                 else:
                     evidence = prior_mutations.get(receipt_id) or prior_observations.get(
                         receipt_id
@@ -421,11 +436,7 @@ class KernelState(BaseModel):
                 elif receipt.tool_name in {"workspace_write", "workspace_edit"}:
                     item = receipt.workspace_mutation()
                 else:
-                    item = ObservationReceipt(
-                        tool_receipt_id=receipt.receipt_id,
-                        tool_name=receipt.tool_name,
-                        observed_at=receipt.observed_at,
-                    )
+                    item = receipt.observation()
             except ToolReceiptError:
                 continue
             evidence.append(item.model_dump(mode="json"))
@@ -505,11 +516,15 @@ def hydrate_receipt_evidence(
     mutations: Dict[str, WorkspaceMutation] = {}
     # Only this step's own receipts: a prior step's output keeps an observation
     # claim as written, so its shape is no proof the receipt exists.
-    observations = {
-        str(item["tool_receipt_id"])
-        for item in receipt_evidence
-        if isinstance(item, dict) and set(item) == set(ObservationReceipt.model_fields)
-    }
+    observations: Dict[str, ObservationReceipt] = {}
+    for item in receipt_evidence:
+        if not isinstance(item, dict):
+            continue
+        try:
+            observation = ObservationReceipt.model_validate(item)
+        except ValidationError:
+            continue
+        observations[observation.tool_receipt_id] = observation
     workflow_prefix = f"tool:{workflow_id}:" if workflow_id else ""
 
     def collect(candidate: Any) -> None:
@@ -568,7 +583,13 @@ def hydrate_receipt_evidence(
                         f"Tool receipt {receipt_id!r} is not command evidence"
                     )
                 if not mutation_claim:
-                    return {key: hydrate(item) for key, item in candidate.items()}
+                    return {
+                        **{key: hydrate(item) for key, item in candidate.items()
+                           if key != "observed_tool_result"},
+                        "observed_tool_result": observations[receipt_id].model_dump(
+                            mode="json", exclude={"tool_receipt_id"}
+                        ),
+                    }
             if evidence is None:
                 raise _unknown_receipt(receipt_id)
             return evidence.model_dump(mode="json")

@@ -52,9 +52,11 @@ ROLE_LEASE_PROFILES: Dict[str, Dict[str, Any]] = {
         "complexity": "nano",  # Short creative writing — fast tier is sufficient
     },
     "browser": {
-        "thinking_budget": 60_000,
-        "action_budget": 60_000,
-        "max_total_tokens": 120_000,
+        # A browser turn carries the page or a collection's records (often 30-120k tokens),
+        # so the time, not the tokens, should end an epoch of real work.
+        "thinking_budget": 300_000,
+        "action_budget": 900_000,
+        "max_total_tokens": 1_200_000,
         "wall_clock_ms": 300_000,  # 5 min — page loads are slow
         "emergency_turn_fuse": 28,
         "model_tier": "browser",   # Dedicated tier — resolves BROWSER_MODEL first

@@ -33,7 +33,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## 2.2.0 <span class="changelog-date">2026-10-15</span>
+## 2.2.0 <span class="changelog-date">Unreleased</span>
 
 One agent can now run as several workers when its queue grows, every model call
 is paced against the provider's real limits, and agents act through native tool
@@ -97,6 +97,10 @@ slots that disappear mid-checkout.
   the exact action, and the step pauses. `Mesh.resolve_hitl()` records the
   decision and resumes the step: an approved action is performed once, through
   the normal tool path and with a receipt, and a declined action is never run.
+  A browser click, select or submission the agent did not mark is judged by the
+  decision model first; one that could commit the person returns
+  `APPROVAL_REQUIRED` instead of running. Live, an unmarked "Place order" had
+  gone through without approval.
   See [HITL](guides/hitl.md#approving-an-agents-consequential-actions).
 - **The browser reads the page as a person does.** `snapshot()` returns the
   page's headings, text, tables, notices and dialogs, with a ref on every
@@ -116,10 +120,12 @@ slots that disappear mid-checkout.
   out, its browser is held open for the next epoch for up to
   `BROWSER_CONTINUATION_HOLD_S` seconds (default 120), so the agent carries on
   from the same page.
-- **Pace, settling and access.** Requests to the same site are spaced at least
-  `BROWSER_SITE_INTERVAL_S` apart (default 1.5 seconds), clicks and typing wait
-  up to `BROWSER_SETTLE_TIMEOUT_MS` (default 3,000 ms) for the page to finish
-  loading, and `navigate` reports when a site turns the browser away.
+- **Pace, settling and access.** Requests to one site are spaced by
+  `BROWSER_SITE_INTERVAL_S` (default 1.5 s). Each action waits for the site's
+  own data requests (`BROWSER_DATA_TIMEOUT_MS`, default 10,000 ms) and for the
+  page to stop changing (`BROWSER_SETTLE_TIMEOUT_MS`, default 3,000 ms), so
+  client-rendered apps are read with their data. `navigate` reports when a site
+  turns the browser away.
 - **Any decision model.** `DecisionClient` is a provider-neutral protocol, and
   `DECISION_CLIENT_FACTORY` plugs in any implementation. See
   [Bring any decision model](concepts/decision-models.md#bring-any-decision-model).
@@ -128,9 +134,119 @@ slots that disappear mid-checkout.
   `{session}` per tenant or workflow. `EGRESS_PROXY_BYPASS` names hosts that go
   direct, and `BROWSER_LOCALE` and `BROWSER_TIMEZONE` match the browser to the
   proxy's region. See [Your own proxy](guides/browser-automation.md#your-own-proxy).
+- **The browser agent writes code for repeated work.** `run_playwright` runs a
+  Python Playwright program against the live page, so reading every row, paging
+  back to a date or opening each item in a list is one tool call. Variables
+  persist for the browser step, `state` carries inventories and findings into
+  the step artifact, and accepted site procedures are retained in Athena. The
+  program runs in the Coder's confined child process and reaches only the page;
+  clicks, submitting key presses, selects and scripts are judged first, and one
+  that could commit the person becomes an approved action. Asked which
+  Hightouch syncs had failed that day, an agent without it took 133 tool calls
+  and 3.5M tokens and found 1 of 5 failures; with it, three consecutive runs
+  matched the run history in 194 to 455 seconds with 7 to 14 model calls. See
+  [Code](guides/browser-automation.md#code).
+- **Browser code reads many pages at once.** `read_pages(urls, script)` opens
+  up to `BROWSER_PARALLEL_PAGES` (default 4) pages in the same session, paced and
+  settled, and returns each page's result. Page calls from confined code are
+  synchronous, so the agent could only read a collection one page at a time;
+  live, reading 23 Hightouch syncs that way ran past its time limit.
+  `open_each(items, script)` does the same for lists whose items open on click,
+  taking the locator the agent would click them by, and returns each item's
+  address and contents. With `next_page` and `until`, `read_pages` reads each
+  paged history back to the start of a period and reports whether it goes on
+  (`more`); agents had read the first page of each sync's runs and reported
+  failures earlier that day as healthy.
+- **A program that runs out of time keeps what it read.** At its `timeout_s`
+  the page stops serving the program, which ends with its variables and `state`
+  intact for the next call. The process used to be killed at the deadline,
+  losing a 180-second inventory the agent had just collected.
+- **Browser work survives bounded execution.** Programs default to the
+  configured code duration, bounded by the remaining lease, rather than a
+  hidden 120 seconds. Findings, recorded programs and the last URL enter the
+  step checkpoint. Batches preserve completed observations after later errors
+  or deadlines and await every cancelled worker before returning, so page
+  cleanup cannot continue after the batch has returned.
+- **Accepted browser procedures keep their programs.** The programs that wrote
+  a step's kept findings are retained with `state["procedure"]` only when the
+  collection reads closed. A later run whose task names that site runs those
+  programs before the first turn, instead of rediscovering the site.
+- **An open collection read is not completion.** `read_pages` and `open_each`
+  are tools as well as code functions. `done` is refused while a read is still
+  open (`more`, or `stop_reason` `timeout`, `error`, `page_limit`) or the latest
+  collection program did not finish. A lease expiry no longer becomes success
+  from a landing answer that names itself incomplete or whose records are open.
+  When an interpretation names obligation ids, each id is satisfied only if it
+  is listed. A blanket verdict no longer satisfies an id that interpretation
+  left unnamed. An interpretation that names descriptions rather than ids still
+  closes on its verdict. A step with no interpretation still satisfies on
+  completion, because there is no semantic record to contradict it.
+- **No tool call outlives the step's time.** A tool call runs under the
+  execution lease. `read_pages` and `open_each` called as tools stop where the
+  lease does and return what they read, with the rest marked `timeout`; any
+  other call is stopped `SUBAGENT_TOOL_HANDBACK_S` (60) seconds after the lease
+  ends and reported as `LeaseExpired`. On a Hightouch run a read began 61
+  seconds before the lease ended and kept going, so the step returned nothing.
+- **A browser program works on the page it opens.** A `run_playwright` program
+  moves the page at most once. Going on to another address is reading a
+  collection with `read_pages` or `open_each`, which open several pages at once;
+  the program is told so and keeps its variables and state. In three live
+  Hightouch runs, programs that walked 23 run histories or clicked through every
+  sync one page at a time spent 619, 388 and 511 seconds before the agent turned
+  to the collection tools.
+- **Programs compute over what the step already read.** `reads` in a program
+  is a dictionary of every collection record the step has read, as tools or in
+  programs, keyed by address or by `"<list url>#<selector>#<index>"`, so a
+  program filters or combines records instead of reading the site again. A
+  later read of the same address or item replaces the earlier record, but an
+  unfinished read never replaces a finished one: on a Hightouch run, filtered
+  re-reads that came back empty had replaced 25 complete histories. An
+  `open_each` record carries its `list` and `selector`; re-opening a failed item
+  (`open_each` takes `indexes`) closes that item, and items of different lists
+  no longer share a record. A collection script that is not valid JavaScript is
+  refused before any page opens.
+- **A paged history stops only when its page stops turning.** `unchanged` was
+  decided by comparing the script's values, so a script that filters rows (and
+  returns an empty list on two pages in a row) ended the history after one
+  page. The page's own content now decides it, and `unchanged` keeps the read
+  open. `until` is defined as the page having gone past the period: a read that
+  stopped on the first page of the period looked finished while it held two
+  hours of a day.
+- **A slow host keeps browser code.** The confinement probe gave a confined
+  child 30 seconds to import JarvisCore and, if it was slower, recorded for the
+  whole process that confinement does not work. On a loaded Mac after a restart
+  that removed `run_playwright` and its guidance: the agent paged 25 run
+  histories with 79 single clicks and ran out of time. Only a definite answer
+  is now kept, a slow start is probed again, and the start window is
+  `JARVISCORE_CONFINEMENT_PROBE_TIMEOUT_S` (180).
+- **Collection guidance is part of the browser prompt.** How to read a
+  collection with `read_pages` and `open_each`, and when a paged history has
+  gone past its period, lived in the code-tool section, so an agent without
+  `run_playwright` had both tools and no account of them.
+- **A clock expiry is completion only when the answer says it is complete.**
+  The landing turn's `done` now carries a required `complete`; anything but
+  `true` keeps the step unfinished with what it established. The model was told
+  to "say so inside the result", while the check looked for `status: partial`:
+  a run that wrote "Partial audit" in prose was recorded as success.
+- **Earlier tool results no longer ride along whole on every turn.** The last
+  ten exchanges were threaded whole with no size bound, so one large result
+  was paid again on each later turn: on a Hightouch run, prompts grew from 23k
+  to 215k tokens and the step ran out of action tokens with six minutes of
+  wall clock left. The newest result is always whole; earlier ones are whole,
+  newest first, within `SUBAGENT_THREAD_RESULT_BUDGET` (120000 characters) and
+  otherwise appear as a reference with their receipt and size that
+  `read_turn_result` shows whole again. Nothing is cut.
 
 ### Changed
 
+- **Later steps read what a step delivered; its working state stays with it.**
+  A browser step's artifact carried its working state (`browser_state`,
+  `browser_programs`) into every later prompt: on one Hightouch run, 211k of
+  the step's 311k characters were working state, pasted into the step check,
+  the next step and the final response. Prompts now carry the delivered work
+  and its evidence whole, and name each working-state field with its keys and
+  size; `read_workflow_step` and browser code (`prior`) read it whole. Nothing
+  is cut.
 - **An agent instance runs one piece of work at a time.** A running task keeps
   its routing decisions and bound workspace on the agent instance, but
   `workflow()` steps, `fanout()` items, `delegate()` calls and peer requests
@@ -141,13 +257,17 @@ slots that disappear mid-checkout.
   A call chain that would wait on an instance it already holds raises an error
   naming the agent instead of hanging. Among several agents registered for a
   role, work goes to the one with the most free instances.
+- **Work on one system is planned as one step.** The planner split a question
+  spanning several categories on one site (Hightouch syncs for Google, Meta and
+  Bing) into a step per category, each repeating the site's navigation and
+  inventory. It now keeps reading one system in one step; the same question
+  planned as a single step and answered correctly through the Desk.
 - **Agents see every tool result whole.** A result was clipped to 800
   characters in the conversation, with the full text repeated in the list of
   recent actions. Each result is now shown whole, once: in the conversation
   while it is among the agent's recent exchanges, where the action list points
-  to it, and in the action list after that. Browser `get_text` returns pages of
-  up to 20,000 characters with `next_offset` instead of cutting at 5,000, and
-  errors and pre-execute review results reach the agent in full.
+  to it, and in the action list after that. Errors and pre-execute review
+  results reach the agent in full.
   `SUBAGENT_OBSERVATION_LIMIT` is ignored.
 - **`fill_form` fills every kind of field.** Selects are chosen by value or
   label, checkboxes and radios take `checked`, and fields that suggest values
@@ -192,9 +312,44 @@ slots that disappear mid-checkout.
   class from words in the message; a failure without a declared class is
   recorded as `UNKNOWN`, and the browser no longer attaches a guessed
   `error_type`.
+- **The browser offers fewer tools.** `evaluate`, `wait_for`, `get_text`,
+  `get_links`, `scroll`, `get_attribute`, `get_cookies` and `close_page` are
+  removed; `run_playwright` does each of them. Across 193 logged browser runs
+  they made 3% of browser tool calls, and `get_attribute` and `get_cookies`
+  were never called. `navigate`, `snapshot`, `click`, `type_text`,
+  `fill_form`, `select_option`, `screenshot`, `find` and `act` remain, and
+  remain the only way to make an approved, consequential action.
 
 ### Fixed
 
+- **A failed amendment is no longer recorded as satisfying the goal.** When an
+  amended step failed, the ledger settled the revision as "satisfied the
+  outstanding obligations". The settlement now names the obligations left
+  unresolved and records them as blocked.
+- **Planning calls are visible.** Each plan, reconciliation and amendment
+  records its model calls in the workflow ledger (`planner_calls`: seconds,
+  prompt size, tokens).
+- **The page shows which option a dropdown holds.** The page view listed a
+  `<select>`'s options without marking the chosen one, so an agent checking a
+  delivery slot could not see it. Options and other unlabelled elements now
+  carry their state, for example `option "Sun 10:00" (selected)`.
+- **The browser no longer offers `install_required` when Playwright is
+  installed.** It was picked up as a tool because of its method name, and
+  calling it reported that Playwright was missing.
+- **Original observations reach completion reasoning.** A cited page, search or
+  provider read carried only its receipt identity, so a completion check could
+  accept the worker's report without seeing contradictory data. Cited results
+  now carry the runtime-owned `observed_tool_result` alongside authored claims.
+  The step evaluator distinguishes observations from claims when assessing the
+  requested query, scope, period and coverage.
+- **Reads with several declared systems are not forced into Coder.** The
+  presence of any system name overrode the reasoning router, including public
+  browser and search work. Reads and proposals now use the explicit execution
+  role or reasoning router; provider mutation and credential boundaries remain.
+- **Unfinished progress survives yield and dependency handoffs.** The kernel's
+  yield result omitted progress, and dependency readers reduced exhausted
+  results to `output: None`. Status, error and unverified progress now reach
+  follow-up interpretation and final synthesis together.
 - **A step that runs out of budget keeps what it found.** When a step used its
   last execution epoch, or its final answer was refused, the failure record held
   only that it stopped; the agent's notes and answer stayed in a checkpoint
@@ -355,6 +510,83 @@ slots that disappear mid-checkout.
   After the document loads, the browser now waits for the page to stop
   changing for half a second, up to `BROWSER_SETTLE_TIMEOUT_MS`, and
   `navigate` waits the same way by default.
+- **A step's next epoch finds what the last one read.** The checkpoint carried
+  the browser's collection records only after a program ran, so a `read_pages`
+  or `open_each` tool call made just before an epoch ended was lost, and the
+  next epoch read the same 22 run histories again. Every checkpoint now
+  carries the specialist's runtime state as it stands.
+- **Earlier results stay readable across epochs.** `read_turn_result` kept
+  results under the loop's turn, which restarts in each epoch, while receipts
+  carry the step-wide number; after an epoch boundary the agent asked for the
+  number on the receipt and got nothing. Results are kept and labelled by
+  their receipt number.
+- **An epoch boundary does not cut a read in flight.** A tool call was stopped
+  at the end of its epoch even when the step had another one, so a paged read
+  started late in an epoch was cut and read again from its first page. When
+  the step continues in another epoch, a tool call may run up to one more
+  epoch's time; the step then continues in its next epoch.
+- **The method behind accepted browser findings is kept without the agent
+  writing it.** Procedures reached cross-session memory only when the agent
+  wrote `state["procedure"]` in a program, and only when the step carried a
+  product's semantic interpretation; a plain Mesh step never had one, so
+  nothing was kept. The collection calls behind the step's current records
+  (`browser_calls`: addresses, script, `next_page`, `until`, list and
+  selector) are now retained when the step completes and its reads have
+  closed, and a later task on the same site recalls them.
+- **History boundaries are written as date comparisons.** The browser prompt's
+  example named the day before the period, and agents wrote `until` as a
+  search for that day's text; a history with no entry on that day was read to
+  its page limit. The prompt now asks for a comparison of the page's oldest
+  entry with the period's start, tried on one address before every address
+  is read.
+- **Agents know the date and time.** No prompt said what day it was, so a
+  page's "Today" and "Yesterday", or a task's "last week", could only be
+  resolved from what the person happened to write. Each turn's runtime notice
+  now states the local date, time and UTC offset.
+- **`until` sees what the page's script read.** A history's boundary function
+  was called with no argument, so one written over the script's rows or text
+  never became true and every history was read to its page limit. `until` is
+  now called with what `script` returned on that page.
+- **Asking for list items that are not there returns at once.** `open_each`
+  with indexes the selector does not match waited for each missing item in
+  turn; it now says how many items the selector matches before opening any.
+- **Reading an element that is not there fails at once.** In browser code,
+  `inner_text`, `text_content`, `get_attribute` and similar reads of a locator
+  that matches nothing waited Playwright's 30 seconds after the page had
+  already settled; they now fail immediately with the reason.
+- **A browser that goes away mid-step is opened again.** When an attached
+  Chrome restarted or a launched browser crashed, every later tool call in the
+  step failed even after the browser was back. The next tool call now opens or
+  attaches it again on the page the step had reached.
+- **A browser answer is checked once against what was read.** Agents reported
+  a panel of recent runs or a first page as the whole period they were asked
+  about. The first answer of a browser step is returned once with the
+  requirement to state how many items the source lists that match the task
+  (counted in code over the list) and how many were read, the pages read for
+  each and the range they span, and to read the rest where the source goes on;
+  an answer given when the step's time has run out is not held back. The
+  browser prompt also asks that counts, totals and the items a read covers be
+  computed in code over the step's records rather than read off a printout.
+- **Browser budgets fit a browser turn.** A browser turn carries the page or a
+  collection's records, often 30,000 to 120,000 tokens, so the old 120,000-token
+  epoch ended after one to seven turns and a long task ran out of epochs with
+  its data already read. The browser role's lease is now 300,000 thinking and
+  900,000 action tokens (1,200,000 total) per five-minute epoch, and the
+  workflow budget's default `max_tokens` is 1,200,000 so it does not cap it.
+  Set `kernel_role_profiles["browser"]` or `execution_budget.max_tokens` to
+  spend less.
+- **A cancelled tool call cannot hold the step.** When a tool call ran past the
+  step's time, the step waited for its cleanup without limit; a page that no
+  longer answered kept one call running for 17 minutes. Cleanup now gets the
+  step's hand-back time and the step moves on.
+
+### Known limitations
+
+- Browser tasks that read many paged histories and report figures over them
+  (for example, failed runs per sync for one day across 25 syncs) are not yet
+  reliable: the data is read completely, but the agent can still miscount,
+  misjudge where a period ends, or miss an item when it picks them by eye. The
+  next release moves counting, period boundaries and coverage into the runtime.
 
 ### Upgrading from 2.1
 
@@ -383,6 +615,13 @@ the configuration reference. Check these behaviour changes:
 5. **Parallel work for one agent needs a pool.** Independent `workflow()` steps
    or `fanout()` items for an agent added without `pool` now run one at a time.
    Add `pool=Pool(max=N)` to the agent to keep them parallel.
+6. **The browser agent's tools changed.** The model is offered
+   `run_playwright` instead of `evaluate`, `wait_for`, `get_text`, `get_links`,
+   `scroll`, `get_attribute`, `get_cookies` and `close_page`. Application code
+   that reads tool names from traces or receipts, or a prompt that names a
+   removed tool, should use the new names. On a host that cannot confine a
+   child process, `run_playwright` is not offered unless
+   `allow_unsafe_local_execution` is set.
 
 </div>
 

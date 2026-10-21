@@ -345,7 +345,7 @@ Every sub-agent dispatch runs against an `ExecutionLease`: a token, turn, and wa
 | `coder` | 132,000 | 108,000 | 240,000 | 4 min | 32 turns |
 | `researcher` | 180,000 | 60,000 | 240,000 | 4 min | 36 turns |
 | `communicator` | 72,000 | 48,000 | 120,000 | 4 min | 18 turns |
-| `browser` | 60,000 | 60,000 | 120,000 | 5 min | 28 turns |
+| `browser` | 300,000 | 900,000 | 1,200,000 | 5 min | 28 turns |
 
 The turn fuse is an emergency hard-stop. If a sub-agent reaches 32 turns without completing, the Kernel terminates it regardless of token budget. This prevents runaway loops on adversarial or ambiguous tasks.
 

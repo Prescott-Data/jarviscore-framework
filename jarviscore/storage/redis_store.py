@@ -2246,18 +2246,31 @@ class RedisContextStore:
                     unmet = set(map(str, interpretation.get(
                         "unmet_requirements", []
                     ))) if isinstance(interpretation, dict) else set()
+                    covered_ids = set(map(str, data.get("covers", [])))
+                    named_ids = (satisfied | not_applicable | unmet) & covered_ids
+                    # An interpretation that names obligation ids is authoritative for
+                    # each id. One that names descriptions instead still closes on its
+                    # verdict, which is how a product without id-addressed checks reports.
+                    id_addressed = bool(named_ids)
                     verdict = str(interpretation.get("verdict") or "") if isinstance(
                         interpretation, dict
                     ) else ""
                     if obligation_id in not_applicable:
                         attempt_state = "not_applicable"
-                    elif obligation_id in satisfied or verdict == "satisfied":
+                    elif obligation_id in satisfied:
+                        attempt_state = "satisfied"
+                    elif obligation_id in unmet or (id_addressed and isinstance(interpretation, dict)):
+                        attempt_state = "unresolved"
+                    elif verdict == "satisfied":
                         attempt_state = "satisfied"
                     elif terminal == "waiting":
                         attempt_state = "pending"
-                    elif obligation_id in unmet or isinstance(interpretation, dict):
+                    elif isinstance(interpretation, dict):
                         attempt_state = "unresolved"
                     else:
+                        # A step with no semantic interpretation has no record that
+                        # contradicts completion. A present interpretation is authoritative
+                        # per obligation id; a blanket verdict is not.
                         attempt_state = (
                             "satisfied" if terminal == "completed" else "unresolved"
                         )

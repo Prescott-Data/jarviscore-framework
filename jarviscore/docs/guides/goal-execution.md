@@ -281,6 +281,13 @@ to downstream synthesis. Missing and unknown receipts fail closed and keep the
 same agent state active. Products can use the public `CommandObservation` model
 without implementing evidence matching or retry logic.
 
+Other cited tool results carry `observed_tool_result`: the original tool input,
+output, status and error. The agent's authored conclusion remains separate from
+that observation. Evaluators reason from the actual query, scope, period and
+coverage rather than treating a real citation as proof of the conclusion.
+Unfinished dependency records retain their status and `progress` in follow-up
+and final-response context; they are not reduced to an empty output.
+
 `workspace_write` and hash-guarded `workspace_edit` use the same contract through
 the public `WorkspaceMutation` model. JarvisCore binds path, hash, byte size and
 executable state to the tool receipt, then reconciles cited local mutations

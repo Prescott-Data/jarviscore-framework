@@ -299,12 +299,13 @@ class TestCoderSubAgent:
             memory=memory,
         )
 
-        # Earlier epochs keep working; the last epoch lands the honest partial result.
+        # Earlier epochs keep working. A landing result that names itself incomplete
+        # is not success, including on the last epoch.
         assert llm.calls == (2 if landing_attempted else 1)
         if landing_attempted:
-            assert result.status == "success"
-            assert result.metadata["typed_outcome"] == "SUCCESS_ON_LANDING"
-            assert result.metadata["work_record"] == {}
+            assert result.status == "epoch_exhausted"
+            assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+            memory.save_checkpoint.assert_awaited_once()
         else:
             assert result.status == "epoch_exhausted"
             assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"

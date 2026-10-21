@@ -67,6 +67,25 @@ class TestCountTokens:
 # ======================================================================
 
 class TestBuildContext:
+    @pytest.mark.parametrize("status", ["failure", "epoch_exhausted", "yield"])
+    def test_unfinished_dependency_keeps_status_and_progress(self, status):
+        from jarviscore.kernel.state import KernelState
+
+        state = KernelState(
+            workflow_id="wf", step_id="final", task="Report findings",
+            context={"previous_step_results": {"read": {
+                "status": status, "output": None, "error": "Budget exhausted",
+                "progress": {"verified": False, "working_notes": ["Evidence remains available"]},
+            }}},
+        )
+
+        rendered = ContextManager().build_context(state)
+
+        assert status in rendered
+        assert "Budget exhausted" in rendered
+        assert "Evidence remains available" in rendered
+        assert "'verified': False" in rendered
+
     def test_mission_always_present(self, cm):
         ctx = cm.build_context({"workflow_id": "wf-1", "step_id": "s1", "task": "analyse"})
         assert "wf-1" in ctx

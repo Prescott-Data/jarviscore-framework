@@ -67,9 +67,18 @@ def test_an_installed_mechanism_that_cannot_start_a_child_is_not_confinement(tmp
     refuse = [sys.executable, "-c", "import sys; sys.exit('No permissions to create a new namespace')"]
     monkeypatch.setattr(isolation, "_mechanism", lambda: "bubblewrap")
     monkeypatch.setattr(isolation, "_prefix_for", lambda *args: refuse)
-    isolation.confinement_unavailable_reason.cache_clear()
-    try:
-        assert confinement_prefix(tmp_path) is None
-        assert "No permissions to create a new namespace" in isolation.confinement_unavailable_reason()
-    finally:
-        isolation.confinement_unavailable_reason.cache_clear()
+    monkeypatch.setattr(isolation, "_CONFINEMENT", [])
+    assert confinement_prefix(tmp_path) is None
+    assert "No permissions to create a new namespace" in isolation.confinement_unavailable_reason()
+
+
+def test_a_slow_confined_start_is_probed_again_rather_than_ruled_out(tmp_path, monkeypatch):
+    slow = [sys.executable, "-c", "import time; time.sleep(5)"]
+    monkeypatch.setattr(isolation, "_mechanism", lambda: "seatbelt")
+    monkeypatch.setattr(isolation, "_prefix_for", lambda *args: slow)
+    monkeypatch.setattr(isolation, "_CONFINEMENT", [])
+    monkeypatch.setattr(isolation, "_PROBE_TIMEOUT_S", 0.5)
+    assert "did not start" in isolation.confinement_unavailable_reason()
+    monkeypatch.setattr(isolation, "_prefix_for", lambda *args: [])
+    monkeypatch.setattr(isolation, "_PROBE_TIMEOUT_S", 120)
+    assert isolation.confinement_unavailable_reason() is None

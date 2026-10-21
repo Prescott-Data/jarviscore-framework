@@ -867,6 +867,52 @@ class TestWorkflowDAG:
         assert current["revision"] == 2
         assert current["attempt_states"] == {"verify_retry": "satisfied"}
 
+    def test_a_blanket_verdict_does_not_satisfy_an_unnamed_obligation(self, store):
+        obligations = [
+            {"id": "o1", "description": "Verify stage", "source_quote": "Verify stage"},
+            {"id": "o2", "description": "Verify owner", "source_quote": "Verify owner"},
+        ]
+        step = {
+            "id": "verify", "capability": "verification", "effect": "read",
+            "task": "Verify stage", "depends_on": [], "covers": ["o1", "o2"],
+        }
+        store.publish_workflow(
+            "wf-blanket", goal="Verify stage", obligations=obligations, steps=[step],
+        )
+        assert store.claim_step("wf-blanket", "verify", "peer:verify", 30)
+        assert store.finish_claimed_step(
+            "wf-blanket", "verify", "peer:verify", {
+                "status": "success",
+                "output": {"stage": "unknown"},
+                "interpretation": {
+                    "verdict": "satisfied", "decision": "proceed",
+                    "satisfied_requirements": ["o1"],
+                    "unmet_requirements": [],
+                },
+            },
+        )
+        projection = store.get_obligation_projection("wf-blanket")
+        assert projection["o1"]["state"] == "satisfied"
+        assert projection["o2"]["state"] == "unresolved"
+
+    def test_a_completed_step_without_interpretation_still_satisfies_its_obligation(self, store):
+        obligations = [{
+            "id": "o1", "description": "Verify stage", "source_quote": "Verify stage",
+        }]
+        step = {
+            "id": "verify", "capability": "verification", "effect": "read",
+            "task": "Verify stage", "depends_on": [], "covers": ["o1"],
+        }
+        store.publish_workflow(
+            "wf-no-interpretation", goal="Verify stage", obligations=obligations, steps=[step],
+        )
+        assert store.claim_step("wf-no-interpretation", "verify", "peer:verify", 30)
+        assert store.finish_claimed_step(
+            "wf-no-interpretation", "verify", "peer:verify",
+            {"status": "success", "output": {"stage": "done"}},
+        )
+        assert store.get_obligation_projection("wf-no-interpretation")["o1"]["state"] == "satisfied"
+
     def test_obligation_projection_resolves_not_applicable_condition(self, store):
         obligations = [{
             "id": "o1",

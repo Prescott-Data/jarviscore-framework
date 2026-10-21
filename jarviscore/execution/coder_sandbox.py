@@ -492,6 +492,7 @@ class CoderSandbox:
         allowed_commands: Optional[set[str]] = None,
         command_environment: Optional[Dict[str, str]] = None,
         allow_unsafe_local_execution: bool = False,
+        browser_proxy=None,  # Optional[PageBroker]: the page, for browser code
     ):
         self.workspace = Path(workspace_dir) if workspace_dir else Path.cwd()
         self.timeout = timeout
@@ -515,6 +516,7 @@ class CoderSandbox:
         self._git = GitHelper(self._bash, self.workspace)
         self._nexus_call_proxy = nexus_call_proxy  # NexusCallProxy | None
         self._mesh_proxy = mesh_proxy
+        self.browser_proxy = browser_proxy
 
         logger.info(
             "CoderSandbox initialized: workspace=%s timeout=%ds nexus=%s",
@@ -790,6 +792,12 @@ class CoderSandbox:
                 "allowed, or explicitly set allow_unsafe_local_execution=True only for "
                 "trusted code."
             )
+        if self.browser_proxy is not None and getattr(self, "_browser_process", None) is not None:
+            # The session keeps its own variables and state; the step's reads arrive with each cell.
+            reads = {"browser_reads": (context or {}).get("browser_reads") or {}}
+            return await self._execute_browser_cell(
+                {"code": code, "context": reads}, timeout or self.timeout,
+            )
         return await self._execute_subprocess(code, context, timeout or self.timeout)
 
     @property
@@ -830,13 +838,18 @@ class CoderSandbox:
         parent_socket, child_socket = socket.socketpair()
         safe_context = {
             key: value for key, value in (context or {}).items()
-            if key in {"task", "system", "workflow_id", "step_id", "prior_outputs"}
+            if key in {
+                "task", "system", "workflow_id", "step_id", "prior_outputs", "browser_state",
+                "browser_reads",
+            }
         }
         request = {
             "code": code, "context": safe_context,
             "workspace": str(self.workspace), "output_dir": str(self.output_dir),
             "bash_timeout": self._bash.timeout, "rpc_fd": child_socket.fileno(),
             "allow_unsafe_local_execution": self.allow_unsafe_local_execution,
+            "browser": self.browser_proxy is not None,
+            "browser_session": self.browser_proxy is not None,
         }
         command_dirs = {
             str(Path(found).parent)
@@ -863,6 +876,12 @@ class CoderSandbox:
         )
         child_socket.close()
         rpc_task = asyncio.create_task(self._serve_child_rpc(parent_socket, context or {}))
+        if self.browser_proxy is not None:
+            self._browser_process = process
+            self._browser_socket = parent_socket
+            self._browser_rpc_task = rpc_task
+            self._browser_stderr = asyncio.create_task(process.stderr.read())
+            return await self._execute_browser_cell(request, timeout)
         try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(json.dumps(request).encode()), timeout=timeout
@@ -909,6 +928,65 @@ class CoderSandbox:
         return self._to_sandbox_dict(cr)
 
     @staticmethod
+    async def _read_child_line(reader) -> bytes:
+        parts = []
+        while True:
+            try:
+                parts.append(await reader.readuntil(b"\n"))
+                return b"".join(parts)
+            except asyncio.LimitOverrunError as exc:
+                parts.append(await reader.readexactly(exc.consumed))
+            except asyncio.IncompleteReadError as exc:
+                return b"".join([*parts, exc.partial])
+
+    async def _execute_browser_cell(self, request: dict, timeout: int) -> Dict[str, Any]:
+        started = time.time()
+        process = self._browser_process
+        try:
+            process.stdin.write((json.dumps(request) + "\n").encode())
+            await process.stdin.drain()
+            line = await asyncio.wait_for(self._read_child_line(process.stdout), timeout)
+            response = json.loads(line)
+        except asyncio.CancelledError:
+            await self.close_browser_session()
+            raise
+        except Exception as exc:
+            timed_out = isinstance(exc, asyncio.TimeoutError)
+            await self.close_browser_session()
+            result = self._to_sandbox_dict(CoderResult(
+                success=False,
+                error=(f"Browser code timed out after {timeout}s; its session was reset."
+                       if timed_out else f"Browser code session ended: {exc}"),
+                error_type="ExecutionTimeout" if timed_out else "SandboxProcessError",
+                execution_time=time.time() - started,
+            ))
+            result["session_reset"] = True
+            return result
+        if response.get("error"):
+            parsed = CoderResult(
+                success=False, stdout=response.get("stdout", ""),
+                error=response["error"], error_type=response.get("error_type"),
+                execution_time=time.time() - started,
+            )
+        else:
+            parsed = self._parse_result(
+                response.get("result"), response.get("stdout", ""), time.time() - started
+            )
+        result = self._to_sandbox_dict(parsed)
+        result["browser_state"] = response.get("state") or {}
+        return result
+
+    async def close_browser_session(self) -> None:
+        process = getattr(self, "_browser_process", None)
+        if process is None:
+            return
+        self._browser_process = None
+        await self._terminate_process_tree(process)
+        self._browser_socket.close()
+        self._browser_rpc_task.cancel()
+        await asyncio.gather(self._browser_rpc_task, self._browser_stderr, return_exceptions=True)
+
+    @staticmethod
     async def _terminate_process_tree(process) -> None:
         """Terminate the isolated sandbox session, including child processes."""
         if process.returncode is not None:
@@ -937,10 +1015,14 @@ class CoderSandbox:
         sock.setblocking(False)
         reader, writer = await asyncio.open_connection(sock=sock)
         try:
-            while line := await reader.readline():
+            while line := await self._read_child_line(reader):
                 request = json.loads(line)
                 try:
-                    if request["operation"] == "nexus_call":
+                    if request["operation"] == "browser":
+                        if self.browser_proxy is None:
+                            raise RuntimeError("No browser page is attached to this code.")
+                        result = await self.browser_proxy.handle(request["payload"])
+                    elif request["operation"] == "nexus_call":
                         payload = request["payload"]
                         method = str(payload.get("method") or "GET").upper()
                         mutation = context.get("_mutation_authority")

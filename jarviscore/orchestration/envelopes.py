@@ -67,7 +67,7 @@ class ExecutionBudget:
     max_seconds: float = 900.0
     max_steps: int = 30
     max_replans: int = 8
-    max_tokens: int = 240_000
+    max_tokens: int = 1_200_000
     max_epochs_per_step: int = 8
     max_peer_depth: int = 2
     peer_timeout_seconds: float = 300.0
@@ -79,7 +79,7 @@ class ExecutionBudget:
             max_seconds=max(1.0, float(values.get("max_seconds", 900.0))),
             max_steps=max(1, int(values.get("max_steps", 30))),
             max_replans=max(0, int(values.get("max_replans", 8))),
-            max_tokens=max(1, int(values.get("max_tokens", 240_000))),
+            max_tokens=max(1, int(values.get("max_tokens", 1_200_000))),
             max_epochs_per_step=max(
                 1, int(values.get("max_epochs_per_step", 8))
             ),

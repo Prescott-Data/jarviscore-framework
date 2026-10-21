@@ -1443,6 +1443,12 @@ class AutoAgent(Profile):
 
             # Record: merges distilled_facts + evaluator findings into truth
             execution.record_completed(step, output, evaluation, elapsed)
+            if isinstance(output.payload, dict) and (
+                output.payload.get("browser_state") or output.payload.get("browser_calls")
+            ):
+                await self._kernel.retain_browser_procedure(
+                    output.payload, step_ctx, self.agent_id, accepted=evaluation.passed,
+                )
             if evaluation.verdict != "fail":
                 # pass AND partial satisfy dependencies — the step produced
                 # usable output (fail routes through replan below). A partial

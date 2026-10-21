@@ -340,7 +340,11 @@ playwright install chromium
 | `BROWSER_ENABLED` | `false` | Enable `BrowserSubAgent` |
 | `BROWSER_HEADLESS` | `true` | Run the browser in headless mode |
 | `BROWSER_SITE_INTERVAL_S` | `1.5` | Seconds between requests to the same site |
-| `BROWSER_SETTLE_TIMEOUT_MS` | `3000` | How long a click or typing may take to finish loading before the agent looks again |
+| `BROWSER_SETTLE_TIMEOUT_MS` | `3000` | How long a page may keep changing after an action before the agent looks again |
+| `BROWSER_DATA_TIMEOUT_MS` | `10000` | Longest an action waits for the site's own data requests to finish |
+| `BROWSER_CODE_TIMEOUT_S` | `600` | Default and maximum program duration; also bounded by the remaining execution lease |
+| `BROWSER_PARALLEL_PAGES` | `4` | Pages `read_pages` opens at once in a run's browser session |
+| `BROWSER_HISTORY_PAGES` | `50` | Most pages `read_pages` turns through one history before reporting that it goes on (`more`) |
 | `BROWSER_ACT_MIN_CONFIDENCE` | `0.7` | Decision confidence at which `act` performs the action itself; below it, `act` returns candidates |
 | `BROWSER_CONTINUATION_HOLD_S` | `120` | How long a browser stays open for the step's next execution epoch to continue on the same page |
 | `BROWSER_LOCALE` | host's | Locale the browser presents, e.g. `en-GB`; match it to the egress proxy's region |

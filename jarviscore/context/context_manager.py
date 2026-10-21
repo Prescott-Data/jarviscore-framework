@@ -471,14 +471,15 @@ class ContextManager:
 
     def _compose_input_context(self, state: "KernelState", tier) -> str:
         """Input context, whole values only; bulk keys drop entirely under pressure."""
+        from jarviscore.core.envelope import dependency_artifact, handoff_view
+
         if not state.context:
             return ""
         input_block = "## INPUT CONTEXT\n"
         prior = state.context.get("previous_step_results", {})
         if prior and prior_step_mode(tier) == "full":
             for step_id, step_result in prior.items():
-                output = (step_result.get("output", step_result)
-                          if isinstance(step_result, dict) else step_result)
+                output = handoff_view(dependency_artifact(step_result), step_id)
                 input_block += f"**[Prior Step: {step_id}]**\n{output}\n\n"
         interpretations = state.context.get("previous_step_interpretations", {})
         if interpretations:
@@ -543,7 +544,7 @@ class ContextManager:
                 # KernelState.ToolResult model
                 output = turn.tool_output
                 if turn.receipt_id and turn.receipt_id in in_conversation:
-                    output = "shown in full in the conversation"
+                    output = "in the conversation, under this receipt"
                 elif turn.tool_name in perception_tools and index != latest_perception:
                     output = (
                         f"replaced by a later {turn.tool_name}; read it in full with "

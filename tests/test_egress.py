@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from jarviscore.core.egress import Egress, configured_egress
+from jarviscore.kernel.state import KernelState
 
 
 def test_only_http_proxies_with_host_and_port_are_accepted():
@@ -127,7 +128,7 @@ def recorder(monkeypatch):
 
 
 def _opened(agent, context):
-    asyncio.run(agent._pre_run_hook(SimpleNamespace(context=context)))
+    asyncio.run(agent._pre_run_hook(KernelState(context=context)))
 
 
 def test_a_fresh_browser_launches_through_the_workflows_sticky_exit(recorder):
@@ -268,7 +269,7 @@ def test_the_browser_agent_browses_through_the_proxy_as_the_configured_region():
         async with _Proxy() as proxy:
             egress = Egress(f"http://user-session-{{session}}:pw@127.0.0.1:{proxy.port}")
             agent = BrowserSubAgent("b", None, egress=egress, locale="en-GB", timezone="Europe/London")
-            await agent._pre_run_hook(SimpleNamespace(context={"workflow_id": "wf-1"}))
+            await agent._pre_run_hook(KernelState(context={"workflow_id": "wf-1"}))
             try:
                 result = await agent._tool_navigate("http://shop.example/basket", wait_for="load")
                 zone = await agent._page.evaluate("Intl.DateTimeFormat().resolvedOptions().timeZone")

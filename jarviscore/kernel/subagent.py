@@ -55,6 +55,7 @@ import time
 import types
 import typing
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 from jarviscore.context.truth import AgentOutput
@@ -96,6 +97,7 @@ _TOOL_PATTERN = re.compile(r"^TOOL:\s*(.+)$", re.MULTILINE)
 _PARAMS_PATTERN = re.compile(r"^PARAMS:\s*(.+)$", re.MULTILINE | re.DOTALL)
 _DONE_PATTERN = re.compile(r"^DONE:\s*(.+?)(?=\nRESULT:|\Z)", re.MULTILINE | re.DOTALL)
 _RESULT_PATTERN = re.compile(r"^RESULT:\s*(.+)$", re.MULTILINE | re.DOTALL)
+_COMPLETE_PATTERN = re.compile(r"^COMPLETE:\s*(yes|no)\b", re.MULTILINE | re.IGNORECASE)
 _COMBINED_DONE_RESULT_PATTERN = re.compile(
     r"^DONE/RESULT\s*:?\s*\n(.+)$", re.MULTILINE | re.DOTALL
 )
@@ -105,13 +107,15 @@ _NOTE_PATTERN = re.compile(r"^NOTE:\s*(.+?)(?=\n(?:NOTE|THOUGHT|TOOL|PARAMS|DONE
 
 # ── Observation channel integrity (issue #57) ─────────────────────────────
 # The agent sees every tool result whole. Results of earlier turns stay
-# readable through read_turn_result for the lifetime of the dispatch.
+# readable through read_turn_result for the lifetime of the step, across epochs.
 # Whole results of the last N tool turns are kept; older turns are released
 # whole, never cut, when the window or the total-size budget is exceeded.
 _TURN_RESULT_WINDOW = int(os.getenv("SUBAGENT_TURN_RESULT_WINDOW", "10"))
 # Exchanges the agent sees each turn, and carries into a continued step.
 _CONVERSATION_WINDOW = 10
 _TURN_RESULT_BUDGET = int(os.getenv("SUBAGENT_TURN_RESULT_BUDGET", "2000000"))
+# Characters of earlier tool results each prompt carries whole; the newest is always whole.
+_THREAD_RESULT_BUDGET = int(os.getenv("SUBAGENT_THREAD_RESULT_BUDGET", "120000"))
 # read_turn_result pages are shown whole, so each page is sized to fit the agent's view.
 _READ_PAGE_LIMIT = int(os.getenv("SUBAGENT_READ_PAGE_LIMIT", "20000"))
 
@@ -140,6 +144,13 @@ def _checkpoint(state: KernelState, conversation_history: list) -> str:
         for entry in conversation_history[-_CONVERSATION_WINDOW:]
     ]
     return state.model_dump_json()
+
+
+def _now_fact() -> str:
+    """The date and time where this runs, so relative dates on pages and in tasks can be resolved."""
+    now = datetime.now().astimezone()
+    offset = now.strftime("%z")
+    return f"Now: {now.strftime('%A %d %B %Y, %H:%M')} local time (UTC{offset[:3]}:{offset[3:]})."
 
 
 def _observe(tool_name: str, tool_result: Any, turn: int, whole: bool = True) -> str:
@@ -179,14 +190,26 @@ def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) 
     """Prior turns (last 10): a native turn as its tool call and result, a text turn as a pair.
 
     A perception a later one replaced is shown as a pointer to it: the agent
-    acts on the latest view of the world, and can still read the older one.
+    acts on the latest view of the world, and can still read the older one. The
+    newest result is always whole; earlier ones are whole while they fit the thread
+    budget, newest first, and otherwise shown as a reference to read them whole again.
     """
     recent = conversation_history[-_CONVERSATION_WINDOW:]
     latest = max((i for i, entry in enumerate(recent) if entry.get("perception")), default=None)
-    for i, hist_entry in enumerate(recent):
-        observation = hist_entry["observation"]
-        if hist_entry.get("perception") and i != latest:
-            observation = hist_entry["superseded"]
+    shown: List[str] = [""] * len(recent)
+    carried = 0
+    for i in range(len(recent) - 1, -1, -1):
+        observation = recent[i]["observation"]
+        if recent[i].get("perception") and i != latest:
+            observation = recent[i]["superseded"]
+        elif (
+            i != len(recent) - 1 and recent[i].get("reference")
+            and carried + len(observation) > _THREAD_RESULT_BUDGET
+        ):
+            observation = recent[i]["reference"]
+        carried += len(observation)
+        shown[i] = observation
+    for hist_entry, observation in zip(recent, shown):
         call = hist_entry.get("tool_call")
         images = hist_entry.get("images", ())
         if call is None:
@@ -449,6 +472,10 @@ class BaseSubAgent(ABC):
     #: Whether this dispatch's turns are native tool calls; set by run() from the LLM client.
     _native_protocol: bool = False
 
+    #: Seconds after the lease ends that a tool keeping its own deadline has to hand back
+    #: what it did, before the call is stopped.
+    tool_handback_s: float = float(os.getenv("SUBAGENT_TOOL_HANDBACK_S", "60"))
+
     #: Tools whose results are the agent's perception and are shown whole, never clipped.
     whole_observation_tools: frozenset = frozenset()
     #: Perceptions of a changing world: a newer result replaces older ones in the agent's view.
@@ -566,8 +593,10 @@ class BaseSubAgent(ABC):
     def _tool_read_turn_result(self, turn: int, offset: int = 0, length: int = 0) -> Dict[str, Any]:
         """Read the whole output of an earlier tool call (params: turn, optional offset/length).
 
-        Results of earlier turns leave the conversation as it moves on; the
-        last few are retained whole and readable here, a page at a time.
+        ``turn`` is the number in the result's [Turn N] label, the last part of its
+        receipt; it names the call across the step's epochs. Results of earlier turns
+        leave the conversation as it moves on; the last few are retained whole and
+        readable here, a page at a time.
         """
         state = self._current_state
         variables = state.internal_variables if state is not None else {}
@@ -639,7 +668,7 @@ class BaseSubAgent(ABC):
         return specs, tools_by_function
 
     @staticmethod
-    def _done_function(context: Optional[Dict]) -> Dict[str, Any]:
+    def _done_function(context: Optional[Dict], landing: bool = False) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "description": (
                 "The data behind the answer, shaped for whoever will use it next: the "
@@ -668,6 +697,15 @@ class BaseSubAgent(ABC):
             },
             "required": ["summary", "result"],
         }
+        if landing:
+            parameters["properties"]["complete"] = {
+                "type": "boolean",
+                "description": (
+                    "True only when this answer covers everything the task asked for, "
+                    "from what was gathered; false when any part was not reached."
+                ),
+            }
+            parameters["required"].append("complete")
         if definitions:
             parameters["$defs"] = definitions
         return {"type": "function", "function": {
@@ -706,6 +744,7 @@ class BaseSubAgent(ABC):
                 "summary": summary or "Completed via done",
                 "result": arguments.get("result"),
                 "answer": summary or None,
+                "complete": arguments.get("complete"),
                 "native_call": native_call,
                 **kept,
             }
@@ -827,7 +866,9 @@ class BaseSubAgent(ABC):
                 "Your memory:",
                 f"  You see the task, your working notes and your last {_CONVERSATION_WINDOW} exchanges. Older",
                 "  exchanges are gone from view, and a long task continues across several",
-                "  sittings. What you have established (a price, an option, a constraint you",
+                "  sittings. A large earlier result may appear as a reference that",
+                "  read_turn_result shows whole again.",
+                "  What you have established (a price, an option, a constraint you",
                 "  checked, a page that has or lacks something, a decision) is kept only if",
                 "  you put it in working_notes. Every function accepts working_notes, so a",
                 "  note costs no turn. Your notes are shown to you every turn.",
@@ -861,7 +902,9 @@ class BaseSubAgent(ABC):
             "Your memory:",
             f"  You see the task, your working notes and your last {_CONVERSATION_WINDOW} exchanges. Older",
             "  exchanges are gone from view, and a long task continues across several",
-            "  sittings. What you have established (a price, an option, a constraint you",
+            "  sittings. A large earlier result may appear as a reference that",
+            "  read_turn_result shows whole again.",
+            "  What you have established (a price, an option, a constraint you",
             "  checked, a page that has or lacks something, a decision) is kept only if",
             "  you write it on a NOTE: line. A note costs no turn: write it in the same",
             "  reply as your next TOOL or DONE. Your notes are shown to you every turn.",
@@ -879,6 +922,23 @@ class BaseSubAgent(ABC):
         max_epochs = int(budget.get("max_epochs_per_step") or 1)
         current = int(context.get("execution_epoch") or 1)
         return current < max_epochs
+
+    def _tool_time_s(self) -> Optional[float]:
+        """Seconds a tool call may run: the rest of this epoch, plus one epoch's time when the step continues in another.
+
+        An epoch bounds the agent's turns; a read in flight at its end spends no tokens,
+        and cutting it would only make the next epoch read the same pages again.
+        """
+        lease = getattr(getattr(self, "_cognition", None), "lease", None)
+        if lease is None:
+            return None
+        seconds = lease.remaining_wall_clock_ms() / 1000
+        state = getattr(self, "_current_state", None)
+        if getattr(self, "_current_memory", None) is not None and self._epochs_remain(
+            getattr(state, "context", None)
+        ):
+            seconds += lease.wall_clock_ms / 1000
+        return seconds
 
     async def _landing_turn(
         self,
@@ -906,10 +966,11 @@ class BaseSubAgent(ABC):
                 instruction = (
                     f"Your execution budget is exhausted ({exhausted}). Only done is "
                     "available now. Call done with your final answer from what you have "
-                    "already gathered. If your findings are partial, say so inside the result."
+                    "already gathered, and set complete to whether it covers everything "
+                    "the task asked for."
                 )
                 kwargs.update(
-                    tools=[self._done_function(state.context)],
+                    tools=[self._done_function(state.context, landing=True)],
                     tool_choice="required",
                     parallel_tool_calls=False,
                 )
@@ -918,8 +979,9 @@ class BaseSubAgent(ABC):
                     f"Your execution budget is exhausted ({exhausted}). Tools are no "
                     "longer available. Produce your final answer NOW from what you "
                     "have already gathered. Respond with exactly:\n"
-                    "DONE: <complete human answer; may span lines>\nRESULT: <json result>\n"
-                    "If your findings are partial, say so inside the result."
+                    "COMPLETE: yes when the answer covers everything the task asked for, "
+                    "no when any part was not reached\n"
+                    "DONE: <complete human answer; may span lines>\nRESULT: <json result>"
                 )
             messages.append({"role": "user", "content": instruction})
             llm_result = await self.llm_client.generate(messages=messages, **kwargs)
@@ -932,11 +994,17 @@ class BaseSubAgent(ABC):
                 parsed = self._parse_native_turn(llm_result, {})
             else:
                 parsed = self._parse_response_for_contract(content, state.context)
+                declared = _COMPLETE_PATTERN.search(content)
+                parsed["complete"] = (
+                    declared.group(1).lower() == "yes" if declared else None
+                )
             if parsed.get("type") != "done":
                 return None
             can_exit, reject_reason = self._ground_completion(state, parsed)
             if can_exit:
                 can_exit, reject_reason = self._can_complete(state, parsed)
+            if can_exit:
+                can_exit, reject_reason = self._records_support_completion(state, parsed)
             if not can_exit:
                 evidence = as_evidence(reject_reason)
                 state.add_thought(f"[LANDING_DONE_GATE] {evidence.render()}")
@@ -1223,7 +1291,7 @@ class BaseSubAgent(ABC):
             # A notice about this run's budget belongs to this turn; kept as a
             # thought it would outlive the run it describes.
             context_block += (
-                f"\n\n## RUNTIME NOTICE (this turn)\n{self._cognition.budget_facts()}"
+                f"\n\n## RUNTIME NOTICE (this turn)\n{_now_fact()}\n{self._cognition.budget_facts()}"
             )
             state.failure_ledger = self._cognition.failures.recent_failures
 
@@ -1259,7 +1327,7 @@ class BaseSubAgent(ABC):
                     state.tokens_used = total_tokens["total"]
                     state.total_cost_usd = total_cost
                     if memory is not None:
-                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
+                        await memory.save_checkpoint(self._checkpoint_json(state, conversation_history))
                     if not e.recoverable:
                         _trace.log_step_complete(
                             False,
@@ -1397,7 +1465,7 @@ class BaseSubAgent(ABC):
                             state.action_tokens_used = self._cognition.lease.action_used
                             state.tokens_used = total_tokens["total"]
                             state.total_cost_usd = total_cost
-                            await memory.save_checkpoint(_checkpoint(state, conversation_history))
+                            await memory.save_checkpoint(self._checkpoint_json(state, conversation_history))
                             return AgentOutput(
                                 status="epoch_exhausted",
                                 summary=f"{summary}; durable state was checkpointed",
@@ -1528,7 +1596,7 @@ class BaseSubAgent(ABC):
                 }
 
                 # Emit thinking + tool_start trace events
-                thought = parsed.get("thought", "")
+                thought = parsed.get("thought", "") or "\n".join(parsed.get("notes") or [])
                 if thought:
                     _trace.log_thinking(thought)
                 _trace.log_tool_start(tool_name, tool_params)
@@ -1548,7 +1616,7 @@ class BaseSubAgent(ABC):
                     turn_log["error"] = str(exc)
                     trajectory.append(turn_log)
                     if memory is not None:
-                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
+                        await memory.save_checkpoint(self._checkpoint_json(state, conversation_history))
                     _trace.log_step_complete(
                         False,
                         "Active execution epoch exhausted; checkpointed for continuation.",
@@ -1596,12 +1664,6 @@ class BaseSubAgent(ABC):
                     state.total_cost_usd = total_cost
                 turn_log["result"] = str(tool_result)[:500]
 
-                # ── Retain the full result for honest retrieval (issue #57) ──
-                # The observation channel clips below; the bytes it clips stay
-                # reachable via read_turn_result for the last N turns.
-                if tool_name != "read_turn_result":
-                    _retain_turn_result(state.internal_variables, turn, str(tool_result))
-
                 # Record in state
                 error_str = tool_result.get("error") if isinstance(tool_result, dict) else None
                 repeat_note = _identical_call_record(
@@ -1616,6 +1678,12 @@ class BaseSubAgent(ABC):
                     duration_ms=tool_duration_ms,
                 )
                 turn_log["tool_receipt_id"] = tool_receipt.receipt_id
+                # The receipt's number names this result across the step's epochs; the loop's turn restarts in each.
+                call = state.tool_results_recorded
+
+                # ── Retain the full result for honest retrieval (issue #57) ──
+                if tool_name != "read_turn_result":
+                    _retain_turn_result(state.internal_variables, call, str(tool_result))
 
                 # ── Track usage ──
                 registered = self._tools.get(tool_name)
@@ -1643,17 +1711,16 @@ class BaseSubAgent(ABC):
                     state.thinking_tokens_used = self._cognition.lease.thinking_used
                     state.action_tokens_used = self._cognition.lease.action_used
                     state.total_cost_usd = total_cost
-                    self._save_subagent_state(state)
                     trajectory.append(turn_log)
                     conversation_history.append({
                         "assistant": content,
                         "observation": (
-                            f"[Turn {turn}] Tool '{tool_name}' returned (waiting):\n"
-                            f"{_observe(tool_name, tool_result, turn)}"
+                            f"[Turn {call}] Tool '{tool_name}' returned (waiting):\n"
+                            f"{_observe(tool_name, tool_result, call)}"
                         ),
                     })
                     if memory is not None:
-                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
+                        await memory.save_checkpoint(self._checkpoint_json(state, conversation_history))
                     return AgentOutput(
                         status="yield",
                         payload=tool_result,
@@ -1681,10 +1748,10 @@ class BaseSubAgent(ABC):
                 # Structured turn digest instead of raw output — helps the LLM
                 # retain what was learned and reason about strategy changes.
                 result_str = _observe(
-                    tool_name, tool_result, turn, tool_name in self.whole_observation_tools
+                    tool_name, tool_result, call, tool_name in self.whole_observation_tools
                 )
                 observation = (
-                    f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}):\n"
+                    f"[Turn {call}] Tool '{tool_name}' returned ({turn_log['status']}):\n"
                     f"{result_str}\n\n"
                     f"Authoritative tool receipt: {tool_receipt.receipt_id}. "
                     "When final JSON reports this command execution, include this exact "
@@ -1701,9 +1768,15 @@ class BaseSubAgent(ABC):
                     "receipt_id": tool_receipt.receipt_id,
                     "perception": tool_name in self.perception_tools,
                     "superseded": (
-                        f"[Turn {turn}] Tool '{tool_name}' returned ({turn_log['status']}); "
+                        f"[Turn {call}] Tool '{tool_name}' returned ({turn_log['status']}); "
                         "a later perception replaced this view. Full result: call "
-                        f'read_turn_result with {{"turn": {turn}}}'
+                        f'read_turn_result with {{"turn": {call}}}'
+                    ),
+                    "reference": (
+                        f"[Turn {call}] Tool '{tool_name}' returned ({turn_log['status']}), "
+                        f"receipt {tool_receipt.receipt_id}, {len(result_str)} characters, "
+                        "shown whole when it arrived. Read it whole again: call "
+                        f'read_turn_result with {{"turn": {call}}}'
                     ),
                 })
 
@@ -1728,7 +1801,7 @@ class BaseSubAgent(ABC):
                 # Save checkpoint
                 if memory:
                     try:
-                        await memory.save_checkpoint(_checkpoint(state, conversation_history))
+                        await memory.save_checkpoint(self._checkpoint_json(state, conversation_history))
                     except Exception as e:
                         self._log.warning("Checkpoint save failed for %s turn=%s: %s", self.agent_id, turn, e)
 
@@ -1871,7 +1944,7 @@ class BaseSubAgent(ABC):
         state.action_tokens_used = self._cognition.lease.action_used
         state.tokens_used = total_tokens["total"]
         state.total_cost_usd = total_cost
-        await memory.save_checkpoint(_checkpoint(state, conversation_history))
+        await memory.save_checkpoint(self._checkpoint_json(state, conversation_history))
         return AgentOutput(
             status="epoch_exhausted",
             summary=(
@@ -1971,6 +2044,11 @@ class BaseSubAgent(ABC):
         """Whether the approved action still targets what the person approved."""
         return True
 
+    def _checkpoint_json(self, state: KernelState, conversation_history: list) -> str:
+        """The checkpoint a resume or the next epoch restores, with this subagent's runtime as it stands."""
+        self._save_subagent_state(state)
+        return _checkpoint(state, conversation_history)
+
     def _save_subagent_state(self, state: KernelState) -> None:
         """Place subclass runtime state into the serializable checkpoint."""
 
@@ -2024,6 +2102,25 @@ class BaseSubAgent(ABC):
         history decide whether completion is supported.
         """
         return (True, "")
+
+    def _records_support_completion(self, state: KernelState, parsed: Dict[str, Any]) -> tuple:
+        """Whether a clock expiry may be reported as completion.
+
+        A landing turn is the runtime forcing done because the lease ended. The
+        model's announcement is not the work: only an answer that declares it covers
+        everything asked completes; a role with checkable records adds its own check.
+        """
+        complete = parsed.get("complete")
+        if complete is not True:
+            return False, GateEvidence(
+                check="landing_complete",
+                requirement=(
+                    "a clock expiry is completion only when the final answer declares "
+                    "complete: true"
+                ),
+                observed={"complete": complete},
+            )
+        return True, ""
 
     @staticmethod
     def _work_record(state: KernelState) -> Dict[str, Dict[str, int]]:
@@ -2149,11 +2246,30 @@ class BaseSubAgent(ABC):
 
         try:
             if inspect.iscoroutinefunction(tool.func):
-                result = await tool.func(**params)
+                call = tool.func(**params)
             else:
-                result = await asyncio.to_thread(tool.func, **params)
-                if inspect.isawaitable(result):
-                    result = await result
+                call = asyncio.to_thread(tool.func, **params)
+            running = asyncio.ensure_future(call)
+            tool_time = self._tool_time_s()
+            limit = None if tool_time is None else tool_time + self.tool_handback_s
+            try:
+                done, _ = await asyncio.wait({running}, timeout=limit)
+            except asyncio.CancelledError:
+                running.cancel()
+                await asyncio.gather(running, return_exceptions=True)
+                raise
+            if not done:
+                running.cancel()
+                # Cleanup that hangs (a page that no longer answers) must not hold the step past its time.
+                await asyncio.wait({running}, timeout=self.tool_handback_s)
+                return {
+                    "status": "error",
+                    "error": f"The step's time ran out while {tool_name} was running; it was stopped.",
+                    "error_type": "LeaseExpired",
+                }
+            result = running.result()
+            if inspect.isawaitable(result):
+                result = await result
             # Normalize to dict
             if not isinstance(result, dict):
                 return {"status": "success", "output": result}
