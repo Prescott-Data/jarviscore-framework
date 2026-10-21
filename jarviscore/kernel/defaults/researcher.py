@@ -16,6 +16,7 @@ All IA-specific imports replaced with jarviscore equivalents.
 
 import asyncio
 import fnmatch
+import importlib.util
 import logging
 import json
 import glob
@@ -523,6 +524,13 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         "evidence_pointers": "every evidence entry carries a pointer or url",
         "api_specs": "every api_spec entry carries a method and a url or path",
     }
+
+    def _autodiscover_tools(self) -> None:
+        super()._autodiscover_tools()
+        # The index needs the [rag] extra; offering the tool without it only
+        # produced a failed call and an install hint the model cannot act on.
+        if importlib.util.find_spec("sentence_transformers") is None:
+            self._tools.pop("rag_query", None)
 
     _CONTENT_TOOLS = frozenset({
         "read_web_content", "browser_get_text", "browser_get_page_text",

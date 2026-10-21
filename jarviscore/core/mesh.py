@@ -472,6 +472,14 @@ class Mesh:
                 await self._p2p_coordinator.announce_capabilities()
                 await self._p2p_coordinator.request_peer_capabilities()
                 self._logger.info("✓ P2P capabilities announced and exchanged")
+            except ModuleNotFoundError as exc:
+                # P2P is on by default and its extra is optional: running
+                # local-only without it is the documented behaviour, not a fault.
+                self._p2p_coordinator = None
+                self._logger.info(
+                    "P2P dependencies are not installed (%s); running local-only. "
+                    "Install jarviscore-framework[p2p] for multi-node meshes.", exc.name,
+                )
             except Exception as exc:
                 self._logger.warning("P2P coordinator init failed (continuing without): %s", exc)
 

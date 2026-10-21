@@ -87,11 +87,11 @@ class CircuitBreaker:
             return True
         return False
 
-    def record_failure(self, service: str):
+    def record_failure(self, service: str, level: int = logging.WARNING):
         self.failures[service] = self.failures.get(service, 0) + 1
         self.last_failure_time[service] = time.time()
         if self.failures[service] >= self.failure_threshold:
-            logger.warning(f"Circuit breaker OPEN for {service} due to {self.failures[service]} failures")
+            logger.log(level, f"Circuit breaker OPEN for {service} due to {self.failures[service]} failures")
             self.state[service] = 'OPEN'
 
     def record_success(self, service: str):
@@ -150,6 +150,11 @@ class InternetSearch:
         )
         self.serper_api_key = os.environ.get("SERPER_API_KEY")
         self.searxng_url = os.environ.get("SEARXNG_INSTANCE_URL", "http://localhost:8080")
+        # The default URL is tried quietly: a SearXNG nobody configured being
+        # absent is not news, and its retries buried real errors in every run.
+        self._searxng_level = (
+            logging.WARNING if os.environ.get("SEARXNG_INSTANCE_URL") else logging.DEBUG
+        )
         self.circuit_breaker = CircuitBreaker()
 
         self._gemini_client = None
@@ -292,7 +297,10 @@ class InternetSearch:
             results: List[Dict[str, Any]] = []
             for provider, batch in zip(providers, provider_results):
                 if isinstance(batch, Exception):
-                    logger.warning(
+                    logger.log(
+                        self._searxng_level
+                        if provider == "searxng" and isinstance(batch, SearchProviderError)
+                        else logging.WARNING,
                         "Search provider=%s tier=%s failed error_type=%s deadline_seconds=%s",
                         provider, tier_name, type(batch).__name__, self._provider_timeout(provider),
                     )
@@ -411,7 +419,7 @@ class InternetSearch:
                 - json
         """
         if self.circuit_breaker.is_open("searxng"):
-            logger.warning("Skipping SearXNG search (Circuit Breaker OPEN)")
+            logger.log(self._searxng_level, "Skipping SearXNG search (Circuit Breaker OPEN)")
             raise SearchProviderError("searxng circuit breaker open")
 
         try:
@@ -460,12 +468,16 @@ class InternetSearch:
                             await asyncio.sleep(1.0 * (2 ** attempt))
                             continue
                 except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
-                    logger.warning("SearXNG connection attempt %d failed: %s", attempt + 1, e)
+                    logger.log(self._searxng_level, "SearXNG connection attempt %d failed: %s", attempt + 1, e)
                     last_failure = f"connection failed: {type(e).__name__}: {e}"
+                    if self._searxng_level == logging.DEBUG and isinstance(
+                        e, aiohttp.ClientConnectorError
+                    ):
+                        break  # nothing listens at the default URL; retrying only waits
                     await asyncio.sleep(1.0 * (2 ** attempt))
 
-            logger.warning("SearXNG search failed: %s", last_failure)
-            self.circuit_breaker.record_failure("searxng")
+            logger.log(self._searxng_level, "SearXNG search failed: %s", last_failure)
+            self.circuit_breaker.record_failure("searxng", level=self._searxng_level)
             raise SearchProviderError(f"searxng {last_failure}")
         except SearchProviderError:
             raise

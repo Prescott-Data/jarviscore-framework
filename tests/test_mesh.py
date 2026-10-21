@@ -377,3 +377,26 @@ class TestMeshRepresentation:
         assert "auto" in repr_str
         assert "agents=2" in repr_str
         assert "started=False" in repr_str
+
+
+@pytest.mark.asyncio
+async def test_a_missing_p2p_extra_is_local_only_not_a_warning(monkeypatch, caplog):
+    import logging
+
+    class Coordinator:
+        def __init__(self, *args, **kwargs):
+            raise ModuleNotFoundError("No module named 'swim'", name="swim")
+
+    monkeypatch.setattr("jarviscore.p2p.P2PCoordinator", Coordinator)
+    mesh = Mesh(config={"p2p_enabled": True})
+    mesh.add(TestAgent1)
+
+    with caplog.at_level(logging.INFO):
+        await mesh.start()
+    try:
+        assert mesh._p2p_coordinator is None
+        p2p = [r for r in caplog.records if "P2P" in r.getMessage()]
+        assert p2p and all(r.levelno < logging.WARNING for r in p2p)
+        assert any("jarviscore-framework[p2p]" in r.getMessage() for r in p2p)
+    finally:
+        await mesh.stop()

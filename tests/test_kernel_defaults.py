@@ -569,6 +569,19 @@ class TestCoderSubAgent:
 class TestResearcherSubAgent:
     """Tests for ResearcherSubAgent."""
 
+    def test_rag_query_is_offered_only_when_the_rag_extra_is_installed(self, mock_llm, monkeypatch):
+        import importlib.util
+
+        real = importlib.util.find_spec
+        monkeypatch.setattr(
+            importlib.util, "find_spec",
+            lambda name, *a: None if name == "sentence_transformers" else real(name, *a),
+        )
+        assert "rag_query" not in ResearcherSubAgent(agent_id="r1", llm_client=mock_llm).tool_names
+
+        monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: object())
+        assert "rag_query" in ResearcherSubAgent(agent_id="r2", llm_client=mock_llm).tool_names
+
     def test_registers_expected_tools(self, mock_llm):
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
         assert "search_internet" in researcher.tool_names

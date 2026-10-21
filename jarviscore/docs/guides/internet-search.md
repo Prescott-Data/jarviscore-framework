@@ -91,7 +91,7 @@ docker run -d \
 > [!IMPORTANT]
 > SearXNG's JSON format must be enabled. Add `- json` under `search.formats` in `settings.yml`, or pass the env var shown above.
 
-If SearXNG is not running, the connection fails silently and the circuit breaker skips it: no error reaches your agent.
+If SearXNG is not running, the connection fails silently and the circuit breaker skips it: no error reaches your agent. When `SEARXNG_INSTANCE_URL` is not set, the default URL is tried once per search and a refused connection is logged only at debug level. When you set it, an instance that is down is retried and reported as a warning.
 
 ---
 

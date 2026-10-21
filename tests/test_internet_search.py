@@ -315,3 +315,56 @@ async def test_searxng_connection_failure_reports_the_connection_error(monkeypat
         await search._search_searxng("any firm")
     assert "connection refused" in str(error.value)
     assert "status 0" not in str(error.value)
+
+
+def _refused_session(calls):
+    import aiohttp
+    from aiohttp.client_reqrep import ConnectionKey
+
+    key = ConnectionKey("localhost", 8080, False, True, None, None, None)
+
+    class Session:
+        def get(self, *args, **kwargs):
+            calls.append(1)
+            raise aiohttp.ClientConnectorError(key, OSError(61, "Connect call failed"))
+
+    return Session()
+
+
+@pytest.mark.asyncio
+async def test_an_unconfigured_searxng_is_skipped_quietly_after_one_attempt(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.delenv("SEARXNG_INSTANCE_URL", raising=False)
+    search = _web_only_search(monkeypatch)
+    calls = []
+    search.session = _refused_session(calls)
+
+    with caplog.at_level(logging.DEBUG, logger="jarviscore.search.internet_search"):
+        with pytest.raises(SearchProviderError):
+            await search._search_searxng("any firm")
+
+    assert calls == [1]
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_a_configured_searxng_that_is_down_is_still_reported(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setenv("SEARXNG_INSTANCE_URL", "http://search.internal:8080")
+    search = _web_only_search(monkeypatch)
+    calls = []
+    search.session = _refused_session(calls)
+
+    async def no_sleep(seconds):
+        return None
+
+    monkeypatch.setattr("jarviscore.search.internet_search.asyncio.sleep", no_sleep)
+
+    with caplog.at_level(logging.WARNING, logger="jarviscore.search.internet_search"):
+        with pytest.raises(SearchProviderError):
+            await search._search_searxng("any firm")
+
+    assert len(calls) > 1
+    assert any("SearXNG" in r.getMessage() for r in caplog.records)
