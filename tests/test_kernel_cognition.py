@@ -67,7 +67,9 @@ class TestToolClassification:
         from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
 
         tools = ResearcherSubAgent(agent_id="r", llm_client=None)._tools
-        for name in ("search_internet", "search_internet_batch", "read_web_content", "rag_query"):
+        readers = ("search_internet", "search_internet_batch", "read_web_content", "rag_query")
+        # rag_query is offered only with the [rag] extra installed.
+        for name in (n for n in readers if n in tools or n != "rag_query"):
             assert getattr(tools[name].phase, "value", tools[name].phase) == AgentPhase.DISCOVERY.value
 
 
