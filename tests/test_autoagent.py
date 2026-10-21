@@ -240,6 +240,41 @@ class TestAutoAgentSetup:
         assert captured["allow_unsafe_local_execution"] is expected
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("requires_auth", [False, True])
+    async def test_only_an_agent_that_requires_auth_can_reach_provider_credentials(
+        self, monkeypatch, requires_auth
+    ):
+        from types import SimpleNamespace
+
+        captured = {}
+
+        def create_sandbox(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace()
+
+        monkeypatch.setattr("jarviscore.execution.create_coder_sandbox", create_sandbox)
+        monkeypatch.setattr(AutoAgent, "_load_agent_profile", lambda self: None)
+
+        class Integrator(AutoAgent):
+            role = "integrator"
+            capabilities = ["crm"]
+            system_prompt = "You work with the CRM."
+
+            def _create_kernel(self):
+                return SimpleNamespace(provider_access=None)
+
+        Integrator.requires_auth = requires_auth
+        agent = Integrator()
+        agent._mesh = SimpleNamespace(
+            config={}, _settings=SimpleNamespace(allow_unsafe_local_execution=True),
+        )
+
+        await agent.setup()
+
+        assert (captured["nexus_call_proxy"] is not None) is requires_auth
+        assert agent._kernel.provider_access is requires_auth
+
+    @pytest.mark.asyncio
     async def test_typesafe_features_require_injected_decision_client(self):
         from types import SimpleNamespace
 

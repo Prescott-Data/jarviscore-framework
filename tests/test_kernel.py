@@ -1794,6 +1794,23 @@ class TestDeclaredSystemCredentials:
         assert output.payload == {"contacts": 2}
 
     @pytest.mark.asyncio
+    async def test_an_agent_without_provider_access_is_not_shown_the_vault(
+        self, kernel, mock_llm, monkeypatch
+    ):
+        _patch_vault(monkeypatch, connected={"hubspot"})
+        kernel.provider_access = False
+
+        assert await kernel._resolve_connection("hubspot") is None
+        assert await kernel._provider_inventory() == {}
+
+        mock_llm.responses = [_router_response("coder"), _coder_write_response()]
+        output = await kernel.execute(task="Read our CRM contacts", context={"system": "hubspot"})
+
+        assert output.status == "yield"
+        assert "requires_auth = True" in output.summary
+        assert output.metadata["dispatches"] == []
+
+    @pytest.mark.asyncio
     async def test_provider_mutation_uses_coder_without_preselecting_an_atom(
         self, kernel, mock_llm, monkeypatch
     ):

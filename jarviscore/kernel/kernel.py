@@ -355,6 +355,11 @@ class Kernel:
         output = await kernel.execute(task="Calculate factorial of 10")
     """
 
+    # Whether this kernel's agent may use provider credentials at all. An
+    # AutoAgent sets it from requires_auth; without it, neither the gateway
+    # nor the machine's local vault is consulted on its behalf.
+    provider_access: bool = True
+
     def __init__(
         self,
         llm_client,
@@ -665,7 +670,7 @@ class Kernel:
         routing, so the router knows whether a credentialed path exists, and again
         at dispatch to tag the coder's context. Never returns credential material.
         """
-        if not system_name:
+        if not system_name or not self.provider_access:
             return None
         if self.auth_manager:
             # A read, never a handshake. get_connection_id() falls through to
@@ -689,6 +694,8 @@ class Kernel:
 
     def _awaiting_consent(self, system_name: str) -> bool:
         """Registered app, no consented account — a different ask than 'register it'."""
+        if not self.provider_access:
+            return False
         try:
             from jarviscore.nexus.store import get_store
             return get_store().needs_consent(system_name)
@@ -802,6 +809,8 @@ class Kernel:
         been connected. A consent completed in another process is only visible
         through the second, so both are asked.
         """
+        if not self.provider_access:
+            return {}
         try:
             from jarviscore.nexus.store import ConnectionState, get_store
             store = get_store()
@@ -913,6 +922,7 @@ class Kernel:
                 blob_storage=self.blob_storage,
             )
             subagent.effect_guards = tuple(self.config.get("effect_guards") or ())
+            subagent.provider_access = self.provider_access
         elif role == "researcher":
             subagent = ResearcherSubAgent(
                 agent_id=agent_id,
@@ -1403,11 +1413,19 @@ class Kernel:
                             # request_access with a provider URL and connection ID.
                             enriched_context["_consent_required_system"] = system_name
                         else:
-                            summary = (
-                                f"This task needs {system_name}, which is not "
-                                "connected here. Someone has to grant access to it "
-                                "before the task can run."
-                            )
+                            if not self.provider_access:
+                                summary = (
+                                    f"This task needs {system_name}, but this agent does "
+                                    "not declare requires_auth = True, so it may not use "
+                                    "provider credentials. Declare it on the agent class "
+                                    "to let the agent act through connected providers."
+                                )
+                            else:
+                                summary = (
+                                    f"This task needs {system_name}, which is not "
+                                    "connected here. Someone has to grant access to it "
+                                    "before the task can run."
+                                )
                             logger.warning(
                                 "[Kernel] %s (system=%s) — no consent channel is available",
                                 summary, system_name,

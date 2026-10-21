@@ -12,6 +12,7 @@ from jarviscore.profiles import AutoAgent
 class NotifierAgent(AutoAgent):
     role = "notifier"
     capabilities = ["notifications", "slack"]
+    requires_auth = True  # posts to Slack through Nexus
     system_prompt = (
         "You are a notification agent. You send messages to Slack using "
         "nexus_call() against the Slack Web API (https://slack.com/api/chat.postMessage). "

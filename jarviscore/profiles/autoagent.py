@@ -355,6 +355,9 @@ class AutoAgent(Profile):
         # proxy tries the gateway first and falls back to NexusLocalStore.
         nexus_proxy = None
         try:
+            if not getattr(self, "requires_auth", False):
+                # Credentials are for agents that declare they act on providers.
+                raise LookupError("agent does not declare requires_auth")
             from jarviscore.auth.manager import AuthenticationManager
             from jarviscore.nexus.call_proxy import NexusCallProxy
             # Resolved at call time, not captured now: the mesh injects the shared
@@ -408,6 +411,11 @@ class AutoAgent(Profile):
         #    Matches an earlier internal agent pipeline.
         self._logger.info("Initializing Kernel (registry-first routing + ValidationLayer)...")
         self._kernel = self._create_kernel()
+        try:
+            self._kernel.provider_access = bool(getattr(self, "requires_auth", False))
+        except AttributeError:
+            # A product kernel that does not take the flag owns its own access rules.
+            pass
 
         # 9. Wire AdaptiveHITLPolicy from mesh config if enabled.
         #    The Kernel's execute() checks self.hitl_policy.should_escalate()

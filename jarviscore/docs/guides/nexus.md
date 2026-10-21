@@ -87,6 +87,20 @@ Without `NEXUS_SECRET`, the key is derived from the machine's hardware UUID. Cre
 
 ## Using Nexus in Agent Code
 
+Only agents that declare `requires_auth = True` can use provider credentials.
+This holds in both modes: an agent that does not declare it gets no
+`nexus_call` route to the gateway or to the local store, and the router is not
+told which providers are connected. A task that names a provider for such an
+agent yields with a message that says so.
+
+```python
+class CrmAgent(AutoAgent):
+    role = "crm"
+    capabilities = ["crm"]
+    requires_auth = True
+    system_prompt = "You keep the CRM up to date."
+```
+
 Use provider atoms where one exists. Custom generated code uses the injected
 asynchronous `nexus_call`; it never reads the local store or builds an auth
 header:

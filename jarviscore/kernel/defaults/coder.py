@@ -2011,7 +2011,7 @@ like any other.
     def _connection_state(self, system: Optional[str]):
         from jarviscore.nexus.store import ConnectionState, get_store
 
-        if not system:
+        if not system or not getattr(self, "provider_access", True):
             return ConnectionState.ABSENT
         # The gateway knows what has been connected; the vault knows what was
         # registered here. A token that landed elsewhere lives only in the first.
@@ -2093,6 +2093,8 @@ like any other.
         marked as needing re-consent (the auth manager knows).
         """
         pending: Dict[str, int] = {}
+        if not getattr(self, "provider_access", True):
+            return []
         connected_at_gateway = getattr(self.auth_manager, "is_connected", lambda _p: False)
         try:
             from jarviscore.nexus.store import get_store

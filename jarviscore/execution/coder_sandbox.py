@@ -1057,7 +1057,13 @@ class CoderSandbox:
                             )
                         if requested_provider and self._nexus_call_proxy:
                             connection_id = self._nexus_call_proxy.connection_handle(provider)
-                        if not self._nexus_call_proxy or not connection_id:
+                        if not self._nexus_call_proxy:
+                            raise RuntimeError(
+                                "This agent may not use provider credentials: it does not "
+                                "declare requires_auth = True. nexus_call is for connected "
+                                "providers; declare requires_auth on the agent class to use it."
+                            )
+                        if not connection_id:
                             raise RuntimeError("No provider account is connected for this task.")
                         call = self._recording_nexus_call(
                             lambda method, url, **kwargs: self._nexus_call_proxy.call(
