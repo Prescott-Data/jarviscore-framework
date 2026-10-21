@@ -21,10 +21,15 @@ from urllib.parse import quote_plus, urlparse, urljoin
 from jarviscore.core.egress import Egress, configured_egress
 from jarviscore.core.search_deadlines import search_deadline
 
-# beautifulsoup4 — required for HTML→Markdown extraction.
-# Part of [web] or [research] extras.
+# beautifulsoup4 — required for HTML→Markdown extraction (a core dependency).
 try:
+    import warnings as _warnings
+
     from bs4 import BeautifulSoup
+    from bs4 import XMLParsedAsHTMLWarning as _XMLParsedAsHTMLWarning
+
+    # Feeds and sitemaps are read as HTML on purpose; the advice is for authors.
+    _warnings.filterwarnings("ignore", category=_XMLParsedAsHTMLWarning)
     _HAS_BS4 = True
 except ImportError:
     _HAS_BS4 = False
@@ -1261,6 +1266,8 @@ class InternetSearch:
         except Exception:
             logger.warning("pypdf not installed; cannot extract PDF content")
             return ""
+        # pypdf reports every font it cannot fully decode; the text still comes out.
+        logging.getLogger("pypdf").setLevel(logging.ERROR)
         try:
             reader = pypdf.PdfReader(BytesIO(pdf_bytes))
             pages = []
