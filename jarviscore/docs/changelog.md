@@ -347,7 +347,9 @@ slots that disappear mid-checkout.
   `complete`; `complete: false` ends the step with `status: "failure"`, the
   agent's own explanation as the error and what it gathered as the payload.
   A missing input file or an unreachable site had come back as
-  `status: "success"` with null figures.
+  `status: "success"` with null figures. When the budget runs out on a run
+  nothing will resume, such as `run_task`, an unfinished answer ends the same
+  way instead of as `epoch_exhausted`.
 - **Keys in `.env` reach every part of the runtime.** Web search and browser
   options read the process environment, which `.env` never reached, so
   `SERPER_API_KEY` in `.env` did not turn search on. `Mesh.start()` exports
