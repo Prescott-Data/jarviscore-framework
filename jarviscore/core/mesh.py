@@ -348,6 +348,16 @@ class Mesh:
         self._logger.info("Starting mesh — probing infrastructure...")
 
         # ── 1. Infrastructure detection ───────────────────────────────────────
+        # Settings reads .env, but much of the runtime (search keys, browser
+        # options) reads os.environ, so a key in .env reached only half of it:
+        # SERPER_API_KEY in .env never turned on web search. Export .env so
+        # both agree; anything already in the process environment wins.
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv(".env", override=False)
+        except Exception as exc:
+            self._logger.debug("Could not export .env to the environment: %s", exc)
         from jarviscore.config.settings import Settings
         self._settings = Settings()
         self._redis_store = self._init_redis(self._settings)
