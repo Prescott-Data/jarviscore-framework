@@ -627,6 +627,25 @@ the configuration reference. Check these behaviour changes:
 
 <div class="changelog-release" markdown>
 
+## 2.1.1 <span class="changelog-date">2026-10-16</span>
+
+### Fixed
+
+- **Peers that leave the mesh now leave every other node's roster.** Remote
+  agents were added when a peer announced itself and never removed, so
+  `peers.list_peers()`, `discover()` and the Mesh capability catalog kept
+  listing departed agents, and requests to them timed out. `P2PCoordinator.stop()`
+  now sends a capability deannouncement before shutting SWIM down, so a clean
+  exit leaves other rosters within a second. A crash sends no goodbye, and
+  swim-p2p only reports a failure on the node whose own probes time out, so the
+  coordinator also checks SWIM membership every two seconds and drops agents on
+  nodes it declares dead. Suspect nodes are kept, and a dropped node that comes
+  back alive is asked to announce again. ([#267](https://github.com/Prescott-Data/jarviscore-framework/issues/267))
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.1.0 <span class="changelog-date">2026-10-06</span>
 
 Faster, more accurate evidence answers: retrieval that finds the right table
