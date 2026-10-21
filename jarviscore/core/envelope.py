@@ -20,6 +20,50 @@ OBSERVATION_REASONING_RULE = (
     "interpretation is correct."
 )
 
+def caller_view(result: Any) -> Any:
+    """A result as the developer who asked for it reads it.
+
+    Inside the mesh, a cited tool result carries its runtime observation
+    (``observed_tool_result``) next to the agent's claim, so evaluators and later
+    steps can check one against the other. Returned to application code, that
+    put tool inputs and raw outputs in the middle of the answer. Here
+    ``output``/``payload`` hold what the agent delivered, ``result_summary`` the
+    prose answer, and the observations move, whole, to ``evidence``. The stored
+    result and what later steps receive are unchanged.
+    """
+    if not isinstance(result, dict):
+        return result
+    evidence: list = []
+    seen: set = set()
+
+    def strip(value: Any) -> Any:
+        if isinstance(value, list):
+            return [strip(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        kept = {}
+        for key, item in value.items():
+            if key == "observed_tool_result" and isinstance(item, dict):
+                receipt = value.get("tool_receipt_id")
+                marker = receipt or id(item)
+                if marker not in seen:
+                    seen.add(marker)
+                    evidence.append({"tool_receipt_id": receipt, **item})
+                continue
+            kept[key] = strip(item)
+        return kept
+
+    view = dict(result)
+    same = "payload" in view and view.get("payload") is view.get("output")
+    if "output" in view:
+        view["output"] = strip(view["output"])
+    if "payload" in view:
+        view["payload"] = view["output"] if same else strip(view["payload"])
+    if evidence:
+        view["evidence"] = [*(view.get("evidence") or []), *evidence]
+    return view
+
+
 def dependency_artifact(result: Any) -> Any:
     """Return the delivered artifact without discarding unfinished work or its status."""
     if isinstance(result, dict) and not result.get("progress"):

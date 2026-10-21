@@ -110,7 +110,8 @@ async def main():
 
     step = results[0]
     print(step["status"])    # "success"
-    print(step["payload"])   # the value stored in `result` by the generated code
+    print(step["result_summary"])  # the answer, in prose
+    print(step["output"])          # the structured data behind it
     await mesh.stop()
 
 asyncio.run(main())
@@ -162,9 +163,10 @@ order. Each result carries the agent envelope plus its stable `step_id`:
 | Key | Description |
 |---|---|
 | `status` | `"success"`, `"failure"`, `"yield"`, or `"hitl"` for a paused goal-oriented execution |
-| `output` | Programmatic task result |
+| `output` | The structured data the agent delivered |
 | `payload` | Alias of `output` on the standard Kernel path |
-| `result_summary` | Guaranteed plain-prose display summary |
+| `result_summary` | Guaranteed plain-prose answer, for display |
+| `evidence` | The runtime's record of each tool result the agent cited: tool, input, output, status. Present when the agent cited any. |
 | `error` | `None` on success; failure or yield explanation otherwise |
 | `tokens` | Input, output, and total token counts |
 | `cost_usd` | Estimated execution cost |
@@ -172,6 +174,13 @@ order. Each result carries the agent envelope plus its stable `step_id`:
 | `goal_execution` | Present for goal-oriented planning or a classified direct Kernel turn |
 
 Always check `step["status"] == "success"` before consuming `step["output"]`.
+An agent that could not carry out its task returns `"failure"` with its reason in
+`error`, never a success whose data says it was blocked.
+
+`mesh.run_task()` and `mesh.workflow()` return this view. Inside the mesh, each
+cited result also carries its observation as `observed_tool_result` next to the
+agent's claim, so evaluators and later steps can check one against the other;
+`mesh.delegate()` returns that raw envelope.
 A failure has `error` plus a human-readable `result_summary`; a yield or HITL
 result carries continuation details in `yield_metadata`.
 

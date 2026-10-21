@@ -652,9 +652,12 @@ class Mesh:
             )
 
         self._logger.info("Executing workflow: %s (%d steps)", workflow_id, len(steps))
-        return await self._workflow_engine.execute(
+        from jarviscore.core.envelope import caller_view
+
+        results = await self._workflow_engine.execute(
             workflow_id, steps, timeout_per_step=timeout_per_step
         )
+        return [caller_view(item) for item in results] if isinstance(results, list) else results
 
     async def execute_goal(
         self,
@@ -3532,7 +3535,9 @@ class Mesh:
         if complexity:
             ctx["complexity"] = complexity
 
-        return await self.delegate(to=role, task=task, context=ctx or None)
+        from jarviscore.core.envelope import caller_view
+
+        return caller_view(await self.delegate(to=role, task=task, context=ctx or None))
 
     # ─────────────────────────────────────────────────────────────────
     # DIAGNOSTICS

@@ -245,7 +245,8 @@ async def main():
             agent="researcher",
             task="What are the main architectural differences between the SWIM and Raft consensus protocols?",
         )
-        print(result["output"])
+        print(result["result_summary"])   # the answer, in prose
+        # result["output"] holds the structured data, result["evidence"] what the tools observed
     finally:
         await mesh.stop()
 
@@ -325,7 +326,7 @@ async def main():
                 "depends_on": [0],
             },
         ])
-        print(results[-1]["output"])
+        print(results[-1]["result_summary"])
     finally:
         await mesh.stop()
 

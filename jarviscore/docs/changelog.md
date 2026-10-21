@@ -245,6 +245,12 @@ slots that disappear mid-checkout.
 
 ### Changed
 
+- **`run_task()` and `workflow()` return the answer, with the evidence beside
+  it.** A cited tool result carried its whole observation (tool input, raw
+  output) inside `output`, so printing the answer printed the agent's code and
+  page dumps. `output` now holds what the agent delivered, `result_summary`
+  the prose answer, and the observations move, whole, to `evidence`. Stored
+  results, handoffs between steps and `delegate()` keep them inline.
 - **A declared `default_kernel_role` is the role.** An AutoAgent that declares
   it now runs every direct task in that role; the router chooses only for
   agents that declare none. Declared as the browser guide shows, a browser
@@ -666,7 +672,10 @@ the configuration reference. Check these behaviour changes:
 8. **Agents finishing with `complete: false` fail.** Code that read a
    `status: "success"` result whose payload said the work was blocked now gets
    `status: "failure"` with the reason in `error`.
-9. **The browser agent's tools changed.** The model is offered
+9. **Tool observations returned to your code are under `evidence`.** Code that
+   read `observed_tool_result` inside a `run_task()` or `workflow()` result
+   reads `result["evidence"]`, or uses `delegate()` for the raw envelope.
+10. **The browser agent's tools changed.** The model is offered
    `run_playwright` instead of `evaluate`, `wait_for`, `get_text`, `get_links`,
    `scroll`, `get_attribute`, `get_cookies` and `close_page`. Application code
    that reads tool names from traces or receipts, or a prompt that names a
