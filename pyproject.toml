@@ -39,6 +39,10 @@ dependencies = [
     # Agent profiles ship as YAML and are read on every AutoAgent load.
     "pyyaml>=6.0",
 
+    # The researcher reads web pages on its first task; without this every
+    # page read failed with "'NoneType' object is not callable".
+    "beautifulsoup4>=4.12.0",
+
     # LLM Providers — the engine. Always available, zero-config.
     # Developer picks which provider to use via env vars, not pip extras.
     "openai>=1.0.0",
