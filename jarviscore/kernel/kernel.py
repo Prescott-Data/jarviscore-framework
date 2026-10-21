@@ -359,6 +359,9 @@ class Kernel:
     # AutoAgent sets it from requires_auth; without it, neither the gateway
     # nor the machine's local vault is consulted on its behalf.
     provider_access: bool = True
+    # Who the agent is across sessions: its role, or an agent_id its developer
+    # chose. Cross-session memory is kept under it. None falls back to agent_id.
+    memory_identity: Optional[str] = None
 
     def __init__(
         self,
@@ -1027,6 +1030,16 @@ class Kernel:
                     )
                     athena_client = None
 
+                local_memory = None
+                if athena_client is None and self.config.get("local_memory", True) and not (
+                    scope_field and memory_scope is None
+                ):
+                    from jarviscore.memory.local import LocalMemory
+
+                    local_memory = LocalMemory(
+                        self.memory_identity or agent_id, scope=memory_scope,
+                    )
+
                 return UnifiedMemory(
                     workflow_id=workflow_id,
                     step_id=step_id,
@@ -1035,6 +1048,8 @@ class Kernel:
                     blob_storage=self.blob_storage,
                     athena_client=athena_client,
                     memory_scope=memory_scope,
+                    memory_identity=self.memory_identity,
+                    local_memory=local_memory,
                 )
         except ImportError:
             logger.debug("[Kernel] UnifiedMemory not available — running without memory")

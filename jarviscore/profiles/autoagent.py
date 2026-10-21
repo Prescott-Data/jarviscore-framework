@@ -413,6 +413,7 @@ class AutoAgent(Profile):
         self._kernel = self._create_kernel()
         try:
             self._kernel.provider_access = bool(getattr(self, "requires_auth", False))
+            self._kernel.memory_identity = getattr(self, "memory_identity", None) or self.role
         except AttributeError:
             # A product kernel that does not take the flag owns its own access rules.
             pass
