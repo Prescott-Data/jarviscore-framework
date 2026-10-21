@@ -811,6 +811,8 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             return {"status": "skipped", "reason": "RAG_AUTO_INGEST disabled"}
         if not documents:
             return {"status": "skipped", "reason": "no documents"}
+        if importlib.util.find_spec("sentence_transformers") is None:
+            return {"status": "skipped", "reason": "the [rag] extra is not installed"}
         try:
             rag = self._get_rag_pipeline()
             return rag.ingest_documents(documents)

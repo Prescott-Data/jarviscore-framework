@@ -582,6 +582,20 @@ class TestResearcherSubAgent:
         monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: object())
         assert "rag_query" in ResearcherSubAgent(agent_id="r2", llm_client=mock_llm).tool_names
 
+    def test_pages_are_not_indexed_without_the_rag_extra(self, mock_llm, monkeypatch):
+        import importlib.util
+
+        researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
+        monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None)
+        monkeypatch.setattr(
+            researcher, "_get_rag_pipeline",
+            lambda: (_ for _ in ()).throw(AssertionError("no index without [rag]")),
+        )
+
+        result = researcher._ingest_rag_documents([{"url": "https://a.test", "content": "x"}])
+
+        assert result["status"] == "skipped"
+
     def test_registers_expected_tools(self, mock_llm):
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
         assert "search_internet" in researcher.tool_names
