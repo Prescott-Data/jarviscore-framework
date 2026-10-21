@@ -520,6 +520,29 @@ class TestNativeToolTurns:
         assert landing is None
         assert list(_functions(llm.requests[0])) == ["done"]
 
+    def test_a_landing_that_could_not_finish_fails_with_its_reason_when_nothing_resumes(self):
+        def land(context):
+            llm = _NativeLLM([_call("done", {
+                "summary": "sales_2025.csv is not in the workspace; nothing was totalled.",
+                "result": {}, "complete": False,
+            })])
+            agent = _NativeAgent(llm)
+            agent._native_protocol = True
+            history = [{"assistant": "", "observation": "not found",
+                        "tool_call": {"id": "c1", "name": "search", "arguments": "{}"}}]
+            return asyncio.run(agent._landing_turn(
+                _make_state(context=context), "system", history, None,
+                {"input": 0, "output": 0, "total": 0}, 0.0, "turns",
+            ))
+
+        final = land({})
+        assert final.status == "failure"
+        assert final.summary.startswith("sales_2025.csv is not in the workspace")
+        assert final.metadata["typed_outcome"] == "FAIL_INCOMPLETE"
+
+        resumable = {"execution_budget": {"max_epochs_per_step": 3}, "execution_epoch": 1}
+        assert land(resumable) is None
+
     def test_a_provider_without_native_tools_keeps_the_text_protocol(self):
         for native in (False, object()):
             llm = _NativeLLM([{"content": _done_reply()}], native=native)

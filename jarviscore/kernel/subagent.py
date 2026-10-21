@@ -1008,6 +1008,13 @@ class BaseSubAgent(ABC):
             if parsed.get("type") != "done":
                 return None
             can_exit, reject_reason = self._ground_completion(state, parsed)
+            if can_exit and parsed.get("complete") is False and not self._epochs_remain(state.context):
+                # No later epoch will pick this up: what the agent says it could
+                # not finish is the result, not a checkpoint nobody resumes.
+                return await self._finish_incomplete(
+                    state, parsed, state.turn, [], getattr(self, "_current_memory", None),
+                    None, total_tokens, total_cost, tokens.get("total", 0),
+                )
             if can_exit:
                 can_exit, reject_reason = self._can_complete(state, parsed)
             if can_exit:
@@ -2137,8 +2144,10 @@ class BaseSubAgent(ABC):
             "turn": turn, "type": "incomplete", "summary": summary,
             "thought": parsed.get("thought", ""),
         })
-        trace.log_step_complete(False, summary)
-        self._cognition.track_usage("done", tokens=turn_tokens)
+        if trace is not None:
+            trace.log_step_complete(False, summary)
+        if getattr(self, "_cognition", None) is not None:
+            self._cognition.track_usage("done", tokens=turn_tokens)
         if memory:
             try:
                 await memory.log_turn(
