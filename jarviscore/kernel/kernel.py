@@ -1538,6 +1538,26 @@ class Kernel:
                     },
                 )
 
+            if (output.metadata or {}).get("declared_incomplete"):
+                await self._cleanup_step(step_id)
+                return AgentOutput(
+                    status="failure",
+                    payload=output.payload,
+                    summary=output.summary,
+                    trajectory=output.trajectory,
+                    metadata={
+                        "tokens": total_tokens,
+                        "cost_usd": total_cost,
+                        "dispatches": dispatches,
+                        "elapsed_ms": (time.time() - start_time) * 1000,
+                        "typed_outcome": "FAIL_INCOMPLETE",
+                        "declared_incomplete": True,
+                        "tool_receipts": output.metadata.get("tool_receipts", []),
+                        "work_record": output.metadata.get("work_record", {}),
+                        "kept_memories": output.metadata.get("kept_memories", []),
+                    },
+                )
+
             # ─────────────────────────────────────────────────────
             # OPTION C: Research-on-failure
             # Researcher fires with a REAL error — not as a prerequisite.

@@ -530,6 +530,48 @@ class TestNativeToolTurns:
             assert "tools" not in llm.requests[0]
             assert "TOOL:" in llm.requests[0]["messages"][0]["content"]
 
+    def test_every_done_asks_whether_the_task_was_carried_out(self):
+        llm = _NativeLLM([_call("done", {"summary": "5", "result": {}, "complete": True})])
+
+        result = asyncio.run(_NativeAgent(llm).run(task="t"))
+
+        done = _functions(llm.requests[0])["done"]["parameters"]
+        assert "complete" in done["required"]
+        assert result.status == "success"
+
+    def test_an_agent_that_could_not_do_the_task_fails_with_its_reason(self):
+        llm = _NativeLLM([
+            _call("search", {"query": "sales_2025.csv"}),
+            _call("done", {
+                "summary": "The file sales_2025.csv does not exist, so nothing was computed.",
+                "result": {"revenue": None},
+                "complete": False,
+            }),
+        ])
+
+        result = asyncio.run(_NativeAgent(llm).run(task="total the file"))
+
+        assert result.status == "failure"
+        assert result.summary == "The file sales_2025.csv does not exist, so nothing was computed."
+        assert result.payload == {"revenue": None}
+        assert result.metadata["typed_outcome"] == "FAIL_INCOMPLETE"
+        assert result.metadata["work_record"] == {"search": {"calls": 1, "succeeded": 1}}
+
+    def test_a_done_without_the_flag_still_completes(self):
+        llm = _NativeLLM([_call("done", {"summary": "5", "result": {}})])
+
+        assert asyncio.run(_NativeAgent(llm).run(task="t")).status == "success"
+
+    def test_the_text_protocol_can_say_the_task_was_not_carried_out(self):
+        reply = "THOUGHT: no file\nCOMPLETE: no\nDONE: The file was not there.\nRESULT: {}"
+        llm = _NativeLLM([{"content": reply}], native=False)
+
+        result = asyncio.run(_NativeAgent(llm).run(task="t"))
+
+        assert result.status == "failure"
+        assert result.summary == "The file was not there."
+        assert "COMPLETE: no" in llm.requests[0]["messages"][0]["content"]
+
     def test_a_declared_output_schema_types_the_done_result(self):
         from pydantic import BaseModel
 
@@ -539,7 +581,7 @@ class TestNativeToolTurns:
         done = _NativeAgent(_NativeLLM([]))._done_function({"output_schema": Answer})
         result = done["function"]["parameters"]["properties"]["result"]
         assert result["properties"]["revenue"]["type"] == "integer"
-        assert done["function"]["parameters"]["required"] == ["summary", "result"]
+        assert done["function"]["parameters"]["required"] == ["summary", "result", "complete"]
 
     def test_a_nested_output_schema_keeps_its_references_resolvable(self):
         from typing import List

@@ -1617,6 +1617,23 @@ class TestKernelExecuteFailure:
         assert output.metadata["typed_outcome"] == "FAIL_ALL_DISPATCHES_EXHAUSTED"
 
     @pytest.mark.asyncio
+    async def test_an_agent_that_says_it_could_not_do_it_is_not_retried(self, kernel, mock_llm):
+        mock_llm.responses = [
+            _router_response("communicator"),
+            _llm_response(
+                "THOUGHT: no data\nCOMPLETE: no\n"
+                "DONE: The report could not be drafted: the source file is missing.\n"
+                "RESULT: {}"
+            ),
+        ]
+        output = await kernel.execute(task="Draft a report", max_dispatches=3)
+
+        assert output.status == "failure"
+        assert output.summary == "The report could not be drafted: the source file is missing."
+        assert output.metadata["typed_outcome"] == "FAIL_INCOMPLETE"
+        assert len(output.metadata["dispatches"]) == 1
+
+    @pytest.mark.asyncio
     async def test_failure_then_success(self, kernel, mock_llm):
         """Kernel succeeds when coder produces executable proof of work."""
         mock_llm.responses = [

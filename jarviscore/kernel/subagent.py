@@ -697,15 +697,20 @@ class BaseSubAgent(ABC):
             },
             "required": ["summary", "result"],
         }
-        if landing:
-            parameters["properties"]["complete"] = {
-                "type": "boolean",
-                "description": (
-                    "True only when this answer covers everything the task asked for, "
-                    "from what was gathered; false when any part was not reached."
-                ),
-            }
-            parameters["required"].append("complete")
+        parameters["properties"]["complete"] = {
+            "type": "boolean",
+            "description": (
+                "True only when this answer covers everything the task asked for, "
+                "from what was gathered; false when any part was not reached."
+                if landing else
+                "True when you carried out the task. False when you could not: "
+                "something you needed was unavailable, refused or failed, or you "
+                "stopped before covering what was asked. Say in summary what "
+                "stopped you. Facts you looked for and found do not exist still "
+                "count as carried out."
+            ),
+        }
+        parameters["required"].append("complete")
         if definitions:
             parameters["$defs"] = definitions
         return {"type": "function", "function": {
@@ -882,6 +887,8 @@ class BaseSubAgent(ABC):
             "Protocol:",
             "  To use a tool: THOUGHT: <reasoning>\\nTOOL: <name>\\nPARAMS: <json>",
             "  To finish:     THOUGHT: <reasoning>\\nDONE: <complete human answer>\\nRESULT: <json>",
+            "  If you could not carry out the task: COMPLETE: no on the line before DONE,",
+            "  and say in DONE what stopped you.",
             "  To keep what you established: NOTE: <fact> lines before TOOL or DONE.",
             "  JSON alternative: {\"thought\": \"...\", \"notes\": [...], \"tool\": \"...\", \"params\": {...}}",
             "  JSON finish:      {\"thought\": \"...\", \"done\": \"<complete human answer>\", \"result\": {...}}",
@@ -1391,6 +1398,11 @@ class BaseSubAgent(ABC):
                 parsed = self._parse_native_turn(llm_result, tools_by_function)
             else:
                 parsed = self._parse_response_for_contract(content, context)
+                if parsed.get("type") == "done":
+                    declared = _COMPLETE_PATTERN.search(content)
+                    parsed["complete"] = (
+                        declared.group(1).lower() == "yes" if declared else None
+                    )
             native_call = parsed.get("native_call")
             reply = content
             if native_call:
@@ -1422,6 +1434,11 @@ class BaseSubAgent(ABC):
             if parsed["type"] == "done":
                 # ── Done-gate: subclasses can reject premature completion ──
                 can_exit, reject_reason = self._ground_completion(state, parsed)
+                if can_exit and parsed.get("complete") is False:
+                    return await self._finish_incomplete(
+                        state, parsed, turn, trajectory, memory, _trace,
+                        total_tokens, total_cost, llm_tokens_this_turn,
+                    )
                 if can_exit:
                     can_exit, reject_reason = self._can_complete(state, parsed)
                 if not can_exit:
@@ -2102,6 +2119,51 @@ class BaseSubAgent(ABC):
         history decide whether completion is supported.
         """
         return (True, "")
+
+    async def _finish_incomplete(
+        self, state, parsed, turn, trajectory, memory, trace,
+        total_tokens, total_cost, turn_tokens,
+    ) -> AgentOutput:
+        """The agent says it could not carry out the task: report that as failure.
+
+        Its explanation and whatever it gathered travel with the result, so the
+        caller sees why without opening a trace.
+        """
+        summary = parsed.get("summary") or "The agent could not carry out the task."
+        state.status = "failed"
+        state.output = parsed.get("result")
+        state.last_error = summary
+        trajectory.append({
+            "turn": turn, "type": "incomplete", "summary": summary,
+            "thought": parsed.get("thought", ""),
+        })
+        trace.log_step_complete(False, summary)
+        self._cognition.track_usage("done", tokens=turn_tokens)
+        if memory:
+            try:
+                await memory.log_turn(
+                    turn_id=str(turn), thought=parsed.get("thought", ""),
+                    action="done", result=f"[INCOMPLETE] {summary}", tokens=turn_tokens,
+                )
+            except Exception as exc:
+                self._log.warning("Memory turn log failed on incomplete DONE: %s", exc)
+        await self._persist_memory(state)
+        return AgentOutput(
+            status="failure",
+            payload=parsed.get("result"),
+            summary=summary,
+            trajectory=trajectory,
+            metadata={
+                "tokens": total_tokens,
+                "cost_usd": total_cost,
+                "typed_outcome": "FAIL_INCOMPLETE",
+                "declared_incomplete": True,
+                "tool_receipts": state.receipt_evidence(parsed.get("result")),
+                "work_record": self._work_record(state),
+                "answer": parsed.get("answer"),
+                "kept_memories": list(getattr(self, "_kept_memories", [])),
+            },
+        )
 
     def _records_support_completion(self, state: KernelState, parsed: Dict[str, Any]) -> tuple:
         """Whether a clock expiry may be reported as completion.
