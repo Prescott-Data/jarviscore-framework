@@ -237,8 +237,29 @@ slots that disappear mid-checkout.
   otherwise appear as a reference with their receipt and size that
   `read_turn_result` shows whole again. Nothing is cut.
 
+- **Memory across runs with nothing to install.** Facts an agent keeps with
+  `remember` go to `.jarviscore/memory/` when Athena is not configured, and
+  each new task recalls the ones relevant to it, in a new process as well.
+  `Mesh(config={"local_memory": False})` turns this off. See
+  [Memory](concepts/memory.md#tier-4-cross-session-memory-local-store-or-athena).
+
 ### Changed
 
+- **A declared `default_kernel_role` is the role.** An AutoAgent that declares
+  it now runs every direct task in that role; the router chooses only for
+  agents that declare none. Declared as the browser guide shows, a browser
+  agent had been routed to the coder, which cannot reach public sites.
+- **Only agents that declare `requires_auth = True` can use provider
+  credentials.** Before, every AutoAgent could call any provider registered in
+  the machine's local vault (`~/.jarviscore/nexus.enc`) or reachable through
+  the gateway; in a new project, an agent that declared neither answered a
+  memory question by searching HubSpot. An agent without the flag is not told
+  which providers are connected, and a task that names one yields saying the
+  agent must declare `requires_auth`.
+- **Cross-session memory belongs to the agent's stable identity.** Athena
+  memory was keyed to the generated `agent_id` (`role-<random>`), which changes
+  with every process, so nothing kept was found after a restart. It is now
+  keyed to the role, or to an `agent_id` you pass.
 - **Later steps read what a step delivered; its working state stays with it.**
   A browser step's artifact carried its working state (`browser_state`,
   `browser_programs`) into every later prompt: on one Hightouch run, 211k of
@@ -322,6 +343,18 @@ slots that disappear mid-checkout.
 
 ### Fixed
 
+- **An agent that could not do the task reports failure.** `done` carries
+  `complete`; `complete: false` ends the step with `status: "failure"`, the
+  agent's own explanation as the error and what it gathered as the payload.
+  A missing input file or an unreachable site had come back as
+  `status: "success"` with null figures.
+- **Tasks started in the same second no longer share a step.** `run_task` and
+  chat named a step after the current second, so concurrent tasks wrote one
+  trace file and overwrote each other's checkpoints.
+- **A plain run logs what went wrong, not what was never configured.** An
+  unconfigured SearXNG is tried once and logged at debug instead of retried
+  with warnings on every search; `rag_query` is offered only with the `[rag]`
+  extra; a missing `[p2p]` extra is one info line.
 - **A failed amendment is no longer recorded as satisfying the goal.** When an
   amended step failed, the ledger settled the revision as "satisfied the
   outstanding obligations". The settlement now names the obligations left
@@ -615,7 +648,15 @@ the configuration reference. Check these behaviour changes:
 5. **Parallel work for one agent needs a pool.** Independent `workflow()` steps
    or `fanout()` items for an agent added without `pool` now run one at a time.
    Add `pool=Pool(max=N)` to the agent to keep them parallel.
-6. **The browser agent's tools changed.** The model is offered
+6. **Declare `requires_auth = True` on agents that call providers.** An agent
+   that used a credential from the local vault without declaring it now
+   yields instead. The Slack examples declare it.
+7. **A declared `default_kernel_role` now binds direct tasks.** Remove it from
+   an agent that should let the router choose per task.
+8. **Agents finishing with `complete: false` fail.** Code that read a
+   `status: "success"` result whose payload said the work was blocked now gets
+   `status: "failure"` with the reason in `error`.
+9. **The browser agent's tools changed.** The model is offered
    `run_playwright` instead of `evaluate`, `wait_for`, `get_text`, `get_links`,
    `scroll`, `get_attribute`, `get_cookies` and `close_page`. Application code
    that reads tool names from traces or receipts, or a prompt that names a
