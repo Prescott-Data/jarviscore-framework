@@ -352,9 +352,10 @@ slots that disappear mid-checkout.
   options read the process environment, which `.env` never reached, so
   `SERPER_API_KEY` in `.env` did not turn search on. `Mesh.start()` exports
   `.env`; variables already set in the process win.
-- **The researcher reads web pages on a plain install.** `beautifulsoup4` is a
-  core dependency; without the `[web]` or `[research]` extra every page read
-  failed with `'NoneType' object is not callable`.
+- **The researcher reads web pages and PDFs on a plain install.**
+  `beautifulsoup4` and `pypdf` are core dependencies. Without the `[web]` or
+  `[research]` extra every page read failed with `'NoneType' object is not
+  callable`, and no install could read a PDF.
 - **Tasks started in the same second no longer share a step.** `run_task` and
   chat named a step after the current second, so concurrent tasks wrote one
   trace file and overwrote each other's checkpoints.
