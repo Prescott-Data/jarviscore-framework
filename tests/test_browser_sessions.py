@@ -774,7 +774,7 @@ def test_the_snapshot_reads_the_page_as_a_person_sees_it():
 
 
 def test_a_row_the_page_makes_clickable_carries_its_ref():
-    # Apps such as Hightouch open a record by clicking its table row, which has no link role.
+    # Many admin apps open a record by clicking its table row, which has no link role.
     tree = (
         "- table [ref=e150]:\n"
         "  - row [ref=e156]:\n"
@@ -806,7 +806,7 @@ def test_an_action_returns_the_page_it_left_behind():
 
 
 def test_a_frame_no_one_can_see_is_left_out_of_the_page():
-    # Hightouch keeps a faded-out support widget frame in the accessibility tree.
+    # Some apps keep a faded-out support widget frame in the accessibility tree.
     tree = (
         '- heading "All syncs" [level=1] [ref=e10]\n'
         "- iframe [ref=e1624]:\n"

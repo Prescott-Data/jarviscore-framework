@@ -277,7 +277,7 @@ def _observations(llm: _ScriptedLLM) -> List[str]:
 class TestRejectionReachesTheAgent:
 
     def test_a_run_that_stops_unanswered_carries_what_it_established(self):
-        """Live (Hightouch run O): a refused answer on the last turn lost every finding."""
+        """Live: a refused answer on the last turn lost every finding."""
         refused = _done(
             '{"tool_receipt_id": "tool:wf-1", "failures": ["2299131 run 1272015726: 1 row rejected"]}'
         )

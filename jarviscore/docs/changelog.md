@@ -142,7 +142,7 @@ slots that disappear mid-checkout.
   program runs in the Coder's confined child process and reaches only the page;
   clicks, submitting key presses, selects and scripts are judged first, and one
   that could commit the person becomes an approved action. Asked which
-  Hightouch syncs had failed that day, an agent without it took 133 tool calls
+  records in a SaaS admin app had failed that day, an agent without it took 133 tool calls
   and 3.5M tokens and found 1 of 5 failures; with it, three consecutive runs
   matched the run history in 194 to 455 seconds with 7 to 14 model calls. See
   [Code](guides/browser-automation.md#code).
@@ -150,7 +150,7 @@ slots that disappear mid-checkout.
   up to `BROWSER_PARALLEL_PAGES` (default 4) pages in the same session, paced and
   settled, and returns each page's result. Page calls from confined code are
   synchronous, so the agent could only read a collection one page at a time;
-  live, reading 23 Hightouch syncs that way ran past its time limit.
+  live, reading 23 records of an admin app that way ran past its time limit.
   `open_each(items, script)` does the same for lists whose items open on click,
   taking the locator the agent would click them by, and returns each item's
   address and contents. With `next_page` and `until`, `read_pages` reads each
@@ -185,21 +185,21 @@ slots that disappear mid-checkout.
   execution lease. `read_pages` and `open_each` called as tools stop where the
   lease does and return what they read, with the rest marked `timeout`; any
   other call is stopped `SUBAGENT_TOOL_HANDBACK_S` (60) seconds after the lease
-  ends and reported as `LeaseExpired`. On a Hightouch run a read began 61
+  ends and reported as `LeaseExpired`. On one live run a read began 61
   seconds before the lease ended and kept going, so the step returned nothing.
 - **A browser program works on the page it opens.** A `run_playwright` program
   moves the page at most once. Going on to another address is reading a
   collection with `read_pages` or `open_each`, which open several pages at once;
   the program is told so and keeps its variables and state. In three live
-  Hightouch runs, programs that walked 23 run histories or clicked through every
-  sync one page at a time spent 619, 388 and 511 seconds before the agent turned
+  runs on an admin app, programs that walked 23 run histories or clicked through every
+  record one page at a time spent 619, 388 and 511 seconds before the agent turned
   to the collection tools.
 - **Programs compute over what the step already read.** `reads` in a program
   is a dictionary of every collection record the step has read, as tools or in
   programs, keyed by address or by `"<list url>#<selector>#<index>"`, so a
   program filters or combines records instead of reading the site again. A
   later read of the same address or item replaces the earlier record, but an
-  unfinished read never replaces a finished one: on a Hightouch run, filtered
+  unfinished read never replaces a finished one: on one live run, filtered
   re-reads that came back empty had replaced 25 complete histories. An
   `open_each` record carries its `list` and `selector`; re-opening a failed item
   (`open_each` takes `indexes`) closes that item, and items of different lists
@@ -230,7 +230,7 @@ slots that disappear mid-checkout.
   a run that wrote "Partial audit" in prose was recorded as success.
 - **Earlier tool results no longer ride along whole on every turn.** The last
   ten exchanges were threaded whole with no size bound, so one large result
-  was paid again on each later turn: on a Hightouch run, prompts grew from 23k
+  was paid again on each later turn: on one live run, prompts grew from 23k
   to 215k tokens and the step ran out of action tokens with six minutes of
   wall clock left. The newest result is always whole; earlier ones are whole,
   newest first, within `SUBAGENT_THREAD_RESULT_BUDGET` (120000 characters) and
@@ -262,7 +262,7 @@ slots that disappear mid-checkout.
   keyed to the role, or to an `agent_id` you pass.
 - **Later steps read what a step delivered; its working state stays with it.**
   A browser step's artifact carried its working state (`browser_state`,
-  `browser_programs`) into every later prompt: on one Hightouch run, 211k of
+  `browser_programs`) into every later prompt: on one live run, 211k of
   the step's 311k characters were working state, pasted into the step check,
   the next step and the final response. Prompts now carry the delivered work
   and its evidence whole, and name each working-state field with its keys and
@@ -279,10 +279,10 @@ slots that disappear mid-checkout.
   naming the agent instead of hanging. Among several agents registered for a
   role, work goes to the one with the most free instances.
 - **Work on one system is planned as one step.** The planner split a question
-  spanning several categories on one site (Hightouch syncs for Google, Meta and
-  Bing) into a step per category, each repeating the site's navigation and
-  inventory. It now keeps reading one system in one step; the same question
-  planned as a single step and answered correctly through the Desk.
+  spanning several categories on one site into a step per category, each
+  repeating the site's navigation and inventory. It now keeps reading one
+  system in one step; the same question planned as a single step and was
+  answered correctly.
 - **Agents see every tool result whole.** A result was clipped to 800
   characters in the conversation, with the full text repeated in the list of
   recent actions. Each result is now shown whole, once: in the conversation
@@ -396,13 +396,13 @@ slots that disappear mid-checkout.
 - **A step that runs out of budget keeps what it found.** When a step used its
   last execution epoch, or its final answer was refused, the failure record held
   only that it stopped; the agent's notes and answer stayed in a checkpoint
-  nothing read. Live, a step that had checked 15 syncs and found a failing run
+  nothing read. Live, a step that had checked 15 records and found a failing run
   reached the final answer as "Step exhausted 8 execution epochs". A run without
   an accepted answer now carries `progress` (its working notes and its last
   refused answer with the reason, marked unverified) through the kernel,
   `AutoAgent` and the `EXECUTION_EPOCH_LIMIT_REACHED` record.
 - **A question about a period is planned over each item's record for that
-  period.** Asked how syncs did "today", the planner judged each one from the
+  period.** Asked how records did "today", the planner judged each one from the
   listing's status column, which describes only the latest run. Listing
   metadata now rules items out only for what it summarises, and a goal about
   a period covers each item's history for the whole period; the plan audit
@@ -534,7 +534,7 @@ slots that disappear mid-checkout.
   before a page load, reached Playwright as "Invalid frame in aria-ref
   selector" or matched nothing. The browser now tracks which refs its latest
   snapshot made live and answers `STALE_REF` without acting.
-- **Clickable rows carry refs.** Apps such as Hightouch open a record when its
+- **Clickable rows carry refs.** Many admin apps open a record when its
   table row is clicked. The browser marked those rows clickable, but the page
   view showed refs only on links, buttons and other interactive roles, so the
   agent could not open a record by its row. Any element the page gives a
@@ -626,7 +626,7 @@ slots that disappear mid-checkout.
 ### Known limitations
 
 - Browser tasks that read many paged histories and report figures over them
-  (for example, failed runs per sync for one day across 25 syncs) are not yet
+  (for example, failed runs per record for one day across 25 records) are not yet
   reliable: the data is read completely, but the agent can still miscount,
   misjudge where a period ends, or miss an item when it picks them by eye. The
   next release moves counting, period boundaries and coverage into the runtime.

@@ -190,7 +190,7 @@ up to `BROWSER_PARALLEL_PAGES` pages loads the list once, then opens its share
 of the items in turn: it clicks one, waits for what opens, runs the script, and
 goes back. It returns each item's `index`, the `url` it opened and its `value`.
 The click is judged once, from the selector and the items' texts. Live, it
-opened all 26 Hightouch syncs in 65 seconds, and `read_pages` then read their
+opened all 26 records of an admin app in 65 seconds, and `read_pages` then read their
 26 run histories in 73.
 
 **Procedures as code.** A program that writes findings the step keeps in `state`
