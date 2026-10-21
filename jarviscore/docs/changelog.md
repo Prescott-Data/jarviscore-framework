@@ -348,6 +348,10 @@ slots that disappear mid-checkout.
   agent's own explanation as the error and what it gathered as the payload.
   A missing input file or an unreachable site had come back as
   `status: "success"` with null figures.
+- **Keys in `.env` reach every part of the runtime.** Web search and browser
+  options read the process environment, which `.env` never reached, so
+  `SERPER_API_KEY` in `.env` did not turn search on. `Mesh.start()` exports
+  `.env`; variables already set in the process win.
 - **Tasks started in the same second no longer share a step.** `run_task` and
   chat named a step after the current second, so concurrent tasks wrote one
   trace file and overwrote each other's checkpoints.
