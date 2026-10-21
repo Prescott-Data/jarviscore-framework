@@ -89,7 +89,7 @@ class _Chromium:
         self.log.append(("launch_persistent_context", user_data_dir))
         return _Context(self.log, pages=[_Page(self.log)])
 
-    async def connect_over_cdp(self, url):
+    async def connect_over_cdp(self, url, timeout=None):
         self.log.append(("connect_over_cdp", url))
         return _Browser(self.log, contexts=[_Context(self.log)])
 

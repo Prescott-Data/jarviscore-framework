@@ -90,8 +90,8 @@ class _Recorder:
         self.calls.append(("launch_persistent_context", kwargs))
         return self
 
-    async def connect_over_cdp(self, url):
-        self.calls.append(("connect_over_cdp", {}))
+    async def connect_over_cdp(self, url, **kwargs):
+        self.calls.append(("connect_over_cdp", kwargs))
         return SimpleNamespace(contexts=[self])
 
     async def new_context(self, **kwargs):
