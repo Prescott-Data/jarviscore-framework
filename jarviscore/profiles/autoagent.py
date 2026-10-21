@@ -787,7 +787,9 @@ class AutoAgent(Profile):
                     context=kernel_ctx,
                     agent_id=self.agent_id,
                     agent_default_role=self.default_kernel_role,
-                    use_default_role_as_fallback=True,
+                    # A role the developer declared is the role; the router only
+                    # chooses for agents that declared none.
+                    use_default_role_as_fallback=self.default_kernel_role is None,
                 )
 
                 meta = output.metadata or {}
