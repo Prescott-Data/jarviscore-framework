@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, cast
 
@@ -1192,7 +1193,9 @@ class Kernel:
         trace_sink = context.pop("_trace_sink", None)
 
         workflow_id = context.get("workflow_id", "unknown")
-        step_id = context.get("step_id", f"step_{int(time.time())}")
+        # Unique per dispatch: two tasks started in the same second shared one
+        # trace file and one checkpoint key.
+        step_id = context.get("step_id") or f"step_{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
         # Create TraceManager for real-time streaming to UI
         from jarviscore.kernel.tracing import DEFAULT_TRACE_DIR, TraceManager, create_noop_trace

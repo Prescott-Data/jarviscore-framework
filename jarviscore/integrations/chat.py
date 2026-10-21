@@ -123,7 +123,7 @@ def create_chat_router(
         t0 = time.monotonic()
 
         workflow_id = req.workflow_id or f"chat_{uuid.uuid4().hex[:12]}"
-        step_id = f"step_{int(time.time())}"
+        step_id = f"step_{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
         context: Dict[str, Any] = dict(req.context or {})
         context["workflow_id"] = workflow_id

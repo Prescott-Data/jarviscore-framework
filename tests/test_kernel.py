@@ -1617,6 +1617,29 @@ class TestKernelExecuteFailure:
         assert output.metadata["typed_outcome"] == "FAIL_ALL_DISPATCHES_EXHAUSTED"
 
     @pytest.mark.asyncio
+    async def test_tasks_started_in_the_same_second_get_their_own_step(
+        self, kernel, mock_llm, monkeypatch
+    ):
+        import re
+        import jarviscore.kernel.kernel as kernel_module
+
+        monkeypatch.setattr(kernel_module.time, "time", lambda: 1792611176.0)
+        mock_llm.responses = [
+            _router_response("communicator"),
+            _llm_response("THOUGHT: a\nDONE: a\nRESULT: {}"),
+            _router_response("communicator"),
+            _llm_response("THOUGHT: b\nDONE: b\nRESULT: {}"),
+        ]
+        await kernel.execute(task="Draft note A")
+        await kernel.execute(task="Draft note B")
+
+        prompts = "\n".join(
+            str(m.get("content")) for call in mock_llm.calls for m in call["messages"]
+        )
+        steps = set(re.findall(r"\*\*Step:\*\* (\S+)", prompts))
+        assert len(steps) == 2
+
+    @pytest.mark.asyncio
     async def test_an_agent_that_says_it_could_not_do_it_is_not_retried(self, kernel, mock_llm):
         mock_llm.responses = [
             _router_response("communicator"),
