@@ -1562,7 +1562,11 @@ def _seed_shipped_atoms(registry: FunctionRegistry) -> None:
     )
     if failed:
         logger.warning("%d atom(s) in the catalogue could not be loaded", len(failed))
-    if not registered:
+    already = sum(
+        1 for item in report.get("skipped", [])
+        if item.get("reason") == "already registered"
+    )
+    if not registered and not already:
         # A silent no-op here is what made an empty registry look like normal
         # operation for as long as it did.
         logger.warning(

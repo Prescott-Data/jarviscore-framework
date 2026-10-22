@@ -1014,6 +1014,16 @@ def seed_registry(
                 existing_hash = hashlib.sha256(
                     existing_source.encode("utf-8")
                 ).hexdigest()
+                if existing_hash == shipped_hash:
+                    # Identical source: the contract check below always skips it
+                    # (either both contracts are ok or the shipped one is not), so
+                    # avoid parsing every atom twice on each agent start.
+                    report["skipped"].append({
+                        "function": function_name,
+                        "system": system,
+                        "reason": "already registered",
+                    })
+                    continue
                 existing_contract = read_contract(
                     existing_source, system=system, expected_name=function_name
                 )
