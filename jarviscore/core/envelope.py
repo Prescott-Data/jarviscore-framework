@@ -59,8 +59,7 @@ def caller_view(result: Any) -> Any:
         view["output"] = strip(view["output"])
     if "payload" in view:
         view["payload"] = view["output"] if same else strip(view["payload"])
-    if evidence:
-        view["evidence"] = [*(view.get("evidence") or []), *evidence]
+    view["evidence"] = [*(view.get("evidence") or []), *evidence]
     return view
 
 

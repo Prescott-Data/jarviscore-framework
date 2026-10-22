@@ -35,10 +35,10 @@ def test_the_answer_is_what_the_agent_delivered_and_the_observations_move_whole(
     assert stored["output"]["observed_tool_result"] == OBSERVED
 
 
-def test_a_result_without_observations_is_unchanged():
+def test_a_result_without_observations_has_empty_evidence():
     result = {"status": "failure", "output": None, "error": "no file"}
 
-    assert caller_view(result) == result
+    assert caller_view(result) == {**result, "evidence": []}
     assert caller_view("plain") == "plain"
 
 
