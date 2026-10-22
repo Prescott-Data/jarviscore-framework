@@ -364,6 +364,18 @@ slots that disappear mid-checkout.
   `beautifulsoup4` and `pypdf` are core dependencies. Without the `[web]` or
   `[research]` extra every page read failed with `'NoneType' object is not
   callable`, and no install could read a PDF.
+- **A research answer is the findings, not the researcher's working state.**
+  A general question returned the researcher's API-research scaffolding
+  (empty `api_specs`, the validation report, its checkpoint and URL registry,
+  `status: "candidate_ready"`) as the answer, summarised as "Completed via
+  tool 'publish_research_findings'". It now returns the summary and evidence,
+  with `api_specs` and `libraries` only when there are some, and a step that
+  ends through a tool takes that tool's summary as its answer.
+- **A workflow step does not ask the roles that run after it.** Each step is
+  told `downstream_roles`; `ask_peer`, `ask_capability` and `send_to_peer`
+  refuse them (`PEER_RUNS_AFTER_YOU`), since they receive the step's result
+  anyway. Peer requests now name the requester by its mesh role, not its
+  kernel role, so replies reach an agent that exists.
 - **Tasks started in the same second no longer share a step.** `run_task` and
   chat named a step after the current second, so concurrent tasks wrote one
   trace file and overwrote each other's checkpoints.
@@ -674,8 +686,12 @@ the configuration reference. Check these behaviour changes:
    `status: "failure"` with the reason in `error`.
 9. **Tool observations returned to your code are under `evidence`.** Code that
    read `observed_tool_result` inside a `run_task()` or `workflow()` result
-   reads `result["evidence"]`, or uses `delegate()` for the raw envelope.
-10. **The browser agent's tools changed.** The model is offered
+   reads `result["evidence"]` (always present), or uses `delegate()` for the
+   raw envelope.
+10. **Researcher results no longer carry `done_validation`, `research_checkpoint`,
+   `url_registry`, `status: "candidate_ready"` or `action_required`.** Read
+   `summary` and `evidence`; `api_specs` and `libraries` appear when found.
+11. **The browser agent's tools changed.** The model is offered
    `run_playwright` instead of `evaluate`, `wait_for`, `get_text`, `get_links`,
    `scroll`, `get_attribute`, `get_cookies` and `close_page`. Application code
    that reads tool names from traces or receipts, or a prompt that names a
