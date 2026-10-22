@@ -344,7 +344,7 @@ def test_dev_reload_restarts_only_the_edited_agent(project, redis_server):
 
 
 def _agent_pids(project):
-    out = subprocess.run(["pgrep", "-f", f"jarviscore.cli.serve {project}"], capture_output=True, text=True)
+    out = subprocess.run(["pgrep", "-f", f"jarviscore.cli.serve {project}"], capture_output=True, text=True, check=False)
     return [int(p) for p in out.stdout.split()]
 
 
@@ -534,10 +534,10 @@ def test_agents_run_the_runner_directly(project, redis_server):
         _wait(lambda: len(_ups(project, "triage")) == 1 and len(_ups(project, "responder")) == 2, proc)
         for pid in _agent_pids(project.resolve()):
             ppid = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
-                                      capture_output=True, text=True).stdout)
+                                      capture_output=True, text=True, check=True).stdout)
             assert ppid == proc.pid, "agents must be direct children of dev"
         serves = subprocess.run(["pgrep", "-f", f"jarviscore.cli serve.*{project}"],
-                                capture_output=True, text=True).stdout.split()
+                                capture_output=True, text=True, check=False).stdout.split()
         assert serves == []
     finally:
         proc.send_signal(signal.SIGINT)

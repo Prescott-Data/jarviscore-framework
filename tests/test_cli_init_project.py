@@ -142,7 +142,7 @@ def test_generated_project_tests_pass(tmp_path):
 def test_force_keeps_existing_files_and_env(tmp_path):
     root = create_project(tmp_path, "demo", provider="claude",
                           credentials={"CLAUDE_API_KEY": "sk-original"}).root
-    edited = sorted((root / "agents").glob("*.py"))[0]
+    edited = min((root / "agents").glob("*.py"))
     edited.write_text("# my edits\n")
     (root / ".gitignore").unlink()
     env_before = (root / ".env").read_text()
