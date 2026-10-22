@@ -2,9 +2,9 @@
    when someone presses play, so pages stay fast and nothing is fetched from
    YouTube before then. Without JavaScript the link opens the video on YouTube. */
 document.addEventListener('click', function (event) {
-  var poster = event.target.closest('.jcx-video .jcx-video-poster');
+  var poster = event.target.closest('.jc-video .jc-video-poster');
   if (!poster) return;
-  var box = poster.closest('.jcx-video');
+  var box = poster.closest('.jc-video');
   var id = box && box.getAttribute('data-yt');
   if (!id || !/^[\w-]{11}$/.test(id)) return;
   event.preventDefault();
