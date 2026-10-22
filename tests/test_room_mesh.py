@@ -181,6 +181,38 @@ async def test_a_conflict_is_explained_to_the_next_attempt(team):
     assert "rejected by" not in objective
 
 
+async def test_the_planner_is_told_the_room_files_the_proposal(team):
+    """A request that says "return it as a proposal" is not a step for the agents:
+    planners once required a step to present the proposal and refused the plan."""
+    from jarviscore.room.work import ROOM_WORK_CONTRACT
+
+    room, _ = team
+    asked = await room.ask("Fix the app and send it as a proposal", asked_by=alice, timeout=20,
+                           plan_template=plan("Fix the app", ("fix", "coding", [])))
+
+    planned = room.redis_store.get_workflow_goal(asked.workflow_id)["goal"]
+    assert planned.startswith("Fix the app and send it as a proposal")
+    assert planned.endswith(ROOM_WORK_CONTRACT)
+    started = next(e for e in room.events() if e["type"] == "ask.started")
+    assert started["goal"] == "Fix the app and send it as a proposal", "the room records what was asked"
+
+
+async def test_work_the_agents_could_not_plan_fails_with_the_reason(team, monkeypatch):
+    room, _ = team
+    mesh = room.mesh
+
+    async def plan_fails(task, *, workflow_id, **_):
+        room.redis_store.save_workflow_planning_status(
+            workflow_id, "failed", error="MeshPlanError: an obligation is not covered")
+
+    monkeypatch.setattr(mesh, "submit_goal", plan_fails)
+    with pytest.raises(RuntimeError, match="could not plan this: MeshPlanError: an obligation"):
+        await room.ask("Fix the app", asked_by=alice, timeout=20)
+
+    failed = next(e for e in room.events() if e["type"] == "ask.failed")
+    assert "could not plan this" in failed["error"], "not reported as a timeout"
+
+
 async def test_work_that_changes_nothing_proposes_nothing(team):
     room, coder = team
     coder.execute_task = _no_edits

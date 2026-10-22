@@ -58,6 +58,15 @@ class AskResult:
     sources: List[Dict[str, str]] = None
 
 
+#: What the room does with the work, for the planner: proposing is the room's job,
+#: so a request that says "return it as a proposal" is not an extra step to plan.
+ROOM_WORK_CONTRACT = (
+    "This work is on the room's files. Make the changes in those files; the room files "
+    "what changed as a proposal for people to review, so no step needs to propose, "
+    "present or deliver the changed files."
+)
+
+
 def new_workflow_id(room_id: str) -> str:
     return f"room-{room_id}-{uuid4().hex[:8]}"
 
@@ -110,6 +119,7 @@ async def ask(
                 f"{room_context['feedback']['by'] or 'a reviewer'}: {previous.reason or 'no reason given'}. "
                 "Address that and redo the work on the current files."
             )
+    task = f"{task}\n\n{ROOM_WORK_CONTRACT}"
     room.note("ask.started", **_who(asked_by), goal=goal, workflow_id=workflow_id,
               version=head.version, revision_of=revision_of)
     try:
@@ -265,6 +275,9 @@ async def _wait(room: Room, mesh, workflow_id: str, timeout: Optional[float]) ->
     definition = room.redis_store.get_workflow_definition(workflow_id) \
         or await mesh._wait_for_workflow_definition(workflow_id, left())
     if definition is None:
+        planning = room.redis_store.get_workflow_planning_status(workflow_id) or {}
+        if planning.get("status") == "failed":
+            raise RuntimeError(f"the agents could not plan this: {planning.get('error') or 'no reason given'}")
         raise TimeoutError("the agents did not make a plan in time")
     while True:
         result = await mesh._wait_for_workflow_terminal(workflow_id, definition, left())
