@@ -6,6 +6,7 @@ Template files live in jarviscore/data/templates/<template>/ plus _common/.
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
@@ -44,6 +45,8 @@ class InitError(Exception):
 class InitResult:
     root: Path
     files: list[Path] = field(default_factory=list)
+    # Existing files left untouched (only with force=True).
+    skipped: list[Path] = field(default_factory=list)
     locked: bool = False
 
 
@@ -51,14 +54,14 @@ def templates_dir() -> Path:
     return get_data_path() / "templates"
 
 
-def create_project(
+def validate_project(
     parent: Path,
     name: str,
     template: str = "minimal",
     provider: str | None = None,
-    credentials: dict[str, str] | None = None,
     force: bool = False,
-) -> InitResult:
+) -> Path:
+    """Check everything that can fail before asking the user anything; returns the root."""
     if not re.match(NAME_PATTERN, name):
         raise InitError(
             f"Project name {name!r} must be lowercase letters, digits or '-', starting with a letter.")
@@ -70,9 +73,26 @@ def create_project(
             f"Unknown provider {provider!r}. Choose from: {', '.join(PROVIDERS)}")
 
     root = parent / name
+    if root.exists() and not root.is_dir():
+        raise InitError(f"{root} exists and is not a directory.")
     if root.exists() and any(root.iterdir()) and not force:
         raise InitError(
-            f"{root} already exists and is not empty (use --force to write into it).")
+            f"{root} already exists and is not empty "
+            "(use --force to add the missing files; existing files are kept).")
+    return root
+
+
+def create_project(
+    parent: Path,
+    name: str,
+    template: str = "minimal",
+    provider: str | None = None,
+    credentials: dict[str, str] | None = None,
+    force: bool = False,
+) -> InitResult:
+    """Generate the project. With force, write into a non-empty directory but never
+    replace an existing file (including .env): missing files are added, the rest skipped."""
+    root = validate_project(parent, name, template, provider, force)
 
     secret_names = [var for var, _,
                     secret in PROVIDERS.get(provider, []) if secret]
@@ -89,6 +109,8 @@ def create_project(
             if "__pycache__" in src.parts:
                 continue
             dest = root / _target_path(src.relative_to(source_dir))
+            if _keep_existing(dest, result):
+                continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             if src.suffix == ".tmpl":
                 dest.write_text(_render(src.read_text(), context))
@@ -97,14 +119,25 @@ def create_project(
             result.files.append(dest)
 
     env_example = root / ".env.example"
-    shutil.copyfile(get_data_path() / ".env.minimal", env_example)
+    if not _keep_existing(env_example, result):
+        shutil.copyfile(get_data_path() / ".env.minimal", env_example)
+        result.files.append(env_example)
     env_file = root / ".env"
-    env_file.write_text(_env_file(provider, credentials or {}))
-    env_file.chmod(0o600)
-    result.files += [env_example, env_file]
+    if not _keep_existing(env_file, result):
+        env_file.write_text(_env_file(provider, credentials or {}))
+        env_file.chmod(0o600)
+        result.files.append(env_file)
 
-    result.locked = _uv_lock(root)
+    # An existing lock is the user's; do not rewrite it.
+    result.locked = (root / "uv.lock").exists() or _uv_lock(root)
     return result
+
+
+def _keep_existing(path: Path, result: InitResult) -> bool:
+    if path.exists() or path.is_symlink():
+        result.skipped.append(path)
+        return True
+    return False
 
 
 def _target_path(relative: Path) -> Path:
@@ -156,6 +189,7 @@ def _framework_version() -> str:
 def _uv_lock(root: Path) -> bool:
     if not shutil.which("uv"):
         return False
+    print("Locking dependencies with uv…", file=sys.stderr, flush=True)
     try:
         subprocess.run(["uv", "lock", "--quiet"], cwd=root, check=True, timeout=300,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

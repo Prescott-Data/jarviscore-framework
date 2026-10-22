@@ -120,7 +120,7 @@ def test_cli_named_init_is_non_interactive_without_tty(tmp_path):
 
 def test_cli_named_init_reports_errors(tmp_path):
     out = _cli("Bad_Name", cwd=tmp_path)
-    assert out.returncode == 2 and "Project name" in out.stdout
+    assert out.returncode == 2 and "Project name" in out.stderr and out.stdout == ""
 
 
 def test_cli_plain_init_is_unchanged(tmp_path):
@@ -137,3 +137,88 @@ def test_generated_project_tests_pass(tmp_path):
     )
     assert out.returncode == 0, out.stdout + out.stderr
     assert "3 passed" in out.stdout
+
+
+def test_force_keeps_existing_files_and_env(tmp_path):
+    root = create_project(tmp_path, "demo", provider="claude",
+                          credentials={"CLAUDE_API_KEY": "sk-original"}).root
+    edited = sorted((root / "agents").glob("*.py"))[0]
+    edited.write_text("# my edits\n")
+    (root / ".gitignore").unlink()
+    env_before = (root / ".env").read_text()
+
+    again = create_project(tmp_path, "demo", provider="claude",
+                           credentials={"CLAUDE_API_KEY": "sk-new"}, force=True)
+    assert (root / ".env").read_text() == env_before and "sk-original" in env_before
+    assert edited.read_text() == "# my edits\n"
+    assert (root / ".gitignore").is_file()
+    assert again.files == [root / ".gitignore"]
+    assert root / ".env" in again.skipped and edited in again.skipped
+
+
+def test_force_on_cli_lists_kept_files(tmp_path):
+    assert _cli("demo", cwd=tmp_path).returncode == 0
+    out = _cli("demo", "--force", cwd=tmp_path)
+    assert out.returncode == 0, out.stderr
+    assert "Kept existing files" in out.stdout and ".env" in out.stdout
+
+
+def test_template_without_name_is_a_usage_error(tmp_path):
+    out = _cli("--template", "support", cwd=tmp_path)
+    assert out.returncode == 2
+    assert "--template needs a project name: jarviscore init NAME --template support" in out.stderr
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_next_step_uses_the_real_path_with_dir(tmp_path):
+    (tmp_path / "work").mkdir()
+    out = _cli("demo", "--dir", "work", cwd=tmp_path)
+    assert out.returncode == 0, out.stderr
+    assert "cd work/demo" in out.stdout
+
+    elsewhere = tmp_path / "elsewhere"
+    out = _cli("demo", "--dir", str(elsewhere), cwd=tmp_path / "work")
+    assert f"cd {elsewhere.resolve() / 'demo'}" in out.stdout
+
+
+def test_validation_happens_before_any_prompt(tmp_path, monkeypatch, capsys):
+    from argparse import Namespace
+
+    from jarviscore.cli import scaffold
+
+    (tmp_path / "demo").mkdir()
+    (tmp_path / "demo" / "x").write_text("x")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_: pytest.fail("prompted before validating"))
+    args = Namespace(name="demo", template="nope", provider=None, dir=str(tmp_path),
+                     force=False, skill=False)
+    assert scaffold._create_named_project(args) == 2
+    args.template = "minimal"
+    assert scaffold._create_named_project(args) == 2
+    assert "not empty" in capsys.readouterr().err
+
+
+def test_provider_prompt_reasks_and_handles_eof(tmp_path, monkeypatch, capsys):
+    from argparse import Namespace
+
+    from jarviscore.cli import scaffold
+
+    answers = iter(["openrouter", "gemini"])
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_: next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda *_: "")
+    monkeypatch.setattr("jarviscore.cli.project_init._uv_lock", lambda root: False)
+    args = Namespace(name="demo", template=None, provider=None, dir=str(tmp_path),
+                     force=False, skill=False)
+    assert scaffold._create_named_project(args) == 0
+    assert "Unknown provider 'openrouter'" in capsys.readouterr().err
+    assert "# GEMINI_API_KEY=" in (tmp_path / "demo" / ".env").read_text()
+
+    def eof(*_):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", eof)
+    args.name = "other"
+    assert scaffold._create_named_project(args) == 130
+    assert "Cancelled" in capsys.readouterr().err
+    assert not (tmp_path / "other").exists()

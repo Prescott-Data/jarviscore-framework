@@ -163,53 +163,90 @@ def copy_skill(dest_dir: Path, force: bool = False) -> bool:
     return wrote
 
 
+def _err(text: str) -> None:
+    print(text, file=sys.stderr)
+
+
+def _ask_provider(choices: list[str]) -> str:
+    """Prompt until the answer is one of `choices` (enter means "skip")."""
+    while True:
+        answer = input(
+            f"LLM provider [{'/'.join(choices)}] (skip): ").strip().lower() or "skip"
+        if answer in choices:
+            return answer
+        _err(f"✗ Unknown provider {answer!r}. Choose one of: {', '.join(choices)}")
+
+
 def _create_named_project(args) -> int:
     from getpass import getpass
 
-    from .project_init import PROVIDERS, TEMPLATES, InitError, create_project
+    from .project_init import PROVIDERS, TEMPLATES, InitError, create_project, validate_project
 
+    template = args.template or 'minimal'
+    parent = Path(args.dir).resolve()
     provider = args.provider
+    try:
+        # Fail on a bad name, template or target before asking for any secrets.
+        validate_project(parent, args.name, template, provider, args.force)
+    except InitError as exc:
+        _err(f"✗ {exc}")
+        return 2
+
     credentials = {}
     interactive = sys.stdin.isatty()
-    if provider is None and interactive:
-        choices = list(PROVIDERS) + ["skip"]
-        answer = input(
-            f"LLM provider [{'/'.join(choices)}] (skip): ").strip().lower() or "skip"
-        if answer not in choices:
-            print(f"✗ Unknown provider {answer!r}")
-            return 2
-        provider = None if answer == "skip" else answer
-    if provider and interactive:
-        for var, prompt, secret in PROVIDERS.get(provider, []):
-            value = (getpass if secret else input)(
-                f"{prompt} (enter to fill in later): ").strip()
-            if value:
-                credentials[var] = value
+    try:
+        if provider is None and interactive:
+            answer = _ask_provider(list(PROVIDERS) + ["skip"])
+            provider = None if answer == "skip" else answer
+        if provider and interactive:
+            for var, prompt, secret in PROVIDERS.get(provider, []):
+                value = (getpass if secret else input)(
+                    f"{prompt} (enter to fill in later): ").strip()
+                if value:
+                    credentials[var] = value
+    except (EOFError, KeyboardInterrupt):
+        _err("\nCancelled; nothing was created.")
+        return 130
 
     try:
         result = create_project(
-            Path(args.dir).resolve(), args.name, args.template,
+            parent, args.name, template,
             provider=provider, credentials=credentials, force=args.force,
         )
     except InitError as exc:
-        print(f"✗ {exc}")
+        _err(f"✗ {exc}")
         return 2
 
     if args.skill:
-        copy_skill(result.root, args.force)
+        copy_skill(result.root, False)  # NAME --force never overwrites
 
     def rel(p): return p.relative_to(result.root)
     print(
-        f"\n✓ Created {args.name}/ from the '{args.template}' template ({TEMPLATES[args.template]})")
+        f"\n✓ Created {args.name}/ from the '{template}' template ({TEMPLATES[template]})")
     for path in sorted(result.files):
         print(f"    {rel(path)}")
+    if result.skipped:
+        print("  Kept existing files (not overwritten):")
+        for path in sorted(result.skipped):
+            print(f"    {rel(path)}")
     if not result.locked:
         print("  (install uv to also generate uv.lock: https://docs.astral.sh/uv/)")
-    print(f"\nNext:\n  cd {args.name}")
-    if not credentials:
+    print(f"\nNext:\n  cd {_display_path(result.root)}")
+    env_kept = result.root / ".env" in result.skipped
+    if credentials and env_kept:
+        print("  .env already existed and was kept: add your provider settings there")
+    elif not credentials:
         print("  edit .env and set one LLM provider")
     print("  jarviscore dev")
     return 0
+
+
+def _display_path(path: Path) -> str:
+    """`path` relative to the working directory when it is below it, else absolute."""
+    try:
+        return str(path.relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return str(path)
 
 
 def main():
@@ -235,7 +272,7 @@ def main():
     parser.add_argument(
         '--force',
         action='store_true',
-        help='Overwrite existing files'
+        help='Overwrite existing files (with NAME: allow a non-empty directory, keep existing files)'
     )
     parser.add_argument(
         '--dir',
@@ -250,8 +287,8 @@ def main():
     )
     parser.add_argument(
         '--template',
-        default='minimal',
-        help='Project template when NAME is given: minimal, support, research, pipeline'
+        default=None,
+        help='Project template when NAME is given: minimal (default), support, research, pipeline'
     )
     parser.add_argument(
         '--provider',
@@ -261,6 +298,10 @@ def main():
     args = parser.parse_args()
     if args.name:
         sys.exit(_create_named_project(args))
+    for flag, value in (('--template', args.template), ('--provider', args.provider)):
+        if value is not None:
+            _err(f"{flag} needs a project name: jarviscore init NAME {flag} {value}")
+            sys.exit(2)
 
     dest_dir = Path(args.dir).resolve()
 
