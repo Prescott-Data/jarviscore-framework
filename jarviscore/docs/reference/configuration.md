@@ -278,6 +278,7 @@ AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
 |---|---|---|
 | `RESEARCH_GROUNDED_TIMEOUT_SECONDS` | `45` | Per-call deadline for Google Grounded (generative search) |
 | `RESEARCH_SEARCH_TIMEOUT_SECONDS` | `15` | Per-call deadline for each other search provider |
+| `RESEARCH_ALLOW_WIKIPEDIA_FALLBACK` | `false` | Search Wikipedia when no other provider found anything, even with web providers configured |
 
 Both `InternetSearch` implementations accept `grounded_timeout_seconds` and
 `search_timeout_seconds` keyword arguments, which take precedence over these

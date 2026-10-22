@@ -969,7 +969,7 @@ class InternetSearch:
     async def _extract_via_browser(self, url: str) -> str:
         """Extract content using headful browser automation for SPAs and anti-bot."""
         if not _HAS_BROWSER or BrowserConfig is None or BrowserController is None:
-            logger.info("Browser not available for SPA extraction. Install: pip install jarviscore[browser]")
+            logger.info("Browser not available for SPA extraction. Install: pip install 'jarviscore-framework[browser]'")
             return ""
         logger.info(f"Using BrowserController to extract content from: {url}")
         browser_config = BrowserConfig(
