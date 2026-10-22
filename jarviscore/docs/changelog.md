@@ -85,7 +85,8 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   the room records are written to the room's team memory (`RoomMemory`), as the
   conversation Athena summarises. What work learns through its asker's own
   access goes to their private memory in the room; work that recalls it is
-  held for them.
+  held for them. Without Athena, rooms use the local store with the same
+  privacy rule, and `room.forget` erases it.
 - **Per-person spending caps.** Every model call made for a person is charged
   to them per UTC day and month (`Spending`); tenants cap it, per person if
   they like. Asking over a cap is refused up front with when it renews; a call
@@ -128,6 +129,11 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Changed
 
+- **Documentation.** The Browser Automation guide is now a short path from
+  install to a working agent, with recipes for your own browser, staying
+  logged in, proxies and approvals; every detail it used to carry is in the new
+  [Browser Reference](reference/browser.md). New landing and Enterprise pages,
+  with the demo and Enterprise films.
 - **The bundled Athena stack runs Athena v0.2.0, pinned.** Athena v0.2.0
   requires authentication and keeps each tenant's memory apart; `memory init`
   generates `ATHENA_API_KEY` and the stack gives it to Athena as a service key.
@@ -329,7 +335,7 @@ slots that disappear mid-checkout.
   pages the researcher reads, through your proxy provider, with a sticky
   `{session}` per tenant or workflow. `EGRESS_PROXY_BYPASS` names hosts that go
   direct, and `BROWSER_LOCALE` and `BROWSER_TIMEZONE` match the browser to the
-  proxy's region. See [Your own proxy](guides/browser-automation.md#your-own-proxy).
+  proxy's region. See [Your own proxy](reference/browser.md#your-own-proxy).
 - **The browser agent writes code for repeated work.** `run_playwright` runs a
   Python Playwright program against the live page, so reading every row, paging
   back to a date or opening each item in a list is one tool call. Variables
@@ -341,7 +347,7 @@ slots that disappear mid-checkout.
   records in a SaaS admin app had failed that day, an agent without it took 133 tool calls
   and 3.5M tokens and found 1 of 5 failures; with it, three consecutive runs
   matched the run history in 194 to 455 seconds with 7 to 14 model calls. See
-  [Code](guides/browser-automation.md#code).
+  [Code](reference/browser.md#code).
 - **Browser code reads many pages at once.** `read_pages(urls, script)` opens
   up to `BROWSER_PARALLEL_PAGES` (default 4) pages in the same session, paced and
   settled, and returns each page's result. Page calls from confined code are

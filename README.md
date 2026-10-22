@@ -114,6 +114,15 @@ from Redis, and only the unfinished work runs.
 
 </details>
 
+### Work as a team, in Slack <sub>new in 2.3</sub>
+
+People ask in their own words, agents change the team's shared files, and every
+change comes back as a proposal people accept with one tap, as themselves. Work
+that used someone's own Gmail or CRM is held for them. Live against a Slack
+sandbox with a real model: a draft, a revision from a teammate's feedback, an
+acceptance only the person who decided could confirm, and work that finished
+once after a restart. [Build a multiplayer agent](https://jarviscore.developers.prescottdata.io/guides/multiplayer-agents/).
+
 <details>
 <summary><strong>More, end to end</strong></summary>
 
@@ -122,7 +131,7 @@ from Redis, and only the unfinished work runs.
 | [Research team, in a terminal](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/research_team.py) | The same kind of team without the Desk: a scout and an analyst, one workflow, a cited brief. [Recording](https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/research.gif). |
 | [Investment committee](https://github.com/Prescott-Data/jarviscore-framework/tree/main/examples/investment_committee) | Seven agents deliberate a $1.5M position on live market data; the process is killed mid-deliberation and finishes without re-running the analysts. [Recording](https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/demo.gif). |
 | [Four-process research mesh](https://github.com/Prescott-Data/jarviscore-framework/releases/download/v1.5.1/mesh_demo_full.mp4) | Four agents in four processes find each other over SWIM, claim steps from a shared ledger, and deliver to Slack through the credential vault. Reproduce with `examples/demo_synthesizer.py` and `demo_node_1/2/3.py`. |
-| [Launch film](https://www.youtube.com/watch?v=4IOpKZgjXIw) | The story of JarvisCore Agents, in four minutes. |
+| [Demo film](https://www.youtube.com/watch?v=4IOpKZgjXIw) | Agents as a fleet of equal peers: discovery by capability, a shared ledger, and every external call through the credential broker, in two minutes. |
 
 </details>
 

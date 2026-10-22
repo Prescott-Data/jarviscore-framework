@@ -1,7 +1,7 @@
 ---
 icon: material/account-multiple-outline
 title: "People as Peers on the Mesh"
-description: "Put people on the JarvisCore mesh with HumanAgent: planners route steps to them by capability, agents ask them directly, and their work waits in the HITL store until they answer from a terminal, the CLI, a dashboard or a room's chat."
+description: "Put people on the mesh with HumanAgent: planners route steps to them, agents ask them, and they answer from a terminal, the CLI, a dashboard or a room's chat."
 ---
 
 # People as Peers

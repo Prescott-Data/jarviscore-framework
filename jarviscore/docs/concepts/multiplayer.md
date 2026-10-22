@@ -1,7 +1,7 @@
 ---
 icon: material/account-group
 title: "Multiplayer: Teams and Agents Working Together"
-description: "How JarvisCore lets a team and its agents do the same work together: rooms of shared work, proposals people review, a room agent the team talks to, people in the loop, and identity, permissions and private access built in."
+description: "How a team and its AI agents do the same work: shared rooms, proposals people review, a room agent in chat, people in the loop, and private access built in."
 ---
 
 # Multiplayer

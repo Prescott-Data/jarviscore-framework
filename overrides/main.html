@@ -73,7 +73,22 @@
               "item": "{{ canonical_url }}"
             }
           ]
-        }{% endif %}
+        }{% endif %}{% if page and page.meta and page.meta.videos %}{% for video in page.meta.videos %},
+        {
+          "@type": "VideoObject",
+          "@id": "https://www.youtube.com/watch?v={{ video.id }}",
+          "name": {{ video.name | tojson }},
+          "description": {{ video.description | tojson }},
+          "thumbnailUrl": [
+            "https://i.ytimg.com/vi/{{ video.id }}/maxresdefault.jpg",
+            "https://i.ytimg.com/vi/{{ video.id }}/hqdefault.jpg"
+          ],
+          "uploadDate": {{ video.upload_date | tojson }},
+          "duration": {{ video.duration | tojson }},
+          "embedUrl": "https://www.youtube.com/embed/{{ video.id }}",
+          "contentUrl": "https://www.youtube.com/watch?v={{ video.id }}",
+          "publisher": { "@id": "https://developers.prescottdata.io/#organization" }
+        }{% endfor %}{% endif %}
       ]
     }
   </script>

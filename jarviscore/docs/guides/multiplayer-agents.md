@@ -1,7 +1,7 @@
 ---
 icon: material/account-group-outline
 title: "Build a Multiplayer Agent"
-description: "Step by step: the agents that do the work, people and a shared room, a room agent people talk to in their own words, your own product or Slack, people in the loop, tests without a model, and production."
+description: "Step by step: agents that do the work, a shared room, a room agent people talk to in Slack or your product, people in the loop, tests and production."
 ---
 
 # Build a Multiplayer Agent

@@ -1,7 +1,7 @@
 ---
 icon: material/api
 title: "Multiplayer API Reference"
-description: "Reference for JarvisCore's multiplayer classes: Person, Identities, Room, RoomFeed, RoomAgent, RoomConversation, ChatSurface, SlackApp, HumanAgent and the HITL methods people's work uses."
+description: "Reference for Person, Identities, Room, RoomFeed, RoomAgent, RoomConversation, ChatSurface, SlackApp, HumanAgent and the HITL methods people's work uses."
 ---
 
 # Multiplayer API
