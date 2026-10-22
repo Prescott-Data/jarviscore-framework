@@ -2,6 +2,10 @@
 
 - `how-it-works.png` is drawn by `scripts/readme_media/how_it_works.py` (writes `how-it-works.svg`), then
   rendered at 2.4x with Chromium: open the SVG in a 1000x540 page and screenshot it.
+- `components.png` is drawn by `scripts/readme_media/components.py` (writes `components.svg`), rendered
+  the same way in a 1000x456 page.
+- `desk-research-team.mp4` is attached to each GitHub release so the README can link a playable
+  video: `gh release upload vX.Y.Z jarviscore/docs/assets/readme/desk-research-team.mp4`.
 - `mesh-vs-orchestrator.png` is drawn by `scripts/readme_media/mesh_vs_orchestrator.py` (writes
   `mesh-vs-orchestrator.svg`) and rendered the same way, in a 1000x500 page.
 - `video-overview.jpg` is the overview film's own YouTube thumbnail with a play control and its

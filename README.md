@@ -10,9 +10,17 @@
   <a href="https://github.com/Prescott-Data/jarviscore-framework/tree/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-1758F5?style=flat-square" alt="License" /></a>
 </p>
 
+```bash
+pip install jarviscore-framework
+```
+
 **JarvisCore** is a runtime where AI agents operate as a fleet of equal peers. Agents
 discover one another by capability, execute tasks from a shared ledger, and authenticate
 to every external service through a zero-trust broker, never with their own keys.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/mesh-vs-orchestrator.png" alt="Two blueprints side by side. A, a central orchestrator: one box that plans, routes and holds state, with arrows out to scout, coder, browser and writer, marked as a single point of failure; if it stops, everything stops. B, the JarvisCore peer mesh: scout, coder, browser and writer connected to each other, an analyst shown stopped, each live peer linked to a shared ledger of steps, claims and results in Redis, and coder and browser linked to the Nexus zero-trust broker; a node stops and a peer claims its step from the ledger." width="900" />
+</p>
 
 Most agent frameworks put one **orchestrator** in charge: it plans, routes every request
 and holds the state, so the system is only as available as that one process. On a
@@ -21,9 +29,6 @@ do (SWIM gossip), take steps from a shared **ledger** (Redis) and record what th
 there, so when one stops, another claims its step and the work goes on. None of them
 holds a credential: the **Nexus** broker places it at the call.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/mesh-vs-orchestrator.png" alt="Two blueprints side by side. A, a central orchestrator: one box that plans, routes and holds state, with arrows out to scout, coder, browser and writer, marked as a single point of failure; if it stops, everything stops. B, the JarvisCore peer mesh: scout, coder, browser and writer connected to each other, an analyst shown stopped, each live peer linked to a shared ledger of steps, claims and results in Redis, and coder and browser linked to the Nexus zero-trust broker; a node stops and a peer claims its step from the ledger." width="900" />
-</p>
 
 ## Video overview
 
@@ -45,44 +50,28 @@ holds a credential: the **Nexus** broker places it at the call.
 
 ## Components
 
-You write an agent's role and prompt; the runtime supplies everything around the model.
-
-| Component | What it does |
-|---|---|
-| **`AutoAgent` · `CustomAgent`** | The two ways to write an agent. An `AutoAgent` is a role, capabilities and a prompt, and the runtime does the work. A `CustomAgent` is plain Python in `execute_task()`. |
-| **Kernel** | Runs an `AutoAgent`'s turns in the role each step needs (researcher, coder, browser or communicator), with budgets, a check that the work is really done, and a record of every call. |
-| **Mesh** | Peers that find each other by capability over SWIM, workflows and goals on a shared Redis ledger, and `Pool(max=8)` to run one agent as several workers. |
-| **Memory** | Working notes that are never dropped, an episodic record of each run, and facts kept across runs: on disk out of the box, in Athena for semantic memory shared across machines. |
-| **Nexus** | The zero-trust broker. OAuth and API keys are placed at the call, only for agents that declare `requires_auth`, and never appear in a prompt, generated code or a trace. |
-| **People in the loop** | Irreversible actions wait for the person they affect, then run exactly once. People can also be peers on the mesh, with capabilities of their own. |
-| **Rooms** <sub>new in 2.3</sub> | A team and its agents on shared files, from Slack or your own product: agents propose, people decide as themselves, and work using someone's own access is held for them. |
-| **Integrations** | Typed atoms for CRMs, payments, messaging, storage and more, with auth injected at runtime. |
+JarvisCore puts eight components around the model: **AutoAgent, CustomAgent, the
+Kernel, the mesh, memory, Nexus, integrations, and people in the loop**, with
+[rooms](https://jarviscore.developers.prescottdata.io/concepts/multiplayer/) for teams. You write the agents; the rest
+handles context, tools, credentials, durable state, coordination and approvals around
+every call the model makes.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/how-it-works.png" alt="Blueprint of one agent turn: the model at the centre, an orbit of five numbered stations around it (1 context in, 2 act, 3 record, 4 approve, 5 done or not), an outer runtime ring that wraps every call, the answer leaving station 5 as result_summary with output, evidence and status, and beside it a wireframe globe of agents that find each other by capability." width="900" />
+  <img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/components.png" alt="The model at the top, connected to four groups of components. Write: AutoAgent (role, capabilities, prompt) and CustomAgent (plain Python in execute_task). Run: the Kernel (roles, budgets, done check) and the mesh (peers, shared ledger, pools). Remember and reach: memory (notes, episodes, Athena), Nexus (credentials placed at the call) and integrations (typed atoms, auth injected). People: people in the loop (approve once, then it runs) and rooms (shared files, Slack), new in 2.3. You write the first column; the runtime supplies the rest." width="900" />
 </p>
-
-An agent's work is a loop around the model, and everything outside the model is the
-runtime's job, not the prompt's:
-
-1. **Context in.** The system prompt, the agent's own working notes (never dropped,
-   even when the context is full) and facts recalled from earlier runs.
-2. **Act.** One real tool call per turn, in the role the task needs: researcher,
-   coder, browser or communicator. Credentials are placed at the call by Nexus, and
-   only for agents that declare `requires_auth = True`.
-3. **Record.** Every call and its result are kept, so the answer can cite them and you
-   can check them.
-4. **Approve.** An action marked irreversible waits for a person, then runs once.
-5. **Done, or not.** The agent finishes with `complete=True`, or says what stopped it.
 
 ## Start in two minutes
 
+Use **Python 3.10 or later** and one model key. In a new folder:
+
 ```bash
 pip install jarviscore-framework
+jarviscore init
+cp .env.example .env    # add AZURE_API_KEY, CLAUDE_API_KEY, GEMINI_API_KEY or LLM_ENDPOINT
+jarviscore check --validate-llm
 ```
 
-Add one model key to `.env` (`AZURE_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY` or
-`LLM_ENDPOINT`), check it with `jarviscore check --validate-llm`, and run:
+Then run your first agent. It needs no database, broker or Docker:
 
 ```python
 import asyncio
@@ -110,32 +99,27 @@ async def main():
 asyncio.run(main())
 ```
 
-No database, no broker, no Docker. Add what you need as you go:
-
-| Install | Adds |
-|---|---|
-| `jarviscore-framework[browser]` then `playwright install chromium` | A browser agent that reads whole sites and fills forms |
-| `jarviscore-framework[redis]` with `REDIS_URL` | Durable workflows, crash recovery, several processes sharing work |
-| `jarviscore-framework[p2p]` | Agents on several machines finding each other over SWIM |
-| `jarviscore-framework[rag]` | Local vector search over your documents |
-| `jarviscore-framework[full]` | Everything |
-
-Prefer to write the logic yourself? A `CustomAgent` is plain Python in
-`execute_task()`, on the same mesh as everything else.
+Add capabilities as you need them: a [browser](https://jarviscore.developers.prescottdata.io/guides/browser-automation/)
+(`[browser]`), [durable workflows and crash recovery](https://jarviscore.developers.prescottdata.io/guides/workflows/)
+(`[redis]` with `REDIS_URL`), [agents on several machines](https://jarviscore.developers.prescottdata.io/concepts/p2p/)
+(`[p2p]`), or everything (`[full]`). Prefer plain Python? A
+[`CustomAgent`](https://jarviscore.developers.prescottdata.io/guides/customagent/) runs on the same mesh. See
+[Getting Started](https://jarviscore.developers.prescottdata.io/getting-started/) for the full walkthrough.
 
 ## What people build with it
 
 ### A research team, live in the Desk
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/desk-research-team.gif" alt="The JarvisCore Desk running a three-agent research mesh: the request is typed, the Scout searches the web and reads official docs, the Analyst compares the options and hands its comparison to the Writer, and the Writer delivers a decision brief with source links as a document." width="900" />
+  <a href="https://github.com/Prescott-Data/jarviscore-framework/releases/download/v2.3.0/desk-research-team.mp4"><img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/desk-research-team.gif" alt="Play the recording: the JarvisCore Desk running a three-agent research mesh. The request is typed, the Scout searches the web and reads official docs, the Analyst compares the options and hands its comparison to the Writer, and the Writer delivers a decision brief with source links as a document." width="900" /></a>
 </p>
 <p align="center"><sub>
-  Three agents on one mesh, live in the JarvisCore Desk: a scout reads official docs on the live web, an analyst compares,
-  a writer delivers the brief with its sources.<br/>
-  A real run, idle time trimmed (<a href="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/desk-research-team.mp4">MP4</a>). The Desk ships with
-  JarvisCore Agents, opening soon; the team is <a href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/desk/research_desk.py">30 lines of Python</a>.
+  Three agents on one mesh: a scout reads official docs on the live web, an analyst compares, a writer delivers the brief
+  with its sources. A real run, idle time trimmed. <a href="https://github.com/Prescott-Data/jarviscore-framework/releases/download/v2.3.0/desk-research-team.mp4">Play the video</a> to pause and scrub.
+  The Desk ships with JarvisCore Agents, opening soon.
 </sub></p>
+
+The whole team is [30 lines of Python](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/desk/research_desk.py):
 
 ```python
 class Scout(AutoAgent):
