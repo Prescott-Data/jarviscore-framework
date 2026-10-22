@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Describe an agent in three lines. It reads the web, runs code, works a browser,<br/>
+  <strong>Describe an agent in a few lines of Python. It reads the web, runs code, works a browser,<br/>
   remembers what it was told, and picks up where it left off after <code>kill -9</code>.</strong>
 </p>
 
