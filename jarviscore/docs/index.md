@@ -27,7 +27,8 @@ JarvisCore is a runtime where AI agents operate as a fleet of equal peers. Agent
 
 </div>
 
-<p class="jc-release"><span>New in 2.3</span> Multiplayer: a team and its agents on the same work, from Slack or your own product. <a href="guides/multiplayer-agents/">Build a multiplayer agent →</a></p>
+!!! tip "New in 2.3: multiplayer"
+    A team and its agents can now work on the same files from Slack or your own product: people ask in their own words, agents propose changes, and people accept them as themselves. Start with [Build a Multiplayer Agent](guides/multiplayer-agents.md), or read the [concept](concepts/multiplayer.md) first. Everything else that changed is in the [changelog](changelog.md).
 
 ## See it in two minutes
 
@@ -39,9 +40,6 @@ JarvisCore is a runtime where AI agents operate as a fleet of equal peers. Agent
 
 One LLM provider key is the only required configuration.
 
-<div class="jc-split" markdown>
-<div markdown>
-
 ```bash title="Install & initialise"
 pip install jarviscore-framework
 jarviscore init
@@ -49,44 +47,7 @@ cp .env.example .env   # add your LLM key
 jarviscore check        # verify dependencies
 ```
 
-Then run `main.py`. The answer comes back with the evidence behind it.
-
-The [Getting Started](getting-started.md) guide walks through it, including what comes back and how to read it.
-
-</div>
-<div markdown>
-
-```python title="main.py"
-import asyncio
-from jarviscore import Mesh, AutoAgent
-
-
-class ResearcherAgent(AutoAgent):
-    role = "researcher"
-    capabilities = ["research", "analysis"]
-    system_prompt = "You are a rigorous research analyst."
-
-
-async def main():
-    mesh = Mesh()
-    mesh.add(ResearcherAgent)
-    await mesh.start()
-    try:
-        result = await mesh.run_task(
-            agent="researcher",
-            task="What are the main trade-offs in multi-agent design?",
-        )
-        print(result["result_summary"])   # the answer
-        print(result["evidence"])         # what it read and produced
-    finally:
-        await mesh.stop()
-
-
-asyncio.run(main())
-```
-
-</div>
-</div>
+The [Getting Started](getting-started.md) guide takes it from here: your first agent, what comes back, and how to read it.
 
 ## Explore the docs
 
@@ -112,12 +73,20 @@ The integration catalog for your installed version is one command away: [`jarvis
 
 Each is one short file in [`examples/showcase`](https://github.com/Prescott-Data/jarviscore-framework/tree/main/examples/showcase){ target="_blank" rel="noopener" }, verified on a real model. Longer, multi-agent examples are in [Examples](examples/index.md).
 
-<div class="jc-rows">
-<a class="jc-row" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/browse_a_whole_site.py" target="_blank" rel="noopener"><code>browse_a_whole_site.py</code><span>Reads every page of a catalogue in a real browser and computes the figures</span><small>browser extra</small></a>
-<a class="jc-row" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/analyst_that_computes.py" target="_blank" rel="noopener"><code>analyst_that_computes.py</code><span>Figures from a 400-row CSV, computed by code the agent writes and runs</span><small>model key</small></a>
-<a class="jc-row" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/agent_that_remembers.py" target="_blank" rel="noopener"><code>agent_that_remembers.py</code><span>Told once, recalled by a new process given nothing</span><small>model key</small></a>
-<a class="jc-row" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/survives_a_crash.py" target="_blank" rel="noopener"><code>survives_a_crash.py</code><span><code>kill -9</code> mid-workflow; the rerun finishes without repeating done work</span><small>Redis</small></a>
-<a class="jc-row" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/research_team.py" target="_blank" rel="noopener"><code>research_team.py</code><span>A scout and an analyst deliver a cited brief from the live web</span><small>model key</small></a>
+<div class="jc-examples" markdown>
+
+<a class="jc-example" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/browse_a_whole_site.py" target="_blank" rel="noopener"><span class="jc-example-head">:material-web:<strong>Read a whole website</strong></span><span class="jc-example-text">An agent works a real browser through every page of a catalogue and computes the figures.</span><span class="jc-example-meta"><code>browse_a_whole_site.py</code> · browser extra</span></a>
+
+<a class="jc-example" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/analyst_that_computes.py" target="_blank" rel="noopener"><span class="jc-example-head">:material-calculator-variant-outline:<strong>Compute, never estimate</strong></span><span class="jc-example-text">Figures from a 400-row CSV, computed by code the agent writes and runs.</span><span class="jc-example-meta"><code>analyst_that_computes.py</code> · model key</span></a>
+
+<a class="jc-example" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/agent_that_remembers.py" target="_blank" rel="noopener"><span class="jc-example-head">:material-brain:<strong>Remember across runs</strong></span><span class="jc-example-text">Told once; a new process, given nothing, still knows.</span><span class="jc-example-meta"><code>agent_that_remembers.py</code> · model key</span></a>
+
+<a class="jc-example" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/survives_a_crash.py" target="_blank" rel="noopener"><span class="jc-example-head">:material-restart:<strong>Survive kill -9</strong></span><span class="jc-example-text">Kill it mid-workflow; the rerun finishes without repeating done work.</span><span class="jc-example-meta"><code>survives_a_crash.py</code> · Redis</span></a>
+
+<a class="jc-example" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/research_team.py" target="_blank" rel="noopener"><span class="jc-example-head">:material-account-search-outline:<strong>A research team</strong></span><span class="jc-example-text">A scout and an analyst deliver a cited brief from the live web.</span><span class="jc-example-meta"><code>research_team.py</code> · model key</span></a>
+
+<a class="jc-example" href="guides/multiplayer-agents/"><span class="jc-example-head">:material-account-group-outline:<strong>Work as a team</strong></span><span class="jc-example-text">A room in Slack where people ask, agents propose, and people decide.</span><span class="jc-example-meta">Guide · new in 2.3</span></a>
+
 </div>
 
 ## Community
