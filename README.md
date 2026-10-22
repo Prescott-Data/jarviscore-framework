@@ -207,7 +207,7 @@ Prefer to write the logic yourself? A `CustomAgent` is plain Python in
 | **Credentials out of reach** | Tokens are placed at the call by Nexus, only for agents that declare `requires_auth`. They never appear in prompts, generated code or traces. |
 | **A person in the loop** | Irreversible actions wait for an approval through `Mesh.resolve_hitl()`, then run exactly once. |
 | **Scale without rewrites** | `Pool(max=8)` turns one agent into several workers, and every model call is paced to the provider's real limits. Verifying 196 claims took 9.4 minutes with pools, against 202 with fixed workers. |
-| **1,200+ integrations** | Typed atoms for CRMs, payments, messaging, storage and more, with auth injected at runtime: `jarviscore atom list`. |
+| **Integrations without wiring** | Typed atoms for CRMs, payments, messaging, storage and more, with auth injected at runtime. See what your installed version ships with [`jarviscore atom list`](https://jarviscore.developers.prescottdata.io/reference/cli/#atom-list). |
 
 ## Go further
 
