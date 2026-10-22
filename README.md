@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="jarviscore/docs/assets/combo-brand.svg" alt="JarvisCore" height="68" />
+  <img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/combo-brand.svg" alt="JarvisCore" height="68" />
 </p>
 
 <p align="center">
@@ -12,17 +12,17 @@
   <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/pyversions/jarviscore-framework?style=flat-square&color=0533AC" alt="Python" /></a>
   <a href="https://jarviscore.developers.prescottdata.io/"><img src="https://img.shields.io/badge/docs-jarviscore-35B0FE?style=flat-square" alt="Docs" /></a>
   <a href="https://discord.gg/jbRBAsMgM"><img src="https://img.shields.io/badge/office%20hours-discord-0CF0E3?style=flat-square&labelColor=0533AC" alt="Discord" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-1758F5?style=flat-square" alt="License" /></a>
+  <a href="https://github.com/Prescott-Data/jarviscore-framework/tree/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-1758F5?style=flat-square" alt="License" /></a>
 </p>
 
 <p align="center">
-  <img src="jarviscore/docs/assets/readme/desk-research-team.gif" alt="The JarvisCore Desk running a three-agent research mesh: the request is typed, the Scout searches the web and reads official docs, the Analyst compares the options and hands its comparison to the Writer, and the Writer delivers a decision brief with source links as a document." width="900" />
+  <img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/desk-research-team.gif" alt="The JarvisCore Desk running a three-agent research mesh: the request is typed, the Scout searches the web and reads official docs, the Analyst compares the options and hands its comparison to the Writer, and the Writer delivers a decision brief with source links as a document." width="900" />
 </p>
 <p align="center"><sub>
   Three agents on one mesh, live in the JarvisCore Desk: a scout reads official docs on the live web, an analyst compares,
   a writer delivers the brief with its sources.<br/>
-  A real run, idle time trimmed (<a href="jarviscore/docs/assets/readme/desk-research-team.mp4">MP4</a>). The Desk ships with
-  JarvisCore Agents, opening soon; the team is <a href="examples/showcase/desk/research_desk.py">30 lines of Python</a>.
+  A real run, idle time trimmed (<a href="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/desk-research-team.mp4">MP4</a>). The Desk ships with
+  JarvisCore Agents, opening soon; the team is <a href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/desk/research_desk.py">30 lines of Python</a>.
 </sub></p>
 
 ```python
@@ -69,12 +69,12 @@ memory, credentials and durable state, and hands you back an answer you can veri
 
 One `goal_oriented` agent opens the catalogue, walks every page, computes the figures
 with code and saves a report: 32 books, 2 pages, every figure correct.
-[`browse_a_whole_site.py`](examples/showcase/browse_a_whole_site.py) · real time 1m 56s ·
+[`browse_a_whole_site.py`](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/browse_a_whole_site.py) · real time 1m 56s ·
 needs `jarviscore-framework[browser]` and `BROWSER_ENABLED=true`.
 
 <details><summary>Watch it run in a terminal</summary>
 
-<img src="jarviscore/docs/assets/readme/browse.gif" alt="browse_a_whole_site.py: an agent collects all 32 books in the Mystery category of books.toscrape.com across both pages, reports the count per rating, the average price of £31.72 and the three most expensive books, and saves mystery_report.md." width="820" />
+<img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/browse.gif" alt="browse_a_whole_site.py: an agent collects all 32 books in the Mystery category of books.toscrape.com across both pages, reports the count per rating, the average price of £31.72 and the three most expensive books, and saves mystery_report.md." width="820" />
 
 </details>
 
@@ -82,11 +82,11 @@ needs `jarviscore-framework[browser]` and `BROWSER_ENABLED=true`.
 
 Revenue and quarter-on-quarter growth for four regions from a 400-row CSV, computed by
 code the agent writes and runs in a sandbox. Every figure matches a hand-written check.
-[`analyst_that_computes.py`](examples/showcase/analyst_that_computes.py) · real time 54s.
+[`analyst_that_computes.py`](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/analyst_that_computes.py) · real time 54s.
 
 <details><summary>Watch it run in a terminal</summary>
 
-<img src="jarviscore/docs/assets/readme/analyst.gif" alt="analyst_that_computes.py: an agent reads a 400-row sales CSV, writes and runs Python, and reports exact revenue per region and Q1 to Q2 growth, with South growing most at 28.64%." width="820" />
+<img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/analyst.gif" alt="analyst_that_computes.py: an agent reads a 400-row sales CSV, writes and runs Python, and reports exact revenue per region and Q1 to Q2 growth, with South growing most at 28.64%." width="820" />
 
 </details>
 
@@ -94,11 +94,11 @@ code the agent writes and runs in a sandbox. Every figure matches a hand-written
 
 Tell it once. A new process, given nothing, still knows. Kept facts live in
 `.jarviscore/memory/`, with nothing to install; point it at Athena for semantic memory
-shared across machines. [`agent_that_remembers.py`](examples/showcase/agent_that_remembers.py).
+shared across machines. [`agent_that_remembers.py`](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/agent_that_remembers.py).
 
 <details><summary>Watch it run in a terminal</summary>
 
-<img src="jarviscore/docs/assets/readme/memory.gif" alt="agent_that_remembers.py run twice: the first run is told Acme renews on 3 March 2027 with Jane Mwangi as contact; a second process, given nothing, answers with the date and the contact; the fact is shown on disk in .jarviscore/memory/account_manager.jsonl." width="820" />
+<img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/memory.gif" alt="agent_that_remembers.py run twice: the first run is told Acme renews on 3 March 2027 with Jane Mwangi as contact; a second process, given nothing, answers with the date and the contact; the fact is shown on disk in .jarviscore/memory/account_manager.jsonl." width="820" />
 
 </details>
 
@@ -106,11 +106,11 @@ shared across machines. [`agent_that_remembers.py`](examples/showcase/agent_that
 
 Kill the process mid-workflow and run the same command again: finished steps come back
 from Redis, and only the unfinished work runs.
-[`survives_a_crash.py`](examples/showcase/survives_a_crash.py) · needs `REDIS_URL`.
+[`survives_a_crash.py`](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/survives_a_crash.py) · needs `REDIS_URL`.
 
 <details><summary>Watch it run in a terminal</summary>
 
-<img src="jarviscore/docs/assets/readme/crash.gif" alt="survives_a_crash.py: a two-step workflow is started, the process is killed with kill -9 once step 1 is saved, and the same command in a new process recovers step 1 from Redis without re-running it and finishes step 2." width="820" />
+<img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/crash.gif" alt="survives_a_crash.py: a two-step workflow is started, the process is killed with kill -9 once step 1 is saved, and the same command in a new process recovers step 1 from Redis without re-running it and finishes step 2." width="820" />
 
 </details>
 
@@ -119,8 +119,8 @@ from Redis, and only the unfinished work runs.
 
 | Demo | What it shows |
 |---|---|
-| [Research team, in a terminal](examples/showcase/research_team.py) | The same kind of team without the Desk: a scout and an analyst, one workflow, a cited brief. [Recording](jarviscore/docs/assets/readme/research.gif). |
-| [Investment committee](examples/investment_committee) | Seven agents deliberate a $1.5M position on live market data; the process is killed mid-deliberation and finishes without re-running the analysts. [Recording](jarviscore/docs/assets/demo.gif). |
+| [Research team, in a terminal](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/research_team.py) | The same kind of team without the Desk: a scout and an analyst, one workflow, a cited brief. [Recording](https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/research.gif). |
+| [Investment committee](https://github.com/Prescott-Data/jarviscore-framework/tree/main/examples/investment_committee) | Seven agents deliberate a $1.5M position on live market data; the process is killed mid-deliberation and finishes without re-running the analysts. [Recording](https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/demo.gif). |
 | [Four-process research mesh](https://github.com/Prescott-Data/jarviscore-framework/releases/download/v1.5.1/mesh_demo_full.mp4) | Four agents in four processes find each other over SWIM, claim steps from a shared ledger, and deliver to Slack through the credential vault. Reproduce with `examples/demo_synthesizer.py` and `demo_node_1/2/3.py`. |
 | [Launch film](https://www.youtube.com/watch?v=4IOpKZgjXIw) | The story of JarvisCore Agents, in four minutes. |
 
@@ -129,7 +129,7 @@ from Redis, and only the unfinished work runs.
 ## How it works
 
 <p align="center">
-  <img src="jarviscore/docs/assets/readme/how-it-works.png" alt="Blueprint of one agent turn: the model at the centre, an orbit of five numbered stations around it (1 context in, 2 act, 3 record, 4 approve, 5 done or not), an outer runtime ring that wraps every call, the answer leaving station 5 as result_summary with output, evidence and status, and beside it a wireframe globe of agents that find each other by capability." width="900" />
+  <img src="https://raw.githubusercontent.com/Prescott-Data/jarviscore-framework/main/jarviscore/docs/assets/readme/how-it-works.png" alt="Blueprint of one agent turn: the model at the centre, an orbit of five numbered stations around it (1 context in, 2 act, 3 record, 4 approve, 5 done or not), an outer runtime ring that wraps every call, the answer leaving station 5 as result_summary with output, evidence and status, and beside it a wireframe globe of agents that find each other by capability." width="900" />
 </p>
 
 An agent's work is a loop around the model, and everything outside the model is the
@@ -228,11 +228,11 @@ If JarvisCore saves you time, a ⭐ helps other developers find it.
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE). You can build and sell products with it; there is
+Apache 2.0. See [LICENSE](https://github.com/Prescott-Data/jarviscore-framework/tree/main/LICENSE). You can build and sell products with it; there is
 no revenue or user threshold that requires a commercial agreement. Separately licensed
 enterprise modules have their own terms; see
 [JarvisCore Enterprise](https://jarviscore.developers.prescottdata.io/infrastructure/enterprise/).
 
 Building with JarvisCore? An optional
 [Built with JarvisCore](https://developers.prescottdata.io) credit on your About page
-or docs is appreciated; the [trademark policy](TRADEMARK.md) applies.
+or docs is appreciated; the [trademark policy](https://github.com/Prescott-Data/jarviscore-framework/blob/main/TRADEMARK.md) applies.
