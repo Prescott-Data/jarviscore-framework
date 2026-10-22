@@ -28,6 +28,9 @@ def _peer_payload(message: Dict[str, Any]) -> Dict[str, Any]:
 
 logger = logging.getLogger(__name__)
 
+# How often the roster is checked against SWIM membership, in seconds.
+MEMBERSHIP_CHECK_INTERVAL = 2.0
+
 
 class P2PCoordinator:
     """
@@ -77,6 +80,8 @@ class P2PCoordinator:
         self._remote_agent_registry: Dict[str, Dict[str, Any]] = {}  # agent_id -> agent info
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._introductions: set = set()
+        self._departed_nodes: set = set()  # nodes whose agents were dropped as dead
+        self._membership_watch: Optional[asyncio.Task] = None
 
     async def start(self):
         """
@@ -138,6 +143,7 @@ class P2PCoordinator:
 
         self._started = True
         self._subscribe_membership()
+        self._membership_watch = asyncio.ensure_future(self._watch_membership())
         logger.info("P2P coordinator started successfully")
 
     def _subscribe_membership(self):
@@ -165,8 +171,72 @@ class P2PCoordinator:
         if self._started and self._loop and not self._loop.is_closed():
             self._loop.call_soon_threadsafe(self._schedule_introduction, event.member.address)
 
+    async def _watch_membership(self):
+        """Keep the roster in step with SWIM: drop agents on nodes SWIM declares dead.
+
+        swim-p2p emits MemberFailedEvent only on the node whose own probes time out;
+        nodes that learn of a death through gossip change state silently. Polling the
+        member list, as swim's own SWIMZMQBridge does, reaches every node.
+        """
+        while self._started:
+            await asyncio.sleep(MEMBERSHIP_CHECK_INTERVAL)
+            try:
+                states = await self._member_states()
+            except Exception as exc:
+                logger.debug(f"Membership check skipped: {exc}")
+                continue
+            self._reconcile_roster(states)
+
+    async def _member_states(self) -> Dict[str, str]:
+        """Snapshot {address: state} on the SWIM loop, which owns the member list."""
+        members = self.swim_manager.swim_node.members
+
+        async def snapshot():
+            return {m.address: m.state.name for m in members.get_all_members(exclude_self=True)}
+
+        handoff = asyncio.run_coroutine_threadsafe(snapshot(), self.swim_manager.swim_loop)
+        return await asyncio.wrap_future(handoff)
+
+    def _reconcile_roster(self, states: Dict[str, str]):
+        for address, state in states.items():
+            if state == 'DEAD' and self._forget_node(address):
+                self._departed_nodes.add(address)
+            elif state == 'ALIVE' and address in self._departed_nodes:
+                # A false positive or healed partition: ask it to re-announce.
+                self._departed_nodes.discard(address)
+                self._schedule_capability_request(address)
+
+    def _forget_node(self, node_id: str) -> bool:
+        """Drop every remote agent announced from this node; True if any were known."""
+        agent_ids = [
+            agent_id for agent_id, info in self._remote_agent_registry.items()
+            if info.get('node_id') == node_id
+        ]
+        if agent_ids:
+            self._forget_agents(agent_ids)
+            logger.info(f"Node {node_id} is gone, removed agents: {agent_ids}")
+        return bool(agent_ids)
+
+    def _forget_agents(self, agent_ids: List[str]):
+        """Remove agents from the capability map and the remote agent registry."""
+        for cap in list(self._capability_map.keys()):
+            self._capability_map[cap] = [
+                a for a in self._capability_map[cap] if a not in agent_ids
+            ]
+            if not self._capability_map[cap]:
+                del self._capability_map[cap]
+        for agent_id in agent_ids:
+            self._remote_agent_registry.pop(agent_id, None)
+
     def _schedule_introduction(self, peer_addr: str):
         task = asyncio.ensure_future(self._introduce_to(peer_addr))
+        self._introductions.add(task)
+        task.add_done_callback(self._introductions.discard)
+
+    def _schedule_capability_request(self, peer_addr: str):
+        task = asyncio.ensure_future(self._send_p2p_message(
+            peer_addr, 'CAPABILITY_REQUEST', {'node_id': self._get_node_id()}
+        ))
         self._introductions.add(task)
         task.add_done_callback(self._introductions.discard)
 
@@ -471,10 +541,17 @@ class P2PCoordinator:
             return
 
         logger.info("Stopping P2P coordinator...")
+        # Say goodbye while still started: deannounce_capabilities() is a no-op once stopped.
+        try:
+            await self.deannounce_capabilities()
+        except Exception as exc:
+            logger.warning(f"Could not deannounce capabilities on stop: {exc}")
         self._started = False
         self._unsubscribe_membership()
         for task in list(self._introductions):
             task.cancel()
+        if self._membership_watch:
+            self._membership_watch.cancel()
 
         # Stop keepalive manager
         if self.keepalive_manager:
@@ -660,19 +737,7 @@ class P2PCoordinator:
             node_id = payload.get('node_id')
             agent_ids = payload.get('agent_ids', [])
 
-            # Remove from capability map
-            for cap in list(self._capability_map.keys()):
-                self._capability_map[cap] = [
-                    a for a in self._capability_map[cap]
-                    if a not in agent_ids
-                ]
-                # Clean up empty capabilities
-                if not self._capability_map[cap]:
-                    del self._capability_map[cap]
-
-            # Remove from remote agent registry
-            for agent_id in agent_ids:
-                self._remote_agent_registry.pop(agent_id, None)
+            self._forget_agents(agent_ids)
 
             logger.info(f"Node {node_id} departed, removed agents: {agent_ids}")
         except Exception as e:
