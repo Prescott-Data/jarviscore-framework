@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 # How often the roster is checked against SWIM membership, in seconds.
 MEMBERSHIP_CHECK_INTERVAL = 2.0
+DEANNOUNCE_TIMEOUT = 3.0
 
 
 class P2PCoordinator:
@@ -542,8 +543,11 @@ class P2PCoordinator:
 
         logger.info("Stopping P2P coordinator...")
         # Say goodbye while still started: deannounce_capabilities() is a no-op once stopped.
+        # Bounded: peers that are shutting down too would otherwise hold each send open.
         try:
-            await self.deannounce_capabilities()
+            await asyncio.wait_for(self.deannounce_capabilities(), DEANNOUNCE_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"Deannouncing capabilities timed out after {DEANNOUNCE_TIMEOUT}s; peers will notice via SWIM")
         except Exception as exc:
             logger.warning(f"Could not deannounce capabilities on stop: {exc}")
         self._started = False
