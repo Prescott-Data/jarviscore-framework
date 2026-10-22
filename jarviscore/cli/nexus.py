@@ -81,43 +81,65 @@ def cmd_status(args):
 
     # 1. Gateway URL
     url = _gateway_url()
+    ping = None
     if not url:
         print(_warn("NEXUS_GATEWAY_URL not set in your .env"))
         print(_info("  Set it to http://localhost:8090 for local dev, or your deployed Gateway URL"))
     else:
         print(_ok(f"NEXUS_GATEWAY_URL = {url}"))
 
-        # 2. Ping the gateway
+        # 2. Ping the gateway (in parallel with the Docker inspect below)
+        import threading
         import urllib.request, urllib.error
-        try:
-            req = urllib.request.urlopen(f"{url}/health", timeout=5)
-            if req.status == 200:
-                print(_ok("Gateway is reachable and healthy"))
-            else:
-                print(_warn(f"Gateway responded with HTTP {req.status}"))
-        except Exception as e:
-            print(_err(f"Gateway not reachable: {e}"))
-            print(_info("  Run: python -m jarviscore.cli nexus up"))
+        ping_lines: list = []
+
+        def _ping() -> None:
+            try:
+                req = urllib.request.urlopen(f"{url}/health", timeout=5)
+                if req.status == 200:
+                    ping_lines.append(_ok("Gateway is reachable and healthy"))
+                else:
+                    ping_lines.append(_warn(f"Gateway responded with HTTP {req.status}"))
+            except Exception as e:
+                ping_lines.append(_err(f"Gateway not reachable: {e}"))
+                ping_lines.append(_info("  Run: python -m jarviscore.cli nexus up"))
+
+        ping = threading.Thread(target=_ping, daemon=True)
+        ping.start()
 
     # 3. Docker container state
+    names = ("nexus-broker", "nexus-gateway", "nexus-db")
+    docker_lines: list = []
     if shutil.which("docker"):
         try:
-            for name in ("nexus-broker", "nexus-gateway", "nexus-db"):
-                out = subprocess.run(
-                    ["docker", "inspect", "--format", "{{.State.Status}}", name],
-                    capture_output=True, text=True,
-                )
-                status = out.stdout.strip()
+            # Missing containers go to stderr; the found ones are still listed on stdout.
+            out = subprocess.run(
+                ["docker", "inspect", "--format", "{{.Name}}|{{.State.Status}}", *names],
+                capture_output=True, text=True, timeout=10,
+            )
+            states = {}
+            for line in out.stdout.splitlines():
+                cname, _, cstatus = line.partition("|")
+                states[cname.lstrip("/")] = cstatus.strip()
+            for name in names:
+                status = states.get(name, "")
                 if status == "running":
-                    print(_ok(f"Container {name}: running"))
+                    docker_lines.append(_ok(f"Container {name}: running"))
                 elif status:
-                    print(_warn(f"Container {name}: {status}"))
+                    docker_lines.append(_warn(f"Container {name}: {status}"))
                 else:
-                    print(_err(f"Container {name}: not found (run 'nexus up')"))
+                    docker_lines.append(_err(f"Container {name}: not found (run 'nexus up')"))
         except Exception as e:
-            print(_warn(f"Could not inspect Docker containers: {e}"))
+            docker_lines.append(_warn(f"Could not inspect Docker containers: {e}"))
     else:
-        print(_warn("Docker not found — needed for local Nexus stack"))
+        docker_lines.append(_warn("Docker not found — needed for local Nexus stack"))
+
+    if ping is not None:
+        ping.join()
+        for line in ping_lines:
+            print(line)
+    for line in docker_lines:
+        print(line)
 
     print()
 
@@ -183,15 +205,18 @@ def cmd_init(args):
     broker_port = os.environ.get("NEXUS_BROKER_PORT", "8080")
     print()
     print(_info("Waiting for broker to be ready..."))
-    for _ in range(30):
+    deadline = time.monotonic() + 30
+    while True:
         try:
-            urllib.request.urlopen(f"http://localhost:{broker_port}/health", timeout=2)
+            remaining = deadline - time.monotonic()
+            urllib.request.urlopen(f"http://localhost:{broker_port}/health",
+                                   timeout=max(0.1, min(2, remaining)))
             break
         except Exception:
-            time.sleep(1)
-    else:
-        print(_warn("Broker didn't respond in 30s — check `docker logs nexus-broker`"))
-        sys.exit(1)
+            if time.monotonic() >= deadline:
+                print(_warn("Broker didn't respond in 30s — check `docker logs nexus-broker`"))
+                sys.exit(1)
+            time.sleep(max(0, min(1, deadline - time.monotonic())))
 
     print(_ok("Nexus stack is up and healthy!"))
     print()
@@ -414,7 +439,7 @@ def _seed_broker_db(provider: str, credentials: dict, workspace_id: str) -> bool
     urls = PROVIDER_URLS.get(provider, {})
 
     try:
-        conn = psycopg2.connect(db_url)
+        conn = psycopg2.connect(db_url, connect_timeout=3)
         conn.autocommit = False
         cur = conn.cursor()
         # Ensure workspace exists

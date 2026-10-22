@@ -5,6 +5,8 @@ is the SWIM seed the others join. Redis is reused if one is already configured o
 running, otherwise started in Docker (or with a local redis-server) for the session.
 """
 
+import hashlib
+import json
 import os
 import random
 import shutil
@@ -29,7 +31,9 @@ ZMQ_PORT_OFFSET = 1000
 DEFAULT_REDIS = "redis://localhost:6379/0"
 REDIS_IMAGE = "redis:7-alpine"
 STOP_TIMEOUT = 15.0
+DOCKER_TIMEOUT = 15
 COLORS = ("36", "35", "33", "32", "34", "31")
+PARENT_PID_ENV = "JARVISCORE_DEV_PARENT_PID"
 
 
 class DevError(Exception):
@@ -102,23 +106,32 @@ def resolve_redis(
     )
 
 
+def docker_redis_name(loaded: LoadedProject) -> str:
+    # Path hash keeps two checkouts with the same service name apart.
+    digest = hashlib.sha1(str(loaded.root.resolve()).encode()).hexdigest()[:6]
+    return f"jarviscore-dev-{loaded.project.service}-{digest}-redis"
+
+
 def _docker_redis(loaded: LoadedProject, reachable) -> RedisHandle:
-    name = f"jarviscore-dev-{loaded.project.service}-redis"
+    name = docker_redis_name(loaded)
 
-    def docker(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-        return subprocess.run(["docker", *args], capture_output=True, text=True, check=check)
+    def docker(*args: str, check: bool = True, timeout: float | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(["docker", *args], capture_output=True, text=True, check=check,
+                              timeout=timeout)
 
-    state = docker("inspect", "-f", "{{.State.Running}}", name, check=False)
     try:
+        state = docker("inspect", "-f", "{{.State.Running}}", name, check=False,
+                       timeout=DOCKER_TIMEOUT)
         if state.returncode != 0:
+            # No timeout: may pull the image on first use.
             docker("run", "-d", "--name", name, "--label", "jarviscore.dev=1",
                    "-p", "127.0.0.1::6379", "-v", f"{name}-data:/data",
                    REDIS_IMAGE, "redis-server", "--appendonly", "yes")
         elif state.stdout.strip() != "true":
-            docker("start", name)
+            docker("start", name, timeout=DOCKER_TIMEOUT)
         port = docker(
-            "port", name, "6379/tcp").stdout.strip().splitlines()[0].rsplit(":", 1)[1]
-    except (subprocess.CalledProcessError, IndexError) as exc:
+            "port", name, "6379/tcp", timeout=DOCKER_TIMEOUT).stdout.strip().splitlines()[0].rsplit(":", 1)[1]
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, IndexError) as exc:
         detail = getattr(exc, "stderr", "") or str(exc)
         raise DevError(
             f"Could not start Redis in Docker ({detail.strip()}). Is Docker running?") from None
@@ -198,8 +211,9 @@ class Peer:
 
 
 def plan_peers(loaded: LoadedProject, roles: list[str], redis_url: str,
-               allocate: Callable[[set[int]], int] = allocate_peer_port) -> list[Peer]:
-    taken: set[int] = set()
+               allocate: Callable[[set[int]], int] = allocate_peer_port,
+               taken: set[int] | None = None) -> list[Peer]:
+    taken = set() if taken is None else taken
     peers: list[Peer] = []
     seed: str | None = None
     for i, role in enumerate(roles):
@@ -211,6 +225,7 @@ def plan_peers(loaded: LoadedProject, roles: list[str], redis_url: str,
                 "JARVISCORE_BIND_HOST": "127.0.0.1",
                 "JARVISCORE_BIND_PORT": str(port),
                 "PYTHONUNBUFFERED": "1",
+                PARENT_PID_ENV: str(os.getpid()),
             }
             if seed:
                 env["JARVISCORE_SEED_NODES"] = seed
@@ -228,20 +243,26 @@ class DevSession:
     redis: RedisHandle
     color: bool = True
     peers: list[Peer] = field(default_factory=list)
+    # Every port handed out this session; a stopped peer's port may not be released yet.
+    used_ports: set[int] = field(default_factory=set)
     _print_lock: threading.Lock = field(default_factory=threading.Lock)
+    _flush: bool = field(default_factory=lambda: sys.stdout.isatty())
 
     def say(self, text: str) -> None:
         with self._print_lock:
-            print(text, flush=True)
+            print(text, flush=self._flush)
 
     def start_all(self) -> None:
-        self.peers = plan_peers(self.loaded, self.roles, self.redis.url)
+        self.peers = plan_peers(self.loaded, self.roles, self.redis.url, taken=self.used_ports)
         for index, peer in enumerate(self.peers):
             self._start(peer)
             if index == 0 and len(self.peers) > 1:
-                # Let the seed bind before others try to join it.
-                _wait_for(lambda p=peer: _listening(p.port + ZMQ_PORT_OFFSET) or p.proc.poll() is not None,
-                          20, None)
+                self._wait_until_bound(peer)
+
+    def _wait_until_bound(self, peer: Peer) -> None:
+        # Let the seed bind before others try to join it.
+        _wait_for(lambda: _listening(peer.port + ZMQ_PORT_OFFSET) or peer.proc.poll() is not None,
+                  20, None)
 
     def _start(self, peer: Peer) -> None:
         cmd = [sys.executable, "-m", "jarviscore.cli", "serve", "--role", peer.role,
@@ -269,10 +290,19 @@ class DevSession:
     def stop(self, peers: list[Peer] | None = None) -> None:
         targets = [p for p in (
             peers if peers is not None else self.peers) if p.proc and p.proc.poll() is None]
-        seed = self.peers[0] if self.peers else None
+        seed = self._seed_peer()
         # Peers hang in shutdown if the seed disappears under them, so the seed goes last.
         self._terminate([p for p in targets if p is not seed])
         self._terminate([p for p in targets if p is seed])
+
+    def _seed_peer(self) -> Peer | None:
+        """The peer most others joined through."""
+        joined = [p.env.get("JARVISCORE_SEED_NODES") for p in self.peers]
+        by_address = {f"127.0.0.1:{p.port}": p for p in self.peers}
+        counts = {a: joined.count(a) for a in by_address if a in joined}
+        if counts:
+            return by_address[max(counts, key=counts.get)]
+        return self.peers[0] if self.peers else None
 
     def _terminate(self, targets: list[Peer]) -> None:
         for peer in targets:
@@ -292,8 +322,20 @@ class DevSession:
         targets = [p for p in self.peers if p.role in roles]
         self.say(f"↻ restarting {', '.join(sorted(roles))}")
         self.stop(targets)
+        survivors = [p for p in self.peers if p not in targets and p.proc and p.proc.poll() is None]
+        seed = f"127.0.0.1:{survivors[0].port}" if survivors else None
         for peer in targets:
+            peer.port = allocate_peer_port(self.used_ports)
+            peer.env["JARVISCORE_BIND_PORT"] = str(peer.port)
+            if seed:
+                peer.env["JARVISCORE_SEED_NODES"] = seed
+            else:
+                peer.env.pop("JARVISCORE_SEED_NODES", None)
+                seed = f"127.0.0.1:{peer.port}"
             self._start(peer)
+            if not survivors and peer is targets[0] and len(targets) > 1:
+                self._wait_until_bound(peer)
+            self.say(f"  {peer.label:<14} port {peer.port}")
 
     def reload_project(self) -> None:
         try:
@@ -308,6 +350,8 @@ class DevSession:
         self.roles = [r for r in self.roles if r in loaded.project.agents] or list(
             loaded.project.agents)
         self.start_all()
+        for peer in self.peers:
+            self.say(f"  {peer.label:<14} port {peer.port}")
 
 
 def roles_to_restart(changed: set[str], loaded: LoadedProject, roles: list[str]) -> set[str] | None:
@@ -334,6 +378,16 @@ def _watch_filter(change, path: str) -> bool:
     if ".jarviscore" in parts or "tests" in parts:
         return False
     return path.endswith((".py", ".yaml"))
+
+
+def _make_watch_filter():
+    import watchfiles
+
+    class _DevFilter(watchfiles.DefaultFilter):
+        def __call__(self, change, path: str) -> bool:
+            return super().__call__(change, path) and _watch_filter(change, path)
+
+    return _DevFilter()
 
 
 def _listening(port: int) -> bool:
@@ -370,8 +424,14 @@ def dev_command(
     try:
         loaded = load_project(destination=destination)
         selected = _select_roles(loaded, roles or [])
-        redis = resolve_redis(loaded, dict(os.environ), redis_url)
+        acquire_session(loaded)
     except (ProjectError, DevError) as exc:
+        typer.echo(f"✗ {exc}", err=True)
+        raise typer.Exit(2) from None
+    try:
+        redis = resolve_redis(loaded, dict(os.environ), redis_url)
+    except DevError as exc:
+        release_session(loaded)
         typer.echo(f"✗ {exc}", err=True)
         raise typer.Exit(2) from None
 
@@ -387,7 +447,7 @@ def dev_command(
         if reload:
             import watchfiles
 
-            for changes in watchfiles.watch(loaded.root, watch_filter=_watch_filter,
+            for changes in watchfiles.watch(loaded.root, watch_filter=_make_watch_filter(),
                                             stop_event=stop_event, raise_interrupt=False):
                 affected = roles_to_restart(
                     {p for _, p in changes}, session.loaded, session.roles)
@@ -401,7 +461,7 @@ def dev_command(
         session.say(f"✗ {exc}")
     finally:
         session.say("Stopping agents…")
-        session_file(loaded).unlink(missing_ok=True)
+        release_session(loaded)
         session.stop()
         redis.cleanup()
         session.say("Stopped.")
@@ -411,9 +471,53 @@ def session_file(loaded: LoadedProject) -> Path:
     return loaded.root / ".jarviscore" / "dev" / "session.json"
 
 
-def write_session_file(loaded: LoadedProject, redis_url: str) -> None:
-    import json
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
+
+def acquire_session(loaded: LoadedProject) -> None:
+    """Claim the project for this process; one `jarviscore dev` per project at a time."""
+    path = session_file(loaded)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            try:
+                owner = int(json.loads(path.read_text()).get("pid", 0))
+            except (OSError, ValueError, TypeError, AttributeError):
+                owner = 0
+            if owner and owner != os.getpid() and _pid_alive(owner):
+                raise DevError(
+                    f"jarviscore dev is already running for this project (pid {owner}). "
+                    "Stop it first, or send tasks to it with `jarviscore run`."
+                ) from None
+            path.unlink(missing_ok=True)
+            continue
+        with os.fdopen(fd, "w") as f:
+            json.dump({"pid": os.getpid(), "redis_url": None,
+                       "environment": loaded.environment}, f)
+        return
+    raise DevError(f"Could not claim {path}; another jarviscore dev may be starting")
+
+
+def release_session(loaded: LoadedProject) -> None:
+    path = session_file(loaded)
+    try:
+        owner = json.loads(path.read_text()).get("pid")
+    except (OSError, ValueError, AttributeError):
+        return
+    if owner == os.getpid():
+        path.unlink(missing_ok=True)
+
+
+def write_session_file(loaded: LoadedProject, redis_url: str) -> None:
     path = session_file(loaded)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"pid": os.getpid(), "redis_url": redis_url,

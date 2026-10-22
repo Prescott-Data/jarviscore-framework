@@ -21,7 +21,6 @@ import json
 import glob
 import os
 import re
-import requests
 import subprocess
 from typing import Dict, Any, List, Optional, Literal, cast, Set, Tuple
 from urllib.parse import urlparse
@@ -1249,6 +1248,8 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         return specs
 
     def _fetch_openapi_specs_direct(self, url: str) -> Tuple[List[Dict[str, Any]], str]:
+        import requests
+
         try:
             resp = requests.get(url, timeout=30)
             if resp.status_code >= 400 or not resp.text:

@@ -11,6 +11,7 @@ Usage:
 
 import sys
 import asyncio
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -51,25 +52,25 @@ class SmokeTest:
 
     async def test_imports(self) -> bool:
         """Test that core framework modules load."""
-        test_start = asyncio.get_event_loop().time()
+        test_start = time.perf_counter()
 
         try:
             from jarviscore import Mesh
             from jarviscore.profiles import AutoAgent
             from dotenv import load_dotenv
 
-            duration = asyncio.get_event_loop().time() - test_start
+            duration = time.perf_counter() - test_start
             self.print_test("Import Framework", True, "Core modules loaded", duration)
             return True
 
         except Exception as e:
-            duration = asyncio.get_event_loop().time() - test_start
+            duration = time.perf_counter() - test_start
             self.print_test("Import Framework", False, str(e), duration)
             return False
 
     async def test_env_config(self) -> bool:
         """Test environment configuration."""
-        test_start = asyncio.get_event_loop().time()
+        test_start = time.perf_counter()
 
         try:
             import os
@@ -96,7 +97,7 @@ class SmokeTest:
             configured = [k for k, v in llm_providers.items() if v]
 
             if not configured:
-                duration = asyncio.get_event_loop().time() - test_start
+                duration = time.perf_counter() - test_start
                 self.print_test(
                     "Configuration",
                     False,
@@ -105,37 +106,37 @@ class SmokeTest:
                 )
                 return False
 
-            duration = asyncio.get_event_loop().time() - test_start
+            duration = time.perf_counter() - test_start
             provider_str = configured[0].replace('_', ' ').title()
             self.print_test("Configuration", True, f"Using {provider_str}", duration)
             return True
 
         except Exception as e:
-            duration = asyncio.get_event_loop().time() - test_start
+            duration = time.perf_counter() - test_start
             self.print_test("Configuration", False, str(e), duration)
             return False
 
     async def test_mesh_creation(self) -> bool:
         """Test mesh creation."""
-        test_start = asyncio.get_event_loop().time()
+        test_start = time.perf_counter()
 
         try:
             from jarviscore import Mesh
 
             mesh = Mesh(mode="autonomous")
 
-            duration = asyncio.get_event_loop().time() - test_start
+            duration = time.perf_counter() - test_start
             self.print_test("Create Mesh", True, "Autonomous mode initialized", duration)
             return True
 
         except Exception as e:
-            duration = asyncio.get_event_loop().time() - test_start
+            duration = time.perf_counter() - test_start
             self.print_test("Create Mesh", False, str(e), duration)
             return False
 
     async def test_agent_definition(self) -> bool:
         """Test agent definition."""
-        test_start = asyncio.get_event_loop().time()
+        test_start = time.perf_counter()
 
         try:
             from jarviscore.profiles import AutoAgent
@@ -147,18 +148,18 @@ class SmokeTest:
 
             agent = TestAgent()
 
-            duration = asyncio.get_event_loop().time() - test_start
+            duration = time.perf_counter() - test_start
             self.print_test("Define Agent", True, "AutoAgent class created", duration)
             return True
 
         except Exception as e:
-            duration = asyncio.get_event_loop().time() - test_start
+            duration = time.perf_counter() - test_start
             self.print_test("Define Agent", False, str(e), duration)
             return False
 
     async def test_end_to_end_execution(self) -> bool:
         """Test full workflow: prompt → code → result."""
-        test_start = asyncio.get_event_loop().time()
+        test_start = time.perf_counter()
 
         max_retries = 3
         retry_delay = 2  # seconds
@@ -178,22 +179,24 @@ class SmokeTest:
                 mesh = Mesh(mode="autonomous")
                 mesh.add(CalculatorAgent)
 
-                # Start mesh
-                await mesh.start()
+                try:
+                    await mesh.start()
 
-                if self.verbose and attempt > 0:
-                    print(f"  Retry attempt {attempt + 1}/{max_retries}...")
+                    if self.verbose and attempt > 0:
+                        print(f"  Retry attempt {attempt + 1}/{max_retries}...")
 
-                # Execute simple task
-                task_start = asyncio.get_event_loop().time()
-                results = await mesh.workflow("smoke-test", [
-                    {
-                        "agent": "calculator",
-                        "task": "Calculate 2 + 2"
-                    }
-                ])
+                    # Execute simple task
+                    task_start = time.perf_counter()
+                    results = await mesh.workflow("smoke-test", [
+                        {
+                            "agent": "calculator",
+                            "task": "Calculate 2 + 2"
+                        }
+                    ])
 
-                task_duration = asyncio.get_event_loop().time() - task_start
+                    task_duration = time.perf_counter() - task_start
+                finally:
+                    await mesh.stop()
 
                 # Validate result
                 result = results[0]
@@ -209,7 +212,6 @@ class SmokeTest:
                                 print(f"  LLM temporarily unavailable, retrying in {retry_delay}s...")
                             await asyncio.sleep(retry_delay)
                             retry_delay *= 2  # Exponential backoff
-                            await mesh.stop()
                             continue
 
                     raise Exception(f"Task failed: {error_msg}")
@@ -218,10 +220,7 @@ class SmokeTest:
                 if output != 4:
                     raise Exception(f"Expected 4, got {output}")
 
-                # Stop mesh
-                await mesh.stop()
-
-                duration = asyncio.get_event_loop().time() - test_start
+                duration = time.perf_counter() - test_start
 
                 detail = f"Task: '2 + 2' → Result: {output}\n"
                 detail += f"Execution time: {task_duration:.2f}s\n"
@@ -235,7 +234,7 @@ class SmokeTest:
             except Exception as e:
                 # Check if this is the last attempt
                 if attempt == max_retries - 1:
-                    duration = asyncio.get_event_loop().time() - test_start
+                    duration = time.perf_counter() - test_start
 
                     error_detail = str(e)
                     if self.verbose:
@@ -255,7 +254,7 @@ class SmokeTest:
                     continue
 
                 # Non-retryable error, fail immediately
-                duration = asyncio.get_event_loop().time() - test_start
+                duration = time.perf_counter() - test_start
                 error_detail = str(e)
                 if self.verbose:
                     import traceback
@@ -337,18 +336,18 @@ class SmokeTest:
     async def run(self) -> bool:
         """Run all smoke tests."""
         self.print_header()
-        self.start_time = asyncio.get_event_loop().time()
+        self.start_time = time.perf_counter()
 
         print("[Framework Tests]")
         imports_ok = await self.test_imports()
         if not imports_ok:
-            self.end_time = asyncio.get_event_loop().time()
+            self.end_time = time.perf_counter()
             self.print_summary()
             return False
 
         config_ok = await self.test_env_config()
         if not config_ok:
-            self.end_time = asyncio.get_event_loop().time()
+            self.end_time = time.perf_counter()
             self.print_summary()
             return False
 
@@ -358,7 +357,7 @@ class SmokeTest:
         print("\n[Integration Test]")
         e2e_ok = await self.test_end_to_end_execution()
 
-        self.end_time = asyncio.get_event_loop().time()
+        self.end_time = time.perf_counter()
 
         return self.print_summary()
 

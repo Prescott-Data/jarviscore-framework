@@ -52,7 +52,8 @@ def _live_session(path: Path) -> dict | None:
         os.kill(int(data["pid"]), 0)
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return data
+    # dev claims the file before Redis is up; no URL means it is still starting.
+    return data if data.get("redis_url") else None
 
 
 def agent_role(loaded: LoadedProject, name: str) -> str:
@@ -84,7 +85,7 @@ async def submit(redis_url: str, role: str, task: str, timeout: float) -> dict:
         async def on_peer_request(self, msg):
             return None
 
-    mesh = Mesh(config={"redis_url": redis_url, "p2p_enabled": False})
+    mesh = Mesh(config={"redis_url": _with_timeouts(redis_url), "p2p_enabled": False})
     mesh.add(CliClient, agent_id=f"jarviscore-cli-{uuid.uuid4().hex[:8]}")
     await mesh.start()
     try:
@@ -104,6 +105,17 @@ async def submit(redis_url: str, role: str, task: str, timeout: float) -> dict:
         return result
     finally:
         await mesh.stop()
+
+
+def _with_timeouts(url: str, seconds: float = 3) -> str:
+    """Add redis-py socket timeouts to the URL unless it already sets them."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query.setdefault("socket_connect_timeout", str(seconds))
+    query.setdefault("socket_timeout", str(seconds))
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def _redact(url: str) -> str:

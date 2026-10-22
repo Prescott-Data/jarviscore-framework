@@ -11,7 +11,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
 
-from jarviscore.project.schema import NAME_PATTERN
+from jarviscore.project._names import NAME_PATTERN
 
 from .scaffold import get_data_path
 

@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 import importlib.util
 
+LLM_TEST_TIMEOUT = 15.0
+
 
 class HealthChecker:
     """Health check orchestrator for JarvisCore setup."""
@@ -60,6 +62,14 @@ class HealthChecker:
         """Check if jarviscore package is installed."""
         try:
             import jarviscore
+            # `import jarviscore` is lazy; load the runtime graph and installed SDKs it used to.
+            import jarviscore.core.mesh  # noqa: F401
+            for sdk in ("google.genai", "openai", "anthropic"):
+                try:
+                    if importlib.util.find_spec(sdk) is not None:
+                        importlib.import_module(sdk)
+                except ImportError:
+                    pass
             version = getattr(jarviscore, '__version__', '0.1.0')
             self.successes.append(f"JarvisCore {version} installed")
             self._print_status("JarvisCore Package", True, f"v{version}")
@@ -214,35 +224,28 @@ class HealthChecker:
         from dotenv import load_dotenv
         load_dotenv()
 
-        # Try each configured provider
-        for provider, is_configured in configured.items():
-            if not is_configured:
-                continue
-
-            try:
-                if provider == "JarvisCore Promotion":
-                    success = await self._test_promo()
-                elif provider == "Claude":
-                    success = await self._test_claude()
-                elif provider == "Azure OpenAI":
-                    success = await self._test_azure()
-                elif provider == "Gemini":
-                    success = await self._test_gemini()
-                elif provider == "vLLM":
-                    success = await self._test_vllm()
-                else:
-                    continue
-
-                if success:
-                    self.successes.append(f"{provider} connectivity OK")
-                    self._print_status(f"  {provider} API", True, "Connected")
-                else:
-                    self.issues.append(f"{provider} connection failed")
-                    self._print_status(f"  {provider} API", False, "Connection failed")
-
-            except Exception as e:
-                self.issues.append(f"{provider} test failed: {str(e)}")
-                self._print_status(f"  {provider} API", False, str(e))
+        # Test configured providers concurrently; report in the fixed provider order.
+        tests = {
+            "JarvisCore Promotion": self._test_promo,
+            "Claude": self._test_claude,
+            "Azure OpenAI": self._test_azure,
+            "Gemini": self._test_gemini,
+            "vLLM": self._test_vllm,
+        }
+        selected = [p for p, is_configured in configured.items() if is_configured and p in tests]
+        outcomes = await asyncio.gather(
+            *(tests[p]() for p in selected), return_exceptions=True
+        )
+        for provider, outcome in zip(selected, outcomes):
+            if isinstance(outcome, BaseException):
+                self.issues.append(f"{provider} test failed: {str(outcome)}")
+                self._print_status(f"  {provider} API", False, str(outcome))
+            elif outcome:
+                self.successes.append(f"{provider} connectivity OK")
+                self._print_status(f"  {provider} API", True, "Connected")
+            else:
+                self.issues.append(f"{provider} connection failed")
+                self._print_status(f"  {provider} API", False, "Connection failed")
 
     async def _test_promo(self) -> bool:
         """Test promotional inference with the public client contract."""
@@ -251,7 +254,7 @@ class HealthChecker:
         token = os.getenv("JARVISCORE_PROMO_TOKEN")
         if not token:
             return False
-        client = PromoLLMClient(token=token)
+        client = PromoLLMClient(token=token, timeout=LLM_TEST_TIMEOUT)
         response = await client.generate(
             [{"role": "user", "content": "Reply with just 'OK'"}],
             temperature=0.0,
@@ -262,13 +265,18 @@ class HealthChecker:
     async def _test_claude(self) -> bool:
         """Test Claude API connectivity."""
         try:
+            import httpx
             from anthropic import AsyncAnthropic
 
             api_key = os.getenv('CLAUDE_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
             if not api_key:
                 return False
 
-            client = AsyncAnthropic(api_key=api_key)
+            client = AsyncAnthropic(
+                api_key=api_key,
+                timeout=httpx.Timeout(LLM_TEST_TIMEOUT, connect=5),
+                max_retries=0,
+            )
 
             # Simple test message
             response = await client.messages.create(
@@ -285,12 +293,15 @@ class HealthChecker:
     async def _test_azure(self) -> bool:
         """Test Azure OpenAI connectivity."""
         try:
-            from openai import AsyncAzureOpenAI
+            import httpx
+            from openai import AsyncAzureOpenAI, BadRequestError
 
             client = AsyncAzureOpenAI(
                 api_key=os.getenv('AZURE_API_KEY') or os.getenv('AZURE_OPENAI_KEY'),
                 api_version=os.getenv('AZURE_API_VERSION', '2024-10-21'),
-                azure_endpoint=os.getenv('AZURE_ENDPOINT')
+                azure_endpoint=os.getenv('AZURE_ENDPOINT'),
+                timeout=httpx.Timeout(LLM_TEST_TIMEOUT, connect=5),
+                max_retries=0,
             )
 
             deployment = os.getenv('AZURE_DEPLOYMENT', 'gpt-4o')
@@ -301,7 +312,9 @@ class HealthChecker:
                     messages=[{"role": "user", "content": "Reply with just 'OK'"}],
                     max_completion_tokens=10,
                 )
-            except Exception:
+            except BadRequestError as exc:
+                if "max_completion_tokens" not in str(exc) and "max_tokens" not in str(exc):
+                    raise
                 # Fall back to max_tokens for older deployments (gpt-4o, gpt-4)
                 response = await client.chat.completions.create(
                     model=deployment,
@@ -322,9 +335,12 @@ class HealthChecker:
             client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
             model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
 
-            response = await client.aio.models.generate_content(
-                model=model_name,
-                contents="Reply with just 'OK'"
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model=model_name,
+                    contents="Reply with just 'OK'"
+                ),
+                LLM_TEST_TIMEOUT,
             )
             return 'OK' in response.text.upper()
 

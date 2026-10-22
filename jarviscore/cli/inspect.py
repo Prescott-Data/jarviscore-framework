@@ -21,7 +21,7 @@ import os
 import sys
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 CLIP = 160
 
@@ -40,8 +40,7 @@ def _parse_ts(raw: str) -> Optional[datetime]:
         return None
 
 
-def _load_events(path: str) -> List[Dict[str, Any]]:
-    events: List[Dict[str, Any]] = []
+def _iter_events(path: str) -> Iterator[Dict[str, Any]]:
     try:
         with open(path, "r", encoding="utf-8") as fh:
             for line in fh:
@@ -49,12 +48,15 @@ def _load_events(path: str) -> List[Dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    events.append(json.loads(line))
+                    yield json.loads(line)
                 except json.JSONDecodeError:
-                    events.append({"type": "unparseable_line", "data": {"raw": _clip(line)}})
+                    yield {"type": "unparseable_line", "data": {"raw": _clip(line)}}
     except OSError as exc:
         print(f"cannot read {path}: {exc}", file=sys.stderr)
-    return events
+
+
+def _load_events(path: str) -> List[Dict[str, Any]]:
+    return list(_iter_events(path))
 
 
 def _discover(trace_dir: str) -> Dict[str, List[str]]:
@@ -73,35 +75,38 @@ def _discover(trace_dir: str) -> Dict[str, List[str]]:
 
 
 def _run_summary(paths: List[str]) -> Dict[str, Any]:
+    return _summarize(event for path in paths for event in _iter_events(path))
+
+
+def _summarize(events: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     first_ts = last_ts = None
     steps = set()
     tokens = 0
     failures = 0
     status = "unknown"
     events_total = 0
-    for path in paths:
-        for event in _load_events(path):
-            events_total += 1
-            ts = _parse_ts(event.get("timestamp", ""))
-            if ts is not None:
-                if first_ts is None or ts < first_ts:
-                    first_ts = ts
-                if last_ts is None or ts > last_ts:
-                    last_ts = ts
-            step = event.get("step_id")
-            if step:
-                steps.add(step)
-            etype = event.get("type", "")
-            data = event.get("data", {}) or {}
-            if etype == "llm_response":
-                try:
-                    tokens += int(data.get("tokens", 0) or 0)
-                except (ValueError, TypeError):
-                    pass  # legacy traces may carry scrubbed placeholders
-            elif etype in ("step_failed", "error_recovery"):
-                failures += 1
-            elif etype == "workflow_complete":
-                status = str(data.get("status", "complete"))
+    for event in events:
+        events_total += 1
+        ts = _parse_ts(event.get("timestamp", ""))
+        if ts is not None:
+            if first_ts is None or ts < first_ts:
+                first_ts = ts
+            if last_ts is None or ts > last_ts:
+                last_ts = ts
+        step = event.get("step_id")
+        if step:
+            steps.add(step)
+        etype = event.get("type", "")
+        data = event.get("data", {}) or {}
+        if etype == "llm_response":
+            try:
+                tokens += int(data.get("tokens", 0) or 0)
+            except (ValueError, TypeError):
+                pass  # legacy traces may carry scrubbed placeholders
+        elif etype in ("step_failed", "error_recovery"):
+            failures += 1
+        elif etype == "workflow_complete":
+            status = str(data.get("status", "complete"))
     duration = ""
     if first_ts is not None and last_ts is not None:
         duration = f"{(last_ts - first_ts).total_seconds():.1f}s"
@@ -124,9 +129,9 @@ def _list_runs(trace_dir: str) -> int:
     header = f"{'workflow':<32} {'started':<20} {'steps':>5} {'tokens':>8} {'fail':>4} {'dur':>8}  status"
     print(header)
     print("-" * len(header))
-    ordered = sorted(runs.items(), key=lambda kv: _run_summary(kv[1])["started"])
-    for workflow_id, paths in ordered:
-        s = _run_summary(paths)
+    summaries = {wid: _run_summary(paths) for wid, paths in runs.items()}
+    ordered = sorted(summaries.items(), key=lambda kv: kv[1]["started"])
+    for workflow_id, s in ordered:
         print(
             f"{_clip(workflow_id, 32):<32} {s['started']:<20} {s['steps']:>5} "
             f"{s['tokens']:>8} {s['failures']:>4} {s['duration']:>8}  {s['status']}"
@@ -189,9 +194,10 @@ def _show_run(trace_dir: str, workflow_id: str, *, step: Optional[str], errors_o
     events: List[Dict[str, Any]] = []
     for path in runs[wid]:
         events.extend(_load_events(path))
+    # Summarize in file order: status takes the last workflow_complete seen.
+    s = _summarize(events)
     events.sort(key=lambda e: e.get("timestamp", ""))
 
-    s = _run_summary(runs[wid])
     print(f"run {wid} | started {s['started']} | {s['steps']} step(s) | "
           f"{s['tokens']} tokens | {s['failures']} failure(s) | {s['duration']} | {s['status']}")
     current_step = object()

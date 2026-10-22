@@ -20,6 +20,15 @@ Usage:
 
 
 def main():
+    import sys
+
+    from ._commands import LEGACY_BY_NAME, run_legacy
+
+    # Legacy commands get raw argv and never need Typer.
+    argv = sys.argv[1:]
+    if argv and argv[0] in LEGACY_BY_NAME:
+        run_legacy(argv[0], argv[1:])
+        return
     from .app import main as app_main
     app_main()
 

@@ -69,6 +69,11 @@ def test_redis_order(project):
     assert resolve_run_redis(
         loaded, {"REDIS_URL": "redis://env"}, None) == ("redis://env", "REDIS_URL")
 
+    # dev has claimed the project but Redis is not up yet.
+    session.write_text(json.dumps({"pid": os.getpid(), "redis_url": None}))
+    assert resolve_run_redis(
+        loaded, {"REDIS_URL": "redis://env"}, None) == ("redis://env", "REDIS_URL")
+
     with pytest.raises(RunError, match="jarviscore dev"):
         resolve_run_redis(loaded, {}, None)
 

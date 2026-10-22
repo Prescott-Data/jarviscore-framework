@@ -256,18 +256,22 @@ def _constant(node: ast.expr) -> bool:
     )
 
 
-def read_contract(source: str, *, system: str = "", expected_name: str = "") -> ContractResult:
+def read_contract(
+    source: str, *, system: str = "", expected_name: str = "", tree: Optional[ast.Module] = None
+) -> ContractResult:
     """Read atom source against the convention, saying what fails and why.
 
     Registration is the last point at which the catalogue can stay coherent.
     Something stored here is offered to every future agent as a capability, so
     "it ran once" is not enough — it has to be the shape everything else is.
+    Pass ``tree`` (``ast.parse(source)``) to skip re-parsing.
     """
     problems: List[str] = []
-    try:
-        tree = ast.parse(source)
-    except SyntaxError as exc:
-        return ContractResult(None, (f"source does not parse: {exc}",))
+    if tree is None:
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            return ContractResult(None, (f"source does not parse: {exc}",))
 
     for statement in tree.body:
         if not _declarative(statement):

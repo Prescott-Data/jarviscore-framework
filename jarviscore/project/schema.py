@@ -7,7 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-NAME_PATTERN = r"^[a-z][a-z0-9-]{0,62}$"
+from ._names import NAME_PATTERN
+
 ENV_NAME_PATTERN = r"^[A-Z_][A-Z0-9_]*$"
 SECRET_REF_PREFIX = "secret:"
 

@@ -68,14 +68,43 @@ def check_redis(
             "Enable AUTH on the server and include it: rediss://:PASSWORD@host:6380/0",
         ))
 
-    server = _info(client, "server")
-    memory = _info(client, "memory")
-    persistence = _info(client, "persistence")
+    batched = _fetch_batched(client)
+    if batched is None:
+        server = _info(client, "server")
+        memory = _info(client, "memory")
+        persistence = _info(client, "persistence")
+        config: dict = {}
+    else:
+        server, memory, persistence, config = batched
 
     results.append(_check_version(server.get("redis_version")))
-    results.append(_check_eviction(client, memory, risky))
-    results.append(_check_persistence(client, persistence, strict))
+    results.append(_check_eviction(client, memory, risky, config))
+    results.append(_check_persistence(client, persistence, strict, config))
     return results
+
+
+_CONFIG_NAMES = ("maxmemory-policy", "save")
+
+
+def _fetch_batched(client):
+    """INFO sections and CONFIG values in one round trip; None if the client can't pipeline."""
+    pipeline = getattr(client, "pipeline", None)
+    if pipeline is None:
+        return None
+    try:
+        pipe = pipeline(transaction=False)
+        for section in ("server", "memory", "persistence"):
+            pipe.info(section)
+        for name in _CONFIG_NAMES:
+            pipe.config_get(name)
+        replies = pipe.execute(raise_on_error=False)
+    except Exception:  # noqa: BLE001 - fall back to one call at a time
+        return None
+    infos = [{} if isinstance(r, Exception) else (r or {}) for r in replies[:3]]
+    config = {}
+    for name, value in zip(_CONFIG_NAMES, replies[3:]):
+        config[name] = value.get(name) if isinstance(value, dict) else None
+    return (*infos, config)
 
 
 def _default_client(url: str, timeout: float):
@@ -133,10 +162,10 @@ def _check_version(raw: str | None) -> CheckResult:
     return CheckResult("redis.version", INFO, True, f"Redis {raw}")
 
 
-def _check_eviction(client, memory: dict, risky: str) -> CheckResult:
+def _check_eviction(client, memory: dict, risky: str, config: dict | None = None) -> CheckResult:
     policy = memory.get("maxmemory_policy")
     if policy is None:
-        policy = _config_get(client, "maxmemory-policy")
+        policy = _config_get(client, "maxmemory-policy", config)
     if policy is None:
         return CheckResult("redis.eviction", WARNING, False, "Could not read maxmemory-policy",
                            "Set maxmemory-policy=noeviction in your Redis provider's settings")
@@ -149,10 +178,10 @@ def _check_eviction(client, memory: dict, risky: str) -> CheckResult:
     return CheckResult("redis.eviction", INFO, True, "maxmemory-policy is noeviction")
 
 
-def _check_persistence(client, persistence: dict, strict: bool) -> CheckResult:
+def _check_persistence(client, persistence: dict, strict: bool, config: dict | None = None) -> CheckResult:
     if str(persistence.get("aof_enabled", "0")) == "1":
         return CheckResult("redis.persistence", INFO, True, "Append-only file persistence is on")
-    save = _config_get(client, "save")
+    save = _config_get(client, "save", config)
     if save:
         return CheckResult("redis.persistence", INFO, True, f"RDB snapshots configured ({save})")
     severity = WARNING if strict else INFO
@@ -163,7 +192,9 @@ def _check_persistence(client, persistence: dict, strict: bool) -> CheckResult:
                        "Run Redis with --appendonly yes")
 
 
-def _config_get(client, name: str) -> str | None:
+def _config_get(client, name: str, prefetched: dict | None = None) -> str | None:
+    if prefetched and name in prefetched:
+        return prefetched[name]
     try:
         value = client.config_get(name)
     except Exception:  # noqa: BLE001 - CONFIG is commonly disabled on managed Redis

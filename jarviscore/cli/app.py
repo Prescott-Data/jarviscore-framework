@@ -6,31 +6,47 @@ import sys
 from importlib import import_module
 
 import typer
+from typer.core import TyperGroup
+
+from ._commands import LEGACY_BY_NAME as _LEGACY_BY_NAME
+from ._commands import LEGACY_COMMANDS as _LEGACY_COMMANDS
+from ._commands import run_legacy as _run_legacy
+
+# (command, module, entry function, help); the module loads only when the command runs.
+_LAZY_COMMANDS = [
+    ("dev", "dev", "dev_command", "Run all agents locally with Redis and live reload."),
+    ("run", "run", "run_command", "Send one task to a running agent and print the result."),
+    ("serve", "serve", "serve_command", "Run one agent from jarviscore.yaml."),
+]
+_LAZY_BY_NAME = {spec[0]: spec for spec in _LAZY_COMMANDS}
+
+
+class _LazyGroup(TyperGroup):
+    """Lists placeholder commands for help; swaps in the real one when it is invoked."""
+
+    def resolve_command(self, ctx, args):
+        if args and args[0] in _LAZY_BY_NAME:
+            self.commands[args[0]] = _load_command(args[0])
+        return super().resolve_command(ctx, args)
+
+
+def _load_command(name: str):
+    _, module, func, help_text = _LAZY_BY_NAME[name]
+    sub = typer.Typer(add_completion=False)
+    sub.command(name, help=help_text)(getattr(import_module(f"jarviscore.cli.{module}"), func))
+    return typer.main.get_command(sub)
+
 
 app = typer.Typer(
     name="jarviscore",
-    help="JarvisCore: build, run and deploy agent meshes.",
+    help='''
+        JarvisCore cli is a tool for managing and interacting with the JarvisCore runtime, where AI agents operate as a fleet of equal peers.
+        Operations include project setup, agent infrastructure management, and operational inspection of running agents.
+    ''',
     no_args_is_help=True,
     add_completion=False,
+    cls=_LazyGroup,
 )
-
-# (command, module, entry function, help)
-_LEGACY_COMMANDS = [
-    ("init", "scaffold", "main",
-     "Create a project: init NAME [--template minimal|support|research|pipeline]"),
-    ("check", "check", "main", "Health check and validation"),
-    ("smoketest", "smoketest", "main", "Quick smoke test"),
-    ("nexus", "nexus", "main", "Manage Nexus auth (init, register, status, list, test)"),
-    ("memory", "memory", "run", "Manage Athena MemOS (init, status, context, search)"),
-    ("atom", "atom", "main", "Validate, test, and list integration atoms"),
-    ("inspect", "inspect", "main", "Read recorded traces: what did my agents do?"),
-]
-
-
-def _run_legacy(name: str, args: list) -> None:
-    _, module, func, _ = _LEGACY_BY_NAME[name]
-    sys.argv = [sys.argv[0], *args]
-    getattr(import_module(f"jarviscore.cli.{module}"), func)()
 
 
 def _register_legacy(name: str, help_text: str) -> None:
@@ -46,22 +62,14 @@ def _register_legacy(name: str, help_text: str) -> None:
         _run_legacy(name, ctx.args)
 
 
-_LEGACY_BY_NAME = {spec[0]: spec for spec in _LEGACY_COMMANDS}
 for _name, _, _, _help in _LEGACY_COMMANDS:
     _register_legacy(_name, _help)
 
 
 def _register_commands() -> None:
-    from .dev import dev_command
-    from .run import run_command
-    from .serve import serve_command
-
-    app.command("dev", help="Run all agents locally with Redis and live reload.")(
-        dev_command)
-    app.command("run", help="Send one task to a running agent and print the result.")(
-        run_command)
-    app.command("serve", help="Run one agent from jarviscore.yaml.")(
-        serve_command)
+    for name, _, _, help_text in _LAZY_COMMANDS:
+        # Placeholder: _LazyGroup.resolve_command replaces it before it can run.
+        app.command(name, help=help_text)(lambda: None)
 
 
 _register_commands()

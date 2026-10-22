@@ -7,7 +7,6 @@ Modes:
 - remote: HTTP POST to sandbox service (production)
 """
 import asyncio
-import aiohttp
 import base64
 import importlib
 import json
@@ -240,6 +239,8 @@ class SandboxExecutor:
         }
 
         try:
+            import aiohttp
+
             # Make HTTP request to sandbox service
             # Use /normal endpoint for API tasks
             endpoint_url = f"{self.sandbox_url}/normal"

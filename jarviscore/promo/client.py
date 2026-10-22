@@ -19,10 +19,16 @@ from typing import Any, Dict, List, Optional
 
 from urllib.parse import urlparse
 
-import aiohttp
-
 PROMO_ENDPOINT = "https://jarviscore-promo.developers.prescottdata.io/api/promo/v1/generate"
 PROMO_MODEL = "jarviscore-promo"
+
+
+def __getattr__(name: str):
+    # aiohttp loads at the call site; keep `promo.client.aiohttp` resolvable for patching.
+    if name == "aiohttp":
+        import aiohttp
+        return aiohttp
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # The endpoint may be overridden, but only to somewhere Prescott controls.
 #
@@ -255,6 +261,8 @@ class PromoLLMClient:
         }
 
     async def _send(self, payload: Dict[str, Any], call_id: str) -> _HTTPResult:
+        import aiohttp
+
         timeout = aiohttp.ClientTimeout(total=self.timeout)
         headers = {
             "Authorization": f"Bearer {self._token}",

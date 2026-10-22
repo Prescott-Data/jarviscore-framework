@@ -1,3 +1,4 @@
+import json
 import os
 import signal
 import socket
@@ -114,10 +115,20 @@ def test_starts_redis_in_docker_and_stops_it(project, monkeypatch):
     handle = resolve_redis(load_project(project), {}, reachable=lambda u: u != dev.DEFAULT_REDIS,
                            which=lambda tool: "/usr/bin/docker" if tool == "docker" else None)
     assert handle.url == "redis://127.0.0.1:55123/0"
+    name = dev.docker_redis_name(load_project(project))
     run = next(c for c in calls if c[0] == "run")
-    assert "jarviscore-dev-demo-redis" in run and "--appendonly" in run
+    assert name in run and "--appendonly" in run and f"{name}-data:/data" in run
     handle.cleanup()
-    assert calls[-1] == ["stop", "jarviscore-dev-demo-redis"]
+    assert calls[-1] == ["stop", name]
+
+
+def test_docker_redis_name_is_scoped_to_the_project_path(tmp_path):
+    for d in ("a", "b"):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "jarviscore.yaml").write_text(textwrap.dedent(YAML))
+    a, b = (dev.docker_redis_name(load_project(tmp_path / d)) for d in ("a", "b"))
+    assert a != b and a.startswith("jarviscore-dev-demo-") and a.endswith("-redis")
+    assert a == dev.docker_redis_name(load_project(tmp_path / "a"))
 
 
 def test_no_redis_anywhere_explains_options(project):
@@ -141,6 +152,85 @@ def test_allocated_ports_are_free_and_distinct():
     taken: set[int] = set()
     a, b = allocate_peer_port(taken), allocate_peer_port(taken)
     assert a != b and {a, a + 1000, b, b + 1000} <= taken
+
+
+class _FakeProc:
+    def poll(self):
+        return None
+
+    def send_signal(self, sig):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _session(project, roles=("triage", "responder")):
+    session = dev.DevSession(load_project(project), list(roles), dev.RedisHandle("redis://r", "test"))
+    session.peers = plan_peers(session.loaded, session.roles, "redis://r", taken=session.used_ports)
+    session._start = lambda peer: setattr(peer, "proc", _FakeProc())
+    session.say = lambda text: None
+    for peer in session.peers:
+        session._start(peer)
+    return session
+
+
+def test_restart_moves_agent_to_fresh_ports_and_rejoins_a_survivor(project):
+    session = _session(project)
+    triage = session.peers[0]
+    old_ports = {p.port for p in session.peers}
+    session.restart({"triage"})
+    assert triage.port not in old_ports
+    assert triage.env["JARVISCORE_BIND_PORT"] == str(triage.port)
+    survivors = {f"127.0.0.1:{p.port}" for p in session.peers if p.role == "responder"}
+    assert triage.env["JARVISCORE_SEED_NODES"] in survivors
+    assert session._seed_peer() is not triage
+
+
+def test_restarting_every_agent_elects_a_new_seed(project):
+    session = _session(project)
+    old_ports = {p.port for p in session.peers}
+    session.restart({"triage", "responder"})
+    new_seed, *others = session.peers
+    assert not ({p.port for p in session.peers} & old_ports)
+    assert "JARVISCORE_SEED_NODES" not in new_seed.env
+    assert {p.env["JARVISCORE_SEED_NODES"] for p in others} == {f"127.0.0.1:{new_seed.port}"}
+    assert session._seed_peer() is new_seed
+
+
+def test_peers_know_the_dev_pid(project):
+    peers = plan_peers(load_project(project), ["triage"], "redis://r", allocate=lambda t: 30001)
+    assert peers[0].env[dev.PARENT_PID_ENV] == str(os.getpid())
+
+
+# -- One dev session per project ------------------------------------------
+
+def test_session_lock_refuses_a_live_owner(project):
+    loaded = load_project(project)
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        path = dev.session_file(loaded)
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"pid": other.pid, "redis_url": "redis://x"}))
+        with pytest.raises(DevError, match=rf"already running for this project \(pid {other.pid}\)"):
+            dev.acquire_session(loaded)
+        dev.release_session(loaded)
+        assert path.exists(), "must not remove another session's file"
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_session_lock_takes_over_a_stale_file(project):
+    loaded = load_project(project)
+    path = dev.session_file(loaded)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"pid": 9_999_999, "redis_url": "redis://old"}))
+    dev.acquire_session(loaded)
+    data = json.loads(path.read_text())
+    assert data["pid"] == os.getpid() and data["redis_url"] is None
+    dev.release_session(loaded)
+    assert not path.exists()
 
 
 def test_roles_to_restart(project):
@@ -238,12 +328,61 @@ def test_dev_reload_restarts_only_the_edited_agent(project, redis_server):
         _wait(lambda: len(_ups(project, "triage")) == 2, proc)
         assert len(_ups(project, "responder")) == 2
         assert any(line.startswith("down demo-triage-1") for line in _lines(project, "triage"))
+        restarted_seed = _ups(project, "triage")[1].split("seed=")[1]
+        responder_seed = _ups(project, "responder")[0].split("seed=")[1]
+        # Restarted on new ports, rejoining through a responder that kept running.
+        assert restarted_seed not in ("", responder_seed)
+        time.sleep(3)
     finally:
         proc.send_signal(signal.SIGINT)
         try:
-            proc.communicate(timeout=60)
+            out, _ = proc.communicate(timeout=60)
         except subprocess.TimeoutExpired:
             proc.kill()
+            out = ""
+    assert "PortValidationError" not in out and "is not available" not in out, out
+
+
+def _agent_pids(project):
+    out = subprocess.run(["pgrep", "-f", f"jarviscore.cli.serve {project}"], capture_output=True, text=True)
+    return [int(p) for p in out.stdout.split()]
+
+
+def test_second_dev_in_same_project_is_refused(project, redis_server):
+    first = _start_dev(project, redis_server, "--no-reload")
+    try:
+        _wait(lambda: len(_ups(project, "triage")) == 1 and len(_ups(project, "responder")) == 2, first)
+        second = subprocess.run(
+            [sys.executable, "-m", "jarviscore.cli", "dev", "--no-reload", "--redis", redis_server],
+            cwd=project, capture_output=True, text=True, timeout=60, check=False,
+        )
+        assert second.returncode == 2
+        assert f"already running for this project (pid {first.pid})" in second.stderr
+        session = json.loads((project / ".jarviscore" / "dev" / "session.json").read_text())
+        assert session["pid"] == first.pid and session["redis_url"] == redis_server
+        assert first.poll() is None
+    finally:
+        first.send_signal(signal.SIGINT)
+        try:
+            first.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            first.kill()
+
+
+def test_agents_stop_when_dev_is_killed_hard(project, redis_server):
+    proc = _start_dev(project, redis_server, "--no-reload")
+    _wait(lambda: len(_ups(project, "triage")) == 1 and len(_ups(project, "responder")) == 2, proc)
+    pids = _agent_pids(project.resolve())
+    assert len(pids) == 3, pids
+    proc.kill()
+    proc.wait()
+    deadline = time.time() + 45
+    while _agent_pids(project.resolve()) and time.time() < deadline:
+        time.sleep(0.5)
+    leftover = _agent_pids(project.resolve())
+    for pid in leftover:
+        os.kill(pid, signal.SIGKILL)
+    assert leftover == [], "agents outlived a killed jarviscore dev"
 
 
 def test_dev_without_project_exits_2(tmp_path):

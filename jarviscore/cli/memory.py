@@ -48,34 +48,28 @@ def _err(msg: str) -> None:
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
-async def cmd_status(_args: argparse.Namespace) -> None:
-    """Show health status of all memory tiers."""
-    _banner("JarvisCore Memory — Status", "═")
-
-    # 1. Athena
-    athena_url = os.getenv("ATHENA_URL", "").strip()
-    if athena_url:
-        from jarviscore.memory import get_athena_client
-        client = get_athena_client()
-        if client:
-            health = await client.health_check()
-            status = health.get("status", "unknown")
-            if status in ("ok", "healthy", "pass", "UP"):
-                _ok(f"Athena MemOS  {athena_url}  [{status}]")
-                deps = health.get("dependencies", {})
-                for dep, dep_status in deps.items():
-                    if dep_status in ("ok", "healthy", "pass", "UP", "true"):
-                        _ok(f"  └─ {dep}: {dep_status}")
-                    else:
-                        _warn(f"  └─ {dep}: {dep_status}")
-            else:
-                _err(f"Athena MemOS  {athena_url}  [{status}]")
+async def _athena_status(athena_url: str) -> list:
+    from jarviscore.memory import get_athena_client
+    lines: list = []
+    client = get_athena_client()
+    if client:
+        health = await client.health_check(timeout=2.5)
+        status = health.get("status", "unknown")
+        if status in ("ok", "healthy", "pass", "UP"):
+            lines.append((_ok, f"Athena MemOS  {athena_url}  [{status}]"))
+            deps = health.get("dependencies", {})
+            for dep, dep_status in deps.items():
+                if dep_status in ("ok", "healthy", "pass", "UP", "true"):
+                    lines.append((_ok, f"  └─ {dep}: {dep_status}"))
+                else:
+                    lines.append((_warn, f"  └─ {dep}: {dep_status}"))
+        else:
+            lines.append((_err, f"Athena MemOS  {athena_url}  [{status}]"))
         await client.close()
-    else:
-        _warn("Athena MemOS  NOT CONFIGURED — set ATHENA_URL to enable")
-        print("         e.g. export ATHENA_URL=http://localhost:8080")
+    return lines
 
-    # 2. Redis
+
+def _redis_status() -> list:
     try:
         import redis as _redis
         r = _redis.Redis(
@@ -83,13 +77,36 @@ async def cmd_status(_args: argparse.Namespace) -> None:
             port=int(os.getenv("REDIS_PORT", "6379")),
             db=int(os.getenv("REDIS_DB", "0")),
             decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
         )
         r.ping()
-        _ok(f"Redis  {os.getenv('REDIS_HOST','localhost')}:{os.getenv('REDIS_PORT','6379')}  [connected]")
+        return [(_ok, f"Redis  {os.getenv('REDIS_HOST','localhost')}:{os.getenv('REDIS_PORT','6379')}  [connected]")]
     except ImportError:
-        _warn("Redis  not installed — pip install 'jarviscore-framework[redis]'")
+        return [(_warn, "Redis  not installed — pip install 'jarviscore-framework[redis]'")]
     except Exception as exc:
-        _err(f"Redis  {exc}")
+        return [(_err, f"Redis  {exc}")]
+
+
+async def cmd_status(_args: argparse.Namespace) -> None:
+    """Show health status of all memory tiers."""
+    _banner("JarvisCore Memory — Status", "═")
+
+    athena_url = os.getenv("ATHENA_URL", "").strip()
+
+    async def _no_athena() -> list:
+        return [
+            (_warn, "Athena MemOS  NOT CONFIGURED — set ATHENA_URL to enable"),
+            (print, "         e.g. export ATHENA_URL=http://localhost:8080"),
+        ]
+
+    # 1. Athena and 2. Redis are checked concurrently, printed in order.
+    athena_lines, redis_lines = await asyncio.gather(
+        _athena_status(athena_url) if athena_url else _no_athena(),
+        asyncio.to_thread(_redis_status),
+    )
+    for emit, msg in (*athena_lines, *redis_lines):
+        emit(msg)
 
     # 3. Blob storage
     storage_backend = os.getenv("STORAGE_BACKEND", "local")
@@ -376,20 +393,26 @@ def cmd_init(args: argparse.Namespace) -> None:
     print("  Waiting for Athena to be ready (Milvus takes ~60s on first boot)...")
     athena_port = os.environ.get("ATHENA_PORT", "8080").strip() or "8080"
     athena_url = f"http://localhost:{athena_port}"
-    for attempt in range(90):
+    start = time.monotonic()
+    deadline = start + 90
+    next_report = 10
+    while True:
         try:
-            resp = urllib.request.urlopen(f"{athena_url}/api/v1/health", timeout=2)
+            remaining = deadline - time.monotonic()
+            resp = urllib.request.urlopen(f"{athena_url}/api/v1/health",
+                                          timeout=max(0.1, min(2, remaining)))
             data = json.loads(resp.read())
             if data.get("status") in ("ok", "healthy", "pass", "UP"):
                 break
         except Exception:
             pass
-        time.sleep(1)
-        if attempt % 10 == 9:
-            print(f"    ...still waiting ({attempt + 1}s)")
-    else:
-        _warn("Athena didn't become healthy in 90s — check: docker logs athena")
-        sys.exit(1)
+        if time.monotonic() >= deadline:
+            _warn("Athena didn't become healthy in 90s — check: docker logs athena")
+            sys.exit(1)
+        time.sleep(max(0, min(1, deadline - time.monotonic())))
+        if time.monotonic() - start >= next_report:
+            print(f"    ...still waiting ({next_report}s)")
+            next_report += 10
 
     # 5. Write ATHENA_URL to .env
     env_file = Path.cwd() / ".env"

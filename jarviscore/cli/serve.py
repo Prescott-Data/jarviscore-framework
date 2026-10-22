@@ -19,6 +19,7 @@ import typer
 from jarviscore.project import ProjectError, build_env, load_project
 
 RUNNER_MODULE = "jarviscore.cli.serve"
+ORPHAN_STOP_TIMEOUT = 20.0
 
 
 def serve_command(
@@ -115,18 +116,41 @@ async def run_agent(agent) -> None:
     await mesh.start()
     loops = asyncio.create_task(mesh.run_forever())
     stopper = asyncio.create_task(stop.wait())
+    orphan_watch = asyncio.create_task(_stop_when_orphaned(stop))
     try:
         done, _ = await asyncio.wait({loops, stopper}, return_when=asyncio.FIRST_COMPLETED)
         if loops in done and loops.exception() is None and not stop.is_set():
             # No run() loop (workflow-driven agent): stay up until signalled.
             await stopper
     finally:
-        for task in (loops, stopper):
+        orphaned = orphan_watch.done() and not orphan_watch.cancelled() and orphan_watch.result()
+        for task in (loops, stopper, orphan_watch):
             task.cancel()
-        await asyncio.gather(loops, stopper, return_exceptions=True)
-        await mesh.stop()
+        await asyncio.gather(loops, stopper, orphan_watch, return_exceptions=True)
+        if orphaned:
+            # Nobody is left to kill us if shutdown hangs on peers that are also going away.
+            try:
+                await asyncio.wait_for(mesh.stop(), ORPHAN_STOP_TIMEOUT)
+            except asyncio.TimeoutError:
+                os._exit(0)
+        else:
+            await mesh.stop()
     if loops.done() and not loops.cancelled() and loops.exception():
         raise loops.exception()
+
+
+async def _stop_when_orphaned(stop: asyncio.Event, interval: float = 1.0) -> bool:
+    """Under `jarviscore dev`, shut down if dev dies without stopping us (e.g. kill -9)."""
+    expected = os.environ.get("JARVISCORE_DEV_PARENT_PID")
+    if not expected or not expected.isdigit():
+        return False
+    while not stop.is_set():
+        if os.getppid() != int(expected):
+            print("jarviscore dev is gone; stopping agent", file=sys.stderr, flush=True)
+            stop.set()
+            return True
+        await asyncio.sleep(interval)
+    return False
 
 
 def _runner_main(argv: list) -> int:

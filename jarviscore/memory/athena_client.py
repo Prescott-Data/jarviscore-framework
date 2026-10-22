@@ -658,26 +658,28 @@ class AthenaClient:
             logger.debug(f"[Athena] get_heat_metrics failed: {exc}")
             return {}
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """
         Check Athena's health and dependency status.
 
         Returns dict with status + per-dependency health (Redis, MongoDB, Milvus, ArangoDB).
         Tries the REST health endpoint first (/health), then falls back to
-        the gRPC gateway endpoint (/api/v1/health).
+        the gRPC gateway endpoint (/api/v1/health) when /health returns 404.
+        ``timeout`` (seconds) overrides the client timeout for each request.
         """
+        kwargs: Dict[str, Any] = {} if timeout is None else {"timeout": timeout}
         try:
             http = await self._http()
             # REST health endpoint (primary — always implemented)
-            resp = await http.get("/health")
-            resp.raise_for_status()
-            return resp.json()
-        except Exception:
-            pass
+            resp = await http.get("/health", **kwargs)
+            if resp.status_code != 404:
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:
+            return {"status": "unreachable", "error": str(exc)}
         try:
-            http = await self._http()
             # gRPC gateway health endpoint (fallback)
-            resp = await http.get("/api/v1/health")
+            resp = await http.get("/api/v1/health", **kwargs)
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:

@@ -3,7 +3,8 @@ Unified LLM Client - All providers in one file with zero-config setup
 Supports: JarvisCore promotion, vLLM, Azure OpenAI, Gemini, Vertex AI, Claude
 """
 import asyncio
-import aiohttp
+import importlib
+import importlib.util
 import logging
 import random
 import re
@@ -93,27 +94,54 @@ def _get_llm_semaphore(max_concurrent: int) -> Optional[asyncio.Semaphore]:
     return _LLM_SEMAPHORE
 
 
-# Try importing optional LLM SDKs
-try:
-    from google import genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
+# Optional LLM SDKs: availability is probed without importing them; the SDK
+# itself loads on first provider setup. Tests may patch these names directly.
+def _sdk_installed(module: str) -> bool:
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+GEMINI_AVAILABLE = _sdk_installed("google.genai")
+if not GEMINI_AVAILABLE:
     logger.debug("Gemini SDK not available (pip install google-genai)")
 
-try:
-    from openai import AsyncAzureOpenAI
-    AZURE_AVAILABLE = True
-except ImportError:
-    AZURE_AVAILABLE = False
+AZURE_AVAILABLE = _sdk_installed("openai")
+if not AZURE_AVAILABLE:
     logger.debug("Azure OpenAI SDK not available (pip install openai)")
 
-try:
-    from anthropic import Anthropic
-    CLAUDE_AVAILABLE = True
-except ImportError:
-    CLAUDE_AVAILABLE = False
+CLAUDE_AVAILABLE = _sdk_installed("anthropic")
+if not CLAUDE_AVAILABLE:
     logger.debug("Claude SDK not available (pip install anthropic)")
+
+genai = None
+AsyncAzureOpenAI = None
+Anthropic = None
+
+_SDK_LOADERS = {
+    "genai": ("google.genai", None),
+    "AsyncAzureOpenAI": ("openai", "AsyncAzureOpenAI"),
+    "Anthropic": ("anthropic", "Anthropic"),
+}
+
+
+def _sdk(name: str) -> Any:
+    """Return the SDK object bound to ``name``, importing it on first use."""
+    value = globals()[name]
+    if value is None:
+        module_name, attr = _SDK_LOADERS[name]
+        module = importlib.import_module(module_name)
+        value = globals()[name] = getattr(module, attr) if attr else module
+    return value
+
+
+def __getattr__(name: str):
+    # Keeps `jarviscore.execution.llm.aiohttp` resolvable (tests patch through it).
+    if name == "aiohttp":
+        import aiohttp
+        return aiohttp
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class LLMProvider(Enum):
@@ -227,7 +255,7 @@ class UnifiedLLMClient:
 
             if azure_key and azure_endpoint:
                 try:
-                    self.azure_client = AsyncAzureOpenAI(
+                    self.azure_client = _sdk("AsyncAzureOpenAI")(
                         api_key=azure_key,
                         azure_endpoint=azure_endpoint,
                         api_version=self.config.get('azure_api_version', '2024-10-21'),
@@ -245,13 +273,13 @@ class UnifiedLLMClient:
             if claude_key:
                 try:
                     if claude_endpoint:
-                        self.claude_client = Anthropic(
+                        self.claude_client = _sdk("Anthropic")(
                             api_key=claude_key,
                             base_url=claude_endpoint
                         )
                         logger.info(f"✓ Claude provider available (fallback): {claude_endpoint}")
                     else:
-                        self.claude_client = Anthropic(api_key=claude_key)
+                        self.claude_client = _sdk("Anthropic")(api_key=claude_key)
                         logger.info("✓ Claude provider available (fallback)")
                     self.provider_order.append(LLMProvider.CLAUDE)
                 except Exception as e:
@@ -269,7 +297,7 @@ class UnifiedLLMClient:
             gemini_key = self.config.get('gemini_api_key')
             if gemini_key:
                 try:
-                    self.gemini_client = genai.Client(api_key=gemini_key)
+                    self.gemini_client = _sdk("genai").Client(api_key=gemini_key)
                     self.gemini_model = self.config.get('gemini_model', 'gemini-2.0-flash')
                     self.provider_order.append(LLMProvider.GEMINI)
                     logger.info(f"✓ Gemini provider available: {self.gemini_model}")
@@ -282,7 +310,7 @@ class UnifiedLLMClient:
             vertex_project = self.config.get('vertex_ai_project')
             if vertex_enabled and vertex_project:
                 try:
-                    self.vertex_ai_client = genai.Client(
+                    self.vertex_ai_client = _sdk("genai").Client(
                         vertexai=True,
                         project=vertex_project,
                         location=self.config.get('vertex_ai_location', 'us-central1'),
@@ -601,6 +629,8 @@ class UnifiedLLMClient:
             "max_tokens": max_tokens,
             "stream": False
         }
+
+        import aiohttp
 
         timeout = aiohttp.ClientTimeout(total=self.config.get('llm_timeout', 120))
         start_time = time.time()
