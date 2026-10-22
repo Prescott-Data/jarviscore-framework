@@ -4,7 +4,7 @@ contact_links:
     url: https://github.com/Prescott-Data/jarviscore-framework/security/advisories/new
     about: Submit security vulnerabilities privately. Do not open a public issue.
   - name: Developer Office Hours (Discord)
-    url: https://discord.gg/jbRBAsMgM
+    url: https://discord.gg/B2aJV5BJmb
     about: Live agent debugging every other week. Bring a broken agent.
   - name: Documentation
     url: https://jarviscore.developers.prescottdata.io/

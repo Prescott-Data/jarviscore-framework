@@ -187,7 +187,7 @@ nav:
   - Enterprise: infrastructure/enterprise.md
 
 extra:
-  version: "2.2.0"
+  version: "2.3.0"
   social:
     - icon: material/web
       link: https://developers.prescottdata.io
@@ -202,5 +202,5 @@ extra:
       link: https://github.com/Prescott-Data/jarviscore-framework
       name: JarvisCore on GitHub
     - icon: fontawesome/brands/discord
-      link: https://discord.gg/vNPYxp6V7
+      link: https://discord.gg/B2aJV5BJmb
       name: Join our Discord

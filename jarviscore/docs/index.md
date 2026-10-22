@@ -1,5 +1,8 @@
 ---
 icon: material/home
+hide:
+  - navigation
+  - toc
 title: Python Multi-Agent AI Framework for Production
 description: Open source Python framework for autonomous multi-agent systems with peer-to-peer orchestration, durable memory, zero-trust credentials, and observability.
 videos:
@@ -16,7 +19,7 @@ videos:
 
 # JarvisCore Documentation
 
-JarvisCore is an open source Python runtime for AI agents that do the work: they read the live web, run code in a sandbox, work a browser, remember across runs, and pick up where they left off after a crash. These docs take you from your first agent to a fleet in production.
+JarvisCore is a runtime where AI agents operate as a fleet of equal peers. Agents discover one another by capability, execute tasks from a shared ledger, and authenticate to every external service through a zero-trust broker, never with their own keys.
 
 <div class="jc-cta-text" markdown>
 [Get started](getting-started.md) [Concepts](concepts/index.md) [Reference](reference/configuration.md)
@@ -30,7 +33,7 @@ JarvisCore is an open source Python runtime for AI agents that do the work: they
 
 <div class="jc-video" data-yt="4IOpKZgjXIw" data-title="JarvisCore Demo"><a class="jc-video-poster" href="https://www.youtube.com/watch?v=4IOpKZgjXIw" target="_blank" rel="noopener" aria-label="Play the JarvisCore demo (2:07)"><img src="https://i.ytimg.com/vi/4IOpKZgjXIw/maxresdefault.jpg" alt="JarvisCore demo: an open-source runtime for AI agents that work as a mesh of equal peers" width="1280" height="720" loading="lazy"><span class="jc-video-play"></span></a></div>
 
-Agents find each other by capability, take work from a shared ledger, and reach every external service through Nexus, never with their own keys.
+A real mesh at work: agents finding each other, claiming steps from the ledger, and calling services through Nexus.
 
 ---
 
@@ -190,7 +193,7 @@ Help more developers discover JarvisCore. Every star makes us easier to find and
 Ask questions, share what you're building, and get early previews of new features. Come say hi.
 
 <div class="jc-cta" markdown>
-[Join Discord](https://discord.gg/jarviscore){ .jc-btn .jc-btn-discord target="_blank" rel="noopener" }
+[Join Discord](https://discord.gg/B2aJV5BJmb){ .jc-btn .jc-btn-discord target="_blank" rel="noopener" }
 </div>
 
 </div>

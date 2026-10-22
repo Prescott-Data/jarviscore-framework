@@ -2456,11 +2456,10 @@ body,
 
 .md-typeset .jc-video-play {
   position: absolute;
-  left: 50%;
-  top: 50%;
+  right: 1rem;
+  bottom: 1rem;
   width: 3.4rem;
   height: 2.4rem;
-  transform: translate(-50%, -50%);
   border-radius: 0.6rem;
   background: rgba(0, 0, 0, 0.72);
   transition: background var(--jc-transition);
@@ -2479,3 +2478,11 @@ body,
   border-color: transparent transparent transparent #fff;
 }
 
+
+/* Docs home: no sidebars, so the page uses the full width. */
+@media screen and (min-width: 60em) {
+  .md-content__inner:has(> .jc-hero) .jc-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .md-content__inner:has(> .jc-hero) .jc-hero p { max-width: 44rem; }
+}
+.md-content__inner:has(> .jc-hero) .jc-video { max-width: 52rem; margin-left: auto; margin-right: auto; }
+.md-content__inner:has(> .jc-hero) .jc-video + p { text-align: center; color: var(--jc-text-muted); }

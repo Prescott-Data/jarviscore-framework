@@ -11,7 +11,7 @@
   <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/v/jarviscore-framework?style=flat-square&color=1758F5&label=pypi" alt="PyPI" /></a>
   <a href="https://pypi.org/project/jarviscore-framework/"><img src="https://img.shields.io/pypi/pyversions/jarviscore-framework?style=flat-square&color=0533AC" alt="Python" /></a>
   <a href="https://jarviscore.developers.prescottdata.io/"><img src="https://img.shields.io/badge/docs-jarviscore-35B0FE?style=flat-square" alt="Docs" /></a>
-  <a href="https://discord.gg/jbRBAsMgM"><img src="https://img.shields.io/badge/office%20hours-discord-0CF0E3?style=flat-square&labelColor=0533AC" alt="Discord" /></a>
+  <a href="https://discord.gg/B2aJV5BJmb"><img src="https://img.shields.io/badge/office%20hours-discord-0CF0E3?style=flat-square&labelColor=0533AC" alt="Discord" /></a>
   <a href="https://github.com/Prescott-Data/jarviscore-framework/tree/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-1758F5?style=flat-square" alt="License" /></a>
 </p>
 
@@ -232,7 +232,7 @@ Prefer to write the logic yourself? A `CustomAgent` is plain Python in
 
 ## Community
 
-Every other week we debug real agents live in [office hours on Discord](https://discord.gg/jbRBAsMgM).
+Every other week we debug real agents live in [office hours on Discord](https://discord.gg/B2aJV5BJmb).
 If JarvisCore saves you time, a ⭐ helps other developers find it.
 
 ## License

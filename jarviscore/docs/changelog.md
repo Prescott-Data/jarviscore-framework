@@ -33,7 +33,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## Unreleased
+## 2.3.0 <span class="changelog-date">2026-10-22</span>
 
 ### Added
 
@@ -132,14 +132,14 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - **Documentation.** The Browser Automation guide is now a short path from
   install to a working agent, with recipes for your own browser, staying
   logged in, proxies and approvals; every detail it used to carry is in the new
-  [Browser Reference](reference/browser.md). New landing and Enterprise pages,
-  with the demo and Enterprise films.
+  [Browser Reference](reference/browser.md). The docs home is a front door to
+  the docs with the demo film; the Enterprise page carries the Enterprise film.
 - **The bundled Athena stack runs Athena v0.2.0, pinned.** Athena v0.2.0
   requires authentication and keeps each tenant's memory apart; `memory init`
   generates `ATHENA_API_KEY` and the stack gives it to Athena as a service key.
   The image is pinned rather than `latest`, so a future Athena release cannot
   break an installed JarvisCore; set `ATHENA_IMAGE` to run another version.
-  To upgrade a stack created by 2.1.x, run `jarviscore memory init` (it adds the
+  To upgrade a stack created by an earlier release, run `jarviscore memory init` (it adds the
   key and restarts the stack on v0.2.0), then `docker exec athena
   ./ltm-purge-unscoped` to remove knowledge-graph entries written before
   tenant scoping.
@@ -158,7 +158,16 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Security
 
-- **Nexus Gateway caller authentication.** `NexusClient` sent no `X-API-Key`, so a Gateway deployed with `GATEWAY_REQUIRE_API_KEY=true` (nexus-framework 0.6.0 and later) refused every call with 401 and no connected app could work. New setting `NEXUS_GATEWAY_API_KEY` (`Settings.nexus_gateway_api_key`); `NexusClient(gateway_url, api_key=...)` sends it as a default header, `AuthenticationManager` passes it through (config key `nexus_gateway_api_key`, settings as fallback), and the `nexus register`, `nexus status`, `nexus test` and `atom test` CLI paths carry it on their raw Gateway calls. Unset means no header, so Gateways without caller auth behave as before.
+- **Nexus Gateway caller authentication.** `NexusClient` sent no `X-API-Key`,
+  so a Gateway deployed with `GATEWAY_REQUIRE_API_KEY=true` (nexus-framework
+  0.6.0 and later) refused every call with 401 and no connected app could work.
+  New setting `NEXUS_GATEWAY_API_KEY` (`Settings.nexus_gateway_api_key`);
+  `NexusClient(gateway_url, api_key=...)` sends it as a default header,
+  `AuthenticationManager` passes it through (config key
+  `nexus_gateway_api_key`, settings as fallback), and the `nexus register`,
+  `nexus status`, `nexus test` and `atom test` CLI paths carry it on their raw
+  Gateway calls. Unset means no header, so Gateways without caller auth behave
+  as before.
 - **The local Nexus stack no longer serves credentials to anyone who asks.**
   The bundled stack passed the broker its key as `BROKER_API_KEY`, a name the
   broker does not read, and the pinned gateway (v0.3.0) had no way to require a
@@ -230,6 +239,22 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   `nexus/migrations/001_initial_schema.sql`. Both were stale copies: the root
   file followed `:latest`, which the current broker refuses to start under.
   `jarviscore nexus init` uses the compose file bundled with the package.
+
+### Upgrading from 2.2
+
+No public API is removed. If you run the bundled stacks, do this once per
+project:
+
+1. **Nexus.** Run `jarviscore nexus up`. It moves the stack's keys out of
+   `.env` into `~/.jarviscore/nexus/stack.env`, keeping the ones that decrypt
+   your stored credentials, writes `NEXUS_GATEWAY_API_KEY` to `.env`, and
+   restarts the stack on Nexus v0.6.7, listening on `127.0.0.1` only.
+   `jarviscore nexus status` warns if a master key is still in `.env`.
+2. **A Gateway you deploy yourself** with `GATEWAY_REQUIRE_API_KEY=true`
+   needs `NEXUS_GATEWAY_API_KEY` set next to `NEXUS_GATEWAY_URL` on every
+   agent host.
+3. **Athena.** Run `jarviscore memory init` to add `ATHENA_API_KEY` and move
+   the stack to Athena v0.2.0, then `docker exec athena ./ltm-purge-unscoped`.
 
 </div>
 
