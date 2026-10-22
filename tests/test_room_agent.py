@@ -758,3 +758,13 @@ class TestRemembering:
         top = [p for p in surface.posts if p.thread is None]
         assert "Dave asked: tidy the plan" in top[1].text
         assert top[2].proposal == pushed.id
+
+
+async def test_scripts_call_tools_by_the_names_the_model_uses(room):
+    """The guide's test calls tools.prepare_decision(...), as the model names it."""
+    from jarviscore.testing.rooms import RoomTools
+    from jarviscore.room.agent import RoomSubAgent
+
+    tools = RoomTools(RoomSubAgent("room-1", llm_client=None, room_agent=ScriptedRoomAgent()))
+    assert tools.prepare_decision == tools._subagent._tool_prepare_decision
+    assert tools.ask_agents == tools._subagent._tool_ask_agents

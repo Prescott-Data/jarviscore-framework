@@ -6,7 +6,7 @@ runs the real room tools from a script instead of a model, so a test decides
 what each message means and checks what the room and the surface do::
 
     async def ship_it(tools, turn):
-        await tools._tool_prepare_decision(action="accept")
+        await tools.prepare_decision(action="accept")
         return "Confirm it and it's in."      # the agent's reply
 
     surface = MemorySurface()
@@ -104,6 +104,18 @@ class MemorySurface(ChatSurface):
         return [p for p in self.posts if not p.to]
 
 
+class RoomTools:
+    """The room agent's tools by the names the model calls them:
+    ``await tools.prepare_decision(action="accept")``."""
+
+    def __init__(self, subagent: RoomSubAgent):
+        self._subagent = subagent
+
+    def __getattr__(self, name: str):
+        tool = getattr(self._subagent, f"_tool_{name}", None)
+        return tool if tool is not None else getattr(self._subagent, name)
+
+
 class ScriptedRoomAgent(RoomAgent):
     """The real room tools, driven by scripts instead of a model: one script per message.
 
@@ -118,7 +130,7 @@ class ScriptedRoomAgent(RoomAgent):
 
     async def _handle(self, turn):
         self.briefs.append(self._brief(turn))
-        tools = RoomSubAgent("room-1", llm_client=None, room_agent=self)
+        tools = RoomTools(RoomSubAgent("room-1", llm_client=None, room_agent=self))
         answer = await self.scripts.pop(0)(tools, turn)
         if answer and not turn.quiet:
             turn.replies.append(answer)

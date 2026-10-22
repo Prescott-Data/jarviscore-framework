@@ -292,7 +292,7 @@ from jarviscore.testing.rooms import MemorySurface, ScriptedRoomAgent
 
 
 async def ship_it(tools, turn):
-    await tools._tool_prepare_decision(action="accept")
+    await tools.prepare_decision(action="accept")
     return "Tap Confirm and it's in."
 
 
