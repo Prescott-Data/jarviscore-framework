@@ -26,6 +26,9 @@ Design rules (learned in production, see #52/#53/#54):
   guessing.
 - Bounded concurrency and an optional item budget — fan-out without a
   ceiling is a cost and latency grenade.
+- One instance per item: each item holds an instance of the agent from its
+  pool while it runs, so items never share a kernel or sandbox. Parallelism
+  is the smaller of ``concurrency`` and the agent's ``Pool`` size.
 - Partial failure is a first-class outcome: one bad item never voids the
   rest; ``.failed`` carries honest per-item errors.
 - Aggregation is explicit and lossless by default: full results in item
@@ -38,7 +41,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Optional, Union
+from typing import Any, AsyncContextManager, Callable, Dict, Iterable, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -87,27 +90,21 @@ class FanoutResult:
         llm: Any,
         prompt: str,
         *,
-        evidence_limit: int = 800,
+        evidence_limit: Optional[int] = None,
     ) -> str:
-        """LLM reduce: one completion over per-item evidence windows.
+        """LLM reduce: one completion over every item's whole evidence.
 
-        Evidence follows the honest-context rules: each item contributes up
-        to ``evidence_limit`` chars WITH an explicit truncation marker when
-        clipped — a summarizer that cannot see the evidence confabulates
-        (see #59). Failures are listed so the summary reflects reality.
+        A summarizer that cannot see the evidence confabulates (see #59), so each
+        item's output and error go in whole. ``evidence_limit`` is accepted for
+        compatibility and no longer shortens anything. Failures are listed so the
+        summary reflects reality.
         """
         lines: List[str] = []
         for r in self.succeeded:
             payload = r.get("payload", r.get("output"))
-            text = str(payload)
-            if len(text) > evidence_limit:
-                text = (
-                    f"{text[:evidence_limit]}"
-                    f"…[truncated: showing {evidence_limit} of {len(text)} chars]"
-                )
-            lines.append(f"- {r['item']}: {text}")
+            lines.append(f"- {r['item']}: {payload}")
         for r in self.failed:
-            lines.append(f"- {r['item']}: FAILED — {str(r.get('error', 'unknown'))[:200]}")
+            lines.append(f"- {r['item']}: FAILED — {r.get('error', 'unknown')}")
         if self.skipped:
             lines.append(f"- ({len(self.skipped)} items skipped by budget: {self.skipped})")
 
@@ -134,7 +131,7 @@ class FanoutResult:
 async def run_fanout(
     *,
     fanout_id: str,
-    find_agent: Callable[[Dict[str, Any]], Optional[Any]],
+    lease_agent: Callable[[str], AsyncContextManager[Optional[Any]]],
     agent: str,
     items: Iterable[Any],
     task: Union[str, Callable[[Any], str]],
@@ -148,7 +145,8 @@ async def run_fanout(
 
     Args:
         fanout_id:   Unique id; namespaces every item's workflow/step ids.
-        find_agent:  Resolver from a step spec to an agent (the mesh's claimer).
+        lease_agent: Holds an instance of the agent for ``agent`` while one item
+                     runs (the mesh's pools); yields None when nothing matches.
         agent:       Role or capability to execute each item.
         items:       The dynamic N. Materialized once; order defines result order.
         task:        Task string, or ``item -> str`` template.
@@ -195,22 +193,22 @@ async def run_fanout(
             item_ctx["step_id"] = step_id
             item_ctx["fanout_item"] = item
 
-            resolved = find_agent({"agent": agent, "task": task_text})
-            if resolved is None:
-                result = {**base, "error": f"No agent found for {agent!r}"}
-            else:
-                try:
-                    coro = resolved.execute_task({"task": task_text, "context": item_ctx})
-                    raw = await (asyncio.wait_for(coro, timeout) if timeout else coro)
-                    if isinstance(raw, dict):
-                        result = {**raw, **{k: base[k] for k in ("item", "step_id")}}
-                        result.setdefault("status", "success")
-                    else:
-                        result = {**base, "status": "success", "output": raw}
-                except asyncio.TimeoutError:
-                    result = {**base, "error": f"timed out after {timeout}s"}
-                except Exception as exc:  # noqa: BLE001 - per-item failures are data
-                    result = {**base, "error": f"{type(exc).__name__}: {exc}"}
+            async with lease_agent(agent) as resolved:
+                if resolved is None:
+                    result = {**base, "error": f"No agent found for {agent!r}"}
+                else:
+                    try:
+                        coro = resolved.execute_task({"task": task_text, "context": item_ctx})
+                        raw = await (asyncio.wait_for(coro, timeout) if timeout else coro)
+                        if isinstance(raw, dict):
+                            result = {**raw, **{k: base[k] for k in ("item", "step_id")}}
+                            result.setdefault("status", "success")
+                        else:
+                            result = {**base, "status": "success", "output": raw}
+                    except asyncio.TimeoutError:
+                        result = {**base, "error": f"timed out after {timeout}s"}
+                    except Exception as exc:  # noqa: BLE001 - per-item failures are data
+                        result = {**base, "error": f"{type(exc).__name__}: {exc}"}
 
             if result.get("status") != "success" and on_error == "fail_fast":
                 fail_fast_tripped.set()

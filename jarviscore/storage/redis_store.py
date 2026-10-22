@@ -160,15 +160,7 @@ class RedisContextStore:
                     (isinstance(existing_output, dict) and existing_output.get("success") is True)
                     or (isinstance(existing_output, list) and len(existing_output) > 0)
                 )
-                new_is_error = False
-                if isinstance(output, dict):
-                    new_is_error = (
-                        output.get("success") is False
-                        or "CONVERGENCE_STALL" in str(output.get("error", ""))
-                        or "CONVERGENCE_STALL" in str(output.get("status", ""))
-                    )
-                elif isinstance(output, str) and "CONVERGENCE_STALL" in output:
-                    new_is_error = True
+                new_is_error = isinstance(output, dict) and output.get("success") is False
                 if existing_ok and new_is_error:
                     logger.warning(
                         "[IDEMPOTENT GUARD] Blocked overwrite of valid output for "
@@ -200,6 +192,7 @@ class RedisContextStore:
         }
         self._redis.hset(key, mapping={k: v for k, v in data.items() if v is not None})
         self._redis.expire(key, self._ttl_seconds)
+        self._index_step_output(workflow_id, step_id)
         return True
 
     def get_step_output(self, workflow_id: str,
@@ -222,18 +215,26 @@ class RedisContextStore:
                 pass
         return result
 
+    def _index_step_output(self, workflow_id: str, step_id: str, pipe=None) -> None:
+        target = pipe if pipe is not None else self._redis
+        index = f"step_output_ids:{workflow_id}"
+        target.sadd(index, step_id)
+        target.expire(index, self._ttl_seconds)
+
     def list_step_output_ids(self, workflow_id: str) -> List[str]:
         """Return all step IDs that have saved outputs for this workflow.
 
-        Uses SCAN (non-blocking) to find keys matching
-        step_output:{workflow_id}:*  and strips the prefix to return
-        just the step_id portion.
+        Reads the workflow's output index and graph instead of scanning the
+        keyspace: a SCAN walks every key in the database, so its cost grew with
+        every workflow ever run and it ran on each step dispatch.
         """
-        prefix = f"step_output:{workflow_id}:"
-        return [
-            k[len(prefix):]
-            for k in self._redis.scan_iter(match=f"{prefix}*")
-        ]
+        candidates = set(self._redis.smembers(f"step_output_ids:{workflow_id}") or ())
+        candidates.update(self._redis.hkeys(f"workflow_graph:{workflow_id}") or ())
+        ordered = sorted(candidates)
+        pipe = self._redis.pipeline()
+        for step_id in ordered:
+            pipe.exists(f"step_output:{workflow_id}:{step_id}")
+        return [step_id for step_id, found in zip(ordered, pipe.execute()) if found]
 
     # ------------------------------------------------------------------
     # Shared Context / Truth
@@ -2014,6 +2015,39 @@ class RedisContextStore:
             except redis.WatchError:
                 continue
 
+    @staticmethod
+    def _responses_composed_before(
+        step_id: str, graph: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Final responses downstream of a resuming step, reset because they described the pause."""
+        downstream = {step_id}
+        grew = True
+        while grew:
+            grew = False
+            for other_id, other in graph.items():
+                if other_id not in downstream and downstream & {
+                    str(value) for value in other.get("depends_on") or []
+                }:
+                    downstream.add(other_id)
+                    grew = True
+        reopened = {}
+        for other_id in downstream - {step_id}:
+            response = dict(graph[other_id])
+            if (
+                str(response.get("effect") or "") != "final_response"
+                or response.get("status") not in {"in_progress", "completed", "failed"}
+            ):
+                continue
+            for field in (
+                "claimed_by", "claim_id", "claim_expires_at", "completed_by",
+                "semantic_outcome", "semantic_decision",
+                "resume_agent_id", "resume_context",
+            ):
+                response.pop(field, None)
+            response.update({"status": "pending", "updated_at": time.time()})
+            reopened[other_id] = response
+        return reopened
+
     def resume_workflow_step(
         self,
         workflow_id: str,
@@ -2046,8 +2080,25 @@ class RedisContextStore:
                     "updated_at": time.time(),
                 })
                 data.pop("blocked_by", None)
+                graph = {
+                    str(other_id): json.loads(value)
+                    for other_id, value in pipe.hgetall(graph_key).items()
+                }
+                stale_responses = self._responses_composed_before(step_id, graph)
                 pipe.multi()
                 pipe.hset(graph_key, mapping={step_id: json.dumps(data, default=str)})
+                for response_id, response in stale_responses.items():
+                    pipe.hset(graph_key, mapping={response_id: json.dumps(response, default=str)})
+                    pipe.delete(
+                        f"step_lock:{workflow_id}:{response_id}",
+                        f"step_output:{workflow_id}:{response_id}",
+                    )
+                    pipe.xadd(f"ledgers:{workflow_id}", {
+                        "event": "step_reopened",
+                        "step_id": response_id,
+                        "reason": f"{step_id} resumed after the response was composed",
+                        "timestamp": str(time.time()),
+                    })
                 pipe.sadd("jarviscore:active_workflows", workflow_id)
                 pipe.xadd(f"ledgers:{workflow_id}", {
                     "event": "step_resumed",
@@ -2195,18 +2246,31 @@ class RedisContextStore:
                     unmet = set(map(str, interpretation.get(
                         "unmet_requirements", []
                     ))) if isinstance(interpretation, dict) else set()
+                    covered_ids = set(map(str, data.get("covers", [])))
+                    named_ids = (satisfied | not_applicable | unmet) & covered_ids
+                    # An interpretation that names obligation ids is authoritative for
+                    # each id. One that names descriptions instead still closes on its
+                    # verdict, which is how a product without id-addressed checks reports.
+                    id_addressed = bool(named_ids)
                     verdict = str(interpretation.get("verdict") or "") if isinstance(
                         interpretation, dict
                     ) else ""
                     if obligation_id in not_applicable:
                         attempt_state = "not_applicable"
-                    elif obligation_id in satisfied or verdict == "satisfied":
+                    elif obligation_id in satisfied:
+                        attempt_state = "satisfied"
+                    elif obligation_id in unmet or (id_addressed and isinstance(interpretation, dict)):
+                        attempt_state = "unresolved"
+                    elif verdict == "satisfied":
                         attempt_state = "satisfied"
                     elif terminal == "waiting":
                         attempt_state = "pending"
-                    elif obligation_id in unmet or isinstance(interpretation, dict):
+                    elif isinstance(interpretation, dict):
                         attempt_state = "unresolved"
                     else:
+                        # A step with no semantic interpretation has no record that
+                        # contradicts completion. A present interpretation is authoritative
+                        # per obligation id; a blanket verdict is not.
                         attempt_state = (
                             "satisfied" if terminal == "completed" else "unresolved"
                         )
@@ -2251,6 +2315,7 @@ class RedisContextStore:
                 pipe.multi()
                 pipe.hset(output_key, mapping={k: v for k, v in mapping.items() if v is not None})
                 pipe.expire(output_key, self._ttl_seconds)
+                self._index_step_output(workflow_id, step_id, pipe)
                 pipe.hset(graph_key, mapping={step_id: json.dumps(data)})
                 if projection:
                     pipe.set(projection_key, json.dumps(projection, default=str))
@@ -2349,6 +2414,29 @@ class RedisContextStore:
     def get_all_step_ids(self, workflow_id: str) -> List[str]:
         """Return all step IDs stored in the workflow DAG hash."""
         return list(self._redis.hkeys(f"workflow_graph:{workflow_id}"))
+
+    def get_active_workflow_graphs(self) -> Dict[str, Dict[str, Any]]:
+        """Every active, uncancelled workflow's step definitions, in one round trip."""
+        workflow_ids = sorted(self.get_active_workflows())
+        pipe = self._redis.pipeline(transaction=False)
+        for workflow_id in workflow_ids:
+            pipe.exists(f"workflow_cancelled:{workflow_id}")
+            pipe.hgetall(f"workflow_graph:{workflow_id}")
+        replies = pipe.execute()
+        graphs: Dict[str, Dict[str, Any]] = {}
+        for index, workflow_id in enumerate(workflow_ids):
+            cancelled, raw_steps = replies[2 * index], replies[2 * index + 1]
+            if cancelled:
+                self.unregister_active_workflow(workflow_id)
+                continue
+            steps = {}
+            for step_id, raw in (raw_steps or {}).items():
+                try:
+                    steps[step_id] = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            graphs[workflow_id] = steps
+        return graphs
 
     # ------------------------------------------------------------------
     # Workflow State (crash recovery)
@@ -2467,7 +2555,7 @@ class RedisContextStore:
     def create_hitl_request(self, workflow_id: str, step_id: str,
                             payload: Dict) -> Dict:
         """Create a HITL request for human approval/input."""
-        key = f"hitl_request:{workflow_id}:{step_id}"
+        key = self._hitl_key(workflow_id, step_id)
         request_id = f"hitl-{workflow_id}-{step_id}-{int(time.time())}"
         data = {
             "request_id": request_id,
@@ -2480,36 +2568,51 @@ class RedisContextStore:
         logger.info(f"HITL request created: {request_id}")
         return {"request_id": request_id, "status": "pending"}
 
-    def get_hitl_request(self, workflow_id: str,
-                         step_id: str) -> Optional[Dict]:
-        """Read HITL request status and human response."""
+    @staticmethod
+    def _hitl_key(workflow_id: str, step_id: str, action_id: Optional[str] = None) -> str:
         key = f"hitl_request:{workflow_id}:{step_id}"
-        data = self._redis.hgetall(key)
+        return f"{key}:{action_id}" if action_id else key
+
+    def get_hitl_request(self, workflow_id: str, step_id: str,
+                         action_id: Optional[str] = None) -> Optional[Dict]:
+        """Read HITL request status and human response."""
+        data = self._redis.hgetall(self._hitl_key(workflow_id, step_id, action_id))
         if not data:
             return None
         result = dict(data)
-        if "payload" in result:
-            try:
-                result["payload"] = json.loads(result["payload"])
-            except (json.JSONDecodeError, TypeError):
-                pass
+        for field in ("payload", "action", "outcome"):
+            if field in result:
+                try:
+                    result[field] = json.loads(result[field])
+                except (json.JSONDecodeError, TypeError):
+                    pass
         return result
 
     def resolve_hitl_request(self, workflow_id: str, step_id: str,
                              decision: str, responder: str = "",
-                             comment: str = "") -> bool:
-        """Record human decision on a HITL request (legacy untyped API)."""
-        key = f"hitl_request:{workflow_id}:{step_id}"
+                             comment: str = "",
+                             action_id: Optional[str] = None) -> bool:
+        """Record a person's decision on a HITL request."""
+        key = self._hitl_key(workflow_id, step_id, action_id)
         if not self._redis.exists(key):
             return False
+        normalized = normalize_hitl_decision(decision).value
         updates = {
             "status": HITLStatus.resolved.value,
-            "decision": normalize_hitl_decision(decision).value,
+            "decision": normalized,
             "responder": responder,
+            "resolved_by": responder,
             "comment": comment,
+            "note": comment,
             "resolved_at": str(time.time()),
         }
         self._redis.hset(key, mapping=updates)
+        if action_id:
+            self.append_ledger_entry(workflow_id, {
+                "event": "hitl_resolved", "step_id": step_id,
+                "action_id": action_id, "decision": normalized,
+                "resolved_by": responder, "timestamp": str(time.time()),
+            })
         logger.info(f"HITL resolved: {workflow_id}/{step_id} -> {decision}")
         return True
 
@@ -2521,15 +2624,31 @@ class RedisContextStore:
 
         Preferred over create_hitl_request() — validates the contract before
         writing and returns the persisted object with any defaults applied.
+        A request for a consequential action is keyed by that action, so one
+        step can wait on several decisions.
         """
-        key = f"hitl_request:{request.workflow_id}:{request.step_id}"
+        action_id = request.action.action_id if request.action else None
+        key = self._hitl_key(request.workflow_id, request.step_id, action_id)
+        # A new request replaces the record whole; no earlier decision carries over.
+        self._redis.delete(key)
         self._redis.hset(key, mapping=request.to_redis_mapping())
         self._redis.expire(key, self._ttl_seconds)
+        if action_id:
+            index = f"hitl_actions:{request.workflow_id}"
+            self._redis.hset(index, action_id, request.step_id)
+            self._redis.expire(index, self._ttl_seconds)
+            self.append_ledger_entry(request.workflow_id, {
+                "event": "hitl_requested", "step_id": request.step_id,
+                "action_id": action_id, "request_id": request.request_id,
+                "consequence": request.action.consequence,
+                "timestamp": str(time.time()),
+            })
         logger.info(f"HITL request created (typed): {request.request_id}")
         return request
 
     def get_hitl_resolution(self, workflow_id: str,
-                            step_id: str) -> Optional[HITLResolution]:
+                            step_id: str,
+                            action_id: Optional[str] = None) -> Optional[HITLResolution]:
         """
         Return a typed HITLResolution if the request has been resolved.
 
@@ -2537,10 +2656,40 @@ class RedisContextStore:
         This is the typed counterpart to get_hitl_request() — preferred for
         kernel polling.
         """
-        raw = self.get_hitl_request(workflow_id, step_id)
+        raw = self.get_hitl_request(workflow_id, step_id, action_id)
         if not raw:
             return None
         return HITLResolution.from_raw(raw)
+
+    def get_hitl_action_step(self, workflow_id: str, action_id: str) -> Optional[str]:
+        """The step whose consequential action ``action_id`` waits on a person."""
+        return self._redis.hget(f"hitl_actions:{workflow_id}", action_id)
+
+    def list_hitl_action_requests(self, workflow_id: str, step_id: str) -> List[Dict]:
+        """Every consequential-action request raised by one step."""
+        index = self._redis.hgetall(f"hitl_actions:{workflow_id}")
+        requests = []
+        for action_id, owner in index.items():
+            if owner != step_id:
+                continue
+            raw = self.get_hitl_request(workflow_id, step_id, action_id)
+            if raw:
+                requests.append(raw)
+        return requests
+
+    def settle_hitl_action(self, workflow_id: str, step_id: str,
+                           action_id: str, outcome: Dict[str, Any]) -> None:
+        """Bind what became of a decided action to the decision itself."""
+        key = self._hitl_key(workflow_id, step_id, action_id)
+        self._redis.hset(key, mapping={
+            "outcome": json.dumps(outcome, default=str),
+            "settled_at": str(time.time()),
+        })
+        self.append_ledger_entry(workflow_id, {
+            "event": "hitl_action_settled", "step_id": step_id,
+            "action_id": action_id, "status": str(outcome.get("status") or ""),
+            "timestamp": str(time.time()),
+        })
 
     # ------------------------------------------------------------------
     # Function Registry Index (Cognitive Projection)

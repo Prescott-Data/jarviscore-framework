@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, cast
 
@@ -28,7 +29,11 @@ from jarviscore.context.truth import AgentOutput
 from jarviscore.context.context_manager import ContextManager, BudgetConfig
 from jarviscore.execution.llm import LLMProvider
 from jarviscore.kernel.lease import ExecutionLease, ROLE_LEASE_PROFILES
-from jarviscore.orchestration.envelopes import ExecutionBudget, neutral_context
+from jarviscore.orchestration.envelopes import (
+    ExecutionBudget,
+    downstream_peer_refusal,
+    neutral_context,
+)
 from jarviscore.kernel.cognition import AgentCognitionManager
 from jarviscore.context.fidelity import Record, select_whole
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
@@ -354,6 +359,14 @@ class Kernel:
         output = await kernel.execute(task="Calculate factorial of 10")
     """
 
+    # Whether this kernel's agent may use provider credentials at all. An
+    # AutoAgent sets it from requires_auth; without it, neither the gateway
+    # nor the machine's local vault is consulted on its behalf.
+    provider_access: bool = True
+    # Who the agent is across sessions: its role, or an agent_id its developer
+    # chose. Cross-session memory is kept under it. None falls back to agent_id.
+    memory_identity: Optional[str] = None
+
     def __init__(
         self,
         llm_client,
@@ -501,6 +514,15 @@ class Kernel:
                 async def execute_peer_tool(_name=name, **kwargs):
                     state = getattr(subagent, "_current_state", None)
                     source_context = dict(getattr(state, "context", {}) or {})
+                    if _name in {"ask_peer", "ask_capability"}:
+                        refusal = downstream_peer_refusal(
+                            source_context,
+                            kwargs.get("role") if _name == "ask_peer" else kwargs.get("capability"),
+                            self.peers,
+                            by_capability=_name == "ask_capability",
+                        )
+                        if refusal:
+                            return refusal
                     peer_context = neutral_context(source_context)
                     workflow_id = str(getattr(state, "workflow_id", "") or "")
                     step_id = str(getattr(state, "step_id", "") or "")
@@ -508,7 +530,11 @@ class Kernel:
                         peer_context["workflow_id"] = workflow_id
                     if step_id and step_id != "unknown":
                         peer_context["peer_requester_step_id"] = step_id
-                    peer_context["peer_requester_role"] = subagent.role
+                    # The mesh role peers address, not the kernel role (researcher,
+                    # coder) the step runs in: replies went to roles nobody holds.
+                    peer_context["peer_requester_role"] = (
+                        getattr(self.peers, "my_role", None) or subagent.role
+                    )
                     # Stamped from runtime step state so delegated work cannot exceed it.
                     peer_context["peer_requester_authority"] = {
                         "effect": str(source_context.get("effect") or "read"),
@@ -550,6 +576,7 @@ class Kernel:
                     execute_peer_tool,
                     definition["description"] + (f" Params: {params}." if params else ""),
                     phase=phase,
+                    parameters=schema or None,
                 )
         if self.redis_store is None:
             return
@@ -663,7 +690,7 @@ class Kernel:
         routing, so the router knows whether a credentialed path exists, and again
         at dispatch to tag the coder's context. Never returns credential material.
         """
-        if not system_name:
+        if not system_name or not self.provider_access:
             return None
         if self.auth_manager:
             # A read, never a handshake. get_connection_id() falls through to
@@ -687,6 +714,8 @@ class Kernel:
 
     def _awaiting_consent(self, system_name: str) -> bool:
         """Registered app, no consented account — a different ask than 'register it'."""
+        if not self.provider_access:
+            return False
         try:
             from jarviscore.nexus.store import get_store
             return get_store().needs_consent(system_name)
@@ -742,11 +771,11 @@ class Kernel:
                 confidence=1.0,
                 reason="Provider mutation requires the credentialed Coder harness.",
             )
-        if system_names and effect in {"read", "propose", "write", "notify", "destructive"}:
+        if system_names and effect in {"write", "notify", "destructive"}:
             return RoutingDecision(
                 role="coder",
                 confidence=1.0,
-                reason="Connected-system work requires the credentialed Coder harness.",
+                reason="Provider mutation requires the credentialed Coder harness.",
             )
         if explicit_role:
             normalized_role = str(explicit_role).lower().strip()
@@ -756,6 +785,12 @@ class Kernel:
                 role=normalized_role,
                 confidence=1.0,
                 reason="Explicit planner/profile role.",
+            )
+        if effect == "final_response" and "communicator" in self._role_lease_profiles:
+            return RoutingDecision(
+                role="communicator",
+                confidence=1.0,
+                reason="The framework's response step synthesizes completed artifacts for the person.",
             )
         routing_context = dict(context or {})
         credentialed = False
@@ -794,6 +829,8 @@ class Kernel:
         been connected. A consent completed in another process is only visible
         through the second, so both are asked.
         """
+        if not self.provider_access:
+            return {}
         try:
             from jarviscore.nexus.store import ConnectionState, get_store
             store = get_store()
@@ -905,6 +942,7 @@ class Kernel:
                 blob_storage=self.blob_storage,
             )
             subagent.effect_guards = tuple(self.config.get("effect_guards") or ())
+            subagent.provider_access = self.provider_access
         elif role == "researcher":
             subagent = ResearcherSubAgent(
                 agent_id=agent_id,
@@ -923,6 +961,8 @@ class Kernel:
                 blob_storage=self.blob_storage,
             )
         elif role == "browser":
+            from jarviscore.core.egress import configured_egress
+
             subagent = BrowserSubAgent(
                 agent_id=agent_id,
                 llm_client=self.llm_client,
@@ -933,6 +973,12 @@ class Kernel:
                 profile_root=self.config.get("browser_profile_dir"),
                 scope_field=self.config.get("memory_scope_field"),
                 control_url=self.config.get("browser_control_url"),
+                egress=configured_egress(self.config),
+                locale=self.config.get("browser_locale"),
+                timezone=self.config.get("browser_timezone"),
+                allow_unsafe_local_execution=(
+                    getattr(self.sandbox, "allow_unsafe_local_execution", False) is True
+                ),
             )
         else:
             raise ValueError(f"Unknown subagent role: {role}")
@@ -1001,6 +1047,16 @@ class Kernel:
                     )
                     athena_client = None
 
+                local_memory = None
+                if athena_client is None and self.config.get("local_memory", True) and not (
+                    scope_field and memory_scope is None
+                ):
+                    from jarviscore.memory.local import LocalMemory
+
+                    local_memory = LocalMemory(
+                        self.memory_identity or agent_id, scope=memory_scope,
+                    )
+
                 return UnifiedMemory(
                     workflow_id=workflow_id,
                     step_id=step_id,
@@ -1009,11 +1065,63 @@ class Kernel:
                     blob_storage=self.blob_storage,
                     athena_client=athena_client,
                     memory_scope=memory_scope,
+                    memory_identity=self.memory_identity,
+                    local_memory=local_memory,
                 )
         except ImportError:
             logger.debug("[Kernel] UnifiedMemory not available — running without memory")
         return None
 
+
+    async def retain_browser_procedure(
+        self, artifact: Any, context: Dict[str, Any], agent_id: str, *, accepted: bool,
+    ) -> bool:
+        if not accepted or not isinstance(artifact, dict):
+            return False
+        from jarviscore.kernel.defaults.browser import reads_closed
+
+        if not reads_closed(artifact.get("browser_reads")):
+            return False
+        state = artifact.get("browser_state") or {}
+        procedure = state.get("procedure") if isinstance(state, dict) else None
+        calls = [call for call in artifact.get("browser_calls") or [] if isinstance(call, dict)]
+        if not procedure and not calls:
+            return False
+        memory = self._create_memory(
+            str(context.get("workflow_id") or ""), str(context.get("step_id") or ""),
+            agent_id, context,
+        )
+        if memory is None:
+            return False
+        programs = [str(code) for code in artifact.get("browser_programs") or []]
+        kept = (
+            json.dumps(procedure, ensure_ascii=False, default=str) if procedure
+            else "the collection reads below"
+        )
+        sections = []
+        if calls:
+            sections.append(
+                "Collection reads behind its accepted findings, in order; adapt dates, "
+                "scope and boundaries to the new task:\n"
+                + "\n".join(json.dumps(call, ensure_ascii=False, default=str) for call in calls)
+            )
+        if programs:
+            sections.append(
+                "Programs that produced its accepted findings, in order:\n"
+                + "\n".join(f"```python\n{code}\n```" for code in programs)
+            )
+        if sections:
+            kept = "\n".join([f"Browser procedure: {kept}", *sections])
+        try:
+            return await memory.remember(
+                kept, kind="procedure",
+                role="browser", verification="accepted_workflow_step",
+            )
+        except Exception as exc:
+            logger.warning("Browser procedure was not retained: %s", exc)
+            return False
+        finally:
+            await memory.close()
 
     def _create_context_manager(self, role: str) -> ContextManager:
         """Create a ContextManager with role-appropriate budget config."""
@@ -1127,20 +1235,24 @@ class Kernel:
         trace_sink = context.pop("_trace_sink", None)
 
         workflow_id = context.get("workflow_id", "unknown")
-        step_id = context.get("step_id", f"step_{int(time.time())}")
+        # Unique per dispatch: two tasks started in the same second shared one
+        # trace file and one checkpoint key.
+        step_id = context.get("step_id") or f"step_{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
         # Create TraceManager for real-time streaming to UI
-        from jarviscore.kernel.tracing import TraceManager, create_noop_trace
+        from jarviscore.kernel.tracing import DEFAULT_TRACE_DIR, TraceManager, create_noop_trace
         try:
             _kernel_trace = TraceManager(
                 workflow_id=workflow_id,
                 step_id=step_id,
+                trace_dir=self.config.get("telemetry_trace_dir") or DEFAULT_TRACE_DIR,
                 event_sink=trace_sink,
             )
         except Exception as _te:
             logger.debug("[Kernel] TraceManager init failed (non-fatal): %s", _te)
             _kernel_trace = create_noop_trace()
 
+        meta: Dict[str, Any] = {}
         for dispatch_num in range(max_dispatches):
             # ─────────────────────────────────────────────────────
             # OPTION A: Registry-first fast path
@@ -1333,11 +1445,19 @@ class Kernel:
                             # request_access with a provider URL and connection ID.
                             enriched_context["_consent_required_system"] = system_name
                         else:
-                            summary = (
-                                f"This task needs {system_name}, which is not "
-                                "connected here. Someone has to grant access to it "
-                                "before the task can run."
-                            )
+                            if not self.provider_access:
+                                summary = (
+                                    f"This task needs {system_name}, but this agent does "
+                                    "not declare requires_auth = True, so it may not use "
+                                    "provider credentials. Declare it on the agent class "
+                                    "to let the agent act through connected providers."
+                                )
+                            else:
+                                summary = (
+                                    f"This task needs {system_name}, which is not "
+                                    "connected here. Someone has to grant access to it "
+                                    "before the task can run."
+                                )
                             logger.warning(
                                 "[Kernel] %s (system=%s) — no consent channel is available",
                                 summary, system_name,
@@ -1441,6 +1561,7 @@ class Kernel:
                         "dispatches": dispatches,
                         "typed_outcome": "CONTINUE_NEW_EXECUTION_EPOCH",
                         "checkpointed": meta.get("checkpointed", False),
+                        **({"progress": meta["progress"]} if meta.get("progress") else {}),
                     },
                 )
 
@@ -1451,6 +1572,7 @@ class Kernel:
                     for key in (
                         "typed_outcome", "hitl_type", "system", "connection_id",
                         "workflow_id", "step_id", "action_id", "action", "consequence",
+                        "progress",
                     )
                     if meta.get(key) is not None
                 }
@@ -1466,6 +1588,26 @@ class Kernel:
                         "yield_pending": True,
                         "elapsed_ms": (time.time() - start_time) * 1000,
                         **pass_through,
+                    },
+                )
+
+            if (output.metadata or {}).get("declared_incomplete"):
+                await self._cleanup_step(step_id)
+                return AgentOutput(
+                    status="failure",
+                    payload=output.payload,
+                    summary=output.summary,
+                    trajectory=output.trajectory,
+                    metadata={
+                        "tokens": total_tokens,
+                        "cost_usd": total_cost,
+                        "dispatches": dispatches,
+                        "elapsed_ms": (time.time() - start_time) * 1000,
+                        "typed_outcome": "FAIL_INCOMPLETE",
+                        "declared_incomplete": True,
+                        "tool_receipts": output.metadata.get("tool_receipts", []),
+                        "work_record": output.metadata.get("work_record", {}),
+                        "kept_memories": output.metadata.get("kept_memories", []),
                     },
                 )
 
@@ -1552,5 +1694,6 @@ class Kernel:
                 "dispatches": dispatches,
                 "elapsed_ms": elapsed,
                 "typed_outcome": "FAIL_ALL_DISPATCHES_EXHAUSTED",
+                **({"progress": meta["progress"]} if meta.get("progress") else {}),
             },
         )

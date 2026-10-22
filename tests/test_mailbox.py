@@ -270,7 +270,7 @@ class TestRoleRouting:
     """
     Role-based routing sends to "the analyst" without knowing
     the agent_id. Uses Mesh._agent_registry — same index used
-    by Mesh.get_agent() and _find_agent_for_step().
+    by Mesh.get_agent() and Mesh._lease_agent().
     """
 
     def test_send_by_role(self, store, mesh_two_agents):

@@ -44,6 +44,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from jarviscore.config.paths import runtime_path
+
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────
@@ -471,7 +473,7 @@ class CoderSandbox:
         - nexus_call     : async fn(method, url, **kwargs) → HTTP response via Nexus
         - Path           : pathlib.Path — for path manipulation
         - common libs    : json, os, re, datetime, dataclasses, etc.
-        - blob_path(name): helper to get a path inside workspace/output/
+        - blob_path(name): helper to get a path inside workspace/.jarviscore/output/
 
     Agents NEVER see raw credentials — nexus_call() internally resolves
     the DynamicStrategy via NexusCallProxy.
@@ -482,7 +484,7 @@ class CoderSandbox:
         workspace_dir: Optional[Path] = None,
         timeout: int = 300,
         bash_timeout: int = 120,
-        output_subdir: str = "output",
+        output_subdir: str = runtime_path("output"),
         nexus_call_proxy=None,  # Optional[NexusCallProxy]
         mesh_proxy=None,
         blob_storage=None,      # Optional[BlobStorage]
@@ -490,9 +492,11 @@ class CoderSandbox:
         allowed_commands: Optional[set[str]] = None,
         command_environment: Optional[Dict[str, str]] = None,
         allow_unsafe_local_execution: bool = False,
+        browser_proxy=None,  # Optional[PageBroker]: the page, for browser code
     ):
         self.workspace = Path(workspace_dir) if workspace_dir else Path.cwd()
         self.timeout = timeout
+        # created lazily at execute() time; idle sandbox leaves no dir
         self.output_dir = self.workspace / output_subdir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         # Where a run's files end up is the developer's choice: any BlobStorage
@@ -512,6 +516,7 @@ class CoderSandbox:
         self._git = GitHelper(self._bash, self.workspace)
         self._nexus_call_proxy = nexus_call_proxy  # NexusCallProxy | None
         self._mesh_proxy = mesh_proxy
+        self.browser_proxy = browser_proxy
 
         logger.info(
             "CoderSandbox initialized: workspace=%s timeout=%ds nexus=%s",
@@ -787,6 +792,12 @@ class CoderSandbox:
                 "allowed, or explicitly set allow_unsafe_local_execution=True only for "
                 "trusted code."
             )
+        if self.browser_proxy is not None and getattr(self, "_browser_process", None) is not None:
+            # The session keeps its own variables and state; the step's reads arrive with each cell.
+            reads = {"browser_reads": (context or {}).get("browser_reads") or {}}
+            return await self._execute_browser_cell(
+                {"code": code, "context": reads}, timeout or self.timeout,
+            )
         return await self._execute_subprocess(code, context, timeout or self.timeout)
 
     @property
@@ -827,13 +838,18 @@ class CoderSandbox:
         parent_socket, child_socket = socket.socketpair()
         safe_context = {
             key: value for key, value in (context or {}).items()
-            if key in {"task", "system", "workflow_id", "step_id", "prior_outputs"}
+            if key in {
+                "task", "system", "workflow_id", "step_id", "prior_outputs", "browser_state",
+                "browser_reads",
+            }
         }
         request = {
             "code": code, "context": safe_context,
             "workspace": str(self.workspace), "output_dir": str(self.output_dir),
             "bash_timeout": self._bash.timeout, "rpc_fd": child_socket.fileno(),
             "allow_unsafe_local_execution": self.allow_unsafe_local_execution,
+            "browser": self.browser_proxy is not None,
+            "browser_session": self.browser_proxy is not None,
         }
         command_dirs = {
             str(Path(found).parent)
@@ -860,6 +876,12 @@ class CoderSandbox:
         )
         child_socket.close()
         rpc_task = asyncio.create_task(self._serve_child_rpc(parent_socket, context or {}))
+        if self.browser_proxy is not None:
+            self._browser_process = process
+            self._browser_socket = parent_socket
+            self._browser_rpc_task = rpc_task
+            self._browser_stderr = asyncio.create_task(process.stderr.read())
+            return await self._execute_browser_cell(request, timeout)
         try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(json.dumps(request).encode()), timeout=timeout
@@ -906,6 +928,65 @@ class CoderSandbox:
         return self._to_sandbox_dict(cr)
 
     @staticmethod
+    async def _read_child_line(reader) -> bytes:
+        parts = []
+        while True:
+            try:
+                parts.append(await reader.readuntil(b"\n"))
+                return b"".join(parts)
+            except asyncio.LimitOverrunError as exc:
+                parts.append(await reader.readexactly(exc.consumed))
+            except asyncio.IncompleteReadError as exc:
+                return b"".join([*parts, exc.partial])
+
+    async def _execute_browser_cell(self, request: dict, timeout: int) -> Dict[str, Any]:
+        started = time.time()
+        process = self._browser_process
+        try:
+            process.stdin.write((json.dumps(request) + "\n").encode())
+            await process.stdin.drain()
+            line = await asyncio.wait_for(self._read_child_line(process.stdout), timeout)
+            response = json.loads(line)
+        except asyncio.CancelledError:
+            await self.close_browser_session()
+            raise
+        except Exception as exc:
+            timed_out = isinstance(exc, asyncio.TimeoutError)
+            await self.close_browser_session()
+            result = self._to_sandbox_dict(CoderResult(
+                success=False,
+                error=(f"Browser code timed out after {timeout}s; its session was reset."
+                       if timed_out else f"Browser code session ended: {exc}"),
+                error_type="ExecutionTimeout" if timed_out else "SandboxProcessError",
+                execution_time=time.time() - started,
+            ))
+            result["session_reset"] = True
+            return result
+        if response.get("error"):
+            parsed = CoderResult(
+                success=False, stdout=response.get("stdout", ""),
+                error=response["error"], error_type=response.get("error_type"),
+                execution_time=time.time() - started,
+            )
+        else:
+            parsed = self._parse_result(
+                response.get("result"), response.get("stdout", ""), time.time() - started
+            )
+        result = self._to_sandbox_dict(parsed)
+        result["browser_state"] = response.get("state") or {}
+        return result
+
+    async def close_browser_session(self) -> None:
+        process = getattr(self, "_browser_process", None)
+        if process is None:
+            return
+        self._browser_process = None
+        await self._terminate_process_tree(process)
+        self._browser_socket.close()
+        self._browser_rpc_task.cancel()
+        await asyncio.gather(self._browser_rpc_task, self._browser_stderr, return_exceptions=True)
+
+    @staticmethod
     async def _terminate_process_tree(process) -> None:
         """Terminate the isolated sandbox session, including child processes."""
         if process.returncode is not None:
@@ -934,10 +1015,14 @@ class CoderSandbox:
         sock.setblocking(False)
         reader, writer = await asyncio.open_connection(sock=sock)
         try:
-            while line := await reader.readline():
+            while line := await self._read_child_line(reader):
                 request = json.loads(line)
                 try:
-                    if request["operation"] == "nexus_call":
+                    if request["operation"] == "browser":
+                        if self.browser_proxy is None:
+                            raise RuntimeError("No browser page is attached to this code.")
+                        result = await self.browser_proxy.handle(request["payload"])
+                    elif request["operation"] == "nexus_call":
                         payload = request["payload"]
                         method = str(payload.get("method") or "GET").upper()
                         mutation = context.get("_mutation_authority")
@@ -972,7 +1057,13 @@ class CoderSandbox:
                             )
                         if requested_provider and self._nexus_call_proxy:
                             connection_id = self._nexus_call_proxy.connection_handle(provider)
-                        if not self._nexus_call_proxy or not connection_id:
+                        if not self._nexus_call_proxy:
+                            raise RuntimeError(
+                                "This agent may not use provider credentials: it does not "
+                                "declare requires_auth = True. nexus_call is for connected "
+                                "providers; declare requires_auth on the agent class to use it."
+                            )
+                        if not connection_id:
                             raise RuntimeError("No provider account is connected for this task.")
                         call = self._recording_nexus_call(
                             lambda method, url, **kwargs: self._nexus_call_proxy.call(
@@ -1247,7 +1338,7 @@ class CoderSandbox:
         git = self._git
 
         def blob_path(filename: str) -> Path:
-            """Return a path inside workspace/output/ — safe write location."""
+            """Return a path inside workspace/.jarviscore/output/ — safe write location."""
             p = output_dir / filename
             p.parent.mkdir(parents=True, exist_ok=True)
             return p
@@ -1538,7 +1629,7 @@ Store the final outcome in a variable called `result` (dict matching the contrac
 Your code runs inside CoderSandbox with these pre-injected names:
 
   workspace   : pathlib.Path  — project root (safe to read/write recursively)
-  output_dir  : pathlib.Path  — workspace/output/ (preferred write location)
+  output_dir  : pathlib.Path  — workspace/.jarviscore/output/ (preferred write location)
   blob_path(n): Path          — shorthand: output_dir / n (creates parent dirs)
   bash(cmd)   : BashExecutor  — run allowed shell commands (git, pip, pandoc, etc.)
   git         : GitHelper     — high-level git: checkout_branch, add_all, commit, push

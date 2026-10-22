@@ -110,7 +110,8 @@ async def main():
 
     step = results[0]
     print(step["status"])    # "success"
-    print(step["payload"])   # the value stored in `result` by the generated code
+    print(step["result_summary"])  # the answer, in prose
+    print(step["output"])          # the structured data behind it
     await mesh.stop()
 
 asyncio.run(main())
@@ -162,9 +163,10 @@ order. Each result carries the agent envelope plus its stable `step_id`:
 | Key | Description |
 |---|---|
 | `status` | `"success"`, `"failure"`, `"yield"`, or `"hitl"` for a paused goal-oriented execution |
-| `output` | Programmatic task result |
+| `output` | The structured data the agent delivered |
 | `payload` | Alias of `output` on the standard Kernel path |
-| `result_summary` | Guaranteed plain-prose display summary |
+| `result_summary` | Guaranteed plain-prose answer, for display |
+| `evidence` | The runtime's record of each tool result the agent cited: tool, input, output, status. Always present; empty when none was cited. |
 | `error` | `None` on success; failure or yield explanation otherwise |
 | `tokens` | Input, output, and total token counts |
 | `cost_usd` | Estimated execution cost |
@@ -172,6 +174,13 @@ order. Each result carries the agent envelope plus its stable `step_id`:
 | `goal_execution` | Present for goal-oriented planning or a classified direct Kernel turn |
 
 Always check `step["status"] == "success"` before consuming `step["output"]`.
+An agent that could not carry out its task returns `"failure"` with its reason in
+`error`, never a success whose data says it was blocked.
+
+`mesh.run_task()` and `mesh.workflow()` return this view. Inside the mesh, each
+cited result also carries its observation as `observed_tool_result` next to the
+agent's claim, so evaluators and later steps can check one against the other;
+`mesh.delegate()` returns that raw envelope.
 A failure has `error` plus a human-readable `result_summary`; a yield or HITL
 result carries continuation details in `yield_metadata`.
 
@@ -242,6 +251,17 @@ class SlackNotifier(AutoAgent):
 
 The four sub-agents the Kernel routes to are the `CoderSubAgent` for tasks that require writing and running Python, the `ResearcherSubAgent` for tasks that require web search and synthesis, the `CommunicatorSubAgent` for tasks that require formatting and delivering output, and the `BrowserSubAgent` for web navigation tasks when `BROWSER_ENABLED=true` is set.
 
+Some steps already say which sub-agent they need, so the Kernel routes them without a model call:
+
+| Step | Sub-agent |
+|---|---|
+| Acts in the agent's own browser (`systems: ["browser"]`) | `browser` |
+| Reads or changes a connected provider | `coder` (the credentialed harness) |
+| Declares a role (`execution_contract.kernel_role` or `default_kernel_role`) | that role |
+| The Mesh's own response step (`effect: final_response`) | `communicator` |
+
+Everything else goes to the structured router.
+
 ### Analysis, not code: the `single_response` contract
 
 The answer must contain visible text and must not carry an explicit incomplete,
@@ -286,7 +306,7 @@ Inside every execution, generated code receives these names in its namespace:
 | Name | Type | Description |
 |---|---|---|
 | `workspace` | `Path` | Project root directory. All file reads and writes are expected here. |
-| `output_dir` | `Path` | `workspace/output/`: the preferred write location for produced files. |
+| `output_dir` | `Path` | `workspace/.jarviscore/output/`: the preferred write location for produced files. |
 | `blob_path(name)` | `Path` | Shorthand for `output_dir / name`. Creates parent directories. |
 | `bash(cmd)` | `BashExecutor` | Run allowed shell commands. Returns `{success, stdout, stderr, returncode}`. |
 | `git` | `GitHelper` | High-level git: `checkout_branch`, `add_all`, `commit`, `push`, `describe_pr`. |
@@ -334,7 +354,7 @@ Every sub-agent dispatch runs against an `ExecutionLease`: a token, turn, and wa
 | `coder` | 132,000 | 108,000 | 240,000 | 4 min | 32 turns |
 | `researcher` | 180,000 | 60,000 | 240,000 | 4 min | 36 turns |
 | `communicator` | 72,000 | 48,000 | 120,000 | 4 min | 18 turns |
-| `browser` | 60,000 | 60,000 | 120,000 | 5 min | 28 turns |
+| `browser` | 300,000 | 900,000 | 1,200,000 | 5 min | 28 turns |
 
 The turn fuse is an emergency hard-stop. If a sub-agent reaches 32 turns without completing, the Kernel terminates it regardless of token budget. This prevents runaway loops on adversarial or ambiguous tasks.
 
@@ -410,7 +430,9 @@ prior = raw.get("output", raw) if isinstance(raw, dict) else {}
 
 ### Checkpointing
 
-Checkpointing happens automatically. After every OODA loop turn, the Kernel calls `UnifiedMemory.save_checkpoint()` which writes the current `KernelState` (all accumulated findings, tool history, and reasoning progress) to Redis under `checkpoint:{workflow_id}:{step_id}`. If the process crashes and the workflow restarts, the `WorkflowEngine` detects the existing checkpoint and resumes from that turn rather than restarting from scratch.
+Checkpointing happens automatically. After every OODA loop turn, the Kernel calls `UnifiedMemory.save_checkpoint()` which writes the current `KernelState` (all accumulated findings, tool history, reasoning progress, and the recent conversation) to Redis under `checkpoint:{workflow_id}:{step_id}`. If the process crashes and the workflow restarts, the `WorkflowEngine` detects the existing checkpoint and resumes from that turn rather than restarting from scratch.
+
+The same checkpoint carries a step across execution epochs and approval pauses. A resumed step continues the conversation it was having, and a browser step whose epoch ran out continues on the same page (see [Browser Automation](./browser-automation.md#session-lifecycle)). Reaching the turn cap mid-work ends the epoch the same way as an exhausted token or time budget: the step continues in its next epoch while the workflow's `max_epochs_per_step` allows, and stops only after the last.
 
 You do not call `save_checkpoint()` or `load_checkpoint()` in application code. The framework manages this transparently when `REDIS_URL` is configured. Without Redis, there is no persistence and no crash recovery: the workflow starts from the beginning on failure.
 
@@ -647,7 +669,7 @@ Verify the outputs:
 
 ```bash
 redis-cli hgetall "step_output:financial-daily-001:fetch"
-cat blob_storage/reports/financial-daily-001.md
+cat .jarviscore/blob_storage/reports/financial-daily-001.md
 redis-cli xrange ledgers:financial-daily-001 - +
 ```
 

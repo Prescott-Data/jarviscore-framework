@@ -24,7 +24,7 @@ This guide covers what changes when you move JarvisCore from a local development
 | Blob storage | `STORAGE_BACKEND=local` writes to local filesystem | `STORAGE_BACKEND=azure` or a mounted persistent volume |
 | Athena memory | Optional | Required for cross-session memory via `ATHENA_URL` |
 | Prometheus | Off by default | Enabled with `PROMETHEUS_ENABLED=true` |
-| LLM concurrency | Unlimited | Set `LLM_MAX_CONCURRENT` to match your provider's RPM |
+| LLM concurrency | The provider governor finds the level from the provider's rate-limit headers | Declare known limits in `LLM_LIMITS` so every process shares one window; set `LLM_MAX_CONCURRENT` only as a hard cap on calls in flight per deployment |
 | P2P bind host | `127.0.0.1` | `0.0.0.0` to be reachable by other nodes |
 | Log level | `DEBUG` or `INFO` | `INFO` or `WARNING` |
 
@@ -41,7 +41,7 @@ Before deploying, confirm each item:
 - [ ] `STORAGE_BACKEND` is set to `azure` or points to a volume-backed path
 - [ ] `ALLOW_UNSAFE_LOCAL_EXECUTION` is off wherever agents read untrusted content
 - [ ] `PROMETHEUS_ENABLED=true` and your scrape target is registered
-- [ ] `LLM_MAX_CONCURRENT` is set to prevent cascading 429 errors
+- [ ] `LLM_LIMITS` declares each deployment's known limits when several processes share it
 - [ ] `LOG_LEVEL=INFO` is set to avoid token content appearing in logs
 - [ ] `P2P_ENABLED` and per-node bind ports are configured correctly for multi-node deployments
 - [ ] `EXECUTION_TIMEOUT` is tuned for your expected task durations
@@ -72,16 +72,89 @@ GEMINI_API_KEY=...
 
 ### LLM rate limiting
 
-In a multi-agent deployment, agents generate concurrent LLM calls. Without a concurrency cap, all agents will hit provider 429 rate limits simultaneously. Set `LLM_MAX_CONCURRENT` using this formula: divide your provider's requests-per-minute limit by the expected average call latency in seconds.
+The provider governor paces every model call per deployment. It starts at 8
+calls in flight, grows while the provider keeps up, and halves on a 429 or when
+the provider's rate-limit headers run low, so most deployments need no
+setting. When several processes share one deployment, declare its limits so
+they share one window through Redis:
 
 ```bash
-# Example: RPM=60, average latency=5s → 60 ÷ 12 = 5
-LLM_MAX_CONCURRENT=5
+LLM_LIMITS='{"azure:gpt-4o": {"rpm": 3000, "tpm": 1000000}}'
+
+# Optional hard cap on calls in flight per deployment
+LLM_MAX_CONCURRENT=16
 
 # 429 retry backoff: 4 retries with exponential delay, starting at 2s, capped at 60s
 LLM_MAX_RETRIES_429=4
 LLM_429_BASE_DELAY=2.0
 ```
+
+See [Provider governor](../reference/configuration.md#provider-governor)
+for every setting.
+
+### Scaling one agent: pools
+
+A pool runs one logical agent across as many members as its queued work needs,
+in one process:
+
+```python
+from jarviscore import Mesh, Pool
+
+mesh = Mesh()
+mesh.add(Verifier, pool=Pool(min=1, max=16, idle_seconds=60))
+```
+
+Members share the agent's id. Idle members above `min` retire after
+`idle_seconds`; `mesh.get_diagnostics()` reports each pool. A pool with
+`lane="bulk"` runs its model calls in the governor's bulk lane.
+
+#### How a pool spawns members
+
+Pass the agent class, not an instance: the pool creates new members from it.
+Each pool has one dispatcher, so members do not each poll Redis. On every pass
+the dispatcher looks for steps that are ready for the agent's role or
+capabilities and hands each one to an idle member. When no member is idle and
+the pool is below `max`, it creates a new member from the class, wires it to
+the same infrastructure as the registered agent (including storage, peer
+clients and, when the agent requires them, credentials), runs its `setup()`,
+and gives it the step. Each step is claimed
+atomically in Redis before it runs, so two members, or two nodes, never run the
+same step.
+
+When the work runs out, members above `min` that have been idle for
+`idle_seconds` are retired: the pool calls their `teardown()` and closes their
+peer clients. The registered agent itself is never retired.
+
+Because members run in parallel, a batch of independent steps takes about as
+long as its slowest step. Their model calls still pass through the
+[provider governor](../reference/configuration.md#provider-governor), so a
+larger pool cannot push a deployment past its rate limits.
+
+#### All work goes through the pool
+
+An agent instance runs one piece of work at a time: a running task keeps its
+routing decisions and its bound workspace on the instance. So every way work
+reaches an agent takes a member from its pool for as long as the work runs:
+
+- durable goal steps and capability needs from other agents, claimed by the
+  dispatcher;
+- steps of `mesh.workflow()`;
+- items of `mesh.fanout()`;
+- `mesh.delegate()` and `mesh.run_task()`;
+- requests from peers.
+
+An agent registered without a pool is a pool of one instance: its work runs one
+piece at a time, and work arriving while it is busy waits for it. Give it a
+`Pool` to let that work run in parallel. If a call chain waits on an agent
+whose every instance that chain already holds (an agent delegating to its own
+role, for example), the call raises an error naming the agent instead of
+waiting forever.
+
+#### Draining before shutdown
+
+Before stopping a node that still has goals in flight, call `mesh.drain()`: the
+node starts no new goal and claims nothing outside the workflows it is waiting
+on. `mesh.stop()` drains first.
 
 ### Model routing
 
@@ -205,7 +278,7 @@ The framework uses blob storage for atom versioning, function registry persisten
 
 ```bash
 STORAGE_BACKEND=local
-STORAGE_BASE_PATH=./blob_storage
+STORAGE_BASE_PATH=./.jarviscore/blob_storage
 ```
 
 This writes to the local filesystem. In a containerised deployment, this data is lost on restart unless you mount a persistent volume at `STORAGE_BASE_PATH`.
@@ -305,7 +378,7 @@ The framework writes structured trace files regardless of whether Prometheus is 
 
 ```bash
 TELEMETRY_ENABLED=true          # Enabled by default
-TELEMETRY_TRACE_DIR=./traces    # Directory for trace JSON files
+TELEMETRY_TRACE_DIR=./.jarviscore/traces    # Directory for trace JSON files
 ```
 
 In production, mount `TELEMETRY_TRACE_DIR` to a persistent volume or configure your observability platform to ship traces from this directory.
@@ -344,12 +417,14 @@ Inject all secrets via environment variables at runtime. Never bake API keys or 
 
 Mount the following paths to persistent storage to survive container restarts:
 
-| Path | Purpose |
-|---|---|
-| `STORAGE_BASE_PATH` (default `./blob_storage`) | Atom registry and LTM artifacts |
-| `TELEMETRY_TRACE_DIR` (default `./traces`) | Trace files |
-| `LOG_DIRECTORY` (default `./logs`) | Log files |
-| `~/.jarviscore/` | Nexus local store, only required when not using Gateway mode |
+| Path                                                       | Purpose                                                      |
+| ---------------------------------------------------------- | ------------------------------------------------------------ |
+| `STORAGE_BASE_PATH` (default `./.jarviscore/blob_storage`) | Atom registry and LTM artifacts                              |
+| `TELEMETRY_TRACE_DIR` (default `./.jarviscore/traces`)     | Trace files                                                  |
+| `LOG_DIRECTORY` (default `./.jarviscore/logs`)             | Log files                                                    |
+| `~/.jarviscore/`                                           | Nexus local store, only required when not using Gateway mode |
+
+All relative runtime paths above default to subdirectories of `./.jarviscore/`, so mounting that single directory covers them at once.
 
 ### Process supervision
 

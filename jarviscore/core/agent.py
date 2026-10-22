@@ -77,6 +77,8 @@ class Agent(ABC):
 
         # Initialize instance attributes
         self.agent_id = agent_id or f"{self.role}-{uuid4().hex[:8]}"
+        # Stable across restarts, unlike a generated agent_id.
+        self.memory_identity = agent_id or self.role
         self._mesh = None  # Set by Mesh when agent is added
         self._logger = logging.getLogger(f"jarviscore.agent.{self.agent_id}")
 
@@ -177,8 +179,12 @@ class Agent(ABC):
         interpretations: Dict[str, Any],
     ):
         """Decide whether upstream uncertainty materially prevents this task."""
+        from jarviscore.core.envelope import handoff_view
         from jarviscore.orchestration.envelopes import DependencyAuthorization
 
+        artifacts = {
+            step_id: handoff_view(artifact, step_id) for step_id, artifact in artifacts.items()
+        }
         unresolved = {
             step_id: interpretation
             for step_id, interpretation in interpretations.items()

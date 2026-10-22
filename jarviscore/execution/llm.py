@@ -4,15 +4,21 @@ Supports: JarvisCore promotion, vLLM, Azure OpenAI, Gemini, Vertex AI, Claude
 """
 import asyncio
 import aiohttp
+import functools
+import httpx
+import inspect
+import json
 import logging
 import random
 import re
 import time
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Tuple
 from enum import Enum
 
 from jarviscore.context.context_manager import ContextManager
-from jarviscore.execution import multimodal
+from jarviscore.execution import multimodal, native_tools
+from jarviscore.execution.governor import current_lane, process_governor, retry_after_seconds
+from jarviscore.config.paths import runtime_path
 from jarviscore.promo import PROMO_MODEL
 from jarviscore.orchestration.budget import current_workflow_budget
 
@@ -59,6 +65,30 @@ def _metadata_value(value: Any, _depth: int = 0, _seen: frozenset = frozenset())
     return repr(value)
 
 
+def _responses_only(deployment: str) -> bool:
+    """Codex deployments (gpt-5.x-codex) are Responses-API-only on Azure."""
+    return "codex" in (deployment or "").lower()
+
+
+def _function_calls(tool_calls: Any) -> list[dict[str, str]]:
+    """Chat Completions tool calls as plain id/name/arguments records."""
+    calls = []
+    for call in tool_calls or []:
+        function = getattr(call, "function", None)
+        if function is None and isinstance(call, dict):
+            function = call.get("function") or {}
+        get = (lambda key: function.get(key)) if isinstance(function, dict) else (
+            lambda key: getattr(function, key, None)
+        )
+        call_id = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+        calls.append({
+            "id": str(call_id or ""),
+            "name": str(get("name") or ""),
+            "arguments": str(get("arguments") or ""),
+        })
+    return calls
+
+
 def _completion_fields(finish_reason: Any, **metadata: Any) -> dict[str, Any]:
     """Expose the native reason and retain provider-specific completion evidence."""
     reason = _metadata_value(finish_reason)
@@ -101,7 +131,7 @@ except ImportError:
     logger.debug("Gemini SDK not available (pip install google-genai)")
 
 try:
-    from openai import AsyncAzureOpenAI
+    from openai import AsyncAzureOpenAI, DefaultAsyncHttpxClient
     AZURE_AVAILABLE = True
 except ImportError:
     AZURE_AVAILABLE = False
@@ -113,6 +143,27 @@ try:
 except ImportError:
     CLAUDE_AVAILABLE = False
     logger.debug("Claude SDK not available (pip install anthropic)")
+
+
+@functools.lru_cache(maxsize=None)
+def _anthropic_takes_tool_choice() -> bool:
+    if not CLAUDE_AVAILABLE:
+        return False
+    return "tool_choice" in inspect.signature(Anthropic(api_key="probe").messages.create).parameters
+
+
+@functools.lru_cache(maxsize=None)
+def _genai_threads_function_calls() -> bool:
+    """JSON-schema declarations and thought signatures, which tool turns need."""
+    if not GEMINI_AVAILABLE:
+        return False
+    from google.genai import types
+
+    return (
+        "parameters_json_schema" in types.FunctionDeclaration.model_fields
+        and "thought_signature" in types.Part.model_fields
+        and "id" in types.FunctionCall.model_fields
+    )
 
 
 class LLMProvider(Enum):
@@ -149,6 +200,40 @@ TOKEN_PRICING = {
     "claude-sonnet-4": {"input": 3.00, "output": 15.00, "cached": 0.75},
     "claude-haiku-3.5": {"input": 1.00, "output": 5.00, "cached": 0.25},
 }
+
+_DEFAULT_PRICING = {"input": 3.0, "output": 15.0}
+_UNPRICED_WARNED: set = set()
+
+
+def _call_cost(
+    model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0,
+    default: Optional[Dict[str, float]] = None,
+) -> Tuple[float, str]:
+    """A call's cost in USD and where its price came from: declared, builtin or default."""
+    from jarviscore.config import settings
+
+    declared = (getattr(settings, "llm_prices", None) or {}).get(model)
+    if declared:
+        pricing, source = declared, "declared"
+    elif model in TOKEN_PRICING:
+        pricing, source = TOKEN_PRICING[model], "builtin"
+    else:
+        pricing, source = default or _DEFAULT_PRICING, "default"
+        if model not in _UNPRICED_WARNED:
+            _UNPRICED_WARNED.add(model)
+            logger.warning(
+                "No price is known for model %r; its costs are estimates at $%s/$%s per 1M "
+                "input/output tokens. Declare its real price in LLM_PRICES.",
+                model, pricing["input"], pricing["output"],
+            )
+    cached = min(max(int(cached_tokens or 0), 0), int(input_tokens or 0))
+    cached_rate = pricing.get("cached", pricing["input"])
+    cost = (
+        (int(input_tokens or 0) - cached) * pricing["input"]
+        + cached * cached_rate
+        + int(output_tokens or 0) * pricing["output"]
+    ) / 1_000_000
+    return cost, source
 
 
 class UnifiedLLMClient:
@@ -196,9 +281,36 @@ class UnifiedLLMClient:
 
         logger.info(f"LLM Client initialized with providers: {[p.value for p in self.provider_order]}")
 
-        # Concurrency limiter — reads LLM_MAX_CONCURRENT from config (env var)
-        max_concurrent = int(self.config.get("llm_max_concurrent", 0))
-        self._semaphore = _get_llm_semaphore(max_concurrent)
+        self._governor = (
+            process_governor(self.config)
+            if self.config.get("llm_governor_enabled", True) else None
+        )
+        # The governor enforces LLM_MAX_CONCURRENT as its ceiling, across event loops.
+        self._semaphore = (
+            None if self._governor is not None
+            else _get_llm_semaphore(int(self.config.get("llm_max_concurrent", 0)))
+        )
+
+    async def _observe_azure_response(self, response) -> None:
+        """Feed every Azure response's rate-limit headers to its deployment's governor."""
+        governor = getattr(self, "_governor", None)
+        if governor is None:
+            return
+        parts = response.request.url.path.split("/")
+        if "deployments" in parts and parts.index("deployments") + 1 < len(parts):
+            deployment = parts[parts.index("deployments") + 1]
+            governor.deployment(f"azure:{deployment}").observe_headers(response.headers)
+
+    def _deployment_key(self, provider: "LLMProvider", model: Optional[str]) -> str:
+        served = model or {
+            LLMProvider.PROMO: PROMO_MODEL,
+            LLMProvider.AZURE: self.config.get("azure_deployment", "gpt-4o"),
+            LLMProvider.CLAUDE: self.config.get("claude_model"),
+            LLMProvider.GEMINI: self.config.get("gemini_model"),
+            LLMProvider.VERTEX_AI: self.config.get("vertex_ai_model"),
+            LLMProvider.VLLM: self.config.get("llm_model"),
+        }.get(provider)
+        return f"{provider.value}:{served or 'default'}"
 
 
     def _setup_providers(self):
@@ -214,7 +326,7 @@ class UnifiedLLMClient:
             self.promo_client = PromoLLMClient(
                 token=promo_token,
                 timeout=self.config.get("llm_timeout", 120),
-                artifact_dir=self.config.get("promo_raw_artifact_dir", "./traces/promo_calls"),
+                artifact_dir=self.config.get("promo_raw_artifact_dir", runtime_path("traces", "promo_calls")),
             )
             self.provider_order.append(LLMProvider.PROMO)
             logger.info("✓ JarvisCore promotional LLM access configured")
@@ -230,7 +342,15 @@ class UnifiedLLMClient:
                         api_key=azure_key,
                         azure_endpoint=azure_endpoint,
                         api_version=self.config.get('azure_api_version', '2024-10-21'),
-                        timeout=self.config.get('llm_timeout', 120)
+                        # A stalled TLS handshake must fail fast and be retried by the SDK,
+                        # not hold the call for the whole response timeout.
+                        timeout=httpx.Timeout(
+                            self.config.get('llm_timeout', 120),
+                            connect=float(self.config.get('llm_connect_timeout', 10.0)),
+                        ),
+                        http_client=DefaultAsyncHttpxClient(
+                            event_hooks={"response": [self._observe_azure_response]}
+                        ),
                     )
                     self.provider_order.append(LLMProvider.AZURE)
                     logger.info(f"✓ Azure OpenAI provider available (primary): {azure_endpoint}")
@@ -339,6 +459,26 @@ class UnifiedLLMClient:
             or None
         )
 
+    def carries_native_tools(self, model: Optional[str] = None) -> bool:
+        """Whether every provider this call could fall back to carries native tool calls.
+
+        A native turn served by a provider that drops its tools would come back
+        as prose, so one provider in the chain without them rules native out.
+        """
+        providers = getattr(self, "provider_order", None) or []
+        return bool(providers) and all(self._carries_native_tools(p) for p in providers)
+
+    @staticmethod
+    def _carries_native_tools(provider: "LLMProvider") -> bool:
+        if provider in (LLMProvider.AZURE, LLMProvider.VLLM):
+            return True
+        if provider == LLMProvider.CLAUDE:
+            return _anthropic_takes_tool_choice()
+        if provider in (LLMProvider.GEMINI, LLMProvider.VERTEX_AI):
+            return _genai_threads_function_calls()
+        # The promotion endpoint's server decides what it forwards; it is not known to carry tools.
+        return False
+
     def _declared_output_allowance(
         self, model: Optional[str], provider: Optional["LLMProvider"] = None
     ) -> int:
@@ -425,6 +565,10 @@ class UnifiedLLMClient:
             input_reservation = multimodal.count_tokens(
                 messages, _TOKEN_COUNTER.count_tokens
             )
+            if kwargs.get("tools"):
+                input_reservation += _TOKEN_COUNTER.count_tokens(
+                    json.dumps(kwargs["tools"], ensure_ascii=False, default=str)
+                )
             if not explicit_allowance:
                 max_tokens = max(
                     1, min(max_tokens, budget_account.headroom() - input_reservation)
@@ -482,6 +626,9 @@ class UnifiedLLMClient:
         base_delay = float(self.config.get("llm_429_base_delay", 2.0))
         last_error = None
         reserved_allowance = max_tokens
+        governor = getattr(self, "_governor", None)
+        lane = kwargs.pop("lane", None) or current_lane()
+        input_tokens = None
 
         for provider in self.provider_order:
             max_tokens = reserved_allowance
@@ -491,29 +638,34 @@ class UnifiedLLMClient:
                     self._declared_output_allowance(kwargs.get("model"), provider),
                 )
             for attempt in range(max_429_retries + 1):
+                permit = None
                 try:
                     logger.debug(f"Trying provider: {provider.value} (attempt {attempt})")
-                    if provider == LLMProvider.PROMO:
-                        return await self._call_promo(messages, temperature, max_tokens, **kwargs)
-                    elif provider == LLMProvider.VLLM:
-                        return await self._call_vllm(messages, temperature, max_tokens, **kwargs)
-                    elif provider == LLMProvider.AZURE:
-                        return await self._call_azure(messages, temperature, max_tokens, **kwargs)
-                    elif provider == LLMProvider.GEMINI:
-                        return await self._call_gemini(messages, temperature, max_tokens, **kwargs)
-                    elif provider == LLMProvider.VERTEX_AI:
-                        return await self._call_vertex_ai(messages, temperature, max_tokens, **kwargs)
-                    elif provider == LLMProvider.CLAUDE:
-                        return await self._call_claude(messages, temperature, max_tokens, **kwargs)
+                    if governor is not None:
+                        if input_tokens is None:
+                            input_tokens = multimodal.count_tokens(
+                                messages, _TOKEN_COUNTER.count_tokens
+                            )
+                        # Providers charge the requested output ceiling at admission.
+                        permit = await governor.deployment(
+                            self._deployment_key(provider, kwargs.get("model"))
+                        ).admit(input_tokens + max_tokens, lane)
+                    result = await self._dispatch(
+                        provider, messages, temperature, max_tokens, **kwargs
+                    )
+                    if permit is not None:
+                        usage = result.get("tokens") or {}
+                        await permit.finish(total_tokens=int(usage.get("total") or 0))
+                    return result
                 except Exception as e:
+                    if permit is not None:
+                        await permit.finish(
+                            rate_limited=self._is_rate_limit(e), failed=True
+                        )
                     if provider == LLMProvider.PROMO:
                         raise
                     error_str = str(e)
-                    is_rate_limit = (
-                        "429" in error_str
-                        or "too_many_requests" in error_str.lower()
-                        or "rate limit" in error_str.lower()
-                    )
+                    is_rate_limit = self._is_rate_limit(e)
                     if is_rate_limit and attempt < max_429_retries:
                         # Exponential backoff with full jitter — without jitter,
                         # N concurrent callers rate-limited at the same instant
@@ -528,8 +680,10 @@ class UnifiedLLMClient:
                         # (2026-07-23). A huge hint means the provider is DOWN
                         # for this window: fail fast so callers can degrade.
                         hint = re.search(r"retry after (\d+) second", error_str, re.IGNORECASE)
-                        if hint:
+                        hinted = retry_after_seconds(e)
+                        if hinted is None and hint:
                             hinted = float(hint.group(1))
+                        if hinted is not None:
                             if hinted > 300.0:
                                 logger.error(
                                     f"Provider {provider.value} quota exhausted "
@@ -549,11 +703,43 @@ class UnifiedLLMClient:
                         last_error = e
                         logger.warning(f"Provider {provider.value} failed: {e}")
                         break  # move to next provider
+                except BaseException:
+                    # Cancellation included: an abandoned call must not hold capacity.
+                    if permit is not None:
+                        await permit.finish(failed=True)
+                    raise
 
         raise RuntimeError(
             f"All LLM providers failed. Last error: {last_error}\n"
             f"Tried: {[p.value for p in self.provider_order]}"
         )
+
+    @staticmethod
+    def _is_rate_limit(error: BaseException) -> bool:
+        if getattr(error, "status_code", None) == 429:
+            return True
+        text = str(error)
+        return (
+            "429" in text
+            or "too_many_requests" in text.lower()
+            or "rate limit" in text.lower()
+        )
+
+    async def _dispatch(self, provider: "LLMProvider", messages: List[Dict],
+                        temperature: float, max_tokens: int, **kwargs) -> Dict:
+        if provider == LLMProvider.PROMO:
+            return await self._call_promo(messages, temperature, max_tokens, **kwargs)
+        if provider == LLMProvider.VLLM:
+            return await self._call_vllm(messages, temperature, max_tokens, **kwargs)
+        if provider == LLMProvider.AZURE:
+            return await self._call_azure(messages, temperature, max_tokens, **kwargs)
+        if provider == LLMProvider.GEMINI:
+            return await self._call_gemini(messages, temperature, max_tokens, **kwargs)
+        if provider == LLMProvider.VERTEX_AI:
+            return await self._call_vertex_ai(messages, temperature, max_tokens, **kwargs)
+        if provider == LLMProvider.CLAUDE:
+            return await self._call_claude(messages, temperature, max_tokens, **kwargs)
+        raise RuntimeError(f"Unknown LLM provider {provider!r}")
 
 
 
@@ -595,11 +781,14 @@ class UnifiedLLMClient:
 
         payload = {
             "model": self.config.get('llm_model', 'default'),
-            "messages": messages,
+            "messages": native_tools.openai_messages(messages),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False
         }
+        for option in ("tools", "tool_choice", "parallel_tool_calls"):
+            if kwargs.get(option) is not None:
+                payload[option] = kwargs[option]
 
         timeout = aiohttp.ClientTimeout(total=self.config.get('llm_timeout', 120))
         start_time = time.time()
@@ -613,7 +802,8 @@ class UnifiedLLMClient:
                 data = await response.json()
                 duration = time.time() - start_time
 
-                content = data['choices'][0]['message']['content']
+                message = data['choices'][0]['message']
+                content = message.get('content')
                 usage = data.get('usage', {})
 
                 return {
@@ -622,9 +812,10 @@ class UnifiedLLMClient:
                     **_completion_fields(
                         data['choices'][0].get("finish_reason"),
                         usage=usage,
-                        refusal=data['choices'][0]['message'].get("refusal"),
-                        tool_calls=data['choices'][0]['message'].get("tool_calls"),
+                        refusal=message.get("refusal"),
+                        tool_calls=message.get("tool_calls"),
                     ),
+                    "tool_calls": _function_calls(message.get("tool_calls")),
                     "tokens": {
                         "input": usage.get('prompt_tokens', 0),
                         "output": usage.get('completion_tokens', 0),
@@ -739,6 +930,7 @@ class UnifiedLLMClient:
         logger.debug("_call_azure: deployment=%s, response_format=%s", deployment, response_format)
 
         repair_enabled = bool(self.config.get("azure_content_filter_repair_enabled", False))
+        messages = native_tools.openai_messages(messages)
         attempts = [("raw", messages)]
         if repair_enabled:
             attempts.append(("provider_repaired", self._sanitize_for_azure(messages)))
@@ -765,19 +957,24 @@ class UnifiedLLMClient:
             if parallel_tool_calls is not None:
                 call_kwargs["parallel_tool_calls"] = parallel_tool_calls
 
-            # Codex deployments (gpt-5.x-codex) are Responses-API-only on Azure:
-            # chat.completions returns 400 "The requested operation is unsupported".
-            is_responses_only = "codex" in deployment.lower()
+            # chat.completions returns 400 "The requested operation is unsupported" for these.
+            is_responses_only = _responses_only(deployment)
 
             try:
                 if is_responses_only:
                     resp_kwargs = {
                         "model": deployment,
-                        "input": [multimodal.to_responses(m) for m in attempt_messages],
+                        "input": native_tools.responses_input(attempt_messages),
                         "max_output_tokens": max_tokens,
                     }
                     if response_format is not None:
                         resp_kwargs["text"] = {"format": response_format}
+                    if tools is not None:
+                        resp_kwargs["tools"] = native_tools.responses_tools(tools)
+                    if tool_choice is not None:
+                        resp_kwargs["tool_choice"] = tool_choice
+                    if parallel_tool_calls is not None:
+                        resp_kwargs["parallel_tool_calls"] = parallel_tool_calls
                     response = await self.azure_client.responses.create(**resp_kwargs)
                 else:
                     response = await self.azure_client.chat.completions.create(**call_kwargs)
@@ -831,6 +1028,12 @@ class UnifiedLLMClient:
                     if part.get("type") == "refusal"
                 ]
                 tool_calls = [item for item in output_items if item.get("type") == "function_call"]
+                function_calls = [
+                    {"id": str(item.get("call_id") or item.get("id") or ""),
+                     "name": str(item.get("name") or ""),
+                     "arguments": str(item.get("arguments") or "")}
+                    for item in tool_calls
+                ]
                 completion = _completion_fields(
                     detail_data.get("reason") or status,
                     status=status, incomplete_details=details,
@@ -844,6 +1047,7 @@ class UnifiedLLMClient:
                 completion_tokens = usage.completion_tokens
                 total_tokens = usage.total_tokens
                 choice = response.choices[0]
+                function_calls = _function_calls(getattr(choice.message, "tool_calls", None))
                 completion = _completion_fields(
                     getattr(choice, "finish_reason", None), usage=usage,
                     refusal=getattr(choice.message, "refusal", None),
@@ -855,14 +1059,20 @@ class UnifiedLLMClient:
                 logger.info("Azure content filter retry succeeded with opt-in provider prompt repair.")
 
             # Calculate cost
-            pricing = TOKEN_PRICING.get(deployment, {"input": 3.0, "output": 15.0})
-            cost = (prompt_tokens * pricing['input'] +
-                    completion_tokens * pricing['output']) / 1_000_000
+            details = getattr(usage, "prompt_tokens_details", None) or getattr(
+                usage, "input_tokens_details", None
+            )
+            cost, price_source = _call_cost(
+                deployment, prompt_tokens, completion_tokens,
+                getattr(details, "cached_tokens", 0) or 0,
+            )
 
             return {
                 "content": content,
                 "provider": "azure",
                 **completion,
+                "tool_calls": function_calls,
+                "price_source": price_source,
                 "tokens": {
                     "input": prompt_tokens,
                     "output": completion_tokens,
@@ -924,6 +1134,7 @@ class UnifiedLLMClient:
         provider_label: str,
         default_pricing: Dict,
         contents: Any = None,
+        messages: Optional[List[Dict]] = None,
         **kwargs,
     ) -> Dict:
         """Shared helper for google.genai generate_content calls (Gemini and Vertex AI)."""
@@ -938,22 +1149,26 @@ class UnifiedLLMClient:
             },
         }
         tools = kwargs.get('tools', None)
-        if tools:
+        if messages is not None and native_tools.is_openai_tools(tools):
+            from google.genai import types
+
+            system, gen_kwargs["contents"] = native_tools.genai_contents(messages, types)
+            if system:
+                gen_kwargs["config"]["system_instruction"] = system
+            gen_kwargs["config"]["tools"] = native_tools.genai_tools(tools, types)
+            gen_kwargs["config"]["tool_config"] = native_tools.genai_tool_config(
+                kwargs.get("tool_choice"), types
+            )
+            gen_kwargs["config"]["automatic_function_calling"] = {"disable": True}
+        elif tools:
             gen_kwargs["config"]["tools"] = self._normalize_tools_for_gemini(tools)
 
         response = await client.aio.models.generate_content(**gen_kwargs)
         duration = time.time() - start_time
 
-        tool_calls = []
         candidate = response.candidates[0] if response.candidates else None
         candidate_content = getattr(candidate, "content", None)
-        if candidate_content and candidate_content.parts:
-            for part in candidate_content.parts:
-                if hasattr(part, 'function_call') and part.function_call:
-                    tool_calls.append({
-                        "name": part.function_call.name,
-                        "args": dict(part.function_call.args) if part.function_call.args else {}
-                    })
+        tool_calls = native_tools.genai_calls(getattr(candidate_content, "parts", None))
 
         if candidate_content and candidate_content.parts:
             content = "".join(
@@ -983,12 +1198,16 @@ class UnifiedLLMClient:
         if finish_reason is None:
             finish_reason = getattr(prompt_feedback, "block_reason", None)
 
-        pricing = TOKEN_PRICING.get(model_name, default_pricing)
-        cost = (input_tokens * pricing['input'] + output_tokens * pricing['output']) / 1_000_000
+        cost, price_source = _call_cost(
+            model_name, input_tokens, output_tokens,
+            getattr(usage_metadata, "cached_content_token_count", 0) or 0,
+            default_pricing,
+        )
 
         return {
             "content": content,
             "provider": provider_label,
+            "price_source": price_source,
             **_completion_fields(
                 finish_reason, usage=usage_metadata,
                 finish_message=getattr(candidate, "finish_message", None),
@@ -1051,6 +1270,7 @@ class UnifiedLLMClient:
             model_name=self.gemini_model,
             prompt=prompt,
             contents=multimodal.to_genai(messages) if multimodal.has_images(messages) else None,
+            messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             provider_label="gemini",
@@ -1069,6 +1289,7 @@ class UnifiedLLMClient:
             model_name=self.vertex_ai_model,
             prompt=prompt,
             contents=multimodal.to_genai(messages) if multimodal.has_images(messages) else None,
+            messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             provider_label="vertex_ai",
@@ -1082,13 +1303,10 @@ class UnifiedLLMClient:
             raise RuntimeError("Claude client not initialized")
 
         # Separate system message from conversation
-        system_msg = None
-        conv_messages = []
-        for msg in messages:
-            if msg['role'] == 'system':
-                system_msg = msg['content']
-            else:
-                conv_messages.append({**msg, "content": multimodal.to_anthropic(msg["content"])})
+        tools = kwargs.pop('tools', None)
+        tool_choice = kwargs.pop('tool_choice', None)
+        parallel_tool_calls = kwargs.pop('parallel_tool_calls', None)
+        system_msg, conv_messages = native_tools.anthropic_messages(messages)
 
         model = kwargs.pop('model', None) or self.config.get('claude_model', 'claude-sonnet-4')
         start_time = time.time()
@@ -1100,6 +1318,11 @@ class UnifiedLLMClient:
             "temperature": temperature,
             "messages": conv_messages
         }
+        if tools:
+            request_kwargs["tools"] = native_tools.anthropic_tools(tools)
+            request_kwargs["tool_choice"] = native_tools.anthropic_tool_choice(
+                tool_choice, parallel_tool_calls
+            )
 
         # Only add system if it exists (Claude API requires it to be string or not present)
         if system_msg:
@@ -1116,20 +1339,24 @@ class UnifiedLLMClient:
             if getattr(block, "text", None)
         )
 
-        # Calculate cost
-        pricing = TOKEN_PRICING.get(model, {"input": 3.0, "output": 15.0})
-        cost = (response.usage.input_tokens * pricing['input'] +
-                response.usage.output_tokens * pricing['output']) / 1_000_000
+        # Calculate cost; Claude's input_tokens excludes cache reads, which bill at the cached rate.
+        cache_reads = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+        cost, price_source = _call_cost(
+            model, response.usage.input_tokens + cache_reads,
+            response.usage.output_tokens, cache_reads,
+        )
 
         return {
             "content": content,
             "provider": "claude",
+            "price_source": price_source,
             **_completion_fields(
                 getattr(response, "stop_reason", None),
                 stop_reason=getattr(response, "stop_reason", None),
                 stop_sequence=getattr(response, "stop_sequence", None),
                 usage=response.usage,
             ),
+            "tool_calls": native_tools.anthropic_calls(response.content),
             "tokens": {
                 "input": response.usage.input_tokens,
                 "output": response.usage.output_tokens,

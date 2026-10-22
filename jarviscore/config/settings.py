@@ -25,6 +25,8 @@ from typing import Dict, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+from .paths import runtime_path
+
 
 class Settings(BaseSettings):
     """
@@ -65,10 +67,13 @@ class Settings(BaseSettings):
     allow_unsafe_local_execution: bool = False
 
     # === Storage Settings ===
-    log_directory: str = "./logs"
+    # Runtime artifacts are consolidated under ./.jarviscore/
+    log_directory: str = runtime_path("logs")
 
     # === LLM Configuration ===
     llm_timeout: float = 120.0
+    # Connecting (TCP + TLS) gets its own short limit; the SDK retries a failed connect.
+    llm_connect_timeout: float = 10.0
     llm_temperature: float = 0.7
     # Output cap when a caller passes none. Reasoning deployments bill hidden
     # reasoning against it, so a low cap returns empty or truncated completions.
@@ -82,6 +87,17 @@ class Settings(BaseSettings):
     # Delay formula: min(base_delay * 2^attempt, 60s).
     llm_max_retries_429: int = 4
     llm_429_base_delay: float = 2.0
+    # Provider governor: paces calls per deployment before they are sent.
+    # Calls in flight start at llm_initial_concurrency and grow while the provider
+    # keeps up; a 429 or near-empty rate-limit headers halve them. Known limits,
+    # e.g. LLM_LIMITS='{"azure:gpt-5.2-chat": {"rpm": 3000, "tpm": 1000000}}',
+    # are enforced in a 60 s window shared through Redis by every process.
+    llm_governor_enabled: bool = True
+    llm_limits: Dict[str, Dict[str, int]] = Field(default_factory=dict)
+    llm_initial_concurrency: int = 8
+    llm_concurrency_ceiling: int = 256
+    # Share of a deployment's calls in flight held back from bulk work.
+    llm_bulk_reserve: float = 0.15
     # Output allowance for calls that do not pass max_tokens. Reasoning models
     # bill hidden reasoning against it; declare their ceilings below instead.
     llm_default_max_tokens: int = 4000
@@ -89,15 +105,22 @@ class Settings(BaseSettings):
     # LLM_MODEL_OUTPUT_LIMITS='{"gpt-5.2-chat": 128000}'. Declared models get
     # their full ceiling, bounded by the remaining workflow budget.
     llm_model_output_limits: Dict[str, int] = Field(default_factory=dict)
+    # Price per 1M tokens for models the built-in table lacks, or to override it, e.g.
+    # LLM_PRICES='{"gpt-5.6-luna": {"input": 1.25, "output": 10.0, "cached": 0.125}}'.
+    llm_prices: Dict[str, Dict[str, float]] = Field(default_factory=dict)
 
     # JarvisCore launch promotion. This is a revocable Prescott entitlement
     # token, never an upstream model-provider API key. The endpoint and model
     # alias are fixed module constants in jarviscore.promo, not configuration.
     promo_token: Optional[str] = Field(None, validation_alias="JARVISCORE_PROMO_TOKEN")
     promo_raw_artifact_dir: str = Field(
-        "./traces/promo_calls",
+        runtime_path("traces", "promo_calls"),
         validation_alias="JARVISCORE_PROMO_RAW_ARTIFACT_DIR",
     )
+
+    # Any decision model: 'module:callable' returning a DecisionClient.
+    # When unset, TypeSafe Jev is used if TYPESAFE_API_KEY is configured.
+    decision_client_factory: Optional[str] = Field(None, validation_alias="DECISION_CLIENT_FACTORY")
 
     # TypeSafe Jev decision model. Separate from generation providers because
     # System One returns typed judgments rather than text completions.
@@ -157,13 +180,13 @@ class Settings(BaseSettings):
 
     # === Blob Storage ===
     storage_backend: str = "local"  # "local" or "azure"
-    storage_base_path: str = "./blob_storage"
+    storage_base_path: str = runtime_path("blob_storage")
     azure_storage_connection_string: Optional[str] = None
     azure_storage_container: str = "jarviscore"
 
     # === Telemetry ===
     telemetry_enabled: bool = True
-    telemetry_trace_dir: str = "./traces"
+    telemetry_trace_dir: str = runtime_path("traces")
     prometheus_enabled: bool = False
     prometheus_port: int = 9090
 
@@ -280,6 +303,18 @@ class Settings(BaseSettings):
     browser_profile_dir: Optional[str] = None  # BROWSER_PROFILE_DIR
     # CDP endpoint of a browser the person already has open (shared browser).
     browser_control_url: Optional[str] = None  # BROWSER_CONTROL_URL
+    # Locale and IANA timezone the browser presents; match them to the egress
+    # proxy's region. Unset = the host's.
+    browser_locale: Optional[str] = None  # BROWSER_LOCALE, e.g. en-GB
+    browser_timezone: Optional[str] = None  # BROWSER_TIMEZONE, e.g. Europe/London
+
+    # === Egress ===
+    # The developer's own proxy for browser traffic and the pages the researcher
+    # reads, e.g. http://user-session-{session}:pass@gw.provider.example:7000.
+    # {session} becomes a stable id per tenant or workflow (sticky exit IP).
+    egress_proxy_url: Optional[str] = None  # EGRESS_PROXY_URL
+    # Comma-separated hosts that go direct (loopback always does), e.g. searxng,.internal
+    egress_proxy_bypass: Optional[str] = None  # EGRESS_PROXY_BYPASS
 
     # === Search Providers ===
     # Gemini Grounded Search (primary): set GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT

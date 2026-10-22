@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from jarviscore.config.paths import runtime_path
+
 from urllib.parse import urlparse
 
 import aiohttp
@@ -112,7 +114,7 @@ class PromoLLMClient:
         token: str,
         *,
         timeout: float = 120.0,
-        artifact_dir: str = "./traces/promo_calls",
+        artifact_dir: str = runtime_path("traces", "promo_calls"),
     ) -> None:
         if not token or not token.strip():
             raise ValueError("A non-empty JARVISCORE_PROMO_TOKEN is required")

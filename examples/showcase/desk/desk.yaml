@@ -1,0 +1,19 @@
+name: JarvisCore Research Team
+factory: research_desk:build_mesh
+blueprint: research-team
+mesh_handler: research_desk:submit_task
+working_dir: ./runtime
+trace_dir: ./runtime/traces
+agents:
+  scout:
+    name: Scout
+    color: "#1758F5"
+    shape: circle
+  analyst:
+    name: Analyst
+    color: "#0CB5AC"
+    shape: diamond
+  writer:
+    name: Writer
+    color: "#7A5AF8"
+    shape: hexagon

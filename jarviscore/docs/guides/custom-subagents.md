@@ -17,7 +17,7 @@ Sub-agents are the specialised execution units that live inside the Kernel and r
 
 A sub-agent is not a mesh agent. It has no `role` in peer discovery, cannot be addressed by `peers`, and is never added to the Mesh directly. It is an internal worker that the Kernel dispatches to when it classifies a task.
 
-Each sub-agent exposes a **system prompt** that shapes LLM behaviour and a **tool set** that defines what the LLM can call. The OODA loop, convergence governor, epistemic ledger, failure ledger, and token budget tracking are all inherited from `BaseSubAgent`. You provide the prompt and the tools.
+Each sub-agent exposes a **system prompt** that shapes LLM behaviour and a **tool set** that defines what the LLM can call. The OODA loop, working notes, failure ledger, and token budget tracking are all inherited from `BaseSubAgent`. You provide the prompt and the tools.
 
 The Kernel caches sub-agents by `(step_id, role)`, they are reused within a workflow step and destroyed when the step completes.
 
@@ -134,6 +134,8 @@ Override these to intervene inside the loop without modifying it.
 ### `_can_complete(state, parsed) -> tuple[bool, GateEvidence | str]`
 
 Called when the LLM emits `DONE`. Return `(True, "")` to allow, or `(False, evidence)` to reject and keep the loop running.
+
+Only `DONE` completes a step. `RESULT` is the structured payload that accompanies `DONE`; a `RESULT` on its own (a plan, a partial table, `{"status": "in_progress"}`) is not a completion, and the agent is asked to repair the protocol on its next turn.
 
 Report what the agent produced, not a verdict on it:
 
@@ -292,13 +294,15 @@ execution stack.
 
 | Feature | Notes |
 |---|---|
-| OODA loop (Observe → Orient → Decide → Act) | Full loop with rolling 10-turn conversation history |
-| Token budget and lease enforcement | Via `AgentCognitionManager` |
-| Same-tool streak detection | Via `ConvergenceGovernor`, grants one strategic pivot, then yields |
-| Repeat failure blocking | Via `FailureLedger`, fingerprints `(tool, params)` pairs |
-| Duplicate search/URL blocking | Via `EpistemicLedger`, prevents wasteful re-reads before they happen |
+| OODA loop (Observe → Orient → Decide → Act) | Full loop with rolling 10-turn conversation history, carried through checkpoints so a resumed step continues the same conversation |
+| Runtime notices | Remaining tokens, wall clock and turns are reported as facts on the turn they apply to, never stored as the agent's own thoughts |
+| Token budget and lease enforcement | Via `AgentCognitionManager`; remaining tokens, wall clock and turns are reported each turn as facts |
+| Failure record | Via `FailureLedger`, classifies and records failures; recent failures are shown to the agent, never used to refuse a call |
+| Identical-call record | An exact repeat of an earlier call runs, and its result notes the earlier receipt and whether the result changed |
 | Trace event emission | `log_thinking`, `log_tool_start`, `log_tool_result`, `log_step_complete` |
 | Memory checkpointing | Per-turn checkpoint to `UnifiedMemory` when injected by Kernel |
+| Working notes | The `working_notes` argument on any native tool call, or `NOTE: <fact>` lines on the text protocol, is written to the step's `WorkingScratchpad` and shown every turn as MY WORKING NOTES, across epochs; notes cost no turn |
+| Approved actions | A person's decisions are carried out once when the step resumes, before the next turn. A tool that refuses before acting returns `"performed": False`, which leaves the approval open instead of settling it |
 
 ---
 

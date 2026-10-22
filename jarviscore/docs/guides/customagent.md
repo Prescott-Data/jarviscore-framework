@@ -175,7 +175,7 @@ For the full `UnifiedMemory` API, see the [Memory](../concepts/memory.md) concep
 
 ## Blob Storage
 
-`LocalBlobStorage` writes to `./blob_storage/` by default. Switch to Azure by setting `STORAGE_BACKEND=azure` in your `.env`.
+`LocalBlobStorage` writes to `./.jarviscore/blob_storage/` by default (`STORAGE_BASE_PATH` changes it). Switch to Azure by setting `STORAGE_BACKEND=azure` in your `.env`.
 
 ```python
 # Save artifacts

@@ -9,8 +9,8 @@ exists, callers must not run model-written code without an explicit opt-in.
 
 from __future__ import annotations
 
-import functools
 import logging
+import os
 import shutil
 import site
 import subprocess
@@ -114,33 +114,48 @@ def _prefix_for(mechanism: str, workspace: Path, protected: Sequence[Path]) -> L
     return bubblewrap_command(workspace, protected)
 
 
-@functools.lru_cache(maxsize=None)
+_CONFINEMENT: List[Optional[str]] = []
+#: Seconds a confined child may take to start and import the framework on a busy host.
+_PROBE_TIMEOUT_S = float(os.getenv("JARVISCORE_CONFINEMENT_PROBE_TIMEOUT_S", "180"))
+
+
 def confinement_unavailable_reason() -> Optional[str]:
     """Why this host cannot confine a child, or None when confinement is proven to work.
 
     An installed mechanism is not enough: containers commonly forbid the
-    namespaces bubblewrap needs, so one confined child is actually run.
+    namespaces bubblewrap needs, so one confined child is actually run. Only a
+    definite answer is kept; a child that was merely slow to start proves nothing
+    and is probed again on the next call.
     """
+    if _CONFINEMENT:
+        return _CONFINEMENT[0]
     mechanism = _mechanism()
     if mechanism is None:
-        return f"no confinement mechanism is installed for {sys.platform}"
+        reason: Optional[str] = f"no confinement mechanism is installed for {sys.platform}"
+        _CONFINEMENT.append(reason)
+        return reason
     with tempfile.TemporaryDirectory() as scratch:
         workspace = Path(scratch)
         try:
             probe = subprocess.run(
                 [*_prefix_for(mechanism, workspace, ()), sys.executable, "-c", "import jarviscore"],
-                cwd=scratch, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+                cwd=scratch, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                timeout=_PROBE_TIMEOUT_S,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired:
+            reason = f"{mechanism} did not start a confined process within {_PROBE_TIMEOUT_S:g}s"
+            logger.warning("Process confinement not yet proven: %s", reason)
+            return reason
+        except OSError as exc:
             reason = f"{mechanism} could not start a confined process: {exc}"
         else:
-            if probe.returncode == 0:
-                return None
-            reason = (
+            reason = None if probe.returncode == 0 else (
                 f"{mechanism} could not start a confined process "
                 f"(exit {probe.returncode}): {probe.stderr.strip()}"
             )
-    logger.warning("Process confinement unavailable: %s", reason)
+    _CONFINEMENT.append(reason)
+    if reason is not None:
+        logger.warning("Process confinement unavailable: %s", reason)
     return reason
 
 

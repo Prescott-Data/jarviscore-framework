@@ -21,6 +21,7 @@ from .llm import (
 
 from .decisions import (
     DecisionClientError,
+    DecisionClient,
     DecisionResult,
     JevDecisionClient,
     create_decision_client,
@@ -109,6 +110,7 @@ from .code_registry import (
     FunctionRegistry,
     FunctionStatus,
     create_function_registry,
+    shared_function_registry,
     # Backward-compatible aliases
     CodeRegistry,
     create_code_registry,
@@ -123,6 +125,7 @@ __all__ = [
 
     # Decision models
     'DecisionClientError',
+    'DecisionClient',
     'DecisionResult',
     'JevDecisionClient',
     'create_decision_client',
@@ -192,6 +195,7 @@ __all__ = [
     'FunctionRegistry',
     'FunctionStatus',
     'create_function_registry',
+    'shared_function_registry',
     # Backward-compatible aliases
     'CodeRegistry',
     'create_code_registry',

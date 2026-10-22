@@ -5,9 +5,7 @@ What these tests prove:
 - Tool classification separates thinking from action tools
 - Budget tracking charges the correct phase bucket
 - Phase transitions follow discovery → analysis → implementation → completion
-- Spinning detection catches 3+ consecutive identical tool calls
-- Cognitive gate prevents premature done() calls
-- Interventions fire on spinning and low budget
+- Cognition records and reports facts; it never steers the agent
 - Budget summary provides accurate snapshot
 """
 
@@ -69,7 +67,9 @@ class TestToolClassification:
         from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
 
         tools = ResearcherSubAgent(agent_id="r", llm_client=None)._tools
-        for name in ("search_internet", "search_internet_batch", "read_web_content", "rag_query"):
+        readers = ("search_internet", "search_internet_batch", "read_web_content", "rag_query")
+        # rag_query is offered only with the [rag] extra installed.
+        for name in (n for n in readers if n in tools or n != "rag_query"):
             assert getattr(tools[name].phase, "value", tools[name].phase) == AgentPhase.DISCOVERY.value
 
 
@@ -200,46 +200,7 @@ class TestShouldContinue:
         assert cognition.should_continue() is False
 
 
-class TestSpinningDetection:
-
-    def test_no_spinning_with_varied_tools(self, cognition):
-        cognition.track_usage("web_search", tokens=100)
-        cognition.track_usage("analyze", tokens=100)
-        cognition.track_usage("web_search", tokens=100)
-        assert not cognition.detect_spinning("web_search")
-
-    def test_detects_spinning_at_threshold(self, cognition):
-        for _ in range(3):
-            cognition.track_usage("web_search", tokens=100)
-        assert cognition.detect_spinning("web_search")
-
-    def test_no_spinning_below_threshold(self, cognition):
-        cognition.track_usage("web_search", tokens=100)
-        cognition.track_usage("web_search", tokens=100)
-        assert not cognition.detect_spinning("web_search")
-
-    def test_spinning_resets_on_different_tool(self, cognition):
-        cognition.track_usage("web_search", tokens=100)
-        cognition.track_usage("web_search", tokens=100)
-        cognition.track_usage("analyze", tokens=100)
-        assert not cognition.detect_spinning("analyze")
-
-
-class TestCognitiveGate:
-
-    def test_premature_done_in_discovery(self, cognition):
-        """done() in discovery phase is premature."""
-        assert cognition.detect_premature_done() is True
-
-    def test_premature_done_without_action(self, cognition):
-        """done() after only thinking is premature."""
-        cognition.track_usage("web_search", tokens=50_000)
-        # Now in ANALYSIS phase but no action taken
-        assert cognition.detect_premature_done() is True
-
-    def test_not_premature_after_action(self, cognition):
-        cognition.track_usage("generate_code", tokens=1000)
-        assert cognition.detect_premature_done() is False
+class TestActedRecord:
 
     def test_has_acted_flag(self, cognition):
         assert cognition.has_acted is False
@@ -252,28 +213,34 @@ class TestCognitiveGate:
         assert cognition.has_acted is False
 
 
-class TestInterventions:
+class TestRecordsWithoutSteering:
+    """Cognition reports what happened; it never decides the agent's next move."""
 
-    def test_no_intervention_normally(self, cognition):
-        cognition.track_usage("web_search", tokens=100)
-        assert cognition.get_intervention() is None
+    def test_no_steering_methods_remain(self, cognition):
+        for name in (
+            "detect_spinning", "detect_premature_done", "get_intervention",
+            "is_repeat_failure", "failure_memory_block", "evaluate_convergence",
+            "check_stall_verdict", "convergence",
+        ):
+            assert not hasattr(cognition, name), name
 
-    def test_spinning_intervention(self, cognition):
-        for _ in range(5):
-            cognition.track_usage("web_search", tokens=100)
-        msg = cognition.get_intervention()
-        assert msg is not None
-        assert "web_search" in msg
-        assert "5 times" in msg
+    def test_repeated_identical_tool_keeps_running(self, cognition):
+        for _ in range(20):
+            cognition.track_usage("web_search", tokens=10)
+        assert cognition.should_continue() is True
 
-    def test_low_budget_intervention(self):
-        lease = ExecutionLease(max_total_tokens=1000, thinking_budget=1000, action_budget=1000)
+    def test_budget_facts_state_remaining_resources(self):
+        lease = ExecutionLease(
+            max_total_tokens=1000, thinking_budget=1000, action_budget=1000,
+            wall_clock_ms=60_000,
+        )
         cognition = AgentCognitionManager(lease)
-        # Use action tokens so _has_acted=True — avoids budget-exhaustion alert (priority 1)
         cognition.track_usage("generate_code", tokens=950)
-        msg = cognition.get_intervention()
-        assert msg is not None
-        assert "remaining" in msg.lower() or "budget" in msg.lower()
+        facts = cognition.budget_facts()
+        assert facts.startswith("Remaining: 50 of 1000 tokens")
+        assert "of 60s wall clock" in facts
+        for steer in ("stop", "call done", "wrap up", "should", "must"):
+            assert steer not in facts.lower()
 
 
 class TestBudgetSummary:

@@ -60,6 +60,7 @@ __license__ = "Apache-2.0"
 from jarviscore.core.agent import Agent
 from jarviscore.core.profile import Profile
 from jarviscore.core.mesh import Mesh, MeshMode
+from jarviscore.core.pool import Pool
 
 # Execution profiles
 from jarviscore.profiles.autoagent import AutoAgent
@@ -85,6 +86,7 @@ from jarviscore.adapter import jarvis_agent, wrap
 from jarviscore.context import JarvisContext, MemoryAccessor, DependencyAccessor
 from jarviscore.execution.decisions import (
     DecisionClientError,
+    DecisionClient,
     DecisionResult,
     JevDecisionClient,
 )
@@ -137,6 +139,7 @@ __all__ = [
     "Profile",
     "Mesh",
     "MeshMode",
+    "Pool",
 
     # Profiles
     "AutoAgent",
@@ -170,6 +173,7 @@ __all__ = [
 
     # Decision models
     "DecisionClientError",
+    "DecisionClient",
     "DecisionResult",
     "JevDecisionClient",
 

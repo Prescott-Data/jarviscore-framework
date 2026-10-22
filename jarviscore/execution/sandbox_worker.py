@@ -82,11 +82,69 @@ class MeshFacade:
         )
 
 
+async def execute_browser_code(request: dict, rpc: ParentRPC, namespace: dict | None = None) -> dict:
+    """Run code against the parent's page: it gets the page stand-in and nothing else."""
+    import ast
+    import datetime
+    import math
+    import re
+
+    from jarviscore.execution.page_proxy import page_namespace
+
+    if namespace is None:
+        namespace = {}
+    if not namespace:
+        def browser_call(operation, payload):
+            return rpc.call(operation, {**payload, "state": _jsonable(namespace.get("state", {}))})
+
+        namespace.update({
+            "__builtins__": __builtins__,
+            "json": json, "re": re, "datetime": datetime, "math": math, "asyncio": asyncio,
+            "state": dict((request.get("context") or {}).get("browser_state") or {}),
+            "prior": (request.get("context") or {}).get("prior_outputs") or {},
+            **page_namespace(browser_call),
+        })
+    namespace["reads"] = dict((request.get("context") or {}).get("browser_reads") or {})
+    namespace["result"] = None
+    previous_main, previous_run = namespace.get("main"), namespace.get("run")
+    stdout = io.StringIO()
+    try:
+        code = compile(
+            request["code"], "<run_playwright>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+        )
+        with contextlib.redirect_stdout(stdout):
+            pending = eval(code, namespace)  # noqa: S307 - runs only inside the confined child
+            if pending is not None and hasattr(pending, "__await__"):
+                await pending
+            entry = (
+                namespace.get("main") if namespace.get("main") is not previous_main
+                else namespace.get("run") if namespace.get("run") is not previous_run else None
+            )
+            if callable(entry):
+                returned = entry()
+                if hasattr(returned, "__await__"):
+                    returned = await returned
+                if returned is not None:
+                    namespace["result"] = returned
+        # Carried as the sandbox envelope's data, so a result with its own "error" key stays data.
+        return {
+            "result": {"data": _jsonable(namespace.get("result"))},
+            "state": _jsonable(namespace.get("state", {})), "stdout": stdout.getvalue(),
+        }
+    except Exception as exc:  # noqa: BLE001 - serialize child failures to the parent process
+        return {
+            "error": f"{type(exc).__name__}: {exc}", "error_type": type(exc).__name__,
+            "state": _jsonable(namespace.get("state", {})), "stdout": stdout.getvalue(),
+        }
+
+
 async def execute(request: dict) -> dict:
     workspace = Path(request["workspace"]).resolve()
     output_dir = Path(request["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     rpc = ParentRPC(int(request["rpc_fd"]))
+    if request.get("browser"):
+        return await execute_browser_code(request, rpc)
     mesh = MeshFacade(rpc)
     bash = BashExecutor(
         workspace,
@@ -157,8 +215,24 @@ async def execute(request: dict) -> dict:
         return {"error": str(exc), "error_type": type(exc).__name__, "stdout": stdout.getvalue()}
 
 
+async def browser_session(request: dict) -> None:
+    rpc = ParentRPC(int(request["rpc_fd"]))
+    namespace: dict = {}
+    while True:
+        response = await execute_browser_code(request, rpc, namespace)
+        sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+        line = sys.stdin.readline()
+        if not line:
+            return
+        request = json.loads(line)
+
+
 def main() -> int:
-    request = json.loads(sys.stdin.read())
+    request = json.loads(sys.stdin.readline())
+    if request.get("browser_session"):
+        asyncio.run(browser_session(request))
+        return 0
     response = asyncio.run(execute(request))
     sys.stdout.write(json.dumps(response, ensure_ascii=False))
     return 0

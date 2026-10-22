@@ -134,7 +134,7 @@ async def main():
             agent="researcher",
             task="What are the key architectural trade-offs in multi-agent systems?",
         )
-        print(result["output"])
+        print(result["result_summary"])
     finally:
         await mesh.stop()
 

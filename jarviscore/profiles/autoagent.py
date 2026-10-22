@@ -333,7 +333,7 @@ class AutoAgent(Profile):
             create_coder_sandbox,
             create_autonomous_repair,
             create_result_handler,
-            create_function_registry
+            shared_function_registry
         )
 
         # 1. Initialize LLM (auto-detects providers)
@@ -355,6 +355,9 @@ class AutoAgent(Profile):
         # proxy tries the gateway first and falls back to NexusLocalStore.
         nexus_proxy = None
         try:
+            if not getattr(self, "requires_auth", False):
+                # Credentials are for agents that declare they act on providers.
+                raise LookupError("agent does not declare requires_auth")
             from jarviscore.auth.manager import AuthenticationManager
             from jarviscore.nexus.call_proxy import NexusCallProxy
             # Resolved at call time, not captured now: the mesh injects the shared
@@ -390,14 +393,15 @@ class AutoAgent(Profile):
         self.repair = create_autonomous_repair(self.codegen, max_repairs)
 
         # 6. Initialize result handler (file + in-memory storage)
-        log_dir = config.get('log_directory', './logs')
+        from jarviscore.config.paths import runtime_path
+        log_dir = config.get('log_directory', runtime_path("logs"))
         self._logger.info(f"Initializing result handler (dir: {log_dir})...")
         self.result_handler = create_result_handler(log_dir)
 
         # 7. Initialize function registry (graduated, reusable generated functions)
         registry_dir = f"{log_dir}/function_registry"
         self._logger.info(f"Initializing function registry (dir: {registry_dir})...")
-        self.code_registry = create_function_registry(registry_dir)
+        self.code_registry = await asyncio.to_thread(shared_function_registry, registry_dir)
         # Confined code may read the registry but only registration may change it.
         self.sandbox.protected_paths = (Path(log_dir).resolve(),)
 
@@ -407,6 +411,12 @@ class AutoAgent(Profile):
         #    Matches an earlier internal agent pipeline.
         self._logger.info("Initializing Kernel (registry-first routing + ValidationLayer)...")
         self._kernel = self._create_kernel()
+        try:
+            self._kernel.provider_access = bool(getattr(self, "requires_auth", False))
+            self._kernel.memory_identity = getattr(self, "memory_identity", None) or self.role
+        except AttributeError:
+            # A product kernel that does not take the flag owns its own access rules.
+            pass
 
         # 9. Wire AdaptiveHITLPolicy from mesh config if enabled.
         #    The Kernel's execute() checks self.hitl_policy.should_escalate()
@@ -786,7 +796,9 @@ class AutoAgent(Profile):
                     context=kernel_ctx,
                     agent_id=self.agent_id,
                     agent_default_role=self.default_kernel_role,
-                    use_default_role_as_fallback=True,
+                    # A role the developer declared is the role; the router only
+                    # chooses for agents that declared none.
+                    use_default_role_as_fallback=self.default_kernel_role is None,
                 )
 
                 meta = output.metadata or {}
@@ -829,6 +841,7 @@ class AutoAgent(Profile):
                     "dispatches": meta.get("dispatches", []),
                     "_tool_receipts": meta.get("tool_receipts", []),
                     "kept_memories": meta.get("kept_memories", []),
+                    **({"progress": meta["progress"]} if meta.get("progress") else {}),
                     "yield_metadata": {
                         key: meta.get(key)
                         for key in (
@@ -1393,7 +1406,7 @@ class AutoAgent(Profile):
                         self._kernel.blob_storage,
                         workflow_id=step_ctx.get("workflow_id", execution.goal_id),
                         step_id=step.step_id,
-                        role=self.role,
+                        role=self.agent_id,
                     )
                     await pad.promote_to_truth(execution.truth, source=step.step_id)
                 except Exception as _se:
@@ -1441,6 +1454,12 @@ class AutoAgent(Profile):
 
             # Record: merges distilled_facts + evaluator findings into truth
             execution.record_completed(step, output, evaluation, elapsed)
+            if isinstance(output.payload, dict) and (
+                output.payload.get("browser_state") or output.payload.get("browser_calls")
+            ):
+                await self._kernel.retain_browser_procedure(
+                    output.payload, step_ctx, self.agent_id, accepted=evaluation.passed,
+                )
             if evaluation.verdict != "fail":
                 # pass AND partial satisfy dependencies — the step produced
                 # usable output (fail routes through replan below). A partial
@@ -1602,7 +1621,18 @@ class AutoAgent(Profile):
         if execution.completed:
             last = execution.completed[-1]
             last_summary = getattr(last.output, "summary", "") or ""
-            high_conf = execution.truth.high_confidence_facts(threshold=0.7)
+            from jarviscore.core.envelope import WORKING_STATE_FIELDS
+
+            # A fact is a readable line. A step's working state (the browser's
+            # programs and page state) is distilled too, and was pasted whole
+            # into the answer as the agent's source code.
+            high_conf = {
+                key: fact
+                for key, fact in execution.truth.high_confidence_facts(threshold=0.7).items()
+                if not any(part in WORKING_STATE_FIELDS for part in str(key).split("."))
+                and len(str(fact.value)) <= 300
+                and "\n" not in str(fact.value)
+            }
             facts_str = (
                 "\n".join(f"- {k}: {v.value}" for k, v in high_conf.items())
                 if high_conf else ""

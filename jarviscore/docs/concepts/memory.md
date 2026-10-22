@@ -31,11 +31,13 @@ flowchart LR
 
 ### Tier 1: Working Scratchpad
 
-The `WorkingScratchpad` holds the agent's active reasoning notes for the current workflow step. It is backed by blob storage (local filesystem or Azure Blob) and is scoped to a single `(workflow_id, step_id, agent_id)` tuple.
+The `WorkingScratchpad` holds the agent's working notes for the current workflow step. It is backed by blob storage (local filesystem or Azure Blob) and is scoped to a single `(workflow_id, step_id, agent_id)` tuple.
 
-Every call to `UnifiedMemory.log_turn()` appends a JSONL entry to the scratchpad. The scratchpad is included in the `rehydrate_bundle()` output as a formatted markdown string, which the Kernel injects into its context window at the start of each turn.
+An agent sees only its last ten exchanges, so anything it established earlier in a long step is kept by writing it down. Alongside any action, the agent writes what it has established: in the `working_notes` argument every function accepts under native tool calls, or as `NOTE: <fact>` lines (or `"notes": [...]` in the JSON protocol) on the text protocol; a note costs no turn. Each note is appended to the scratchpad and shown to the agent at the top of every later turn as **MY WORKING NOTES**, a block that context pressure never withholds. The notes are part of the step's checkpoint, so a step that continues in a new execution epoch keeps them.
 
-The scratchpad is ephemeral relative to the session: it is created fresh for each step and is not carried across steps. Use the Episodic Ledger and LTM for cross-step continuity.
+Every call to `UnifiedMemory.log_turn()` also appends the turn (thought, action and the whole result) to the scratchpad as an audit record; these turn entries are not shown back to the agent.
+
+The scratchpad is scoped to its step. Entries written with `scope="goal"` are promoted into the goal's truth when an `AutoAgent` goal step completes; use the Episodic Ledger and LTM for other cross-step continuity.
 
 **Activates when:** `blob_storage` is provided to `UnifiedMemory`.
 
@@ -62,9 +64,25 @@ On `load_summary()`, Redis is tried first. If the key has expired (for example a
 
 **Activates when:** both `redis_store` and `blob_storage` are provided to `UnifiedMemory`.
 
-### Tier 4: Athena MemOS
+### Tier 4: Cross-session memory (local store or Athena)
 
-Athena is an external memory service that provides cross-session, semantically searchable memory. It is the only tier that persists context beyond a single workflow execution.
+Tiers 1 to 3 belong to one workflow. Tier 4 is what an agent keeps from one
+session to the next: the facts it chooses to keep with `remember()`, recalled
+with `recall()` and, before every task, by relevance to that task.
+
+It is kept under the agent's stable identity: its `role`, or the `agent_id` you
+pass to the constructor. A generated `agent_id` (`researcher-1a2b3c4d`) is not
+used, because it changes with every process. When the Mesh separates tenants
+with `memory_scope_field`, each tenant has its own memory, and a step that
+names no tenant gets none.
+
+**Local store (default).** With no Athena configured, kept facts are appended
+to `.jarviscore/memory/<identity>.jsonl` (with `__<tenant>` when scoped).
+Recall scores facts by the words they share with the query: exact and cheap,
+not semantic. Set `Mesh(config={"local_memory": False})` to turn it off.
+
+**Athena MemOS.** Athena is an external memory service that replaces the local
+store with semantically searchable memory shared across machines.
 
 Athena operates its own three-tier pipeline internally:
 
@@ -74,9 +92,19 @@ Athena operates its own three-tier pipeline internally:
 | Mid-Term Memory (MTM) | MongoDB and Milvus | Cognitive chains grouped by topic with heat scoring |
 | Long-Term Memory (LTM) | ArangoDB | Knowledge graph built from consolidated chains |
 
-When Athena is configured, `UnifiedMemory.log_turn()` writes the thought and action outcome to Athena STM on every turn. On `rehydrate_bundle()`, the Kernel receives `athena_context`, which includes recent STM events and the highest-heat MTM chains. This context spans sessions: an agent restarted after a crash recovers not just its last checkpoint but its accumulated semantic understanding of the domain.
+When Athena is configured, it holds what lasts beyond a session: the outcomes
+an agent reports and the facts it chooses to keep with `remember()`. Individual
+turns are not written there; they stay in the step's scratchpad and episodic
+ledger, which recover a session after a crash. `recall()` searches Athena by
+relevance, and also returns facts kept so recently that Athena has not indexed
+them yet, labelled as such. On `rehydrate_bundle()`, the Kernel receives
+`athena_context`, which includes recent STM events and the highest-heat MTM
+chains, so an agent restarted after a crash recovers not just its last
+checkpoint but what earlier sessions established.
 
-**Activates when:** `ATHENA_URL` is set and `athena_client` is passed to `UnifiedMemory`.
+**Activates when:** the local store, whenever blob storage or Redis is
+available and Athena is not; Athena, when `ATHENA_URL` is set and
+`athena_client` is passed to `UnifiedMemory`.
 
 ---
 
@@ -164,10 +192,13 @@ The `ledger_tail` parameter controls how many recent episodic entries are includ
 | `redis_store` | `blob_storage` | `athena_client` | Active tiers |
 |---|---|---|---|
 | Not set | Not set | Not set | None (pure in-process run) |
-| Set | Not set | Not set | Episodic Ledger only |
-| Not set | Set | Not set | Working Scratchpad only |
-| Set | Set | Not set | Scratchpad, Episodic Ledger, LTM |
-| Set | Set | Set | All four tiers |
+| Set | Not set | Not set | Episodic Ledger, local cross-session store |
+| Not set | Set | Not set | Working Scratchpad, local cross-session store |
+| Set | Set | Not set | Scratchpad, Episodic Ledger, LTM, local cross-session store |
+| Set | Set | Set | Scratchpad, Episodic Ledger, LTM, Athena |
+
+A `Mesh` provides local blob storage by default, so an agent run through a Mesh
+always has the scratchpad and the local cross-session store.
 
 When a tier is inactive, all writes to it are no-ops and all reads return empty defaults. The Kernel continues to function correctly; it simply has less historical context available.
 

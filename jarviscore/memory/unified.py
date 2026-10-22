@@ -51,12 +51,19 @@ class UnifiedMemory:
         blob_storage=None,
         athena_client=None,   # Optional AthenaClient — enables 4th memory tier
         memory_scope: Optional[str] = None,
+        memory_identity: Optional[str] = None,
+        local_memory=None,    # Optional LocalMemory — cross-session tier without Athena
     ):
         self._wf = workflow_id
         self._step = step_id
         self._agent = agent_id
+        # Cross-session memory belongs to who the agent is, not to this process:
+        # agent_id carries a per-process suffix, so a fact kept under it was
+        # never found again after a restart.
+        self._identity = memory_identity or agent_id
         self._redis = redis_store
         self._memory_scope = memory_scope
+        self.local = local_memory
 
         self.working: Optional[WorkingScratchpad] = (
             WorkingScratchpad(blob_storage, workflow_id, step_id, agent_id)
@@ -83,6 +90,7 @@ class UnifiedMemory:
             "episodic" if self.episodic else None,
             "ltm" if self.ltm else None,
             "athena" if athena_client else None,
+            "local" if (local_memory is not None and not athena_client) else None,
         ]
         active = [t for t in tiers if t]
         logger.info(
@@ -99,7 +107,7 @@ class UnifiedMemory:
         try:
             from .athena_memory import AthenaMemory
             self._athena_memory = await AthenaMemory.create(
-                agent_id=self._agent,
+                agent_id=getattr(self, "_identity", None) or self._agent,
                 client=self._athena_client,
                 redis_store=self._redis,
                 user_id=self._memory_scope,
@@ -139,7 +147,9 @@ class UnifiedMemory:
         Tiers written (when available):
           - WorkingScratchpad (blob) — working notes for this step
           - EpisodicLedger (Redis Stream) — full chronological history
-          - AthenaMemory (Athena STM) — semantically searchable cross-session
+
+        Athena is not written: a turn is not a memory. ``remember()`` is how
+        something reaches cross-session memory.
 
         Args:
             turn_id: Unique identifier for this turn (e.g. "t1", "t2")
@@ -176,6 +186,9 @@ class UnifiedMemory:
         Returns False when no cross-session tier is available, so the caller can
         say so instead of believing something was kept.
         """
+        local = getattr(self, "local", None)
+        if local is not None and getattr(self, "_athena_client", None) is None:
+            return local.remember(fact, kind=kind, **metadata)
         am = await self._get_athena_memory()
         if not am:
             return False
@@ -197,6 +210,9 @@ class UnifiedMemory:
         A question, not a dump: the last N things the agent thought about
         anything are not what it needs to know about this.
         """
+        local = getattr(self, "local", None)
+        if local is not None and getattr(self, "_athena_client", None) is None:
+            return local.recall(query, limit=limit)
         am = await self._get_athena_memory()
         if not am:
             return []
@@ -208,8 +224,12 @@ class UnifiedMemory:
             return []
         # Search covers consolidated memory only; a fact the agent kept stays
         # short-term until Athena consolidates it, and must still be recallable.
-        seen = {str(item.get("content")) for item in found if isinstance(item, dict)}
+        # It is not a relevance match, so it is labelled and counted in the limit.
+        found = [item for item in found if isinstance(item, dict)][:limit]
+        seen = {str(item.get("content")) for item in found}
         for event in recent:
+            if len(found) >= limit:
+                break
             if not isinstance(event, dict):
                 continue
             if (event.get("metadata") or {}).get("event") != "remembered":
@@ -217,7 +237,7 @@ class UnifiedMemory:
             content = str(event.get("content") or "")
             if content and content not in seen:
                 seen.add(content)
-                found.append(event)
+                found.append({**event, "match": "kept recently, not yet searchable"})
         return found
 
 

@@ -18,6 +18,9 @@ AUTHORITY_KEYS = frozenset({
     "execution_budget",
     "output_schema",
     "mesh_workflow_id",
+    # Where the requester's step sits in its workflow; a peer answering it
+    # works in its own position, not the requester's.
+    "downstream_roles",
 })
 
 EFFECT_ORDER = ("read", "propose", "write", "notify", "destructive")
@@ -67,7 +70,7 @@ class ExecutionBudget:
     max_seconds: float = 900.0
     max_steps: int = 30
     max_replans: int = 8
-    max_tokens: int = 240_000
+    max_tokens: int = 1_200_000
     max_epochs_per_step: int = 8
     max_peer_depth: int = 2
     peer_timeout_seconds: float = 300.0
@@ -79,7 +82,7 @@ class ExecutionBudget:
             max_seconds=max(1.0, float(values.get("max_seconds", 900.0))),
             max_steps=max(1, int(values.get("max_steps", 30))),
             max_replans=max(0, int(values.get("max_replans", 8))),
-            max_tokens=max(1, int(values.get("max_tokens", 240_000))),
+            max_tokens=max(1, int(values.get("max_tokens", 1_200_000))),
             max_epochs_per_step=max(
                 1, int(values.get("max_epochs_per_step", 8))
             ),
@@ -423,3 +426,39 @@ class CapabilityMandate:
             fulfillment=fulfillment,
             error=str(record.get("error")) if record.get("error") else None,
         )
+
+
+def downstream_peer_refusal(
+    context: Optional[Dict[str, Any]], target: str, peers: Any = None, by_capability: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Refuse a peer request to a role that runs after this step in its workflow.
+
+    That role already receives this step's result as its input; asking it now
+    does its work twice, and its answer comes back before it has what it needs.
+    """
+    downstream = {str(role) for role in (context or {}).get("downstream_roles") or [] if role}
+    target = str(target or "").strip()
+    if not downstream or not target:
+        return None
+    roles = {target}
+    if by_capability and peers is not None and hasattr(peers, "list_peers"):
+        offering = {
+            str(peer.get("role")) for peer in peers.list_peers()
+            if target in (peer.get("capabilities") or [])
+        }
+        if offering and not offering <= downstream:
+            return None
+        roles |= offering
+    later = sorted(roles & downstream)
+    if not later:
+        return None
+    return {
+        "status": "error",
+        "error": (
+            f"{', '.join(later)} runs after you in this workflow and receives your "
+            "result as its input. Finish your part and deliver it; asking now would "
+            "do its work twice."
+        ),
+        "semantic_error": "PEER_RUNS_AFTER_YOU",
+        "peer_request_attempted": False,
+    }

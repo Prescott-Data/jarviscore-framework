@@ -95,7 +95,8 @@ class TestInfrastructureInjection:
             try:
                 assert first.decisions is decision_client
                 assert second.decisions is decision_client
-                assert mesh.has_capability("decisions_typesafe")
+                assert mesh.has_capability("decisions")
+                assert not mesh.has_capability("decisions_typesafe")
             finally:
                 await mesh.stop()
 
@@ -287,7 +288,7 @@ class TestInfrastructureAvailableInSetup:
             async def setup(self):
                 seen.update({
                     knob: self._mesh.config.get(knob)
-                    for knob in ("browser_headless", "browser_model", "browser_profile_dir", "browser_control_url")
+                    for knob in ("browser_headless", "browser_model", "browser_profile_dir", "browser_control_url", "telemetry_trace_dir")
                 })
 
             async def execute_task(self, task):
@@ -297,6 +298,7 @@ class TestInfrastructureAvailableInSetup:
         monkeypatch.setenv("BROWSER_MODEL", "gpt-5.6-luna")
         monkeypatch.setenv("BROWSER_PROFILE_DIR", "/tmp/profiles")
         monkeypatch.setenv("BROWSER_CONTROL_URL", "http://127.0.0.1:9222")
+        monkeypatch.setenv("TELEMETRY_TRACE_DIR", "/var/audit/traces")
         mesh = Mesh(mode="autonomous")
         mesh.add(SetupCheckAgent)
         await mesh.start()
@@ -306,6 +308,7 @@ class TestInfrastructureAvailableInSetup:
                 "browser_model": "gpt-5.6-luna",
                 "browser_profile_dir": "/tmp/profiles",
                 "browser_control_url": "http://127.0.0.1:9222",
+                "telemetry_trace_dir": "/var/audit/traces",
             }
         finally:
             await mesh.stop()

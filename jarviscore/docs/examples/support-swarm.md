@@ -147,7 +147,7 @@ class EscalationAgent(CustomAgent):
 
 Verify after running:
 ```bash
-ls blob_storage/escalations/support-swarm/
+ls .jarviscore/blob_storage/escalations/support-swarm/
 ```
 
 ---

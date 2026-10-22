@@ -91,7 +91,7 @@ docker run -d \
 > [!IMPORTANT]
 > SearXNG's JSON format must be enabled. Add `- json` under `search.formats` in `settings.yml`, or pass the env var shown above.
 
-If SearXNG is not running, the connection fails silently and the circuit breaker skips it: no error reaches your agent.
+If SearXNG is not running, the connection fails silently and the circuit breaker skips it: no error reaches your agent. When `SEARXNG_INSTANCE_URL` is not set, the default URL is tried once per search and a refused connection is logged only at debug level. When you set it, an instance that is down is retried and reported as a warning.
 
 ---
 
@@ -178,6 +178,8 @@ Every provider has an independent circuit breaker:
 | Recovery timeout | 300 seconds (5 minutes) |
 
 Once a provider's breaker opens, it is skipped entirely until the recovery window passes. Healthy providers continue operating normally. You'll see circuit breaker state changes in agent logs at `WARNING` level.
+
+A page read that fails carries the HTTP `status_code` the site returned. A page the site refuses with 401 or 403 is also marked `access: protected`, so the agent can tell a page it is not allowed to read from one that failed for another reason. The runtime does not retry or click around a failure on the agent's behalf; the agent decides what to do next.
 
 ---
 

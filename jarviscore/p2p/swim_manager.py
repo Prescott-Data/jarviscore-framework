@@ -10,14 +10,30 @@ import asyncio
 import contextlib
 import io
 import logging
+import os
 import threading
 from typing import Optional
 
 from .scheduling import SchedulingMonitor
 from .suspicion import SuspicionGuard
 
+
+@contextlib.contextmanager
+def _without_dotenv():
+    """swim.main calls load_dotenv() at import; the host process owns its environment."""
+    previous = os.environ.get("PYTHON_DOTENV_DISABLED")
+    os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("PYTHON_DOTENV_DISABLED", None)
+        else:
+            os.environ["PYTHON_DOTENV_DISABLED"] = previous
+
+
 # swim-p2p announces itself on stdout at import; a library must stay quiet
-with contextlib.redirect_stdout(io.StringIO()) as _swim_import_noise:
+with contextlib.redirect_stdout(io.StringIO()) as _swim_import_noise, _without_dotenv():
     from swim.transport.hybrid import HybridTransport
     from swim.protocol.node import Node
     from swim.config import get_config as get_swim_config, validate_config as validate_swim_config

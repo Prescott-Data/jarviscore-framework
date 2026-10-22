@@ -159,9 +159,10 @@ class TestEpistemicDecisionPrompt:
         prompt = self._build_prompt()
         assert "STRATEGY:" in prompt
 
-    def test_prompt_includes_exit_check(self):
+    def test_prompt_leaves_sufficiency_to_the_agent(self):
         prompt = self._build_prompt()
-        assert "EXIT CHECK:" in prompt
+        assert "EXIT CHECK" not in prompt
+        assert "enough to produce a useful result" not in prompt
 
     def test_prompt_includes_turn_number(self):
         state = _make_state(turn=7)
@@ -202,7 +203,7 @@ class TestConversationHistoryWindow:
         """run() threads history through _thread_history, which keeps 10 turns."""
         import inspect
         from jarviscore.kernel.subagent import _thread_history
-        assert "_thread_history(messages, conversation_history)" in inspect.getsource(BaseSubAgent.run)
+        assert "_thread_history(messages, conversation_history)" in inspect.getsource(BaseSubAgent._run_turns)
         messages = []
         _thread_history(messages, [{"assistant": str(i), "observation": str(i)} for i in range(15)])
         assert len(messages) == 20
@@ -250,6 +251,6 @@ class TestTurnDigest:
     def test_observation_format_in_source(self):
         """The observation string should include turn number and reflection prompt."""
         import inspect
-        source = inspect.getsource(BaseSubAgent.run)
+        source = inspect.getsource(BaseSubAgent._run_turns)
         assert "Reflect:" in source
         assert "[Turn {turn}]" in source or "Turn {turn}" in source

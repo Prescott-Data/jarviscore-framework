@@ -95,6 +95,29 @@ class TestKernelOutputFormat:
         assert "dispatches" in output.metadata
 
     @pytest.mark.asyncio
+    async def test_turn_fuse_yield_preserves_unfinished_findings(self, mock_llm, mock_sandbox):
+        mock_llm.responses = [
+            _router_response(),
+            _llm_response(
+                "THOUGHT: Still investigating\nNOTE: The source reports expenditure of 42 million\n"
+                'TOOL: read_turn_result\nPARAMS: {"turn": 0}'
+            ),
+        ]
+        kernel = Kernel(
+            llm_client=mock_llm, sandbox=mock_sandbox,
+            config={"kernel_max_turns": 1},
+        )
+
+        output = await kernel.execute(task="Research the expenditure", max_dispatches=1)
+
+        assert output.status == "yield"
+        assert output.payload is None
+        assert output.metadata["progress"]["verified"] is False
+        assert output.metadata["progress"]["working_notes"] == [
+            "The source reports expenditure of 42 million"
+        ]
+
+    @pytest.mark.asyncio
     async def test_legacy_dict_conversion(self, mock_llm, mock_sandbox):
         """AgentOutput can be converted to the legacy dict format."""
         mock_sandbox.responses = [{"status": "success", "output": {"answer": 42}}]

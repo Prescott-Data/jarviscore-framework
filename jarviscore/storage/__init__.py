@@ -18,6 +18,8 @@ Usage:
 
 from typing import TYPE_CHECKING
 
+from jarviscore.config.paths import runtime_path
+
 from .base import BlobStorage
 from .local import LocalBlobStorage
 
@@ -64,5 +66,5 @@ def get_blob_storage(settings=None) -> BlobStorage:
         )
 
     return LocalBlobStorage(
-        base_path=getattr(settings, "storage_base_path", "./blob_storage"),
+        base_path=getattr(settings, "storage_base_path", None) or runtime_path("blob_storage"),
     )
