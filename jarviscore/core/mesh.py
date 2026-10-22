@@ -710,6 +710,9 @@ class Mesh:
                         "revision": 0,
                         "result_summary": "",
                         "steps": [],
+                        "output": None,
+                        "evidence": [],
+                        "waiting": None,
                     }
                 raise RuntimeError(f"Workflow {identity!r} was not published before timeout")
             return await self._wait_for_workflow_terminal(identity, definition, timeout)
@@ -1622,7 +1625,7 @@ class Mesh:
                 if overall != "waiting":
                     self._redis_store.unregister_active_workflow(workflow_id)
                 self._workflow_activity.pop(workflow_id, None)
-                return {
+                return self._goal_result({
                     "workflow_id": workflow_id,
                     "status": overall,
                     "obligation_status": obligation_status,
@@ -1634,10 +1637,55 @@ class Mesh:
                         terminal_summaries[0] if len(terminal_summaries) == 1 else ""
                     ),
                     "steps": steps,
-                }
+                }, current_step_ids, dependency_ids)
             await self._idle_for(interval, mark)
         self._workflow_activity.pop(workflow_id, None)
         raise TimeoutError(f"Workflow {workflow_id!r} did not finish within {timeout}s")
+
+    @staticmethod
+    def _goal_result(result: Dict[str, Any], current: set, dependencies: set) -> Dict[str, Any]:
+        """Add what a caller reads from a goal, as run_task and workflow return it.
+
+        ``output`` is what the goal delivered: the completed final step of the
+        current plan (its response step, or its only terminal step).
+        ``evidence`` collects every current step's tool observations.
+        ``waiting`` names the step paused for a person, with why.
+        """
+        from jarviscore.core.envelope import caller_view
+
+        steps = [step for step in result["steps"] if str(step.get("id")) in current]
+        evidence: List[Dict[str, Any]] = []
+        seen: set = set()
+        for step in steps:
+            for item in caller_view(step.get("output") or {}).get("evidence") or []:
+                marker = item.get("tool_receipt_id") or id(item)
+                if marker not in seen:
+                    seen.add(marker)
+                    evidence.append({**item, "step_id": step.get("id")})
+        delivered = [
+            step for step in steps
+            if step.get("status") == "completed" and str(step.get("id")) not in dependencies
+            and isinstance(step.get("output"), dict)
+        ]
+        final = next((step for step in delivered if step.get("effect") == "final_response"), None)
+        if final is None and len(delivered) == 1:
+            final = delivered[0]
+        envelope = caller_view(final["output"]) if final else {}
+        output = envelope.get("output", envelope.get("payload")) if isinstance(envelope, dict) else None
+        if final and not result.get("result_summary") and isinstance(envelope, dict):
+            result["result_summary"] = str(envelope.get("result_summary") or "")
+        waiting = next((step for step in steps if step.get("status") == "waiting"), None)
+        result.update({
+            "output": output,
+            "evidence": evidence,
+            "waiting": {
+                "step_id": waiting.get("id"),
+                "reason": str((waiting.get("output") or {}).get("result_summary")
+                              or (waiting.get("output") or {}).get("error") or ""),
+                "metadata": (waiting.get("output") or {}).get("yield_metadata") or {},
+            } if waiting else None,
+        })
+        return result
 
     def cancel_goal(self, workflow_id: str, *, reason: str = "Goal cancelled") -> bool:
         """Durably cancel shared work so no peer can claim or commit it later."""

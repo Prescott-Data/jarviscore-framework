@@ -33,6 +33,20 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 2.3.1 <span class="changelog-date">2026-10-23</span>
+
+### Fixed
+
+- **A goal returns what it delivered.** `Mesh.execute_goal()` and
+  `resume_goal()` now return `output` (the final step's delivered work) and
+  `evidence` (every step's tool observations), as `run_task()` does, and
+  `waiting` (the step paused for a person, with why). Before, callers had to
+  dig them out of `steps`.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.3.0 <span class="changelog-date">2026-10-22</span>
 
 Multiplayer: a team and its agents work on the same files, from Slack or your

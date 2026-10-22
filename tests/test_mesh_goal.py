@@ -384,6 +384,9 @@ async def test_execute_goal_compiles_publishes_and_peers_claim_by_capability(mon
     assert result["status"] == "completed"
     assert result["result_summary"] == "The evidence was analysed successfully."
     assert [step["status"] for step in result["steps"]] == ["completed", "completed"]
+    # What the goal delivered, as run_task returns it: no digging through steps.
+    assert result["output"] == {"used": {"evidence": ["source-1"]}}
+    assert result["evidence"] == [] and result["waiting"] is None
     assert researcher.received[0]["context"]["objective"] == "Find evidence and analyse it"
     assert researcher.received[0]["context"]["source_context"]["lead"]["email"] == (
         "lead@example.com"
@@ -676,6 +679,7 @@ async def test_a_person_resolves_a_waiting_action_through_hitl(monkeypatch, deci
         await mesh.stop()
 
     assert first["status"] == "waiting"
+    assert first["waiting"]["step_id"] == "research" and first["output"] is None
     assert pending["status"] == "pending" and pending["action"]["consequence"] == "Places the order"
     assert resumed["status"] == "completed"
     assert analyst.received[0]["context"]["previous_step_results"] == {
