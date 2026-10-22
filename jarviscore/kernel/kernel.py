@@ -29,7 +29,11 @@ from jarviscore.context.truth import AgentOutput
 from jarviscore.context.context_manager import ContextManager, BudgetConfig
 from jarviscore.execution.llm import LLMProvider
 from jarviscore.kernel.lease import ExecutionLease, ROLE_LEASE_PROFILES
-from jarviscore.orchestration.envelopes import ExecutionBudget, neutral_context
+from jarviscore.orchestration.envelopes import (
+    ExecutionBudget,
+    downstream_peer_refusal,
+    neutral_context,
+)
 from jarviscore.kernel.cognition import AgentCognitionManager
 from jarviscore.context.fidelity import Record, select_whole
 from jarviscore.kernel.hitl import AdaptiveHITLPolicy
@@ -510,6 +514,15 @@ class Kernel:
                 async def execute_peer_tool(_name=name, **kwargs):
                     state = getattr(subagent, "_current_state", None)
                     source_context = dict(getattr(state, "context", {}) or {})
+                    if _name in {"ask_peer", "ask_capability"}:
+                        refusal = downstream_peer_refusal(
+                            source_context,
+                            kwargs.get("role") if _name == "ask_peer" else kwargs.get("capability"),
+                            self.peers,
+                            by_capability=_name == "ask_capability",
+                        )
+                        if refusal:
+                            return refusal
                     peer_context = neutral_context(source_context)
                     workflow_id = str(getattr(state, "workflow_id", "") or "")
                     step_id = str(getattr(state, "step_id", "") or "")
@@ -517,7 +530,11 @@ class Kernel:
                         peer_context["workflow_id"] = workflow_id
                     if step_id and step_id != "unknown":
                         peer_context["peer_requester_step_id"] = step_id
-                    peer_context["peer_requester_role"] = subagent.role
+                    # The mesh role peers address, not the kernel role (researcher,
+                    # coder) the step runs in: replies went to roles nobody holds.
+                    peer_context["peer_requester_role"] = (
+                        getattr(self.peers, "my_role", None) or subagent.role
+                    )
                     # Stamped from runtime step state so delegated work cannot exceed it.
                     peer_context["peer_requester_authority"] = {
                         "effect": str(source_context.get("effect") or "read"),
