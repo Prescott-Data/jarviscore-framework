@@ -260,6 +260,7 @@ class Settings(BaseSettings):
     # All credential types (OAuth, api_key, basic_auth) go through Nexus.
     # Set NEXUS_GATEWAY_URL to enable any connected-app functionality.
     nexus_gateway_url: Optional[str] = None  # NEXUS_GATEWAY_URL — required for connected apps
+    nexus_gateway_api_key: Optional[str] = None  # NEXUS_GATEWAY_API_KEY — sent as X-API-Key; written by `jarviscore nexus init`
     nexus_return_url: str = "http://localhost:8000/oauth/callback"  # Broker redirects here after consent
     nexus_default_user_id: str = "jarviscore-agent"
     nexus_enabled: Optional[bool] = None  # NEXUS_ENABLED — explicit override; None = auto-detect from nexus_gateway_url

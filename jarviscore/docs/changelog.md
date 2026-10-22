@@ -150,6 +150,32 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   only publishing to a provider is a `write`. Plans used to describe edits as
   writes to a made-up "source workspace" system, which validation refused.
 
+### Security
+
+- **The local Nexus stack no longer serves credentials to anyone who asks.**
+  The bundled stack passed the broker its key as `BROKER_API_KEY`, a name the
+  broker does not read, and the pinned gateway (v0.3.0) had no way to require a
+  key. Both listened on every network interface. Anything that could reach the
+  ports, including other machines on the same network, could list connections
+  through `/audit` and read their decrypted credentials from
+  `/connections/{id}/token` or `/v1/resolve`. The stack is now pinned to Nexus
+  v0.6.7, the broker requires `API_KEY`, the gateway requires
+  `NEXUS_GATEWAY_API_KEY`, and both publish on `127.0.0.1` only. The gateway
+  reaches the broker at `BROKER_BASE_URL` instead of sharing its network
+  namespace.
+- **Agents no longer hold the key that decrypts every credential.**
+  `jarviscore nexus init` wrote `NEXUS_ENCRYPTION_KEY` and `NEXUS_STATE_KEY` to
+  the project `.env`, which every agent process loads; generated code once
+  listed the encryption key into a user-facing answer. The stack's secrets now
+  live in `~/.jarviscore/nexus/stack.env` (mode 0600) and agents get
+  `NEXUS_GATEWAY_URL` and `NEXUS_GATEWAY_API_KEY` only. `nexus init` and
+  `nexus up` move keys an earlier init left in `.env` rather than regenerating
+  them, so stored credentials stay readable, and leave a key in place with a
+  warning when it differs from the stack's copy. `nexus status` warns when a
+  master key is still in `.env`.
+- **`nexus register` prompts for secrets** left out of its flags, so client
+  secrets and API keys stay out of shell history.
+
 ### Fixed
 
 - **The bundled Athena stack did not start, and lost memory when it did.**
@@ -187,6 +213,16 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - **A step that fails on another node keeps its reason.** The workflow
   reported every remote failure as "Remote node reported step failure"; it
   now returns the failure the remote node stored.
+- `jarviscore atom test --mode integration` asked the gateway for a broker-only
+  path and always failed; it now uses `/v1/token/{id}` and keeps the nested
+  `credentials` out of what it prints.
+
+### Removed
+
+- The repository-root `docker-compose.nexus.yml` and
+  `nexus/migrations/001_initial_schema.sql`. Both were stale copies: the root
+  file followed `:latest`, which the current broker refuses to start under.
+  `jarviscore nexus init` uses the compose file bundled with the package.
 
 </div>
 

@@ -86,7 +86,11 @@ class AuthenticationManager:
         self.nexus_client: Optional[NexusClient] = None
         self.lifecycle_monitor: Optional[LifecycleMonitor] = None
         if gateway_url:
-            self.nexus_client = NexusClient(gateway_url)
+            self.nexus_client = NexusClient(
+                gateway_url,
+                api_key=config.get("nexus_gateway_api_key")
+                or getattr(settings, "nexus_gateway_api_key", None),
+            )
             # The monitor noticed revoked tokens and told nobody: it took an
             # on_attention callback and was built without one, so the next
             # agent run failed at the provider one full run after the system
@@ -99,7 +103,7 @@ class AuthenticationManager:
                 "AuthenticationManager: NEXUS_GATEWAY_URL not set. "
                 "Connected-app calls will raise at runtime. "
                 "Set NEXUS_GATEWAY_URL to enable Nexus auth, or run "
-                "'docker compose -f docker-compose.nexus.yml up' for local dev."
+                "'jarviscore nexus init' for local dev."
             )
 
         # Pluggable OAuth flow handler (CLI by default)
@@ -241,7 +245,7 @@ class AuthenticationManager:
             logger.error(
                 "Cannot authenticate provider %r: no Nexus gateway configured. "
                 "Set NEXUS_GATEWAY_URL, or run "
-                "'docker compose -f docker-compose.nexus.yml up' for local dev.",
+                "'jarviscore nexus init' for local dev.",
                 provider,
             )
             raise RuntimeError(

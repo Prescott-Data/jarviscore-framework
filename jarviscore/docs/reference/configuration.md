@@ -373,6 +373,7 @@ Required only when agents call third-party services (GitHub, Slack, Jira, Stripe
 | Variable | Default | Description |
 |---|---|---|
 | `NEXUS_GATEWAY_URL` | (none) | Gateway URL, e.g. `http://localhost:8090` |
+| `NEXUS_GATEWAY_API_KEY` | (none) | Sent as `X-API-Key` on every Gateway call. Written by `jarviscore nexus init`. Grants Gateway access only, never the broker's encryption key. |
 | `NEXUS_BROKER_URL` | (none) | Broker URL, e.g. `http://localhost:8080`. Used by dashboard and SDK to POST credentials directly to the Broker's `/auth/capture-credential` endpoint for non-OAuth providers. |
 | `NEXUS_RETURN_URL` | `http://localhost:8000/oauth/callback` | OAuth callback URL; the Nexus broker redirects here after consent. |
 | `NEXUS_DEFAULT_USER_ID` | `jarviscore-agent` | User identity passed to Nexus for credential lookups. |
@@ -385,11 +386,11 @@ Initial setup:
 
 ```bash
 jarviscore nexus init
-jarviscore nexus register github \
-    --client-id=YOUR_ID \
-    --client-secret=YOUR_SECRET
+jarviscore nexus register github --client-id=YOUR_ID   # prompts for the secret
 jarviscore nexus test github
 ```
+
+The local stack's own secrets (`NEXUS_ENCRYPTION_KEY`, `NEXUS_STATE_KEY`, `NEXUS_BROKER_API_KEY`) live in `~/.jarviscore/nexus/stack.env` and are read by the broker and gateway containers only. Do not put them in a project `.env`.
 
 ---
 

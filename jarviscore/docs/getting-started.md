@@ -384,7 +384,7 @@ jarviscore memory init
 
 ```bash
 jarviscore nexus init
-jarviscore nexus register github --client-id=YOUR_ID --client-secret=YOUR_SECRET
+jarviscore nexus register github --client-id=YOUR_ID   # prompts for the secret
 ```
 
 **Enable multi-node distributed execution** with P2P:

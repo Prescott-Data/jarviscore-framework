@@ -95,7 +95,7 @@ Manages the Nexus credential gateway, which agents use to call third-party OAuth
 
 ### nexus init
 
-First-time setup. Generates encryption keys, writes them to `.env`, and starts the local Docker stack.
+First-time setup. Generates the stack's secrets, gives your project what agents need, and starts the local Docker stack.
 
 ```bash
 jarviscore nexus init
@@ -103,19 +103,22 @@ jarviscore nexus init
 
 This command:
 
-1. Generates `NEXUS_ENCRYPTION_KEY` and `NEXUS_STATE_KEY` if they are not already present in `.env`.
-2. Adds `NEXUS_GATEWAY_URL=http://localhost:8090` and `NEXUS_RETURN_URL=http://localhost:8000/oauth/callback` to `.env`.
-3. Pulls and starts the Nexus Docker stack with `docker compose up -d`.
-4. Waits up to 30 seconds for the broker to become healthy.
+1. Generates `NEXUS_ENCRYPTION_KEY`, `NEXUS_STATE_KEY`, `NEXUS_BROKER_API_KEY` and `NEXUS_GATEWAY_API_KEY` into `~/.jarviscore/nexus/stack.env`, a file only your user can read. Keys an earlier `nexus init` wrote to `.env` are moved there, not regenerated, so existing credentials stay readable.
+2. Adds `NEXUS_GATEWAY_URL`, `NEXUS_RETURN_URL` and `NEXUS_GATEWAY_API_KEY` to the project `.env`. Agents use only these.
+3. Pulls and starts the Nexus Docker stack. The broker and gateway require an API key and listen on `127.0.0.1` only.
+4. Waits up to 60 seconds each for the broker and the gateway to become healthy.
 
-Run this command once per project. Subsequent starts use `jarviscore nexus up`.
+Run this command once per machine. Subsequent starts use `jarviscore nexus up`, which also moves any master key it finds in the project `.env`.
+
+!!! warning "Keep the master key out of your project"
+    `NEXUS_ENCRYPTION_KEY` decrypts every stored credential. A project `.env` is loaded by every agent process, so the key does not belong there. Back up `~/.jarviscore/nexus/stack.env`: losing it makes stored credentials unreadable.
 
 !!! note "Docker is required"
     `nexus init` requires Docker Desktop or Docker Engine to be installed and running. See [https://www.docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop).
 
 ### nexus up
 
-Starts the local Nexus stack without regenerating keys. Use this for day-to-day restarts after the initial `nexus init`.
+Starts the local Nexus stack with the secrets in `~/.jarviscore/nexus/stack.env`. Use this for day-to-day restarts after the initial `nexus init`.
 
 ```bash
 jarviscore nexus up
@@ -132,16 +135,18 @@ jarviscore nexus register <provider> [options]
 **OAuth2 providers** (GitHub, Slack, Notion, HubSpot, Linear, Google Sheets, Google Drive):
 
 ```bash
-jarviscore nexus register github \
-    --client-id=YOUR_GITHUB_CLIENT_ID \
-    --client-secret=YOUR_GITHUB_CLIENT_SECRET
+jarviscore nexus register github --client-id=YOUR_GITHUB_CLIENT_ID
+# prompts for the client secret
 ```
 
 **API-key providers** (Stripe, Airtable, Brevo, Serper):
 
 ```bash
-jarviscore nexus register stripe --api-key=sk_live_...
+jarviscore nexus register stripe
+# prompts for the API key
 ```
+
+A secret left out of the flags is prompted for without echo, so it stays out of your shell history. The flags still work for scripts.
 
 **Any other provider.** The catalog holds defaults for providers already looked up, but it is not a list of what you are allowed to register. Pass the auth type, and for an API key say where the key goes:
 
