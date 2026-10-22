@@ -523,6 +523,12 @@ class WorkflowEngine:
         logger.info(
             f"Waiting up to {int(timeout)}s for remote node to complete step {step_id}"
         )
+        # Defaults keep the historical flat 2s poll; callers waiting on a single
+        # interactive step (e.g. `jarviscore run`) start lower and back off.
+        interval = float(self.config.get("remote_step_poll_interval", 2.0))
+        max_interval = max(
+            interval, float(self.config.get("remote_step_poll_max_interval", interval))
+        )
         while asyncio.get_event_loop().time() < deadline:
             status = self.redis_store.get_step_status(workflow_id, step_id)
             if status == "completed":
@@ -541,7 +547,8 @@ class WorkflowEngine:
                     "error": "Remote node reported step failure",
                     "step_id": step_id,
                 }
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(interval)
+            interval = min(interval * 1.5, max_interval)
 
         logger.warning(
             f"Timeout ({timeout}s) waiting for remote step {step_id} "

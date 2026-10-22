@@ -134,3 +134,58 @@ def test_run_against_dev_mesh(mesh):
 def test_run_without_mesh(project):
     out = _run(project, "helper", "hi")
     assert out.returncode == 2 and "jarviscore dev" in out.stderr
+
+
+# ── Latency and invocation ────────────────────────────────────────────────
+
+async def test_cli_polls_for_the_result_fast_then_backs_off(monkeypatch):
+    import asyncio
+
+    from jarviscore.cli.run import RESULT_POLL
+    from jarviscore.orchestration import engine as engine_mod
+
+    class Pending:
+        def get_step_status(self, workflow_id, step_id):
+            return "pending"
+
+    sleeps = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) >= 12:
+            raise asyncio.CancelledError
+        await real_sleep(0)
+
+    monkeypatch.setattr(engine_mod.asyncio, "sleep", fake_sleep)
+    engine = engine_mod.WorkflowEngine(mesh=type("MeshStub", (), {"agents": []})(),
+                                       config=dict(RESULT_POLL), redis_store=Pending())
+    with pytest.raises(asyncio.CancelledError):
+        await engine._wait_remote_step("wf", "step0", timeout=60)
+    assert sleeps[0] == 0.1 and sleeps == sorted(sleeps) and max(sleeps) == 1.0
+
+    sleeps.clear()
+    default = engine_mod.WorkflowEngine(mesh=type("MeshStub", (), {"agents": []})(),
+                                        redis_store=Pending())
+    with pytest.raises(asyncio.CancelledError):
+        await default._wait_remote_step("wf", "step0", timeout=60)
+    assert set(sleeps) == {2.0}, "the default poll for deployed meshes is unchanged"
+
+
+def test_run_module_invocation_runs_the_command():
+    out = subprocess.run([sys.executable, "-m", "jarviscore.cli.run", "--help"],
+                         capture_output=True, text=True, check=False)
+    assert out.returncode == 0 and "Usage: jarviscore run" in out.stdout
+
+
+@pytest.mark.parametrize("command", ["dev", "run", "serve"])
+def test_help_does_not_load_the_project_schema(command):
+    code = ("import sys; from jarviscore.cli.app import main\n"
+            "try:\n"
+            f"    main(['{command}', '--help'])\n"
+            "except SystemExit:\n"
+            "    pass\n"
+            "print('LOADED' if {'pydantic', 'yaml', 'dotenv', 'asyncio'} & set(sys.modules) else 'LAZY',"
+            " file=sys.stderr)")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert out.stderr.strip().endswith("LAZY"), out.stderr

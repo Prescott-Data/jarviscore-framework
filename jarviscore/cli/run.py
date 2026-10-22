@@ -5,21 +5,24 @@ distributed worker claims and executes it. Use it against `jarviscore dev` or an
 deployment whose Redis you can reach.
 """
 
-import asyncio
+from __future__ import annotations
+
 import json
 import os
+import sys
 import uuid
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import typer
 
-from jarviscore.project import LoadedProject, ProjectError, load_project
-from jarviscore.project.checks.production import available_values
-from jarviscore.project.schema import SECRET_REF_PREFIX
+from jarviscore.project._names import SECRET_REF_PREFIX
 
-from .dev import session_file
-from .serve import AgentResolutionError, load_agent_module, resolve_agent
+if TYPE_CHECKING:
+    from jarviscore.project import LoadedProject
+
+# The CLI waits on one step: poll fast at first, then back off (the default is 2s flat).
+RESULT_POLL = {"remote_step_poll_interval": 0.1, "remote_step_poll_max_interval": 1.0}
 
 
 class RunError(Exception):
@@ -27,6 +30,10 @@ class RunError(Exception):
 
 
 def resolve_run_redis(loaded: LoadedProject, environ: dict[str, str], explicit: str | None) -> tuple[str, str]:
+    from jarviscore.project.checks.production import available_values
+
+    from .dev import session_file
+
     if explicit:
         return explicit, "--redis"
     session = _live_session(session_file(loaded))
@@ -58,6 +65,8 @@ def _live_session(path: Path) -> dict | None:
 
 def agent_role(loaded: LoadedProject, name: str) -> str:
     """The role the agent registers in the mesh, which can differ from its yaml name."""
+    from .serve import AgentResolutionError, load_agent_module, resolve_agent
+
     agents = loaded.project.agents
     if name not in agents:
         raise RunError(
@@ -85,7 +94,8 @@ async def submit(redis_url: str, role: str, task: str, timeout: float) -> dict:
         async def on_peer_request(self, msg):
             return None
 
-    mesh = Mesh(config={"redis_url": _with_timeouts(redis_url), "p2p_enabled": False})
+    mesh = Mesh(config={"redis_url": _with_timeouts(redis_url), "p2p_enabled": False,
+                        **RESULT_POLL})
     mesh.add(CliClient, agent_id=f"jarviscore-cli-{uuid.uuid4().hex[:8]}")
     await mesh.start()
     try:
@@ -137,6 +147,10 @@ def run_command(
         False, "--json", help="Print the full result as JSON"),
 ) -> None:
     """Send one task to a running agent and print the result."""
+    import asyncio
+
+    from jarviscore.project import ProjectError, load_project
+
     try:
         loaded = load_project(destination=destination)
         role = agent_role(loaded, agent)
@@ -165,3 +179,9 @@ def run_command(
         typer.echo(
             f"✗ {result.get('error') or result.get('status')}", err=True)
     raise typer.Exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    from jarviscore.cli.app import main
+
+    main(["run", *sys.argv[1:]])
