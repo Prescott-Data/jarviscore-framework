@@ -33,7 +33,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## 2.2.0 <span class="changelog-date">Unreleased</span>
+## 2.2.0 <span class="changelog-date">2026-10-22</span>
 
 One agent can now run as several workers when its queue grows, every model call
 is paced against the provider's real limits, and agents act through native tool
