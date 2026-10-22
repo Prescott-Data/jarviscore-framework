@@ -507,9 +507,13 @@ def dev_command(
         None, "--redis", help="Use this Redis instead of finding or starting one"),
     reload: bool = typer.Option(
         True, "--reload/--no-reload", help="Restart agents when their files change"),
+    sync: bool = typer.Option(
+        True, "--sync/--no-sync",
+        help="Create .venv from pyproject.toml on first run (uv sync, else venv + pip). "
+             "Also disabled by JARVISCORE_DEV_NO_SYNC=1"),
 ) -> None:
     """Run all agents locally with Redis and live reload."""
-    raise typer.Exit(run_dev(roles or [], destination, redis_url, reload))
+    raise typer.Exit(run_dev(roles or [], destination, redis_url, reload, sync=sync))
 
 
 def use_color(stream=None, environ=None) -> bool:
@@ -526,7 +530,7 @@ def _fail(exc: Exception) -> None:
 
 
 def run_dev(roles: list[str], destination: str | None, redis_url: str | None,
-            reload: bool) -> int:
+            reload: bool, sync: bool = True) -> int:
     """Exit codes: 0 stopped normally, 1 runtime failure, 2 bad project/arguments,
     128+N stopped by signal N (130 for Ctrl-C)."""
     from jarviscore.project import ProjectError, load_project
@@ -542,6 +546,7 @@ def run_dev(roles: list[str], destination: str | None, redis_url: str | None,
         return 130
 
     try:
+        _provision_env(loaded, sync)
         python = _agent_python(loaded)
         if reload:
             _require("watchfiles")
@@ -550,10 +555,10 @@ def run_dev(roles: list[str], destination: str | None, redis_url: str | None,
         release_session(loaded)
         _fail(exc)
         return 1
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as exc:
         release_session(loaded)
         print("\nInterrupted.", file=sys.stderr, flush=True)
-        return 130
+        return 128 + getattr(exc, "signum", signal.SIGINT)
 
     session = DevSession(loaded, selected, redis, color=use_color(), python=python)
     stop_event = session.stopping
@@ -604,6 +609,18 @@ def run_dev(roles: list[str], destination: str | None, redis_url: str | None,
     if received:
         return 128 + received[0]
     return 1 if failed else 0
+
+
+def _provision_env(loaded: LoadedProject, sync: bool) -> None:
+    """First run: create the project's .venv so agents get its dependencies (p2p, redis)."""
+    from ._provision import ProvisionError, provision, should_provision
+
+    if not should_provision(loaded.root, sync=sync):
+        return
+    try:
+        provision(loaded.root)
+    except ProvisionError as exc:
+        raise DevError(str(exc)) from None
 
 
 def _agent_python(loaded: LoadedProject) -> str:

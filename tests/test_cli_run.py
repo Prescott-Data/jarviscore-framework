@@ -13,6 +13,12 @@ import pytest
 from jarviscore.cli.run import RunError, agent_role, resolve_run_redis
 from jarviscore.project import load_project
 
+
+@pytest.fixture(autouse=True)
+def _no_env_provisioning(monkeypatch):
+    # These projects must never trigger a real `uv sync` / pip install from `jarviscore dev`.
+    monkeypatch.setenv("JARVISCORE_DEV_NO_SYNC", "1")
+
 YAML = """
 service: demo
 agents:

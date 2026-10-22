@@ -41,7 +41,8 @@ def ensure_jarviscore(python: str, root: Path) -> None:
     if not ok:
         raise InterpreterError(
             f"{python} cannot import jarviscore. Install the project's dependencies: "
-            f"run `uv sync` (or `pip install -e .`) in {root}")
+            f"run `uv sync` in {root}, or delete {root / '.venv'} and run `jarviscore dev` "
+            "to recreate it")
 
 
 def running_under_pipx() -> bool:

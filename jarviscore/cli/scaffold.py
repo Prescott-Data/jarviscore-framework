@@ -237,7 +237,7 @@ def _create_named_project(args) -> int:
         print("  .env already existed and was kept: add your provider settings there")
     elif not credentials:
         print("  edit .env and set one LLM provider")
-    print("  jarviscore dev")
+    print("  jarviscore dev   (first run sets up .venv with the project's dependencies)")
     return 0
 
 
