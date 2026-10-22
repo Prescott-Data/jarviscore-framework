@@ -236,3 +236,42 @@ class RoomMemory:
     def _private(self, proposal: Dict[str, Any]) -> bool:
         shared = set(self.room.settings().get("shared_connectors") or [])
         return any(str(s.get("provider", "")).lower() not in shared for s in proposal.get("sources") or [])
+
+
+class LocalRoomMemory:
+    """Erases what agents kept for a room in the local store (``.jarviscore/memory``).
+
+    Without Athena, agents working in a room remember in local files scoped to the
+    room, and to each person's private memory in it. They live on the machine
+    and in the working directory where the work ran; run every worker of a room
+    there, or use Athena, for ``forget`` to reach all of it.
+    """
+
+    def __init__(self, room, base_dir: Optional[str] = None):
+        self.room = room
+        self.store = room.redis_store
+        self.base_dir = base_dir
+
+    def private_scope(self, person) -> str:
+        return f"{self.room.key}#private:{person.id}"
+
+    _scopes = RoomMemory._scopes
+
+    async def erase(self) -> Dict[str, int]:
+        from jarviscore.memory.local import LocalMemory
+
+        removed = 0
+        for scope in self._scopes():
+            removed += LocalMemory.erase_scope(scope, self.base_dir)
+            if scope != self.room.key and self.store is not None:
+                self.store.forget_room_memory_scope(self.room.key, scope)
+        return {"local_facts": removed}
+
+    async def erase_person(self, person) -> Dict[str, Any]:
+        from jarviscore.memory.local import LocalMemory
+
+        scope = self.private_scope(person)
+        removed = LocalMemory.erase_scope(scope, self.base_dir)
+        if self.store is not None:
+            self.store.forget_room_memory_scope(self.room.key, scope)
+        return {"local_facts": removed}

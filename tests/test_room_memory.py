@@ -301,9 +301,10 @@ class TestForgetting:
         await room.forget_person(alice, by=alice)
         assert not athena.contents(user="acme/launch#private:alice")
 
-    async def test_without_athena_forgetting_is_a_no_op(self, room):
+    async def test_a_room_that_keeps_no_team_memory_still_erases_local_memory(self, room, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         room.memory = None
-        assert await room.forget(by=alice) == {}
+        assert await room.forget(by=alice) == {"local_facts": 0}
 
     async def test_private_memory_from_before_scopes_were_recorded_is_still_erased(self, room, athena):
         await self.keep_private(room, athena, carol, "Carol's notes on the supplier", "wf-c")
@@ -338,8 +339,73 @@ class TestForgetting:
         with pytest.raises(RuntimeError, match="retry"):
             await room.forget(by=alice)
 
-    async def test_forgetting_without_athena_configured_is_an_error_not_a_success(self, room, monkeypatch, tmp_path):
+
+
+def local_memory_for(room, agent, context, workflow_id="wf-1"):
+    from jarviscore.memory.local import LocalMemory
+
+    kernel = Kernel.__new__(Kernel)
+    kernel.redis_store = room.redis_store
+    kernel.config = {}
+    target = kernel._room_memory(context, workflow_id)
+    return UnifiedMemory(workflow_id, "step", f"{agent}-1a2b", redis_store=room.redis_store,
+                         memory_scope=target.get("memory_scope"), memory_identity=agent,
+                         local_memory=LocalMemory(agent, scope=target.get("memory_scope")),
+                         **{k: v for k, v in target.items() if k != "memory_scope"})
+
+
+class TestRoomsWithoutAthena:
+    """With no Athena configured, rooms keep memory in the local store with the same rules."""
+
+    @pytest.fixture
+    def plain_room(self, room, tmp_path, monkeypatch):
         monkeypatch.delenv("ATHENA_URL", raising=False)
-        fresh = Room("launch", tenant="acme", blob_storage=LocalBlobStorage(str(tmp_path)), redis_store=room.redis_store)
-        with pytest.raises(RuntimeError, match="ATHENA_URL"):
-            await fresh.forget(by=alice)
+        monkeypatch.chdir(tmp_path)
+        fresh = Room("launch", tenant="acme", blob_storage=LocalBlobStorage(str(tmp_path)),
+                     redis_store=room.redis_store)
+        assert fresh.memory is None
+        return fresh
+
+    async def test_what_work_learns_through_someones_own_access_stays_theirs(self, plain_room):
+        plain_room.redis_store.record_workflow_source("wf-a", "gmail", alice.key)
+        assert await local_memory_for(plain_room, "reader", work_context(plain_room, alice), "wf-a").remember(
+            "Maria's email says the venue moved")
+        assert await local_memory_for(plain_room, "reader", {"room_id": plain_room.key}, "wf-s").remember(
+            "The board fixed Tuesday")
+
+        bobs = await local_memory_for(plain_room, "reader", work_context(plain_room, bob), "wf-b").recall(
+            "venue Tuesday")
+        assert [item["content"] for item in bobs] == ["The board fixed Tuesday"], "alice's stays hers"
+
+        held = []
+        alices = local_memory_for(plain_room, "reader", work_context(plain_room, alice), "wf-c")
+        alices._on_private_recall = lambda: held.append(True)
+        found = await alices.recall("venue")
+        assert any(item.get("private") and "venue" in item["content"] for item in found)
+        assert held, "work that recalls private memory is private work"
+
+    async def test_forgetting_a_room_erases_its_local_memory(self, plain_room):
+        plain_room.redis_store.record_workflow_source("wf-a", "gmail", alice.key)
+        await local_memory_for(plain_room, "reader", work_context(plain_room, alice), "wf-a").remember(
+            "Maria's email says the venue moved")
+        await local_memory_for(plain_room, "writer", {"room_id": plain_room.key}, "wf-s").remember(
+            "The board fixed Tuesday")
+        other = Room("other", tenant="acme", blob_storage=LocalBlobStorage("blobs"), redis_store=plain_room.redis_store)
+        await local_memory_for(other, "writer", {"room_id": other.key}, "wf-o").remember("Other room's fact")
+
+        totals = await plain_room.forget(by=alice)
+
+        assert totals == {"local_facts": 2}
+        assert not await local_memory_for(plain_room, "writer", {"room_id": plain_room.key}).recall("board Tuesday")
+        assert await local_memory_for(other, "writer", {"room_id": other.key}).recall("Other room"), "other rooms stay"
+
+    async def test_a_person_erases_their_own_local_private_memory(self, plain_room):
+        for person, wf in ((alice, "wf-a"), (bob, "wf-b")):
+            plain_room.redis_store.record_workflow_source(wf, "gmail", person.key)
+            await local_memory_for(plain_room, "reader", work_context(plain_room, person), wf).remember(
+                f"{person.id}'s private note")
+
+        assert await plain_room.forget_person(bob, by=bob) == {"local_facts": 1}
+        with pytest.raises(RoomPermissionError):
+            await plain_room.forget_person(alice, by=bob)
+        assert await plain_room.forget_person(alice, by=alice) == {"local_facts": 1}

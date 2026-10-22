@@ -148,6 +148,20 @@ class UnifiedMemory:
             logger.warning("[UnifiedMemory] Athena init failed (non-fatal): %s", exc)
         return self._athena_memory
 
+    def _note_private_scope(self) -> bool:
+        """Record a person's private scope in the room before anything is kept in it,
+        so erasing the room always finds it. False when it could not be recorded."""
+        record = getattr(self._redis, "record_room_memory_scope", None)
+        if record is None or not self._memory_scope:
+            return True
+        try:
+            record(self._memory_scope, self._private_scope)
+            return True
+        except Exception as exc:
+            logger.warning("[UnifiedMemory] private memory off: could not note scope %s: %s",
+                           self._private_scope, exc)
+            return False
+
     async def _session(self, attr: str, user_id: Optional[str], agent_id: str):
         """Another Athena session in this step's tenant (the person's private memory,
         the team's), created on first use."""
@@ -244,6 +258,12 @@ class UnifiedMemory:
         """
         local = getattr(self, "local", None)
         if local is not None and getattr(self, "_athena_client", None) is None:
+            if self._private_scope and self._is_private():
+                # Learned through someone's own access: theirs alone, as in Athena.
+                if not self._note_private_scope():
+                    return False
+                return local.for_scope(self._private_scope).remember(
+                    fact, kind=kind, **{**metadata, "private": "true"})
             return local.remember(fact, kind=kind, **metadata)
         am = await self._get_athena_memory()
         if am and self._private_scope and self._is_private():
@@ -273,7 +293,14 @@ class UnifiedMemory:
         """
         local = getattr(self, "local", None)
         if local is not None and getattr(self, "_athena_client", None) is None:
-            return local.recall(query, limit=limit)
+            found = local.recall(query, limit=limit)
+            if self._private_scope and self._on_private_recall is not None:
+                private = local.for_scope(self._private_scope).recall(query, limit=limit)
+                if private:
+                    # Work that draws on someone's private memory is private work.
+                    self._on_private_recall()
+                    found.extend({**item, "private": True} for item in private)
+            return found
         am = await self._get_athena_memory()
         if not am:
             return []

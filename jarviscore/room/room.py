@@ -203,14 +203,14 @@ class Room:
         self._memory_chosen = True
 
     def _memory_to_erase(self):
-        """The room's memory, or None when the room deliberately keeps none. Raises when
-        Athena is simply not configured here: nothing could be erased, and saying
-        otherwise would leave the memory in place unnoticed."""
-        memory = self.memory
-        if memory is None and not getattr(self, "_memory_chosen", False):
-            raise RuntimeError(f"Athena is not configured in this process (ATHENA_URL), so room {self.id}'s "
-                               "memory cannot be erased from it")
-        return memory
+        """Where the room's memory can be: Athena when configured, and always the
+        local store, which agents use when Athena is not configured."""
+        from jarviscore.room.memory import LocalRoomMemory
+
+        places = [LocalRoomMemory(self)]
+        if self.memory is not None:
+            places.insert(0, self.memory)
+        return places
 
     # ── Construction ────────────────────────────────────────────────────────
 
@@ -811,14 +811,15 @@ class Room:
         self.redis_store.delete_room(self.key)
 
     async def forget(self, *, by: Person) -> Dict[str, int]:
-        """Erase everything the room remembers in Athena: the team's memory and every
-        person's private memory in the room, including people who have left.
-        Owners only. Returns Athena's counts; raises if Athena did not confirm."""
+        """Erase everything the room remembers, in Athena and in the local store: the
+        team's memory and every person's private memory in the room, including
+        people who have left. Owners only. Returns the counts; raises if Athena
+        did not confirm."""
         self.require(by, "owner", "erase the room's memory")
-        memory = self._memory_to_erase()
-        if memory is None:
-            return {}
-        totals = await memory.erase()
+        totals: Dict[str, int] = {}
+        for memory in self._memory_to_erase():
+            for name, n in (await memory.erase()).items():
+                totals[name] = totals.get(name, 0) + n
         self.note("memory_erased", by=by.id)
         return totals
 
@@ -828,9 +829,8 @@ class Room:
         self._same_tenant(person)
         if by.key != person.key:
             self.require(by, "owner", f"erase {person.display}'s memory")
-        memory = self._memory_to_erase()
-        if memory is None:
-            return {}
-        result = await memory.erase_person(person)
+        result: Dict[str, Any] = {}
+        for memory in self._memory_to_erase():
+            result.update(await memory.erase_person(person))
         self.note("memory_erased", by=by.id, person=person.id)
         return result
