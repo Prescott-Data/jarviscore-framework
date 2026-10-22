@@ -2,6 +2,7 @@
 Typer application for the `jarviscore` command
 """
 
+import difflib
 import sys
 from importlib import import_module
 
@@ -19,6 +20,10 @@ _LAZY_COMMANDS = [
     ("serve", "serve", "serve_command", "Run one agent from jarviscore.yaml."),
 ]
 _LAZY_BY_NAME = {spec[0]: spec for spec in _LAZY_COMMANDS}
+_CONTEXT = {"help_option_names": ["-h", "--help"]}
+# Plain help: rich formatting costs ~60ms per invocation and is not needed.
+_TYPER_OPTIONS = {"add_completion": False, "rich_markup_mode": None,
+                  "pretty_exceptions_enable": False, "context_settings": _CONTEXT}
 
 
 class _LazyGroup(TyperGroup):
@@ -32,8 +37,8 @@ class _LazyGroup(TyperGroup):
 
 def _load_command(name: str):
     _, module, func, help_text = _LAZY_BY_NAME[name]
-    sub = typer.Typer(add_completion=False)
-    sub.command(name, help=help_text)(getattr(import_module(f"jarviscore.cli.{module}"), func))
+    sub = typer.Typer(**_TYPER_OPTIONS)
+    sub.command(name, help=help_text, context_settings=_CONTEXT)(getattr(import_module(f"jarviscore.cli.{module}"), func))
     return typer.main.get_command(sub)
 
 
@@ -44,9 +49,32 @@ app = typer.Typer(
         Operations include project setup, agent infrastructure management, and operational inspection of running agents.
     ''',
     no_args_is_help=True,
-    add_completion=False,
     cls=_LazyGroup,
+    **_TYPER_OPTIONS,
 )
+
+
+def _version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("jarviscore-framework")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        typer.echo(f"jarviscore {_version()}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(False, "--version", callback=_print_version, is_eager=True,
+                                 help="Show the version and exit."),
+) -> None:
+    """JarvisCore runtime CLI."""
 
 
 def _register_legacy(name: str, help_text: str) -> None:
@@ -75,6 +103,11 @@ def _register_commands() -> None:
 _register_commands()
 
 
+def _suggest(name: str, commands) -> str:
+    close = difflib.get_close_matches(name, list(commands), n=1, cutoff=0.6)
+    return f". Did you mean '{close[0]}'?" if close else ""
+
+
 def main(argv: list | None = None) -> None:
     argv = sys.argv[1:] if argv is None else list(argv)
     # Legacy commands get raw argv (including a bare `--`)
@@ -82,10 +115,12 @@ def main(argv: list | None = None) -> None:
         _run_legacy(argv[0], argv[1:])
         return
     command = typer.main.get_command(app)
-    if not argv or (not argv[0].startswith("-") and argv[0] not in command.commands):
-        if argv:
-            print(f"Unknown command: {argv[0]}\n", file=sys.stderr)
+    if not argv:
         command.main(args=["--help"], prog_name="jarviscore",
                      standalone_mode=False)
         sys.exit(1)
+    if not argv[0].startswith("-") and argv[0] not in command.commands:
+        print(f"Unknown command: {argv[0]}{_suggest(argv[0], command.commands)}\n"
+              "Run 'jarviscore --help' to list commands.", file=sys.stderr)
+        sys.exit(2)
     app(args=argv, prog_name="jarviscore")

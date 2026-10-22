@@ -63,11 +63,37 @@ def test_legacy_exit_code_is_preserved(monkeypatch):
     assert exc.value.code == 3
 
 
-def test_unknown_command_exits_1_like_before(capsys):
+def test_unknown_command_is_a_usage_error_with_a_suggestion(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["no-such-command"])
-    assert exc.value.code == 1
-    assert "Unknown command: no-such-command" in capsys.readouterr().err
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert "Unknown command: no-such-command" in captured.err
+    assert "Did you mean" not in captured.err
+    assert captured.out == "", "must not dump the full help"
+
+    with pytest.raises(SystemExit) as exc:
+        main(["serv"])
+    assert exc.value.code == 2
+    assert "Did you mean 'serve'?" in capsys.readouterr().err
+
+
+def test_version_flag(capsys):
+    from importlib.metadata import version
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == f"jarviscore {version('jarviscore-framework')}"
+
+
+@pytest.mark.parametrize("args", [["-h"], ["dev", "-h"], ["run", "-h"], ["serve", "-h"]])
+def test_short_help_everywhere(args):
+    out = subprocess.run([sys.executable, "-m", "jarviscore.cli", *args],
+                         capture_output=True, text=True, check=False)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.startswith("Usage: jarviscore")
+    assert "\x1b[" not in out.stdout and "─" not in out.stdout, "help must be plain text"
 
 
 def test_no_args_shows_help_and_exits_1_like_before(capsys):
