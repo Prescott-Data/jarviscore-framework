@@ -49,6 +49,16 @@
 
   async function renderDiagrams(reset) {
     if (!window.mermaid || rendering) return;
+    rendering = true;
+    // Labels are measured when laid out: wait for the font they are drawn in, or
+    // they are sized for a fallback font and clipped once Inter arrives. (Before
+    // any diagram element exists, so nothing else renders them meanwhile.)
+    if (document.fonts && document.fonts.load) {
+      try {
+        await Promise.all([document.fonts.load('16px "Inter"'), document.fonts.ready]);
+      } catch (e) {}
+    }
+    rendering = false;
 
     var diagrams = [];
     document.querySelectorAll("pre.mermaid-source").forEach(function (source) {
@@ -72,12 +82,20 @@
 
     rendering = true;
     var dark = themeName();
+    // Natural size: a small diagram is not stretched to the page's width; a wide
+    // one is still scaled down to fit by the stylesheet.
+    var natural = { useMaxWidth: false };
     window.mermaid.initialize({
       startOnLoad: false,
       securityLevel: "strict",
       theme: "base",
       themeVariables: themeVariables(dark),
       fontFamily: "Inter, sans-serif",
+      flowchart: natural,
+      sequence: natural,
+      state: natural,
+      class: natural,
+      er: natural,
     });
     try {
       await window.mermaid.run({ nodes: diagrams });

@@ -32,6 +32,22 @@ from .hosts import HostNotAllowed, ensure_host_allowed
 logger = logging.getLogger(__name__)
 
 
+def _record_source(provider: str) -> None:
+    """Note whose access the current workflow step used, so its output can be held
+    for that person when it reaches a shared space (rooms)."""
+    from jarviscore.auth.principal import acting_for
+    from jarviscore.orchestration.budget import current_workflow_budget
+
+    account = current_workflow_budget()
+    record = getattr(getattr(account, "store", None), "record_workflow_source", None)
+    if account is None or not callable(record):
+        return
+    try:
+        record(account.workflow_id, provider, acting_for.get() or "")
+    except Exception as exc:  # recording must never break the call
+        logger.warning("Could not record the use of %s in %s: %s", provider, account.workflow_id, exc)
+
+
 class NexusCallProxy:
     """
     Single entry point for ALL authenticated HTTP calls to connected apps.
@@ -71,6 +87,9 @@ class NexusCallProxy:
         for provider, cid in connections.items():
             if cid == connection_id:
                 return str(provider).lower()
+        # A gateway-discovered handle names its provider last: "resolved:[person:]github".
+        if connection_id.startswith("resolved:"):
+            return connection_id.rsplit(":", 1)[-1].lower()
         # Local-vault mode: the handle is the provider name ("github:user123").
         return connection_id.split(":")[0].lower()
 
@@ -152,6 +171,7 @@ class NexusCallProxy:
             request_kwargs = apply_strategy(strategy, method, url, headers=headers, **kwargs)
             url = request_kwargs["url"]
         request_kwargs.setdefault("timeout", timeout)
+        _record_source(provider)
 
         async with httpx.AsyncClient() as client:
             response = await client.request(**request_kwargs)

@@ -549,6 +549,11 @@ class WorkflowEngine:
                     "step_id": step_id,
                 }
             if status == "failed":
+                # The remote node stores its failure; its reason is what the caller needs.
+                saved = self.redis_store.get_step_output(workflow_id, step_id) or {}
+                failure = saved.get("output")
+                if isinstance(failure, dict) and failure.get("error"):
+                    return {**failure, "status": "failure", "step_id": step_id}
                 return {
                     "status": "failure",
                     "error": "Remote node reported step failure",

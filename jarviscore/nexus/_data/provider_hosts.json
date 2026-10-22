@@ -422,6 +422,9 @@
   "slack": [
     "slack.com"
   ],
+  "slack_app": [
+    "slack.com"
+  ],
   "snapchat_ads": [
     "adsapi.snapchat.com",
     "marketingapi.snapchat.com"

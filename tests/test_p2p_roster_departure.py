@@ -167,3 +167,41 @@ async def test_crashed_node_is_removed_from_every_roster():
     finally:
         for coordinator in reversed(coordinators):
             await coordinator.stop()
+
+
+# A request that arrives while the Mesh is still starting
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.delivered = []
+
+    async def _deliver_message(self, message):
+        self.delivered.append(message)
+
+
+def _request_for(target: str) -> dict:
+    return {"payload": {"target": target, "sender": "asker", "data": {"query": "hi"},
+                        "correlation_id": "c-1"}}
+
+
+async def test_a_request_waits_for_its_local_agent_to_be_registered():
+    """Capability replies go out as SWIM starts, before PeerClients exist, so a
+    peer can ask an agent this node has not finished wiring yet."""
+    agent = _agent(0)
+    coordinator = P2PCoordinator([agent], {})
+    client = _RecordingClient()
+
+    handling = asyncio.create_task(coordinator._handle_peer_request("peer", _request_for(agent.role)))
+    await asyncio.sleep(0.2)
+    assert not handling.done()
+    coordinator.register_peer_client(agent.agent_id, client)
+    await asyncio.wait_for(handling, 2)
+
+    assert [m.data for m in client.delivered] == [{"query": "hi"}]
+
+
+async def test_a_request_for_an_agent_this_node_does_not_have_fails_at_once():
+    coordinator = P2PCoordinator([_agent(0)], {})
+    await asyncio.wait_for(
+        coordinator._handle_peer_request("peer", _request_for("nobody")), 0.5)

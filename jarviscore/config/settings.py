@@ -179,8 +179,9 @@ class Settings(BaseSettings):
     redis_max_step_output_bytes: int = 10 * 1024 * 1024
 
     # === Blob Storage ===
-    storage_backend: str = "local"  # "local" or "azure"
+    storage_backend: str = "local"  # "local", "azure", or "redis" (uses REDIS_URL)
     storage_base_path: str = runtime_path("blob_storage")
+    storage_redis_max_blob_bytes: int = 32 * 1024 * 1024  # per file, with storage_backend="redis"
     azure_storage_connection_string: Optional[str] = None
     azure_storage_container: str = "jarviscore"
 
@@ -251,6 +252,8 @@ class Settings(BaseSettings):
     hitl_enabled: bool = False
     hitl_max_confidence: float = 0.8
     hitl_min_risk_score: float = 0.7
+    #: Who responds to escalations (comma-separated), e.g. "ops-oncall,finance-approver".
+    hitl_targets: str = "reviewer"
 
     # === Auth / Nexus ===
     # Nexus is the ONLY auth path — there is no dev-mode bypass.

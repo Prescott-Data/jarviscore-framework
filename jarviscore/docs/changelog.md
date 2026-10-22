@@ -33,6 +33,165 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## Unreleased
+
+### Added
+
+- **Multiplayer: a team and its agents on the same work.** Anyone on a team
+  asks for something in their own words, the team's agents do it on shared
+  files, and people review, change and decide where they already talk, with
+  every action taken as the person who said it. See
+  [Multiplayer](concepts/multiplayer.md) and
+  [Build a Multiplayer Agent](guides/multiplayer-agents.md). It is made of:
+    - **People** (`Person`, `Account`, `Identities`): people in tenants,
+      accounts on surfaces resolved to them, one-time-code linking of one
+      person's accounts, and removal that ends everything they could do.
+    - **Rooms** (`jarviscore.room.Room`): versioned shared files in a
+      tenant, private to their members until an owner opens them. Asking a
+      room runs an ordinary goal on its current files as the person who
+      asked; the agents' changes come back as one proposal. Accepting merges
+      over newer work line by line and stops with `RoomConflict` where
+      changes really clash. Every decision is atomic and made once. Work that
+      used someone's own access to a system the room does not share is held
+      for them until they release it; owners name the systems a room shares.
+      Work belongs to the mesh: if the process that asked stops, another
+      finishes it and files its proposal once.
+    - **`RoomAgent`**: the agent a team talks to. An AutoAgent with a `room`
+      Kernel role whose tools are the room's own operations. It asks the
+      agents, has proposals redone in the person's own words, files pasted
+      versions exactly, answers from the room's files and history, and stays
+      out of conversations that are not for it. It never decides: accepting,
+      rejecting, releasing, stopping work and signing off are prepared for the
+      person to confirm with one tap.
+    - **Chat surfaces**: `RoomConversation` connects a room to any surface
+      through `ChatSurface`: messages recorded before they are acknowledged
+      and handled once, in order per thread, across processes; each update
+      posted once; held work shown only to its asker; nothing posted where
+      someone who may not see the room would see it. Slack is built in
+      (`SlackApp`, `jarviscore room slack`): one app for every room of a
+      tenant, Socket Mode, workspace members only, and no Slack token in your
+      code (calls go through Nexus; a new `slack_app` atom opens Socket Mode).
+    - **People as peers** (`jarviscore.human.HumanAgent`): a person or a team
+      on the mesh with capabilities. Planners route steps to them and agents
+      ask them; each piece of their work is a HITL item they answer from a
+      terminal, `jarviscore human answer`, a dashboard or a room's chat.
+    - **Testing**: `jarviscore.testing.rooms` (`MemorySurface`,
+      `ScriptedRoomAgent`) and `jarviscore.testing.slack.FakeSlack` test rooms,
+      conversations and Slack without a model or a workspace.
+- **A room remembers, in Athena.** Work in a room and the room's conversation
+  use the room's tenant and the room as Athena's scope, with no configuration,
+  so every agent working in a room shares one memory and nothing crosses rooms
+  or tenants. What people say to the room, the agent's public replies and what
+  the room records are written to the room's team memory (`RoomMemory`), as the
+  conversation Athena summarises. What work learns through its asker's own
+  access goes to their private memory in the room; work that recalls it is
+  held for them.
+- **Per-person spending caps.** Every model call made for a person is charged
+  to them per UTC day and month (`Spending`); tenants cap it, per person if
+  they like. Asking over a cap is refused up front with when it renews; a call
+  that would go over during work is not made, and the work stops
+  (`SpendCapReached`) instead of retrying. `jarviscore room caps`.
+- **Audit.** `Room.audit()` records who did what, why, with whose access and at
+  what cost; `Identities.log()` records who was added, linked or removed.
+  `jarviscore room audit`.
+- **HITL items know their work and tenant; answering resumes it.** Items
+  record the mesh step that raised them and the tenant of the person the work
+  runs for (`inbox(..., tenant=)`). Resolving an escalation that paused a mesh
+  step resumes the step with the answer (`hitl_resolution`). An item is
+  resolved once across hosts, and `inbox` reads Redis as the truth.
+- **Steps act for the person who asked.** A workflow registered with
+  `context["acting_for"]` runs its steps for that person: Nexus lookups,
+  consents and calls use that person's own workspace instead of the
+  deployment's single identity, so their access applies and provider audit
+  logs show them. The identity is read only from the registered workflow,
+  never from peer or capability-need context.
+- **HITL work routed to people.** `HITLQueue.assign` files work routed to a
+  person (type `input_request`, no escalation category), `inbox(target)`
+  lists what waits for a person across agents, and `expire` closes items
+  nobody answered.
+- **`mesh_worker = False`** marks an agent people reach directly: planners
+  never route steps to it, it claims none, and P2P does not announce it.
+- **CustomAgent works on files with no extra code.** Every CustomAgent gets
+  `WorkspaceAccess` unless it has its own sandbox, so its steps find the
+  workspace's files at `context["workspace_binding"]["path"]`.
+- **Line-level merging.** Edits to different lines of the same text file are
+  combined, in rooms and when a step builds on parallel branches; only edits
+  to the same lines that differ conflict.
+- **`STORAGE_BACKEND=redis`** keeps file contents in the Mesh's Redis, so one
+  Redis is all people and agents on different machines need.
+- **`HITL_TARGETS`** names who responds to escalations; a request can name
+  its own with `targets=`.
+- `RedisContextStore` ledgers can be kept beyond the context TTL
+  (`append_ledger_entry(..., expires=False)`) and read after an entry
+  (`get_ledger_after`); a step claim records the claiming agent's role.
+- `BlobSnapshotStore.compose` builds a snapshot from blobs already stored.
+
+### Changed
+
+- **The bundled Athena stack runs Athena v0.2.0, pinned.** Athena v0.2.0
+  requires authentication and keeps each tenant's memory apart; `memory init`
+  generates `ATHENA_API_KEY` and the stack gives it to Athena as a service key.
+  The image is pinned rather than `latest`, so a future Athena release cannot
+  break an installed JarvisCore; set `ATHENA_IMAGE` to run another version.
+  To upgrade a stack created by 2.1.x, run `jarviscore memory init` (it adds the
+  key and restarts the stack on v0.2.0), then `docker exec athena
+  ./ltm-purge-unscoped` to remove knowledge-graph entries written before
+  tenant scoping.
+- **Every Kernel role can work on a step's files.** The file tools
+  (`workspace_read`, `workspace_edit`, `workspace_write`, ...) are shared and
+  given to whichever sub-agent the router picks for a step bound to files, so
+  a writing task goes to the writer and a coding task to the coder, and both
+  can open and change the files. Running commands stays with the coder.
+- **The node that runs a step decides its workspace commands** with its own
+  `workspace_allowed_commands`; the asking node's list applies only when the
+  running node sets none.
+- The mesh planner and its audit are told that reading and editing a goal's
+  workspace files calls no provider: file changes are `propose` steps, and
+  only publishing to a provider is a `write`. Plans used to describe edits as
+  writes to a made-up "source workspace" system, which validation refused.
+
+### Fixed
+
+- **The bundled Athena stack did not start, and lost memory when it did.**
+  `minio/mc` is no longer published (the setup step now uses the MinIO server
+  image's own client); Athena's short-term memory was smaller than the count
+  that forces a summary, so events beyond the newest ten were dropped unsummarised;
+  with Azure, `memory init` never gave Athena its chat and embedding deployment
+  URLs, so it summarised nothing. `memory init` now builds them, checks both
+  deployments answer, and no longer offers Anthropic, which Athena does not support.
+- **Athena memory used the deployment's default tenant** for every customer;
+  room work now uses the room's tenant.
+- **HITL requests stored their status as `HITLStatus.pending`** in Redis
+  (the enum's name); they now store `pending`.
+- **The local Nexus vault derived its key on every credential read**, a
+  deliberately slow computation that stalled the event loop of every agent
+  making calls; the key is now derived once per secret.
+- **Escalations no longer assume a founder.** HITL requests were addressed to
+  a hard-coded `founder`, and the agent prompts told the model that only "the
+  founder" could supply missing data. A request now goes to the people the
+  deployment names (`HITL_TARGETS`, default `reviewer`) or to `targets=` on
+  the request, and the prompts speak of a person.
+- **A HITL reviewer's reason reaches the agent.** `resolve()` stored the
+  reason where `check()` and `wait()` never read it; it now comes back as the
+  resolution's `note`. The HITL guide's examples read a `reason` attribute
+  that does not exist and edited inbox files into a shape `check()` ignores;
+  they now use `note` and `resolve()`.
+- **A peer's first request to a node that just joined is no longer dropped.**
+  A starting node answers capability requests as soon as SWIM is up, but
+  registered its PeerClients only after announcing, which can take a minute
+  when known peers are unreachable. A peer that learned of an agent in that
+  window had its request dropped and waited out its whole timeout. The Mesh
+  now registers PeerClients as soon as the coordinator starts, and the
+  coordinator holds a request for one of its own agents briefly until its
+  client is registered.
+- **A step that fails on another node keeps its reason.** The workflow
+  reported every remote failure as "Remote node reported step failure"; it
+  now returns the failure the remote node stored.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.2.0 <span class="changelog-date">2026-10-22</span>
 
 One agent can now run as several workers when its queue grows, every model call

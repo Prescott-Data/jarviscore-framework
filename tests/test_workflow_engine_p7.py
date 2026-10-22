@@ -139,6 +139,17 @@ class FakeRemoteRedis:
         return None
 
 
+class FailedRemoteRedis:
+    def __init__(self, output):
+        self.output = output
+
+    def get_step_status(self, workflow_id: str, step_id: str) -> str:
+        return "failed"
+
+    def get_step_output(self, workflow_id: str, step_id: str):
+        return None if self.output is None else {"output": self.output}
+
+
 class ContextAgent(Agent):
     """Returns the previous_step_results it received."""
     role = "ctx"
@@ -392,6 +403,37 @@ class TestFailureHandling:
 
         assert result["status"] == "failure"
         assert "no output" in result["error"]
+
+    async def test_remote_failure_keeps_its_reason(self):
+        engine = WorkflowEngine(
+            mesh=type("MeshStub", (), {"agents": []})(),
+            redis_store=FailedRemoteRedis({
+                "status": "failure",
+                "error": "alice rejected: too vague",
+                "output": {"decision": "rejected"},
+            }),
+        )
+
+        result = await engine._wait_remote_step("wf-remote", "remote-step", timeout=0.01)
+
+        assert result["status"] == "failure"
+        assert result["error"] == "alice rejected: too vague"
+        assert result["output"] == {"decision": "rejected"}
+        assert result["step_id"] == "remote-step"
+
+    async def test_remote_failure_without_a_stored_reason_says_so(self):
+        engine = WorkflowEngine(
+            mesh=type("MeshStub", (), {"agents": []})(),
+            redis_store=FailedRemoteRedis(None),
+        )
+
+        result = await engine._wait_remote_step("wf-remote", "remote-step", timeout=0.01)
+
+        assert result == {
+            "status": "failure",
+            "error": "Remote node reported step failure",
+            "step_id": "remote-step",
+        }
 
 
 # ======================================================================

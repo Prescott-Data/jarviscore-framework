@@ -65,15 +65,18 @@ from jarviscore.core.pool import Pool
 # Execution profiles
 from jarviscore.profiles.autoagent import AutoAgent
 from jarviscore.profiles.customagent import CustomAgent
+from jarviscore.human import HumanAgent
 from jarviscore.execution.workspace import (
     BlobSnapshotStore,
     SandboxBinding,
     SnapshotEntry,
     SourceRef,
     SourceSnapshot,
+    WorkspaceAccess,
     WorkspaceDelta,
     WorkspaceDeltaConflict,
 )
+from jarviscore.room import Proposal, Room, RoomConflict
 from jarviscore.execution.sources import (
     SourceAdapter,
     SourceAdapterError,
@@ -144,6 +147,7 @@ __all__ = [
     # Profiles
     "AutoAgent",
     "CustomAgent",
+    "HumanAgent",
 
     # Durable source snapshots and ephemeral execution bindings
     "SourceRef",
@@ -153,6 +157,12 @@ __all__ = [
     "WorkspaceDeltaConflict",
     "BlobSnapshotStore",
     "SandboxBinding",
+    "WorkspaceAccess",
+
+    # Rooms: shared workspaces people and agents change together
+    "Room",
+    "Proposal",
+    "RoomConflict",
     "SourceAdapter",
     "SourceAdapterError",
     "SourceContractError",

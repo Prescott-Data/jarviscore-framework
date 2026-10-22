@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import json
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
+from jarviscore.auth.spending import PersonCharge
 from jarviscore.orchestration.budget import current_workflow_budget
 
 
@@ -108,6 +109,12 @@ class JevDecisionClient:
                 ).encode("utf-8")
             )
             reservation_id = budget_account.reserve(request_bytes + (256 * len(questions)))
+        try:
+            charge = PersonCharge(len(json.dumps(questions, default=str)) + 256 * len(questions))
+        except BaseException:
+            if budget_account is not None and reservation_id is not None:
+                budget_account.release(reservation_id)
+            raise
 
         call_kwargs: dict[str, Any] = {
             "state": state,
@@ -120,6 +127,7 @@ class JevDecisionClient:
         except BaseException as exc:
             if budget_account is not None and reservation_id is not None:
                 budget_account.release(reservation_id)
+            charge.release()
             if not isinstance(exc, Exception):
                 raise
             raise DecisionClientError(
@@ -136,6 +144,7 @@ class JevDecisionClient:
                 input_tokens + output_tokens,
                 cost_usd,
             )
+        charge.settle(input_tokens + output_tokens, cost_usd)
         answers = {
             name: self._normalize_answer(answer) for name, answer in response.answers.items()
         }

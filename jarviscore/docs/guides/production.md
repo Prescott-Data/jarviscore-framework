@@ -305,6 +305,7 @@ Athena is the framework's Tier 3 and Tier 4 memory layer. It provides structured
 
 ```bash
 ATHENA_URL=http://athena.internal:8080
+ATHENA_API_KEY=<service key>  # an Athena service key ("<key>=*" in Athena's MEMORY_OS_API_KEYS)
 
 ATHENA_TENANT_ID=default      # Namespace for multi-tenant Athena deployments
 ATHENA_HTTP_TIMEOUT=10.0      # Seconds before an Athena HTTP call times out

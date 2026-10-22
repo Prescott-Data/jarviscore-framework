@@ -122,6 +122,14 @@ class CustomAgent(Profile):
 
     def __init__(self, agent_id: Optional[str] = None):
         super().__init__(agent_id)
+        # On a step whose goal works on files (a room, a source workspace), the
+        # Mesh hands the agent a copy of them at
+        # task["context"]["workspace_binding"]["path"]. An agent with its own
+        # sandbox keeps it.
+        if getattr(self, "sandbox", None) is None:
+            from jarviscore.execution.workspace import WorkspaceAccess
+
+            self.sandbox = WorkspaceAccess()
 
     async def setup(self):
         """

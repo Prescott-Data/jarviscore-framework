@@ -106,6 +106,7 @@ class AthenaMemory:
         metadata: Optional[Dict[str, str]] = None,
         *,
         user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
         outbox: Optional[Outbox] = None,
     ) -> "AthenaMemory":
         """
@@ -131,6 +132,7 @@ class AthenaMemory:
             redis_store=redis_store,
             metadata=merged_meta,
             user_id=user_id,
+            tenant_id=tenant_id,
         )
         if not session_id:
             raise RuntimeError(

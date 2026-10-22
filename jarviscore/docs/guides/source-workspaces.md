@@ -110,9 +110,10 @@ exported under:
 workflows/<workflow-id>/workspace_deltas/<step-id>/
 ```
 
-Parallel branches may change different files. If two dependency branches change
-the same path to different content, JarvisCore rejects the merge instead of
-choosing one silently. Runtime and build directories such as `.tmp`, `output`,
+Parallel branches may change different files, or different lines of the same
+text file; both are combined. If two dependency branches change the same lines
+to different content, or one deletes a file the other changed, JarvisCore
+rejects the merge instead of choosing one silently. Runtime and build directories such as `.tmp`, `output`,
 `target`, `node_modules`, and `.venv` are excluded from deltas by default.
 
 Final-response steps consume prior artifacts and do not materialize the source
@@ -137,6 +138,12 @@ Coder receives six direct tools when a workspace is attached:
 | `workspace_write` | Create or fully replace one bounded UTF-8 file. The supplied content is the complete final file. |
 | `workspace_edit` | Replace an inclusive line range in an existing UTF-8 file after matching the `sha256` returned by `workspace_read`. |
 | `workspace_run` | Run a trusted allow-listed command in a workspace directory. |
+
+A CustomAgent works on a step's files too, with no setup: it finds them at
+`task["context"]["workspace_binding"]["path"]`, and whatever it changes there
+becomes the step's delta. In an AutoAgent, whichever Kernel sub-agent does the
+step gets tools to read, search and edit them. For a workspace that a team's people and
+agents change together over time, see [Rooms](rooms.md).
 
 These tools avoid generating Python merely to inspect or author files. Agents
 should use `workspace_write` for new fixtures and complete-file replacement,

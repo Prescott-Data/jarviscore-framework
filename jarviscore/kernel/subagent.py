@@ -61,6 +61,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 from jarviscore.context.truth import AgentOutput
 from jarviscore.execution import multimodal
 from jarviscore.kernel.cognition import AgentCognitionManager, FailureLedger
+from jarviscore.auth.spending import SpendCapReached
 from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 from jarviscore.kernel.gate import GateEvidence, as_evidence, record_attempt
 from jarviscore.kernel.state import KernelState, ToolReceiptError
@@ -1342,6 +1343,15 @@ class BaseSubAgent(ABC):
                     state.total_cost_usd = total_cost
                     if memory is not None:
                         await memory.save_checkpoint(self._checkpoint_json(state, conversation_history))
+                    if isinstance(e, SpendCapReached):
+                        _trace.log_step_complete(False, str(e))
+                        return AgentOutput(
+                            status="failure", payload=state.output, summary=str(e),
+                            trajectory=trajectory,
+                            metadata={"error": str(e), "tokens": total_tokens, "cost_usd": total_cost,
+                                      "typed_outcome": "SPEND_CAP_REACHED",
+                                      "checkpointed": memory is not None},
+                        )
                     if not e.recoverable:
                         _trace.log_step_complete(
                             False,
@@ -1636,6 +1646,13 @@ class BaseSubAgent(ABC):
                     state.action_tokens_used = self._cognition.lease.action_used
                     state.tokens_used = total_tokens["total"]
                     state.total_cost_usd = total_cost
+                    if isinstance(exc, SpendCapReached):
+                        return AgentOutput(
+                            status="failure", payload=state.output, summary=str(exc),
+                            trajectory=trajectory,
+                            metadata={"error": str(exc), "tokens": total_tokens, "cost_usd": total_cost,
+                                      "typed_outcome": "SPEND_CAP_REACHED"},
+                        )
                     turn_log["status"] = "epoch_exhausted"
                     turn_log["error"] = str(exc)
                     trajectory.append(turn_log)

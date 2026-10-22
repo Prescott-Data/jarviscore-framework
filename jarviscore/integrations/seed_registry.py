@@ -48,6 +48,12 @@ PROVIDER_META: Dict[str, Dict[str, Any]] = {
         "status": "verified",
         "capabilities": ["messaging", "channels", "users", "reactions"],
     },
+    "slack_app": {
+        "category": "communication",
+        "auth_type": "api_key",
+        "status": "verified",
+        "capabilities": ["socket_mode"],
+    },
     "github": {
         "category": "development",
         "auth_type": "oauth2",

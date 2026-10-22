@@ -60,5 +60,4 @@ async def test_membership_alone_converges_twelve_sequential_joiners():
 
         assert not missing(), f"nodes missing peers: {missing()}"
     finally:
-        for coordinator in reversed(coordinators):
-            await coordinator.stop()
+        await asyncio.gather(*(coordinator.stop() for coordinator in coordinators), return_exceptions=True)

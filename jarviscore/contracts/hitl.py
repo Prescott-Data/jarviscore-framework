@@ -21,7 +21,7 @@ Usage:
         step_id=state.step_id,
         type=HITLType.approval,
         description="Approve outbound email before sending",
-        targets=["reviewer", "founder"],
+        targets=["reviewer", "finance-approver"],
         channels=["dashboard", "slack"],
         payload={"draft": email_draft},
     )
@@ -88,13 +88,13 @@ class HITLCategory(str, Enum):
                       Example: Nexus returns 401, .env key absent, OAuth expired.
 
     data_required   — Critical input data is missing and CANNOT be obtained
-                      via API, scraping, or any autonomous means. Only the
-                      founder can supply it (e.g. bank statement CSV, private
+                      via API, scraping, or any autonomous means. Only a
+                      person can supply it (e.g. a bank statement CSV, private
                       contract text, unreleased pricing).
 
     critical_action — The next action is irreversible, financially material,
                       or reputationally sensitive enough that the agent should
-                      not execute without explicit founder sign-off.
+                      not execute without a responsible person's sign-off.
                       Example: sending an investor email, publishing a press
                       release, making a payment, deleting production data.
     """
@@ -153,7 +153,7 @@ class HITLPolicy(BaseModel):
     {
         "hitl": {
             "required": true,
-            "targets": ["reviewer", "founder"],
+            "targets": ["reviewer", "finance-approver"],
             "channels": ["dashboard", "slack"],
             "policy": {"type": "any_of"}
         }
@@ -206,9 +206,10 @@ class HITLRequest(BaseModel):
     type: HITLType = HITLType.approval
     status: HITLStatus = HITLStatus.pending
 
-    # Mandatory: why this escalation is valid. Must be one of the three
-    # permitted categories — queue.py rejects requests without a valid one.
-    category: HITLCategory = HITLCategory.critical_action
+    # Why this escalation is valid: one of the three permitted categories, and
+    # queue.py rejects escalations without one. Work routed to a person who
+    # owns a capability (type input_request) is not an escalation and has none.
+    category: Optional[HITLCategory] = HITLCategory.critical_action
 
     description: str = ""
     payload: Dict[str, Any] = Field(default_factory=dict)
