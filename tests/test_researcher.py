@@ -777,13 +777,27 @@ class TestPublishFindings:
         assert researcher._current_research_phase() == ResearchPhase.DONE
 
     @pytest.mark.asyncio
-    async def test_publish_returns_candidate_ready(self, researcher):
+    async def test_publish_delivers_findings_not_working_state(self, researcher):
         result = await researcher._tool_publish_research_findings(
-            summary="Stripe uses Bearer auth",
-            evidence=[{"pointer": "https://docs.stripe.com", "kind": "web_doc"}],
+            summary="Qdrant fuses dense and sparse scores natively.",
+            evidence=[{"pointer": "https://qdrant.tech/documentation", "kind": "web_doc"}],
         )
-        assert result.get("status") == "candidate_ready"
-        assert result.get("action_required") == "delegate_coding"
+        assert result["summary"] == "Qdrant fuses dense and sparse scores natively."
+        assert result["evidence"]
+        for internal in ("status", "action_required", "done_validation",
+                         "research_checkpoint", "url_registry", "api_specs", "libraries"):
+            assert internal not in result, internal
+        assert researcher.current_state.internal_variables["done_validation"]
+        assert researcher.current_state.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_publish_keeps_api_specs_when_there_are_some(self, researcher):
+        result = await researcher._tool_publish_research_findings(
+            summary="Stripe charges are created with POST /v1/charges.",
+            evidence=[{"pointer": "https://docs.stripe.com", "kind": "web_doc"}],
+            api_specs=[{"method": "POST", "url": "/v1/charges", "body_schema": {"amount": "int"}}],
+        )
+        assert result["api_specs"][0]["url"] == "/v1/charges"
 
     @pytest.mark.asyncio
     async def test_publish_rejects_empty_summary(self, researcher):
@@ -805,7 +819,8 @@ class TestPublishFindings:
             evidence=[],  # empty explicit evidence → fallback to accumulated
         )
         # Should still succeed via accumulated findings fallback
-        assert result.get("status") in ("candidate_ready", "error")
+        assert result.get("status") != "error"
+        assert result["evidence"][0]["pointer"] == "https://docs.stripe.com/api"
 
 
 # ═════════════════════════════════════════════════════════════════

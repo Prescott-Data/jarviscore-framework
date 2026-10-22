@@ -553,6 +553,21 @@ class TestNativeToolTurns:
             assert "tools" not in llm.requests[0]
             assert "TOOL:" in llm.requests[0]["messages"][0]["content"]
 
+    def test_a_tool_that_ends_the_step_gives_its_summary_as_the_answer(self):
+        llm = _NativeLLM([_call("publish", {"summary": "Qdrant fuses dense and sparse natively."})])
+        agent = _NativeAgent(llm)
+
+        async def publish(summary: str):
+            agent._current_state.status = "completed"
+            return {"summary": summary, "evidence": [{"pointer": "https://qdrant.tech"}]}
+
+        agent.register_tool("publish", publish, "Publish the findings.")
+        result = asyncio.run(agent.run(task="research hybrid search"))
+
+        assert result.status == "success"
+        assert result.summary == "Qdrant fuses dense and sparse natively."
+        assert result.metadata["answer"] == "Qdrant fuses dense and sparse natively."
+
     def test_every_done_asks_whether_the_task_was_carried_out(self):
         llm = _NativeLLM([_call("done", {"summary": "5", "result": {}, "complete": True})])
 
