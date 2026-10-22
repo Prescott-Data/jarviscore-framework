@@ -11,7 +11,6 @@ Usage:
 
 import sys
 import os
-import asyncio
 from pathlib import Path
 from typing import Dict, List, Tuple
 import importlib.util
@@ -233,6 +232,8 @@ class HealthChecker:
             "vLLM": self._test_vllm,
         }
         selected = [p for p, is_configured in configured.items() if is_configured and p in tests]
+        import asyncio
+
         outcomes = await asyncio.gather(
             *(tests[p]() for p in selected), return_exceptions=True
         )
@@ -334,6 +335,8 @@ class HealthChecker:
 
             client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
             model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+
+            import asyncio
 
             response = await asyncio.wait_for(
                 client.aio.models.generate_content(
@@ -485,17 +488,25 @@ def run_production_profile(destination, as_json: bool, connect: bool = True) -> 
     """Production checklist for a jarviscore.yaml project. Exit 1 on any error."""
     import json
 
-    from jarviscore.project import ProjectError, load_project
+    from jarviscore.project import ProjectError, find_root, load_project
     from jarviscore.project.checks import ERROR, has_errors
     from jarviscore.project.checks.production import run_production_checks
 
+    defaulted = False
+    if destination is None:
+        try:
+            # A production checklist belongs to the prod overlay when the project has one.
+            if (find_root() / "jarviscore.prod.yaml").is_file():
+                destination, defaulted = "prod", True
+        except ProjectError:
+            pass  # load_project reports it below
     try:
         loaded = load_project(destination=destination)
     except ProjectError as exc:
         if as_json:
             print(json.dumps({"ok": False, "error": str(exc), "results": []}, indent=2))
         else:
-            print(f"✗ {exc}")
+            print(f"✗ {exc}", file=sys.stderr)
         return 2
 
     results = run_production_checks(loaded, dict(os.environ), connect=connect)
@@ -509,7 +520,13 @@ def run_production_profile(destination, as_json: bool, connect: bool = True) -> 
         }, indent=2))
         return 0 if ok else 1
 
-    print(f"\nProduction checks: {loaded.project.service} ({loaded.environment})\n")
+    if defaulted:
+        where = f"{loaded.environment}, from jarviscore.prod.yaml; pass -d <env> for another"
+    elif destination is None:
+        where = f"{loaded.environment}: jarviscore.yaml only; pass -d <env> to check a deployment"
+    else:
+        where = loaded.environment
+    print(f"\nProduction checks: {loaded.project.service} ({where})\n")
     icons = {True: "✓", ERROR: "✗"}
     for r in sorted(results, key=lambda r: (r.ok, r.severity != ERROR)):
         icon = icons[True] if r.ok else icons.get(r.severity, "⚠")
@@ -566,6 +583,13 @@ def main():
 
     args = parser.parse_args()
 
+    if args.profile is None:
+        profile_only = [flag for flag, used in (
+            ('--json', args.json), ('-d/--destination', args.destination is not None),
+            ('--no-connect', args.no_connect)) if used]
+        if profile_only:
+            parser.error(f"{', '.join(profile_only)} requires --profile prod")
+
     if args.profile == 'prod':
         sys.exit(run_production_profile(args.destination, args.json, connect=not args.no_connect))
 
@@ -574,6 +598,8 @@ def main():
         validate_typesafe=args.validate_typesafe,
         verbose=args.verbose
     )
+
+    import asyncio
 
     success = asyncio.run(checker.run())
     sys.exit(0 if success else 1)

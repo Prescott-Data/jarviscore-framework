@@ -191,3 +191,29 @@ def test_cli_without_project_exits_2(tmp_path):
 def test_cli_plain_check_still_runs_health_check(tmp_path):
     out = _cli(tmp_path)
     assert "JarvisCore Health Check" in out.stdout
+
+
+@pytest.mark.parametrize("args", [["--json"], ["-d", "prod"], ["--no-connect"]])
+def test_cli_profile_flags_without_profile_are_usage_errors(tmp_path, args):
+    out = _cli(tmp_path, *args)
+    assert out.returncode == 2
+    assert out.stdout == "" and "requires --profile prod" in out.stderr
+
+
+def test_cli_profile_defaults_to_the_prod_overlay(tmp_path):
+    make(tmp_path)
+    out = _cli(tmp_path, "--profile", "prod", "--json", env=GOOD_ENV)
+    assert json.loads(out.stdout)["environment"] == "prod"
+    human = _cli(tmp_path, "--profile", "prod", env=GOOD_ENV)
+    assert "(prod, from jarviscore.prod.yaml" in human.stdout
+
+
+def test_cli_profile_without_overlay_says_how_to_pick_one(tmp_path):
+    (tmp_path / "jarviscore.yaml").write_text(textwrap.dedent(GOOD_BASE))
+    out = _cli(tmp_path, "--profile", "prod", env=GOOD_ENV)
+    assert "pass -d <env>" in out.stdout
+
+
+def test_cli_project_error_goes_to_stderr(tmp_path):
+    out = _cli(tmp_path, "--profile", "prod")
+    assert out.returncode == 2 and "✗" in out.stderr and "✗" not in out.stdout
