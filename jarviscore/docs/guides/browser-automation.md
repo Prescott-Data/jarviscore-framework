@@ -176,7 +176,7 @@ Model calls, search APIs and Nexus go direct. Details, including
 
 A task that outlasts one execution epoch keeps its browser: the next epoch
 continues on the same page, with forms, basket and login intact
-([Session lifecycle](../reference/browser.md#session-lifecycle)).
+([Session lifecycle](../reference/browser.md#which-browser-is-used)).
 
 ---
 
