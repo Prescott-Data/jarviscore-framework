@@ -5,6 +5,7 @@ Uses unittest.mock to mock httpx.AsyncClient responses.
 """
 
 import base64
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -173,3 +174,42 @@ class TestNexusClientClose:
         client.client.aclose = AsyncMock()
         await client.close()
         client.client.aclose.assert_called_once()
+
+
+# ── Gateway caller API key ─────────────────────────────────────────
+
+class TestNexusClientApiKey:
+
+    def test_api_key_sent_as_header(self):
+        c = NexusClient(gateway_url="https://gateway.example.com", api_key="gw-secret")
+        assert c.api_key == "gw-secret"
+        assert c.client.headers["X-API-Key"] == "gw-secret"
+
+    def test_no_api_key_means_no_header(self, monkeypatch):
+        monkeypatch.delenv("NEXUS_GATEWAY_API_KEY", raising=False)
+        c = NexusClient(gateway_url="https://gateway.example.com")
+        assert c.api_key is None
+        assert "x-api-key" not in c.client.headers
+
+    def test_empty_api_key_is_treated_as_unset(self, monkeypatch):
+        monkeypatch.delenv("NEXUS_GATEWAY_API_KEY", raising=False)
+        c = NexusClient(gateway_url="https://gateway.example.com", api_key="")
+        assert c.api_key is None
+        assert "x-api-key" not in c.client.headers
+
+    @pytest.mark.asyncio
+    async def test_header_travels_with_every_request(self):
+        """The key is a default header on the session, so every call carries it."""
+        c = NexusClient(gateway_url="https://gateway.example.com", api_key="gw-secret")
+        seen = {}
+
+        async def handler(request):
+            seen["key"] = request.headers.get("X-API-Key")
+            return httpx.Response(200, json={"status": "ACTIVE"})
+
+        c.client = httpx.AsyncClient(
+            base_url=c.gateway_url, headers=c.client.headers, transport=httpx.MockTransport(handler)
+        )
+        await c.check_connection_status("conn_1")
+        await c.close()
+        assert seen["key"] == "gw-secret"

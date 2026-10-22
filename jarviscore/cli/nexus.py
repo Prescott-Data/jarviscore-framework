@@ -61,33 +61,20 @@ def _compose_file() -> Path:
 
 # ── Nexus Gateway URL ─────────────────────────────────────────────────────────
 
-def _gateway_url() -> Optional[str]:
-    """Read NEXUS_GATEWAY_URL from env or .env file."""
-    url = os.environ.get("NEXUS_GATEWAY_URL", "")
-    if url:
-        return url
+def _env_or_dotenv(name: str) -> Optional[str]:
+    """Read one variable from the environment, else from ./.env.
+
+    The file is parsed with python-dotenv, so quoting and inline comments
+    (`KEY=value # note`) are handled the way Settings handles them.
+    """
+    value = os.environ.get(name, "")
+    if value:
+        return value
     env_file = Path.cwd() / ".env"
     if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            if line.startswith("NEXUS_GATEWAY_URL="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
+        from dotenv import dotenv_values
+        return dotenv_values(env_file).get(name) or None
     return None
-
-
-def _gateway_api_key() -> Optional[str]:
-    """Read NEXUS_GATEWAY_API_KEY from env or the project .env."""
-    key = os.environ.get("NEXUS_GATEWAY_API_KEY", "")
-    if key:
-        return key
-    return _read_env_file(Path.cwd() / ".env").get("NEXUS_GATEWAY_API_KEY") or None
-
-
-def _gateway_headers(extra: Optional[dict] = None) -> dict:
-    headers = dict(extra or {})
-    key = _gateway_api_key()
-    if key:
-        headers["X-API-Key"] = key
-    return headers
 
 
 # ── Stack secrets ────────────────────────────────────────────────────────────
@@ -243,6 +230,41 @@ def _wait_healthy(url: str, seconds: int = 60) -> bool:
         except Exception:
             time.sleep(1)
     return False
+
+
+def _gateway_url() -> Optional[str]:
+    """Read NEXUS_GATEWAY_URL from env or .env file."""
+    return _env_or_dotenv("NEXUS_GATEWAY_URL")
+
+
+def _gateway_api_key() -> Optional[str]:
+    """Read NEXUS_GATEWAY_API_KEY from env or .env file (None when unset)."""
+    return _env_or_dotenv("NEXUS_GATEWAY_API_KEY")
+
+
+def _gateway_headers(extra: Optional[dict] = None) -> dict:
+    """Headers every raw CLI call to the Gateway must carry: the caller API key, if set."""
+    headers = dict(extra or {})
+    key = _gateway_api_key()
+    if key:
+        headers["X-API-Key"] = key
+    return headers
+
+
+def _gateway_open(req, timeout: float):
+    """urlopen for an authenticated Gateway call that never follows a redirect.
+
+    urllib copies request headers onto the redirected request, so a redirect
+    to another origin, or from https to http, would forward the caller API key.
+    The Gateway API never redirects; a 3xx is surfaced as an HTTPError instead.
+    """
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    return urllib.request.build_opener(_NoRedirect()).open(req, timeout=timeout)
 
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -505,10 +527,10 @@ def cmd_register(args):
             req = urllib.request.Request(
                 f"{gateway_url}/v1/providers",
                 data=payload,
-                headers=_gateway_headers({"Content-Type": "application/json"}),
+                headers={"Content-Type": "application/json", **_gateway_headers()},
                 method="POST",
             )
-            resp = urllib.request.urlopen(req, timeout=10)
+            resp = _gateway_open(req, timeout=10)
             body = json.loads(resp.read())
             print(_ok(f"{label} registered with gateway"))
             print(_info(f"  Provider ID: {body.get('id', body.get('provider_id', provider))}"))
@@ -658,11 +680,8 @@ def cmd_list(args):
     if gateway_url:
         import urllib.request, urllib.error
         try:
-            req = urllib.request.urlopen(
-                urllib.request.Request(f"{gateway_url}/v1/providers", headers=_gateway_headers()),
-                timeout=5,
-            )
-            providers = json.loads(req.read())
+            req = urllib.request.Request(f"{gateway_url}/v1/providers", headers=_gateway_headers())
+            providers = json.loads(_gateway_open(req, timeout=5).read())
             if providers:
                 print(_bold("  Gateway providers:"))
                 for p in providers:

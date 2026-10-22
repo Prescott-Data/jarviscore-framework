@@ -70,6 +70,9 @@ class AuthenticationManager:
         gateway_url = config.get("nexus_gateway_url") or getattr(
             settings, "nexus_gateway_url", None
         )
+        gateway_api_key = config.get("nexus_gateway_api_key") or getattr(
+            settings, "nexus_gateway_api_key", None
+        )
 
         self.user_id = config.get("nexus_default_user_id") or getattr(
             settings, "nexus_default_user_id", "jarviscore-agent"
@@ -86,11 +89,7 @@ class AuthenticationManager:
         self.nexus_client: Optional[NexusClient] = None
         self.lifecycle_monitor: Optional[LifecycleMonitor] = None
         if gateway_url:
-            self.nexus_client = NexusClient(
-                gateway_url,
-                api_key=config.get("nexus_gateway_api_key")
-                or getattr(settings, "nexus_gateway_api_key", None),
-            )
+            self.nexus_client = NexusClient(gateway_url, api_key=gateway_api_key)
             # The monitor noticed revoked tokens and told nobody: it took an
             # on_attention callback and was built without one, so the next
             # agent run failed at the provider one full run after the system

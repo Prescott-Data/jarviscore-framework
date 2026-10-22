@@ -176,6 +176,8 @@ jarviscore nexus status
 
 ## Gateway API Contract
 
+A Gateway deployed with caller authentication (`GATEWAY_REQUIRE_API_KEY=true`, nexus-framework 0.6.0 and later) refuses every request without an `X-API-Key` header. Set `NEXUS_GATEWAY_API_KEY` next to `NEXUS_GATEWAY_URL` and `NexusClient`, `AuthenticationManager` and the `nexus` CLI send it on every call. Leave it unset for a Gateway without caller auth.
+
 When `NEXUS_GATEWAY_URL` is set, the CLI registers providers by calling the Gateway directly. You should not need to call this manually (`jarviscore nexus register` handles it) but the contract is documented here for completeness.
 
 **Register a provider:** `POST /v1/providers`
