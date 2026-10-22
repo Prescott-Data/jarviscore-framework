@@ -7,10 +7,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ._names import NAME_PATTERN
+from ._names import NAME_PATTERN, SECRET_REF_PREFIX
 
 ENV_NAME_PATTERN = r"^[A-Z_][A-Z0-9_]*$"
-SECRET_REF_PREFIX = "secret:"
 
 # Accessories JarvisCore knows how to run without an image.
 PRESET_ACCESSORIES = ("redis", "sandbox", "nexus")

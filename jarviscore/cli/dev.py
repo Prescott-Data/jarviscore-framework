@@ -1,9 +1,12 @@
 """`jarviscore dev`: run every agent in jarviscore.yaml locally with live reload.
 
-Each agent replica is a `jarviscore serve` process on its own free ports; the first one
-is the SWIM seed the others join. Redis is reused if one is already configured or
-running, otherwise started in Docker (or with a local redis-server) for the session.
+Each agent replica runs the `jarviscore serve` runner (same environment, started
+directly) on its own free ports; the first one is the SWIM seed the others join.
+Redis is reused if one is already configured or running, otherwise started in Docker
+(or with a local redis-server) for the session.
 """
+
+from __future__ import annotations
 
 import hashlib
 import json
@@ -19,21 +22,35 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from jarviscore.project import LoadedProject, ProjectError, load_project
-from jarviscore.project.checks.production import available_values
-from jarviscore.project.schema import SECRET_REF_PREFIX
+from jarviscore.project._names import SECRET_REF_PREFIX
+
+from ._python import InterpreterError, ensure_jarviscore, install_hint, project_python
+from .serve import PARENT_PID_ENV, POLL_INTERVAL_ENV, agent_env, runner_argv
+
+if TYPE_CHECKING:
+    from jarviscore.project import LoadedProject
 
 ZMQ_PORT_OFFSET = 1000
 DEFAULT_REDIS = "redis://localhost:6379/0"
 REDIS_IMAGE = "redis:7-alpine"
 STOP_TIMEOUT = 15.0
 DOCKER_TIMEOUT = 15
+# `docker run` may pull the image on first use.
+DOCKER_PULL_TIMEOUT = 300
+DOCKER_STOP_GRACE = 5
 COLORS = ("36", "35", "33", "32", "34", "31")
-PARENT_PID_ENV = "JARVISCORE_DEV_PARENT_PID"
+# Agents under dev pick up tasks quickly; deployed agents keep the 2s default.
+DEV_POLL_INTERVAL = "0.25"
+NO_REDIS_HINT = (
+    "Start Redis with one of:\n"
+    "  docker run -d -p 6379:6379 redis:7-alpine\n"
+    "  redis-server   (install: brew install redis, or apt install redis-server)\n"
+    "or point at an existing one with REDIS_URL in .env (or --redis URL)"
+)
 
 
 class DevError(Exception):
@@ -47,6 +64,18 @@ class RedisHandle:
     url: str
     source: str
     cleanup: Callable[[], None] = lambda: None
+    # Immediate, best-effort stop for a second Ctrl-C (no waiting).
+    kill: Callable[[], None] = lambda: None
+
+
+def _note(text: str) -> None:
+    print(text, file=sys.stderr, flush=True)
+
+
+def _redact(url: str) -> str:
+    from jarviscore.project.checks.redis import redact
+
+    return redact(url)
 
 
 def redis_reachable(url: str, timeout: float = 0.5) -> bool:
@@ -54,7 +83,8 @@ def redis_reachable(url: str, timeout: float = 0.5) -> bool:
         import redis
     except ImportError as exc:
         raise DevError(
-            'jarviscore dev needs Redis support: pip install "jarviscore-framework[redis]"') from exc
+            f"jarviscore dev needs the redis package. Install it with: {install_hint('redis')}"
+        ) from exc
     try:
         return bool(redis.Redis.from_url(url, socket_timeout=timeout, socket_connect_timeout=timeout).ping())
     except Exception:  # noqa: BLE001 - any failure means "not usable"
@@ -69,6 +99,8 @@ def resolve_redis(
     reachable: Callable[[str], bool] = redis_reachable,
     which: Callable[[str], str | None] = shutil.which,
 ) -> RedisHandle:
+    from jarviscore.project.checks.production import available_values
+
     values = available_values(loaded.root, environ)
     accessory = loaded.project.accessories["redis"]
 
@@ -89,21 +121,27 @@ def resolve_redis(
 
     for url, source in candidates:
         if not reachable(url):
-            raise DevError(f"Redis from {source} is not reachable")
+            raise DevError(
+                f"Redis from {source} is not reachable at {_redact(url)}. Start that Redis or "
+                f"fix the URL; without {source}, jarviscore dev starts a local Redis for you.")
         return RedisHandle(url, source)
 
     if reachable(DEFAULT_REDIS):
         return RedisHandle(DEFAULT_REDIS, "already running on localhost:6379")
+    failures: list[str] = []
     if which("docker"):
-        return _docker_redis(loaded, reachable)
+        try:
+            return _docker_redis(loaded, reachable)
+        except DevError as exc:
+            failures.append(str(exc))
     if which("redis-server"):
-        return _local_redis_server(loaded, reachable)
-    raise DevError(
-        "No Redis available. Start one of:\n"
-        "  docker run -d -p 6379:6379 redis:7-alpine\n"
-        "  brew install redis && brew services start redis\n"
-        "or point at an existing one with REDIS_URL in .env"
-    )
+        if failures:
+            _note("Trying a local redis-server instead…")
+        try:
+            return _local_redis_server(loaded, reachable)
+        except DevError as exc:
+            failures.append(str(exc))
+    raise DevError("\n".join([*failures, "No Redis available. " + NO_REDIS_HINT]))
 
 
 def docker_redis_name(loaded: LoadedProject) -> str:
@@ -123,11 +161,13 @@ def _docker_redis(loaded: LoadedProject, reachable) -> RedisHandle:
         state = docker("inspect", "-f", "{{.State.Running}}", name, check=False,
                        timeout=DOCKER_TIMEOUT)
         if state.returncode != 0:
-            # No timeout: may pull the image on first use.
+            _note(f"Starting Redis in Docker (first run pulls {REDIS_IMAGE})…")
             docker("run", "-d", "--name", name, "--label", "jarviscore.dev=1",
                    "-p", "127.0.0.1::6379", "-v", f"{name}-data:/data",
-                   REDIS_IMAGE, "redis-server", "--appendonly", "yes")
+                   REDIS_IMAGE, "redis-server", "--appendonly", "yes",
+                   timeout=DOCKER_PULL_TIMEOUT)
         elif state.stdout.strip() != "true":
+            _note(f"Starting Redis container {name}…")
             docker("start", name, timeout=DOCKER_TIMEOUT)
         port = docker(
             "port", name, "6379/tcp", timeout=DOCKER_TIMEOUT).stdout.strip().splitlines()[0].rsplit(":", 1)[1]
@@ -139,20 +179,35 @@ def _docker_redis(loaded: LoadedProject, reachable) -> RedisHandle:
     url = f"redis://127.0.0.1:{port}/0"
     _wait_for(lambda: reachable(url), 20,
               f"Redis container {name} did not become ready")
-    return RedisHandle(url, f"docker container {name}", lambda: docker("stop", name, check=False))
+
+    def stop() -> None:
+        try:
+            docker("stop", "-t", str(DOCKER_STOP_GRACE), name, check=False,
+                   timeout=DOCKER_STOP_GRACE + DOCKER_TIMEOUT)
+        except (subprocess.SubprocessError, OSError):
+            _note(f"⚠ could not stop {name}; stop it with: docker stop {name}")
+
+    return RedisHandle(url, f"docker container {name}", stop)
 
 
 def _local_redis_server(loaded: LoadedProject, reachable) -> RedisHandle:
     data = loaded.root / ".jarviscore" / "dev" / "redis"
     data.mkdir(parents=True, exist_ok=True)
     port = _free_port()
-    proc = subprocess.Popen(
-        ["redis-server", "--port", str(port), "--bind", "127.0.0.1", "--dir", str(data),
-         "--appendonly", "yes"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
-    )
+    try:
+        proc = subprocess.Popen(
+            ["redis-server", "--port", str(port), "--bind", "127.0.0.1", "--dir", str(data),
+             "--appendonly", "yes"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+    except OSError as exc:
+        raise DevError(f"Could not run redis-server ({exc})") from None
     url = f"redis://127.0.0.1:{port}/0"
-    _wait_for(lambda: reachable(url), 10, "redis-server did not start")
+    try:
+        _wait_for(lambda: reachable(url), 10, "redis-server did not start")
+    except DevError:
+        proc.kill()
+        raise
 
     def stop() -> None:
         proc.terminate()
@@ -161,7 +216,8 @@ def _local_redis_server(loaded: LoadedProject, reachable) -> RedisHandle:
         except subprocess.TimeoutExpired:
             proc.kill()
 
-    return RedisHandle(url, f"redis-server (data in {data.relative_to(loaded.root)})", stop)
+    return RedisHandle(url, f"redis-server (data in {data.relative_to(loaded.root)})", stop,
+                       proc.kill)
 
 
 # ── Peers ────────────────────────────────────────────────────────────────
@@ -227,6 +283,8 @@ def plan_peers(loaded: LoadedProject, roles: list[str], redis_url: str,
                 "PYTHONUNBUFFERED": "1",
                 PARENT_PID_ENV: str(os.getpid()),
             }
+            if POLL_INTERVAL_ENV not in os.environ:
+                env[POLL_INTERVAL_ENV] = DEV_POLL_INTERVAL
             if seed:
                 env["JARVISCORE_SEED_NODES"] = seed
             else:
@@ -242,39 +300,53 @@ class DevSession:
     roles: list[str]
     redis: RedisHandle
     color: bool = True
+    python: str = field(default_factory=lambda: sys.executable)
     peers: list[Peer] = field(default_factory=list)
     # Every port handed out this session; a stopped peer's port may not be released yet.
     used_ports: set[int] = field(default_factory=set)
+    # Set on Ctrl-C/SIGTERM so a slow start-up stops early.
+    stopping: threading.Event = field(default_factory=threading.Event)
     _print_lock: threading.Lock = field(default_factory=threading.Lock)
-    _flush: bool = field(default_factory=lambda: sys.stdout.isatty())
 
     def say(self, text: str) -> None:
+        # Flush every line: piped output (CI, `| tee`) should stream, not arrive in blocks.
         with self._print_lock:
-            print(text, flush=self._flush)
+            print(text, flush=True)
+
+    def warn(self, text: str) -> None:
+        with self._print_lock:
+            print(text, file=sys.stderr, flush=True)
 
     def start_all(self) -> None:
         self.peers = plan_peers(self.loaded, self.roles, self.redis.url, taken=self.used_ports)
         for index, peer in enumerate(self.peers):
+            if self.stopping.is_set():
+                break
             self._start(peer)
             if index == 0 and len(self.peers) > 1:
                 self._wait_until_bound(peer)
 
     def _wait_until_bound(self, peer: Peer) -> None:
         # Let the seed bind before others try to join it.
-        _wait_for(lambda: _listening(peer.port + ZMQ_PORT_OFFSET) or peer.proc.poll() is not None,
+        _wait_for(lambda: (_listening(peer.port + ZMQ_PORT_OFFSET) or peer.proc.poll() is not None
+                           or self.stopping.is_set()),
                   20, None)
 
     def _start(self, peer: Peer) -> None:
-        cmd = [sys.executable, "-m", "jarviscore.cli", "serve", "--role", peer.role,
-               "--replica", str(peer.replica)]
-        if self.loaded.destination:
-            cmd += ["-d", self.loaded.destination]
+        # The same environment `jarviscore serve` would build, without a second
+        # interpreter start just to compute it; peer.env (ports, seed) wins.
+        env = agent_env(self.loaded, peer.role, peer.replica, {**os.environ, **peer.env})
+        agent_file = self.loaded.root / self.loaded.project.agents[peer.role].path
         peer.stopping = False
-        peer.proc = subprocess.Popen(
-            cmd, cwd=self.loaded.root, env={**os.environ, **peer.env},
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-            start_new_session=True,
-        )
+        try:
+            peer.proc = subprocess.Popen(
+                runner_argv(self.python, self.loaded.root, agent_file),
+                cwd=self.loaded.root, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise DevError(f"Could not start {peer.label} with {self.python}: {exc}") from None
         threading.Thread(target=self._pump, args=(
             peer, peer.proc), daemon=True).start()
 
@@ -313,10 +385,24 @@ class DevSession:
             try:
                 peer.proc.wait(max(0.1, deadline - time.time()))
             except subprocess.TimeoutExpired:
-                self.say(
+                self.warn(
                     f"⚠ {peer.label} did not stop within {STOP_TIMEOUT:.0f}s, killing it")
                 peer.proc.kill()
                 peer.proc.wait()
+
+    def kill_all(self) -> None:
+        """Second Ctrl-C: SIGKILL every agent (and anything it started) without waiting."""
+        for peer in self.peers:
+            peer.stopping = True
+            if peer.proc and peer.proc.poll() is None:
+                try:
+                    # Each agent leads its own session (start_new_session), so pgid == pid.
+                    os.killpg(peer.proc.pid, signal.SIGKILL)
+                except OSError:
+                    try:
+                        peer.proc.kill()
+                    except OSError:
+                        pass
 
     def restart(self, roles: set[str]) -> None:
         targets = [p for p in self.peers if p.role in roles]
@@ -338,10 +424,12 @@ class DevSession:
             self.say(f"  {peer.label:<14} port {peer.port}")
 
     def reload_project(self) -> None:
+        from jarviscore.project import ProjectError, load_project
+
         try:
             loaded = load_project(self.loaded.root, self.loaded.destination)
         except ProjectError as exc:
-            self.say(
+            self.warn(
                 f"✗ jarviscore.yaml is invalid, keeping the running agents:\n{exc}")
             return
         self.say("↻ jarviscore.yaml changed, restarting all agents")
@@ -421,30 +509,77 @@ def dev_command(
         True, "--reload/--no-reload", help="Restart agents when their files change"),
 ) -> None:
     """Run all agents locally with Redis and live reload."""
+    raise typer.Exit(run_dev(roles or [], destination, redis_url, reload))
+
+
+def use_color(stream=None, environ=None) -> bool:
+    """ANSI colour only on a terminal, and never with NO_COLOR set or TERM=dumb."""
+    stream = sys.stdout if stream is None else stream
+    environ = os.environ if environ is None else environ
+    if environ.get("NO_COLOR") or environ.get("TERM") == "dumb":
+        return False
+    return stream.isatty()
+
+
+def _fail(exc: Exception) -> None:
+    print(f"✗ {exc}", file=sys.stderr, flush=True)
+
+
+def run_dev(roles: list[str], destination: str | None, redis_url: str | None,
+            reload: bool) -> int:
+    """Exit codes: 0 stopped normally, 1 runtime failure, 2 bad project/arguments,
+    128+N stopped by signal N (130 for Ctrl-C)."""
+    from jarviscore.project import ProjectError, load_project
+
     try:
         loaded = load_project(destination=destination)
-        selected = _select_roles(loaded, roles or [])
+        selected = _select_roles(loaded, roles)
         acquire_session(loaded)
     except (ProjectError, DevError) as exc:
-        typer.echo(f"✗ {exc}", err=True)
-        raise typer.Exit(2) from None
+        _fail(exc)
+        return 2
+    except KeyboardInterrupt:
+        return 130
+
     try:
+        python = _agent_python(loaded)
+        if reload:
+            _require("watchfiles")
         redis = resolve_redis(loaded, dict(os.environ), redis_url)
     except DevError as exc:
         release_session(loaded)
-        typer.echo(f"✗ {exc}", err=True)
-        raise typer.Exit(2) from None
+        _fail(exc)
+        return 1
+    except KeyboardInterrupt:
+        release_session(loaded)
+        print("\nInterrupted.", file=sys.stderr, flush=True)
+        return 130
 
-    session = DevSession(loaded, selected, redis, color=sys.stdout.isatty())
-    stop_event = threading.Event()
+    session = DevSession(loaded, selected, redis, color=use_color(), python=python)
+    stop_event = session.stopping
+    received: list[int] = []
+
+    def on_signal(signum, _frame) -> None:
+        if received:
+            # Second signal: do not wait for graceful shutdown.
+            session.kill_all()
+            redis.kill()
+            release_session(loaded)
+            os.write(2, b"\nKilled agents.\n")
+            os._exit(128 + received[0])
+        received.append(signum)
+        stop_event.set()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, lambda *_: stop_event.set())
+        signal.signal(sig, on_signal)
 
+    failed = False
     try:
         session.start_all()
-        write_session_file(loaded, redis.url)
-        _banner(session, reload)
-        if reload:
+        if not stop_event.is_set():
+            write_session_file(loaded, redis.url)
+            _banner(session, reload)
+        if reload and not stop_event.is_set():
             import watchfiles
 
             for changes in watchfiles.watch(loaded.root, watch_filter=_make_watch_filter(),
@@ -458,13 +593,36 @@ def dev_command(
         else:
             stop_event.wait()
     except DevError as exc:
-        session.say(f"✗ {exc}")
+        failed = True
+        session.warn(f"✗ {exc}")
     finally:
-        session.say("Stopping agents…")
+        session.say("Stopping agents… (Ctrl-C again to kill them now)")
         release_session(loaded)
         session.stop()
         redis.cleanup()
         session.say("Stopped.")
+    if received:
+        return 128 + received[0]
+    return 1 if failed else 0
+
+
+def _agent_python(loaded: LoadedProject) -> str:
+    python, note = project_python(loaded.root)
+    if note:
+        _note(note)
+    try:
+        ensure_jarviscore(python, loaded.root)
+    except InterpreterError as exc:
+        raise DevError(str(exc)) from None
+    return python
+
+
+def _require(module: str) -> None:
+    import importlib.util
+
+    if importlib.util.find_spec(module) is None:
+        raise DevError(f"jarviscore dev needs the {module} package. Install it with: "
+                       f"{install_hint(module)}")
 
 
 def session_file(loaded: LoadedProject) -> Path:
@@ -542,6 +700,7 @@ def _select_roles(loaded: LoadedProject, requested: list[str]) -> list[str]:
 def _banner(session: DevSession, reload: bool) -> None:
     project = session.loaded.project
     lines = [f"\njarviscore dev: {project.service} ({session.loaded.environment})",
+             f"  python  {session.python}",
              f"  redis   {session.redis.source}"]
     for peer in session.peers:
         lines.append(f"  {peer.label:<14} port {peer.port}")
@@ -549,3 +708,9 @@ def _banner(session: DevSession, reload: bool) -> None:
         f"  reload  {'on: edit a file to restart its agent' if reload else 'off'}")
     lines.append("  Ctrl-C to stop\n")
     session.say("\n".join(lines))
+
+
+if __name__ == "__main__":
+    from jarviscore.cli.app import main
+
+    main(["dev", *sys.argv[1:]])

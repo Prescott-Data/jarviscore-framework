@@ -119,7 +119,7 @@ def test_starts_redis_in_docker_and_stops_it(project, monkeypatch):
     run = next(c for c in calls if c[0] == "run")
     assert name in run and "--appendonly" in run and f"{name}-data:/data" in run
     handle.cleanup()
-    assert calls[-1] == ["stop", name]
+    assert calls[-1] == ["stop", "-t", "5", name]
 
 
 def test_docker_redis_name_is_scoped_to_the_project_path(tmp_path):
@@ -309,7 +309,7 @@ def test_dev_runs_every_replica_and_stops_cleanly(project, redis_server):
 
         proc.send_signal(signal.SIGINT)
         out, _ = proc.communicate(timeout=60)
-        assert proc.returncode == 0, out
+        assert proc.returncode == 130, out
         assert "Stopped." in out
         downs = [line for role in ("triage", "responder") for line in _lines(project, role) if line.startswith("down")]
         assert len(downs) == 3, out
@@ -401,3 +401,184 @@ def test_dev_command_is_listed():
     out = subprocess.run([sys.executable, "-m", "jarviscore.cli", "--help"], capture_output=True,
                          text=True, check=False)
     assert "Run all agents locally" in out.stdout
+
+
+# ── Error messages, fallbacks, interpreter, output ────────────────────────
+
+def test_unreachable_redis_names_the_redacted_url(project):
+    with pytest.raises(DevError) as exc:
+        resolve_redis(load_project(project), {}, "redis://:hunter2@db.example:6380/0",
+                      reachable=lambda u: False, which=no_tools)
+    message = str(exc.value)
+    assert "db.example:6380" in message and "hunter2" not in message
+    assert "jarviscore dev starts a local Redis" in message
+
+
+def test_docker_failure_falls_back_to_redis_server(project, monkeypatch):
+    def broken_docker(loaded, reachable):
+        raise DevError("Could not start Redis in Docker (daemon down). Is Docker running?")
+
+    monkeypatch.setattr(dev, "_docker_redis", broken_docker)
+    monkeypatch.setattr(dev, "_local_redis_server",
+                        lambda loaded, reachable: dev.RedisHandle("redis://local", "redis-server"))
+    handle = resolve_redis(load_project(project), {}, reachable=lambda u: False,
+                           which=lambda tool: f"/usr/bin/{tool}")
+    assert handle.url == "redis://local"
+
+
+def test_docker_failure_without_redis_server_shows_every_option(project, monkeypatch):
+    def broken_docker(loaded, reachable):
+        raise DevError("Could not start Redis in Docker (daemon down). Is Docker running?")
+
+    monkeypatch.setattr(dev, "_docker_redis", broken_docker)
+    with pytest.raises(DevError) as exc:
+        resolve_redis(load_project(project), {}, reachable=lambda u: False,
+                      which=lambda tool: "/usr/bin/docker" if tool == "docker" else None)
+    message = str(exc.value)
+    assert "Is Docker running?" in message
+    assert "docker run" in message and "redis-server" in message and "REDIS_URL" in message
+
+
+def test_docker_run_reports_progress_and_has_timeouts(project, monkeypatch, capsys):
+    timeouts = {}
+
+    def fake_run(cmd, **kwargs):
+        timeouts[cmd[1]] = kwargs.get("timeout")
+        out = {"inspect": "", "port": "127.0.0.1:55123\n"}.get(cmd[1], "")
+        return subprocess.CompletedProcess(cmd, 1 if cmd[1] == "inspect" else 0, out, "")
+
+    monkeypatch.setattr(dev.subprocess, "run", fake_run)
+    handle = resolve_redis(load_project(project), {}, reachable=lambda u: u != dev.DEFAULT_REDIS,
+                           which=lambda tool: "/usr/bin/docker" if tool == "docker" else None)
+    handle.cleanup()
+    assert "Starting Redis in Docker (first run pulls redis:7-alpine)" in capsys.readouterr().err
+    assert all(timeouts[c] for c in ("inspect", "run", "port", "stop")), timeouts
+
+
+def test_missing_redis_package_suggests_pipx_inject(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_redis(name, *args, **kwargs):
+        if name == "redis":
+            raise ImportError("No module named 'redis'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_redis)
+    monkeypatch.setattr(sys, "prefix", "/Users/me/.local/pipx/venvs/jarviscore-framework")
+    with pytest.raises(DevError, match="pipx inject jarviscore-framework redis"):
+        dev.redis_reachable("redis://localhost")
+
+
+@pytest.mark.parametrize("environ, tty, expected", [
+    ({}, True, True),
+    ({}, False, False),
+    ({"NO_COLOR": "1"}, True, False),
+    ({"TERM": "dumb"}, True, False),
+])
+def test_color_follows_tty_no_color_and_term(environ, tty, expected):
+    class Stream:
+        def isatty(self):
+            return tty
+
+    assert dev.use_color(Stream(), environ) is expected
+
+
+def test_peers_poll_for_work_quickly(project, monkeypatch):
+    monkeypatch.delenv(dev.POLL_INTERVAL_ENV, raising=False)
+    peers = plan_peers(load_project(project), ["triage"], "redis://r", allocate=lambda t: 30001)
+    assert float(peers[0].env[dev.POLL_INTERVAL_ENV]) < 1
+
+
+def test_agents_use_the_project_venv(project, capsys):
+    loaded = load_project(project)
+    assert dev._agent_python(loaded) == sys.executable
+    assert "no " in capsys.readouterr().err  # one-line fallback note
+
+    bindir = project / ".venv" / "bin"
+    bindir.mkdir(parents=True)
+    python = bindir / "python"
+    python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    python.chmod(0o755)
+    assert dev._agent_python(loaded) == str(python)
+    assert capsys.readouterr().err == ""
+
+
+def test_project_venv_without_jarviscore_is_explained(project):
+    bindir = project / ".venv" / "bin"
+    bindir.mkdir(parents=True)
+    python = bindir / "python"
+    python.write_text("#!/bin/sh\nexit 1\n")
+    python.chmod(0o755)
+    with pytest.raises(DevError, match="cannot import jarviscore.*uv sync"):
+        dev._agent_python(load_project(project))
+
+
+def test_dev_module_invocation_runs_the_command():
+    out = subprocess.run([sys.executable, "-m", "jarviscore.cli.dev", "--help"],
+                         capture_output=True, text=True, check=False)
+    assert out.returncode == 0 and "Usage: jarviscore dev" in out.stdout
+
+
+def test_banner_shows_the_interpreter(project, capsys):
+    session = _session(project)
+    session.say = lambda text: print(text)
+    dev._banner(session, reload=False)
+    assert f"python  {sys.executable}" in capsys.readouterr().out
+
+
+def test_agents_run_the_runner_directly(project, redis_server):
+    proc = _start_dev(project, redis_server, "--no-reload")
+    try:
+        _wait(lambda: len(_ups(project, "triage")) == 1 and len(_ups(project, "responder")) == 2, proc)
+        for pid in _agent_pids(project.resolve()):
+            ppid = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
+                                      capture_output=True, text=True).stdout)
+            assert ppid == proc.pid, "agents must be direct children of dev"
+        serves = subprocess.run(["pgrep", "-f", f"jarviscore.cli serve.*{project}"],
+                                capture_output=True, text=True).stdout.split()
+        assert serves == []
+    finally:
+        proc.send_signal(signal.SIGINT)
+        proc.communicate(timeout=60)
+
+
+def test_second_ctrl_c_kills_agents_immediately(project, redis_server):
+    (project / "agents" / "slow.py").write_text(textwrap.dedent('''
+        import asyncio
+        from jarviscore.profiles import CustomAgent
+
+
+        class Slow(CustomAgent):
+            role = "slow"
+            capabilities = ["slow"]
+
+            async def teardown(self):
+                await asyncio.sleep(60)
+                await super().teardown()
+
+            async def on_peer_request(self, msg):
+                return {}
+    '''))
+    (project / "jarviscore.yaml").write_text(
+        textwrap.dedent(YAML) + "  slow: { path: agents/slow.py }\n")
+    proc = _start_dev(project, redis_server, "--no-reload", "slow")
+    try:
+        _wait(lambda: len(_agent_pids(project.resolve())) == 1, proc)
+        time.sleep(3)  # let the agent finish starting so SIGTERM reaches teardown
+        proc.send_signal(signal.SIGINT)
+        time.sleep(1)
+        started = time.time()
+        proc.send_signal(signal.SIGINT)
+        out, _ = proc.communicate(timeout=10)
+        assert time.time() - started < 5
+        assert proc.returncode == 130, out
+        deadline = time.time() + 5
+        while _agent_pids(project.resolve()) and time.time() < deadline:
+            time.sleep(0.2)
+        assert _agent_pids(project.resolve()) == []
+        assert not (project / ".jarviscore" / "dev" / "session.json").exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()

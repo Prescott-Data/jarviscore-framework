@@ -194,3 +194,69 @@ def test_serve_runs_agent_and_stops_cleanly_on_sigterm(project):
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+# ── runner argv and orphan handling ───────────────────────────────────────
+
+@pytest.mark.parametrize("args", [[], ["--help"], ["only-one"]])
+def test_runner_validates_argv(args):
+    out = subprocess.run([sys.executable, "-m", "jarviscore.cli.serve", *args],
+                         capture_output=True, text=True, check=False)
+    assert out.returncode == 2
+    assert "usage: python -m jarviscore.cli.serve" in out.stderr
+    assert "Traceback" not in out.stderr
+
+
+def test_runner_rejects_missing_files(tmp_path):
+    out = subprocess.run([sys.executable, "-m", "jarviscore.cli.serve", str(tmp_path),
+                          str(tmp_path / "nope.py")], capture_output=True, text=True, check=False)
+    assert out.returncode == 2 and "nope.py does not exist" in out.stderr
+
+
+def test_runner_import_does_not_load_typer_or_the_schema():
+    code = ("import sys, jarviscore.cli.serve; "
+            "print(any(m in sys.modules for m in ('typer', 'pydantic', 'jarviscore.project.schema')))")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "False"
+
+
+async def test_orphaned_agent_stops_and_arms_an_exit_watchdog(monkeypatch):
+    import asyncio
+
+    armed = []
+    monkeypatch.setenv(serve_mod.PARENT_PID_ENV, str(os.getppid() + 100000))
+    monkeypatch.setattr(serve_mod, "_detach_output", lambda: None)
+    monkeypatch.setattr(serve_mod, "_arm_exit_watchdog", armed.append)
+    stop = asyncio.Event()
+    assert await asyncio.wait_for(serve_mod._stop_when_orphaned(stop, interval=0.01), 2) is True
+    assert stop.is_set() and armed == [serve_mod.ORPHAN_STOP_TIMEOUT]
+
+
+async def test_agent_with_live_parent_keeps_running(monkeypatch):
+    import asyncio
+
+    monkeypatch.setenv(serve_mod.PARENT_PID_ENV, str(os.getppid()))
+    stop = asyncio.Event()
+    watch = asyncio.create_task(serve_mod._stop_when_orphaned(stop, interval=0.01))
+    await asyncio.sleep(0.1)
+    assert not watch.done() and not stop.is_set()
+    stop.set()
+    assert await asyncio.wait_for(watch, 1) is False
+
+
+def test_serve_uses_the_project_venv(project, monkeypatch):
+    captured = {}
+
+    def fake_execve(path, argv, env):
+        captured.update(path=path, argv=argv)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(serve_mod.os, "execve", fake_execve)
+    bindir = project / ".venv" / "bin"
+    bindir.mkdir(parents=True)
+    python = bindir / "python"
+    python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    python.chmod(0o755)
+    result = runner.invoke(app, ["serve", "--role", "triage"])
+    assert result.exit_code == 0, result.output
+    assert captured["path"] == str(python) and captured["argv"][0] == str(python)

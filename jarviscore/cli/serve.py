@@ -1,57 +1,121 @@
 """`jarviscore serve --role NAME`: run one agent from `jarviscore.yaml`.
 
-This is the single entry point used by `jarviscore dev`, containers and CI. The command
-resolves the agent's environment from the project files, then replaces itself with a
-fresh interpreter running `run_agent`, because framework settings are read once at
-import time and must see the final environment.
+This is the entry point used by containers and CI. The command resolves the agent's
+environment from the project files, then replaces itself with a fresh interpreter
+running `run_agent` (`python -m jarviscore.cli.serve ROOT AGENT_FILE`), because framework
+settings are read once at import time and must see the final environment.
+`jarviscore dev` builds the same environment and starts that runner directly.
+
+The runner path imports neither Typer nor the project schema; the Typer command is
+built on first access (`serve_command`, PEP 562).
 """
 
-import asyncio
+from __future__ import annotations
+
 import importlib.util
 import inspect
 import os
 import signal
 import sys
+import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import typer
-
-from jarviscore.project import ProjectError, build_env, load_project
+if TYPE_CHECKING:
+    import asyncio
 
 RUNNER_MODULE = "jarviscore.cli.serve"
-ORPHAN_STOP_TIMEOUT = 20.0
+RUNNER_USAGE = (
+    "usage: python -m jarviscore.cli.serve PROJECT_ROOT AGENT_FILE\n"
+    "Internal agent runner. To run an agent use: jarviscore serve --role NAME"
+)
+ORPHAN_STOP_TIMEOUT = 10.0
+PARENT_PID_ENV = "JARVISCORE_DEV_PARENT_PID"
+# Read only by the runner; `jarviscore dev` sets it so tasks are claimed promptly.
+POLL_INTERVAL_ENV = "JARVISCORE_DISTRIBUTED_POLL_INTERVAL"
 
 
-def serve_command(
-    role: str = typer.Option(..., "--role", "-r", help="Agent name from jarviscore.yaml"),
-    destination: str = typer.Option(None, "--destination", "-d", help="Environment overlay, e.g. prod"),
-    replica: int = typer.Option(1, "--replica", min=1, help="Replica number, used in the node name"),
-) -> None:
-    """Run one agent from jarviscore.yaml."""
-    try:
-        loaded = load_project(destination=destination)
-    except ProjectError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(2) from None
+class ServeError(Exception):
+    pass
 
-    project = loaded.project
-    if role not in project.agents:
-        typer.echo(f"Unknown agent {role!r}. Defined agents: {', '.join(project.agents)}", err=True)
-        raise typer.Exit(2)
 
-    agent_file = loaded.root / project.agents[role].path
-    if not agent_file.is_file():
-        typer.echo(f"agents.{role}.path: {project.agents[role].path} does not exist", err=True)
-        raise typer.Exit(2)
+def agent_env(loaded, role: str, replica: int, environ: dict[str, str]) -> dict[str, str]:
+    """The runner's environment: project files, then `environ` (explicit env wins)."""
+    from jarviscore.project import build_env
 
     env = build_env(loaded, role)
-    env["JARVISCORE_NODE_NAME"] = f"{project.service}-{role}-{replica}"
-    # Explicit process env (from dev, compose, CI) wins over the project files.
-    env.update(os.environ)
+    env["JARVISCORE_NODE_NAME"] = f"{loaded.project.service}-{role}-{replica}"
+    env.update(environ)
+    return env
 
+
+def agent_path(loaded, role: str) -> Path:
+    project = loaded.project
+    if role not in project.agents:
+        raise ServeError(f"Unknown agent {role!r}. Defined agents: {', '.join(project.agents)}")
+    agent_file = loaded.root / project.agents[role].path
+    if not agent_file.is_file():
+        raise ServeError(f"agents.{role}.path: {project.agents[role].path} does not exist")
+    return agent_file
+
+
+def runner_argv(python: str, root: Path, agent_file: Path) -> list[str]:
+    return [python, "-m", RUNNER_MODULE, str(root), str(agent_file)]
+
+
+def serve(role: str, destination: str | None, replica: int) -> int:
+    """Resolve and exec the runner; returns an exit code only on failure."""
+    from jarviscore.project import ProjectError, load_project
+
+    from ._python import InterpreterError, ensure_jarviscore, project_python
+
+    try:
+        loaded = load_project(destination=destination)
+        agent_file = agent_path(loaded, role)
+    except (ProjectError, ServeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    python, note = project_python(loaded.root)
+    if note:
+        print(note, file=sys.stderr)
+    try:
+        ensure_jarviscore(python, loaded.root)
+    except InterpreterError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    # Explicit process env (from compose, CI) wins over the project files.
+    env = agent_env(loaded, role, replica, dict(os.environ))
     os.chdir(loaded.root)
-    argv = [sys.executable, "-m", RUNNER_MODULE, str(loaded.root), str(agent_file)]
-    os.execve(sys.executable, argv, env)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve(python, runner_argv(python, loaded.root, agent_file), env)
+    return 0  # unreachable unless execve is stubbed
+
+
+def _build_serve_command():
+    import typer
+
+    def serve_command(
+        role: str = typer.Option(..., "--role", "-r", help="Agent name from jarviscore.yaml"),
+        destination: str = typer.Option(None, "--destination", "-d", help="Environment overlay, e.g. prod"),
+        replica: int = typer.Option(1, "--replica", min=1, help="Replica number, used in the node name"),
+    ) -> None:
+        """Run one agent from jarviscore.yaml."""
+        code = serve(role, destination, replica)
+        if code:
+            raise typer.Exit(code)
+
+    return serve_command
+
+
+def __getattr__(name: str):
+    if name == "serve_command":
+        command = _build_serve_command()
+        globals()[name] = command
+        return command
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class AgentResolutionError(Exception):
@@ -103,9 +167,18 @@ def load_agent_module(root: Path, agent_file: Path):
 
 
 async def run_agent(agent) -> None:
+    import asyncio
+
     from jarviscore import Mesh
 
-    mesh = Mesh()
+    config = {}
+    poll = os.environ.get(POLL_INTERVAL_ENV, "")
+    try:
+        if float(poll) > 0:
+            config["distributed_poll_interval"] = float(poll)
+    except ValueError:
+        pass
+    mesh = Mesh(config=config) if config else Mesh()
     mesh.add(agent)
 
     stop = asyncio.Event()
@@ -113,53 +186,85 @@ async def run_agent(agent) -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
 
+    # Watch from the start: dev may die while this agent is still starting up.
+    orphan_watch = asyncio.create_task(_stop_when_orphaned(stop))
     await mesh.start()
     loops = asyncio.create_task(mesh.run_forever())
     stopper = asyncio.create_task(stop.wait())
-    orphan_watch = asyncio.create_task(_stop_when_orphaned(stop))
     try:
         done, _ = await asyncio.wait({loops, stopper}, return_when=asyncio.FIRST_COMPLETED)
         if loops in done and loops.exception() is None and not stop.is_set():
             # No run() loop (workflow-driven agent): stay up until signalled.
             await stopper
     finally:
-        orphaned = orphan_watch.done() and not orphan_watch.cancelled() and orphan_watch.result()
         for task in (loops, stopper, orphan_watch):
             task.cancel()
         await asyncio.gather(loops, stopper, orphan_watch, return_exceptions=True)
-        if orphaned:
-            # Nobody is left to kill us if shutdown hangs on peers that are also going away.
-            try:
-                await asyncio.wait_for(mesh.stop(), ORPHAN_STOP_TIMEOUT)
-            except asyncio.TimeoutError:
-                os._exit(0)
-        else:
-            await mesh.stop()
+        await mesh.stop()
     if loops.done() and not loops.cancelled() and loops.exception():
         raise loops.exception()
 
 
 async def _stop_when_orphaned(stop: asyncio.Event, interval: float = 1.0) -> bool:
     """Under `jarviscore dev`, shut down if dev dies without stopping us (e.g. kill -9)."""
-    expected = os.environ.get("JARVISCORE_DEV_PARENT_PID")
+    import asyncio
+
+    expected = os.environ.get(PARENT_PID_ENV)
     if not expected or not expected.isdigit():
         return False
     while not stop.is_set():
         if os.getppid() != int(expected):
-            print("jarviscore dev is gone; stopping agent", file=sys.stderr, flush=True)
+            _detach_output()
+            _arm_exit_watchdog(ORPHAN_STOP_TIMEOUT)
             stop.set()
             return True
         await asyncio.sleep(interval)
     return False
 
 
+def _arm_exit_watchdog(seconds: float) -> None:
+    """Nobody is left to kill us if shutdown hangs on peers that are also going away.
+
+    A thread, not the event loop: a stuck `mesh.stop()` (or a cancellation it swallows)
+    would block a loop-based timeout, and non-daemon threads can block interpreter exit.
+    """
+    timer = threading.Timer(seconds, os._exit, args=(0,))
+    timer.daemon = True
+    timer.start()
+
+
+def _detach_output() -> None:
+    """dev read our output through a pipe; with dev gone every write would raise
+    BrokenPipeError, so point stdout/stderr at /dev/null before shutting down."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except (OSError, ValueError):
+                pass
+            os.dup2(devnull, stream.fileno())
+        os.close(devnull)
+    except (OSError, ValueError):
+        pass
+
+
 def _runner_main(argv: list) -> int:
+    if len(argv) != 2 or any(a.startswith("-") for a in argv):
+        print(RUNNER_USAGE, file=sys.stderr)
+        return 2
     root, agent_file = Path(argv[0]), Path(argv[1])
+    if not root.is_dir() or not agent_file.is_file():
+        print(f"{agent_file if root.is_dir() else root} does not exist\n{RUNNER_USAGE}",
+              file=sys.stderr)
+        return 2
     try:
         agent = resolve_agent(load_agent_module(root, agent_file))
     except AgentResolutionError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    import asyncio
+
     asyncio.run(run_agent(agent))
     return 0
 
