@@ -184,11 +184,16 @@ An item with `held_for` belongs to work held for that person: show them `text` a
 
 ## Memory
 
-A room remembers. With [Athena](../concepts/memory.md) configured (`ATHENA_URL`), it remembers fully. Every agent working in the room shares one memory, in the room's tenant: what any of them keeps, and what the team said and decided in the room's conversation, the next one recalls. "Sam owns support", said once in a thread, is what an agent writing the support section a week later knows. What work learns from someone's own access stays in their private memory in the room, and work that recalls it is held for them. Without Athena, what agents keep in the room goes to the local store (`.jarviscore/memory`), scoped to the room and kept private the same way; the team's conversation is not remembered, and the store is on one machine, in one working directory, so a room worked on by several processes or machines needs Athena. See [Memory in a room](../concepts/memory.md#memory-in-a-room).
+A room remembers what its agents keep and what its team says, shared by every agent working in it and never across rooms or tenants. What work learns from someone's own access stays private to them, and work that recalls it is held for them.
+
+- **With [Athena](../concepts/memory.md)** (`ATHENA_URL`): the room also remembers its conversation ("Sam owns support", said once, is known a week later), on every machine.
+- **Without Athena**: what agents keep goes to the local store (`.jarviscore/memory`), on one machine and in one working directory. A room worked on from several machines needs Athena.
+
+See [Memory in a room](../concepts/memory.md#memory-in-a-room).
 
 The room's team memory is `room.memory` (a `RoomMemory`); set it to None to keep none, or to your own to keep it elsewhere.
 
-To erase what a room remembers, an owner calls `await room.forget(by=owner)`: the team's memory and everyone's private memory in the room go, including people who have left. A person erases their own private memory in the room with `await room.forget_person(person, by=person)`. Do this before `room.delete`, which removes only the room's own state and history. Both erase the local store too. With Athena configured, both raise unless Athena confirms the erasure; a room you gave `memory = None` erases only the local store.
+To erase it, an owner calls `await room.forget(by=owner)`, which removes everyone's memory in the room, including people who have left; a person erases their own with `await room.forget_person(person, by=person)`. Call these before `room.delete`. Both erase the local store and Athena, and raise unless Athena confirms.
 
 ## Spending
 

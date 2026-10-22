@@ -35,226 +35,84 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ## 2.3.0 <span class="changelog-date">2026-10-22</span>
 
+Multiplayer: a team and its agents work on the same files, from Slack or your
+own product. Also a hardened local Nexus stack and Gateway API keys.
+
 ### Added
 
-- **Multiplayer: a team and its agents on the same work.** Anyone on a team
-  asks for something in their own words, the team's agents do it on shared
-  files, and people review, change and decide where they already talk, with
-  every action taken as the person who said it. See
-  [Multiplayer](concepts/multiplayer.md) and
-  [Build a Multiplayer Agent](guides/multiplayer-agents.md). It is made of:
-    - **People** (`Person`, `Account`, `Identities`): people in tenants,
-      accounts on surfaces resolved to them, one-time-code linking of one
-      person's accounts, and removal that ends everything they could do.
-    - **Rooms** (`jarviscore.room.Room`): versioned shared files in a
-      tenant, private to their members until an owner opens them. Asking a
-      room runs an ordinary goal on its current files as the person who
-      asked; the agents' changes come back as one proposal. Accepting merges
-      over newer work line by line and stops with `RoomConflict` where
-      changes really clash. Every decision is atomic and made once. Work that
-      used someone's own access to a system the room does not share is held
-      for them until they release it; owners name the systems a room shares.
-      Work belongs to the mesh: if the process that asked stops, another
-      finishes it and files its proposal once.
-    - **`RoomAgent`**: the agent a team talks to. An AutoAgent with a `room`
-      Kernel role whose tools are the room's own operations. It asks the
-      agents, has proposals redone in the person's own words, files pasted
-      versions exactly, answers from the room's files and history, and stays
-      out of conversations that are not for it. It never decides: accepting,
-      rejecting, releasing, stopping work and signing off are prepared for the
-      person to confirm with one tap.
-    - **Chat surfaces**: `RoomConversation` connects a room to any surface
-      through `ChatSurface`: messages recorded before they are acknowledged
-      and handled once, in order per thread, across processes; each update
-      posted once; held work shown only to its asker; nothing posted where
-      someone who may not see the room would see it. Slack is built in
-      (`SlackApp`, `jarviscore room slack`): one app for every room of a
-      tenant, Socket Mode, workspace members only, and no Slack token in your
-      code (calls go through Nexus; a new `slack_app` atom opens Socket Mode).
-    - **People as peers** (`jarviscore.human.HumanAgent`): a person or a team
-      on the mesh with capabilities. Planners route steps to them and agents
-      ask them; each piece of their work is a HITL item they answer from a
-      terminal, `jarviscore human answer`, a dashboard or a room's chat.
-    - **Testing**: `jarviscore.testing.rooms` (`MemorySurface`,
-      `ScriptedRoomAgent`) and `jarviscore.testing.slack.FakeSlack` test rooms,
-      conversations and Slack without a model or a workspace.
-- **A room remembers, in Athena.** Work in a room and the room's conversation
-  use the room's tenant and the room as Athena's scope, with no configuration,
-  so every agent working in a room shares one memory and nothing crosses rooms
-  or tenants. What people say to the room, the agent's public replies and what
-  the room records are written to the room's team memory (`RoomMemory`), as the
-  conversation Athena summarises. What work learns through its asker's own
-  access goes to their private memory in the room; work that recalls it is
-  held for them. Without Athena, rooms use the local store with the same
-  privacy rule, and `room.forget` erases it.
-- **Per-person spending caps.** Every model call made for a person is charged
-  to them per UTC day and month (`Spending`); tenants cap it, per person if
-  they like. Asking over a cap is refused up front with when it renews; a call
-  that would go over during work is not made, and the work stops
-  (`SpendCapReached`) instead of retrying. `jarviscore room caps`.
-- **Audit.** `Room.audit()` records who did what, why, with whose access and at
-  what cost; `Identities.log()` records who was added, linked or removed.
-  `jarviscore room audit`.
-- **HITL items know their work and tenant; answering resumes it.** Items
-  record the mesh step that raised them and the tenant of the person the work
-  runs for (`inbox(..., tenant=)`). Resolving an escalation that paused a mesh
-  step resumes the step with the answer (`hitl_resolution`). An item is
-  resolved once across hosts, and `inbox` reads Redis as the truth.
-- **Steps act for the person who asked.** A workflow registered with
-  `context["acting_for"]` runs its steps for that person: Nexus lookups,
-  consents and calls use that person's own workspace instead of the
-  deployment's single identity, so their access applies and provider audit
-  logs show them. The identity is read only from the registered workflow,
-  never from peer or capability-need context.
-- **HITL work routed to people.** `HITLQueue.assign` files work routed to a
-  person (type `input_request`, no escalation category), `inbox(target)`
-  lists what waits for a person across agents, and `expire` closes items
-  nobody answered.
-- **`mesh_worker = False`** marks an agent people reach directly: planners
-  never route steps to it, it claims none, and P2P does not announce it.
-- **CustomAgent works on files with no extra code.** Every CustomAgent gets
-  `WorkspaceAccess` unless it has its own sandbox, so its steps find the
-  workspace's files at `context["workspace_binding"]["path"]`.
-- **Line-level merging.** Edits to different lines of the same text file are
-  combined, in rooms and when a step builds on parallel branches; only edits
-  to the same lines that differ conflict.
-- **`STORAGE_BACKEND=redis`** keeps file contents in the Mesh's Redis, so one
-  Redis is all people and agents on different machines need.
-- **`HITL_TARGETS`** names who responds to escalations; a request can name
-  its own with `targets=`.
-- `RedisContextStore` ledgers can be kept beyond the context TTL
-  (`append_ledger_entry(..., expires=False)`) and read after an entry
-  (`get_ledger_after`); a step claim records the claiming agent's role.
-- `BlobSnapshotStore.compose` builds a snapshot from blobs already stored.
+- **Multiplayer.** People ask in their own words, agents propose changes, and
+  people decide as themselves. Start with
+  [Build a Multiplayer Agent](guides/multiplayer-agents.md).
+    - **Rooms** (`Room`): versioned shared files with roles, proposals, line-level
+      merging, and work held for whoever's own access it used.
+    - **`RoomAgent`**: the agent the team talks to. It asks the agents and
+      prepares decisions; people confirm them with one tap.
+    - **Chat surfaces**: `RoomConversation` connects a room to any surface; Slack
+      is built in (`SlackApp`, `jarviscore room slack`).
+    - **People as peers** (`HumanAgent`): planners route steps to people, who
+      answer from a terminal, the CLI or a room's chat.
+    - **Testing** without a model or a workspace: `MemorySurface`,
+      `ScriptedRoomAgent`, `FakeSlack`.
+- **Room memory.** A room remembers in Athena, or in the local store without
+  it. What work learns through someone's own access stays private to them.
+  `room.forget` erases it all.
+- **Per-person spending caps** (`Spending`) and an **audit** of who did what,
+  with whose access and at what cost (`Room.audit()`).
+- **Steps act for the person who asked** (`context["acting_for"]`): their own
+  connections and access, in their name.
+- **HITL:** items record their step and tenant, and answering one resumes the
+  step. `HITL_TARGETS` names who responds; `HITLQueue.assign` routes work to a
+  person.
+- `mesh_worker = False`, CustomAgents working on files with no extra code, and
+  `STORAGE_BACKEND=redis`.
 
 ### Changed
 
-- **Documentation.** The Browser Automation guide is now a short path from
-  install to a working agent, with recipes for your own browser, staying
-  logged in, proxies and approvals; every detail it used to carry is in the new
-  [Browser Reference](reference/browser.md). The docs home is a front door to
-  the docs with the demo film; the Enterprise page carries the Enterprise film.
-- **The bundled Athena stack runs Athena v0.2.0, pinned.** Athena v0.2.0
-  requires authentication and keeps each tenant's memory apart; `memory init`
-  generates `ATHENA_API_KEY` and the stack gives it to Athena as a service key.
-  The image is pinned rather than `latest`, so a future Athena release cannot
-  break an installed JarvisCore; set `ATHENA_IMAGE` to run another version.
-  To upgrade a stack created by an earlier release, run `jarviscore memory init` (it adds the
-  key and restarts the stack on v0.2.0), then `docker exec athena
-  ./ltm-purge-unscoped` to remove knowledge-graph entries written before
-  tenant scoping.
-- **Every Kernel role can work on a step's files.** The file tools
-  (`workspace_read`, `workspace_edit`, `workspace_write`, ...) are shared and
-  given to whichever sub-agent the router picks for a step bound to files, so
-  a writing task goes to the writer and a coding task to the coder, and both
-  can open and change the files. Running commands stays with the coder.
-- **The node that runs a step decides its workspace commands** with its own
-  `workspace_allowed_commands`; the asking node's list applies only when the
-  running node sets none.
-- The mesh planner and its audit are told that reading and editing a goal's
-  workspace files calls no provider: file changes are `propose` steps, and
-  only publishing to a provider is a `write`. Plans used to describe edits as
-  writes to a made-up "source workspace" system, which validation refused.
+- The bundled Athena stack is pinned to **Athena v0.2.0** (authentication and
+  per-tenant memory).
+- Every Kernel role can open and change a step's files; only the coder runs
+  commands.
+- The new [Browser Reference](reference/browser.md) holds the detail behind a
+  shorter Browser Automation guide.
 
 ### Security
 
-- **Nexus Gateway caller authentication.** `NexusClient` sent no `X-API-Key`,
-  so a Gateway deployed with `GATEWAY_REQUIRE_API_KEY=true` (nexus-framework
-  0.6.0 and later) refused every call with 401 and no connected app could work.
-  New setting `NEXUS_GATEWAY_API_KEY` (`Settings.nexus_gateway_api_key`);
-  `NexusClient(gateway_url, api_key=...)` sends it as a default header,
-  `AuthenticationManager` passes it through (config key
-  `nexus_gateway_api_key`, settings as fallback), and the `nexus register`,
-  `nexus status`, `nexus test` and `atom test` CLI paths carry it on their raw
-  Gateway calls. Unset means no header, so Gateways without caller auth behave
-  as before.
-- **The local Nexus stack no longer serves credentials to anyone who asks.**
-  The bundled stack passed the broker its key as `BROKER_API_KEY`, a name the
-  broker does not read, and the pinned gateway (v0.3.0) had no way to require a
-  key. Both listened on every network interface. Anything that could reach the
-  ports, including other machines on the same network, could list connections
-  through `/audit` and read their decrypted credentials from
-  `/connections/{id}/token` or `/v1/resolve`. The stack is now pinned to Nexus
-  v0.6.7, the broker requires `API_KEY`, the gateway requires
-  `NEXUS_GATEWAY_API_KEY`, and both publish on `127.0.0.1` only. The gateway
-  reaches the broker at `BROKER_BASE_URL` instead of sharing its network
-  namespace.
-- **Agents no longer hold the key that decrypts every credential.**
-  `jarviscore nexus init` wrote `NEXUS_ENCRYPTION_KEY` and `NEXUS_STATE_KEY` to
-  the project `.env`, which every agent process loads; generated code once
-  listed the encryption key into a user-facing answer. The stack's secrets now
-  live in `~/.jarviscore/nexus/stack.env` (mode 0600) and agents get
-  `NEXUS_GATEWAY_URL` and `NEXUS_GATEWAY_API_KEY` only. `nexus init` and
-  `nexus up` move keys an earlier init left in `.env` rather than regenerating
-  them, so stored credentials stay readable, and leave a key in place with a
-  warning when it differs from the stack's copy. `nexus status` warns when a
-  master key is still in `.env`.
-- **`nexus register` prompts for secrets** left out of its flags, so client
-  secrets and API keys stay out of shell history.
+- **Gateway API keys.** `NexusClient`, `AuthenticationManager` and the CLI
+  send `NEXUS_GATEWAY_API_KEY` as `X-API-Key`.
+- **The local Nexus stack is locked down.** Nexus v0.6.7 now requires keys on the
+  broker and the gateway and listens on `127.0.0.1` only; before, anything on
+  your network could read stored credentials.
+- **Agents no longer hold the encryption key.** Stack secrets moved from `.env`
+  to `~/.jarviscore/nexus/stack.env` (mode 0600); agents get the gateway URL
+  and key only.
+- `nexus register` prompts for secrets instead of taking them as flags.
 
 ### Fixed
 
-- **The bundled Athena stack did not start, and lost memory when it did.**
-  `minio/mc` is no longer published (the setup step now uses the MinIO server
-  image's own client); Athena's short-term memory was smaller than the count
-  that forces a summary, so events beyond the newest ten were dropped unsummarised;
-  with Azure, `memory init` never gave Athena its chat and embedding deployment
-  URLs, so it summarised nothing. `memory init` now builds them, checks both
-  deployments answer, and no longer offers Anthropic, which Athena does not support.
-- **Athena memory used the deployment's default tenant** for every customer;
-  room work now uses the room's tenant.
-- **HITL requests stored their status as `HITLStatus.pending`** in Redis
-  (the enum's name); they now store `pending`.
-- **The local Nexus vault derived its key on every credential read**, a
-  deliberately slow computation that stalled the event loop of every agent
-  making calls; the key is now derived once per secret.
-- **Escalations no longer assume a founder.** HITL requests were addressed to
-  a hard-coded `founder`, and the agent prompts told the model that only "the
-  founder" could supply missing data. A request now goes to the people the
-  deployment names (`HITL_TARGETS`, default `reviewer`) or to `targets=` on
-  the request, and the prompts speak of a person.
-- **A HITL reviewer's reason reaches the agent.** `resolve()` stored the
-  reason where `check()` and `wait()` never read it; it now comes back as the
-  resolution's `note`. The HITL guide's examples read a `reason` attribute
-  that does not exist and edited inbox files into a shape `check()` ignores;
-  they now use `note` and `resolve()`.
-- **A peer's first request to a node that just joined is no longer dropped.**
-  A starting node answers capability requests as soon as SWIM is up, but
-  registered its PeerClients only after announcing, which can take a minute
-  when known peers are unreachable. A peer that learned of an agent in that
-  window had its request dropped and waited out its whole timeout. The Mesh
-  now registers PeerClients as soon as the coordinator starts, and the
-  coordinator holds a request for one of its own agents briefly until its
-  client is registered.
-- **A step that fails on another node keeps its reason.** The workflow
-  reported every remote failure as "Remote node reported step failure"; it
-  now returns the failure the remote node stored.
-- `jarviscore atom test --mode integration` asked the gateway for a broker-only
-  path and always failed; it now uses `/v1/token/{id}` and keeps the nested
-  `credentials` out of what it prints.
+- The bundled Athena stack starts, keeps every event, and summarises with
+  Azure deployments.
+- Room work uses the room's tenant in Athena, not the deployment's default.
+- HITL requests go to the people you name rather than a hard-coded "founder",
+  and a reviewer's reason reaches the agent.
+- A peer's first request to a node that has just joined is no longer dropped,
+  and a step that fails on another node keeps its reason.
+- The local vault derives its key once instead of on every credential read.
+- `jarviscore atom test --mode integration` works.
 
 ### Removed
 
-- The repository-root `docker-compose.nexus.yml` and
-  `nexus/migrations/001_initial_schema.sql`. Both were stale copies: the root
-  file followed `:latest`, which the current broker refuses to start under.
-  `jarviscore nexus init` uses the compose file bundled with the package.
+- The stale repository-root `docker-compose.nexus.yml` and Nexus migration;
+  `jarviscore nexus init` uses the bundled compose file.
 
 ### Upgrading from 2.2
 
-No public API is removed. If you run the bundled stacks, do this once per
-project:
-
-1. **Nexus.** Run `jarviscore nexus up`. It moves the stack's keys out of
-   `.env` into `~/.jarviscore/nexus/stack.env`, keeping the ones that decrypt
-   your stored credentials, writes `NEXUS_GATEWAY_API_KEY` to `.env`, and
-   restarts the stack on Nexus v0.6.7, listening on `127.0.0.1` only.
-   `jarviscore nexus status` warns if a master key is still in `.env`.
-2. **A Gateway you deploy yourself** with `GATEWAY_REQUIRE_API_KEY=true`
-   needs `NEXUS_GATEWAY_API_KEY` set next to `NEXUS_GATEWAY_URL` on every
-   agent host.
-3. **Athena.** Run `jarviscore memory init` to add `ATHENA_API_KEY` and move
-   the stack to Athena v0.2.0, then `docker exec athena ./ltm-purge-unscoped`.
+1. **Local Nexus:** run `jarviscore nexus up`. It moves the stack's keys out of
+   `.env` (keeping the ones that decrypt your credentials) and restarts on
+   v0.6.7.
+2. **A gateway you deploy yourself** with `GATEWAY_REQUIRE_API_KEY=true`:
+   set `NEXUS_GATEWAY_API_KEY` on every agent host.
+3. **Athena:** run `jarviscore memory init`, then
+   `docker exec athena ./ltm-purge-unscoped`.
 
 </div>
 
@@ -262,669 +120,115 @@ project:
 
 ## 2.2.0 <span class="changelog-date">2026-10-22</span>
 
-One agent can now run as several workers when its queue grows, every model call
-is paced against the provider's real limits, and agents act through native tool
-calls on every provider that supports them. The runtime now records what an
-agent did instead of steering how it works, and long browser tasks hold together
-through cookie dialogs, pagination, out-of-stock items, approvals and delivery
-slots that disappear mid-checkout.
+One agent can run as several workers, every model call is paced to the
+provider's real limits, and agents act through native tool calls. Results come
+back with the evidence behind them, and the browser holds together on long,
+real tasks.
 
 ### Added
 
-- **Elastic worker pools.** `mesh.add(AgentClass, pool=Pool(min=1, max=8,
-  idle_seconds=60))` lets one logical agent run as several members when work
-  queues up, up to `max` in the process. Members above `min` retire after
-  `idle_seconds` without work, and `lane="bulk"` marks the pool's model calls
-  as background work for the provider governor. `Mesh.get_diagnostics()`
-  reports each pool. Every way work reaches an agent goes through its pool:
-  goal steps, capability needs from other agents, `workflow()` steps,
-  `fanout()` items, `delegate()` calls and peer requests each hold a member
-  while they run, so a pooled agent answers them in parallel. In our Evidence
-  Engine benchmark, verifying 196 claims on
-  one laptop took 9.4 minutes with 32 pool slots, against 202 minutes with
-  fixed workers. See [RFC 0002](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0002-elastic-execution.md).
-- **Draining.** `Mesh.drain()` stops a node from starting new goals or claiming
-  work outside the workflows it is still waiting on, so the goals it already
-  started can finish. `stop()` drains first.
-- **Provider governor.** Every model call is admitted per deployment before it
-  is sent. The governor starts with a small number of calls in flight, grows
-  while the provider keeps up, backs off on rate-limit errors and learns the
-  real limits from the provider's `x-ratelimit-*` headers. `LLM_LIMITS`
-  declares known limits so that several processes share one rate window
-  through Redis, and `lane_scope(BULK)` runs background work in a lane that
-  leaves headroom for people waiting on chat. Every setting has a working
-  default: `LLM_GOVERNOR_ENABLED`, `LLM_LIMITS`, `LLM_INITIAL_CONCURRENCY`,
-  `LLM_CONCURRENCY_CEILING`, `LLM_BULK_RESERVE` and `LLM_CONNECT_TIMEOUT`. See
+- **Elastic worker pools.** `mesh.add(Agent, pool=Pool(min=1, max=8))` runs one
+  agent as several workers as work queues up. Verifying 196 claims took 9.4
+  minutes instead of 202. See
+  [RFC 0002](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0002-elastic-execution.md).
+- **Draining.** `Mesh.drain()` lets started goals finish without taking new
+  work; `stop()` drains first.
+- **Provider governor.** Calls are admitted per deployment, grow while the
+  provider keeps up and back off on rate limits. `LLM_LIMITS` shares limits
+  across processes. See
   [Provider governor](reference/configuration.md#provider-governor).
-- **Native tool turns.** Where every provider in the fallback chain supports
-  tool calls (Azure Chat Completions and Responses, Claude, Gemini and Vertex
-  AI, and vLLM), each sub-agent turn is a native function call: the model must
-  call one of the step's tools, or a `done` function whose result is typed from
-  the step's `output_schema`. Replaying a real verifier turn 24 times, the text
-  protocol answered without using a tool every time, while native turns called
-  a tool every time. The Prescott promotional endpoint keeps the text protocol.
-  The Claude, Gemini and vLLM translations are covered by tests but have not
-  yet been verified against the live services.
-- **A record of the work.** Every accepted result carries
-  `metadata["work_record"]`, which lists for each tool the calls made and how
-  many succeeded. Facts about the remaining budget reach the agent as a runtime
-  notice in that turn's prompt, not as instructions to stop.
-- **Working notes.** Alongside any action, an agent can record what it has
-  established: the `working_notes` argument on native turns, or a `NOTE:` line
-  in the text protocol. Notes are kept in the step's `WorkingScratchpad`, shown
-  to the agent on every turn, never dropped when the context is under pressure,
-  and carried into the step's next execution epoch. Until now the scratchpad
-  was written on every turn but never shown back to the agent.
-- **One runtime folder.** Files the framework writes relative to the working
-  directory (blob storage, logs, traces, the HITL inbox, step outputs and the
-  function registry) now live under `./.jarviscore/`. Thanks to @whoisnjoguu
-  (#146).
-- **Consequential actions wait for a person.** A browser or coder action marked
-  `irreversible` with a `consequence` raises a typed `HITLRequest` that carries
-  the exact action, and the step pauses. `Mesh.resolve_hitl()` records the
-  decision and resumes the step: an approved action is performed once, through
-  the normal tool path and with a receipt, and a declined action is never run.
-  A browser click, select or submission the agent did not mark is judged by the
-  decision model first; one that could commit the person returns
-  `APPROVAL_REQUIRED` instead of running. Live, an unmarked "Place order" had
-  gone through without approval.
-  See [HITL](guides/hitl.md#approving-an-agents-consequential-actions).
-- **The browser reads the page as a person does.** `snapshot()` returns the
-  page's headings, text, tables, notices and dialogs, with a ref on every
-  element that can be acted on, and every interaction tool accepts that ref.
-  Disabled, hidden and covered elements are refused at once, with the reason.
-- **Every browser action returns the page it leaves behind.** `navigate`,
-  `click`, `type_text`, `fill_form`, `select_option`, `scroll` and `act`
-  return the page as it stands afterwards, so the agent no longer spends a
-  model call on a snapshot after each action. On the regression tasks this
-  halved the model calls for train times (52 to 27) and museum hours (19 to
-  10).
-- **`find` and `act`.** With a decision model configured, `find(goal)` returns
-  the element that serves a goal, and `act(goal, action)` performs a reversible
-  click, typing or selection in one step. `act` never performs a consequential
-  action.
-- **The browser continues across epochs.** When a step's execution epoch runs
-  out, its browser is held open for the next epoch for up to
-  `BROWSER_CONTINUATION_HOLD_S` seconds (default 120), so the agent carries on
-  from the same page.
-- **Pace, settling and access.** Requests to one site are spaced by
-  `BROWSER_SITE_INTERVAL_S` (default 1.5 s). Each action waits for the site's
-  own data requests (`BROWSER_DATA_TIMEOUT_MS`, default 10,000 ms) and for the
-  page to stop changing (`BROWSER_SETTLE_TIMEOUT_MS`, default 3,000 ms), so
-  client-rendered apps are read with their data. `navigate` reports when a site
-  turns the browser away.
-- **Any decision model.** `DecisionClient` is a provider-neutral protocol, and
-  `DECISION_CLIENT_FACTORY` plugs in any implementation. See
-  [Bring any decision model](concepts/decision-models.md#bring-any-decision-model).
-- **Your own egress proxy.** `EGRESS_PROXY_URL` routes the browser, and the
-  pages the researcher reads, through your proxy provider, with a sticky
-  `{session}` per tenant or workflow. `EGRESS_PROXY_BYPASS` names hosts that go
-  direct, and `BROWSER_LOCALE` and `BROWSER_TIMEZONE` match the browser to the
-  proxy's region. See [Your own proxy](reference/browser.md#your-own-proxy).
-- **The browser agent writes code for repeated work.** `run_playwright` runs a
-  Python Playwright program against the live page, so reading every row, paging
-  back to a date or opening each item in a list is one tool call. Variables
-  persist for the browser step, `state` carries inventories and findings into
-  the step artifact, and accepted site procedures are retained in Athena. The
-  program runs in the Coder's confined child process and reaches only the page;
-  clicks, submitting key presses, selects and scripts are judged first, and one
-  that could commit the person becomes an approved action. Asked which
-  records in a SaaS admin app had failed that day, an agent without it took 133 tool calls
-  and 3.5M tokens and found 1 of 5 failures; with it, three consecutive runs
-  matched the run history in 194 to 455 seconds with 7 to 14 model calls. See
-  [Code](reference/browser.md#code).
-- **Browser code reads many pages at once.** `read_pages(urls, script)` opens
-  up to `BROWSER_PARALLEL_PAGES` (default 4) pages in the same session, paced and
-  settled, and returns each page's result. Page calls from confined code are
-  synchronous, so the agent could only read a collection one page at a time;
-  live, reading 23 records of an admin app that way ran past its time limit.
-  `open_each(items, script)` does the same for lists whose items open on click,
-  taking the locator the agent would click them by, and returns each item's
-  address and contents. With `next_page` and `until`, `read_pages` reads each
-  paged history back to the start of a period and reports whether it goes on
-  (`more`); agents had read the first page of each sync's runs and reported
-  failures earlier that day as healthy.
-- **A program that runs out of time keeps what it read.** At its `timeout_s`
-  the page stops serving the program, which ends with its variables and `state`
-  intact for the next call. The process used to be killed at the deadline,
-  losing a 180-second inventory the agent had just collected.
-- **Browser work survives bounded execution.** Programs default to the
-  configured code duration, bounded by the remaining lease, rather than a
-  hidden 120 seconds. Findings, recorded programs and the last URL enter the
-  step checkpoint. Batches preserve completed observations after later errors
-  or deadlines and await every cancelled worker before returning, so page
-  cleanup cannot continue after the batch has returned.
-- **Accepted browser procedures keep their programs.** The programs that wrote
-  a step's kept findings are retained with `state["procedure"]` only when the
-  collection reads closed. A later run whose task names that site runs those
-  programs before the first turn, instead of rediscovering the site.
-- **An open collection read is not completion.** `read_pages` and `open_each`
-  are tools as well as code functions. `done` is refused while a read is still
-  open (`more`, or `stop_reason` `timeout`, `error`, `page_limit`) or the latest
-  collection program did not finish. A lease expiry no longer becomes success
-  from a landing answer that names itself incomplete or whose records are open.
-  When an interpretation names obligation ids, each id is satisfied only if it
-  is listed. A blanket verdict no longer satisfies an id that interpretation
-  left unnamed. An interpretation that names descriptions rather than ids still
-  closes on its verdict. A step with no interpretation still satisfies on
-  completion, because there is no semantic record to contradict it.
-- **No tool call outlives the step's time.** A tool call runs under the
-  execution lease. `read_pages` and `open_each` called as tools stop where the
-  lease does and return what they read, with the rest marked `timeout`; any
-  other call is stopped `SUBAGENT_TOOL_HANDBACK_S` (60) seconds after the lease
-  ends and reported as `LeaseExpired`. On one live run a read began 61
-  seconds before the lease ended and kept going, so the step returned nothing.
-- **A browser program works on the page it opens.** A `run_playwright` program
-  moves the page at most once. Going on to another address is reading a
-  collection with `read_pages` or `open_each`, which open several pages at once;
-  the program is told so and keeps its variables and state. In three live
-  runs on an admin app, programs that walked 23 run histories or clicked through every
-  record one page at a time spent 619, 388 and 511 seconds before the agent turned
-  to the collection tools.
-- **Programs compute over what the step already read.** `reads` in a program
-  is a dictionary of every collection record the step has read, as tools or in
-  programs, keyed by address or by `"<list url>#<selector>#<index>"`, so a
-  program filters or combines records instead of reading the site again. A
-  later read of the same address or item replaces the earlier record, but an
-  unfinished read never replaces a finished one: on one live run, filtered
-  re-reads that came back empty had replaced 25 complete histories. An
-  `open_each` record carries its `list` and `selector`; re-opening a failed item
-  (`open_each` takes `indexes`) closes that item, and items of different lists
-  no longer share a record. A collection script that is not valid JavaScript is
-  refused before any page opens.
-- **A paged history stops only when its page stops turning.** `unchanged` was
-  decided by comparing the script's values, so a script that filters rows (and
-  returns an empty list on two pages in a row) ended the history after one
-  page. The page's own content now decides it, and `unchanged` keeps the read
-  open. `until` is defined as the page having gone past the period: a read that
-  stopped on the first page of the period looked finished while it held two
-  hours of a day.
-- **A slow host keeps browser code.** The confinement probe gave a confined
-  child 30 seconds to import JarvisCore and, if it was slower, recorded for the
-  whole process that confinement does not work. On a loaded Mac after a restart
-  that removed `run_playwright` and its guidance: the agent paged 25 run
-  histories with 79 single clicks and ran out of time. Only a definite answer
-  is now kept, a slow start is probed again, and the start window is
-  `JARVISCORE_CONFINEMENT_PROBE_TIMEOUT_S` (180).
-- **Collection guidance is part of the browser prompt.** How to read a
-  collection with `read_pages` and `open_each`, and when a paged history has
-  gone past its period, lived in the code-tool section, so an agent without
-  `run_playwright` had both tools and no account of them.
-- **A clock expiry is completion only when the answer says it is complete.**
-  The landing turn's `done` now carries a required `complete`; anything but
-  `true` keeps the step unfinished with what it established. The model was told
-  to "say so inside the result", while the check looked for `status: partial`:
-  a run that wrote "Partial audit" in prose was recorded as success.
-- **Earlier tool results no longer ride along whole on every turn.** The last
-  ten exchanges were threaded whole with no size bound, so one large result
-  was paid again on each later turn: on one live run, prompts grew from 23k
-  to 215k tokens and the step ran out of action tokens with six minutes of
-  wall clock left. The newest result is always whole; earlier ones are whole,
-  newest first, within `SUBAGENT_THREAD_RESULT_BUDGET` (120000 characters) and
-  otherwise appear as a reference with their receipt and size that
-  `read_turn_result` shows whole again. Nothing is cut.
+- **Native tool turns** on Azure, Claude, Gemini, Vertex AI and vLLM: every
+  turn is a real tool call, or `done` typed from the step's `output_schema`.
+- **Working notes and a work record.** Agents note what they have established
+  (never dropped from context), and every result carries
+  `metadata["work_record"]`.
+- **Memory across runs with nothing to install**, in `.jarviscore/memory/`
+  when Athena is not configured.
+- **Consequential actions wait for a person.** An action marked `irreversible`
+  pauses the step; `Mesh.resolve_hitl()` resumes it, and the action runs once.
+- **A browser for real tasks:**
+    - page views as a person reads them, and every action returns the page it
+      leaves behind;
+    - `find` and `act` with a decision model;
+    - `run_playwright` programs for repeated work, with `read_pages` and
+      `open_each` for many pages and paged histories;
+    - continuing across execution epochs, site pacing, and your own egress
+      proxy (`EGRESS_PROXY_URL`).
 
-- **Memory across runs with nothing to install.** Facts an agent keeps with
-  `remember` go to `.jarviscore/memory/` when Athena is not configured, and
-  each new task recalls the ones relevant to it, in a new process as well.
-  `Mesh(config={"local_memory": False})` turns this off. See
-  [Memory](concepts/memory.md#tier-4-cross-session-memory-local-store-or-athena).
+  See the [Browser Reference](reference/browser.md).
+- **One runtime folder.** Everything the framework writes goes under
+  `./.jarviscore/`. Thanks to @whoisnjoguu (#146).
 
 ### Changed
 
-- **`run_task()` and `workflow()` return the answer, with the evidence beside
-  it.** A cited tool result carried its whole observation (tool input, raw
-  output) inside `output`, so printing the answer printed the agent's code and
-  page dumps. `output` now holds what the agent delivered, `result_summary`
-  the prose answer, and the observations move, whole, to `evidence`. Stored
-  results, handoffs between steps and `delegate()` keep them inline.
-- **A declared `default_kernel_role` is the role.** An AutoAgent that declares
-  it now runs every direct task in that role; the router chooses only for
-  agents that declare none. Declared as the browser guide shows, a browser
-  agent had been routed to the coder, which cannot reach public sites.
-- **Only agents that declare `requires_auth = True` can use provider
-  credentials.** Before, every AutoAgent could call any provider registered in
-  the machine's local vault (`~/.jarviscore/nexus.enc`) or reachable through
-  the gateway; in a new project, an agent that declared neither answered a
-  memory question by searching HubSpot. An agent without the flag is not told
-  which providers are connected, and a task that names one yields saying the
-  agent must declare `requires_auth`.
-- **Cross-session memory belongs to the agent's stable identity.** Athena
-  memory was keyed to the generated `agent_id` (`role-<random>`), which changes
-  with every process, so nothing kept was found after a restart. It is now
-  keyed to the role, or to an `agent_id` you pass.
-- **Later steps read what a step delivered; its working state stays with it.**
-  A browser step's artifact carried its working state (`browser_state`,
-  `browser_programs`) into every later prompt: on one live run, 211k of
-  the step's 311k characters were working state, pasted into the step check,
-  the next step and the final response. Prompts now carry the delivered work
-  and its evidence whole, and name each working-state field with its keys and
-  size; `read_workflow_step` and browser code (`prior`) read it whole. Nothing
-  is cut.
-- **An agent instance runs one piece of work at a time.** A running task keeps
-  its routing decisions and bound workspace on the agent instance, but
-  `workflow()` steps, `fanout()` items, `delegate()` calls and peer requests
-  used to run concurrently on the first registered agent for a role, so two
-  tasks could act on each other's state. Each now holds an instance from the
-  agent's pool while it runs. An agent added without a `Pool` is one instance
-  and runs its work in turn; add `pool=Pool(max=N)` to run up to N at once.
-  A call chain that would wait on an instance it already holds raises an error
-  naming the agent instead of hanging. Among several agents registered for a
-  role, work goes to the one with the most free instances.
-- **Work on one system is planned as one step.** The planner split a question
-  spanning several categories on one site into a step per category, each
-  repeating the site's navigation and inventory. It now keeps reading one
-  system in one step; the same question planned as a single step and was
-  answered correctly.
-- **Agents see every tool result whole.** A result was clipped to 800
-  characters in the conversation, with the full text repeated in the list of
-  recent actions. Each result is now shown whole, once: in the conversation
-  while it is among the agent's recent exchanges, where the action list points
-  to it, and in the action list after that. Errors and pre-execute review
-  results reach the agent in full.
-  `SUBAGENT_OBSERVATION_LIMIT` is ignored.
-- **`fill_form` fills every kind of field.** Selects are chosen by value or
-  label, checkboxes and radios take `checked`, and fields that suggest values
-  as you type (station or address pickers) are typed into and the matching
-  suggestion is chosen. When several suggestions match, the call returns them
-  instead of guessing, and the form is not submitted. An optional `submit` ref
-  is clicked only once every field is set.
+- **Answers come with evidence.** `run_task()` and `workflow()` return the
+  answer in `output` and `result_summary`, and the tool observations in
+  `evidence`.
+- **Agents act as declared.** A declared `default_kernel_role` is used, and
+  only agents with `requires_auth = True` can use provider credentials.
+- **Memory follows the agent** across restarts: it is keyed to the role rather
+  than a per-process id.
+- **One instance, one piece of work.** Add `pool=Pool(max=N)` to run an
+  agent's work in parallel.
+- **Agents see every tool result whole**, and later steps read what a step
+  delivered, not its working state.
 - **The runtime records what an agent did instead of policing how it works.**
-  Live traces showed agents that still had budget stopping after three tool
-  calls because the runtime told them to. The runtime no longer refuses or
-  redirects an agent's work. Removed:
-
-    - the knowledge-plateau notice;
-    - refusals of searches similar to earlier ones and of URLs already read;
-    - the convergence governor's forced changes of approach;
-    - the failure guard's refusal to retry a tool;
-    - budget coaching such as "stop gathering, call done now";
-    - the exit checklist shown before completion;
-    - the research phase contract and the tool refusals it made;
-    - the gates that required a search, or URL ids, before reading;
-    - the block on clicking by coordinates;
-    - the coder's requirement to research before writing code.
-
-    A repeated identical call now runs, and its result says whether it matches
-    the earlier receipt. `FailureLedger` records and classifies failures without
-    blocking anything. `preferred_domains` orders results rather than filtering
-    them: preferred sources come first and open-web results are still returned.
-    The boundaries stay in place: execution leases, approvals, effect-intent
-    review, atom contracts, credential and workspace limits, receipt grounding,
-    result shape checks and `required_tool_groups`. See
-    [RFC 0003](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0003-record-not-police.md).
-
-- **The runtime never clicks for the agent.** When a researcher's click or
-  typing failed, the runtime tried other elements itself, then a coordinate
-  guessed from a screenshot, and reported success for an element the agent had
-  never chosen. A failed action now returns its error to the agent. The
-  undocumented `RESEARCH_REPAIR_LOOP_ENABLED` and `RESEARCH_REPAIR_MAX_TURNS`
-  settings and the `recovery_strategy` hint on failed page reads are removed
-  with it. An action a person approved is still performed exactly as approved.
-- **Failures are recorded as facts.** `FailureLedger` keeps the failure class a
-  tool declares, the status code and the full error. It no longer guesses a
-  class from words in the message; a failure without a declared class is
-  recorded as `UNKNOWN`, and the browser no longer attaches a guessed
-  `error_type`.
-- **The browser offers fewer tools.** `evaluate`, `wait_for`, `get_text`,
-  `get_links`, `scroll`, `get_attribute`, `get_cookies` and `close_page` are
-  removed; `run_playwright` does each of them. Across 193 logged browser runs
-  they made 3% of browser tool calls, and `get_attribute` and `get_cookies`
-  were never called. `navigate`, `snapshot`, `click`, `type_text`,
-  `fill_form`, `select_option`, `screenshot`, `find` and `act` remain, and
-  remain the only way to make an approved, consequential action.
+  The runtime no longer clicks for the agent; leases, approvals, contracts and
+  credential limits stay. See
+  [RFC 0003](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0003-record-not-police.md).
+- `fill_form` fills every kind of field. The browser offers fewer tools;
+  `run_playwright` covers the rest.
 
 ### Fixed
 
-- **An agent that could not do the task reports failure.** `done` carries
-  `complete`; `complete: false` ends the step with `status: "failure"`, the
-  agent's own explanation as the error and what it gathered as the payload.
-  A missing input file or an unreachable site had come back as
-  `status: "success"` with null figures. When the budget runs out on a run
-  nothing will resume, such as `run_task`, an unfinished answer ends the same
-  way instead of as `epoch_exhausted`.
-- **Keys in `.env` reach every part of the runtime.** Web search and browser
-  options read the process environment, which `.env` never reached, so
-  `SERPER_API_KEY` in `.env` did not turn search on. `Mesh.start()` exports
-  `.env`; variables already set in the process win.
-- **The researcher reads web pages and PDFs on a plain install.**
-  `beautifulsoup4` and `pypdf` are core dependencies. Without the `[web]` or
-  `[research]` extra every page read failed with `'NoneType' object is not
-  callable`, and no install could read a PDF.
-- **A research answer is the findings, not the researcher's working state.**
-  A general question returned the researcher's API-research scaffolding
-  (empty `api_specs`, the validation report, its checkpoint and URL registry,
-  `status: "candidate_ready"`) as the answer, summarised as "Completed via
-  tool 'publish_research_findings'". It now returns the summary and evidence,
-  with `api_specs` and `libraries` only when there are some, and a step that
-  ends through a tool takes that tool's summary as its answer.
-- **A workflow step does not ask the roles that run after it.** Each step is
-  told `downstream_roles`; `ask_peer`, `ask_capability` and `send_to_peer`
-  refuse them (`PEER_RUNS_AFTER_YOU`), since they receive the step's result
-  anyway. Peer requests now name the requester by its mesh role, not its
-  kernel role, so replies reach an agent that exists.
-- **Tasks started in the same second no longer share a step.** `run_task` and
-  chat named a step after the current second, so concurrent tasks wrote one
-  trace file and overwrote each other's checkpoints.
-- **A plain run logs what went wrong, not what was never configured.** An
-  unconfigured SearXNG is tried once and logged at debug instead of retried
-  with warnings on every search; `rag_query` is offered only with the `[rag]`
-  extra; a missing `[p2p]` extra is one info line.
-- **A failed amendment is no longer recorded as satisfying the goal.** When an
-  amended step failed, the ledger settled the revision as "satisfied the
-  outstanding obligations". The settlement now names the obligations left
-  unresolved and records them as blocked.
-- **Planning calls are visible.** Each plan, reconciliation and amendment
-  records its model calls in the workflow ledger (`planner_calls`: seconds,
-  prompt size, tokens).
-- **The page shows which option a dropdown holds.** The page view listed a
-  `<select>`'s options without marking the chosen one, so an agent checking a
-  delivery slot could not see it. Options and other unlabelled elements now
-  carry their state, for example `option "Sun 10:00" (selected)`.
-- **The browser no longer offers `install_required` when Playwright is
-  installed.** It was picked up as a tool because of its method name, and
-  calling it reported that Playwright was missing.
-- **Original observations reach completion reasoning.** A cited page, search or
-  provider read carried only its receipt identity, so a completion check could
-  accept the worker's report without seeing contradictory data. Cited results
-  now carry the runtime-owned `observed_tool_result` alongside authored claims.
-  The step evaluator distinguishes observations from claims when assessing the
-  requested query, scope, period and coverage.
-- **Reads with several declared systems are not forced into Coder.** The
-  presence of any system name overrode the reasoning router, including public
-  browser and search work. Reads and proposals now use the explicit execution
-  role or reasoning router; provider mutation and credential boundaries remain.
-- **Unfinished progress survives yield and dependency handoffs.** The kernel's
-  yield result omitted progress, and dependency readers reduced exhausted
-  results to `output: None`. Status, error and unverified progress now reach
-  follow-up interpretation and final synthesis together.
-- **A step that runs out of budget keeps what it found.** When a step used its
-  last execution epoch, or its final answer was refused, the failure record held
-  only that it stopped; the agent's notes and answer stayed in a checkpoint
-  nothing read. Live, a step that had checked 15 records and found a failing run
-  reached the final answer as "Step exhausted 8 execution epochs". A run without
-  an accepted answer now carries `progress` (its working notes and its last
-  refused answer with the reason, marked unverified) through the kernel,
-  `AutoAgent` and the `EXECUTION_EPOCH_LIMIT_REACHED` record.
-- **A question about a period is planned over each item's record for that
-  period.** Asked how records did "today", the planner judged each one from the
-  listing's status column, which describes only the latest run. Listing
-  metadata now rules items out only for what it summarises, and a goal about
-  a period covers each item's history for the whole period; the plan audit
-  flags plans that do not.
-- **A cut-short receipt id is reported as unknown.** An agent that cited only
-  the workflow part of a tool receipt id was told the receipt belonged to
-  another workflow, which it could not act on. It is now told the receipt is
-  unknown and to cite the id exactly as the tool result gave it.
-- **Only `DONE` completes a step.** A turn with a `RESULT` but no `DONE` (for
-  example `{"status": "in_progress"}`) was recorded as a completed step.
-- **A goal whose record had expired could stall a node.** Its id stayed in the
-  set of goals waiting to be planned, so every node tried to claim it again on
-  every tick. With the new wake-on-change loop this became a busy loop that
-  kept the node's workers from claiming steps. Such a goal is now settled as a
-  planning failure that states the reason.
-- **`Mesh.stop()` could hang** when the node was running a step whose agent
-  code swallowed the cancellation, for example a worker paused for an
-  approval. The mesh now marks itself as stopping before it cancels anything,
-  and its loops exit on that rather than relying on cancellation alone.
-- **A goal's answer could still describe the pause after the approval went
-  through.** The final response may be written while a step waits for a
-  person, so it could say that an order still needed approval after the order
-  had been placed. Resuming a step now reopens every final response that
-  depends on it, and a response still being written from the paused state is
-  discarded when it finishes.
-- **Peer tools show the model their real parameters on native turns.** The
-  schema was read from the tool wrapper's signature, so the model saw an
-  internal `_name` argument and none of `ask_capability`'s `capability` and
-  `question`. A tool can now declare its JSON Schema with `register_tool(...,
-  parameters=)`, and arguments annotated with `Literal` are offered as a fixed
-  set of values. `navigate` uses this for `wait_for`, which a model had set to
-  an unsupported value.
-- **Tool receipt ids are never reused.** They were numbered from the length of
-  the tool history, which compaction shortens, so a later receipt could take
-  the id of an archived one. Receipts are now numbered from a count that only
-  grows, and archived turns keep their ids.
-- **Costs say where their price came from.** A model missing from the price
-  table was silently costed at $3/$15 per 1M tokens. `LLM_PRICES` now declares
-  prices per model, cached input is billed at its cached rate, every call
-  reports `price_source` (`declared`, `builtin` or `default`), and a model still
-  on the default is named once in the log.
-- **`FanoutResult.summarize` passes every item's evidence whole.** It cut each
-  output at 800 characters and each error at 200. `evidence_limit` is still
-  accepted and no longer shortens anything.
-- **`recall()` keeps to its limit.** Facts kept so recently that Athena has not
-  indexed them were appended after the search results, beyond `limit` and
-  unlabelled. They now count towards `limit` and are marked
-  `"match": "kept recently, not yet searchable"`.
-- **The memory guide said every turn is written to Athena.** Turns stay in the
-  step's scratchpad and episodic ledger; Athena receives outcomes and what the
-  agent keeps with `remember()`.
-- **Pools no longer block the event loop.** The function registry is built
-  once per directory per process, outside the event loop; step outputs are
-  indexed per workflow instead of found by scanning the Redis keyspace; active
-  workflow graphs are fetched in one pipelined call; and a goal waiter wakes
-  only for changes to its own workflow.
-- **The governor no longer strands calls.** A call waiting on a different
-  event loop could wait for a long time without being admitted. One limit now
-  holds across every event loop.
-- **`LLM_MAX_CONCURRENT` is enforced once.** It was applied twice, once by a
-  semaphore bound to a single event loop, and the governor ignored it whenever
-  it was below the governor's starting concurrency of 8. The governor now
-  enforces it alone, as the most calls in flight per deployment.
-- **Work that lost its step claim stops.** It used to keep calling tools and
-  models until it tried to commit; the claim heartbeat now cancels it.
-- **Nested output schemas work.** A nested `output_schema` reached providers
-  with broken internal references (`$defs`), and a state carrying an
-  `output_schema` could not be checkpointed.
-- **`TELEMETRY_TRACE_DIR` is honoured.** The setting was documented but never
-  read, so kernel traces were always written to the default folder.
-- **Importing JarvisCore no longer loads a `.env` file into the process.** The
-  `swim-p2p` dependency calls `load_dotenv()` when it is imported; JarvisCore
-  now prevents that during its import. Settings still read `.env` as
-  documented.
-- **An answer that cites a page read is accepted.** A correct answer citing the
-  receipt of a page read was rejected as citing an unknown receipt. A page read
-  that established a fact now counts as evidence.
-- **Refused pages are marked protected.** A page the site refused with 401 or
-  403 was never marked `access: protected`, because the fetcher reported a
-  guessed category instead of the status code. Failed page reads now carry
-  `status_code`.
-- **A continued step keeps its conversation.** It now resumes with its last 10
-  exchanges, including the turn that paused for a person.
-- **An approval is not used up by an action that never ran.** An approved
-  action that was blocked before it could act, for example by a cookie dialog
-  covering the button, was recorded as already performed. A tool that refuses
-  before acting now reports `performed: False`, and the approval stays open.
-- **Approved form values are restored.** When the page was reopened, an
-  approved form submission lost the values the person had approved. Those
-  values are now part of the action's identity and are filled in again before
-  the approved click; if they cannot be restored, the action does not run.
-- **The browser presents its real identity.** It presented a stale Chrome 120
-  identity while running as `HeadlessChrome`; it now reports the running
-  Chrome's actual version and platform.
-- **`extract_api_details` works.** The researcher's tool failed on every call
-  and cut documentation off at 20,000 characters; it now reads the
-  documentation in full.
-- **The researcher's answer is enough.** The researcher required a top-level
-  `summary` key, which products that define their own result shape could never
-  provide. The `DONE` answer now satisfies it.
-- **A goal-wide quote is stated once.** When one source quote applied to every
-  obligation, the plan view repeated it for each of them. It is now stated
-  once, which saves about 1,100 prompt tokens per turn.
-- **Amendments can read new evidence.** An amendment whose answer depends on
-  new evidence could not be planned, and a planning failure raised an error
-  instead of settling the goal on the work already completed.
-- **The plan audit reads obligations as they were written.** It was shown
-  obligations with `source_quote` while being told that the ledger uses
-  `source_ref`, and sometimes rejected correct plans over that mismatch, which
-  failed the goal at planning.
-- **The Mesh's response step is routed directly.** The step that writes the
-  final response was routed by a model call although its destination is fixed.
-  It now goes straight to the communicator, which saves about 2 seconds per
-  goal.
-- **Plans no longer need a repair call for their own response step.** The
-  planner's first prompt never said that JarvisCore appends the response step
-  itself and that only domain steps settle obligations. Plans covered
-  obligations with a response step of their own, the framework replaced it,
-  and between a third and two thirds of plans needed a repair call. Every
-  prompt that produces steps now says so. In 24 live plannings none needed a
-  repair, and mean planning time fell from about 20 to 15 seconds.
-- **The researcher and its browser share one egress session**, so page reads
-  and browser actions leave through the same sticky proxy session.
-- **Reaching the turn cap continues the step.** A step that hit the kernel's
-  turn cap mid-work failed its goal, whereas an exhausted token or time budget
-  would have let it continue. The turn cap now ends the execution epoch, and
-  the step continues while the workflow grants further epochs.
-- **Stale element refs are refused.** A ref from an earlier snapshot, or from
-  before a page load, reached Playwright as "Invalid frame in aria-ref
-  selector" or matched nothing. The browser now tracks which refs its latest
-  snapshot made live and answers `STALE_REF` without acting.
-- **Clickable rows carry refs.** Many admin apps open a record when its
-  table row is clicked. The browser marked those rows clickable, but the page
-  view showed refs only on links, buttons and other interactive roles, so the
-  agent could not open a record by its row. Any element the page gives a
-  pointer cursor now carries a ref.
-- **Invisible frames are left out of the page.** A support-chat widget faded
-  to full transparency stayed in the accessibility tree, and the agent tried
-  to close a panel no one could see. Frames that are transparent, hidden or
-  have no size are no longer shown, and their refs are not live.
-- **Rows laid out without a box are clicked correctly.** An element with
-  `display: contents` has no box of its own, so the check for what covers it
-  looked at the top-left corner of the page and refused the click. The check
-  now uses the area the element's content covers, and such an element receives
-  the click itself.
-- **The browser stops waiting for network idle.** Apps that poll in the
-  background never reach it, so every action waited the full settle time.
-  After the document loads, the browser now waits for the page to stop
-  changing for half a second, up to `BROWSER_SETTLE_TIMEOUT_MS`, and
-  `navigate` waits the same way by default.
-- **A step's next epoch finds what the last one read.** The checkpoint carried
-  the browser's collection records only after a program ran, so a `read_pages`
-  or `open_each` tool call made just before an epoch ended was lost, and the
-  next epoch read the same 22 run histories again. Every checkpoint now
-  carries the specialist's runtime state as it stands.
-- **Earlier results stay readable across epochs.** `read_turn_result` kept
-  results under the loop's turn, which restarts in each epoch, while receipts
-  carry the step-wide number; after an epoch boundary the agent asked for the
-  number on the receipt and got nothing. Results are kept and labelled by
-  their receipt number.
-- **An epoch boundary does not cut a read in flight.** A tool call was stopped
-  at the end of its epoch even when the step had another one, so a paged read
-  started late in an epoch was cut and read again from its first page. When
-  the step continues in another epoch, a tool call may run up to one more
-  epoch's time; the step then continues in its next epoch.
-- **The method behind accepted browser findings is kept without the agent
-  writing it.** Procedures reached cross-session memory only when the agent
-  wrote `state["procedure"]` in a program, and only when the step carried a
-  product's semantic interpretation; a plain Mesh step never had one, so
-  nothing was kept. The collection calls behind the step's current records
-  (`browser_calls`: addresses, script, `next_page`, `until`, list and
-  selector) are now retained when the step completes and its reads have
-  closed, and a later task on the same site recalls them.
-- **History boundaries are written as date comparisons.** The browser prompt's
-  example named the day before the period, and agents wrote `until` as a
-  search for that day's text; a history with no entry on that day was read to
-  its page limit. The prompt now asks for a comparison of the page's oldest
-  entry with the period's start, tried on one address before every address
-  is read.
-- **Agents know the date and time.** No prompt said what day it was, so a
-  page's "Today" and "Yesterday", or a task's "last week", could only be
-  resolved from what the person happened to write. Each turn's runtime notice
-  now states the local date, time and UTC offset.
-- **`until` sees what the page's script read.** A history's boundary function
-  was called with no argument, so one written over the script's rows or text
-  never became true and every history was read to its page limit. `until` is
-  now called with what `script` returned on that page.
-- **Asking for list items that are not there returns at once.** `open_each`
-  with indexes the selector does not match waited for each missing item in
-  turn; it now says how many items the selector matches before opening any.
-- **Reading an element that is not there fails at once.** In browser code,
-  `inner_text`, `text_content`, `get_attribute` and similar reads of a locator
-  that matches nothing waited Playwright's 30 seconds after the page had
-  already settled; they now fail immediately with the reason.
-- **A browser that goes away mid-step is opened again.** When an attached
-  Chrome restarted or a launched browser crashed, every later tool call in the
-  step failed even after the browser was back. The next tool call now opens or
-  attaches it again on the page the step had reached.
-- **A browser answer is checked once against what was read.** Agents reported
-  a panel of recent runs or a first page as the whole period they were asked
-  about. The first answer of a browser step is returned once with the
-  requirement to state how many items the source lists that match the task
-  (counted in code over the list) and how many were read, the pages read for
-  each and the range they span, and to read the rest where the source goes on;
-  an answer given when the step's time has run out is not held back. The
-  browser prompt also asks that counts, totals and the items a read covers be
-  computed in code over the step's records rather than read off a printout.
-- **Browser budgets fit a browser turn.** A browser turn carries the page or a
-  collection's records, often 30,000 to 120,000 tokens, so the old 120,000-token
-  epoch ended after one to seven turns and a long task ran out of epochs with
-  its data already read. The browser role's lease is now 300,000 thinking and
-  900,000 action tokens (1,200,000 total) per five-minute epoch, and the
-  workflow budget's default `max_tokens` is 1,200,000 so it does not cap it.
-  Set `kernel_role_profiles["browser"]` or `execution_budget.max_tokens` to
-  spend less.
-- **A cancelled tool call cannot hold the step.** When a tool call ran past the
-  step's time, the step waited for its cleanup without limit; a page that no
-  longer answered kept one call running for 17 minutes. Cleanup now gets the
-  step's hand-back time and the step moves on.
+- **Honest results.** An agent that could not do the task reports `failure`
+  with its reason. Only `DONE` completes a step, and receipts are never reused
+  or invented.
+- **Plain installs work.** Keys in `.env` reach every part of the runtime, the
+  researcher reads web pages and PDFs without extras, logs report only real
+  problems, and importing JarvisCore no longer loads a `.env` file.
+- **Workflows and the mesh.** Tasks started in the same second get their own
+  steps, and an expired goal no longer stalls a node. `Mesh.stop()` no longer
+  hangs, pools no longer block the event loop, and the governor no longer
+  strands calls.
+- **Long steps hold together.** Reaching the turn cap continues the step, and
+  running out of budget keeps what was found. The next epoch finds what the
+  last one read.
+- **The browser.** Stale refs are refused, clickable rows and dropdown choices
+  are visible, and approvals restore form values and run only once. A browser
+  that goes away mid-step is reopened, and agents know the date.
+- **Research and memory.** A research answer is the findings, not the working
+  state, `recall()` keeps to its limit, and costs say where their price came
+  from.
 
 ### Known limitations
 
-- Browser tasks that read many paged histories and report figures over them
-  (for example, failed runs per record for one day across 25 records) are not yet
-  reliable: the data is read completely, but the agent can still miscount,
-  misjudge where a period ends, or miss an item when it picks them by eye. The
-  next release moves counting, period boundaries and coverage into the runtime.
+- Counting across many paged histories can still be off, though the data is
+  read completely.
 
 ### Upgrading from 2.1
 
-No public API is removed: the settings this release drops were never part of
-the configuration reference. Check these behaviour changes:
-
-1. **Runtime files moved to `./.jarviscore/`.** With default settings, blob
-   storage, logs and traces written by 2.1 are not read from their old folders.
-   To keep them, set the old locations:
-
-    ```bash
-    STORAGE_BASE_PATH=./blob_storage
-    LOG_DIRECTORY=./logs
-    TELEMETRY_TRACE_DIR=./traces
-    ```
-
-2. **Research is no longer enforced by the runtime.** A product whose steps
-   must search or read declares it with `required_tool_groups` or plans it as
-   a step. The removed `CONVERGENCE_*`, `FAILURE_GUARD_*`,
-   `RESEARCH_STRICT_PHASE_CONTRACT` and `RESEARCH_REQUIRE_URL_IDS` settings are
-   ignored. The internal `jarviscore.kernel.epistemic` module and
-   `ConvergenceGovernor` are gone; they were never exported.
-3. A turn that emits `RESULT` without `DONE` no longer completes a step.
-4. Browser approvals no longer use the private `_approved_actions` context
-   token; resolve waiting actions with `Mesh.resolve_hitl()`.
-5. **Parallel work for one agent needs a pool.** Independent `workflow()` steps
-   or `fanout()` items for an agent added without `pool` now run one at a time.
-   Add `pool=Pool(max=N)` to the agent to keep them parallel.
-6. **Declare `requires_auth = True` on agents that call providers.** An agent
-   that used a credential from the local vault without declaring it now
-   yields instead. The Slack examples declare it.
-7. **A declared `default_kernel_role` now binds direct tasks.** Remove it from
-   an agent that should let the router choose per task.
-8. **Agents finishing with `complete: false` fail.** Code that read a
-   `status: "success"` result whose payload said the work was blocked now gets
-   `status: "failure"` with the reason in `error`.
-9. **Tool observations returned to your code are under `evidence`.** Code that
-   read `observed_tool_result` inside a `run_task()` or `workflow()` result
-   reads `result["evidence"]` (always present), or uses `delegate()` for the
-   raw envelope.
-10. **Researcher results no longer carry `done_validation`, `research_checkpoint`,
-   `url_registry`, `status: "candidate_ready"` or `action_required`.** Read
-   `summary` and `evidence`; `api_specs` and `libraries` appear when found.
-11. **The browser agent's tools changed.** The model is offered
-   `run_playwright` instead of `evaluate`, `wait_for`, `get_text`, `get_links`,
-   `scroll`, `get_attribute`, `get_cookies` and `close_page`. Application code
-   that reads tool names from traces or receipts, or a prompt that names a
-   removed tool, should use the new names. On a host that cannot confine a
-   child process, `run_playwright` is not offered unless
-   `allow_unsafe_local_execution` is set.
+1. Runtime files moved to `./.jarviscore/`. To keep the old folders, set
+   `STORAGE_BASE_PATH=./blob_storage`, `LOG_DIRECTORY=./logs` and
+   `TELEMETRY_TRACE_DIR=./traces`.
+2. Steps that must search or read declare it with `required_tool_groups`. The
+   `CONVERGENCE_*`, `FAILURE_GUARD_*` and `RESEARCH_*` enforcement settings
+   are ignored.
+3. A turn with `RESULT` but no `DONE` no longer completes a step.
+4. Resolve browser approvals with `Mesh.resolve_hitl()`.
+5. Parallel work for one agent needs `pool=Pool(max=N)`.
+6. Agents that call providers declare `requires_auth = True`.
+7. A declared `default_kernel_role` binds direct tasks; remove it to let the
+   router choose.
+8. `complete: false` now returns `status: "failure"` with the reason in
+   `error`.
+9. Tool observations are in `result["evidence"]`; `delegate()` still returns
+   the raw envelope.
+10. Researcher results carry `summary` and `evidence`; the old checkpoint
+    fields are gone.
+11. The browser's model tools changed: `run_playwright` replaces `evaluate`,
+    `wait_for`, `get_text`, `get_links`, `scroll`, `get_attribute`,
+    `get_cookies` and `close_page`.
 
 </div>
 
