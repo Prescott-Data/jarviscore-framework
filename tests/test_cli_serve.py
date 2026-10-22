@@ -196,6 +196,73 @@ def test_serve_runs_agent_and_stops_cleanly_on_sigterm(project):
             proc.kill()
 
 
+TASK_DRIVEN_AGENT = """
+import os
+from pathlib import Path
+from jarviscore import Agent
+
+class Worker(Agent):
+    role = "triage"
+    capabilities = ["triage"]
+
+    async def setup(self):
+        await super().setup()
+        Path(os.environ["MARKER"]).write_text("up")
+
+    async def teardown(self):
+        Path(os.environ["MARKER"] + ".down").write_text("down")
+        await super().teardown()
+
+    async def execute_task(self, task):
+        return {"status": "success", "output": None}
+"""
+
+
+def test_task_driven_agent_keeps_its_mesh_until_signalled(project):
+    # Agents without their own run() loop (AutoAgent, every `jarviscore init` template)
+    # used to have their mesh stopped right after start while the process stayed up.
+    (project / "agents" / "triage.py").write_text(TASK_DRIVEN_AGENT)
+    marker = project / "up.marker"
+    env = {**os.environ, "MARKER": str(marker), "JARVISCORE_BIND_PORT": str(_free_port()),
+           "JARVISCORE_BIND_HOST": "127.0.0.1"}
+    env.pop("REDIS_URL", None)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "jarviscore.cli", "serve", "--role", "triage"],
+        cwd=project, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        deadline = time.time() + 60
+        while not marker.exists():
+            assert proc.poll() is None, proc.stdout.read()
+            assert time.time() < deadline, "agent never started"
+            time.sleep(0.2)
+        time.sleep(3)
+        assert proc.poll() is None
+        assert not Path(str(marker) + ".down").exists(), "mesh was stopped without a signal"
+
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=30) == 0, proc.stdout.read()
+        assert Path(str(marker) + ".down").exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+@pytest.mark.parametrize("source, expected", [
+    ("from jarviscore.profiles import CustomAgent as Base", True),
+    ("from jarviscore.profiles import AutoAgent as Base", False),
+    ("from jarviscore import Agent as Base", False),
+])
+def test_has_run_loop(tmp_path, source, expected):
+    module = module_from(tmp_path, source + """
+
+class Thing(Base):
+    role = "thing"
+    capabilities = ["thing"]
+""")
+    assert serve_mod.has_run_loop(module.Thing) is expected
+
+
 # ── runner argv and orphan handling ───────────────────────────────────────
 
 @pytest.mark.parametrize("args", [[], ["--help"], ["only-one"]])

@@ -166,6 +166,14 @@ def load_agent_module(root: Path, agent_file: Path):
     return module
 
 
+def has_run_loop(agent) -> bool:
+    """True when the agent (class or instance) overrides Agent.run() with its own loop."""
+    from jarviscore import Agent
+
+    cls = agent if inspect.isclass(agent) else type(agent)
+    return getattr(cls, "run", Agent.run) is not Agent.run
+
+
 async def run_agent(agent) -> None:
     import asyncio
 
@@ -189,7 +197,13 @@ async def run_agent(agent) -> None:
     # Watch from the start: dev may die while this agent is still starting up.
     orphan_watch = asyncio.create_task(_stop_when_orphaned(stop))
     await mesh.start()
-    loops = asyncio.create_task(mesh.run_forever())
+    if has_run_loop(agent):
+        loops = asyncio.create_task(mesh.run_forever())
+    else:
+        # Task-driven agent (e.g. AutoAgent): its run() is the no-op default, and
+        # run_forever() would see it return and stop the mesh (SWIM, ZMQ, task polling)
+        # while this process stays up. Keep the mesh serving until signalled instead.
+        loops = asyncio.create_task(stop.wait())
     stopper = asyncio.create_task(stop.wait())
     try:
         done, _ = await asyncio.wait({loops, stopper}, return_when=asyncio.FIRST_COMPLETED)
