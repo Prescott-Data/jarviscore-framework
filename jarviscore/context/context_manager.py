@@ -216,26 +216,44 @@ class ContextManager:
         established?") read a stale diagnosis as established. Here it is named
         for what it is, and what it is not.
         """
-        lines = [
-            "## FROM EARLIER SESSIONS",
-            "What this agent recorded before, retrieved by relevance to this task. "
-            "It describes the past: things may have changed since, and anything "
-            "that reads as a diagnosis of a failure is a hypothesis to re-test, "
-            "not a fact to build on.",
-        ]
+        def render(item: Any) -> str:
+            if not isinstance(item, dict):
+                return f"- {str(item).strip()}" if str(item).strip() else ""
+            text = item.get("content") or item.get("text") or item.get("summary") or ""
+            when = item.get("timestamp") or item.get("created_at") or ""
+            score = item.get("similarity_score")
+            tag = f" ({when})" if when else ""
+            rel = f" [relevance {score:.2f}]" if isinstance(score, (int, float)) else ""
+            return f"- {str(text).strip()}{tag}{rel}" if str(text).strip() else ""
+
         items = recalled if isinstance(recalled, list) else [recalled]
-        for item in items:
-            if isinstance(item, dict):
-                text = item.get("content") or item.get("text") or item.get("summary") or ""
-                when = item.get("timestamp") or item.get("created_at") or ""
-                score = item.get("similarity_score")
-                tag = f" ({when})" if when else ""
-                rel = f" [relevance {score:.2f}]" if isinstance(score, (int, float)) else ""
-                if str(text).strip():
-                    lines.append(f"- {str(text).strip()}{tag}{rel}")
-            elif str(item).strip():
-                lines.append(f"- {str(item).strip()}")
-        return "\n".join(lines) if len(lines) > 2 else ""
+        # What people said in a room's conversation is a record of what they told
+        # the team, not this agent's own earlier conclusions. Under the earlier
+        # sessions' caution ("a hypothesis to re-test") agents set it aside and
+        # answered that nobody had said.
+        said = [line for line in (render(i) for i in items
+                                  if isinstance(i, dict) and i.get("source") == "team") if line]
+        own = [line for line in (render(i) for i in items
+                                 if not (isinstance(i, dict) and i.get("source") == "team")) if line]
+        blocks = []
+        if said:
+            blocks.append("\n".join([
+                "## WHAT THE TEAM SAID",
+                "The room's conversation and decisions, as the people and the room recorded them. "
+                "This is what the team told each other; where it bears on the task, it is what "
+                "they want, unless the task or the files say otherwise.",
+                *said,
+            ]))
+        if own:
+            blocks.append("\n".join([
+                "## FROM EARLIER SESSIONS",
+                "What this agent recorded before, retrieved by relevance to this task. "
+                "It describes the past: things may have changed since, and anything "
+                "that reads as a diagnosis of a failure is a hypothesis to re-test, "
+                "not a fact to build on.",
+                *own,
+            ]))
+        return "\n\n".join(blocks)
 
     def _build_goal_state_block(self, context: Dict[str, Any]) -> str:
         """Render a goal execution's accumulated state — structured (issue #72).
