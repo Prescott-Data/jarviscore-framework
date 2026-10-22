@@ -166,7 +166,7 @@ order. Each result carries the agent envelope plus its stable `step_id`:
 | `output` | The structured data the agent delivered |
 | `payload` | Alias of `output` on the standard Kernel path |
 | `result_summary` | Guaranteed plain-prose answer, for display |
-| `evidence` | The runtime's record of each tool result the agent cited: tool, input, output, status. Present when the agent cited any. |
+| `evidence` | The runtime's record of each tool result the agent cited: tool, input, output, status. Always present; empty when none was cited. |
 | `error` | `None` on success; failure or yield explanation otherwise |
 | `tokens` | Input, output, and total token counts |
 | `cost_usd` | Estimated execution cost |
