@@ -6,7 +6,6 @@
   `mesh-vs-orchestrator.svg`) and rendered the same way, in a 1000x500 page.
 - `video-overview.jpg` is the overview film's own YouTube thumbnail with a play control and its
   length: `scripts/readme_media/video_card.py` writes an HTML page; screenshot it at 1280x720.
-- `poster-*.png` (docs home) are the last frame of each showcase GIF, cropped to the end of the run.
 - Each GIF is a real run of a script in `examples/showcase/`, recorded with
   `asciinema rec --headless --window-size 100x44 -i 1.5` and rendered with
   `agg --theme github-dark --font-size 16 --idle-time-limit 2`. Waiting is
