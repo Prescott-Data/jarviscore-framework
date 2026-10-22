@@ -73,21 +73,14 @@ The integration catalog for your installed version is one command away: [`jarvis
 
 Each is one short file in [`examples/showcase`](https://github.com/Prescott-Data/jarviscore-framework/tree/main/examples/showcase){ target="_blank" rel="noopener" }, verified on a real model. Longer, multi-agent examples are in [Examples](examples/index.md).
 
-<div class="jc-examples" markdown>
-
-<a class="jc-example" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/browse_a_whole_site.py" target="_blank" rel="noopener"><span class="jc-example-head">:material-web:<strong>Read a whole website</strong></span><span class="jc-example-text">An agent works a real browser through every page of a catalogue and computes the figures.</span><span class="jc-example-meta"><code>browse_a_whole_site.py</code> · browser extra</span></a>
-
-<a class="jc-example" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/analyst_that_computes.py" target="_blank" rel="noopener"><span class="jc-example-head">:material-calculator-variant-outline:<strong>Compute, never estimate</strong></span><span class="jc-example-text">Figures from a 400-row CSV, computed by code the agent writes and runs.</span><span class="jc-example-meta"><code>analyst_that_computes.py</code> · model key</span></a>
-
-<a class="jc-example" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/agent_that_remembers.py" target="_blank" rel="noopener"><span class="jc-example-head">:material-brain:<strong>Remember across runs</strong></span><span class="jc-example-text">Told once; a new process, given nothing, still knows.</span><span class="jc-example-meta"><code>agent_that_remembers.py</code> · model key</span></a>
-
-<a class="jc-example" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/survives_a_crash.py" target="_blank" rel="noopener"><span class="jc-example-head">:material-restart:<strong>Survive kill -9</strong></span><span class="jc-example-text">Kill it mid-workflow; the rerun finishes without repeating done work.</span><span class="jc-example-meta"><code>survives_a_crash.py</code> · Redis</span></a>
-
-<a class="jc-example" href="https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/research_team.py" target="_blank" rel="noopener"><span class="jc-example-head">:material-account-search-outline:<strong>A research team</strong></span><span class="jc-example-text">A scout and an analyst deliver a cited brief from the live web.</span><span class="jc-example-meta"><code>research_team.py</code> · model key</span></a>
-
-<a class="jc-example" href="guides/multiplayer-agents/"><span class="jc-example-head">:material-account-group-outline:<strong>Work as a team</strong></span><span class="jc-example-text">A room in Slack where people ask, agents propose, and people decide.</span><span class="jc-example-meta">Guide · new in 2.3</span></a>
-
-</div>
+| Example | What it shows | Needs |
+|---|---|---|
+| [Read a whole website](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/browse_a_whole_site.py){ target="_blank" rel="noopener" } | An agent works a real browser through every page of a catalogue and computes the figures. | `jarviscore-framework[browser]` |
+| [Compute, never estimate](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/analyst_that_computes.py){ target="_blank" rel="noopener" } | Figures from a 400-row CSV, computed by code the agent writes and runs. | A model key |
+| [Remember across runs](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/agent_that_remembers.py){ target="_blank" rel="noopener" } | Told once; a new process, given nothing, still knows. | A model key |
+| [Survive kill -9](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/survives_a_crash.py){ target="_blank" rel="noopener" } | Kill it mid-workflow; the rerun finishes without repeating done work. | `REDIS_URL` |
+| [A research team](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/research_team.py){ target="_blank" rel="noopener" } | A scout and an analyst deliver a cited brief from the live web. | A model key |
+| [Work as a team](guides/multiplayer-agents.md) | A room in Slack where people ask, agents propose, and people decide. | New in 2.3 |
 
 ## Community
 
