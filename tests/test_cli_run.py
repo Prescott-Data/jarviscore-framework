@@ -150,8 +150,12 @@ async def test_cli_polls_for_the_result_fast_then_backs_off(monkeypatch):
 
     sleeps = []
     real_sleep = asyncio.sleep
+    owner = asyncio.current_task()
 
     async def fake_sleep(seconds):
+        # asyncio.sleep is patched process-wide; ignore tasks other tests leaked.
+        if asyncio.current_task() is not owner:
+            return await real_sleep(seconds)
         sleeps.append(seconds)
         if len(sleeps) >= 12:
             raise asyncio.CancelledError
