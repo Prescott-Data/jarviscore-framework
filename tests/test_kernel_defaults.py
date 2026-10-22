@@ -625,10 +625,9 @@ class TestResearcherSubAgent:
         """publish_research_findings works with no arguments (empty research)."""
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
         result = await researcher._tool_publish_research_findings()
-        assert "api_specs" in result
-        assert "libraries" in result
         assert "evidence" in result
         assert "summary" in result
+        assert "api_specs" not in result and "libraries" not in result
 
     @pytest.mark.asyncio
     async def test_grep_codebase_finds_pattern(self, mock_llm):

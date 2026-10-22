@@ -1834,7 +1834,10 @@ class BaseSubAgent(ABC):
                 # to signal they've produced a final result. This check makes that
                 # a first-class exit path — no separate DONE emission needed.
                 if getattr(state, "status", None) == "completed":
-                    summary = (
+                    stated = tool_result.get("summary") if isinstance(tool_result, dict) else None
+                    # The tool's own account of what it delivered is the answer.
+                    answer = stated.strip() if isinstance(stated, str) and stated.strip() else None
+                    summary = answer or (
                         f"Completed via tool '{tool_name}' "
                         f"(state-driven exit on turn {turn})"
                     )
@@ -1848,6 +1851,7 @@ class BaseSubAgent(ABC):
                         metadata={
                             "tokens": total_tokens, "cost_usd": total_cost,
                             "exit_type": "state_driven",
+                            "answer": answer,
                             "tool_receipts": state.receipt_evidence(state.output),
                         },
                     )

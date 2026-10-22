@@ -53,6 +53,8 @@ class WorkflowEngine:
     ):
         self.mesh = mesh
         self.p2p = p2p_coordinator
+        # workflow_id -> step_id -> roles of the steps that consume its result
+        self._downstream_roles: Dict[str, Dict[str, List[str]]] = {}
         self.config = config or {}
         self.redis_store = redis_store  # Phase 7: optional Redis backing
 
@@ -198,6 +200,7 @@ class WorkflowEngine:
             default_step_timeout = float(self.config.get("workflow_step_timeout", 300.0))
 
         step_map = {s["id"]: s for s in steps}
+        self._downstream_roles[workflow_id] = self._roles_after(steps)
         pending: Set[str] = set(step_map.keys())
         running_tasks: Dict[str, asyncio.Task] = {}
         results: Dict[str, Any] = dict(pre_results or {})
@@ -466,6 +469,7 @@ class WorkflowEngine:
             "previous_step_results": dep_outputs,
             "workflow_id": workflow_id,
             "step_id": step_id,
+            "downstream_roles": self._downstream_roles.get(workflow_id, {}).get(step_id, []),
         }
 
         # Auth resolution (Phase 7D)
@@ -694,6 +698,31 @@ class WorkflowEngine:
                 step["id"] = f"step{i}"
             normalized.append(step)
         return normalized
+
+    def _roles_after(self, steps: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """For each step, the roles of every step that depends on it, directly or not."""
+        children: Dict[str, List[str]] = {s["id"]: [] for s in steps}
+        for step in steps:
+            for dep in self._resolve_dependency_ids(step.get("depends_on", []), steps):
+                children.setdefault(dep, []).append(step["id"])
+        by_id = {s["id"]: s for s in steps}
+        roles_after: Dict[str, List[str]] = {}
+        for step_id in by_id:
+            seen: set = set()
+            stack = list(children.get(step_id, []))
+            while stack:
+                child = stack.pop()
+                if child not in seen:
+                    seen.add(child)
+                    stack.extend(children.get(child, []))
+            own = by_id[step_id].get("agent") or by_id[step_id].get("role")
+            roles_after[step_id] = sorted({
+                str(by_id[c].get("agent") or by_id[c].get("role") or by_id[c].get("capability"))
+                for c in seen
+                if (by_id[c].get("agent") or by_id[c].get("role") or by_id[c].get("capability"))
+                and (by_id[c].get("agent") or by_id[c].get("role")) != own
+            })
+        return roles_after
 
     def _resolve_dependency_ids(
         self,

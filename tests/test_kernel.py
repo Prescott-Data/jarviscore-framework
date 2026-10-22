@@ -1414,6 +1414,48 @@ class TestSubagentCreation:
         _, args, context = peer_tool.calls[1]
         assert context["peer_requester_authority"] == {"effect": "propose", "systems": []}
 
+    @pytest.mark.asyncio
+    async def test_peers_see_the_mesh_role_and_later_steps_are_not_asked(self, kernel):
+        class FakePeerTool:
+            tool_names = ["ask_peer"]
+
+            def __init__(self):
+                self.calls = []
+
+            @property
+            def schema(self):
+                return [{"name": "ask_peer", "description": "ask", "input_schema": {}}]
+
+            async def execute(self, name, args, context=None):
+                self.calls.append((name, args, context))
+                return {"status": "success"}
+
+        class FakePeers:
+            my_role = "scout"
+
+            def __init__(self, tool):
+                self.tool = tool
+
+            def as_tool(self):
+                return self.tool
+
+        peer_tool = FakePeerTool()
+        kernel.attach_mesh_capabilities(peers=FakePeers(peer_tool))
+        subagent = kernel._create_subagent("researcher", "scout-1")
+        subagent._current_state = SimpleNamespace(
+            workflow_id="wf-1", step_id="step0",
+            context={"downstream_roles": ["analyst", "writer"]},
+        )
+
+        refused = await subagent._tools["ask_peer"].func(role="analyst", question="Compare these")
+        await subagent._tools["ask_peer"].func(role="legal", question="Any licence issue?")
+
+        assert refused["semantic_error"] == "PEER_RUNS_AFTER_YOU"
+        assert [args["role"] for _, args, _ in peer_tool.calls] == ["legal"]
+        _, _, context = peer_tool.calls[0]
+        assert context["peer_requester_role"] == "scout"
+        assert "downstream_roles" not in context
+
     def test_peer_tools_declare_their_parameter_names_to_the_model(self, kernel):
         from jarviscore.p2p.peer_tool import PeerTool
 

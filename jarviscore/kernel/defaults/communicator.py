@@ -232,6 +232,13 @@ Your job: transform raw data into clear, actionable output for your audience.
         if not message:
             return {"status": "error", "error": "Missing message — specify what to send"}
 
+        from jarviscore.orchestration.envelopes import downstream_peer_refusal
+
+        state = getattr(self, "_current_state", None)
+        refusal = downstream_peer_refusal(getattr(state, "context", None), peer_role)
+        if refusal:
+            return refusal
+
         if self.peers is not None:
             sent = await self.peers.notify(
                 peer_role,

@@ -3037,14 +3037,16 @@ DOCUMENTATION TEXT:
                 "validation_report": report
             }
             
-        out["research_checkpoint"] = self._checkpoint()
-        out["url_registry"] = self._get_url_registry()
-        out["done_validation"] = report
-        
-        # Explicit output contract to tell Kernel to move back to coding
-        out["status"] = "candidate_ready"
-        out["action_required"] = "delegate_coding"
-        
+        # The result is what the research delivered. The checkpoint, URL registry
+        # and validation report are the researcher's working state: they stay in
+        # its state and trace rather than in the answer every caller receives.
+        if self.current_state:
+            self._checkpoint()
+            self.current_state.internal_variables["done_validation"] = report
+        for key in ("api_specs", "libraries"):
+            if not out.get(key):
+                out.pop(key, None)
+
         # CRITICAL: We must set the state status to 'completed' to break the OODA loop,
         # just like the old 'done' tool used to do in base.py.
         if self.current_state:
@@ -3076,7 +3078,10 @@ DOCUMENTATION TEXT:
 
         api_specs = payload.get("api_specs") if isinstance(payload, dict) else None
         evidence = payload.get("evidence") if isinstance(payload, dict) else None
-        done_validation = payload.get("done_validation") if isinstance(payload, dict) else None
+        done_validation = (
+            self.current_state.internal_variables.get("done_validation")
+            if self.current_state else None
+        )
         status = str(getattr(output, "status", "") or "").lower()
         return {
             "status": status,
