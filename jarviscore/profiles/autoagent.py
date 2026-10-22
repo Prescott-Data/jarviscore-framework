@@ -1621,7 +1621,18 @@ class AutoAgent(Profile):
         if execution.completed:
             last = execution.completed[-1]
             last_summary = getattr(last.output, "summary", "") or ""
-            high_conf = execution.truth.high_confidence_facts(threshold=0.7)
+            from jarviscore.core.envelope import WORKING_STATE_FIELDS
+
+            # A fact is a readable line. A step's working state (the browser's
+            # programs and page state) is distilled too, and was pasted whole
+            # into the answer as the agent's source code.
+            high_conf = {
+                key: fact
+                for key, fact in execution.truth.high_confidence_facts(threshold=0.7).items()
+                if not any(part in WORKING_STATE_FIELDS for part in str(key).split("."))
+                and len(str(fact.value)) <= 300
+                and "\n" not in str(fact.value)
+            }
             facts_str = (
                 "\n".join(f"- {k}: {v.value}" for k, v in high_conf.items())
                 if high_conf else ""
