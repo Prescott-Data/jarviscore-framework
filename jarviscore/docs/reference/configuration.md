@@ -362,7 +362,7 @@ JarvisCore supplies no IP addresses. To give agents a reputable, stable or regio
 | `EGRESS_PROXY_URL` | (none) | `http://` or `https://` proxy, e.g. `http://user-session-{session}:pass@gw.provider.example:7000`. `{session}` becomes a stable 16-character id per tenant profile or workflow, so a provider that pins an exit IP per session keeps one IP for a login or checkout. |
 | `EGRESS_PROXY_BYPASS` | (none) | Comma-separated hosts that go direct, e.g. `searxng,.internal`. Loopback always goes direct. |
 
-See [Browser Automation: Your own proxy](../guides/browser-automation.md#your-own-proxy).
+See [Browser Automation: Your own proxy](browser.md#your-own-proxy).
 
 ---
 

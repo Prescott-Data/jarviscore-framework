@@ -58,6 +58,7 @@ extra_javascript:
   - javascripts/header.js
   - javascripts/llm-assist.js
   - javascripts/mermaid-render.js
+  - javascripts/video.js
 
 plugins:
   - search
@@ -179,6 +180,7 @@ nav:
       - Execution and Evidence API: reference/execution-api.md
       - Chat API: reference/chat-api.md
       - Multiplayer API: reference/multiplayer-api.md
+      - Browser Reference: reference/browser.md
       - CLI Reference: reference/cli.md
       - Troubleshooting: TROUBLESHOOTING.md
       - Changelog: changelog.md

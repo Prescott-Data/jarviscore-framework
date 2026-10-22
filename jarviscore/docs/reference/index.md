@@ -35,6 +35,13 @@ Complete API reference, configuration options, CLI commands, and troubleshooting
 
     [Read more →](multiplayer-api.md)
 
+-   :material-web-box: **Browser Reference**
+
+    Every browser tool, confined Playwright programs, approvals, sessions,
+    pacing and proxies.
+
+    [Read more →](browser.md)
+
 -   :material-console: **CLI Reference**
 
     All `jarviscore` CLI commands, flags, and examples.
