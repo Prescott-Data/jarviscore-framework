@@ -20,6 +20,7 @@ from jarviscore.execution import multimodal, native_tools
 from jarviscore.execution.governor import current_lane, process_governor, retry_after_seconds
 from jarviscore.config.paths import runtime_path
 from jarviscore.promo import PROMO_MODEL
+from jarviscore.auth.spending import PersonCharge
 from jarviscore.orchestration.budget import current_workflow_budget
 
 logger = logging.getLogger(__name__)
@@ -561,19 +562,24 @@ class UnifiedLLMClient:
 
         budget_account = current_workflow_budget()
         reservation_id = None
-        if budget_account is not None:
-            input_reservation = multimodal.count_tokens(
-                messages, _TOKEN_COUNTER.count_tokens
+        input_reservation = multimodal.count_tokens(messages, _TOKEN_COUNTER.count_tokens)
+        if kwargs.get("tools"):
+            input_reservation += _TOKEN_COUNTER.count_tokens(
+                json.dumps(kwargs["tools"], ensure_ascii=False, default=str)
             )
-            if kwargs.get("tools"):
-                input_reservation += _TOKEN_COUNTER.count_tokens(
-                    json.dumps(kwargs["tools"], ensure_ascii=False, default=str)
-                )
+        if budget_account is not None:
             if not explicit_allowance:
                 max_tokens = max(
                     1, min(max_tokens, budget_account.headroom() - input_reservation)
                 )
             reservation_id = budget_account.reserve(input_reservation + max_tokens)
+        # Charged to the person the call is made for, against their caps.
+        try:
+            charge = PersonCharge(input_reservation + max_tokens)
+        except BaseException:
+            if budget_account is not None and reservation_id is not None:
+                budget_account.release(reservation_id)
+            raise
 
         try:
             # Acquire concurrency slot before dispatching to any provider.
@@ -593,14 +599,16 @@ class UnifiedLLMClient:
             # Cancellation included: an abandoned call must not hold capacity.
             if budget_account is not None and reservation_id is not None:
                 budget_account.release(reservation_id)
+            charge.release()
             raise
+        usage = result.get("tokens") or {}
         if budget_account is not None and reservation_id is not None:
-            usage = result.get("tokens") or {}
             budget_account.settle(
                 reservation_id,
                 int(usage.get("total") or 0),
                 float(result.get("cost_usd") or 0.0),
             )
+        charge.settle(int(usage.get("total") or 0), float(result.get("cost_usd") or 0.0))
         return result
 
 

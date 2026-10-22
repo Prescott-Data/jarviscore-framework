@@ -46,8 +46,42 @@ class LocalMemory:
     def __init__(self, identity: str, scope: Optional[str] = None, base_dir: Optional[str] = None):
         self.identity = identity
         self.scope = scope
+        self.base_dir = base_dir or runtime_path("memory")
         name = _safe(identity) + (f"__{_safe(scope)}" if scope else "")
-        self.path = os.path.join(base_dir or runtime_path("memory"), f"{name}.jsonl")
+        self.path = os.path.join(self.base_dir, f"{name}.jsonl")
+
+    def for_scope(self, scope: str) -> "LocalMemory":
+        """The same agent's memory in another scope (a person's private memory)."""
+        return LocalMemory(self.identity, scope=scope, base_dir=self.base_dir)
+
+    @staticmethod
+    def erase_scope(scope: str, base_dir: Optional[str] = None) -> int:
+        """Delete every agent's memory kept in ``scope``. Returns the facts removed."""
+        base = base_dir or runtime_path("memory")
+        suffix = f"__{_safe(scope)}.jsonl"
+        removed = 0
+        try:
+            names = os.listdir(base)
+        except FileNotFoundError:
+            return 0
+        for name in names:
+            if not name.endswith(suffix):
+                continue
+            path = os.path.join(base, name)
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    entries = [json.loads(line) for line in handle if line.strip()]
+            except (FileNotFoundError, ValueError):
+                continue
+            # The file name is a sanitised scope; the facts name it exactly.
+            if not entries or any(entry.get("scope") != scope for entry in entries):
+                continue
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                continue
+            removed += len(entries)
+        return removed
 
     def _entries(self) -> List[Dict[str, Any]]:
         try:
@@ -74,6 +108,7 @@ class LocalMemory:
         entry = {
             "content": fact,
             "kind": kind,
+            "scope": self.scope or "",
             "metadata": {k: str(v) for k, v in metadata.items()},
             "kept_at": datetime.now(timezone.utc).isoformat(),
         }

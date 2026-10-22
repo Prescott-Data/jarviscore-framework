@@ -444,3 +444,25 @@ async def test_delta_ignores_build_outputs_without_deleting_tracked_files(tmp_pa
     assert delta.added == ()
     assert delta.modified == ()
     assert delta.deleted == ()
+
+@pytest.mark.asyncio
+async def test_binding_combines_parallel_edits_to_different_lines(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    snapshot = await store.capture(
+        SourceRef(provider="archive", locator="fixture", revision="main"),
+        "commit-1",
+        {"plan.md": "# Plan\n\nGoals: TBD\n\nDates: TBD\n"},
+    )
+    deltas = []
+    for index, (old, new) in enumerate((("Goals: TBD", "Goals: grow"), ("Dates: TBD", "Dates: May")), 1):
+        async with SandboxBinding(store, snapshot) as branch:
+            path = branch.workspace / "plan.md"
+            path.write_text(path.read_text().replace(old, new))
+            deltas.append(await branch.export_delta(f"workflows/wf/branch-{index}"))
+
+    async with SandboxBinding(store, snapshot) as merged:
+        await merged.apply_deltas(deltas)
+        assert (merged.workspace / "plan.md").read_text() == "# Plan\n\nGoals: grow\n\nDates: May\n"
+        combined = await merged.export_delta("workflows/wf/editor")
+    assert [entry.path for entry in combined.modified] == ["plan.md"]

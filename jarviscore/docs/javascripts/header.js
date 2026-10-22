@@ -12,7 +12,7 @@ document.addEventListener('DOMContentLoaded', function () {
      __md_extra). Falls back to __init__.__version__ pattern in the chip. */
   var configVersion = (typeof __md_extra !== 'undefined' && __md_extra.version)
     ? 'v' + __md_extra.version
-    : 'v1.2.0';
+    : 'v2.3.0';
   var chip;
   if (title) {
     chip = document.createElement('span');

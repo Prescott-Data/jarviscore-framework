@@ -13,6 +13,7 @@
 #
 # Required environment variables (set by `jarviscore memory init`):
 #   ATHENA_LLM_API_KEY     — Gemini / OpenAI API key for MTM summarisation
+#   ATHENA_API_KEY         — service key JarvisCore uses to call Athena (generated)
 #
 # ── HOST PORTS ───────────────────────────────────────────────────────────────
 # Every published port is overridable, so the stack can co-locate with
@@ -32,8 +33,9 @@
 #   arangodb       (:8529)  — LTM knowledge graph
 #
 # ── IMAGE SOURCE ─────────────────────────────────────────────────────────────
-# Pulls ghcr.io/prescott-data/athena by default. Contributors hacking on
-# Athena itself can build from a local clone instead:
+# Pulls ghcr.io/prescott-data/athena at a pinned version, so a new Athena
+# release cannot break an installed JarvisCore; set ATHENA_IMAGE to run another
+# version. Contributors hacking on Athena itself can build from a local clone:
 #   ATHENA_IMAGE=athena-memos:local ATHENA_BUILD_CONTEXT=/path/to/athena \
 #     docker compose -f docker-compose.athena.yml up -d --build
 # ─────────────────────────────────────────────────────────────────────────────
@@ -43,7 +45,7 @@ version: "3.9"
 services:
   # ── Athena Memory Server ────────────────────────────────────────────────────
   athena:
-    image: ${ATHENA_IMAGE:-ghcr.io/prescott-data/athena:latest}
+    image: ${ATHENA_IMAGE:-ghcr.io/prescott-data/athena:v0.2.0}
     container_name: athena
     ports:
       - "${ATHENA_PORT:-8080}:8080"
@@ -56,9 +58,21 @@ services:
       LLM_API_KEY: ${ATHENA_LLM_API_KEY:?Set ATHENA_LLM_API_KEY or run 'jarviscore memory init'}
       LLM_MODEL_NAME: ${ATHENA_LLM_MODEL:-gemini-2.0-flash}
       EMBEDDING_MODEL_NAME: ${ATHENA_EMBEDDING_MODEL:-gemini-embedding-001}
-      # Azure OpenAI (needed when LLM_PROVIDER=azure)
+      # Azure OpenAI (needed when LLM_PROVIDER=azure): Athena posts to these URLs
+      # as given, so they name the deployments (set by 'jarviscore memory init').
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
       AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      LLM_BASE_URL: ${ATHENA_LLM_BASE_URL:-}
+      EMBEDDING_BASE_URL: ${ATHENA_EMBEDDING_BASE_URL:-}
+      MILVUS_VECTOR_DIMENSION: ${ATHENA_VECTOR_DIMENSION:-1536}
+      # Reasoning chat deployments (gpt-5+, o-series): set by 'memory init' when detected.
+      LLM_REASONING_MODEL: ${ATHENA_LLM_REASONING:-false}
+
+      # Short-term memory must hold more events than the count that forces a
+      # summary, or events older than the newest STM_CACHE_MAX_TURNS are dropped
+      # before they are ever summarised (Athena's defaults are 10 and 20).
+      STM_CACHE_MAX_TURNS: ${ATHENA_STM_MAX_EVENTS:-60}
+      STM_MAX_EVENTS_BEFORE_FLUSH: ${ATHENA_STM_FLUSH_EVENTS:-20}
 
       # MongoDB — both prefixed (config.go) and unprefixed (cache layer)
       MEMORY_OS_MONGODB_URI: "mongodb://admin:admin123@mongodb:27017/memory_os?authSource=admin"
@@ -83,6 +97,13 @@ services:
       MILVUS_HOST: milvus
       MILVUS_PORT: 19530
 
+      # Authentication. Athena refuses to start without it. JarvisCore serves many
+      # tenants (one per room), so it holds a service key ("<key>=*") and names the
+      # tenant in each request. 'jarviscore memory init' generates ATHENA_API_KEY.
+      MEMORY_OS_REQUIRE_API_KEY: "true"
+      MEMORY_OS_API_KEYS: "${ATHENA_API_KEY:?Set ATHENA_API_KEY or run 'jarviscore memory init'}=*"
+      MEMORY_OS_API_KEY: ${ATHENA_API_KEY}   # read by Athena releases before tenant keys
+
       # ArangoDB — LTM knowledge graph (read by cmd/memory-server/main.go)
       ARANGODB_URL: http://arangodb:8529
       ARANGODB_USER: root
@@ -103,6 +124,8 @@ services:
         condition: service_started
       arangodb:
         condition: service_started
+      athena-ltm-init:
+        condition: service_completed_successfully
     networks:
       - athena_net
     restart: unless-stopped
@@ -112,6 +135,24 @@ services:
       timeout: 5s
       retries: 8
       start_period: 30s
+
+  # ── LTM graph schema (one-shot) ─────────────────────────────────────────────
+  # Creates the athena_ltm database and collections; without them Athena runs
+  # with long-term memory silently disabled. Safe to re-run.
+  athena-ltm-init:
+    image: ${ATHENA_IMAGE:-ghcr.io/prescott-data/athena:v0.2.0}
+    container_name: athena-ltm-init
+    command: ["./init-ltm"]
+    environment:
+      ARANGODB_URL: http://arangodb:8529
+      ARANGODB_USER: root
+      ARANGODB_PASSWORD: athena_dev
+    depends_on:
+      arangodb:
+        condition: service_started
+    networks:
+      - athena_net
+    restart: on-failure:20
 
   # ── Redis — STM hot cache ────────────────────────────────────────────────────
   redis:
@@ -182,7 +223,8 @@ services:
     restart: unless-stopped
 
   minio-setup:
-    image: minio/mc
+    # The server image carries the mc client (minio/mc is no longer published).
+    image: minio/minio:RELEASE.2024-01-01T16-36-33Z
     container_name: athena-minio-setup
     depends_on:
       - minio

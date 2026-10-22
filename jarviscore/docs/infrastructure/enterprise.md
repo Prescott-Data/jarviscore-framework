@@ -2,6 +2,12 @@
 icon: material/shield-check-outline
 title: "JarvisCore Enterprise"
 description: "Compare JarvisCore OSS and Enterprise, including Nexus access controls, Maven cost efficiency, workflow improvement, deployment, and support."
+videos:
+  - id: 7_Uo5n9CKYw
+    name: "JarvisCore Enterprise"
+    description: "JarvisCore is coming to enterprise, ready to let AI agents act within institutional boundaries."
+    upload_date: "2026-10-22T04:38:31-07:00"
+    duration: PT2M0S
 ---
 
 # JarvisCore Enterprise
@@ -9,6 +15,10 @@ description: "Compare JarvisCore OSS and Enterprise, including Nexus access cont
 The JarvisCore framework is open source under Apache 2.0. You can self-host it and use it in commercial products without a revenue or user-count cap.
 
 **JarvisCore Enterprise** adds commercially licensed capabilities for agent access control, AI cost efficiency, and workflow improvement, alongside deployment assistance and support from Prescott Data.
+
+<div class="jc-video" data-yt="7_Uo5n9CKYw" data-title="JarvisCore Enterprise"><a class="jc-video-poster" href="https://www.youtube.com/watch?v=7_Uo5n9CKYw" target="_blank" rel="noopener" aria-label="Play the JarvisCore Enterprise film (2:00)"><img src="https://i.ytimg.com/vi/7_Uo5n9CKYw/maxresdefault.jpg" alt="JarvisCore Enterprise: welcome to your sovereignty" width="1280" height="720" loading="lazy"><span class="jc-video-play"></span></a></div>
+
+This page documents what Enterprise covers. For an overview and pricing, see [JarvisCore Enterprise](https://developers.prescottdata.io/jarviscore/enterprise){ target="_blank" rel="noopener" } and [Pricing](https://developers.prescottdata.io/jarviscore/pricing){ target="_blank" rel="noopener" } on the developer hub.
 
 ---
 
@@ -80,7 +90,7 @@ For deployments serving multiple business units or customers, the architecture r
 
 ### Agent Governance & Policy Controls
 
-The open-source framework already includes execution budgets, [HITL](../guides/hitl.md), and [contracts and boundaries](../concepts/contracts.md). Enterprise adds the Nexus credential identity and delegated-access controls described above. Access enforcement complements agent reasoning; it does not replace it.
+The open-source framework already includes execution budgets, [HITL](../guides/hitl.md), [contracts and boundaries](../concepts/contracts.md), and, in [multiplayer rooms](../concepts/multiplayer.md), per-person spending caps and an audit of who did what with whose access. Enterprise adds the Nexus credential identity and delegated-access controls described above. Access enforcement complements agent reasoning; it does not replace it.
 
 ---
 

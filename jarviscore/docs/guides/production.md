@@ -197,7 +197,7 @@ Or use the bundled Docker Compose file for initial setup:
 jarviscore nexus init
 ```
 
-This command generates `NEXUS_ENCRYPTION_KEY` and `NEXUS_STATE_KEY`, writes them to `.env`, and starts the stack. For production, extract these values and store them in your platform's secret manager before they reach version control.
+This command generates the stack's secrets into `~/.jarviscore/nexus/stack.env` and gives the project `.env` only `NEXUS_GATEWAY_URL` and `NEXUS_GATEWAY_API_KEY`. For production, keep `ENCRYPTION_KEY` and `STATE_KEY` in your platform's secret manager and give them to the Broker and Gateway only; agents never need them.
 
 ### Nexus Gateway architecture
 
@@ -209,17 +209,18 @@ The stack has three components:
 | Gateway | 8090 | The control plane that JarvisCore communicates with |
 | Postgres | 5432 | Broker persistence |
 
-The Gateway always dials the Broker at `localhost:8080` within the same network namespace. In the provided Docker Compose configuration, the Gateway runs with `network_mode: service:nexus-broker` so that `localhost` resolves to the Broker container correctly.
+The Gateway reaches the Broker at `BROKER_BASE_URL` and authenticates with the Broker's `API_KEY`. Agents authenticate to the Gateway with `NEXUS_GATEWAY_API_KEY` (`GATEWAY_REQUIRE_API_KEY=true`). Without either key requirement, any caller that reaches the port can list connections and read back their decrypted credentials.
 
 ### Required environment variables for Gateway mode
 
 ```bash
 NEXUS_GATEWAY_URL=https://your-nexus-gateway.internal:8090
+NEXUS_GATEWAY_API_KEY=<one of the Gateway's GATEWAY_API_KEYS>
 NEXUS_RETURN_URL=https://your-app.com/oauth/callback   # OAuth redirect target after consent
 NEXUS_SECRET=<long-random-secret>                       # Key derivation for local store fallback
-NEXUS_ENCRYPTION_KEY=<openssl rand -base64 32>          # Gateway token encryption key
-NEXUS_STATE_KEY=<openssl rand -base64 32>               # OAuth state parameter for CSRF protection
 ```
+
+`ENCRYPTION_KEY` and `STATE_KEY` belong to the Broker (and `STATE_KEY` to the Gateway), set from your secret manager. They are not agent settings: a process that holds `ENCRYPTION_KEY` can decrypt every stored credential.
 
 > [!CAUTION]
 > If `NEXUS_SECRET` is not set, the local credential store falls back to machine UUID for key derivation and logs a warning. In a containerised environment this is unreliable. Always set `NEXUS_SECRET`.
@@ -305,6 +306,7 @@ Athena is the framework's Tier 3 and Tier 4 memory layer. It provides structured
 
 ```bash
 ATHENA_URL=http://athena.internal:8080
+ATHENA_API_KEY=<service key>  # an Athena service key ("<key>=*" in Athena's MEMORY_OS_API_KEYS)
 
 ATHENA_TENANT_ID=default      # Namespace for multi-tenant Athena deployments
 ATHENA_HTTP_TIMEOUT=10.0      # Seconds before an Athena HTTP call times out

@@ -46,6 +46,19 @@ if _swim_import_noise.getvalue():
     logger.debug("swim-p2p import output: %s", _swim_import_noise.getvalue().strip())
 
 
+def _quiet_swim_metrics(node) -> None:
+    """Stop SWIM printing a "Metrics Report" dict to stdout every minute.
+
+    The metrics stay on: Lifeguard's adaptive probe timeouts read them. Only
+    the reporting thread, which prints and nothing else, is stopped.
+    """
+    collector = getattr(node, "metrics_collector", None)
+    if collector is None:
+        return
+    collector._running = False
+    collector.report_metrics = lambda: {}
+
+
 class SWIMThreadManager:
     """Manages SWIM node in a dedicated thread with its own event loop."""
 
@@ -221,6 +234,7 @@ class SWIMThreadManager:
                 return
 
             logger.info(f"SWIM node created at {self.bind_addr}")
+            _quiet_swim_metrics(self.swim_node)
 
             # Watch this loop's own scheduling before the protocol starts, so the
             # first probe already has a window to check against.

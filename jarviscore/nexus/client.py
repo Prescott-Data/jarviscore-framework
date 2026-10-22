@@ -47,15 +47,31 @@ class NexusClient:
     Agents NEVER talk to providers or the Broker directly.
     All auth flows and token retrieval go through the Gateway.
 
-    Instantiate with the NEXUS_GATEWAY_URL from settings:
-        client = NexusClient(gateway_url=settings.nexus_gateway_url)
+    Instantiate with the NEXUS_GATEWAY_URL and NEXUS_GATEWAY_API_KEY from settings:
+        client = NexusClient(
+            gateway_url=settings.nexus_gateway_url,
+            api_key=settings.nexus_gateway_api_key,
+        )
+
+    A Gateway deployed with caller authentication on (nexus-framework >= 0.6.0,
+    GATEWAY_REQUIRE_API_KEY=true) refuses every request without an X-API-Key
+    header with 401. When api_key is given it is sent on every request; when it
+    is None, NEXUS_GATEWAY_API_KEY from the environment is used; when neither is
+    set nothing is added and a Gateway without caller auth works as before.
     """
 
-    def __init__(self, gateway_url: str, timeout: float = 30.0):
+    API_KEY_HEADER = "X-API-Key"
+
+    def __init__(self, gateway_url: str, timeout: float = 30.0, api_key: Optional[str] = None):
+        import os
+
         self.gateway_url = gateway_url.rstrip("/")
+        self.api_key = api_key or os.environ.get("NEXUS_GATEWAY_API_KEY") or None
+        headers = {self.API_KEY_HEADER: self.api_key} if self.api_key else {}
         self.client = httpx.AsyncClient(
             base_url=self.gateway_url,
             timeout=timeout,
+            headers=headers,
         )
 
     # ── Control Plane ─────────────────────────────────────────────

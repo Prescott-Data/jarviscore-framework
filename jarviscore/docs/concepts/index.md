@@ -87,6 +87,13 @@ framework; jump directly to a concept when diagnosing an existing system.
 
     [Understand peer communication →](p2p.md)
 
+-   :material-account-group: **Multiplayer**
+
+    See how a team and its agents work on the same work at once: shared rooms,
+    proposals people review, people as peers, and a room agent people talk to.
+
+    [Understand multiplayer →](multiplayer.md)
+
 </div>
 
 ## 4. Tools and trust boundaries

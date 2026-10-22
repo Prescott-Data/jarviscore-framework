@@ -49,6 +49,9 @@ logger = logging.getLogger("jarviscore.hitl")
 
 # ── Content size guards ──────────────────────────────────────────────────────
 # HITL payloads are human-readable summaries, not data dumps.
+#: Who responds when neither the deployment nor the request names anyone.
+DEFAULT_TARGETS = ("reviewer",)
+
 MAX_CONTENT_CHARS = 2000   # ~2 KB — plenty for a review summary
 MAX_CONTEXT_CHARS = 1000   # structured context field — keep lean
 
@@ -101,8 +104,11 @@ class HITLQueue:
         agent_id: str,
         inbox_dir: Optional[str] = None,
         redis_store=None,
+        targets: Optional[List[str]] = None,
     ):
         self._agent_id = agent_id
+        #: Who responds to this agent's requests unless a request names someone.
+        self._targets = list(targets or DEFAULT_TARGETS)
         self._inbox_dir = Path(inbox_dir) if inbox_dir else self._DEFAULT_INBOX
         # created lazily on first write; an unused HITL queue leaves no dir
         self._redis_store = redis_store
@@ -119,6 +125,7 @@ class HITLQueue:
         urgency: str = "normal",
         context: Optional[Dict[str, Any]] = None,
         category: str = "",
+        targets: Optional[List[str]] = None,
     ) -> str:
         """
         Submit a human review request.
@@ -126,14 +133,14 @@ class HITLQueue:
         CATEGORY IS REQUIRED and must be one of the three permitted values:
 
           auth_required   — Nexus/API credentials missing or expired.
-          data_required   — Critical data only the founder can supply.
+          data_required   — Critical data only a person can supply.
           critical_action — Irreversible or sensitive action needing sign-off.
 
         Any other reason (output quality checks, self-validation, content
         completeness doubts, "the output looked truncated", etc.) is NOT
         a valid escalation.  Agents must handle those autonomously.
         Passing an invalid category raises ValueError so the agent is forced
-        to reconsider before the item reaches the founder's inbox.
+        to reconsider before the item reaches a person.
 
         Args:
             title:    Headline shown in the review list — never truncated, keep it descriptive
@@ -142,6 +149,8 @@ class HITLQueue:
             context:  Arbitrary dict for structured metadata (file paths,
                       downstream actions, agent state snapshots, etc.)
             category: One of "auth_required", "data_required", "critical_action"
+            targets:  Who should respond, e.g. ["finance-approver"]. Defaults to
+                      the queue's targets (Mesh config ``hitl_targets``).
 
         Returns:
             request_id: Unique identifier for this review request.
@@ -162,12 +171,95 @@ class HITLQueue:
             raise ValueError(
                 f"Invalid HITL category '{category}'. "
                 f"Permitted values: {sorted(valid_categories)}. "
-                "Only escalate for auth failures, missing founder-supplied data, "
+                "Only escalate for auth failures, data only a person can supply, "
                 "or irreversible/sensitive actions. "
                 "Everything else must be handled autonomously."
             )
-        hitl_category = HITLCategory(category)
+        return self._submit(
+            title, content, urgency=urgency, context=context,
+            category=HITLCategory(category), kind=HITLType.approval,
+            targets=list(targets or self._targets),
+        )
 
+    def assign(
+        self,
+        title: str,
+        content: str,
+        *,
+        targets: List[str],
+        context: Optional[Dict[str, Any]] = None,
+        urgency: str = "normal",
+    ) -> str:
+        """
+        Put work routed to a person in front of them, and return its id.
+
+        This is not an escalation: a person on the mesh owns a capability (a
+        review, a sign-off, a decision) and a workflow step was routed to them,
+        so there is no category gate. The item is stored like any HITL request
+        and is answered with ``resolve()``; ``wait()`` returns the answer, with
+        the person's words in ``note``.
+
+        Args:
+            title:    What is asked, in a line
+            content:  The full task, with what came before it
+            targets:  Who it is for (the person's role on the mesh)
+            context:  workflow_id, step_id and anything a review surface shows
+        """
+        if urgency not in self.VALID_URGENCY:
+            raise ValueError(f"Invalid urgency '{urgency}'. Must be one of: {self.VALID_URGENCY}")
+        return self._submit(title, content, urgency=urgency, context=context, category=None,
+                            kind=HITLType.input_request, targets=list(targets))
+
+    def inbox(self, target: Optional[str] = None, *, tenant: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Pending items for ``target`` (a person or role), from every agent, oldest first.
+
+        Without a target, every pending item. With ``tenant``, only items raised
+        by work done for someone in that tenant.
+        """
+        found: Dict[str, Dict[str, Any]] = {}
+        shared = False
+        if self._redis_store is not None and hasattr(self._redis_store, "hitl_pending"):
+            try:
+                for data in self._redis_store.hitl_pending(tenant):  # every host's items
+                    found[data["id"]] = data
+                shared = True
+            except Exception as exc:
+                self._logger.warning("Shared HITL inbox unavailable: %s", exc)
+        for f in sorted(self._inbox_dir.glob("hitl-*.json")):
+            try:
+                data = json.loads(f.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            request_id = data.get("id", f.stem)
+            if shared and request_id not in found and data.get("status") == "pending":
+                # Redis is the truth when it has the item: it may have been
+                # answered on another host since this copy was written.
+                try:
+                    if self._redis_store.get_hitl_request(*self._hitl_key(request_id, data)):
+                        continue
+                except Exception:
+                    pass
+            found.setdefault(request_id, data)
+        items = [
+            data for data in found.values()
+            if data.get("type") == "hitl" and data.get("status") == "pending"
+            and (target is None or target in (data.get("targets") or []))
+            and (tenant is None or (data.get("context") or {}).get("tenant") == tenant)
+        ]
+        return sorted(items, key=lambda d: d.get("created_at") or "")
+
+    def _submit(
+        self,
+        title: str,
+        content: str,
+        *,
+        urgency: str,
+        context: Optional[Dict[str, Any]],
+        category: Optional[HITLCategory],
+        kind: HITLType,
+        targets: List[str],
+    ) -> str:
         ts = time.strftime("%Y%m%d-%H%M%S")
         request_id = f"hitl-{ts}-{uuid.uuid4().hex[:8]}"
         now_iso = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -178,23 +270,40 @@ class HITLQueue:
         safe_title = (title or "").strip()
         safe_content = _truncate(content or "", MAX_CONTENT_CHARS)
         safe_context = self._truncate_context(context or {})
+        # Which mesh step asked, so answering it can resume that step, and whose
+        # tenant it is, so only that tenant's people see it.
+        from jarviscore.auth.principal import acting_for
+        from jarviscore.orchestration.step_context import current_step
+
+        step = current_step.get()
+        if step is not None:
+            safe_context.setdefault("mesh_workflow_id", step[0])
+            safe_context.setdefault("mesh_step_id", step[1])
+        principal = acting_for.get() or ""
+        if "/" in principal:
+            safe_context.setdefault("tenant", principal.split("/", 1)[0])
+        # Where the Redis copy lives. Work routed to a person gets a key of its
+        # own: several items can belong to one step, or to none.
+        workflow_id = safe_context.get("workflow_id") or self._agent_id
+        step_id = (request_id if kind == HITLType.input_request
+                   else safe_context.get("step_id") or request_id)
 
         # ── Build typed request ──────────────────────────────────────────────
         hitl_request = HITLRequest(
             request_id=request_id,
-            workflow_id=safe_context.get("workflow_id", self._agent_id),
-            step_id=safe_context.get("step_id", request_id),
-            type=HITLType.approval,
+            workflow_id=workflow_id,
+            step_id=step_id,
+            type=kind,
             status=HITLStatus.pending,
-            category=hitl_category,
+            category=category,
             description=safe_content,
             payload={
                 "title": safe_title,
                 "urgency": urgency,
-                "category": hitl_category.value,
+                "category": category.value if category else "",
                 "content": safe_content,
             },
-            targets=["founder"],
+            targets=targets,
             channels=["dashboard"],
             mode="adaptive",
             metadata={
@@ -205,22 +314,26 @@ class HITLQueue:
 
         # ── Persist to flat file (always) ────────────────────────────────────
         self._write_file(request_id, hitl_request, safe_title, safe_content,
-                         urgency, hitl_category.value, safe_context, now_iso)
+                         urgency, category.value if category else "", safe_context, now_iso)
 
         # ── Persist to Redis (when available) ────────────────────────────────
         if self._redis_store:
             try:
                 self._redis_store.create_hitl_request_typed(hitl_request)
+                record = self._read_file(request_id)
+                if record:
+                    self._redis_store.index_hitl_pending(request_id, record)
             except Exception as exc:
                 self._logger.warning(
                     "Redis HITL write failed (file write succeeded): %s", exc
                 )
 
         self._logger.info(
-            "HITL request submitted: id=%s category=%s urgency=%s title=%r",
-            request_id, hitl_category.value, urgency, safe_title[:60],
+            "HITL %s submitted: id=%s category=%s urgency=%s title=%r",
+            kind.value, request_id, category.value if category else "-", urgency, safe_title[:60],
         )
         return request_id
+
 
     def check(self, request_id: str) -> Optional[HITLResolution]:
         """
@@ -251,13 +364,7 @@ class HITLQueue:
         if self._redis_store:
             try:
                 # Extract workflow_id and step_id from the file metadata
-                if filepath.exists():
-                    data = json.loads(filepath.read_text())
-                    wf_id = data.get("context", {}).get("workflow_id", self._agent_id)
-                    step_id = data.get("context", {}).get("step_id", request_id)
-                else:
-                    wf_id = self._agent_id
-                    step_id = request_id
+                wf_id, step_id = self._hitl_key(request_id)
                 return self._redis_store.get_hitl_resolution(wf_id, step_id)
             except Exception as exc:
                 self._logger.warning("Redis HITL lookup failed: %s", exc)
@@ -326,58 +433,117 @@ class HITLQueue:
         request_id: str,
         decision: str,
         reason: str = "",
+        by: str = "",
     ) -> bool:
         """
-        Programmatically resolve a HITL item (for testing or auto-approval).
+        Resolve a HITL item: a person's decision, or auto-approval in tests.
+
+        An item is resolved once: when several people answer at the same time,
+        the first answer stands and the others get False. With Redis, Redis
+        decides who was first, across hosts. Answering an item that paused a
+        mesh step (an agent's escalation) resumes that step with the answer.
 
         Args:
             request_id: Item to resolve
-            decision:   "approved" or "rejected"
-            reason:     Optional reason string
+            decision:   "approved", "rejected", or another HITLDecision value
+            reason:     The person's reason or answer, returned as the resolution's note
+            by:         Who decided
 
         Returns:
-            True if item was found and updated, False otherwise
+            True if this call resolved the item, False if it was not pending.
         """
+        data = self._read_file(request_id)
+        if data is None and self._redis_store is not None and hasattr(self._redis_store, "hitl_pending"):
+            data = next((r for r in self._redis_store.hitl_pending() if r.get("id") == request_id), None)
+        if data is None or data.get("status") != "pending":
+            return False
+        normalized = normalize_hitl_decision(decision)
+        if self._redis_store is not None and hasattr(self._redis_store, "resolve_hitl_once"):
+            wf_id, step_id = self._hitl_key(request_id, data)
+            try:
+                won = self._redis_store.resolve_hitl_once(
+                    wf_id, step_id, decision=normalized.value, responder=by or "auto", comment=reason)
+            except Exception as exc:
+                self._logger.warning("Redis HITL resolve failed; resolving the local copy: %s", exc)
+                won = None
+            if won is False:
+                return False  # someone else answered first
+            try:
+                self._redis_store.unindex_hitl_pending(request_id)
+            except Exception as exc:
+                self._logger.warning("Could not unlist HITL item %s: %s", request_id, exc)
         filepath = self._inbox_dir / f"{request_id}.json"
-        if not filepath.exists():
-            return False
+        if filepath.exists():
+            try:
+                # `status` is the lifecycle state (pending -> resolved); the
+                # approve/reject verdict lives in `decision` (HITLResolution.from_raw
+                # only builds a resolution when status == "resolved").
+                data.update({
+                    "status": HITLStatus.resolved.value, "decision": normalized.value,
+                    "decision_reason": reason, "note": reason, "request_id": request_id,
+                    "resolved_by": by or data.get("resolved_by") or "auto",
+                    "resolved_at": time.time(), "decided_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                })
+                filepath.write_text(json.dumps(data, indent=2))
+            except OSError as exc:
+                self._logger.error("Failed to resolve HITL item %s: %s", request_id, exc)
+                return False
+        self._resume_step(data, normalized.value, reason, by)
+        self._logger.info("HITL item %s resolved: %s", request_id, decision)
+        return True
+
+    def _resume_step(self, data: Dict[str, Any], decision: str, reason: str, by: str) -> None:
+        """Resume the mesh step an escalation paused, with the person's answer."""
+        context = data.get("context") or {}
+        workflow_id, step_id = context.get("mesh_workflow_id"), context.get("mesh_step_id")
+        if (data.get("kind") != HITLType.approval.value or not workflow_id or not step_id
+                or self._redis_store is None or not hasattr(self._redis_store, "resume_workflow_step")):
+            return
         try:
-            data = json.loads(filepath.read_text())
-            normalized = normalize_hitl_decision(decision)
-            # `status` is the lifecycle state (pending -> resolved); the
-            # approve/reject verdict lives in `decision`. Writing the verdict
-            # into `status` broke HITLResolution.from_raw(), which only builds a
-            # resolution when status == "resolved" — so check() could never read
-            # a file-resolved item back (HITL queue contract fix).
-            data["status"] = HITLStatus.resolved.value
-            data["decision"] = normalized.value
-            data["decision_reason"] = reason
-            data["request_id"] = request_id
-            data["resolved_by"] = data.get("resolved_by") or "auto"
-            data["resolved_at"] = time.time()
-            data["decided_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            filepath.write_text(json.dumps(data, indent=2))
+            self._redis_store.resume_workflow_step(workflow_id, step_id, context={
+                "hitl_resolution": {"request_id": data.get("id"), "decision": decision,
+                                    "note": reason, "resolved_by": by}})
+        except (KeyError, ValueError):
+            pass  # the step is not paused (it moved on, or was never waiting)
+        except Exception as exc:
+            self._logger.warning("Could not resume %s/%s after HITL answer: %s", workflow_id, step_id, exc)
 
-            # Also update Redis if available
-            if self._redis_store:
-                try:
-                    wf_id = data.get("context", {}).get("workflow_id", self._agent_id)
-                    step_id = data.get("context", {}).get("step_id", request_id)
-                    self._redis_store.resolve_hitl_request(
-                        wf_id, step_id, decision=normalized.value,
-                        responder="auto", comment=reason,
-                    )
-                except Exception as exc:
-                    self._logger.warning("Redis HITL resolve failed: %s", exc)
-
-            self._logger.info("HITL item %s resolved: %s", request_id, decision)
-            return True
-        except (json.JSONDecodeError, OSError) as exc:
-            self._logger.error("Failed to resolve HITL item %s: %s", request_id, exc)
+    def expire(self, request_id: str) -> bool:
+        """Close a pending item nobody answered in time, so it leaves every inbox.
+        False if it was answered first."""
+        data = self._read_file(request_id)
+        if data is None or data.get("status") != "pending":
             return False
+        if self._redis_store is not None and hasattr(self._redis_store, "expire_hitl_request"):
+            try:
+                if self._redis_store.expire_hitl_request(*self._hitl_key(request_id, data)) is False:
+                    return False
+                self._redis_store.unindex_hitl_pending(request_id)
+            except Exception as exc:
+                self._logger.warning("Could not expire HITL item %s in Redis: %s", request_id, exc)
+        data["status"] = HITLStatus.expired.value
+        data["decided_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        (self._inbox_dir / f"{request_id}.json").write_text(json.dumps(data, indent=2))
+        return True
 
     # ─────────────────────────────────────────────────────────────────────────
     # Internals
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _read_file(self, request_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            return json.loads((self._inbox_dir / f"{request_id}.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def _hitl_key(self, request_id: str, data: Optional[Dict[str, Any]] = None):
+        """The (workflow_id, step_id) an item's Redis copy is stored under."""
+        data = data if data is not None else (self._read_file(request_id) or {})
+        if data.get("hitl_key"):
+            return tuple(data["hitl_key"])
+        context = data.get("context") or {}
+        return (context.get("workflow_id") or self._agent_id, context.get("step_id") or request_id)
+
     # ─────────────────────────────────────────────────────────────────────────
 
     def _write_file(
@@ -395,6 +561,9 @@ class HITLQueue:
         data = {
             "id": request_id,
             "agent": self._agent_id,
+            "kind": hitl_request.type.value,
+            "targets": list(hitl_request.targets),
+            "hitl_key": [hitl_request.workflow_id, hitl_request.step_id],
             "title": title,
             "content": content,
             "urgency": urgency,

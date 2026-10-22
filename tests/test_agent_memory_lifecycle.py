@@ -134,6 +134,25 @@ def test_recalled_memory_is_labelled_as_the_past():
     assert "Drive calls were blocked (2026-09-07) [relevance 0.80]" in block
 
 
+def test_what_the_team_said_is_not_presented_as_the_agents_own_hypotheses():
+    """Live, an agent asked who owns support set aside "Alice: Sam owns support"
+    because it arrived as this agent's past notes, "a hypothesis to re-test"."""
+    block = ContextManager._build_recalled_block([
+        {"content": "Alice: Sam owns support.", "source": "team", "timestamp": "2026-10-22"},
+        {"content": "Drive calls were blocked", "similarity_score": 0.8},
+    ])
+    said, earlier = block.split("## FROM EARLIER SESSIONS")
+    assert said.startswith("## WHAT THE TEAM SAID")
+    assert "Alice: Sam owns support. (2026-10-22)" in said
+    assert "hypothesis" not in said
+    assert "Drive calls were blocked" in earlier and "Sam" not in earlier
+
+
+def test_only_the_team_said_renders_no_earlier_sessions():
+    block = ContextManager._build_recalled_block([{"content": "Bob: ship Friday", "source": "team"}])
+    assert block.startswith("## WHAT THE TEAM SAID") and "FROM EARLIER SESSIONS" not in block
+
+
 def test_recalled_memory_never_lands_in_input_context():
     """Under INPUT CONTEXT it read as part of the task."""
     cm = ContextManager()

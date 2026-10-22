@@ -13,6 +13,8 @@ from uuid import uuid4
 
 import redis
 
+from jarviscore.storage.errors import RoomStateChanged  # noqa: F401 (raised here, caught by rooms)
+
 from jarviscore.contracts.hitl import (
     HITLRequest,
     HITLResolution,
@@ -1052,6 +1054,74 @@ class RedisContextStore:
             except redis.WatchError:
                 continue
 
+    # ── Per-person spending (jarviscore.auth.spending) ──────────────────────
+
+    @staticmethod
+    def _spend_key(person_key: str, *parts: str) -> str:
+        tenant, _, person_id = str(person_key).partition("/")
+        return ":".join((f"spend:{{{tenant}}}", person_id, *parts))
+
+    def person_spend(self, person_key: str, period: str, stamp: str) -> Dict[str, Any]:
+        raw = self._redis.hgetall(self._spend_key(person_key, period, stamp))
+        return {"period": stamp, "tokens": int(float(raw.get("tokens") or 0)),
+                "usd": round(float(raw.get("usd") or 0.0), 6), "calls": int(float(raw.get("calls") or 0))}
+
+    def reserve_person_spend(self, person_key: str, periods: Dict[str, str],
+                             limits: Dict[str, Dict[str, Optional[float]]], reservation_id: str,
+                             tokens: int, lease_seconds: float) -> Optional[tuple]:
+        """Hold ``tokens`` for a person if it fits every cap; returns None, or the
+        (period, "used of limit") that refused it."""
+        reservations = self._spend_key(person_key, "reservations")
+        period_keys = {p: self._spend_key(person_key, p, stamp) for p, stamp in periods.items()}
+        with self._redis.pipeline() as pipe:
+            while True:
+                try:
+                    pipe.watch(reservations, *period_keys.values())
+                    now = time.time()
+                    live, stale = 0, []
+                    for rid, raw in pipe.hgetall(reservations).items():
+                        held = json.loads(raw)
+                        if now - float(held.get("at") or 0) > lease_seconds:
+                            stale.append(rid)
+                        else:
+                            live += int(held.get("tokens") or 0)
+                    for period, key in period_keys.items():
+                        used = pipe.hgetall(key)
+                        used_tokens = int(float(used.get("tokens") or 0))
+                        used_usd = float(used.get("usd") or 0.0)
+                        cap = limits.get(period) or {}
+                        if cap.get("tokens") is not None and used_tokens + live + tokens > cap["tokens"]:
+                            pipe.unwatch()
+                            return (period, f"{used_tokens + live:,} of {int(cap['tokens']):,} tokens in use, "
+                                            f"{tokens:,} more needed")
+                        if cap.get("usd") is not None and used_usd >= cap["usd"]:
+                            pipe.unwatch()
+                            return (period, f"${used_usd:.2f} of ${cap['usd']:.2f}")
+                    pipe.multi()
+                    if stale:
+                        pipe.hdel(reservations, *stale)
+                    pipe.hset(reservations, reservation_id, json.dumps({"tokens": tokens, "at": now}))
+                    pipe.expire(reservations, int(lease_seconds) * 4)
+                    pipe.execute()
+                    return None
+                except redis.WatchError:
+                    continue
+
+    def settle_person_spend(self, person_key: str, periods: Dict[str, str], reservation_id: str,
+                            tokens: int, cost_usd: float) -> None:
+        pipe = self._redis.pipeline()
+        pipe.hdel(self._spend_key(person_key, "reservations"), reservation_id)
+        for period, stamp in periods.items():
+            key = self._spend_key(person_key, period, stamp)
+            pipe.hincrby(key, "tokens", int(tokens))
+            pipe.hincrbyfloat(key, "usd", float(cost_usd))
+            pipe.hincrby(key, "calls", 1)
+            pipe.expire(key, (3 if period == "day" else 62) * 86400)
+        pipe.execute()
+
+    def release_person_spend(self, person_key: str, reservation_id: str) -> None:
+        self._redis.hdel(self._spend_key(person_key, "reservations"), reservation_id)
+
     def get_workflow_budget_usage(
         self,
         workflow_id: str,
@@ -1944,8 +2014,13 @@ class RedisContextStore:
         step_id: str,
         agent_id: str,
         lease_seconds: int = 60,
+        role: str = "",
     ) -> bool:
-        """Atomically lease a step to one execution identity."""
+        """Atomically lease a step to one execution identity.
+
+        ``role`` is recorded with the claim so anyone following the workflow
+        can say who is doing the step.
+        """
         lock_key = f"step_lock:{workflow_id}:{step_id}"
         cancelled_key = f"workflow_cancelled:{workflow_id}"
         lease_seconds = max(1, int(lease_seconds))
@@ -2007,6 +2082,7 @@ class RedisContextStore:
                     "step_id": step_id,
                     "agent_id": owner_id,
                     "claim_id": agent_id,
+                    **({"role": role} if role else {}),
                     "timestamp": str(now),
                 })
                 pipe.expire(f"ledgers:{workflow_id}", self._ttl_seconds)
@@ -2457,14 +2533,33 @@ class RedisContextStore:
     # Episodic Ledger
     # ------------------------------------------------------------------
 
-    def append_ledger_entry(self, workflow_id: str, entry: Dict) -> str:
-        """Append entry to episodic ledger (Redis Stream)."""
+    def append_ledger_entry(self, workflow_id: str, entry: Dict, *, expires: bool = True) -> str:
+        """Append entry to episodic ledger (Redis Stream).
+
+        ``expires=False`` keeps the ledger beyond the context TTL, for histories
+        that must outlive any one workflow (a room's).
+        """
         key = f"ledgers:{workflow_id}"
         entry_data = {k: json.dumps(v) if not isinstance(v, str) else v
                       for k, v in entry.items()}
         entry_id = self._redis.xadd(key, entry_data)
-        self._redis.expire(key, self._ttl_seconds)
+        if expires:
+            self._redis.expire(key, self._ttl_seconds)
         return entry_id
+
+    def get_ledger_after(self, workflow_id: str, after_id: str = "") -> List[Dict]:
+        """Ledger entries after ``after_id`` (exclusive), or all, in order."""
+        start = f"({after_id}" if after_id else "-"
+        results = []
+        for entry_id, data in self._redis.xrange(f"ledgers:{workflow_id}", min=start):
+            parsed = {"_id": entry_id}
+            for k, v in data.items():
+                try:
+                    parsed[k] = json.loads(v)
+                except (json.JSONDecodeError, TypeError):
+                    parsed[k] = v
+            results.append(parsed)
+        return results
 
     def get_ledger_tail(self, workflow_id: str,
                         count: int = 10) -> List[Dict]:
@@ -2496,6 +2591,279 @@ class RedisContextStore:
                     parsed[k] = v
             results.append(parsed)
         return results
+
+    # ------------------------------------------------------------------
+    # Rooms: shared workspaces people and agents change together
+    # ------------------------------------------------------------------
+    #
+    # File bytes live in BlobStorage like any workspace snapshot. Here is the
+    # small mutable part of a room: its head (which snapshot is current), its
+    # proposals, its settings and members, and its history. ``room_key`` is
+    # "<tenant>/<room>"; every key of one room carries it as a hash tag, so a
+    # room's state changes are single-slot transactions even on Redis Cluster.
+    # The history is a ledger stream that never expires; it is also the outbox
+    # every surface reads.
+
+    @staticmethod
+    def _room_key(room_key: str, part: str) -> str:
+        return f"room:{{{room_key}}}:{part}"
+
+    @staticmethod
+    def _room_history(room_key: str) -> str:
+        return f"room:{{{room_key}}}"
+
+    def create_room(self, room_key: str, head: Dict, meta: Dict, event: Dict) -> bool:
+        """Create a room with its first head, settings and history event; False if it exists."""
+        head_key = self._room_key(room_key, "head")
+        with self._redis.pipeline() as pipe:
+            try:
+                pipe.watch(head_key)
+                if pipe.exists(head_key):
+                    pipe.unwatch()
+                    return False
+                pipe.multi()
+                pipe.set(head_key, json.dumps(head))
+                pipe.set(self._room_key(room_key, "meta"), json.dumps(meta))
+                pipe.xadd(f"ledgers:{self._room_history(room_key)}", self._stream_fields(event))
+                pipe.execute()
+                return True
+            except redis.WatchError:
+                return False
+
+    def record_workflow_source(self, workflow_id: str, provider: str, person: str) -> None:
+        """Note that the workflow used ``person``'s connection to ``provider``."""
+        key = f"workflow_sources:{workflow_id}"
+        self._redis.sadd(key, json.dumps({"provider": provider, "person": person}, sort_keys=True))
+        self._redis.expire(key, self._ttl_seconds)
+
+    def workflow_sources(self, workflow_id: str) -> List[Dict[str, str]]:
+        """Every (provider, person) whose access the workflow used."""
+        return sorted((json.loads(v) for v in self._redis.smembers(f"workflow_sources:{workflow_id}")),
+                      key=lambda s: (s["provider"], s["person"]))
+
+    def get_room_head(self, room_key: str) -> Optional[Dict]:
+        raw = self._redis.get(self._room_key(room_key, "head"))
+        return json.loads(raw) if raw else None
+
+    def get_room_proposal(self, room_key: str, proposal_id: str) -> Optional[Dict]:
+        raw = self._redis.hget(self._room_key(room_key, "proposals"), proposal_id)
+        return json.loads(raw) if raw else None
+
+    def list_room_proposals(self, room_key: str) -> List[Dict]:
+        values = self._redis.hvals(self._room_key(room_key, "proposals"))
+        return sorted((json.loads(v) for v in values), key=lambda p: p.get("created_at", 0))
+
+    def room_transition(
+        self,
+        room_key: str,
+        event: Dict,
+        *,
+        proposal_id: str = "",
+        proposal: Optional[Dict] = None,
+        require_status: Optional[str] = None,
+        proposal_fields: Optional[Dict] = None,
+        expected_version: Optional[int] = None,
+        head: Optional[Dict] = None,
+    ) -> str:
+        """Change a room atomically and record it in its history, or not at all.
+
+        Optionally checks that the head is still at ``expected_version`` and
+        that proposal ``proposal_id`` is in ``require_status`` ("missing" for one
+        that must not exist yet); then writes the
+        new ``head``, stores a new ``proposal`` or updates the existing one with
+        ``proposal_fields``, and appends ``event``, in one transaction. Returns
+        the event's id. Raises ``RoomStateChanged`` when a check fails, with
+        ``.head_moved`` or ``.proposal_status`` saying which.
+        """
+        head_key = self._room_key(room_key, "head")
+        proposals_key = self._room_key(room_key, "proposals")
+        history_key = f"ledgers:{self._room_history(room_key)}"
+        while True:
+            with self._redis.pipeline() as pipe:
+                try:
+                    pipe.watch(head_key, proposals_key)
+                    if expected_version is not None:
+                        raw = pipe.get(head_key)
+                        current = int(json.loads(raw)["version"]) if raw else None
+                        if current != int(expected_version):
+                            pipe.unwatch()
+                            raise RoomStateChanged(head_moved=True)
+                    record = None
+                    if proposal_id:
+                        raw = pipe.hget(proposals_key, proposal_id)
+                        record = json.loads(raw) if raw else None
+                        status = (record or {}).get("status") or "missing"
+                        if require_status is not None and status != require_status:
+                            pipe.unwatch()
+                            raise RoomStateChanged(proposal_status=status)
+                    pipe.multi()
+                    if head is not None:
+                        pipe.set(head_key, json.dumps(head))
+                    if proposal is not None:
+                        pipe.hset(proposals_key, proposal["id"], json.dumps(proposal))
+                    if proposal_fields and record is not None:
+                        pipe.hset(proposals_key, proposal_id, json.dumps({**record, **proposal_fields}))
+                    pipe.xadd(history_key, self._stream_fields(event))
+                    return pipe.execute()[-1]
+                except redis.WatchError:
+                    continue  # something else changed the room; check again
+
+    def get_room_meta(self, room_key: str) -> Dict:
+        raw = self._redis.get(self._room_key(room_key, "meta"))
+        return json.loads(raw) if raw else {}
+
+    def update_room_meta(self, room_key: str, change, event: Optional[Dict] = None) -> Dict:
+        """Apply ``change(meta) -> meta`` atomically, with an optional history event."""
+        key = self._room_key(room_key, "meta")
+        while True:
+            with self._redis.pipeline() as pipe:
+                try:
+                    pipe.watch(key)
+                    raw = pipe.get(key)
+                    meta = change(json.loads(raw) if raw else {})
+                    pipe.multi()
+                    pipe.set(key, json.dumps(meta))
+                    if event is not None:
+                        pipe.xadd(f"ledgers:{self._room_history(room_key)}", self._stream_fields(event))
+                    pipe.execute()
+                    return meta
+                except redis.WatchError:
+                    continue
+
+    def append_room_event(self, room_key: str, event: Dict) -> str:
+        """Record something that happened in a room; returns its id in the room's history."""
+        return self._redis.xadd(f"ledgers:{self._room_history(room_key)}", self._stream_fields(event))
+
+    def get_room_events(self, room_key: str, after: str = "") -> List[Dict]:
+        """The room's history after event id ``after`` (all of it by default)."""
+        return [{**entry, "seq": entry.pop("_id")}
+                for entry in self.get_ledger_after(self._room_history(room_key), after)]
+
+    def delete_room(self, room_key: str) -> None:
+        """Remove a room's state and history (its file blobs are the caller's to remove)."""
+        self._redis.delete(self._room_key(room_key, "head"), self._room_key(room_key, "proposals"),
+                           self._room_key(room_key, "meta"), self._room_key(room_key, "memory_scopes"),
+                           f"ledgers:{self._room_history(room_key)}")
+
+    def record_room_memory_scope(self, room_key: str, scope: str) -> None:
+        """Note an Athena scope that holds memory of this room (a person's private
+        memory in it), so erasing the room's memory can find it after they leave."""
+        self._redis.sadd(self._room_key(room_key, "memory_scopes"), scope)
+
+    def room_memory_scopes(self, room_key: str) -> List[str]:
+        return sorted(self._redis.smembers(self._room_key(room_key, "memory_scopes")) or [])
+
+    def forget_room_memory_scope(self, room_key: str, scope: str) -> None:
+        self._redis.srem(self._room_key(room_key, "memory_scopes"), scope)
+
+    # ── A room's conversations on its surfaces ──────────────────────────────
+    #
+    # Per surface (e.g. "slack:C0123") and thread: the transcript, messages
+    # received but not yet handled, what was delivered, decisions waiting for
+    # a person's confirmation, and where the surface's delivery stands.
+
+    def _conv_key(self, room_key: str, surface: str, *parts: str) -> str:
+        return ":".join((self._room_key(room_key, "conv"), surface, *parts))
+
+    def receive_message(self, room_key: str, surface: str, message_id: str, record: Dict) -> bool:
+        """Record a message as received, atomically and once. False if it was already received."""
+        entry = json.dumps({**record, "message_id": message_id, "status": "pending",
+                            "received_at": time.time()})
+        return bool(self._redis.hsetnx(self._conv_key(room_key, surface, "inbound"), message_id, entry))
+
+    def pending_messages(self, room_key: str, surface: str, keep_seconds: int = 86400) -> List[Dict]:
+        """Messages received but not yet handled, oldest first (handled ones older than
+        ``keep_seconds`` are forgotten; until then a redelivery is still recognised)."""
+        key = self._conv_key(room_key, surface, "inbound")
+        pending, stale = [], []
+        now = time.time()
+        for message_id, raw in self._redis.hgetall(key).items():
+            record = json.loads(raw)
+            if record.get("status") == "pending":
+                pending.append(record)
+            elif now - float(record.get("handled_at") or 0) > keep_seconds:
+                stale.append(message_id)
+        if stale:
+            self._redis.hdel(key, *stale)
+        return sorted(pending, key=lambda m: m.get("received_at", 0))
+
+    def message_handled(self, room_key: str, surface: str, message_id: str) -> None:
+        key = self._conv_key(room_key, surface, "inbound")
+        raw = self._redis.hget(key, message_id)
+        if raw:
+            self._redis.hset(key, message_id, json.dumps({**json.loads(raw), "status": "handled",
+                                                          "handled_at": time.time()}))
+
+    def append_transcript(self, room_key: str, surface: str, thread: str, entry: Dict,
+                          retention_days: int = 90, max_entries: int = 2000) -> str:
+        key = self._conv_key(room_key, surface, "thread", thread)
+        entry_id = self._redis.xadd(key, self._stream_fields(entry), maxlen=max_entries, approximate=True)
+        self._redis.expire(key, int(retention_days) * 86400)
+        return entry_id
+
+    def transcript(self, room_key: str, surface: str, thread: str, limit: int = 30) -> List[Dict]:
+        """The thread's last ``limit`` entries, oldest first."""
+        key = self._conv_key(room_key, surface, "thread", thread)
+        out = []
+        for entry_id, data in reversed(self._redis.xrevrange(key, count=limit)):
+            parsed = {"_id": entry_id}
+            for k, v in data.items():
+                try:
+                    parsed[k] = json.loads(v)
+                except (json.JSONDecodeError, TypeError):
+                    parsed[k] = v
+            out.append(parsed)
+        return out
+
+    def delete_transcript(self, room_key: str, surface: str, thread: str) -> None:
+        self._redis.delete(self._conv_key(room_key, surface, "thread", thread))
+
+    def delivered(self, room_key: str, surface: str, item_key: str) -> Optional[str]:
+        return self._redis.hget(self._conv_key(room_key, surface, "delivered"), item_key)
+
+    def mark_delivered(self, room_key: str, surface: str, item_key: str, message_id: str) -> None:
+        self._redis.hset(self._conv_key(room_key, surface, "delivered"), item_key, message_id)
+
+    def put_decision(self, room_key: str, decision: Dict, ttl_seconds: int) -> None:
+        self._redis.set(self._room_key(room_key, f"decision:{decision['id']}"), json.dumps(decision),
+                        ex=max(1, int(ttl_seconds)))
+
+    def take_decision(self, room_key: str, decision_id: str) -> Optional[Dict]:
+        """The decision, removed so it can be confirmed only once; None if gone or expired."""
+        raw = self._redis.getdel(self._room_key(room_key, f"decision:{decision_id}"))
+        return json.loads(raw) if raw else None
+
+    def get_decision(self, room_key: str, decision_id: str) -> Optional[Dict]:
+        raw = self._redis.get(self._room_key(room_key, f"decision:{decision_id}"))
+        return json.loads(raw) if raw else None
+
+    def surface_map(self, room_key: str, surface: str, name: str) -> Dict[str, str]:
+        """One of a surface's maps (threads, the proposal latest in each thread,
+        where each question was asked): every process adds to it, none overwrites it."""
+        return dict(self._redis.hgetall(self._conv_key(room_key, surface, "map", name)))
+
+    def surface_map_put(self, room_key: str, surface: str, name: str, field: str, value: str,
+                        retention_days: int = 90) -> None:
+        key = self._conv_key(room_key, surface, "map", name)
+        pipe = self._redis.pipeline()
+        pipe.hset(key, field, value)
+        pipe.expire(key, retention_days * 86400)
+        pipe.execute()
+
+    def surface_state(self, room_key: str, surface: str) -> Optional[Dict]:
+        raw = self._redis.get(self._conv_key(room_key, surface, "state"))
+        return json.loads(raw) if raw else None
+
+    def save_surface_state(self, room_key: str, surface: str, state: Dict, *, first: bool = False) -> bool:
+        """Save where the surface's delivery stands; with ``first``, only if nothing is saved yet
+        (True if this call saved it)."""
+        return bool(self._redis.set(self._conv_key(room_key, surface, "state"), json.dumps(state),
+                                    nx=first or None))
+
+    @staticmethod
+    def _stream_fields(entry: Dict) -> Dict[str, str]:
+        # Every value JSON-encoded, strings included, so "42" reads back as "42", not 42.
+        return {k: json.dumps(v) for k, v in entry.items()}
 
     # ------------------------------------------------------------------
     # Long-Term Memory (LTM)
@@ -2616,6 +2984,45 @@ class RedisContextStore:
         logger.info(f"HITL resolved: {workflow_id}/{step_id} -> {decision}")
         return True
 
+    def _close_hitl(self, workflow_id: str, step_id: str, fields: Dict[str, str]) -> Optional[bool]:
+        """Write ``fields`` only if the request is still pending: True if this call
+        closed it, False if something else did first, None if there is no request."""
+        key = f"hitl_request:{workflow_id}:{step_id}"
+        with self._redis.pipeline() as pipe:
+            while True:
+                try:
+                    pipe.watch(key)
+                    if not pipe.exists(key):
+                        pipe.unwatch()
+                        return None
+                    # (Older records stored the enum's name, "HITLStatus.pending".)
+                    if pipe.hget(key, "status") not in (HITLStatus.pending.value, "HITLStatus.pending"):
+                        pipe.unwatch()
+                        return False
+                    pipe.multi()
+                    pipe.hset(key, mapping=fields)
+                    pipe.execute()
+                    return True
+                except redis.WatchError:
+                    continue
+
+    def resolve_hitl_once(self, workflow_id: str, step_id: str, decision: str,
+                          responder: str = "", comment: str = "") -> Optional[bool]:
+        """Resolve a pending HITL request atomically: True if this call resolved it,
+        False if it was already resolved (or expired), None if there is no such request."""
+        return self._close_hitl(workflow_id, step_id, {
+            "status": HITLStatus.resolved.value,
+            "decision": normalize_hitl_decision(decision).value,
+            "responder": responder, "comment": comment,
+            "resolved_by": responder, "note": comment,
+            "resolved_at": str(time.time()),
+        })
+
+    def expire_hitl_request(self, workflow_id: str, step_id: str) -> Optional[bool]:
+        """Close a pending request nobody answered: True if it was still pending."""
+        return self._close_hitl(workflow_id, step_id, {
+            "status": HITLStatus.expired.value, "resolved_at": str(time.time())})
+
     # ── Typed HITL API (preferred) ────────────────────────────────────────────
 
     def create_hitl_request_typed(self, request: HITLRequest) -> HITLRequest:
@@ -2645,6 +3052,20 @@ class RedisContextStore:
             })
         logger.info(f"HITL request created (typed): {request.request_id}")
         return request
+
+    def index_hitl_pending(self, request_id: str, record: Dict) -> None:
+        """List a pending HITL item where any host can find it (``hitl_pending``)."""
+        self._redis.hset("hitl:pending", request_id, json.dumps(record, default=str))
+
+    def hitl_pending(self, tenant: Optional[str] = None) -> List[Dict]:
+        """Every pending HITL item, from every host; only ``tenant``'s when given."""
+        items = [json.loads(raw) for raw in self._redis.hvals("hitl:pending")]
+        if tenant is not None:
+            items = [i for i in items if (i.get("context") or {}).get("tenant") == tenant]
+        return items
+
+    def unindex_hitl_pending(self, request_id: str) -> None:
+        self._redis.hdel("hitl:pending", request_id)
 
     def get_hitl_resolution(self, workflow_id: str,
                             step_id: str,
@@ -2787,6 +3208,35 @@ class RedisContextStore:
     def lock(self, key: str, timeout: int = 30):
         """Acquire a Redis lock (returns context manager)."""
         return self._redis.lock(f"lock:{key}", timeout=timeout)
+
+    def take_lease(self, key: str, owner: str, seconds: float) -> bool:
+        """Hold ``key`` for ``seconds`` as ``owner``: True if it is now ours (newly,
+        or renewed because we already held it), False if someone else holds it."""
+        name = f"lease:{key}"
+        ms = max(1, int(seconds * 1000))
+        if self._redis.set(name, owner, nx=True, px=ms):
+            return True
+        return self._if_held(name, owner, lambda pipe: pipe.pexpire(name, ms))
+
+    def release_lease(self, key: str, owner: str) -> bool:
+        """Let go of ``key`` if ``owner`` still holds it."""
+        name = f"lease:{key}"
+        return self._if_held(name, owner, lambda pipe: pipe.delete(name))
+
+    def _if_held(self, name: str, owner: str, change) -> bool:
+        with self._redis.pipeline() as pipe:
+            while True:
+                try:
+                    pipe.watch(name)
+                    if pipe.get(name) != owner:
+                        pipe.unwatch()
+                        return False
+                    pipe.multi()
+                    change(pipe)
+                    pipe.execute()
+                    return True
+                except redis.WatchError:
+                    continue
 
     # ------------------------------------------------------------------
     # Utilities

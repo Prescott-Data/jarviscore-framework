@@ -1,111 +1,44 @@
 ---
 icon: material/home
+hide:
+  - navigation
+  - toc
 title: Python Multi-Agent AI Framework for Production
 description: Open source Python framework for autonomous multi-agent systems with peer-to-peer orchestration, durable memory, zero-trust credentials, and observability.
+videos:
+  - id: 4IOpKZgjXIw
+    name: "JarvisCore Demo"
+    description: "Agents on JarvisCore work as a fleet of equal peers: they discover one another by capability, execute tasks from a shared ledger, and reach every external service through a zero-trust broker, never with their own keys."
+    upload_date: "2026-10-02T03:11:50-07:00"
+    duration: PT2M7S
 ---
 
 <div class="jc-hero" markdown>
 
 <img src="assets/combo-brand.svg" class="jc-hero-logo" alt="JarvisCore Logo" />
 
-# Agents that survive production
+# JarvisCore Documentation
 
-JarvisCore is an open source Python framework for building autonomous multi-agent AI systems. Most agent frameworks get you a demo; JarvisCore gets you an operator: agents that run unattended for weeks, remember last month, fail loudly, and leave a flight record you can read. We run our own agents on it, with real budgets. Every hardening release comes from those scars.
+JarvisCore is a runtime where AI agents operate as a fleet of equal peers. Agents discover one another by capability, execute tasks from a shared ledger, and authenticate to every external service through a zero-trust broker, never with their own keys.
 
 <div class="jc-cta-text" markdown>
-[Get started](getting-started.md) [Why JarvisCore](#why-jarviscore) [Reference](reference/configuration.md)
+[Get started](getting-started.md) [Concepts](concepts/index.md) [Reference](reference/configuration.md)
 </div>
 
 </div>
 
----
+!!! tip "New in 2.3: multiplayer"
+    A team and its agents can now work on the same files from Slack or your own product: people ask in their own words, agents propose changes, and people accept them as themselves. Start with [Build a Multiplayer Agent](guides/multiplayer-agents.md), or read the [concept](concepts/multiplayer.md) first. Everything else that changed is in the [changelog](changelog.md).
 
-## Why JarvisCore
+## See it in two minutes
 
-Built by running our own agents unattended, with real budgets. Four rules fell out of that, and they are enforced in code, not promised in prose:
+<div class="jc-video jc-video-home" data-yt="4IOpKZgjXIw" data-title="JarvisCore Demo"><a class="jc-video-poster" href="https://www.youtube.com/watch?v=4IOpKZgjXIw" target="_blank" rel="noopener" aria-label="Play the JarvisCore demo (2:07)"><img src="https://i.ytimg.com/vi/4IOpKZgjXIw/maxresdefault.jpg" alt="JarvisCore demo: an open-source runtime for AI agents that work as a mesh of equal peers" width="1280" height="720" loading="lazy"><span class="jc-video-play"></span></a></div>
 
-- **Honest context.** Nothing is truncated silently. Clips are labeled, originals archived, summaries say what they summarize.
-- **Loud failures.** Failed steps say so. Partial work survives. Rate-limit storms are absorbed, not crashed on.
-- **Two profiles, no mushy middle.** `CustomAgent`: you bring the brain. `AutoAgent`: the full cognitive stack. It writes its own integrations, repairs them in a sandbox, and banks verified work for reuse.
-- **No single point of death.** Agents coordinate over a SWIM gossip mesh. Memory compounds across sessions via Athena. Credentials stay out of agent reasoning via Nexus.
-
-Here is what those rules buy you in practice.
-
----
-
-## What JarvisCore provides
-
-<div class="jc-grid" markdown>
-<div class="jc-card" markdown>
-<span class="jc-card-label">Agent Profiles</span>
-
-### Two execution models
-
-`AutoAgent` runs a full cognitive loop internally: observe, orient, decide, act. `CustomAgent` exposes the execution loop directly for deterministic control. Both share the same infrastructure.
-</div>
-
-<div class="jc-card" markdown>
-<span class="jc-card-label">Memory</span>
-
-### Four-tier agent memory
-
-Working scratchpad, episodic ledger, LLM-compressed long-term summaries, and optional cross-session semantic memory via Athena MemOS. Wired into AutoAgent automatically when `ATHENA_URL` is set. Context that survives restarts and compounds across weeks.
-</div>
-
-<div class="jc-card" markdown>
-<span class="jc-card-label">Communication</span>
-
-### Self-organising agent mesh
-
-Agents discover and message each other via a `PeerClient` API over SWIM gossip and ZMQ. No central orchestrator to die: nodes join, fail, and rejoin. Identical code on a single process or across distributed machines.
-</div>
-
-<div class="jc-card" markdown>
-<span class="jc-card-label">Integrations</span>
-
-### Built-in service integrations
-
-Prebuilt actions for Slack, GitHub, Zoom, SAP, NetSuite, MS Graph, Salesforce, and more. No glue code, no auth wiring. Inspect the catalog in your installed version with [`jarviscore atom list`](reference/cli.md#atom-list).
-
-[Browse integrations →](guides/integrations.md)
-</div>
-
-<div class="jc-card" markdown>
-<span class="jc-card-label">Auth</span>
-
-### Nexus credential layer
-
-Agents call third-party APIs without ever touching raw credentials. OAuth2, API keys, and basic auth are all managed by Nexus and kept out of agent reasoning.
-
-[Nexus guide →](guides/nexus.md)
-</div>
-
-<div class="jc-card" markdown>
-<span class="jc-card-label">Observability</span>
-
-### Full-stack tracing
-
-Every agent turn, tool call, and LLM request is traced automatically. Redis PubSub for live streams, JSONL for compliance, Prometheus for operational dashboards.
-
-[Observability guide →](guides/observability.md)
-</div>
-
-<div class="jc-card" markdown>
-<span class="jc-card-label">Control</span>
-
-### Human-in-the-loop
-
-`HITLQueue` intercepts decisions that exceed confidence thresholds, routes them to a review inbox, and resumes execution once a human responds. First-class, not an afterthought.
-
-[HITL guide →](guides/hitl.md)
-</div>
-</div>
-
----
+<p class="jc-caption">Agents finding each other by capability, claiming steps from a shared ledger, and calling services through Nexus.</p>
 
 ## Quickstart
 
-One LLM provider key is the only required configuration. Install, initialise, and run your first autonomous agent:
+One LLM provider key is the only required configuration.
 
 ```bash title="Install & initialise"
 pip install jarviscore-framework
@@ -114,91 +47,41 @@ cp .env.example .env   # add your LLM key
 jarviscore check        # verify dependencies
 ```
 
-```python title="main.py"
-import asyncio
-from jarviscore import Mesh, AutoAgent
+The [Getting Started](getting-started.md) guide takes it from here: your first agent, what comes back, and how to read it.
 
+## Explore the docs
 
-class ResearcherAgent(AutoAgent):
-    role = "researcher"
-    capabilities = ["research", "analysis"]
-    system_prompt = "You are a rigorous research analyst."
+<div class="jc-tiles" markdown>
 
+<a class="jc-tile" href="getting-started/">:material-rocket-launch-outline:<strong>Getting Started</strong><span>Install, add one model key, and run your first agent.</span></a>
 
-async def main():
-    mesh = Mesh()
-    mesh.add(ResearcherAgent)
-    await mesh.start()
-    try:
-        result = await mesh.run_task(
-            agent="researcher",
-            task="What are the key architectural trade-offs in multi-agent systems?",
-        )
-        print(result["result_summary"])
-    finally:
-        await mesh.stop()
+<a class="jc-tile" href="concepts/">:material-cube-outline:<strong>Concepts</strong><span>Agents, the Kernel, memory, the mesh, Nexus and multiplayer.</span></a>
 
+<a class="jc-tile" href="guides/">:material-map-marker-path:<strong>Guides</strong><span>Workflows, browser, search, credentials, people in the loop, production.</span></a>
 
-asyncio.run(main())
-```
+<a class="jc-tile" href="reference/">:material-code-braces:<strong>Reference</strong><span>Every setting, the APIs, the CLI and troubleshooting.</span></a>
 
----
+<a class="jc-tile" href="compare/">:material-scale-balance:<strong>Compare</strong><span>How JarvisCore differs from CrewAI, LangGraph and Hermes Agent.</span></a>
 
-## Where to start
-
-If you are new to JarvisCore, read in this order:
-
-1. [Getting Started](getting-started.md): install, configure, and run your first agent
-2. [Architecture Overview](concepts/architecture.md): the mental model for how the framework fits together
-3. [Agents](concepts/agents.md): what an agent is, its identity and lifecycle
-4. [Language Models](concepts/language-models.md): how JarvisCore uses multiple LLMs simultaneously
-5. [Memory](concepts/memory.md): how agents maintain and recover context
-6. [Agent Personas](concepts/agent-personas.md): how profiles shape autonomous behaviour
-
-If you are evaluating for a specific use case:
-
-- [Compare Agent Frameworks](compare/index.md): CrewAI, LangGraph, Hermes Agent, and JarvisCore by operating model
-- [Open Source Agent Harness](agent-harness.md): planning, tools, context, permissions, recovery, and observability
-- [AutoAgent Guide](guides/autoagent.md): autonomous reasoning agents
-- [CustomAgent Guide](guides/customagent.md): deterministic worker agents
-- [System Bundles & Integrations](guides/integrations.md): the full atom catalog
-- [Configuration Reference](reference/configuration.md): all environment variables
-- [JarvisCore Enterprise](infrastructure/enterprise.md): edition comparison, enterprise capabilities, deployment, and support
-
----
-
-## Explore the ecosystem
-
-| | |
-|---|---|
-| **Reference** | Full API surface, configuration keys, and CLI flags: [view reference](reference/configuration.md) |
-| **Source** | Browse the code, open issues, and submit PRs: [GitHub](https://github.com/Prescott-Data/jarviscore-framework){ target="_blank" rel="noopener" } |
-| **Community** | Questions, showcases, and early feature previews: [Discord](https://discord.gg/jarviscore){ target="_blank" rel="noopener" } |
-| **Blog** | Engineering deep-dives and architecture walkthroughs: [read the blog](https://developers.prescottdata.io/blog){ target="_blank" rel="noopener" } |
-
----
-
-<div class="jc-ecosystem" markdown>
-<div class="jc-ecosystem-card" markdown>
-
-### Star us on GitHub
-
-Help more developers discover JarvisCore. Every star makes us easier to find and keeps the project growing.
-
-<div class="jc-cta" markdown>
-[Star on GitHub](https://github.com/Prescott-Data/jarviscore-framework){ .jc-btn .jc-btn-github target="_blank" rel="noopener" }
-</div>
+<a class="jc-tile" href="guides/integrations/">:material-puzzle-outline:<strong>Integrations</strong><span>Prebuilt actions for the services your agents use.</span></a>
 
 </div>
-<div class="jc-ecosystem-card" markdown>
 
-### Join the community
+The integration catalog for your installed version is one command away: [`jarviscore atom list`](reference/cli.md#atom-list).
 
-Ask questions, share what you're building, and get early previews of new features. Come say hi.
+## Run the examples
 
-<div class="jc-cta" markdown>
-[Join Discord](https://discord.gg/jarviscore){ .jc-btn .jc-btn-discord target="_blank" rel="noopener" }
-</div>
+Each is one short file in [`examples/showcase`](https://github.com/Prescott-Data/jarviscore-framework/tree/main/examples/showcase){ target="_blank" rel="noopener" }, verified on a real model. Longer, multi-agent examples are in [Examples](examples/index.md).
 
-</div>
-</div>
+| Example | What it shows | Needs |
+|---|---|---|
+| [Read a whole website](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/browse_a_whole_site.py){ target="_blank" rel="noopener" } | An agent works a real browser through every page of a catalogue and computes the figures. | `jarviscore-framework[browser]` |
+| [Compute, never estimate](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/analyst_that_computes.py){ target="_blank" rel="noopener" } | Figures from a 400-row CSV, computed by code the agent writes and runs. | A model key |
+| [Remember across runs](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/agent_that_remembers.py){ target="_blank" rel="noopener" } | Told once; a new process, given nothing, still knows. | A model key |
+| [Survive kill -9](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/survives_a_crash.py){ target="_blank" rel="noopener" } | Kill it mid-workflow; the rerun finishes without repeating done work. | `REDIS_URL` |
+| [A research team](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/research_team.py){ target="_blank" rel="noopener" } | A scout and an analyst deliver a cited brief from the live web. | A model key |
+| [Work as a team](guides/multiplayer-agents.md) | A room in Slack where people ask, agents propose, and people decide. | New in 2.3 |
+
+## Community
+
+<p class="jc-community">Questions, showcases and live office hours are on <a href="https://discord.gg/B2aJV5BJmb" target="_blank" rel="noopener">Discord</a>. Code and issues are on <a href="https://github.com/Prescott-Data/jarviscore-framework" target="_blank" rel="noopener">GitHub</a>, where a star helps other developers find JarvisCore. For the overview and blog, see the <a href="https://developers.prescottdata.io/jarviscore" target="_blank" rel="noopener">developer hub</a>; for teams, <a href="infrastructure/enterprise/">Enterprise</a> and <a href="https://developers.prescottdata.io/jarviscore/pricing" target="_blank" rel="noopener">pricing</a>.</p>
