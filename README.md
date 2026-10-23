@@ -116,7 +116,7 @@ Add capabilities as you need them: a [browser](https://jarviscore.developers.pre
 <p align="center"><sub>
   Three agents on one mesh: a scout reads official docs on the live web, an analyst compares, a writer delivers the brief
   with its sources. A real run, idle time trimmed. <a href="https://github.com/Prescott-Data/jarviscore-framework/releases/download/v2.3.0/desk-research-team.mp4">Play the video</a> to pause and scrub.
-  The Desk ships with JarvisCore Agents, opening soon.
+  The Desk ships with <a href="https://github.com/Prescott-Data/jarviscore-agents">JarvisCore Agents</a>, with four complete blueprints to run in it.
 </sub></p>
 
 The whole team is [30 lines of Python](https://github.com/Prescott-Data/jarviscore-framework/blob/main/examples/showcase/desk/research_desk.py):
