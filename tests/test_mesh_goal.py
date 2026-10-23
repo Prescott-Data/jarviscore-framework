@@ -1618,3 +1618,13 @@ async def test_cancelling_execute_goal_tombstones_shared_workflow(monkeypatch):
     assert store.is_workflow_cancelled("wf-cancel-goal") is True
     assert store.get_step_status("wf-cancel-goal", "unavailable") == "cancelled"
     assert "wf-cancel-goal" not in store.get_active_workflows()
+
+def test_a_failed_goal_names_the_failed_step_not_one_blocked_behind_it():
+    from jarviscore.core.mesh import Mesh
+
+    result = Mesh._goal_result({"status": "failed", "steps": [
+        {"id": "publish", "status": "blocked", "blocked_by": ["fetch"]},
+        {"id": "fetch", "status": "failed", "output": {"error": "source unavailable"}},
+    ]}, {"publish", "fetch"}, set())
+
+    assert result["error"] == "source unavailable"

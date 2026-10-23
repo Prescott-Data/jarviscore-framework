@@ -1677,7 +1677,8 @@ class Mesh:
         waiting = next((step for step in steps if step.get("status") == "waiting"), None)
         if result.get("status") == "failed" and not result.get("error"):
             # Why it failed, in the failing step's own words, not only in steps.
-            stopped = next((step for step in steps if step.get("status") in ("failed", "blocked")), None)
+            stopped = next((step for step in steps if step.get("status") == "failed"), None) \
+                or next((step for step in steps if step.get("status") == "blocked"), None)
             saved = (stopped or {}).get("output") or {}
             reason = saved.get("error") or saved.get("result_summary") or (stopped or {}).get("error")
             if reason:

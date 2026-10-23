@@ -107,7 +107,7 @@ await room.reject(proposal.id, by=bob, reason="One line per risk, please")
 
 To have the agents redo a proposal, ask again with `revision_of`. The agents are given the earlier attempt's files and text to start from, and what happened to it is in `context["room"]["feedback"]`. The earlier proposal does not have to be turned down first: while both are open, either can be accepted, and accepting the revision closes the one it replaces.
 
-Only one revision of a proposal lands. Accepting one closes every other open revision of the same proposal ("superseded by …") and stops work still making one; a revision of a proposal that another revision already replaced cannot be accepted.
+Only one version of a line of work (a proposal and its revisions) lands. Accepting one replaces what it revised, closes every other open version in that line ("superseded by …", including revisions of a losing version) and stops work still making one. A version built on one the team did not take cannot be accepted, even if two people accept competing versions at the same moment. A revision of work held for someone (it used their private access) is held for them too, and its text is never shown to anyone else.
 
 Every file the agents write in the room's folder is part of the proposal, including binary files and new folders such as `output/`; the runtime's own scratch stays in `.jarviscore/`. Agents are told to put new work in a new file and to change an existing file only when the request is about it. Give the work a short `title=` to name its proposal; without one, the first sentence of the goal is used.
 

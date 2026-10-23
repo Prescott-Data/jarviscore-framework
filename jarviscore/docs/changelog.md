@@ -63,15 +63,20 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   told only to change "the room's files", so a new topic overwrote whatever file
   was there. They are now told to put new work in a new file, and a revision is
   given the files and text of the attempt it redoes.
-- **One revision of a proposal lands.** Two people giving the same feedback
+- **One version of a piece of work lands.** Two people giving the same feedback
   started two revisions, and the later one could be accepted over the team's
-  choice. Accepting a revision now closes the other open revisions of that
-  proposal, stops work still making one, and refuses a revision of a proposal
-  already replaced. Work that finishes after that files nothing (`superseded`).
+  choice. A revision is now reserved before it starts, so feedback given at the
+  same moment is kept for it rather than starting another. Accepting a version
+  replaces what it revised, closes the other versions of that line of work
+  (and revisions built on them), and stops work still making one; decisions on
+  one line of work are made one at a time, and a version built on one the team
+  did not take cannot be accepted. Work that finishes after that files nothing
+  (`superseded`). Revisions of held work stay held.
 - **Nothing anyone adds to running work is lost.** The room agent gains
   `update_work`: an addition or correction to work in progress, or feedback on a
   proposal already being redone, is kept (`ask.queued`), and when the work ends
   one follow-up takes up every addition from its result, in the same thread.
+- **A failed goal names the step that failed**, not a step blocked behind it.
 - **The room agent knows what is running and how work ended.** Its brief lists
   running work, additions waiting, and recent results (including work that
   changed no files), and it answers questions and agreement itself instead of

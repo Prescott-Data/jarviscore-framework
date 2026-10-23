@@ -738,9 +738,18 @@ class RoomAgent(AutoAgent):
         taken = {queued for e in events if e.get("type") == "ask.started" for queued in e.get("takes") or ()}
         return [{"work": e.get("workflow_id", ""), "by": e.get("by", ""),
                  "by_name": e.get("by_name") or e.get("by", ""), "message": e.get("message", ""),
-                 "change": e.get("change", ""), "id": e.get("queued", "")}
+                 "change": e.get("change", ""), "id": e.get("queued", ""),
+                 "revising": e.get("revising", "")}
                 for e in events if e.get("type") == "ask.queued" and e.get("queued") not in taken
                 and (not workflow_ids or e.get("workflow_id") in workflow_ids)]
+
+    @staticmethod
+    def _revising(room: Room, proposal_id: str) -> str:
+        return f"{room.key}:revising:{proposal_id}"
+
+    def _reservation_seconds(self) -> float:
+        timeout = self.ask_options.get("timeout")
+        return max(3600.0, 2 * float(timeout)) if timeout else 3600.0
 
     @staticmethod
     def _running_follow_up(room: Room, workflow_id: str) -> str:
@@ -748,7 +757,8 @@ class RoomAgent(AutoAgent):
 
         return next((e["workflow_id"] for e in unfinished(room) if e.get("follows") == workflow_id), "")
 
-    def queue_update(self, turn: Turn, workflow_id: str, change: str = "") -> Dict[str, Any]:
+    def queue_update(self, turn: Turn, workflow_id: str, change: str = "",
+                     revising: str = "") -> Dict[str, Any]:
         """Keep the person's message for running work: the follow-up that starts when
         it finishes takes it up (``_follow_up``). Safe to repeat for one message."""
         from jarviscore.room.work import _ended
@@ -764,7 +774,7 @@ class RoomAgent(AutoAgent):
         queued = turn.effect_id("queued") or uuid4().hex[:10]
         if not any(e.get("type") == "ask.queued" and e.get("queued") == queued for e in room.events()):
             room.note("ask.queued", by=person.id, by_name=person.display, workflow_id=target,
-                      queued=queued, message=turn.message,
+                      queued=queued, message=turn.message, revising=revising,
                       change=change if change.strip() != turn.message.strip() else "")
         if _ended(room, target):
             self._track(f"follow-up:{target}:{queued}", self._follow_up(room, target))
@@ -797,20 +807,29 @@ class RoomAgent(AutoAgent):
                 f"{a['by_name']}, in their words:\n\"\"\"\n{a['message']}\n\"\"\""
                 + (f"\nAs understood in the conversation: {a['change']}" if a["change"] else "")
                 for a in additions)
-            request = str(original.get("goal") or "").split("\n\n", 1)[0][:600]
+            request = str(original.get("goal") or "").split("\n\n", 1)[0][:600] \
+                or "Do what the people below asked."
             revision_of = ""
-            if ended.get("proposal"):
+            candidates = [ended.get("proposal") or ""] + [a["revising"] for a in additions]
+            for candidate in filter(None, candidates):
                 try:
-                    if room.proposal(ended["proposal"]).status == "open":
-                        revision_of = ended["proposal"]
+                    if room.proposal(candidate).status == "open":
+                        revision_of = candidate
+                        break
                 except KeyError:
-                    pass
+                    continue  # not a proposal in this room: nothing to build on
+            held = ended.get("held_for") or ""
+            reported = ""
+            if ended.get("summary") and not held:
+                reported = f"\n\nWhat that work reported:\n{str(ended['summary'])[:1500]}"
             if revision_of:
-                goal = (f"{request}\n\nWhile that work was being done, people added to it. Take its "
-                        f"result ({revision_of}) and apply all of this:\n{words}")
+                goal = (f"{request}{reported}\n\nWhile that work was being done, people added to it. "
+                        f"Take its result ({revision_of}) and apply all of this:\n{words}")
             else:
-                goal = f"{request}\n\nWhile it was being done, people added to it. Include all of this:\n{words}"
-            asker = additions[0]["by"] or original.get("by", "")
+                goal = (f"{request}{reported}\n\nWhile it was being done, people added to it. "
+                        f"Include all of this:\n{words}")
+            # Work held for someone stays theirs: its follow-up runs as them and is held too.
+            asker = held or additions[0]["by"] or original.get("by", "")
             person = room.identities.get(room.tenant, asker) or Person(room.tenant, asker, room.name_of(asker))
             title = short_title(f"Update: {original.get('title') or request}")
             self._track(follow, self._work_on(room, person, goal, revision_of, follow, title,
@@ -837,23 +856,31 @@ class RoomAgent(AutoAgent):
             return {"status": "error", "error": str(exc).replace(person.key, person.display)}
         from jarviscore.room.work import _started, new_workflow_id
 
-        if revision_of:
-            already = next((w for w in self.running_work(room) if w["revision_of"] == revision_of), None)
-            if already is not None:
-                # One revision at a time; what this person asked is kept for it, not lost.
-                kept = self.queue_update(turn, already["workflow_id"], change)
-                return {**kept, "already_running": True, "note": (
-                    f"{revision_of} is already being redone, as {already['asked_by_name'] or already['asked_by']} "
-                    "asked. This person's words are kept and applied to that version as soon as it "
-                    "arrives. Tell them, then finish.")}
         effect = turn.effect_id("work")
         workflow_id = f"room-{room.id}-{effect}" if effect else new_workflow_id(room.id)
-        if turn.on_work:
-            turn.on_work(workflow_id)
         if workflow_id in self._work or _started(room, workflow_id) is not None:
             # This message was handled before a restart and already started this work.
+            if turn.on_work:
+                turn.on_work(workflow_id)
             return {"status": "success", "started": workflow_id,
                     "note": "This work had already started for this message. Tell the person, then finish."}
+        if revision_of:
+            # One revision of a proposal at a time, reserved before it starts, so two
+            # people asking at once (in one process or several) start one revision.
+            reservation = self._revising(room, revision_of)
+            running = next((w["workflow_id"] for w in self.running_work(room)
+                            if w["revision_of"] == revision_of and w["workflow_id"] != workflow_id), "")
+            if running or not room.redis_store.take_lease(reservation, workflow_id, self._reservation_seconds()):
+                holder = running or room.redis_store.lease_holder(reservation) or ""
+                if holder and holder != workflow_id:
+                    kept = self.queue_update(turn, holder, change, revising=revision_of)
+                    who = next((w["asked_by_name"] or w["asked_by"] for w in self.running_work(room)
+                                if w["workflow_id"] == holder), "someone")
+                    return {**kept, "already_running": True, "note": (
+                        f"{revision_of} is already being redone, as {who} asked. This person's words "
+                        "are kept and applied to that version as soon as it arrives. Tell them, then finish.")}
+        if turn.on_work:
+            turn.on_work(workflow_id)
         self._track(workflow_id, self._work_on(room, person, goal, revision_of, workflow_id, title))
         return {"status": "success", "started": workflow_id,
                 "note": ("The agents have the request and work on it after this turn; their progress "
@@ -869,6 +896,9 @@ class RoomAgent(AutoAgent):
         except Exception:
             # The room recorded ask.failed with the reason; whoever follows the room sees it.
             logger.exception("Room work %s failed", workflow_id)
+        finally:
+            if revision_of:
+                room.redis_store.release_lease(self._revising(room, revision_of), workflow_id)
         await self._follow_up(room, workflow_id, also=(follows,) if follows else ())
 
     def _track(self, workflow_id: str, coroutine) -> None:
@@ -885,12 +915,26 @@ class RoomAgent(AutoAgent):
         mesh = getattr(room, "mesh", None)
         if mesh is None:
             return []
+        from jarviscore.room.work import _ended, _started
+
         resumed = []
         for started in unfinished(room):
             workflow_id = started["workflow_id"]
             if workflow_id not in self._work:
                 self._track(workflow_id, self._resume(room, mesh, workflow_id))
                 resumed.append(workflow_id)
+        # Additions kept for work that ended (or never started) before its follow-up did,
+        # because a process stopped in between: take them up now.
+        for work in dict.fromkeys(a["work"] for a in self.queued_updates(room)):
+            if work in self._work or self._running_follow_up(room, work):
+                continue
+            ended = _ended(room, work)
+            lost = _started(room, work) is None and not any(
+                room.redis_store.lease_holder(self._revising(room, a["revising"])) == work
+                for a in self.queued_updates(room, work) if a["revising"])
+            if ended or lost:
+                self._track(f"follow-up:{work}", self._follow_up(room, work))
+                resumed.append(f"follow-up:{work}")
         return resumed
 
     async def _resume(self, room: Room, mesh, workflow_id: str) -> None:

@@ -88,6 +88,10 @@ async def _earlier_attempt(room: Room, previous: Proposal) -> str:
     paths = sorted(path for path, change in previous.changes.items() if change)
     if not paths:
         return ""
+    if previous.held_for:
+        # Held work came from someone's private access: its text is theirs alone.
+        return (f"The earlier attempt wrote {', '.join(paths)}; it is held for its asker, so its "
+                "text is not shown here.")
     parts = [f"The earlier attempt wrote {', '.join(paths)}. Keep the work in the same "
              f"file{'s' if len(paths) > 1 else ''}, starting from what it wrote:"]
     budget = _EARLIER_TOTAL_CHARS
@@ -220,12 +224,20 @@ async def finish(room: Room, mesh, workflow_id: str, result: Dict[str, Any]) -> 
             room.tenant, started.get("by", ""), started.get("by_name", ""))
         sources = room.redis_store.workflow_sources(workflow_id)
         held_for = asked_by.id if room.private_sources(workflow_id) else ""
+        if not held_for and started.get("revision_of"):
+            try:
+                # Redoing work held for this person keeps it theirs until they release it.
+                revised = room.proposal(started["revision_of"])
+                held_for = asked_by.id if revised.held_for == asked_by.id else ""
+            except KeyError:
+                held_for = ""
         steps = result.get("steps") or []
         proposal = None
-        replaced_by = _replaced_by(room, started.get("revision_of", ""))
+        revising = started.get("revision_of", "")
+        replaced_by = room.overtaken_by(revising) if revising else ""
         if replaced_by:
-            # The team took another revision of the same proposal while this one ran.
-            summary = f"Not filed: {started['revision_of']} was already replaced by {replaced_by}."
+            # The team took another version of the same work while this one ran.
+            summary = f"Not filed: {revising} was already replaced by {replaced_by}."
             room.note("ask.finished", **_who(asked_by), workflow_id=workflow_id,
                       status="superseded", summary=summary, proposal="", held_for="")
             return AskResult(workflow_id, "superseded", None, summary, result, "", sources)
@@ -257,16 +269,6 @@ async def finish(room: Room, mesh, workflow_id: str, result: Dict[str, Any]) -> 
                          held_for, sources)
     finally:
         room.redis_store.release_lease(lock, holder)
-
-
-def _replaced_by(room: Room, proposal_id: str) -> str:
-    """The proposal that replaced ``proposal_id`` when it was accepted, or ""."""
-    if not proposal_id:
-        return ""
-    try:
-        return room.replaced_by(room.proposal(proposal_id))
-    except KeyError:
-        return ""
 
 
 def _started(room: Room, workflow_id: str) -> Optional[Dict[str, Any]]:

@@ -53,6 +53,7 @@ class TestOneRevisionAtATime:
     async def test_the_same_change_asked_twice_starts_one_revision(self, room):
         first = await proposed(room, PLAN.replace("Tuesday", "Wednesday"), title="Move the launch")
         started(room, "room-launch-bob", bob, goal="Redo it", revision_of=first.id)
+        room.redis_store.take_lease(f"{room.key}:revising:{first.id}", "room-launch-bob", 600)
         agent = RoomAgent()
 
         result = agent._start_work(Turn(room, dana, "me too", message_id="m3", proposal=first.id),
@@ -63,7 +64,36 @@ class TestOneRevisionAtATime:
         assert agent._work == {}, "no second workflow"
         assert RoomAgent.queued_updates(room) == [{
             "work": "room-launch-bob", "by": "dana", "by_name": "Dana", "message": "me too",
-            "change": "", "id": result_id(room)}]
+            "change": "", "id": result_id(room), "revising": first.id}]
+
+    async def test_two_requests_at_once_start_one_revision_before_either_is_recorded(self, room):
+        asks = recording(room)
+        first = await proposed(room, PLAN.replace("Tuesday", "Wednesday"))
+        agent = RoomAgent()
+
+        one = agent._start_work(Turn(room, bob, "Thursday", message_id="m1"), "Thursday", revision_of=first.id)
+        two = agent._start_work(Turn(room, dana, "Friday", message_id="m2"), "Friday", revision_of=first.id)
+        await settle(agent)
+
+        assert "started" in one and two["kept_for"] == one["started"]
+        bobs, danas = asks
+        assert bobs["by"] == "bob" and "follows" not in bobs
+        assert danas["follows"] == one["started"], "Dana's is taken up after Bob's, not beside it"
+
+    async def test_a_message_handled_again_does_not_queue_its_own_work(self, room):
+        recording(room)
+        first = await proposed(room, PLAN.replace("Tuesday", "Wednesday"))
+        agent = RoomAgent()
+        result = agent._start_work(Turn(room, bob, "Thursday", message_id="m1"), "Thursday",
+                                   revision_of=first.id)
+        await settle(agent)
+        room.redis_store.take_lease(f"{room.key}:revising:{first.id}", result["started"], 600)
+
+        again = RoomAgent()._start_work(Turn(room, bob, "Thursday", message_id="m1"), "Thursday",
+                                        revision_of=first.id)
+
+        assert again["started"] == result["started"] and "already started" in again["note"]
+        assert RoomAgent.queued_updates(room) == []
 
     async def test_accepting_one_revision_closes_the_others_and_stops_their_work(self, room):
         first = await proposed(room, PLAN.replace("Tuesday", "Wednesday"))
@@ -92,13 +122,53 @@ class TestOneRevisionAtATime:
         assert room.proposal(aside.id).reason == f"superseded by {third.id}"
         assert room.proposals("open") == []
 
+    async def test_a_version_built_on_a_losing_branch_cannot_land(self, room):
+        first = await proposed(room, PLAN.replace("Tuesday", "Wednesday"))
+        winner = await proposed(room, PLAN.replace("Tuesday", "Thursday"), revision_of=first.id)
+        loser = await proposed(room, PLAN.replace("Tuesday", "Friday"), revision_of=first.id)
+        on_loser = await proposed(room, PLAN.replace("Tuesday", "Monday"), revision_of=loser.id)
+        started(room, "room-launch-on-loser", dana, goal="Again", revision_of=on_loser.id)
+
+        await room.accept(winner.id, by=ava)
+
+        assert room.proposal(on_loser.id).reason == f"superseded by {winner.id}"
+        assert "room-launch-on-loser" in [w for w, _ in room.mesh.cancelled]
+        late = await proposed(room, PLAN.replace("Tuesday", "Sunday"), revision_of=on_loser.id)
+        with pytest.raises(ValueError, match=f"{winner.id} already replaced"):
+            await room.accept(late.id, by=ava)
+
+    async def test_a_turned_down_proposal_remembers_the_revision_that_replaced_it(self, room):
+        first = await proposed(room, PLAN.replace("Tuesday", "Wednesday"))
+        await room.reject(first.id, by=bob, reason="Thursday, please")
+        taken = await proposed(room, PLAN.replace("Tuesday", "Thursday"), revision_of=first.id)
+        await room.accept(taken.id, by=bob)
+        late = await proposed(room, PLAN.replace("Tuesday", "Friday"), revision_of=first.id)
+
+        assert room.proposal(first.id).reason == "Thursday, please", "the reviewer's words are kept"
+        assert room.overtaken_by(late.id) == taken.id
+        with pytest.raises(ValueError, match="already replaced"):
+            await room.accept(late.id, by=dana)
+
+    async def test_two_people_accepting_competing_versions_at_once_land_one(self, room):
+        first = await proposed(room, PLAN.replace("Tuesday", "Wednesday"))
+        bobs = await proposed(room, PLAN.replace("Tuesday", "Thursday"), revision_of=first.id)
+        danas = await room.propose({"notes.md": "Different file, no conflict\n"}, by=dana,
+                                   revision_of=first.id)
+
+        results = await asyncio.gather(room.accept(bobs.id, by=bob), room.accept(danas.id, by=dana),
+                                       return_exceptions=True)
+
+        assert sum(not isinstance(r, Exception) for r in results) == 1
+        assert room.head().version == 2
+        assert len(room.proposals("accepted")) == 1
+
     async def test_a_revision_of_a_proposal_already_replaced_cannot_be_accepted(self, room):
         first = await proposed(room, PLAN.replace("Tuesday", "Wednesday"))
         taken = await proposed(room, PLAN.replace("Tuesday", "Thursday"), revision_of=first.id)
         await room.accept(taken.id, by=ava)
         late = await proposed(room, PLAN.replace("Tuesday", "Friday"), revision_of=first.id)
 
-        with pytest.raises(ValueError, match=f"which {taken.id} already replaced"):
+        with pytest.raises(ValueError, match=f"that {taken.id} already replaced"):
             await room.accept(late.id, by=dana)
         assert room.head().version == 2
 
@@ -209,6 +279,59 @@ class TestNothingAnyoneAddsIsLost:
 
         await agent._follow_up(room, "room-launch-mail")
         assert asks == []
+
+
+class TestFollowUps:
+
+    async def test_a_follow_up_is_told_what_the_work_before_it_reported(self, room):
+        asks = recording(room)
+        started(room, "room-launch-icp", ava, goal="Research the ICP")
+        agent = RoomAgent()
+        agent.queue_update(Turn(room, bob, "now turn that into a LinkedIn post", message_id="m1"),
+                           "room-launch-icp")
+        room.note("ask.finished", by="ava", by_name="Ava", workflow_id="room-launch-icp",
+                  status="completed", summary="Primary ICP: holiday organisers", proposal="", held_for="")
+
+        await agent._follow_up(room, "room-launch-icp")
+        await settle(agent)
+
+        assert "What that work reported:\nPrimary ICP: holiday organisers" in asks[0]["goal"]
+
+    async def test_held_work_is_followed_up_as_its_owner_without_its_summary(self, room):
+        asks = recording(room)
+        started(room, "room-launch-inbox", bob, goal="Summarise my inbox")
+        agent = RoomAgent()
+        agent.queue_update(Turn(room, dana, "and list the venues", message_id="m1"), "room-launch-inbox")
+        room.note("ask.finished", by="bob", by_name="Bob", workflow_id="room-launch-inbox",
+                  status="completed", summary="Private: three emails", proposal="", held_for="bob")
+
+        await agent._follow_up(room, "room-launch-inbox")
+        await settle(agent)
+
+        assert asks[0]["by"] == "bob" and "Private: three emails" not in asks[0]["goal"]
+
+    async def test_additions_stranded_by_a_restart_are_taken_up_on_resume(self, room):
+        asks = recording(room)
+        started(room, "room-launch-mail", ava, goal="Write the email sequence")
+        RoomAgent().queue_update(Turn(room, bob, "add SMS", message_id="m1"), "room-launch-mail")
+        room.note("ask.finished", by="ava", by_name="Ava", workflow_id="room-launch-mail",
+                  status="completed", summary="Done", proposal="", held_for="")
+
+        restarted = RoomAgent()
+        assert restarted.resume_work(room) == ["follow-up:room-launch-mail"]
+        await settle(restarted)
+        assert len(asks) == 1 and "add SMS" in asks[0]["goal"]
+
+    async def test_a_revision_of_held_work_does_not_show_its_text(self, room):
+        from jarviscore.room.work import _earlier_attempt
+
+        held = await proposed(room, "Private notes from Bob's inbox\n")
+        room.redis_store.room_transition(room.key, {"type": "test.hold", "at": 0}, proposal_id=held.id,
+                                         require_status="open", proposal_fields={"held_for": "bob"})
+
+        text = await _earlier_attempt(room, room.proposal(held.id))
+
+        assert "plan.md" in text and "Private notes" not in text
 
 
 class TestTheAgentKnowsWhereThingsStand:

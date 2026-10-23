@@ -3218,6 +3218,10 @@ class RedisContextStore:
             return True
         return self._if_held(name, owner, lambda pipe: pipe.pexpire(name, ms))
 
+    def lease_holder(self, key: str) -> Optional[str]:
+        """Who holds ``key`` now, or None."""
+        return self._redis.get(f"lease:{key}")
+
     def release_lease(self, key: str, owner: str) -> bool:
         """Let go of ``key`` if ``owner`` still holds it."""
         name = f"lease:{key}"
