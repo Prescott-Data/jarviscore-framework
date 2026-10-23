@@ -74,7 +74,7 @@ Reading methods are for trusted code; check `room.require(person, "viewer", ...)
 
 | Member | |
 |---|---|
-| `await room.ask(goal, *, asked_by, revision_of="", timeout=None, plan_template=None, workflow_id="")` | Run a goal on the room as `asked_by`; returns `AskResult(workflow_id, status, proposal, summary, result, held_for, sources)` |
+| `await room.ask(goal, *, asked_by, revision_of="", title="", timeout=None, plan_template=None, workflow_id="")` | Run a goal on the room as `asked_by`; returns `AskResult(workflow_id, status, proposal, summary, result, held_for, sources)` |
 | `await room.propose(changes, *, by, author="", title="", base_version=None, revision_of="")` | Propose content per path (`None` deletes); None if nothing changes |
 | `await room.accept(proposal_id, *, by)` | Merge it in; returns the new `Head`. Raises `RoomConflict` (with `.paths`) |
 | `await room.reject(proposal_id, *, by, reason)` | Turn it down |
@@ -104,8 +104,9 @@ A `Proposal` has `id`, `title`, `author`, `asked_by`, `base_version`, `changes`,
 | Event | Fields |
 |---|---|
 | `room.created` | `by`, `by_name`, `files`, `source` |
-| `ask.started` | `by`, `by_name`, `goal`, `workflow_id`, `version`, `revision_of` |
-| `ask.finished`, `ask.failed` | `status`, `summary`, `proposal`, `held_for`; `error` |
+| `ask.started` | `by`, `by_name`, `goal`, `title`, `workflow_id`, `version`, `revision_of`; `follows`, `takes` for a follow-up |
+| `ask.queued` | `by`, `by_name`, `workflow_id` (the running work), `queued`, `message`, `change` |
+| `ask.finished`, `ask.failed` | `status` (`superseded` when another revision was accepted first), `summary`, `proposal`, `held_for`; `error` |
 | `proposal.opened`, `proposal.released` | `proposal`, `author`, `title`, `paths`, `base_version`, `revision_of`, `workflow_id`, `held_for` |
 | `proposal.accepted`, `proposal.rejected`, `proposal.conflicted` | `proposal`, `by`, `by_name`, `version`, `merged_over`, `line_merged`; `reason`; `paths` |
 | `member.changed`, `room.visibility`, `room.connectors` | `person`, `role`; `visibility`, `tenant_role`; `shared` |
@@ -137,10 +138,13 @@ An AutoAgent with a `room` Kernel role. See [Build a Multiplayer Agent](../guide
 | `await agent.converse(room, person, message, **turn)` | Handle one message from `person`; returns a `Turn` with `replies` and `decisions` |
 | `agent.prepare(turn, action, target, reason="")` | Check and describe a decision for the person to confirm |
 | `agent.running_work(room)`, `agent.stop(room, workflow_id, *, by, reason)` | Work in progress; stop it (its asker, or an owner) |
+| `agent.queued_updates(room, *workflow_ids)`, `agent.recent_results(room)` | What people added to running work and no follow-up has taken yet; how the latest work ended |
 | `agent.resume_work(room)` | Follow work started before this process to its end |
 | `system_prompt`, `ask_options`, `subagent_class` | How it speaks; options for `room.ask`; its harness (`RoomSubAgent`) |
 
-Its tools: `room_status`, `running_work`, `room_history`, `read_file`, `show_change`, `ask_agents`, `request_changes`, `propose_version`, `prepare_decision`, `answer_question`, `stay_quiet`.
+Its tools: `room_status`, `running_work`, `room_history`, `read_file`, `show_change`, `ask_agents`, `update_work`, `request_changes`, `propose_version`, `prepare_decision`, `answer_question`, `stay_quiet`.
+
+Nothing anyone adds is lost while work runs. More for running work (`update_work`), or feedback on a proposal that is already being redone, is kept as `ask.queued`. When that work ends, one follow-up starts from its result with every addition made meanwhile, in the same thread. If the work was stopped, what was added to it stops with it. Each turn's brief tells the agent what is running, what is waiting to be taken up, and how recent work ended, so questions about it are answered rather than sent to the agents.
 
 ## RoomConversation and ChatSurface
 

@@ -53,6 +53,30 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - **The room agent's replies are written for people.** A reply could end with
   a runtime receipt id ("Tool receipt: tool:room-…:1"); the agent is told not
   to, and any that slips through is removed before the reply is posted.
+- **Files the agents write under `output/` reach the room.** In a room or any
+  bound workspace, the sandbox put its own scratch folder at `output/` and the
+  change collector skipped every folder of that name, so a PDF an agent made was
+  reported done but never proposed. The runtime's folder is `.jarviscore/output`
+  again, `output/` is the project's own, and a write left out of a step's change
+  is logged.
+- **New work goes in a new file; a revision edits what it revises.** Agents were
+  told only to change "the room's files", so a new topic overwrote whatever file
+  was there. They are now told to put new work in a new file, and a revision is
+  given the files and text of the attempt it redoes.
+- **One revision of a proposal lands.** Two people giving the same feedback
+  started two revisions, and the later one could be accepted over the team's
+  choice. Accepting a revision now closes the other open revisions of that
+  proposal, stops work still making one, and refuses a revision of a proposal
+  already replaced. Work that finishes after that files nothing (`superseded`).
+- **Nothing anyone adds to running work is lost.** The room agent gains
+  `update_work`: an addition or correction to work in progress, or feedback on a
+  proposal already being redone, is kept (`ask.queued`), and when the work ends
+  one follow-up takes up every addition from its result, in the same thread.
+- **The room agent knows what is running and how work ended.** Its brief lists
+  running work, additions waiting, and recent results (including work that
+  changed no files), and it answers questions and agreement itself instead of
+  starting new work. `ask_agents` and `room.ask` take a short `title`; a
+  proposal is no longer titled with the whole request.
 - **A plan cut short says how to fix it.** When a reasoning model spent its
   whole output allowance thinking, planning failed with token counts only; the
   error now names `LLM_MODEL_OUTPUT_LIMITS` and the model to declare.

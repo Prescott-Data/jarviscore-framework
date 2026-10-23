@@ -2552,21 +2552,15 @@ class Mesh:
                                 and isinstance(bound_result, dict)
                                 and bound_status in {"success", "epoch_exhausted"}
                             ):
+                                from jarviscore.execution.workspace import DELTA_IGNORED_NAMES
+
                                 delta = await binding.export_delta(
                                     f"workflows/{workflow_id}/workspace_deltas/{step_id}",
                                     ignored_names=tuple(
                                         self.config.get(
                                             "workspace_delta_ignored_names"
                                         )
-                                        or (
-                                            ".git",
-                                            ".tmp",
-                                            ".venv",
-                                            "__pycache__",
-                                            "node_modules",
-                                            "output",
-                                            "target",
-                                        )
+                                        or DELTA_IGNORED_NAMES
                                     ),
                                 )
                                 if delta.added or delta.modified or delta.deleted:
@@ -2584,6 +2578,12 @@ class Mesh:
                                         continue
                                     entry = delta_entries.get(str(evidence.get("path") or ""))
                                     if entry is None:
+                                        logger.warning(
+                                            "Step %s wrote %s, but it is not among the files the "
+                                            "step changed (an ignored folder, deleted again, or "
+                                            "left as it was); its record is dropped",
+                                            step_id, evidence.get("path"),
+                                        )
                                         continue
                                     if (
                                         str(evidence.get("sha256") or "")

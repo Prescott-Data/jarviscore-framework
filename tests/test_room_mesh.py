@@ -71,6 +71,25 @@ class Writer(CustomAgent):
         return {"status": "success", "output": "Documented v2"}
 
 
+class Publisher(CustomAgent):
+    role = "publisher"
+    capabilities = ["publishing"]
+    PDF = b"%PDF-1.4\n\x00\xfe one page\n%%EOF\n"
+
+    def __init__(self, agent_id=None):
+        super().__init__(agent_id)
+        self.sandbox = FileSandbox()
+
+    async def authorize_dependencies(self, task, artifacts, interpretations):
+        return DependencyAuthorization("allow", "test")
+
+    async def execute_task(self, task):
+        root = Path(task["context"]["workspace_binding"]["path"])
+        (root / "output").mkdir(exist_ok=True)
+        (root / "output" / "review.pdf").write_bytes(self.PDF)
+        return {"status": "success", "output": "Made the PDF"}
+
+
 def plan(goal, *steps):
     return {
         "obligations": [{"id": "o1", "description": goal, "source_quote": goal}],
@@ -95,6 +114,7 @@ async def team(tmp_path, monkeypatch):
     mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.02})
     coder = mesh.add(Coder)
     mesh.add(Writer)
+    mesh.add(Publisher)
     await mesh.start()
     room = Room.for_mesh(mesh, "repo", tenant="acme")
     await room.ensure({"src/app.py": "VERSION = 'v1'\n", "README.md": "# Repo\n"}, by=alice)
@@ -145,6 +165,50 @@ async def test_agents_work_on_the_room_and_propose_their_changes(team):
     assert "writer took docs" in lines and "writer finished docs" in lines
     assert lines.index("writer finished docs") < lines.index(
         f"▲ {proposal.id} proposed by coder, writer for Alice: {goal} (3 files, on v1)")
+
+
+async def test_a_file_the_agents_write_under_output_is_in_the_proposal(team):
+    import hashlib
+
+    room, _ = team
+    asked = await room.ask("Make a PDF for compliance", asked_by=alice, timeout=20,
+                           title="Compliance PDF", plan_template=plan(
+                               "Make a PDF for compliance", ("pdf", "publishing", [])))
+
+    assert asked.proposal.paths == ["output/review.pdf"]
+    assert asked.proposal.title == "Compliance PDF"
+    assert asked.proposal.changes["output/review.pdf"]["sha256"] == hashlib.sha256(Publisher.PDF).hexdigest()
+    await room.accept(asked.proposal.id, by=bob)
+    assert await room.read("output/review.pdf") == Publisher.PDF
+
+
+async def test_a_revision_starts_from_what_the_earlier_attempt_wrote(team):
+    room, coder = team
+    first = await room.ask("Fix the app", asked_by=alice, timeout=20,
+                           plan_template=plan("Fix the app", ("fix", "coding", [])))
+
+    await room.ask("Fix the app, and say why", asked_by=bob, revision_of=first.proposal.id,
+                   timeout=20, plan_template=plan("Fix the app", ("fix", "coding", [])))
+
+    objective = coder.tasks[-1]["context"]["objective"]
+    assert "The earlier attempt wrote src/app.py, test_app.py. Keep the work in the same files" in objective
+    assert "--- src/app.py, as the earlier attempt wrote it ---\nVERSION = 'v2'" in objective
+    assert "Put new work in a new file" in objective
+
+
+async def test_work_on_a_proposal_another_revision_replaced_files_nothing(team):
+    room, _ = team
+    first = await room.ask("Fix the app", asked_by=alice, timeout=20,
+                           plan_template=plan("Fix the app", ("fix", "coding", [])))
+    taken = await room.propose({"src/app.py": "VERSION = 'v3'\n"}, by=bob, revision_of=first.proposal.id)
+    await room.accept(taken.id, by=bob)
+
+    late = await room.ask("Fix the app", asked_by=alice, revision_of=first.proposal.id, timeout=20,
+                          plan_template=plan("Fix the app", ("fix", "coding", [])))
+
+    assert late.status == "superseded" and late.proposal is None
+    assert f"already replaced by {taken.id}" in late.summary
+    assert [p.id for p in room.proposals("open")] == []
 
 
 async def test_a_rejection_is_passed_to_the_next_attempt(team):

@@ -357,6 +357,9 @@ class RoomConversation:
     def _thread_for(self, item: FeedItem) -> Optional[str]:
         if item.workflow_id and f"wf:{item.workflow_id}" in self._threads:
             return self._threads[f"wf:{item.workflow_id}"]
+        follows = (item.event or {}).get("follows", "") if item.kind == "ask.started" else ""
+        if follows and f"wf:{follows}" in self._threads:
+            return self._threads[f"wf:{follows}"]
         if item.proposal:
             return self._threads.get(f"p:{item.proposal}")
         return None
@@ -385,6 +388,10 @@ class RoomConversation:
             self._remember("latest", thread or posted, item.proposal)
             return posted
         if item.kind == "ask.started" and thread:
+            if item.workflow_id:
+                self._remember("threads", f"wf:{item.workflow_id}", thread)
+            if (item.event or {}).get("follows"):
+                return await self.surface.say(thread, item.text)
             return thread  # the request itself is the thread
         if item.held_for:
             posted = await self._once(key, "withheld", lambda: self.surface.say(thread, item.withheld))

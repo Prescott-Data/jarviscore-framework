@@ -29,6 +29,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -47,6 +48,8 @@ from jarviscore.execution.workspace import (
     _register_workspace_path,
 )
 from jarviscore.storage.errors import RoomStateChanged
+
+logger = logging.getLogger(__name__)
 
 #: Provider name a goal uses to work on a room: workspace_source={"provider": "room", ...}
 ROOM_PROVIDER = "room"
@@ -651,6 +654,15 @@ class Room:
             raise RoomPermissionError(
                 f"{proposal_id} used {self.name_of(proposal.held_for)}'s private access; "
                 "they must release it before it can be accepted")
+        if proposal.revision_of:
+            try:
+                replaced_by = self.replaced_by(self.proposal(proposal.revision_of))
+            except KeyError:
+                replaced_by = ""
+            if replaced_by and replaced_by != proposal_id:
+                raise ValueError(
+                    f"{proposal_id} revises {proposal.revision_of}, which {replaced_by} already "
+                    "replaced: ask for changes to the current version instead")
         base = {e.path: e for e in (await self.store.load(proposal.base_manifest)).entries}
 
         for _ in range(_ACCEPT_ATTEMPTS):
@@ -719,6 +731,7 @@ class Room:
                 raise ValueError(f"{proposal_id} is {exc.proposal_status}, not open") from exc
             if proposal.revision_of:
                 self._close_replaced(proposal.revision_of, proposal_id, by)
+                self._supersede_other_revisions(proposal.revision_of, proposal_id, by)
             return new_head
         raise RuntimeError(f"Could not accept {proposal_id}: the room kept changing")
 
@@ -735,6 +748,47 @@ class Room:
                                  "reason": f"replaced by {proposal_id}"})
         except RoomStateChanged:
             pass  # it was already decided
+
+    @staticmethod
+    def replaced_by(proposal: Proposal) -> str:
+        """The revision of ``proposal`` that was accepted in its place, or ""."""
+        prefix = "replaced by "
+        if proposal.status == "rejected" and proposal.reason.startswith(prefix):
+            return proposal.reason[len(prefix):].strip()
+        return ""
+
+    def _supersede_other_revisions(self, replaced_id: str, proposal_id: str, by: Person) -> None:
+        """Once one revision of a proposal lands, the others are out of date: their
+        proposals close and work still making one stops."""
+        reason = f"superseded by {proposal_id}"
+        for other in self.proposals("open"):
+            if other.revision_of != replaced_id or other.id == proposal_id:
+                continue
+            try:
+                self.redis_store.room_transition(self.key, {
+                    "type": "proposal.rejected", "at": time.time(), "proposal": other.id, **_who(by),
+                    "author": other.author, "reason": reason, "workflow_id": other.workflow_id,
+                }, proposal_id=other.id, require_status="open",
+                    proposal_fields={"status": "rejected", "decided_by": by.id,
+                                     "decided_at": time.time(), "reason": reason})
+            except RoomStateChanged:
+                pass
+        mesh = getattr(self, "mesh", None)
+        if mesh is None:
+            return
+        running: Dict[str, Dict[str, Any]] = {}
+        for event in self.events():
+            workflow = event.get("workflow_id", "")
+            if event.get("type") == "ask.started" and event.get("revision_of") == replaced_id:
+                running[workflow] = event
+            elif event.get("type") in ("ask.finished", "ask.failed"):
+                running.pop(workflow, None)
+        for workflow in running:
+            try:
+                mesh.cancel_goal(workflow, reason=f"{by.display} accepted {proposal_id} instead")
+            except Exception:  # noqa: BLE001 - the work ending on its own is fine too
+                logger.warning("Could not stop %s after %s was accepted", workflow, proposal_id,
+                               exc_info=True)
 
     async def reject(self, proposal_id: str, *, by: Person, reason: str) -> Proposal:
         """Turn down an open proposal with a reason its author can act on."""

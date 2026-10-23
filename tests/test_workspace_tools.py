@@ -205,6 +205,15 @@ def test_workspace_run_receives_only_trusted_build_environment(tmp_path, monkeyp
     assert cache.is_dir()
 
 
+def test_workspace_clone_keeps_runtime_output_out_of_the_project(tmp_path):
+    original = create_coder_sandbox(workspace_dir=tmp_path / "original")
+
+    bound = original.for_workspace(tmp_path / "bound")
+
+    assert bound.output_dir == tmp_path / "bound" / ".jarviscore" / "output"
+    assert not (tmp_path / "bound" / "output").exists()
+
+
 def test_workspace_clone_accepts_trusted_command_timeout_and_cache(tmp_path):
     original = create_coder_sandbox(workspace_dir=tmp_path / "original")
     cache = tmp_path / "cache"

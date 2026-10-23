@@ -15,6 +15,20 @@ from typing import Mapping
 from jarviscore.storage import BlobStorage
 
 
+#: Folders whose files are never part of what a step changed: tooling caches and the
+#: runtime's own folder (sandbox scratch and artifacts live in ``.jarviscore/``).
+#: A project folder named ``output`` is the project's, so it is not on the list.
+DELTA_IGNORED_NAMES: tuple[str, ...] = (
+    ".git",
+    ".jarviscore",
+    ".tmp",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "target",
+)
+
+
 def _safe_relative_path(value: str) -> PurePosixPath:
     path = PurePosixPath(value)
     windows_path = PureWindowsPath(value)
@@ -528,15 +542,7 @@ class SandboxBinding:
         self,
         prefix: str,
         *,
-        ignored_names: tuple[str, ...] = (
-            ".git",
-            ".tmp",
-            ".venv",
-            "__pycache__",
-            "node_modules",
-            "output",
-            "target",
-        ),
+        ignored_names: tuple[str, ...] = DELTA_IGNORED_NAMES,
     ) -> WorkspaceDelta:
         if self.workspace is None:
             raise RuntimeError("Enter the SandboxBinding before exporting a delta")

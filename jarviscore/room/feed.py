@@ -52,9 +52,15 @@ def describe(event: Dict[str, Any]) -> str:
     if kind == "room.created":
         source = f" from {event['source']}" if event.get("source") else ""
         return f"{by} opened the room with {event.get('files', 0)} files{source} (v1)"
+    if kind == "ask.started" and event.get("follows"):
+        return f"the agents take up what the team added: {event.get('title') or event.get('goal', '')}"
     if kind == "ask.started":
         again = f", redoing {event['revision_of']}" if event.get("revision_of") else ""
         return f"{by} asked: {event.get('goal', '')}{again}"
+    if kind == "ask.queued":
+        return f"{by}'s addition is kept for the work in progress; the agents get it with that work's result"
+    if kind == "ask.finished" and event.get("status") == "superseded":
+        return f"this version was not filed: {event.get('summary', '')}"
     if kind == "ask.finished":
         tail = f" → {proposal} to review" if proposal else " with no changes to the files"
         return f"the agents finished ({event.get('status')}){tail}"
