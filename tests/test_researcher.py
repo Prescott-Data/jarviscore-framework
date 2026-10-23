@@ -211,9 +211,11 @@ class TestPhasesAreRecorded:
     @pytest.mark.asyncio
     async def test_every_registered_tool_is_reachable_in_every_phase(self, researcher):
         state = researcher.current_state
+        offered = [tool.name for tool in researcher._offered_tools(state.context)]
+        assert "search_internet" in offered
         for phase in ResearchPhase:
             researcher._set_research_phase(phase, "test")
-            for name in researcher._tools:
+            for name in offered:
                 assert researcher._tool_is_actionable(name, state), (phase, name)
             assert await researcher._pre_execute_hook("search_internet", {}, state) is None
 

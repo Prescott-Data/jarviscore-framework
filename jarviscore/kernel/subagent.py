@@ -247,14 +247,20 @@ def _thread_history(messages: List[Dict[str, Any]], conversation_history: list) 
 _DONE_FUNCTION = "done"
 #: The argument every native function carries for notes, as NOTE: lines carry them in text.
 _NOTES_ARGUMENT = "working_notes"
-_NOTES_SCHEMA = {
-    "type": "array",
-    "items": {"type": "string"},
-    "description": (
-        "Facts you established and want to keep (a price, an option, a constraint "
-        "you checked, a decision). Shown to you every turn, across sittings."
-    ),
-}
+# Described once in the system prompt; repeating it in every function cost ~60
+# tokens per tool per turn.
+_NOTES_SCHEMA = {"type": "array", "items": {"type": "string"}}
+#: Tools that reach other agents: offered only while another agent is reachable.
+_PEER_TOOLS = frozenset({
+    "ask_peer", "ask_capability", "send_to_peer", "list_peers", "broadcast_update", "read_mailbox",
+})
+#: Cross-session memory tools: offered only when memory that keeps and recalls is attached.
+_MEMORY_TOOLS = {"remember": "remember", "recall": "recall"}
+#: Tools that read the rest of the workflow: offered only when there is a rest to read.
+_WORKFLOW_TOOLS = frozenset({"inspect_workflow", "read_workflow_step"})
+_WORKFLOW_CONTEXT_KEYS = (
+    "previous_step_results", "downstream_roles", "workflow_plan", "_goal", "_completed_steps",
+)
 _INVALID_FUNCTION_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 _JSON_SCALARS = {str: "string", bool: "boolean", int: "integer", float: "number"}
 
@@ -481,6 +487,12 @@ class BaseSubAgent(ABC):
     whole_observation_tools: frozenset = frozenset()
     #: Perceptions of a changing world: a newer result replaces older ones in the agent's view.
     perception_tools: frozenset = frozenset()
+    #: Registered and callable, but never offered to the model: runtime helpers that
+    #: share the ``_tool_`` prefix, and tools that only echo their input back, which
+    #: cost a turn and add nothing to the answer.
+    hidden_tools: frozenset = frozenset({"time_s", "is_actionable"})
+    #: Directory of the other agents this one can reach; set by the Kernel.
+    peer_directory = None
 
     def __init__(
         self,
@@ -635,17 +647,62 @@ class BaseSubAgent(ABC):
         """List of registered tool names."""
         return list(self._tools.keys())
 
+    def _peers_reachable(self) -> bool:
+        directory = self.peer_directory if self.peer_directory is not None else getattr(self, "peers", None)
+        if directory is None:
+            return False
+        try:
+            return bool(directory.list_peers())
+        except Exception:  # noqa: BLE001 - an unanswerable directory keeps the tools offered
+            return True
+
+    def _offers_tool(self, name: str, context: Optional[Dict]) -> bool:
+        """Whether the model is offered this tool on this run.
+
+        A tool that cannot do anything here (no other agent to ask, no memory to
+        keep in, no other step to read) costs its schema on every turn and invites
+        a wasted call, so it is left out while that holds.
+        """
+        if name in self.hidden_tools:
+            return False
+        if name in _PEER_TOOLS:
+            return self._peers_reachable()
+        if name in _MEMORY_TOOLS:
+            return hasattr(self._current_memory, _MEMORY_TOOLS[name])
+        if name in _WORKFLOW_TOOLS:
+            return any((context or {}).get(key) for key in _WORKFLOW_CONTEXT_KEYS)
+        if name == "read_turn_result":
+            return self._results_left_view()
+        return True
+
+    def _results_left_view(self) -> bool:
+        """Whether an earlier result can be out of the agent's view: past the window or the budget."""
+        state = getattr(self, "_current_state", None)
+        if state is None:
+            return True
+        variables = state.internal_variables if isinstance(state.internal_variables, dict) else {}
+        if variables.get("_released_turn_results"):
+            return True
+        if len(state.tool_history) >= _CONVERSATION_WINDOW:
+            return True
+        retained = variables.get("_turn_results") or {}
+        return sum(len(text) for text in retained.values()) > _THREAD_RESULT_BUDGET // 2
+
+    def _offered_tools(self, context: Optional[Dict]) -> List["ToolDefinition"]:
+        return [tool for tool in self._tools.values() if self._offers_tool(tool.name, context)]
+
     def get_tool_descriptions(self) -> str:
         """Format tool descriptions for prompt injection."""
+        context = getattr(getattr(self, "_current_state", None), "context", None)
         lines = ["Available tools:"]
-        for tool in self._tools.values():
+        for tool in self._offered_tools(context):
             lines.append(f"  - {tool.name}: {tool.description} [{tool.phase}]")
         return "\n".join(lines)
 
     def _native_tool_specs(self, context: Optional[Dict]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-        """The registered tools and done as provider functions, and each function's tool."""
+        """The offered tools and done as provider functions, and each function's tool."""
         specs, tools_by_function = [], {}
-        for tool in self._tools.values():
+        for tool in self._offered_tools(context):
             function = _INVALID_FUNCTION_CHARS.sub("_", tool.name)[:64]
             while function in tools_by_function or function == _DONE_FUNCTION:
                 function = f"{function[:56]}_{len(tools_by_function)}"
@@ -672,8 +729,8 @@ class BaseSubAgent(ABC):
     def _done_function(context: Optional[Dict], landing: bool = False) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "description": (
-                "The data behind the answer, shaped for whoever will use it next: the "
-                "list, the record, the figures. An empty object when there is none."
+                "The data behind the answer for whoever uses it next: the list, the "
+                "record, the figures. Leave it out when there is none."
             ),
         }
         declared = (context or {}).get("output_schema")
@@ -694,9 +751,11 @@ class BaseSubAgent(ABC):
                     ),
                 },
                 "result": result,
-                _NOTES_ARGUMENT: _NOTES_SCHEMA,
+                # No working_notes: done ends the run, so a note written here is never read.
             },
-            "required": ["summary", "result"],
+            # A declared output schema is the step's contract; otherwise the answer
+            # is the summary, and a required result was written out as a second copy.
+            "required": ["summary", "result"] if declared is not None else ["summary"],
         }
         parameters["properties"]["complete"] = {
             "type": "boolean",
@@ -730,7 +789,25 @@ class BaseSubAgent(ABC):
         calls = llm_result.get("tool_calls") or []
         if not calls:
             return {"type": "raw", "content": content}
-        call = calls[0]
+        # Calls that do not depend on each other arrive together and all run this
+        # turn. A done sent alongside them was written before their results
+        # existed, so it is not taken; the agent finishes once it has seen them.
+        actions = [call for call in calls if call["name"] != _DONE_FUNCTION] or calls[:1]
+        parsed = [
+            BaseSubAgent._parse_native_call(call, content if index == 0 else "", tools_by_function)
+            for index, call in enumerate(actions)
+        ]
+        first = parsed[0]
+        if first["type"] == "tool" and len(parsed) > 1:
+            first["more_calls"] = parsed[1:]
+        if len(actions) < len(calls):
+            first["dropped_done"] = True
+        return first
+
+    @staticmethod
+    def _parse_native_call(
+        call: Dict[str, Any], content: str, tools_by_function: Dict[str, str],
+    ) -> Dict[str, Any]:
         native_call = {key: call[key] for key in ("id", "name", "arguments", "signature") if key in call}
         arguments = _extract_json_object(call["arguments"]) if call["arguments"].strip() else {}
         raw_notes = arguments.pop(_NOTES_ARGUMENT, None) if arguments is not None else None
@@ -748,7 +825,8 @@ class BaseSubAgent(ABC):
                 "type": "done",
                 "thought": content,
                 "summary": summary or "Completed via done",
-                "result": arguments.get("result"),
+                # An omitted result is the empty object it replaced as the default.
+                "result": arguments["result"] if "result" in arguments else {},
                 "answer": summary or None,
                 "complete": arguments.get("complete"),
                 "native_call": native_call,
@@ -788,8 +866,8 @@ class BaseSubAgent(ABC):
             if not name.startswith("_tool_"):
                 continue
             tool_name = name[len("_tool_"):]
-            if tool_name in self._tools:
-                continue  # already registered explicitly
+            if tool_name in self._tools or tool_name in self.hidden_tools:
+                continue  # already registered explicitly, or a helper, not a tool
             doc = inspect.getdoc(method) or ""
             description = doc.splitlines()[0] if doc else "No description"
             self._tools[tool_name] = ToolDefinition(tool_name, method, description)
@@ -855,29 +933,23 @@ class BaseSubAgent(ABC):
                 self.get_system_prompt(),
                 "",
                 "Protocol:",
-                "  You act only by calling the functions offered: one call per turn. After",
-                "  each result you receive another turn; keep calling tools until the task",
-                "  is complete, then call done. Never call done merely because additional",
-                "  tool calls are needed.",
+                "  Act by calling the functions offered. Call several in one turn when they",
+                "  do not depend on each other; they run in order and you see every result",
+                "  next turn. Keep calling tools until the task is complete, then call done,",
+                "  on its own. Never call done merely because more tool calls are needed.",
                 "",
                 "Finishing:",
-                "  done's summary is read by the person who asked. Put the complete answer",
-                "  there, including any lists or details they asked for. done's result",
-                "  carries the data behind that answer, shaped for whoever will use it",
-                "  next: the list, the record, the figures. It is not a place for status",
-                "  flags, booleans about your own process, or a diagnosis of the runtime,",
-                "  and it is not a second copy of the answer. If there is no data beyond",
-                "  the answer, result may be an empty object.",
+                "  done's summary is the complete answer the person reads, with any lists",
+                "  or details they asked for. Add a result only for data a later step or the",
+                "  caller needs that the summary does not hold; never a copy of the answer.",
                 "",
                 "Your memory:",
-                f"  You see the task, your working notes and your last {_CONVERSATION_WINDOW} exchanges. Older",
-                "  exchanges are gone from view, and a long task continues across several",
-                "  sittings. A large earlier result may appear as a reference that",
-                "  read_turn_result shows whole again.",
-                "  What you have established (a price, an option, a constraint you",
-                "  checked, a page that has or lacks something, a decision) is kept only if",
-                "  you put it in working_notes. Every function accepts working_notes, so a",
-                "  note costs no turn. Your notes are shown to you every turn.",
+                f"  You see the task, your working notes and your last {_CONVERSATION_WINDOW} exchanges; older",
+                "  ones leave your view (read_turn_result shows an earlier result whole), and",
+                "  a long task may continue across several sittings. Anything you will need",
+                "  after that (a price, a constraint you checked, a decision) is kept only in",
+                "  working_notes, which every tool call accepts at no extra turn and which you",
+                "  see every turn. One note per turn is enough; a short task needs none.",
             ]
             return "\n".join(parts)
         parts += [
@@ -1060,30 +1132,27 @@ class BaseSubAgent(ABC):
         that forces the LLM to reason about gaps before acting.
         """
         parts = [context_block, "\n---"]
-        parts.append(f"**ROLE: {self.role.upper()} AGENT** | Turn {state.turn}")
-        act = (
-            "Then call the function for your next step, or done."
-            if self._native_protocol
-            else "Then emit your TOOL/PARAMS or DONE/RESULT."
-        )
-        keep = (
-            "Write anything newly established in working_notes; your reasoning is gone "
-            "from view after a few turns, your notes are not. "
-            if self._native_protocol
-            else "Write anything newly established on NOTE: lines; your THOUGHT is gone "
-            "from view after a few turns, your notes are not. "
-        )
-
-        # Epistemic Decision Contract — forces self-assessment
-        parts.append(
-            "**DECISION CONTRACT (follow this structure in your THOUGHT):**\n"
-            "1. **KNOWN:** What have I established so far? (my working notes and findings above, and this turn's result)\n"
-            "2. **GAP:** What specific information am I still missing?\n"
-            "3. **STRATEGY:** What is the most efficient next step to close the gap?\n\n"
-            f"{keep}"
-            f"{act}"
-        )
-        if "ask_peer" in self._tools:
+        if self._native_protocol:
+            # The model reasons internally; asking it to also write its reasoning
+            # out every turn was paid for as output on every call.
+            parts.append(f"**ROLE: {self.role.upper()} AGENT**")
+            parts.append(
+                "Call the functions for your next step, or done. Keep in working_notes "
+                "only what you will still need after these exchanges scroll out of view."
+            )
+        else:
+            parts.append(f"**ROLE: {self.role.upper()} AGENT** | Turn {state.turn}")
+            # Epistemic Decision Contract — forces self-assessment
+            parts.append(
+                "**DECISION CONTRACT (follow this structure in your THOUGHT):**\n"
+                "1. **KNOWN:** What have I established so far? (my working notes and findings above, and this turn's result)\n"
+                "2. **GAP:** What specific information am I still missing?\n"
+                "3. **STRATEGY:** What is the most efficient next step to close the gap?\n\n"
+                "Write anything newly established on NOTE: lines; your THOUGHT is gone "
+                "from view after a few turns, your notes are not. "
+                "Then emit your TOOL/PARAMS or DONE/RESULT."
+            )
+        if "ask_peer" in self._tools and self._offers_tool("ask_peer", state.context):
             parts.append(
                 "**PEER RESOLUTION:** Before concluding blocked, incomplete, or DONE "
                 "with a material gap, ask whether an available peer can resolve it. "
@@ -1325,7 +1394,7 @@ class BaseSubAgent(ABC):
             if self._native_protocol:
                 tool_specs, tools_by_function = self._native_tool_specs(state.context)
                 kwargs.update(
-                    tools=tool_specs, tool_choice="required", parallel_tool_calls=False,
+                    tools=tool_specs, tool_choice="required", parallel_tool_calls=True,
                 )
 
             _llm_t0 = __import__('time').monotonic()
@@ -1592,7 +1661,9 @@ class BaseSubAgent(ABC):
                 )
 
             # ═══ 4. ACT — Tool execution ═══
-            if parsed["type"] == "tool":
+            async def _act(parsed, content, native_call, llm_tokens_this_turn):
+                """Carry out one tool call of this turn; an AgentOutput ends the run."""
+                nonlocal total_cost
                 tool_name = parsed["tool"]
                 tool_params = parsed.get("params", {})
 
@@ -1617,7 +1688,7 @@ class BaseSubAgent(ABC):
                         turn, tool_name, tool_params, hook_result, hook_event,
                         tool_call=native_call,
                     )
-                    continue
+                    return None
 
                 # Execute tool
                 turn_log: Dict[str, Any] = {
@@ -1791,15 +1862,13 @@ class BaseSubAgent(ABC):
                 result_str = _observe(
                     tool_name, tool_result, call, tool_name in self.whole_observation_tools
                 )
+                # Repeated in history on every later turn, so it carries only what the
+                # agent uses: which call, its receipt, and the result. How to cite a
+                # receipt is said once, with the receipts list.
                 observation = (
-                    f"[Turn {call}] Tool '{tool_name}' returned ({turn_log['status']}):\n"
-                    f"{result_str}\n\n"
-                    f"Authoritative tool receipt: {tool_receipt.receipt_id}. "
-                    "When final JSON reports this command execution, include this exact "
-                    "value as `tool_receipt_id`; JarvisCore binds the runtime facts.\n\n"
-                    + (f"{repeat_note}\n\n" if repeat_note else "")
-                    + "Reflect: What new information does this provide? "
-                    "Does it change your strategy?"
+                    f"[Turn {call}] Tool '{tool_name}' returned ({turn_log['status']}), "
+                    f"receipt {tool_receipt.receipt_id}:\n{result_str}"
+                    + (f"\n\n{repeat_note}" if repeat_note else "")
                 )
                 conversation_history.append({
                     "assistant": content,
@@ -1873,6 +1942,22 @@ class BaseSubAgent(ABC):
                         },
                     )
 
+                return None
+
+            if parsed["type"] == "tool":
+                batch = [parsed, *parsed.get("more_calls", ())]
+                for index, action in enumerate(batch):
+                    if index:
+                        await self._keep_notes(state, action.get("notes"))
+                    # The turn's tokens and its text belong to its first call only.
+                    ended = await _act(
+                        action,
+                        content if index == 0 else "",
+                        action.get("native_call"),
+                        llm_tokens_this_turn if index == 0 else 0,
+                    )
+                    if ended is not None:
+                        return ended
                 continue
 
             # ── Unparseable response — protocol failure, not completion ──
@@ -2281,7 +2366,9 @@ class BaseSubAgent(ABC):
 
     def _tool_is_actionable(self, tool_name: str, state: KernelState) -> bool:
         """Whether a registered tool can execute in the current agent state."""
-        return tool_name in getattr(self, "_tools", {})
+        return tool_name in getattr(self, "_tools", {}) and self._offers_tool(
+            tool_name, getattr(state, "context", None)
+        )
 
     # ──────────────────────────────────────────────────────────────────────
     # Tool Execution

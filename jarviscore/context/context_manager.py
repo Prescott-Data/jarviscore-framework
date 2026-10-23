@@ -131,6 +131,11 @@ class BudgetConfig:
         return self.total_tokens - self.output_reserve - self.system_reserve
 
 
+def _is_empty(value) -> bool:
+    """An empty list, map or string under INPUT CONTEXT tells the agent nothing."""
+    return value is None or (isinstance(value, (str, list, tuple, dict, set)) and not value)
+
+
 class ContextManager:
     """
     Manages LLM token budgets and assembles prioritised prompt context.
@@ -336,10 +341,8 @@ class ContextManager:
         if tier is not PressureTier.NORMAL:
             blocks.insert(1, format_pressure_notice(pressure))
 
-        blocks.append(
-            f"\n---\n**Context Budget:** {used}/{budget} tokens "
-            f"({100 * used // budget if budget else 0}% used)"
-        )
+        # The budget's state reaches the agent as a pressure notice when it binds;
+        # a per-turn counter only made every prompt unique.
         return "\n\n".join(blocks)
 
     def _render_at_tier(self, state: "KernelState", candidates, tier) -> List[str]:
@@ -372,8 +375,6 @@ class ContextManager:
 **Workflow:** {state.workflow_id}
 **Step:** {state.step_id}
 **Task:** {state.task}
-**Status:** {state.status}
-**Turn:** {state.turn}
 """
         if state.last_error:
             mission += f"**CRITICAL ERROR TO FIX:** {state.last_error}\n"
@@ -460,8 +461,9 @@ class ContextManager:
                 add(
                     "tool_receipts",
                     "## AUTHORITATIVE TOOL RECEIPTS\n"
-                    "Use these IDs when final JSON cites tool evidence. Full results "
-                    "remain in durable action history.\n"
+                    "When your result reports what a tool did, cite its receipt as "
+                    "`tool_receipt_id`; JarvisCore binds the runtime facts. Full "
+                    "results remain in durable action history.\n"
                     + "\n".join(receipt_lines),
                 )
             history_block, _ = self._format_tool_history(
@@ -529,8 +531,13 @@ class ContextManager:
                      # Memory is rendered as what it is, in its own block. Under
                      # INPUT CONTEXT it read as part of the task.
                      "_recalled", "_athena_memory", "_ltm_summary",
-                     "_mailbox_context"}
-        other = {key: value for key, value in state.context.items() if key not in skip_keys}
+                     "_mailbox_context",
+                     # The router's own record of choosing this role, for the envelope.
+                     "_kernel_routing"}
+        other = {
+            key: value for key, value in state.context.items()
+            if key not in skip_keys and not _is_empty(value)
+        }
         allowed = set(filter_input_context_keys(other.keys(), tier))
         cleaned = self._scrub_dict({k: v for k, v in other.items() if k in allowed})
         for key, value in cleaned.items():

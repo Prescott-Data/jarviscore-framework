@@ -452,6 +452,8 @@ class Kernel:
             subagent.mailbox = self.mailbox
         if hasattr(subagent, "peers"):
             subagent.peers = self.peers
+        # Peer tools are offered only while another agent is reachable through this.
+        subagent.peer_directory = self.peers
         subagent.decision_client = self.decision_client
         subagent.rag_decision_provider = str(
             self.config.get("rag_decision_provider", "vector")

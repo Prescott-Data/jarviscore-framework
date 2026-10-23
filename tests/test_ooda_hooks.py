@@ -150,13 +150,14 @@ class TestPreExecuteHook:
         assert hook_pos < exec_pos
 
     def test_hook_block_uses_continue(self):
-        """When hook returns a result, the loop should continue (not execute)."""
+        """When hook returns a result, the call is skipped (not executed) and the loop moves on."""
         source = inspect.getsource(BaseSubAgent._run_turns)
         hook_idx = source.index("_pre_execute_hook")
-        # Find the continue after the hook block
+        # The block ends this call without executing it: the turn loop's
+        # `continue`, or `return None` from the per-call action.
         block = source[hook_idx:hook_idx + 1500]
         assert "pre_execute_block" in block
-        assert "continue" in block
+        assert "continue" in block or "return None" in block
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -381,7 +382,8 @@ class TestNativeToolTurns:
 
         first = llm.requests[0]
         assert first["tool_choice"] == "required"
-        assert first["parallel_tool_calls"] is False
+        # Independent calls arrive together and all run this turn.
+        assert first["parallel_tool_calls"] is True
         functions = _functions(first)
         assert {"search", "crm_lookup", "done"} <= set(functions)
         assert functions["search"]["parameters"] == {
@@ -389,10 +391,14 @@ class TestNativeToolTurns:
             "properties": {
                 "query": {"type": "string"},
                 "limit": {"type": "integer"},
-                "working_notes": functions["done"]["parameters"]["properties"]["working_notes"],
+                "working_notes": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["query"],
         }
+        # done ends the run: no notes to keep, and the summary is the answer.
+        done = functions["done"]["parameters"]
+        assert "working_notes" not in done["properties"]
+        assert done["required"] == ["summary", "complete"]
         system = first["messages"][0]["content"]
         assert "TOOL:" not in system and "Available tools:" not in system
 
@@ -404,6 +410,50 @@ class TestNativeToolTurns:
         assert tool_message["role"] == "tool"
         assert tool_message["tool_call_id"] == "call_search"
         assert "revenue was 5" in tool_message["content"]
+
+    def test_independent_calls_in_one_reply_all_run_in_one_turn(self):
+        both = {"tool_calls": [
+            {"id": "call_a", "name": "search", "arguments": json.dumps({"query": "revenue"})},
+            {"id": "call_b", "name": "search", "arguments": json.dumps({"query": "margin", "working_notes": ["margin asked"]})},
+        ]}
+        llm = _NativeLLM([both, _call("done", {"summary": "Both found.", "complete": True})])
+        agent = _NativeAgent(llm)
+
+        result = asyncio.run(agent.run(task="find revenue and margin"))
+
+        assert result.status == "success"
+        assert agent.searched == [("revenue", 5), ("margin", 5)]
+        # Two calls, one model turn: the second request already holds both results.
+        assert len(llm.requests) == 2
+        threaded = llm.requests[1]["messages"]
+        answered = [m["tool_call_id"] for m in threaded if m.get("role") == "tool"]
+        assert answered == ["call_a", "call_b"]
+        assert len(agent._current_state.tool_history) == 2
+        assert any("margin asked" in str(note) for note in agent._current_state.working_notes)
+
+    def test_done_sent_with_other_calls_waits_for_their_results(self):
+        rushed = {"tool_calls": [
+            {"id": "call_a", "name": "search", "arguments": json.dumps({"query": "revenue"})},
+            {"id": "call_done", "name": "done", "arguments": json.dumps({"summary": "guess", "complete": True})},
+        ]}
+        llm = _NativeLLM([rushed, _call("done", {"summary": "Revenue was 5.", "complete": True})])
+        agent = _NativeAgent(llm)
+
+        result = asyncio.run(agent.run(task="find revenue"))
+
+        assert agent.searched == [("revenue", 5)]
+        assert result.summary == "Revenue was 5."
+        assert len(llm.requests) == 2
+
+    def test_done_without_a_result_carries_an_empty_one(self):
+        llm = _NativeLLM([_call("done", {"summary": "Nothing to hand on.", "complete": True})])
+        agent = _NativeAgent(llm)
+
+        result = asyncio.run(agent.run(task="say hello"))
+
+        assert result.status == "success"
+        assert result.payload == {}
+        assert result.summary == "Nothing to hand on."
 
     def test_a_long_result_reaches_the_agent_whole_and_once(self):
         report = "row " * 5000 + "LAST ROW: 15 rejected"
