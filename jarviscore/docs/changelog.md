@@ -33,6 +33,51 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## Unreleased
+
+### Changed
+
+- **Agents start in a fraction of the time.** Opening the function registry
+  executed all 1,229 shipped atom modules to hold callables nothing asked for,
+  and merging the catalogue parsed every atom's contract twice even when the
+  stored source was the shipped source. A warm start spent 5 to 6 seconds
+  there and a cold one 4 to 14, before any work began. Callables now compile
+  on first `get_function()`, an atom identical to the shipped one is skipped
+  by hash, and each atom is parsed once. Warm registry open drops to about
+  0.25 s and a cold seed to about 2 s, with identical registry contents.
+- **LLM calls keep their connection.** The provider SDKs closed idle
+  connections after 5 s, shorter than the tool work between agent turns, so
+  most calls paid a new TCP and TLS handshake (about a second to a distant
+  region), and promotion and vLLM calls opened a new session every time.
+  Idle connections are now kept for `LLM_KEEPALIVE_SECONDS` (default 120),
+  promotion and vLLM calls reuse one session per event loop, and an agent
+  opens its primary provider's connection while it starts (`LLM_PREWARM`).
+  Measured against Azure: a call after an idle gap went from 2.9–3.2 s to
+  1.1–1.2 s, and an agent's first call from 2.9 s to 2.0 s.
+- **The observability guide says what a trace is.** It described the
+  per-step trace as suitable for replay and audit retention. It is a
+  debugging record: LLM prompts and responses are previews, tool results are
+  cut to 2,000 characters, routing, planning and evaluation calls are not yet
+  traced, entries expire after seven days, and writes are best effort. The
+  guide, the memory concept page and the tracer docstrings now say so, and
+  the event table lists the fields the runtime writes.
+
+### Added
+
+- `UnifiedLLMClient.close()` and `PromoLLMClient.close()` release the
+  client's connections; `AutoAgent.teardown()` calls it. The `Profile`
+  teardown example already called `llm.close()`, which did not exist.
+
+### Fixed
+
+- **`jarviscore inspect` shows each tool call's arguments.** The kernel's
+  tracer records them as `args` and the timeline read only `params`, so every
+  tool call in a real run printed without them.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.3.1 <span class="changelog-date">2026-10-23</span>
 
 ### Fixed
