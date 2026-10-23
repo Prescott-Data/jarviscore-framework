@@ -42,6 +42,9 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   `evidence` (every step's tool observations), as `run_task()` does, and
   `waiting` (the step paused for a person, with why). Before, callers had to
   dig them out of `steps`.
+- **A plan cut short says how to fix it.** When a reasoning model spent its
+  whole output allowance thinking, planning failed with token counts only; the
+  error now names `LLM_MODEL_OUTPUT_LIMITS` and the model to declare.
 
 </div>
 

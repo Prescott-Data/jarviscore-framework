@@ -822,12 +822,18 @@ class MeshPlanner:
             if reason is not None and str(reason).lower() not in _COMPLETED_REASONS:
                 usage = (response.get("provider_metadata") or {}).get("usage") or {}
                 details = usage.get("completion_tokens_details") or {}
+                model = response.get("model")
+                hint = (
+                    f" The model used its whole output allowance. If it reasons, declare "
+                    f"its real ceiling, e.g. LLM_MODEL_OUTPUT_LIMITS='{{\"{model}\": 32000}}'."
+                    if str(reason).lower() == "length" else ""
+                )
                 raise MeshPlanError(
                     "Mesh planner completion did not finish: "
-                    f"finish_reason={reason}, model={response.get('model')}, "
+                    f"finish_reason={reason}, model={model}, "
                     f"output_tokens={(response.get('tokens') or {}).get('output')}, "
                     f"reasoning_tokens={details.get('reasoning_tokens')}, "
-                    f"answer_chars={len(content or '')}"
+                    f"answer_chars={len(content or '')}.{hint}"
                 )
         text = (content or "").strip()
         if text.startswith("```"):
