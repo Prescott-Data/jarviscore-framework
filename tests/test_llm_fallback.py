@@ -825,6 +825,8 @@ async def test_vllm_sends_tools_and_returns_function_calls():
             return False
 
     class _Session:
+        closed = False
+
         def __init__(self, *args, **kwargs):
             pass
 

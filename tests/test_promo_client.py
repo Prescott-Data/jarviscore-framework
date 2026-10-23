@@ -362,7 +362,9 @@ async def test_send_uses_bearer_header_and_never_places_token_in_payload(tmp_pat
             return "{}"
 
     class FakeSession:
-        def __init__(self, *, timeout):
+        closed = False
+
+        def __init__(self, *, timeout, connector=None):
             captured["timeout"] = timeout
 
         async def __aenter__(self):
