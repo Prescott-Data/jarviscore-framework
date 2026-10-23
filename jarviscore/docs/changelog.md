@@ -82,8 +82,10 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   the task gives is answered in the routing call (one model call instead of
   two), on the model the communicator would use. Calculations still go to the
   coder. `KERNEL_ROUTER_MAY_ANSWER=false` turns it off.
-- **Prompts are laid out for the provider's cache**: the task leads the
-  conversation and tool definitions stay fixed for a run.
+- **Tool definitions stay fixed for a run**, and the task leads the
+  conversation. Turns still replace their closing message each time, which
+  stops the provider reusing the cached prefix within a run; that is the next
+  change.
 
 ### Added
 
