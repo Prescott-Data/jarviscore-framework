@@ -729,9 +729,13 @@ class Room:
                 if exc.head_moved:
                     continue  # someone moved the head; merge against the new one
                 raise ValueError(f"{proposal_id} is {exc.proposal_status}, not open") from exc
-            if proposal.revision_of:
-                self._close_replaced(proposal.revision_of, proposal_id, by)
-                self._supersede_other_revisions(proposal.revision_of, proposal_id, by)
+            # A revision of a revision replaces the whole line it came from.
+            replaced, seen = proposal.revision_of, {proposal_id}
+            while replaced and replaced not in seen:
+                seen.add(replaced)
+                self._close_replaced(replaced, proposal_id, by)
+                self._supersede_other_revisions(replaced, proposal_id, by, keep=seen)
+                replaced = (self.redis_store.get_room_proposal(self.key, replaced) or {}).get("revision_of", "")
             return new_head
         raise RuntimeError(f"Could not accept {proposal_id}: the room kept changing")
 
@@ -757,12 +761,13 @@ class Room:
             return proposal.reason[len(prefix):].strip()
         return ""
 
-    def _supersede_other_revisions(self, replaced_id: str, proposal_id: str, by: Person) -> None:
+    def _supersede_other_revisions(self, replaced_id: str, proposal_id: str, by: Person,
+                                   keep: Iterable[str] = ()) -> None:
         """Once one revision of a proposal lands, the others are out of date: their
         proposals close and work still making one stops."""
         reason = f"superseded by {proposal_id}"
         for other in self.proposals("open"):
-            if other.revision_of != replaced_id or other.id == proposal_id:
+            if other.revision_of != replaced_id or other.id == proposal_id or other.id in keep:
                 continue
             try:
                 self.redis_store.room_transition(self.key, {

@@ -79,6 +79,19 @@ class TestOneRevisionAtATime:
         assert room.proposal(danas.id).reason == f"superseded by {bobs.id}"
         assert [w for w, _ in room.mesh.cancelled] == ["room-launch-third"], "unrelated work goes on"
 
+    async def test_accepting_a_revision_of_a_revision_closes_the_whole_line(self, room):
+        first = await proposed(room, PLAN.replace("Tuesday", "Wednesday"))
+        second = await proposed(room, PLAN.replace("Tuesday", "Thursday"), revision_of=first.id)
+        third = await proposed(room, PLAN.replace("Tuesday", "Friday"), revision_of=second.id)
+        aside = await proposed(room, PLAN.replace("Tuesday", "Monday"), revision_of=first.id)
+
+        await room.accept(third.id, by=ava)
+
+        assert room.proposal(first.id).reason == f"replaced by {third.id}"
+        assert room.proposal(second.id).reason == f"replaced by {third.id}"
+        assert room.proposal(aside.id).reason == f"superseded by {third.id}"
+        assert room.proposals("open") == []
+
     async def test_a_revision_of_a_proposal_already_replaced_cannot_be_accepted(self, room):
         first = await proposed(room, PLAN.replace("Tuesday", "Wednesday"))
         taken = await proposed(room, PLAN.replace("Tuesday", "Thursday"), revision_of=first.id)
