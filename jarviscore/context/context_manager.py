@@ -131,6 +131,11 @@ class BudgetConfig:
         return self.total_tokens - self.output_reserve - self.system_reserve
 
 
+#: Blocks that hold for a whole step: the task and what it was given. They lead
+#: the prompt so each turn repeats the last one's prefix and is served from cache.
+STEP_CONSTANT_BLOCKS = frozenset({"mission", "goal_state", "input_context", "recalled", "prior_steps"})
+
+
 def _is_empty(value) -> bool:
     """An empty list, map or string under INPUT CONTEXT tells the agent nothing."""
     return value is None or (isinstance(value, (str, list, tuple, dict, set)) and not value)
@@ -316,6 +321,23 @@ class ContextManager:
             return self._build_context_from_dict(state)
         return self._build_context_from_state(state, in_conversation)
 
+    def build_context_parts(
+        self, state: Any, in_conversation: frozenset = frozenset()
+    ) -> Tuple[str, str]:
+        """The turn's context as (what holds for the whole step, what changes each turn).
+
+        Providers cache a prompt's longest repeated prefix. The task and its inputs
+        lead the conversation and the turn's own state follows it, so every turn
+        repeats the one before and is served from cache; rendered as one block
+        after the conversation, each turn's prompt differed early and nothing was.
+        """
+        if isinstance(state, dict):
+            return self._build_context_from_dict(state), ""
+        blocks = self._render_keyed(state, in_conversation)
+        static = [text for key, text in blocks if key in STEP_CONSTANT_BLOCKS]
+        changing = [text for key, text in blocks if key not in STEP_CONSTANT_BLOCKS]
+        return "\n\n".join(static), "\n\n".join(changing)
+
     def _build_context_from_state(
         self, state: "KernelState", in_conversation: frozenset = frozenset()
     ) -> str:
@@ -324,13 +346,20 @@ class ContextManager:
         Blocks are composed once at full fidelity, then the least aggressive
         pressure tier that fits the budget is chosen. Values are never cut.
         """
+        # The budget's state reaches the agent as a pressure notice when it binds;
+        # a per-turn counter only made every prompt unique.
+        return "\n\n".join(text for _, text in self._render_keyed(state, in_conversation))
+
+    def _render_keyed(
+        self, state: "KernelState", in_conversation: frozenset = frozenset()
+    ) -> List[Tuple[str, str]]:
         budget = self.config.usable_tokens
         candidates = self._compose_blocks(state, in_conversation)
         full_cost = sum(self.count_tokens(text) for _, text in candidates)
 
         for tier in LADDER:
             blocks = self._render_at_tier(state, candidates, tier)
-            used = sum(self.count_tokens(text) for text in blocks)
+            used = sum(self.count_tokens(text) for _, text in blocks)
             if used <= budget or tier is LADDER[-1]:
                 break
 
@@ -339,26 +368,23 @@ class ContextManager:
         if isinstance(state.internal_variables, dict):
             set_pressure(state.internal_variables, pressure)
         if tier is not PressureTier.NORMAL:
-            blocks.insert(1, format_pressure_notice(pressure))
+            blocks.insert(1, ("pressure", format_pressure_notice(pressure)))
+        return blocks
 
-        # The budget's state reaches the agent as a pressure notice when it binds;
-        # a per-turn counter only made every prompt unique.
-        return "\n\n".join(blocks)
-
-    def _render_at_tier(self, state: "KernelState", candidates, tier) -> List[str]:
+    def _render_at_tier(self, state: "KernelState", candidates, tier) -> List[Tuple[str, str]]:
         """Keep every block this tier allows, whole; reference the rest."""
-        rendered: List[str] = []
+        rendered: List[Tuple[str, str]] = []
         for key, text in candidates:
             if key == "input_context" and tier is not PressureTier.NORMAL:
                 text = self._compose_input_context(state, tier)
                 if not text:
                     continue
             if should_render_block(key, tier):
-                rendered.append(text)
+                rendered.append((key, text))
         if prior_step_mode(tier) == "references":
             prior = (state.context or {}).get("previous_step_results") or {}
             if prior:
-                rendered.append(format_step_references(state.workflow_id, prior.keys()))
+                rendered.append(("prior_steps", format_step_references(state.workflow_id, prior.keys())))
         return rendered
 
     def _compose_blocks(

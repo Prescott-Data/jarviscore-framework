@@ -1369,7 +1369,12 @@ class BaseSubAgent(ABC):
                 for entry in conversation_history[-_CONVERSATION_WINDOW:]
                 if entry.get("receipt_id")
             )
-            context_block = context_manager.build_context(state, in_conversation=in_conversation)
+            build_parts = getattr(context_manager, "build_context_parts", None)
+            split = self._native_protocol and callable(build_parts)
+            if split:
+                constant_block, context_block = build_parts(state, in_conversation=in_conversation)
+            else:
+                context_block = context_manager.build_context(state, in_conversation=in_conversation)
 
             # ═══ 2. ORIENT — the budget that remains, as a fact for this turn ═══
             # A notice about this run's budget belongs to this turn; kept as a
@@ -1380,10 +1385,19 @@ class BaseSubAgent(ABC):
             state.failure_ledger = self._cognition.failures.recent_failures
 
             # ═══ 3. DECIDE — LLM call ═══
-            user_prompt = self._build_user_prompt(state, context_block)
             messages = [{"role": "system", "content": system_prompt}]
-            _thread_history(messages, conversation_history)
-            messages.append({"role": "user", "content": user_prompt})
+            if split:
+                # The task leads and the turn's own state follows the conversation,
+                # so each prompt repeats the previous one and is served from cache.
+                user_prompt = self._build_user_prompt(state, constant_block)
+                messages.append({"role": "user", "content": user_prompt})
+                _thread_history(messages, conversation_history)
+                messages.append({"role": "user", "content": context_block.strip()})
+                user_prompt = f"{user_prompt}\n\n{context_block}"
+            else:
+                user_prompt = self._build_user_prompt(state, context_block)
+                _thread_history(messages, conversation_history)
+                messages.append({"role": "user", "content": user_prompt})
 
             _trace.log_llm_request(system_prompt[:300], user_prompt[:500], model=model)
 
