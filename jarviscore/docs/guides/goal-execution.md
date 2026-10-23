@@ -106,7 +106,8 @@ print(result["output"])            # what the final step delivered
 print(result["evidence"])          # every step's tool observations
 ```
 
-`output` and `evidence` are the same as `run_task()` returns. When a step is
+`output` and `evidence` are the same as `run_task()` returns. A failed goal
+carries `error`, the failing step's reason. When a step is
 paused for a person, `status` is `waiting` and `result["waiting"]` names the
 step, why it waits and its `metadata`. `steps` still holds every step's record
 for anything more detailed.

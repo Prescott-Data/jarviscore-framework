@@ -623,6 +623,8 @@ async def test_execute_goal_propagates_non_success_without_hanging(
     assert result["status"] == expected_status
     assert [step["status"] for step in result["steps"]] == [upstream_status, "blocked"]
     assert analyst.received == []
+    if expected_status == "failed":
+        assert result["error"] == "source unavailable", "the failing step's reason, not only in steps"
 
 
 class ApprovalPeer(ResearchPeer):

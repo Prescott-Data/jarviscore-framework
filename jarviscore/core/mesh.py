@@ -1675,6 +1675,13 @@ class Mesh:
         if final and not result.get("result_summary") and isinstance(envelope, dict):
             result["result_summary"] = str(envelope.get("result_summary") or "")
         waiting = next((step for step in steps if step.get("status") == "waiting"), None)
+        if result.get("status") == "failed" and not result.get("error"):
+            # Why it failed, in the failing step's own words, not only in steps.
+            stopped = next((step for step in steps if step.get("status") in ("failed", "blocked")), None)
+            saved = (stopped or {}).get("output") or {}
+            reason = saved.get("error") or saved.get("result_summary") or (stopped or {}).get("error")
+            if reason:
+                result["error"] = str(reason)
         result.update({
             "output": output,
             "evidence": evidence,
