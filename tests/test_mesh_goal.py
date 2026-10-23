@@ -384,6 +384,9 @@ async def test_execute_goal_compiles_publishes_and_peers_claim_by_capability(mon
     assert result["status"] == "completed"
     assert result["result_summary"] == "The evidence was analysed successfully."
     assert [step["status"] for step in result["steps"]] == ["completed", "completed"]
+    # What the goal delivered, as run_task returns it: no digging through steps.
+    assert result["output"] == {"used": {"evidence": ["source-1"]}}
+    assert result["evidence"] == [] and result["waiting"] is None
     assert researcher.received[0]["context"]["objective"] == "Find evidence and analyse it"
     assert researcher.received[0]["context"]["source_context"]["lead"]["email"] == (
         "lead@example.com"
@@ -620,6 +623,8 @@ async def test_execute_goal_propagates_non_success_without_hanging(
     assert result["status"] == expected_status
     assert [step["status"] for step in result["steps"]] == [upstream_status, "blocked"]
     assert analyst.received == []
+    if expected_status == "failed":
+        assert result["error"] == "source unavailable", "the failing step's reason, not only in steps"
 
 
 class ApprovalPeer(ResearchPeer):
@@ -676,6 +681,7 @@ async def test_a_person_resolves_a_waiting_action_through_hitl(monkeypatch, deci
         await mesh.stop()
 
     assert first["status"] == "waiting"
+    assert first["waiting"]["step_id"] == "research" and first["output"] is None
     assert pending["status"] == "pending" and pending["action"]["consequence"] == "Places the order"
     assert resumed["status"] == "completed"
     assert analyst.received[0]["context"]["previous_step_results"] == {
@@ -1612,3 +1618,13 @@ async def test_cancelling_execute_goal_tombstones_shared_workflow(monkeypatch):
     assert store.is_workflow_cancelled("wf-cancel-goal") is True
     assert store.get_step_status("wf-cancel-goal", "unavailable") == "cancelled"
     assert "wf-cancel-goal" not in store.get_active_workflows()
+
+def test_a_failed_goal_names_the_failed_step_not_one_blocked_behind_it():
+    from jarviscore.core.mesh import Mesh
+
+    result = Mesh._goal_result({"status": "failed", "steps": [
+        {"id": "publish", "status": "blocked", "blocked_by": ["fetch"]},
+        {"id": "fetch", "status": "failed", "output": {"error": "source unavailable"}},
+    ]}, {"publish", "fetch"}, set())
+
+    assert result["error"] == "source unavailable"

@@ -26,9 +26,11 @@ the ``Person`` who performs it, from the surface's own authentication.
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import hashlib
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -47,6 +49,8 @@ from jarviscore.execution.workspace import (
     _register_workspace_path,
 )
 from jarviscore.storage.errors import RoomStateChanged
+
+logger = logging.getLogger(__name__)
 
 #: Provider name a goal uses to work on a room: workspace_source={"provider": "room", ...}
 ROOM_PROVIDER = "room"
@@ -651,6 +655,25 @@ class Room:
             raise RoomPermissionError(
                 f"{proposal_id} used {self.name_of(proposal.held_for)}'s private access; "
                 "they must release it before it can be accepted")
+        # One decision at a time per line of work (a proposal and its revisions), so two
+        # people accepting competing versions at once cannot both land.
+        lock, holder = f"{self.key}:lineage:{self.lineage(proposal_id)[-1]}", uuid4().hex
+        while not self.redis_store.take_lease(lock, holder, 60):
+            await asyncio.sleep(0.05)
+        try:
+            return await self._accept(proposal_id, by)
+        finally:
+            self.redis_store.release_lease(lock, holder)
+
+    async def _accept(self, proposal_id: str, by: Person) -> Head:
+        proposal = self.proposal(proposal_id)
+        if proposal.status != "open":
+            raise ValueError(f"{proposal_id} is {proposal.status}, not open")
+        overtaken = self.overtaken_by(proposal_id)
+        if overtaken:
+            raise ValueError(
+                f"{proposal_id} revises an earlier version that {overtaken} already replaced: "
+                "ask for changes to the current version instead")
         base = {e.path: e for e in (await self.store.load(proposal.base_manifest)).entries}
 
         for _ in range(_ACCEPT_ATTEMPTS):
@@ -718,7 +741,7 @@ class Room:
                     continue  # someone moved the head; merge against the new one
                 raise ValueError(f"{proposal_id} is {exc.proposal_status}, not open") from exc
             if proposal.revision_of:
-                self._close_replaced(proposal.revision_of, proposal_id, by)
+                self._close_overtaken(proposal_id, by)
             return new_head
         raise RuntimeError(f"Could not accept {proposal_id}: the room kept changing")
 
@@ -735,6 +758,62 @@ class Room:
                                  "reason": f"replaced by {proposal_id}"})
         except RoomStateChanged:
             pass  # it was already decided
+
+    def lineage(self, proposal_id: str) -> List[str]:
+        """``proposal_id`` and the proposals it revises, nearest first; the last is where
+        that line of work started."""
+        chain: List[str] = []
+        current = proposal_id
+        while current and current not in chain:
+            chain.append(current)
+            current = (self.redis_store.get_room_proposal(self.key, current) or {}).get("revision_of", "")
+        return chain
+
+    def overtaken_by(self, proposal_id: str) -> str:
+        """The accepted proposal that took another version of ``proposal_id``'s line of
+        work, or "". Work or a revision built on an overtaken version must not land."""
+        line = set(self.lineage(proposal_id))
+        for accepted in self.proposals("accepted"):
+            if accepted.id not in line and line & set(self.lineage(accepted.id)):
+                return accepted.id
+        return ""
+
+    def _close_overtaken(self, winner_id: str, by: Person) -> None:
+        """Once one version of a line of work lands, the rest of the line is out of date:
+        what it revised is replaced, other open versions close, and work on them stops."""
+        line = self.lineage(winner_id)
+        for replaced in line[1:]:
+            self._close_replaced(replaced, winner_id, by)
+        reason = f"superseded by {winner_id}"
+        for other in self.proposals("open"):
+            if other.id == winner_id or winner_id in self.lineage(other.id) or not self.overtaken_by(other.id):
+                continue
+            try:
+                self.redis_store.room_transition(self.key, {
+                    "type": "proposal.rejected", "at": time.time(), "proposal": other.id, **_who(by),
+                    "author": other.author, "reason": reason, "workflow_id": other.workflow_id,
+                }, proposal_id=other.id, require_status="open",
+                    proposal_fields={"status": "rejected", "decided_by": by.id,
+                                     "decided_at": time.time(), "reason": reason})
+            except RoomStateChanged:
+                logger.debug("%s was decided meanwhile; nothing to supersede", other.id)
+        mesh = getattr(self, "mesh", None)
+        if mesh is None:
+            return
+        running: Dict[str, str] = {}
+        for event in self.events():
+            workflow = event.get("workflow_id", "")
+            if event.get("type") == "ask.started" and event.get("revision_of"):
+                running[workflow] = event["revision_of"]
+            elif event.get("type") in ("ask.finished", "ask.failed"):
+                running.pop(workflow, None)
+        for workflow, revising in running.items():
+            if revising in line or self.overtaken_by(revising):
+                try:
+                    mesh.cancel_goal(workflow, reason=f"{by.display} accepted {winner_id} instead")
+                except Exception:  # noqa: BLE001 - the work ending on its own is fine too
+                    logger.warning("Could not stop %s after %s was accepted", workflow, winner_id,
+                                   exc_info=True)
 
     async def reject(self, proposal_id: str, *, by: Person, reason: str) -> Proposal:
         """Turn down an open proposal with a reason its author can act on."""

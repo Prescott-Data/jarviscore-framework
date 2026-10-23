@@ -554,7 +554,7 @@ class CoderSandbox:
             workspace_dir=workspace_dir,
             timeout=self.timeout,
             bash_timeout=bash_timeout or self._bash.timeout,
-            output_subdir=self.output_dir.name,
+            output_subdir=self._output_subdir(),
             nexus_call_proxy=self._nexus_call_proxy,
             mesh_proxy=self._mesh_proxy,
             blob_storage=self.blob_storage,
@@ -566,6 +566,14 @@ class CoderSandbox:
             },
             allow_unsafe_local_execution=self.allow_unsafe_local_execution,
         )
+
+    def _output_subdir(self) -> str:
+        # The whole relative path: just the last part would put the runtime's output
+        # folder at ``<workspace>/output``, among the project's own files.
+        try:
+            return self.output_dir.relative_to(self.workspace).as_posix()
+        except ValueError:
+            return runtime_path("output")
 
     def _workspace_path(self, relative: str = ".") -> Path:
         candidate = (self.workspace / relative).resolve()

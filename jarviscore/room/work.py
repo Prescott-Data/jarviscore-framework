@@ -61,10 +61,51 @@ class AskResult:
 #: What the room does with the work, for the planner: proposing is the room's job,
 #: so a request that says "return it as a proposal" is not an extra step to plan.
 ROOM_WORK_CONTRACT = (
-    "This work is on the room's files. Make the changes in those files; the room files "
-    "what changed as a proposal for people to review, so no step needs to propose, "
-    "present or deliver the changed files."
+    "This work is on the room's files. Put new work in a new file with a clear name, and "
+    "change an existing file only when the request is about that file. Every file written "
+    "in the room's folder is part of the change: the room files what changed as a proposal "
+    "for people to review, so no step needs to propose, present or deliver the changed files."
 )
+
+#: How much of an earlier attempt a revision is shown, per file and in all.
+_EARLIER_FILE_CHARS, _EARLIER_TOTAL_CHARS = 8000, 16000
+
+
+def short_title(goal: str, limit: int = 80) -> str:
+    """A proposal title from a request: its first sentence, cut at a word."""
+    first = " ".join(str(goal or "").strip().split("\n\n", 1)[0].split())
+    for stop in (". ", "? ", "! "):
+        if stop in first:
+            first = first.split(stop, 1)[0] + stop.strip()
+            break
+    if len(first) <= limit:
+        return first
+    return first[: limit - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+
+
+async def _earlier_attempt(room: Room, previous: Proposal) -> str:
+    """What a revised proposal wrote, for the agents redoing it: its files, and their text."""
+    paths = sorted(path for path, change in previous.changes.items() if change)
+    if not paths:
+        return ""
+    if previous.held_for:
+        # Held work came from someone's private access: its text is theirs alone.
+        return (f"The earlier attempt wrote {', '.join(paths)}; it is held for its asker, so its "
+                "text is not shown here.")
+    parts = [f"The earlier attempt wrote {', '.join(paths)}. Keep the work in the same "
+             f"file{'s' if len(paths) > 1 else ''}, starting from what it wrote:"]
+    budget = _EARLIER_TOTAL_CHARS
+    for path in paths:
+        try:
+            text = (await room._blob(previous.changes[path]["blob_path"])).decode("utf-8")
+        except (UnicodeDecodeError, FileNotFoundError):
+            parts.append(f"--- {path}: not text, not shown ---")
+            continue
+        shown = text[: min(_EARLIER_FILE_CHARS, max(0, budget))]
+        budget -= len(shown)
+        cut = "" if len(shown) == len(text) else "\n[… cut]"
+        parts.append(f"--- {path}, as the earlier attempt wrote it ---\n{shown}{cut}")
+    return "\n".join(parts)
 
 
 def new_workflow_id(room_id: str) -> str:
@@ -87,6 +128,9 @@ async def ask(
     plan_template: Optional[Dict[str, Any]] = None,
     timeout: Optional[float] = None,
     workflow_id: str = "",
+    title: str = "",
+    follows: str = "",
+    takes: Optional[List[str]] = None,
 ) -> AskResult:
     room.require(asked_by, "editor", "ask for work")
     from jarviscore.auth.spending import Spending
@@ -112,16 +156,20 @@ async def ask(
                 "Redo the work on the current files."
             )
         elif previous.status == "open":
-            task = f"{goal}\n\nThis revises an earlier attempt ({revision_of}). Redo the work on the current files."
+            task = f"{goal}\n\nThis revises an earlier attempt ({revision_of}), which is not in the room's files yet."
         else:
             task = (
                 f"{goal}\n\nA previous attempt ({revision_of}) was rejected by "
                 f"{room_context['feedback']['by'] or 'a reviewer'}: {previous.reason or 'no reason given'}. "
-                "Address that and redo the work on the current files."
+                "Address that and redo the work."
             )
+        earlier = await _earlier_attempt(room, previous)
+        if earlier:
+            task = f"{task}\n\n{earlier}"
     task = f"{task}\n\n{ROOM_WORK_CONTRACT}"
     room.note("ask.started", **_who(asked_by), goal=goal, workflow_id=workflow_id,
-              version=head.version, revision_of=revision_of)
+              version=head.version, revision_of=revision_of, title=title or short_title(goal),
+              **({"follows": follows, "takes": list(takes or [])} if follows else {}))
     try:
         # Submitted, not executed: the work belongs to the mesh and goes on if this
         # process stops; whichever process is running then finishes it (``resume``).
@@ -176,8 +224,23 @@ async def finish(room: Room, mesh, workflow_id: str, result: Dict[str, Any]) -> 
             room.tenant, started.get("by", ""), started.get("by_name", ""))
         sources = room.redis_store.workflow_sources(workflow_id)
         held_for = asked_by.id if room.private_sources(workflow_id) else ""
+        if not held_for and started.get("revision_of"):
+            try:
+                # Redoing work held for this person keeps it theirs until they release it.
+                revised = room.proposal(started["revision_of"])
+                held_for = asked_by.id if revised.held_for == asked_by.id else ""
+            except KeyError:
+                held_for = ""
         steps = result.get("steps") or []
         proposal = None
+        revising = started.get("revision_of", "")
+        replaced_by = room.overtaken_by(revising) if revising else ""
+        if replaced_by:
+            # The team took another version of the same work while this one ran.
+            summary = f"Not filed: {revising} was already replaced by {replaced_by}."
+            room.note("ask.finished", **_who(asked_by), workflow_id=workflow_id,
+                      status="superseded", summary=summary, proposal="", held_for="")
+            return AskResult(workflow_id, "superseded", None, summary, result, "", sources)
         # Stopped work proposes nothing: whoever stopped it did not want its changes.
         deltas, authors = ([], []) if result.get("status") == "cancelled" else \
             await _final_deltas(room, mesh, workflow_id, steps)
@@ -192,7 +255,7 @@ async def finish(room: Room, mesh, workflow_id: str, result: Dict[str, Any]) -> 
                 base_version=int(started.get("version") or 0),
                 author=", ".join(authors) or "agents",
                 asked_by=asked_by,
-                title=started.get("goal", ""),
+                title=started.get("title") or short_title(started.get("goal", "")),
                 workflow_id=workflow_id,
                 revision_of=started.get("revision_of", ""),
                 held_for=held_for,

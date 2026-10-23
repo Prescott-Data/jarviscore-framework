@@ -100,10 +100,17 @@ result = await mesh.execute_goal(
     context={"tenant_id": "acme"},
 )
 
-print(result["status"])
-print(result["obligation_status"])
-print(result["response_status"])
+print(result["status"])            # completed, waiting, failed or cancelled
+print(result["result_summary"])    # the answer
+print(result["output"])            # what the final step delivered
+print(result["evidence"])          # every step's tool observations
 ```
+
+`output` and `evidence` are the same as `run_task()` returns. A failed goal
+carries `error`, the failing step's reason. When a step is
+paused for a person, `status` is `waiting` and `result["waiting"]` names the
+step, why it waits and its `metadata`. `steps` still holds every step's record
+for anything more detailed.
 
 Caller context is copied without private keys or execution authority. The
 framework derives capability, effect and systems from the published step and

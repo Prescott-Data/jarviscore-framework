@@ -33,6 +33,63 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 2.3.1 <span class="changelog-date">2026-10-23</span>
+
+### Fixed
+
+- **A goal returns what it delivered.** `Mesh.execute_goal()` and
+  `resume_goal()` now return `output` (the final step's delivered work) and
+  `evidence` (every step's tool observations), as `run_task()` does, and
+  `waiting` (the step paused for a person, with why). Before, callers had to
+  dig them out of `steps`. A failed goal also carries `error`, the failing
+  step's own reason.
+- **A result is checked against its declared contract before it is accepted.**
+  `output_schema` shaped the `done` call but its validators were never run, so
+  a result that broke a rule the JSON schema cannot express (a reproduction
+  needs a failing run) either passed or failed the whole step. `done` is now
+  refused with the rules that failed, and the agent fixes the result in its
+  next turn. An agent that says it could not finish (`complete: false`) is not
+  held to the contract.
+- **The room agent's replies are written for people.** A reply could end with
+  a runtime receipt id ("Tool receipt: tool:room-…:1"); the agent is told not
+  to, and any that slips through is removed before the reply is posted.
+- **Files the agents write under `output/` reach the room.** In a room or any
+  bound workspace, the sandbox put its own scratch folder at `output/` and the
+  change collector skipped every folder of that name, so a PDF an agent made was
+  reported done but never proposed. The runtime's folder is `.jarviscore/output`
+  again, `output/` is the project's own, and a write left out of a step's change
+  is logged.
+- **New work goes in a new file; a revision edits what it revises.** Agents were
+  told only to change "the room's files", so a new topic overwrote whatever file
+  was there. They are now told to put new work in a new file, and a revision is
+  given the files and text of the attempt it redoes.
+- **One version of a piece of work lands.** Two people giving the same feedback
+  started two revisions, and the later one could be accepted over the team's
+  choice. A revision is now reserved before it starts, so feedback given at the
+  same moment is kept for it rather than starting another. Accepting a version
+  replaces what it revised, closes the other versions of that line of work
+  (and revisions built on them), and stops work still making one; decisions on
+  one line of work are made one at a time, and a version built on one the team
+  did not take cannot be accepted. Work that finishes after that files nothing
+  (`superseded`). Revisions of held work stay held.
+- **Nothing anyone adds to running work is lost.** The room agent gains
+  `update_work`: an addition or correction to work in progress, or feedback on a
+  proposal already being redone, is kept (`ask.queued`), and when the work ends
+  one follow-up takes up every addition from its result, in the same thread.
+- **A failed goal names the step that failed**, not a step blocked behind it.
+- **The room agent knows what is running and how work ended.** Its brief lists
+  running work, additions waiting, and recent results (including work that
+  changed no files), and it answers questions and agreement itself instead of
+  starting new work. `ask_agents` and `room.ask` take a short `title`; a
+  proposal is no longer titled with the whole request.
+- **A plan cut short says how to fix it.** When a reasoning model spent its
+  whole output allowance thinking, planning failed with token counts only; the
+  error now names `LLM_MODEL_OUTPUT_LIMITS` and the model to declare.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.3.0 <span class="changelog-date">2026-10-22</span>
 
 Multiplayer: a team and its agents work on the same files, from Slack or your
