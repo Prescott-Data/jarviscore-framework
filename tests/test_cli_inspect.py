@@ -119,3 +119,15 @@ def test_unparseable_lines_survive_as_events(trace_dir, capsys):
         fh.write("not json at all\n")
     assert _show_run(trace_dir, "research-run", step=None, errors_only=True) == 0
     assert "unparseable_line" in capsys.readouterr().out
+
+
+def test_runtime_tool_calls_show_their_arguments(tmp_path, capsys):
+    # The kernel's tracer, which writes every subagent step, records "tool" and "args".
+    d = str(tmp_path / "traces")
+    _write_trace(d, "runtime-run", "step-1", [
+        ("tool_start", {"tool": "web_search", "args": {"query": "jarviscore latency"}}),
+    ])
+    assert _show_run(d, "runtime-run", step=None, errors_only=False) == 0
+    out = capsys.readouterr().out
+    assert "tool web_search" in out
+    assert "jarviscore latency" in out
