@@ -163,8 +163,8 @@ class TestWhenProgramsAreOffered:
         before = agent._program_description({})
         assert "list_invoices(page: integer = ...)" in before
         assert "customer_name(customer_id: string)" in before
-        assert "->" not in before
-        assert "print a small sample before relying on fields" in before
+        assert "list_invoices(page: integer = ...) -> not seen yet" in before
+        assert "print a small sample first" in before
 
         asyncio.run(agent._tool_run_tool_program("list_invoices(1)"))
 
@@ -186,6 +186,8 @@ class TestToolDefinitionsHoldStillForTheRun:
         tail = agent._shapes_learned_this_run()
         assert tail.startswith("## RETURN SHAPES LEARNED THIS RUN")
         assert '- list_invoices: {"page":"int","pages":"int","invoices":[{' in tail
+        # A result in the conversation shows its own shape.
+        assert agent._shapes_learned_this_run(frozenset({"list_invoices"})) == ""
 
     def test_a_new_run_describes_what_the_agent_already_learned(self, tmp_path):
         agent = _agent(tmp_path)

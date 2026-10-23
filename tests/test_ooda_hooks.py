@@ -884,6 +884,8 @@ class TestEachPromptExtendsTheLast:
         last = self._text(llm.requests[-1])
         assert last.count("Now: ") == 1 and today in last
         assert last.count("Remaining: ") == 1
+        # The notice the first turn was given stays where it was, unchanged.
+        assert llm.requests[-1]["messages"][2] == llm.requests[0]["messages"][2]
 
     def test_the_budget_is_said_again_once_it_runs_low(self):
         agent, _ = self._run(1)
@@ -901,3 +903,13 @@ class TestEachPromptExtendsTheLast:
         leading = json.dumps(llm.requests[1]["messages"][:2])
         assert "wf-run-4711" not in leading
         assert "lookup" in leading
+
+    def test_receipts_are_cited_in_result_never_in_the_summary(self):
+        _, llm = self._run(1)
+
+        done = next(t for t in llm.requests[0]["tools"] if t["function"]["name"] == "done")
+        fields = done["function"]["parameters"]["properties"]
+        assert "tool_receipt_id" in fields["result"]["description"]
+        assert "No receipt ids" in fields["summary"]["description"]
+        # Said once, where done is called.
+        assert "tool_receipt_id" not in llm.requests[0]["messages"][0]["content"]

@@ -820,18 +820,19 @@ class BaseSubAgent(ABC):
         # repeating that here was paid for on every call of every run.
         lines = [
             "Run a Python program that calls your tools as functions. Only what it "
-            "prints and what it puts in `result` come back to you, not the tool "
-            "results it reads. Use it to gather many results, or to loop over, "
-            "filter, join, count or total them. A function returns its tool's data "
-            "with JSON decoded, and raises on a tool error. Where no return shape is "
-            "given, print a small sample before relying on fields. json, re, datetime "
-            "and math are available. Print a compact answer, not raw data. Functions:",
+            "prints and what it puts in `result` come back to you; the tool results "
+            "it reads stay out of your view. Use it whenever you need several tool "
+            "results, or must loop over, filter, join, count or total them. Each "
+            "function returns what the tool returns, with JSON already decoded into "
+            "dicts and lists, and raises on a tool error. Write against the return "
+            "shapes below; for a function whose return is not known yet, print a "
+            "small sample first rather than guess its fields. json, re, datetime and "
+            "math are available. Print a compact answer, not raw data. Your functions:",
         ]
         shapes = getattr(self, "_result_shapes", {})
         for tool in self._program_tools(context):
             _, signature = self._tool_signature(tool)
-            returns = shapes.get(tool.name)
-            lines.append(f"  {signature}" + (f" -> {returns}" if returns else ""))
+            lines.append(f"  {signature} -> {shapes.get(tool.name) or 'not seen yet'}")
         return "\n".join(lines)
 
     async def _tool_run_tool_program(self, code: str) -> Dict[str, Any]:
@@ -942,14 +943,20 @@ class BaseSubAgent(ABC):
         self._shapes_described = dict(getattr(self, "_result_shapes", {}) or {})
         return specs, tools_by_function
 
-    def _shapes_learned_this_run(self) -> str:
-        """Return shapes learned after the tool definitions were fixed, for the turn's tail."""
+    def _shapes_learned_this_run(self, in_view: frozenset = frozenset()) -> str:
+        """Return shapes learned after the tool definitions were fixed, for the turn's tail.
+
+        A tool whose result is in the conversation shows its shape there already.
+        """
         described = getattr(self, "_shapes_described", None)
         state = getattr(self, "_current_state", None)
         if described is None or not self._offers_tool("run_tool_program", getattr(state, "context", None)):
             return ""
         shapes = getattr(self, "_result_shapes", {}) or {}
-        fresh = {name: shape for name, shape in shapes.items() if described.get(name) != shape}
+        fresh = {
+            name: shape for name, shape in shapes.items()
+            if described.get(name) != shape and name not in in_view
+        }
         if not fresh:
             return ""
         return "## RETURN SHAPES LEARNED THIS RUN (for run_tool_program)\n" + "\n".join(
@@ -986,10 +993,13 @@ class BaseSubAgent(ABC):
 
     @staticmethod
     def _done_function(context: Optional[Dict], landing: bool = False) -> Dict[str, Any]:
+        # How to finish is said here, where done is called, and nowhere else.
         result: Dict[str, Any] = {
             "description": (
-                "The data behind the answer for whoever uses it next: the list, the "
-                "record, the figures. Leave it out when there is none."
+                "Only data a later step or the caller needs that the summary does not "
+                "hold (a list, a record, figures), never a copy of the answer; leave it "
+                "out when there is none. Where it reports what a tool did, cite that "
+                "call's receipt in it as tool_receipt_id."
             ),
         }
         declared = (context or {}).get("output_schema")
@@ -1005,8 +1015,8 @@ class BaseSubAgent(ABC):
                 "summary": {
                     "type": "string",
                     "description": (
-                        "The complete answer for the person who asked, including "
-                        "any lists or details they asked for."
+                        "The complete answer the person reads, with any lists or "
+                        "details they asked for. No receipt ids here."
                     ),
                 },
                 "result": result,
@@ -1195,13 +1205,6 @@ class BaseSubAgent(ABC):
                 "  do not depend on each other; they run in order and you see every result",
                 "  next turn. Keep calling tools until the task is complete, then call done,",
                 "  on its own. Never call done merely because more tool calls are needed.",
-                "",
-                "Finishing:",
-                "  done's summary is the complete answer the person reads, with any lists",
-                "  or details they asked for. Add a result only for data a later step or the",
-                "  caller needs that the summary does not hold; never a copy of the answer.",
-                "  Where result reports what a tool did, cite that call's receipt in it as",
-                "  tool_receipt_id; receipts never go in the summary.",
                 "",
                 "Your memory:",
                 f"  You see the task and at least your last {_CONVERSATION_WINDOW} exchanges; older ones",
@@ -1643,7 +1646,12 @@ class BaseSubAgent(ABC):
             # ═══ 2. ORIENT — the budget that remains, as a fact for this turn ═══
             # A notice about this run's budget belongs to this turn; kept as a
             # thought it would outlive the run it describes.
-            learned = self._shapes_learned_this_run() if self._native_protocol else ""
+            learned = ""
+            if self._native_protocol:
+                learned = self._shapes_learned_this_run(frozenset(
+                    turn.tool_name for turn in state.tool_history
+                    if turn.receipt_id in in_conversation
+                ))
             if learned:
                 context_block += f"\n\n{learned}"
             if not split:
