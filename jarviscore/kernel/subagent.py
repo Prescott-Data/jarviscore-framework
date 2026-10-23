@@ -2145,7 +2145,33 @@ class BaseSubAgent(ABC):
         Peer tools remain available reasoning actions, not a mandatory route for
         every unresolved result. Product evidence contracts and concrete attempt
         history decide whether completion is supported.
+
+        The base gate checks the result against the step's declared
+        ``output_schema``, validators included: a contract the JSON schema
+        cannot express ("a reproduction needs a failing run") is still the
+        contract, and the agent can only meet it if it is told which rule failed.
         """
+        return self._satisfies_output_schema(state, parsed)
+
+    @staticmethod
+    def _satisfies_output_schema(state: KernelState, parsed: Dict[str, Any]) -> tuple:
+        """Whether ``done``'s result is a valid instance of the declared ``output_schema``."""
+        declared = (state.context or {}).get("output_schema")
+        if parsed.get("complete") is False or not hasattr(declared, "model_validate"):
+            return (True, "")
+        try:
+            declared.model_validate(parsed.get("result"))
+        except Exception as exc:  # pydantic.ValidationError, without importing pydantic here
+            errors = getattr(exc, "errors", None)
+            problems = [
+                f"{'.'.join(str(part) for part in error.get('loc', ())) or 'result'}: {error.get('msg')}"
+                for error in (errors() if callable(errors) else [])
+            ] or [str(exc)]
+            return (False, GateEvidence(
+                check="output_schema",
+                requirement=f"the result is a valid {declared.__name__}",
+                observed={"violations": problems[:10]},
+            ))
         return (True, "")
 
     async def _finish_incomplete(

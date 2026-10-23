@@ -43,6 +43,16 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   `waiting` (the step paused for a person, with why). Before, callers had to
   dig them out of `steps`. A failed goal also carries `error`, the failing
   step's own reason.
+- **A result is checked against its declared contract before it is accepted.**
+  `output_schema` shaped the `done` call but its validators were never run, so
+  a result that broke a rule the JSON schema cannot express (a reproduction
+  needs a failing run) either passed or failed the whole step. `done` is now
+  refused with the rules that failed, and the agent fixes the result in its
+  next turn. An agent that says it could not finish (`complete: false`) is not
+  held to the contract.
+- **The room agent's replies are written for people.** A reply could end with
+  a runtime receipt id ("Tool receipt: tool:room-…:1"); the agent is told not
+  to, and any that slips through is removed before the reply is posted.
 - **A plan cut short says how to fix it.** When a reasoning model spent its
   whole output allowance thinking, planning failed with token counts only; the
   error now names `LLM_MODEL_OUTPUT_LIMITS` and the model to declare.

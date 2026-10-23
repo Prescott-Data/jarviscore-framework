@@ -768,3 +768,16 @@ async def test_scripts_call_tools_by_the_names_the_model_uses(room):
     tools = RoomTools(RoomSubAgent("room-1", llm_client=None, room_agent=ScriptedRoomAgent()))
     assert tools.prepare_decision == tools._subagent._tool_prepare_decision
     assert tools.ask_agents == tools._subagent._tool_ask_agents
+
+
+def test_replies_reach_people_without_the_runtimes_receipt_ids():
+    """Live: a reply ended with 'Tool receipt: tool:room-acme--launch-conversation: step_…:1'."""
+    from jarviscore.room.agent import for_people
+
+    reply = ("I prepared acceptance of proposal p-28df0d4e for announcement.md. Confirm it with "
+             "one tap. Tool receipt: tool:room-acme--launch-conversation: step_1792742613_4624fc40 :1")
+    assert for_people(reply) == (
+        "I prepared acceptance of proposal p-28df0d4e for announcement.md. Confirm it with one tap.")
+    assert for_people("Done (receipt tool:wf-1:step-2:3). p-1a2b3c4d is in the thread.") == (
+        "Done. p-1a2b3c4d is in the thread.")
+    assert for_people("The receipts show nothing odd.") == "The receipts show nothing odd."

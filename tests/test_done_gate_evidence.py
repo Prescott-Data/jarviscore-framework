@@ -968,3 +968,59 @@ class TestCoderGate:
         assert result["status"] == "success"
         assert result["skipped"] is True
         assert result["semantic_outcome"] == "EFFECT_ALREADY_SATISFIED"
+
+
+class TestTheResultMeetsItsDeclaredContract:
+    """output_schema typed done's arguments, but its validators were never checked:
+    a result that broke the contract either passed or failed the whole step, and the
+    agent never learned which rule it broke (found live in Software Reliability)."""
+
+    @staticmethod
+    def contract():
+        from pydantic import BaseModel, model_validator
+
+        class Verification(BaseModel):
+            selection_receipt: str
+            execution_receipt: str
+
+            @model_validator(mode="after")
+            def distinct(self):
+                if self.selection_receipt == self.execution_receipt:
+                    raise ValueError("collection and execution need distinct receipts")
+                return self
+
+        return Verification
+
+    def test_a_result_that_breaks_the_contract_is_refused_and_then_fixed(self):
+        llm = _ScriptedLLM([
+            _done('{"selection_receipt": "r1", "execution_receipt": "r1"}'),
+            _done('{"selection_receipt": "r1", "execution_receipt": "r2"}'),
+        ])
+        agent = _PlainAgent(llm)
+
+        result = asyncio.run(agent.run(
+            task="t", context={"output_schema": self.contract()}, max_turns=2,
+        ))
+
+        shown = "\n".join(_observations(llm))
+        assert "DONE_GATE_UNSATISFIED: output_schema" in shown
+        assert "collection and execution need distinct receipts" in shown
+        assert result.status == "success"
+        assert result.payload["execution_receipt"] == "r2"
+
+    def test_a_result_that_meets_the_contract_is_accepted_at_once(self):
+        llm = _ScriptedLLM([_done('{"selection_receipt": "r1", "execution_receipt": "r2"}')])
+        result = asyncio.run(_PlainAgent(llm).run(
+            task="t", context={"output_schema": self.contract()}, max_turns=1,
+        ))
+        assert result.status == "success"
+
+    def test_an_agent_that_could_not_finish_is_not_held_to_the_contract(self):
+        llm = _ScriptedLLM([
+            "THOUGHT: blocked\nCOMPLETE: no\nDONE: python is unavailable\nRESULT: {}",
+        ])
+        result = asyncio.run(_PlainAgent(llm).run(
+            task="t", context={"output_schema": self.contract()}, max_turns=1,
+        ))
+        assert result.status == "failure"
+        assert "python is unavailable" in str(result.summary)

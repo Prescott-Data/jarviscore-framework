@@ -46,7 +46,7 @@ the Mesh or Kernel needs them to route, authorize, or validate work.
 | `description` | No | One-sentence purpose used by peers for routing decisions |
 | `capability_descriptions` | No | Mapping from capability name to a concrete routing description. Distributed planning uses it instead of guessing from a short tag. |
 | `capability_contracts` | No | Mapping from capability name to authorized `effects`, provider `systems`, and optional planner-visible `produces` artifact descriptions. |
-| `output_schema` | No | Pydantic model class enforced on CoderSubAgent execution output. Validate other role outputs or richer work products in an application subclass. |
+| `output_schema` | No | Pydantic model class for the agent's result. It shapes the `done` call, and `done` is refused, with the failing rules shown to the agent, until the result is a valid instance (validators included). |
 | `default_kernel_role` | No | Preferred fallback role for specialist agents. Built-ins are `"researcher"`, `"coder"`, `"communicator"`, and `"browser"`; products may register custom roles through an extended Kernel. Leave unset for generalists. |
 | `goal_oriented` | No | Defaults to `False`; set `True` for multi-step goal decomposition |
 | `requires_auth` | No | Defaults to `False`; set `True` to receive Nexus-backed `_auth_manager` |
