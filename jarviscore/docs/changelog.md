@@ -62,6 +62,29 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   guide, the memory concept page and the tracer docstrings now say so, and
   the event table lists the fields the runtime writes.
 
+- **Agent turns carry only what the agent can use.** A working turn sent
+  19-29 tool schemas, each repeating a long note description, peer tools with
+  no peers present, memory and workflow tools with nothing behind them, an
+  echo tool that made the model write its answer twice, internal routing data,
+  per-turn counters and a reasoning scaffold the model wrote out every call.
+  Each is now offered only where it can act, and independent tool calls in one
+  reply all run in the same turn. On a three-lookup support task: 5 calls and
+  ~17k input tokens became 3 calls and ~5k, with output tokens cut by more than
+  half.
+- **Tool programs.** A sub-agent's own tools can be called from a Python
+  program in the Kernel's sandbox (`run_tool_program`), so paging, filtering
+  and totals happen in code and only the result reaches the model. Every call
+  still runs through the agent's hooks and leaves a receipt. On an
+  accounts-receivable task over 3,600 invoices, JarvisCore answered correctly
+  for $0.024 in 21 s; LangGraph, CrewAI and Hermes, on the same model, spent
+  $0.18-0.46 and 32-111 s and got it wrong.
+- **The router answers tasks that need no role.** Summarising or rewording what
+  the task gives is answered in the routing call (one model call instead of
+  two), on the model the communicator would use. Calculations still go to the
+  coder. `KERNEL_ROUTER_MAY_ANSWER=false` turns it off.
+- **Prompts are laid out for the provider's cache**: the task leads the
+  conversation and tool definitions stay fixed for a run.
+
 ### Added
 
 - `UnifiedLLMClient.close()` and `PromoLLMClient.close()` release the
