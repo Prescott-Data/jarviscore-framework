@@ -205,6 +205,9 @@ class Settings(BaseSettings):
     kernel_action_budget: int = 24000
     kernel_wall_clock_ms: int = 180000
     kernel_router_provider: str = "llm"
+    # Let the router answer a task that needs no role (no tools, data or effects)
+    # in the same call, when it runs on the model the communicator would use.
+    kernel_router_may_answer: bool = True
     typesafe_router_min_confidence: float = 0.5
     task_complexity_provider: str = "llm"
     typesafe_complexity_min_confidence: float = 0.5
