@@ -28,7 +28,6 @@ Storage Layout:
         └── ...
 """
 
-import ast
 import asyncio
 import hashlib
 import json
@@ -164,6 +163,10 @@ class FunctionRegistry:
         # In-memory registries
         self.functions: Dict[str, Optional[Callable]] = {}
         self.function_metadata: Dict[str, Dict[str, Any]] = {}
+        # Source registered but not yet compiled; get_function() compiles on
+        # first use. Executing every catalogue module at load made each start
+        # pay seconds for callables nothing had asked for.
+        self._uncompiled: Set[str] = set()
 
         # Multi-dimensional indexes
         self.functions_by_system: Dict[str, Set[str]] = {}
@@ -363,13 +366,11 @@ class FunctionRegistry:
             import inspect
             source_code = inspect.getsource(function)
             self.functions[function_name] = function
+            self._uncompiled.discard(function_name)
         elif isinstance(function, str):
             source_code = function
-            # Try dynamic import
-            try:
-                self._try_load_callable(function_name, source_code)
-            except Exception:
-                self._register_source_only(function_name, source_code)
+            self.functions[function_name] = None
+            self._uncompiled.add(function_name)
         else:
             logger.error(f"Invalid function type: {type(function)}")
             return False
@@ -466,6 +467,7 @@ class FunctionRegistry:
 
         metadata = self.function_metadata.pop(function_name, {})
         self.functions.pop(function_name, None)
+        self._uncompiled.discard(function_name)
 
         # Remove from indexes — extract primitives to avoid passing the full stored dict
         self._deindex_function(
@@ -494,6 +496,18 @@ class FunctionRegistry:
 
     def get_function(self, function_name: str) -> Optional[Callable]:
         """Get callable function object, or None if not found/source-only."""
+        if function_name in self._uncompiled:
+            self._uncompiled.discard(function_name)
+            source_code = self.get_function_code(function_name)
+            if source_code:
+                try:
+                    self._try_load_callable(function_name, source_code)
+                except Exception as exc:
+                    self.functions[function_name] = None
+                    logger.debug(
+                        "Source-only function %s (not importable): %s",
+                        function_name, exc,
+                    )
         return self.functions.get(function_name)
 
     def get_function_code(self, function_name: str) -> Optional[str]:
@@ -1128,16 +1142,10 @@ class FunctionRegistry:
                 )
                 self.function_metadata[function_name] = metadata
 
-                # Try to load callable from atom
                 atom_path = metadata.get("atom_path")
+                self.functions[function_name] = None
                 if atom_path and Path(atom_path).exists():
-                    try:
-                        code = Path(atom_path).read_text()
-                        self._try_load_callable(function_name, code)
-                    except Exception:
-                        self.functions[function_name] = None
-                else:
-                    self.functions[function_name] = None
+                    self._uncompiled.add(function_name)
 
             except Exception as e:
                 logger.error(f"Failed to load metadata from {meta_file}: {e}")
@@ -1393,32 +1401,8 @@ class FunctionRegistry:
             return pool.submit(asyncio.run, coro).result()
 
     # ─────────────────────────────────────────────────────────────
-    # Source-Only Registration (AST fallback)
+    # Callable Loading (on first get_function)
     # ─────────────────────────────────────────────────────────────
-
-    def _register_source_only(self, function_name: str, source_code: str) -> None:
-        """Register function via AST without importing (no callable)."""
-        try:
-            tree = ast.parse(source_code)
-            # Validate that at least one function/class definition exists
-            has_def = any(
-                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                for node in ast.walk(tree)
-            )
-            if has_def:
-                self.functions[function_name] = None  # Source-only marker
-                logger.debug(f"Source-only registration: {function_name}")
-            else:
-                # Still register — code might be a script-style function
-                self.functions[function_name] = None
-                logger.debug(
-                    f"Source-only registration (no def): {function_name}"
-                )
-        except SyntaxError as e:
-            logger.warning(
-                f"Failed to parse source for {function_name}: {e}"
-            )
-            self.functions[function_name] = None
 
     def _try_load_callable(self, function_name: str, source_code: str) -> None:
         """Try to dynamically import function as callable."""
