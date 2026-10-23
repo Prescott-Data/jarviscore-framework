@@ -151,6 +151,7 @@ requires one generative LLM provider from the preceding section.
 | `TYPESAFE_BASE_URL` | TypeSafe SDK default | Optional compatible gateway or test endpoint. |
 | `TYPESAFE_TIMEOUT` | `10.0` | Decision request timeout in seconds. |
 | `KERNEL_ROUTER_PROVIDER` | `llm` | Set to `typesafe` to opt into Jev-backed Kernel role selection. |
+| `KERNEL_ROUTER_MAY_ANSWER` | `true` | Let the router answer, in the same call, a task that needs no role (summarising, rewording, explaining or drafting from the task text, with no tool, data, calculation or action). Applies only when the router runs on the model the communicator would use. |
 | `TYPESAFE_ROUTER_MIN_CONFIDENCE` | `0.5` | Minimum Jev routing confidence. Validate against your workload before changing production behavior. |
 | `TASK_COMPLEXITY_PROVIDER` | `llm` | Set to `typesafe` to classify direct Kernel versus Planner execution with Jev. |
 | `TYPESAFE_COMPLEXITY_MIN_CONFIDENCE` | `0.5` | Below this confidence, preserve the full planning path. |

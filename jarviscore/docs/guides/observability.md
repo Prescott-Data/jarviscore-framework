@@ -64,6 +64,7 @@ A trace is a debugging record, not an audit log:
 
 - **Previews, not payloads.** LLM events carry the first 300 characters of the system prompt, 500 of the user prompt and 500 of the response, with latency and token count. Tool results are cut to 2,000 characters.
 - **Subagent steps only.** Routing, goal planning and step evaluation calls are not traced yet.
+- **Programs included.** Each call a tool program makes is traced as its own `tool_start`/`tool_result` and kept as a receipt marked `via_program`, even though its result never enters the model's context.
 - **Redacted.** Values under credential-like keys and token-shaped strings are replaced with `***` before anything is written.
 - **Best effort.** A failed Redis or file write is logged and skipped, never retried. Files can be edited after the fact and nothing detects it.
 
