@@ -100,6 +100,9 @@ class CoderSubAgent(BaseSubAgent):
     6. On persistent failure → delegate_research
     """
 
+    # The coder already writes and runs code; it is not also a program host.
+    programmable = False
+
     DEFAULT_SYSTEM_PROMPT = """\
 You are a CODE EXECUTION SPECIALIST in a multi-agent orchestration framework.
 Your ONE job: write Python code that WORKS, execute it, and return real results.

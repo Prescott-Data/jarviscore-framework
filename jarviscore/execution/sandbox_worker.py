@@ -51,6 +51,24 @@ class ParentRPC:
         return response.get("result")
 
 
+def _tool_function(rpc: ParentRPC, name: str, params: list):
+    """One of the agent's tools as a function the program calls.
+
+    The call runs in the parent, through the agent's own tool path (its hooks,
+    approvals and receipts); only what the program keeps reaches the model.
+    """
+
+    def call(*args, **kwargs):
+        if len(args) > len(params):
+            raise TypeError(f"{name}() takes {len(params)} positional arguments ({', '.join(params)})")
+        arguments = dict(zip(params, args))
+        arguments.update(kwargs)
+        return rpc.call("tool_call", {"name": name, "params": _jsonable(arguments)})
+
+    call.__name__ = name
+    return call
+
+
 class MeshFacade:
     """The only mesh operations generated code may request from its parent."""
 
@@ -198,6 +216,10 @@ async def execute(request: dict) -> dict:
     for key, value in (request.get("context") or {}).items():
         if not key.startswith("_"):
             namespace[key] = value
+    reserved = set(namespace)
+    for name, params in (request.get("tools") or {}).items():
+        if name.isidentifier() and name not in reserved:
+            namespace[name] = _tool_function(rpc, name, list(params))
 
     stdout = io.StringIO()
     try:

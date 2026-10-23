@@ -454,6 +454,10 @@ class Kernel:
             subagent.peers = self.peers
         # Peer tools are offered only while another agent is reachable through this.
         subagent.peer_directory = self.peers
+        # Tool programs run in the Kernel's sandbox, never in this process.
+        subagent.program_sandbox = self.sandbox
+        # What each tool returns is learned once per agent, not once per step.
+        subagent._result_shapes = self.__dict__.setdefault("_tool_result_shapes", {})
         subagent.decision_client = self.decision_client
         subagent.rag_decision_provider = str(
             self.config.get("rag_decision_provider", "vector")

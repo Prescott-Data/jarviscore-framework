@@ -477,10 +477,12 @@ class ContextManager:
                 ltm_block += f"…and {hidden} older memories held in long-term memory\n"
             add("long_term_memory", ltm_block)
 
-        if state.tool_history:
+        # A program's own calls stay evidence; the agent sees what the program reported.
+        shown_history = [turn for turn in state.tool_history if not getattr(turn, "via_program", False)]
+        if shown_history:
             receipt_lines = [
                 f"- `{turn.receipt_id}`: {turn.tool_name}; observed at {turn.observed_at.isoformat()}"
-                for turn in state.tool_history[-20:]
+                for turn in shown_history[-20:]
                 if getattr(turn, "receipt_id", "")
             ]
             if receipt_lines:
@@ -493,7 +495,7 @@ class ContextManager:
                     + "\n".join(receipt_lines),
                 )
             history_block, _ = self._format_tool_history(
-                state.tool_history, self.config.history_limit, in_conversation
+                shown_history, self.config.history_limit, in_conversation
             )
             add("tool_history", history_block)
 

@@ -103,6 +103,8 @@ class ToolResult(BaseModel):
     timestamp: float = Field(default_factory=time.time)
     duration_ms: int = Field(default=0, ge=0)
     receipt_id: str = ""
+    #: Made by a tool program: kept as evidence, never shown to the agent as context.
+    via_program: bool = False
 
     @property
     def succeeded(self) -> bool:
@@ -268,6 +270,7 @@ class KernelState(BaseModel):
         *,
         timestamp: Optional[float] = None,
         duration_ms: int = 0,
+        via_program: bool = False,
     ) -> ToolResult:
         """Record a tool invocation result.
 
@@ -293,6 +296,7 @@ class KernelState(BaseModel):
             status=status,
             timestamp=time.time() if timestamp is None else timestamp,
             duration_ms=max(0, int(duration_ms)),
+            via_program=via_program,
             receipt_id=(
                 f"tool:{self.workflow_id or f'local-{self.agent_id}-{int(self.started_at * 1_000_000)}'}:"
                 f"{self.step_id or self.agent_id}:{self.tool_results_recorded}"

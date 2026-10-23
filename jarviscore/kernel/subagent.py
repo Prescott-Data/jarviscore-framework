@@ -258,6 +258,15 @@ _PEER_TOOLS = frozenset({
 _MEMORY_TOOLS = {"remember": "remember", "recall": "recall"}
 #: Tools that read the rest of the workflow: offered only when there is a rest to read.
 _WORKFLOW_TOOLS = frozenset({"inspect_workflow", "read_workflow_step"})
+#: Tools a program never calls: finishing, memory, runtime and peer controls, and
+#: the coder's own code and workspace tools (a program already is code).
+_UNBRIDGED_TOOLS = frozenset({
+    "run_tool_program", "read_turn_result", "remember", "recall", "time_s", "is_actionable",
+    "write_code", "execute_code", "validate_code", "register_function", "repair_atom",
+    "inspect_atom_for_repair", "check_registry", "delegate_research", "evaluate_decisions",
+    "workspace_list", "workspace_read", "workspace_search", "workspace_write",
+    "workspace_edit", "workspace_run",
+}) | _PEER_TOOLS | _WORKFLOW_TOOLS
 _WORKFLOW_CONTEXT_KEYS = (
     "previous_step_results", "downstream_roles", "workflow_plan", "_goal", "_completed_steps",
 )
@@ -283,6 +292,44 @@ def _json_schema_for(annotation: Any) -> Dict[str, Any]:
     if base is dict:
         return {"type": "object"}
     return {}
+
+
+def _result_shape(value: Any, depth: int = 0) -> Any:
+    """The shape of a tool's result (field names and types, never values)."""
+    if isinstance(value, str):
+        text = value.strip()
+        if depth == 0 and text[:1] in "{[":
+            try:
+                return _result_shape(json.loads(text), depth)
+            except ValueError:
+                pass
+        return "text" if depth == 0 else "str"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if value is None:
+        return "null"
+    if depth >= 3:
+        return "..."
+    if isinstance(value, dict):
+        keys = list(value)[:15]
+        shape = {str(key): _result_shape(value[key], depth + 1) for key in keys}
+        if len(value) > len(keys):
+            shape["..."] = f"{len(value) - len(keys)} more"
+        return shape
+    if isinstance(value, (list, tuple)):
+        return [_result_shape(value[0], depth + 1)] if value else []
+    return type(value).__name__
+
+
+def _render_shape(value: Any) -> str:
+    if isinstance(value, str) and value == "text":
+        return "plain text"
+    rendered = json.dumps(value, separators=(",", ":"))
+    return rendered if len(rendered) <= 400 else rendered[:397] + "..."
 
 
 def _parameters_schema(func: Callable) -> Dict[str, Any]:
@@ -493,6 +540,10 @@ class BaseSubAgent(ABC):
     hidden_tools: frozenset = frozenset({"time_s", "is_actionable"})
     #: Directory of the other agents this one can reach; set by the Kernel.
     peer_directory = None
+    #: Sandbox that runs tool programs; set by the Kernel. None leaves them off.
+    program_sandbox = None
+    #: Whether this role is offered run_tool_program over its own tools.
+    programmable: bool = True
 
     def __init__(
         self,
@@ -673,7 +724,156 @@ class BaseSubAgent(ABC):
             return any((context or {}).get(key) for key in _WORKFLOW_CONTEXT_KEYS)
         if name == "read_turn_result":
             return self._results_left_view()
+        if name == "run_tool_program":
+            return (
+                self.programmable and self._programs_can_run()
+                and bool(self._program_tools(context))
+            )
         return True
+
+    def _programs_can_run(self) -> bool:
+        """Whether the Kernel's sandbox will run model-written code on this host."""
+        sandbox = self.program_sandbox
+        if sandbox is None:
+            return False
+        cached = getattr(self, "_program_sandbox_ready", None)
+        if cached is None or cached[0] is not sandbox:
+            try:
+                ready = bool(
+                    getattr(sandbox, "allow_unsafe_local_execution", False) is True
+                    or getattr(sandbox, "confined", False)
+                )
+            except Exception:  # noqa: BLE001 - a sandbox that cannot answer runs nothing
+                ready = False
+            cached = (sandbox, ready)
+            self._program_sandbox_ready = cached
+        return cached[1]
+
+    def _program_tools(self, context: Optional[Dict]) -> List["ToolDefinition"]:
+        """The agent's own tools a program may call."""
+        return [
+            tool for tool in self._tools.values()
+            if tool.name not in _UNBRIDGED_TOOLS and tool.name.isidentifier()
+            and self._offers_tool(tool.name, context)
+        ]
+
+    @staticmethod
+    def _tool_signature(tool: "ToolDefinition") -> Tuple[List[str], str]:
+        schema = copy.deepcopy(tool.parameters) if tool.parameters else _parameters_schema(tool.func)
+        properties = schema.get("properties") or {}
+        required = set(schema.get("required") or [])
+        rendered = ", ".join(
+            f"{name}: {spec.get('type', 'any')}" + ("" if name in required else " = ...")
+            for name, spec in properties.items()
+        )
+        return list(properties), f"{tool.name}({rendered})"
+
+    def _note_result_shape(self, tool_name: str, result: Any) -> None:
+        """Remember what a tool returns, so programs are written against its real fields."""
+        if isinstance(result, dict) and set(result) == {"status", "output"}:
+            result = result["output"]
+        if isinstance(result, dict) and result.get("status") == "error":
+            return
+        shapes = self.__dict__.setdefault("_result_shapes", {})
+        shapes[tool_name] = _render_shape(_result_shape(result))
+
+    def _program_description(self, context: Optional[Dict]) -> str:
+        lines = [
+            "Run a Python program that calls your tools as functions. Only what it "
+            "prints and what it puts in `result` come back to you; the tool results "
+            "it reads stay out of your view. Use it whenever you need several tool "
+            "results, or must loop over, filter, join, count or total them. Each "
+            "function returns what the tool returns, with JSON already decoded into "
+            "dicts and lists, and raises on a tool error. Write against the return "
+            "shapes below; for a function whose return is not known yet, print a "
+            "small sample first rather than guess its fields. json, re, datetime and "
+            "math are available. Print a compact answer, not raw data. Your functions:",
+        ]
+        shapes = getattr(self, "_result_shapes", {})
+        for tool in self._program_tools(context):
+            _, signature = self._tool_signature(tool)
+            summary = " ".join((tool.description or "").split())[:240]
+            returns = shapes.get(tool.name)
+            lines.append(
+                f"  {signature}: {summary}"
+                + (f" Returns: {returns}" if returns else " Returns: not seen yet.")
+            )
+        return "\n".join(lines)
+
+    async def _tool_run_tool_program(self, code: str) -> Dict[str, Any]:
+        """Run a Python program that calls your tools as functions."""
+        state = self._current_state
+        context = getattr(state, "context", None)
+        tools = {tool.name: tool for tool in self._program_tools(context)}
+        if not tools or not self._programs_can_run():
+            return {"status": "error", "error": "Tool programs are not available on this run."}
+        trace = getattr(self, "_run_trace", None)
+        receipts: List[str] = []
+        counts: Dict[str, int] = {}
+
+        async def bridge(name: str, params: Dict[str, Any]) -> Any:
+            if name not in tools:
+                raise RuntimeError(f"{name} is not one of the functions this program was given.")
+            params = dict(params or {})
+            started_at, started = time.time(), time.monotonic()
+            if trace is not None:
+                trace.log_tool_start(name, params)
+            result = await self._pre_execute_hook(name, params, state)
+            if result is None:
+                result = await self._execute_tool(name, params)
+            error = result.get("error") if isinstance(result, dict) else None
+            receipt = state.add_tool_result(
+                name, params, result, error=error, timestamp=started_at,
+                duration_ms=round((time.monotonic() - started) * 1000), via_program=True,
+            )
+            receipts.append(receipt.receipt_id)
+            counts[name] = counts.get(name, 0) + 1
+            self._note_result_shape(name, result)
+            if trace is not None:
+                trace.log_tool_result(name, result, error=error)
+            if isinstance(result, dict) and result.get("status") == "waiting":
+                raise RuntimeError(
+                    f"{name} needs a person's decision; call it directly, not from a program."
+                )
+            if isinstance(result, dict) and result.get("status") == "error":
+                raise RuntimeError(f"{name}: {result.get('error')}")
+            if isinstance(result, dict) and set(result) == {"status", "output"}:
+                result = result["output"]
+            if isinstance(result, str) and result.lstrip()[:1] in ("{", "["):
+                # Programs work with data: JSON text arrives already decoded.
+                try:
+                    return json.loads(result)
+                except ValueError:
+                    pass
+            return result
+
+        outcome = await self.program_sandbox.execute(
+            code,
+            context={
+                "_tool_bridge": bridge,
+                "_tool_signatures": {
+                    name: self._tool_signature(tool)[0] for name, tool in tools.items()
+                },
+            },
+        )
+        # What the program reported, once: the sandbox envelope repeats itself and
+        # carries file bookkeeping a tool program does not produce.
+        failed = outcome.get("success") is False or outcome.get("status") in ("error", "failure")
+        report: Dict[str, Any] = {"status": "error" if failed else "success"}
+        stdout = outcome.get("stdout")
+        if stdout:
+            report["stdout"] = stdout
+        data = outcome.get("data", outcome.get("result"))
+        if data is not None:
+            report["result"] = data
+        if failed:
+            report["error"] = outcome.get("error") or "The program failed."
+            if outcome.get("error_type"):
+                report["error_type"] = outcome["error_type"]
+        # Calls per function, so a program that read one page of eight shows it.
+        report["tool_calls"] = counts
+        report["tool_receipts"] = receipts
+        return report
 
     def _results_left_view(self) -> bool:
         """Whether an earlier result can be out of the agent's view: past the window or the budget."""
@@ -683,7 +883,8 @@ class BaseSubAgent(ABC):
         variables = state.internal_variables if isinstance(state.internal_variables, dict) else {}
         if variables.get("_released_turn_results"):
             return True
-        if len(state.tool_history) >= _CONVERSATION_WINDOW:
+        shown = [turn for turn in state.tool_history if not getattr(turn, "via_program", False)]
+        if len(shown) >= _CONVERSATION_WINDOW:
             return True
         retained = variables.get("_turn_results") or {}
         return sum(len(text) for text in retained.values()) > _THREAD_RESULT_BUDGET // 2
@@ -696,7 +897,11 @@ class BaseSubAgent(ABC):
         context = getattr(getattr(self, "_current_state", None), "context", None)
         lines = ["Available tools:"]
         for tool in self._offered_tools(context):
-            lines.append(f"  - {tool.name}: {tool.description} [{tool.phase}]")
+            description = (
+                self._program_description(context)
+                if tool.name == "run_tool_program" else tool.description
+            )
+            lines.append(f"  - {tool.name}: {description} [{tool.phase}]")
         return "\n".join(lines)
 
     def _native_tool_specs(self, context: Optional[Dict]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
@@ -719,7 +924,10 @@ class BaseSubAgent(ABC):
             parameters["properties"][_NOTES_ARGUMENT] = _NOTES_SCHEMA
             specs.append({"type": "function", "function": {
                 "name": function,
-                "description": tool.description,
+                "description": (
+                    self._program_description(context)
+                    if tool.name == "run_tool_program" else tool.description
+                ),
                 "parameters": parameters,
             }})
         specs.append(self._done_function(context))
@@ -1292,6 +1500,7 @@ class BaseSubAgent(ABC):
         # ── TraceManager: use injected trace or no-op ──
         from jarviscore.kernel.tracing import create_noop_trace
         _trace = trace if trace is not None else create_noop_trace()
+        self._run_trace = _trace
         await self._carry_out_decided_actions(state, _trace)
         total_tokens = {"input": 0, "output": 0, "total": state.tokens_used}
         total_cost = state.total_cost_usd
@@ -1810,6 +2019,8 @@ class BaseSubAgent(ABC):
                 # ── Retain the full result for honest retrieval (issue #57) ──
                 if tool_name != "read_turn_result":
                     _retain_turn_result(state.internal_variables, call, str(tool_result))
+                if tool_name not in _UNBRIDGED_TOOLS:
+                    self._note_result_shape(tool_name, tool_result)
 
                 # ── Track usage ──
                 registered = self._tools.get(tool_name)
