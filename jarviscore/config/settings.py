@@ -263,6 +263,7 @@ class Settings(BaseSettings):
     nexus_gateway_api_key: Optional[str] = None  # NEXUS_GATEWAY_API_KEY — sent as X-API-Key; `jarviscore nexus init` writes it for the local stack
     nexus_return_url: str = "http://localhost:8000/oauth/callback"  # Broker redirects here after consent
     nexus_default_user_id: str = "jarviscore-agent"
+    nexus_seed_providers: bool = True  # NEXUS_SEED_PROVIDERS — register a provider the gateway does not list before a consent; set false behind a shared gateway that manages providers itself
     nexus_enabled: Optional[bool] = None  # NEXUS_ENABLED — explicit override; None = auto-detect from nexus_gateway_url
     auth_strategy_cache_ttl: int = 300   # Seconds before re-fetching strategy from Gateway
     auth_flow_timeout: int = 300         # Max seconds to wait for OAuth consent

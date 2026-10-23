@@ -83,6 +83,13 @@ class AuthenticationManager:
         self.return_url = config.get("nexus_return_url") or getattr(
             settings, "nexus_return_url", "http://localhost:8000/oauth/callback"
         )
+        # Seeding registers a provider through the gateway before a consent, which suits a
+        # local stack. A shared gateway that manages providers itself refuses it; turn it
+        # off there (NEXUS_SEED_PROVIDERS=false).
+        seed = config.get("nexus_seed_providers")
+        self.seed_providers = (
+            getattr(settings, "nexus_seed_providers", True) if seed is None else bool(seed)
+        )
 
         # Nexus clients — only instantiated when gateway_url is provided.
         # Agents that never call authenticate() don't need Nexus at all.
@@ -305,7 +312,8 @@ class AuthenticationManager:
                 f"No account can be connected to {provider!r} right now, because "
                 "this deployment has no way to run a consent flow."
             )
-        await self._ensure_provider(provider)
+        if self.seed_providers:
+            await self._ensure_provider(provider)
         return await self.nexus_client.request_connection(
             provider=provider,
             user_id=user_id or self._person(),
