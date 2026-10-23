@@ -100,3 +100,89 @@ async def test_non_oauth_capture_schema_is_resolved_from_signed_state():
 
     assert requested == [{"state": "signed-state"}]
     assert "credentials" not in str(schema)
+
+
+def _client(handler):
+    client = NexusClient("https://gateway.test")
+    return client, httpx.AsyncClient(base_url="https://gateway.test", transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_a_listing_with_the_other_spelling_counts_as_present():
+    """The catalogue says google_calendar; the broker form is google-calendar."""
+    calls = []
+
+    async def handler(request):
+        calls.append((request.method, request.url.path))
+        return httpx.Response(200, json={"oauth2": {"google_calendar": {}}})
+
+    client, transport_client = _client(handler)
+    await client.client.aclose()
+    client.client = transport_client
+    try:
+        await client.ensure_provider({"name": "google-calendar", "auth_type": "oauth2"})
+    finally:
+        await client.close()
+    assert calls == [("GET", "/v1/providers")]  # no registration attempted
+
+
+@pytest.mark.parametrize("refused", [401, 403, 404, 405])
+@pytest.mark.asyncio
+async def test_a_gateway_that_refuses_registration_does_not_stop_the_consent(refused):
+    async def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"oauth2": {}})
+        return httpx.Response(refused, json={"error": "method_not_allowed"})
+
+    client, transport_client = _client(handler)
+    await client.client.aclose()
+    client.client = transport_client
+    try:
+        await client.ensure_provider({"name": "google-calendar", "auth_type": "oauth2"})
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_real_gateway_error_still_raises():
+    async def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"oauth2": {}})
+        return httpx.Response(500, json={"error": "boom"})
+
+    client, transport_client = _client(handler)
+    await client.client.aclose()
+    client.client = transport_client
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.ensure_provider({"name": "slack", "auth_type": "oauth2"})
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_seeding_can_be_turned_off_for_a_shared_gateway():
+    manager = AuthenticationManager(
+        {"nexus_gateway_url": "https://gateway.test", "nexus_seed_providers": False}
+    )
+    order = []
+
+    async def ensure(profile):
+        order.append("seed")
+
+    async def request_connection(**kwargs):
+        order.append("connect")
+        return "conn-1", "https://accounts.google.com/o/oauth2/v2/auth"
+
+    manager.nexus_client.ensure_provider = ensure
+    manager.nexus_client.request_connection = request_connection
+    try:
+        await manager.begin_authentication("google_calendar")
+    finally:
+        await manager.close()
+    assert order == ["connect"]
+
+
+def test_seeding_is_on_by_default():
+    manager = AuthenticationManager({"nexus_gateway_url": "https://gateway.test"})
+    assert manager.seed_providers is True

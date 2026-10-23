@@ -378,6 +378,7 @@ Required only when agents call third-party services (GitHub, Slack, Jira, Stripe
 | `NEXUS_BROKER_URL` | (none) | Broker URL, e.g. `http://localhost:8080`. Used by dashboard and SDK to POST credentials directly to the Broker's `/auth/capture-credential` endpoint for non-OAuth providers. |
 | `NEXUS_RETURN_URL` | `http://localhost:8000/oauth/callback` | OAuth callback URL; the Nexus broker redirects here after consent. |
 | `NEXUS_DEFAULT_USER_ID` | `jarviscore-agent` | User identity passed to Nexus for credential lookups. |
+| `NEXUS_SEED_PROVIDERS` | `true` | Before a consent, register the provider through the Gateway when its listing does not show it. Suits a local stack. Set `false` behind a shared Gateway or a policy layer that manages providers itself; a refused registration (401, 403, 404, 405) is logged and the consent goes ahead either way. |
 | `AUTH_STRATEGY_CACHE_TTL` | `300` | Seconds before the resolved auth strategy is re-fetched from the Gateway. |
 | `AUTH_FLOW_TIMEOUT` | `300` | Maximum seconds to wait for a user to complete OAuth browser consent. |
 | `AUTH_POLL_INTERVAL` | `2.0` | Seconds between Gateway status polls during an OAuth flow. |

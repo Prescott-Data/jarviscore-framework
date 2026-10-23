@@ -180,6 +180,15 @@ A Gateway deployed with caller authentication (`GATEWAY_REQUIRE_API_KEY=true`, n
 
 When `NEXUS_GATEWAY_URL` is set, the CLI registers providers by calling the Gateway directly. You should not need to call this manually (`jarviscore nexus register` handles it) but the contract is documented here for completeness.
 
+!!! note "Shared gateways"
+    Before each consent, `AuthenticationManager.begin_authentication` checks the Gateway's
+    provider list and, if the provider is missing, registers it. Names are compared in the
+    broker's form, so `google_calendar` and `google-calendar` are the same provider. A
+    Gateway that does not take registrations from callers (one shared by several teams, or a
+    policy layer in front of one) refuses with 401, 403, 404 or 405; the refusal is logged
+    and the consent request goes ahead, and the Gateway answers whether the provider exists.
+    To skip the registration attempt entirely, set `NEXUS_SEED_PROVIDERS=false`.
+
 **Register a provider:** `POST /v1/providers`
 
 The payload must wrap all fields in a `profile` object and use `name` (not `provider`) as the identifier:

@@ -33,6 +33,17 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## Unreleased
+
+### Fixed
+
+- **A consent no longer fails when the Gateway refuses to register a provider.** `begin_authentication` registers a provider the Gateway does not list before requesting the connection. Behind a Gateway that manages providers itself (a shared deployment, or a policy layer in front of one), that `POST /v1/providers` is refused, and the refusal aborted the consent. A 401, 403, 404 or 405 is now logged and the consent request goes ahead; the Gateway answers whether the provider exists. Other errors still raise.
+- **Provider names are compared in the broker's form when checking the listing.** A Gateway that lists `google_calendar` now counts as having `google-calendar` (the form `broker_name` produces), so no registration is attempted for a provider that is already there.
+
+### Added
+
+- `NEXUS_SEED_PROVIDERS` (default `true`): set `false` to skip the registration attempt entirely, for deployments behind a shared Gateway.
+
 ## 2.3.0 <span class="changelog-date">2026-10-22</span>
 
 Multiplayer: a team and its agents work on the same files, from Slack or your

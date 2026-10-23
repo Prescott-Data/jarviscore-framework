@@ -76,16 +76,40 @@ class NexusClient:
 
     # ── Control Plane ─────────────────────────────────────────────
 
+    # Answers meaning "this gateway does not take provider registrations from callers", not
+    # "something broke": a gateway that manages providers itself, or a policy layer in front
+    # of one. The consent request that follows gets the authoritative answer.
+    REGISTRATION_REFUSED = (401, 403, 404, 405)
+
     async def ensure_provider(self, profile: Dict[str, Any]) -> None:
-        """Create a provider profile through the public Gateway API if absent."""
+        """Create a provider profile through the public Gateway API if absent.
+
+        Names are compared in the broker's form (lower case, hyphens), so a listing that
+        says google_calendar counts as present for google-calendar. A gateway that refuses
+        registration is not an error: the consent request goes ahead and the gateway says
+        whether the provider exists.
+        """
         name = str(profile.get("name") or "")
         response = await self.client.get("/v1/providers")
         response.raise_for_status()
         grouped = response.json()
-        present = any(name in providers for providers in grouped.values() if isinstance(providers, dict))
+        wanted = _provider_key(name)
+        present = any(
+            wanted == _provider_key(listed)
+            for providers in grouped.values()
+            if isinstance(providers, dict)
+            for listed in providers
+        )
         if present:
             return
         created = await self.client.post("/v1/providers", json={"profile": profile})
+        if created.status_code in self.REGISTRATION_REFUSED:
+            logger.warning(
+                "[NexusClient] Gateway refused to register provider %s (HTTP %s); "
+                "continuing with the consent request",
+                name, created.status_code,
+            )
+            return
         if created.status_code not in (200, 201, 409):
             created.raise_for_status()
 
@@ -302,3 +326,8 @@ class NexusClient:
     async def close(self):
         """Close the underlying HTTP client."""
         await self.client.aclose()
+
+
+def _provider_key(name: str) -> str:
+    """The broker's form of a provider name, for comparing two spellings of one provider."""
+    return str(name).strip().lower().replace("_", "-")
