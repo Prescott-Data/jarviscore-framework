@@ -163,12 +163,13 @@ class TestWhenProgramsAreOffered:
         before = agent._program_description({})
         assert "list_invoices(page: integer = ...)" in before
         assert "customer_name(customer_id: string)" in before
-        assert "Returns: not seen yet." in before
+        assert "->" not in before
+        assert "print a small sample before relying on fields" in before
 
         asyncio.run(agent._tool_run_tool_program("list_invoices(1)"))
 
         after = agent._program_description({})
-        assert 'Returns: {"page":"int","pages":"int","invoices":[{' in after
+        assert 'list_invoices(page: integer = ...) -> {"page":"int","pages":"int","invoices":[{' in after
 
 
 class TestToolDefinitionsHoldStillForTheRun:

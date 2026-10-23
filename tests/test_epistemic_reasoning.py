@@ -284,6 +284,7 @@ class TestTurnDigest:
         """
         import inspect
         source = inspect.getsource(BaseSubAgent._run_turns)
-        assert "[Turn {call}] Tool '{tool_name}' returned" in source
+        assert "[Turn {call}] {turn_log['status']}, " in source
+        assert "Tool '{tool_name}' returned" not in source
         assert "receipt {tool_receipt.receipt_id}" in source
         assert "Reflect:" not in source

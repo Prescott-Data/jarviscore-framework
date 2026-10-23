@@ -322,7 +322,8 @@ class ContextManager:
         return self._build_context_from_state(state, in_conversation)
 
     def build_context_parts(
-        self, state: Any, in_conversation: frozenset = frozenset()
+        self, state: Any, in_conversation: frozenset = frozenset(),
+        notes_in_view: Optional[frozenset] = None,
     ) -> Tuple[str, str]:
         """The turn's context as (what holds for the whole step, what changes each turn).
 
@@ -330,10 +331,12 @@ class ContextManager:
         lead the conversation and the turn's own state follows it, so every turn
         repeats the one before and is served from cache; rendered as one block
         after the conversation, each turn's prompt differed early and nothing was.
+        ``notes_in_view`` names notes the agent can read in its own calls in view;
+        they are not repeated.
         """
         if isinstance(state, dict):
             return self._build_context_from_dict(state), ""
-        blocks = self._render_keyed(state, in_conversation)
+        blocks = self._render_keyed(state, in_conversation, notes_in_view)
         static = [text for key, text in blocks if key in STEP_CONSTANT_BLOCKS]
         changing = [text for key, text in blocks if key not in STEP_CONSTANT_BLOCKS]
         return "\n\n".join(static), "\n\n".join(changing)
@@ -351,10 +354,11 @@ class ContextManager:
         return "\n\n".join(text for _, text in self._render_keyed(state, in_conversation))
 
     def _render_keyed(
-        self, state: "KernelState", in_conversation: frozenset = frozenset()
+        self, state: "KernelState", in_conversation: frozenset = frozenset(),
+        notes_in_view: Optional[frozenset] = None,
     ) -> List[Tuple[str, str]]:
         budget = self.config.usable_tokens
-        candidates = self._compose_blocks(state, in_conversation)
+        candidates = self._compose_blocks(state, in_conversation, notes_in_view)
         full_cost = sum(self.count_tokens(text) for _, text in candidates)
 
         for tier in LADDER:
@@ -388,7 +392,8 @@ class ContextManager:
         return rendered
 
     def _compose_blocks(
-        self, state: "KernelState", in_conversation: frozenset = frozenset()
+        self, state: "KernelState", in_conversation: frozenset = frozenset(),
+        notes_in_view: Optional[frozenset] = None,
     ) -> List[tuple]:
         """Every block the turn could show, at full fidelity, in priority order."""
         blocks: List[tuple] = []
@@ -397,8 +402,9 @@ class ContextManager:
             if text and text.strip():
                 blocks.append((key, text))
 
+        # The workflow's id is unique to each run: leading the task, it made every
+        # run's prompt differ from the first lines on. Receipts still carry it.
         mission = f"""## MISSION
-**Workflow:** {state.workflow_id}
 **Step:** {state.step_id}
 **Task:** {state.task}
 """
@@ -406,7 +412,10 @@ class ContextManager:
             mission += f"**CRITICAL ERROR TO FIX:** {state.last_error}\n"
         add("mission", mission)
         add("goal_state", self._build_goal_state_block(state.context or {}))
-        notes = getattr(state, "working_notes", None) or []
+        notes = [
+            note for note in getattr(state, "working_notes", None) or []
+            if notes_in_view is None or str(note.get("note", "")).strip() not in notes_in_view
+        ]
         if notes:
             add("working_notes", "## MY WORKING NOTES\nWhat I wrote down in this step (turn: note):\n" + "\n".join(
                 f"- [{note.get('turn')}] {note.get('note')}" for note in notes
@@ -478,20 +487,26 @@ class ContextManager:
             add("long_term_memory", ltm_block)
 
         # A program's own calls stay evidence; the agent sees what the program reported.
+        # A call in the conversation is shown there with its receipt; only the
+        # calls that have left view are listed here.
         shown_history = [turn for turn in state.tool_history if not getattr(turn, "via_program", False)]
-        if shown_history:
+        out_of_view = [
+            turn for turn in shown_history
+            if not (getattr(turn, "receipt_id", "") and turn.receipt_id in in_conversation)
+        ]
+        if out_of_view:
             receipt_lines = [
                 f"- `{turn.receipt_id}`: {turn.tool_name}; observed at {turn.observed_at.isoformat()}"
-                for turn in shown_history[-20:]
+                for turn in out_of_view[-20:]
                 if getattr(turn, "receipt_id", "")
             ]
             if receipt_lines:
                 add(
                     "tool_receipts",
                     "## AUTHORITATIVE TOOL RECEIPTS\n"
-                    "When your result reports what a tool did, cite its receipt as "
-                    "`tool_receipt_id`; JarvisCore binds the runtime facts. Full "
-                    "results remain in durable action history.\n"
+                    "Calls no longer in the conversation. When your result reports what "
+                    "one did, cite its receipt as `tool_receipt_id`; JarvisCore binds the "
+                    "runtime facts. Full results remain in durable action history.\n"
                     + "\n".join(receipt_lines),
                 )
             history_block, _ = self._format_tool_history(
@@ -609,8 +624,9 @@ class ContextManager:
                 # KernelState.ToolResult model
                 output = turn.tool_output
                 if turn.receipt_id and turn.receipt_id in in_conversation:
-                    output = "in the conversation, under this receipt"
-                elif turn.tool_name in perception_tools and index != latest_perception:
+                    # Shown in the conversation with its call and receipt.
+                    continue
+                if turn.tool_name in perception_tools and index != latest_perception:
                     output = (
                         f"replaced by a later {turn.tool_name}; read it in full with "
                         "read_turn_result"
