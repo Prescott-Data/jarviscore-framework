@@ -169,3 +169,37 @@ class TestWhenProgramsAreOffered:
 
         after = agent._program_description({})
         assert 'Returns: {"page":"int","pages":"int","invoices":[{' in after
+
+
+class TestToolDefinitionsHoldStillForTheRun:
+    """Tool definitions lead every prompt: one that changes mid-run makes every later turn miss the cache."""
+
+    def test_learning_a_shape_mid_run_leaves_the_definitions_as_they_were(self, tmp_path):
+        agent = _agent(tmp_path)
+        before, _ = agent._native_tool_specs({})
+
+        asyncio.run(agent._tool_run_tool_program("list_invoices(1)"))
+        after, _ = agent._native_tool_specs({})
+
+        assert json.dumps(after) == json.dumps(before)
+        tail = agent._shapes_learned_this_run()
+        assert tail.startswith("## RETURN SHAPES LEARNED THIS RUN")
+        assert '- list_invoices: {"page":"int","pages":"int","invoices":[{' in tail
+
+    def test_a_new_run_describes_what_the_agent_already_learned(self, tmp_path):
+        agent = _agent(tmp_path)
+        asyncio.run(agent._tool_run_tool_program("list_invoices(1)"))
+        agent._current_state = KernelState(
+            workflow_id="wf", step_id="s2", agent_id="ledger", task="again", context={},
+        )
+
+        specs, _ = agent._native_tool_specs({})
+
+        program = next(s for s in specs if s["function"]["name"] == "run_tool_program")
+        assert '"pages":"int"' in program["function"]["description"]
+        assert agent._shapes_learned_this_run() == ""
+
+    def test_read_turn_result_is_offered_from_the_first_turn(self, tmp_path):
+        agent = _agent(tmp_path)
+        names = {spec["function"]["name"] for spec in agent._native_tool_specs({})[0]}
+        assert "read_turn_result" in names

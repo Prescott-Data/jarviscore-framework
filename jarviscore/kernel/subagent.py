@@ -722,8 +722,6 @@ class BaseSubAgent(ABC):
             return hasattr(self._current_memory, _MEMORY_TOOLS[name])
         if name in _WORKFLOW_TOOLS:
             return any((context or {}).get(key) for key in _WORKFLOW_CONTEXT_KEYS)
-        if name == "read_turn_result":
-            return self._results_left_view()
         if name == "run_tool_program":
             return (
                 self.programmable and self._programs_can_run()
@@ -875,20 +873,6 @@ class BaseSubAgent(ABC):
         report["tool_receipts"] = receipts
         return report
 
-    def _results_left_view(self) -> bool:
-        """Whether an earlier result can be out of the agent's view: past the window or the budget."""
-        state = getattr(self, "_current_state", None)
-        if state is None:
-            return True
-        variables = state.internal_variables if isinstance(state.internal_variables, dict) else {}
-        if variables.get("_released_turn_results"):
-            return True
-        shown = [turn for turn in state.tool_history if not getattr(turn, "via_program", False)]
-        if len(shown) >= _CONVERSATION_WINDOW:
-            return True
-        retained = variables.get("_turn_results") or {}
-        return sum(len(text) for text in retained.values()) > _THREAD_RESULT_BUDGET // 2
-
     def _offered_tools(self, context: Optional[Dict]) -> List["ToolDefinition"]:
         return [tool for tool in self._tools.values() if self._offers_tool(tool.name, context)]
 
@@ -905,7 +889,38 @@ class BaseSubAgent(ABC):
         return "\n".join(lines)
 
     def _native_tool_specs(self, context: Optional[Dict]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-        """The offered tools and done as provider functions, and each function's tool."""
+        """The offered tools and done as provider functions, and each function's tool.
+
+        Fixed for the run once built: tool definitions lead every prompt, so one
+        that changed mid-run (a newly learned return shape, a tool appearing) made
+        every later turn miss the provider's cache. They are rebuilt only when the
+        offered set itself changes.
+        """
+        offered = tuple(tool.name for tool in self._offered_tools(context))
+        snapshot = getattr(self, "_spec_snapshot", None)
+        run = id(getattr(self, "_current_state", None))
+        if snapshot is not None and snapshot[0] == (run, offered):
+            return snapshot[1], snapshot[2]
+        specs, tools_by_function = self._build_native_tool_specs(context)
+        self._spec_snapshot = ((run, offered), specs, tools_by_function)
+        self._shapes_described = dict(getattr(self, "_result_shapes", {}) or {})
+        return specs, tools_by_function
+
+    def _shapes_learned_this_run(self) -> str:
+        """Return shapes learned after the tool definitions were fixed, for the turn's tail."""
+        described = getattr(self, "_shapes_described", None)
+        state = getattr(self, "_current_state", None)
+        if described is None or not self._offers_tool("run_tool_program", getattr(state, "context", None)):
+            return ""
+        shapes = getattr(self, "_result_shapes", {}) or {}
+        fresh = {name: shape for name, shape in shapes.items() if described.get(name) != shape}
+        if not fresh:
+            return ""
+        return "## RETURN SHAPES LEARNED THIS RUN (for run_tool_program)\n" + "\n".join(
+            f"- {name}: {shape}" for name, shape in fresh.items()
+        )
+
+    def _build_native_tool_specs(self, context: Optional[Dict]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
         specs, tools_by_function = [], {}
         for tool in self._offered_tools(context):
             function = _INVALID_FUNCTION_CHARS.sub("_", tool.name)[:64]
@@ -1588,6 +1603,9 @@ class BaseSubAgent(ABC):
             # ═══ 2. ORIENT — the budget that remains, as a fact for this turn ═══
             # A notice about this run's budget belongs to this turn; kept as a
             # thought it would outlive the run it describes.
+            learned = self._shapes_learned_this_run() if self._native_protocol else ""
+            if learned:
+                context_block += f"\n\n{learned}"
             context_block += (
                 f"\n\n## RUNTIME NOTICE (this turn)\n{_now_fact()}\n{self._cognition.budget_facts()}"
             )
