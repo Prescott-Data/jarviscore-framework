@@ -45,7 +45,7 @@ The scratchpad is scoped to its step. Entries written with `scope="goal"` are pr
 
 The `EpisodicLedger` is an append-only, ordered log of every turn event in a workflow. It is backed by a Redis Stream (key: `ledgers:{workflow_id}`) with a default TTL of seven days.
 
-Each entry records the turn ID, timestamp, thought, action, result, and token count. The ledger provides the complete chronological audit trail for a workflow execution.
+Each entry records the turn ID, timestamp, thought, action, result, and token count. The ledger is the chronological record of a workflow's turns while it is kept; it expires with the TTL and is not tamper-evident.
 
 During context assembly, the Kernel reads the last N entries via `tail(count)` rather than the full history, keeping the context window bounded regardless of how long the workflow runs.
 

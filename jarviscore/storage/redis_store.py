@@ -2910,7 +2910,7 @@ class RedisContextStore:
         serialized = json.dumps(event)
         # PubSub for real-time streaming
         receivers = self._redis.publish(channel, serialized)
-        # List for replay/audit
+        # List for history (expires with the store TTL)
         list_key = f"trace_log:{channel}"
         self._redis.rpush(list_key, serialized)
         self._redis.expire(list_key, self._ttl_seconds)
