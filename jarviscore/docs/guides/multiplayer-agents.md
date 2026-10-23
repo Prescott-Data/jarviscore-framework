@@ -10,6 +10,9 @@ This guide builds a multiplayer agent step by step: a launch team and its agents
 
 By the end, anyone on the team asks for work in their own words, your agents propose the change in a thread, and people review and decide there, each as themselves. You write the agents; JarvisCore provides identity, permissions, the conversation, delivery and people in the loop.
 
+!!! tip "See it finished first"
+    The [multiplayer blueprint](https://github.com/Prescott-Data/jarviscore-agents/tree/main/multiplayer) in JarvisCore Agents is a complete version of what this guide builds: a marketing team, a strategist and a writer agent in one room, running in the Desk. Its [video](https://github.com/Prescott-Data/jarviscore-agents/releases/download/v1.0.0/jarviscore-multiplayer.mp4) shows a real run.
+
 ## Before you start
 
 ```bash
