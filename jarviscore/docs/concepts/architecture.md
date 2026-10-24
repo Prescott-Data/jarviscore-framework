@@ -229,6 +229,10 @@ or return `already_satisfied` with evidence that the requested real-world
 outcome already exists. The latter completes as a successful no-op instead of
 repeating the mutation. Invalid reviews fail closed. This protects conditional
 effects without encoding provider sequences or domain decisions in atoms.
+The review judges preconditions only: a call missing required arguments is
+refused before review, permission to act is left to policy and approval, and
+the same call redirected twice is stopped (`EFFECT_INTENT_UNRESOLVED`) so the
+agent reports the missing evidence instead of asking again.
 
 The workflow budget caps the existing Kernel lease and goal loop. Every LLM call
 made during planning, evaluation, dependency review, effect review, direct step

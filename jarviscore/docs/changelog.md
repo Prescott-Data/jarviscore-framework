@@ -112,6 +112,18 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - **Nobody is asked to approve a call that cannot run.** A consequential call
   missing a required argument was sent for approval as it was; it is now refused
   with `ATOM_PARAMETERS_INVALID` first.
+- **The coder sees the arguments every integration takes.** Integrations were
+  offered to the model with an empty argument schema, so it guessed arguments
+  from the description and often sent none. Each is now offered with its real
+  parameters. The coder is also told to read an action's preconditions before
+  taking it, and the sandbox notes in its prompt render as lines, not literal `\n`.
+- **The effect-intent review no longer goes round in circles.** It is skipped for
+  a call missing required arguments (refused plainly instead), never asks for
+  "authorization" (policy and approval decide that), and stops after redirecting
+  the same call twice (`EFFECT_INTENT_UNRESOLVED`). In 20 live runs of a payment
+  task on the same model, reaching the approval gate went from 19/20 to 20/20,
+  median model calls 7 to 3, input tokens 24.7k to 11.4k, output tokens 1,063 to
+  259, and median time 19.4s to 8.7s; argument-less calls went from 40 to 0.
 
 ### Removed
 

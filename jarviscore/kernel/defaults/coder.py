@@ -87,6 +87,48 @@ def _produced_output(output: Any) -> bool:
 # CoderSubAgent
 # ─────────────────────────────────────────────────────────────────
 
+#: Atom parameters that are transport plumbing, not the task's: never the model's to set.
+_ATOM_PLUMBING = frozenset({"timeout", "verify_ssl"})
+
+
+def _atom_parameters_schema(atom) -> Dict[str, Any]:
+    """An atom's arguments as JSON Schema, so the model is told what each call needs.
+
+    Atom tools are closures taking ``**params``; without this their schema was
+    empty, the model guessed arguments from prose, and sometimes sent a call with
+    none, which an approval then covered as it was.
+    """
+    import re as _re
+
+    def json_type(annotation: str) -> Dict[str, Any]:
+        text = (annotation or "").replace("typing.", "").strip()
+        optional = _re.fullmatch(r"Optional\[(.*)\]", text)
+        if optional:
+            text = optional.group(1)
+        base = text.split("[", 1)[0].strip().lower()
+        mapped = {
+            "str": "string", "int": "integer", "float": "number", "bool": "boolean",
+            "list": "array", "tuple": "array", "dict": "object",
+        }.get(base)
+        return {"type": mapped} if mapped else {}
+
+    properties: Dict[str, Any] = {}
+    required = []
+    for parameter in atom.parameters:
+        if parameter.name in _ATOM_PLUMBING:
+            continue
+        properties[parameter.name] = json_type(parameter.type)
+        if parameter.required:
+            required.append(parameter.name)
+    schema: Dict[str, Any] = {"type": "object", "properties": properties, "additionalProperties": False}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+_EFFECT_REDIRECT_LIMIT = 2
+
+
 class CoderSubAgent(BaseSubAgent):
     """
     Code generation + execution subagent.
@@ -205,6 +247,19 @@ Code you write for the task itself has no provider access there. For an
 operation no atom covers, write a new read atom with `write_code` (atom=<name>,
 call=<arguments>): it is proven by that one call, then register it and call it
 like any other.
+
+## ACTIONS THAT CHANGE SOMETHING
+
+A capability that writes, sends, pays or deletes is checked before it runs.
+First read what it depends on with a read capability: the record it acts on,
+its current state, and the values you will send. Then call it once, with
+every argument it needs taken from what you read.
+
+Many of these wait for a person's approval. When a call returns `waiting`,
+stop and report that it is waiting: the step resumes with their decision and
+JarvisCore carries out exactly what they approved. Never call it again with
+other arguments, and never repair, rewrite or work around an action
+capability; if one fails, report what failed.
 
 ## CRITICAL RULES (read all before acting)
 
@@ -352,7 +407,10 @@ like any other.
         prompt = self.DEFAULT_SYSTEM_PROMPT
         if self.sandbox and hasattr(self.sandbox, "get_manifest"):
             manifest = self.sandbox.get_manifest()
-            prompt += f"\\n\\n## SANDBOX ENVIRONMENT\\nThe following modules and globals are pre-loaded in your execution environment. Do NOT use `import` for these:\\n{manifest}"
+            prompt += (
+                "\n\n## SANDBOX ENVIRONMENT\nThe following modules and globals are pre-loaded "
+                f"in your execution environment. Do NOT use `import` for these:\n{manifest}"
+            )
         return prompt
 
     def _build_user_prompt(self, state: KernelState, context_block: str) -> str:
@@ -433,11 +491,54 @@ like any other.
         state: KernelState,
     ) -> Optional[Dict[str, Any]]:
         atom = getattr(self, "_atoms", {}).get(tool_name)
-        if atom is None or atom.policy.effect not in {
-            "write", "notify", "destructive"
-        }:
+        if atom is None:
+            return None
+        # A call missing what it needs is refused here, plainly, before any review
+        # weighs it: a reviewer judging an argument-less call invents other reasons,
+        # and an agent chasing those reasons never sends the arguments.
+        missing = [
+            parameter.name for parameter in getattr(atom, "parameters", ())
+            if parameter.required and (params or {}).get(parameter.name) is None
+        ]
+        if missing:
+            return {
+                "status": "error",
+                "error": f"{tool_name} needs {', '.join(missing)}; call it again with them.",
+                "semantic_error": "ATOM_PARAMETERS_INVALID",
+                "missing": missing,
+            }
+        if atom.policy.effect not in {"write", "notify", "destructive"}:
             return None
         from jarviscore.orchestration.envelopes import EffectIntentDecision
+
+        # The same call redirected twice will be redirected again: more review only
+        # burns turns. Stop and say so, so the agent reports what it lacks.
+        names = {parameter.name for parameter in getattr(atom, "parameters", ())}
+
+        def arguments(call):
+            return {
+                k: v for k, v in (call or {}).items()
+                if (k in names if names else k != "working_notes")
+            }
+
+        proposed = arguments(params)
+        redirects = sum(
+            1 for item in state.tool_history
+            if item.tool_name == tool_name
+            and isinstance(item.tool_output, dict)
+            and item.tool_output.get("semantic_error") == "EFFECT_INTENT_REDIRECT"
+            and arguments(item.tool_input) == proposed
+        )
+        if redirects >= _EFFECT_REDIRECT_LIMIT:
+            return {
+                "status": "blocked",
+                "error": (
+                    f"{tool_name} with these arguments was held back {redirects} times "
+                    "for missing evidence. Do not call it again: finish with done and "
+                    "report the evidence that is missing."
+                ),
+                "semantic_error": "EFFECT_INTENT_UNRESOLVED",
+            }
 
         evidence = [
             {
@@ -460,7 +561,9 @@ like any other.
             "be true before the effect: evidence of its own result (a readback, receipt, "
             "link or confirmation of what this call creates or changes) cannot exist "
             "until it runs, and the agent verifies it afterwards, so never redirect for "
-            "it. Do not infer "
+            "it. Authority to act (permission, sign-off, authorization) is not evidence "
+            "the agent can gather: the institution's policy and approval gate decide it "
+            "after this review, so never redirect for it. Do not infer "
             "absence of one resource from absence of another. Return already_satisfied when "
             "the gathered evidence establishes that the requested real-world outcome "
             "already exists, so repeating the effect would be redundant. Redirect only when "
@@ -1855,6 +1958,7 @@ like any other.
                 f"{atom.describe()} Runs against {atom.system} with "
                 "credentials resolved outside the sandbox; you never handle them.",
                 phase="action",
+                parameters=_atom_parameters_schema(atom),
             )
             self._atom_tools.append(name)
 
@@ -1901,6 +2005,7 @@ like any other.
             f"{atom.describe()} Runs against {atom.system} with "
             "credentials resolved outside the sandbox; you never handle them.",
             phase="action",
+            parameters=_atom_parameters_schema(atom),
         )
         self._failed_atom_calls.pop(name, None)
         self._observed_atom_calls.pop(name, None)

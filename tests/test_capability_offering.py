@@ -85,8 +85,11 @@ def coder():
         }
     )
 
-    def register_tool(name, fn, description, phase=None):
+    agent._schemas = {}
+
+    def register_tool(name, fn, description, phase=None, parameters=None):
         agent._tools[name] = (fn, description, phase)
+        agent._schemas[name] = parameters
 
     agent.register_tool = register_tool
 
@@ -145,6 +148,21 @@ def test_candidate_makes_the_atom_a_callable_tool(coder):
     assert set(coder._atom_tools) == {
         "insightly_get_account", "insightly_create_account",
     }
+
+
+def test_an_offered_atom_tells_the_model_the_arguments_it_needs(coder):
+    """Atom tools are **params closures; their schema comes from the atom, not the closure."""
+    coder._run_context = {"system": "insightly", "effect": "write", "systems": ["insightly"]}
+
+    coder._offer_system_capabilities(coder._resolved_system())
+
+    for name in coder._atom_tools:
+        schema = coder._schemas[name]
+        atom = coder._atoms[name]
+        needed = [p.name for p in atom.parameters if p.required and p.name not in {"timeout", "verify_ssl"}]
+        assert schema["additionalProperties"] is False
+        assert schema.get("required", []) == needed, name
+        assert "verify_ssl" not in schema["properties"] and "timeout" not in schema["properties"]
 
 
 def test_provider_bound_outcome_offers_read_and_write_atoms_for_agent_reasoning(coder):

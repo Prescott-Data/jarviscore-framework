@@ -84,3 +84,50 @@ async def test_repairing_a_write_integration_cannot_perform_the_effect(coder):
 
     assert result["status"] != "success"
     assert all(method == "GET" for method, _, _ in coder.proxy.calls), coder.proxy.calls
+
+
+@pytest.mark.asyncio
+async def test_a_call_missing_arguments_is_refused_before_any_review_weighs_it(coder):
+    from jarviscore.kernel.state import KernelState
+
+    reviewed = []
+
+    async def review(*args, **kwargs):
+        reviewed.append(args)
+        return {"content": '{"decision": "allow"}'}
+
+    coder.llm_client.generate = review
+    state = KernelState(workflow_id="wf", step_id="pay", agent_id="c", task="pay INV-7")
+
+    refusal = await coder._pre_execute_hook("erp_pay_invoice", {"invoice_id": "INV-7"}, state)
+
+    assert refusal["semantic_error"] == "ATOM_PARAMETERS_INVALID"
+    assert refusal["missing"] == ["amount", "iban"]
+    assert reviewed == []
+
+
+@pytest.mark.asyncio
+async def test_the_same_action_is_not_reviewed_round_and_round(coder):
+    from jarviscore.kernel.state import KernelState
+
+    reviews = []
+
+    async def review(*args, **kwargs):
+        reviews.append(kwargs)
+        return {"content": '{"decision": "redirect", "reason": "need more", "missing_evidence": ["x"]}'}
+
+    coder.llm_client.generate = review
+    state = KernelState(workflow_id="wf", step_id="pay", agent_id="c", task="pay INV-7")
+    call = {"invoice_id": "INV-7", "amount": 10, "iban": "DE00"}
+
+    for _ in range(2):
+        held = await coder._pre_execute_hook("erp_pay_invoice", call, state)
+        assert held["semantic_error"] == "EFFECT_INTENT_REDIRECT"
+        state.add_tool_result("erp_pay_invoice", {**call, "working_notes": "again"}, held, error=held["error"])
+
+    stopped = await coder._pre_execute_hook("erp_pay_invoice", call, state)
+
+    assert stopped["semantic_error"] == "EFFECT_INTENT_UNRESOLVED"
+    assert len(reviews) == 2
+    changed = await coder._pre_execute_hook("erp_pay_invoice", {**call, "amount": 11}, state)
+    assert changed["semantic_error"] == "EFFECT_INTENT_REDIRECT"
