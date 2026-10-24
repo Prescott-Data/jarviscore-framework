@@ -115,7 +115,8 @@ Where every provider in the fallback chain supports native tool calls, each
 sub-agent turn is a function call. The model calls one of the step's tools, or
 calls `done` with `summary` (the complete human answer) and `result` (the
 structured value for downstream work, typed from the step's `output_schema`).
-Either call may carry `working_notes`, which the agent sees again on every turn.
+Any tool call may carry `working_notes`. The agent reads a note in the call that
+carried it while that call is in view, and in its notes once the call has left.
 
 Otherwise, Kernel sub-agents use a provider-neutral text protocol:
 

@@ -82,10 +82,28 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   the task gives is answered in the routing call (one model call instead of
   two), on the model the communicator would use. Calculations still go to the
   coder. `KERNEL_ROUTER_MAY_ANSWER=false` turns it off.
-- **Tool definitions stay fixed for a run**, and the task leads the
-  conversation. Turns still replace their closing message each time, which
-  stops the provider reusing the cached prefix within a run; that is the next
-  change.
+- **Each turn's prompt extends the last one, so providers serve it from
+  cache.** Tool definitions stay fixed for a run and the task leads the
+  conversation. What the runtime tells the agent (the date, the budget at the
+  start and again once a quarter remains, a warning before exchanges leave
+  view) is said once and stays where it was said. Notes, receipts and recent
+  actions are listed only for calls that have left view, exchanges leave view
+  five at a time, and the run's workflow id no longer leads the task. On
+  Azure, a prompt that strictly extends the last was served 9.1k of 9.2k
+  tokens from cache; one whose closing message was replaced, 5.4k of 9.1k.
+- **Notes when they are needed.** The agent is asked to note what it will
+  still need when exchanges are about to leave view, instead of on every
+  call; output tokens on a support ticket fell from ~550 to ~300.
+- **Receipts stay out of the answer.** `done` says receipts are cited in
+  `result` as `tool_receipt_id`, never in the summary; replies to customers
+  had carried receipt ids in their prose.
+- Measured head to head (same model, three interleaved rounds), against the
+  release before these turn changes: support lookups 1.8x cheaper, compute
+  1.7x, research 1.3x, five recurring tickets 2.2x (and 1.5x faster), with
+  26-78% of input now cached where none was. Against LangGraph and CrewAI,
+  JarvisCore is 2-3x cheaper on a 360-invoice ledger and 26-29x on 3,600
+  invoices, where it alone answered correctly; on small tool tasks it still
+  costs 1.3-3.6x more.
 
 ### Added
 
