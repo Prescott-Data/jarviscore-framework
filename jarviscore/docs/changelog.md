@@ -33,6 +33,27 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 2.4.1 <span class="changelog-date">2026-10-24</span>
+
+### Fixed
+
+- **An approval covers only the arguments the person saw.** A consequential
+  action's approval was looked up by its operation identity (the atom and its
+  idempotency fields), and the action then ran with whatever arguments the agent
+  passed. After a person approved "pay invoice INV-1, 10 to account A", a call
+  for INV-1 with another amount or account ran under that approval. 20 of the 155
+  shipped integrations that require approval take arguments outside their
+  identity (for example `cc` on `msgraph_send_email`, `from_email` on
+  `sendgrid_send_email`, `visibility` on `linkedin_create_post`). An approval is
+  now bound to every argument (for browser actions, to the element and values
+  touched), and different arguments ask the person again. An operation that has
+  already run still returns its recorded outcome, so it is never run twice.
+- **The first decision on an action stands.** `Mesh.resolve_hitl` checked that
+  an action was undecided and then wrote the decision, so an approval and a
+  refusal sent together could both pass the check and the last one won. The
+  decision is now written atomically (`resolve_hitl_action_once`); the later one
+  gets `ValueError`.
+
 ## 2.4.0 <span class="changelog-date">2026-10-24</span>
 
 ### Changed

@@ -28,6 +28,17 @@ def _durable(store, workflow_id, step_id) -> bool:
     )
 
 
+def _same_binding(record: dict[str, Any], action: HITLAction) -> bool:
+    """Whether the decision on record was asked for exactly this action."""
+    asked = record.get("action")
+    if not isinstance(asked, dict):
+        return False
+    try:
+        return HITLAction(**asked).binding_digest() == action.binding_digest()
+    except Exception:  # noqa: BLE001 - an unreadable record covers nothing
+        return False
+
+
 def _waiting(action: HITLAction, request_id: str, workflow_id: str, step_id: str) -> dict[str, Any]:
     return {
         "status": "waiting",
@@ -46,7 +57,11 @@ def _waiting(action: HITLAction, request_id: str, workflow_id: str, step_id: str
 
 
 def gate(store, workflow_id: str, step_id: str, action: HITLAction) -> dict[str, Any] | None:
-    """None when the person approved ``action`` and it has not run; otherwise its tool result."""
+    """None when the person approved exactly ``action`` and it has not run; otherwise its tool result.
+
+    An approval covers the arguments the person saw. Once the operation has run,
+    its recorded outcome stands for it, whatever arguments are offered again.
+    """
     if not _durable(store, workflow_id, step_id):
         return {
             "status": "error",
@@ -58,8 +73,13 @@ def gate(store, workflow_id: str, step_id: str, action: HITLAction) -> dict[str,
         }
     record = store.get_hitl_request(workflow_id, step_id, action.action_id)
     outcome = (record or {}).get("outcome")
-    if record is None or (isinstance(outcome, dict) and outcome.get("status") == "not_performed"):
-        # An approval that could not be carried out leaves the action undecided.
+    if (
+        record is None
+        or (isinstance(outcome, dict) and outcome.get("status") == "not_performed")
+        or (not isinstance(outcome, dict) and not _same_binding(record, action))
+    ):
+        # An approval that could not be carried out leaves the action undecided, and
+        # one given for other arguments does not cover these: the person decides again.
         request = HITLRequest(
             workflow_id=workflow_id,
             step_id=step_id,

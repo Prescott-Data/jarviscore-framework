@@ -266,7 +266,10 @@ result = await mesh.resolve_hitl(
 On resume, JarvisCore carries out the decision before the agent's next turn.
 An approved action runs through the normal tool path and the agent receives
 its receipt; a declined one is reported and never run. An approval covers one
-exact action in one step and the action runs at most once. If the action could
+exact action in one step, with exactly the arguments the person saw (for a
+browser action, the element and the values entered): the same operation with
+other arguments asks the person again. The action runs at most once, and the
+first decision sent on it stands. If the action could
 not be carried out (the target moved, or something blocked it), nothing
 happened, so the outcome is reported to the agent and the action is not
 marked as done. See
