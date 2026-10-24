@@ -117,6 +117,18 @@ def test_without_uv_creates_venv_and_pip_installs_the_dependencies(project):
     assert "-e" not in run.calls[1][0]
 
 
+def test_without_uv_a_local_framework_source_is_installed_editable(project):
+    text = (project / "pyproject.toml").read_text()
+    (project / "pyproject.toml").write_text(
+        text + '\n[tool.uv.sources]\njarviscore-framework = { path = "/src/jc", editable = true }\n')
+    run = Recorder()
+    provision(project, which=lambda _: None, python="/usr/bin/python3", runner=run,
+              note=lambda _: None)
+    pip = run.calls[1][0]
+    assert pip[pip.index("-e") + 1] == "/src/jc[p2p,redis]"
+    assert not any(arg.startswith("jarviscore-framework") for arg in pip)
+
+
 def test_dependencies_are_required_without_uv(project):
     (project / "pyproject.toml").write_text('[project]\nname = "demo"\n')
     run = Recorder()

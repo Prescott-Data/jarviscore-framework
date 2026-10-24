@@ -73,7 +73,7 @@ def serve(role: str, destination: str | None, replica: int) -> int:
         loaded = load_project(destination=destination)
         agent_file = agent_path(loaded, role)
     except (ProjectError, ServeError) as exc:
-        print(str(exc), file=sys.stderr)
+        print(f"✗ {exc}", file=sys.stderr)
         return 2
 
     python, note = project_python(loaded.root)
@@ -82,7 +82,7 @@ def serve(role: str, destination: str | None, replica: int) -> int:
     try:
         ensure_jarviscore(python, loaded.root)
     except InterpreterError as exc:
-        print(str(exc), file=sys.stderr)
+        print(f"✗ {exc}", file=sys.stderr)
         return 1
 
     # Explicit process env (from compose, CI) wins over the project files.
@@ -275,7 +275,7 @@ def _runner_main(argv: list) -> int:
     try:
         agent = resolve_agent(load_agent_module(root, agent_file))
     except AgentResolutionError as exc:
-        print(str(exc), file=sys.stderr)
+        print(f"✗ {exc}", file=sys.stderr)
         return 2
     import asyncio
 

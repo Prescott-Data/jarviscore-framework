@@ -3,12 +3,13 @@
 Template files live in jarviscore/data/templates/<template>/ plus _common/.
 """
 
+import json
 import re
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from importlib.metadata import PackageNotFoundError
+from importlib.metadata import PackageNotFoundError, distribution
 from importlib.metadata import version as package_version
 from pathlib import Path
 
@@ -99,6 +100,7 @@ def create_project(
     context = {
         "service": name,
         "jarviscore_version": _framework_version(),
+        "framework_source": _framework_source_block(),
         "secret_list": "[" + ", ".join(secret_names) + "]",
         "secret_refs": "\n".join(f"{n}=${n}" for n in secret_names) or "# CLAUDE_API_KEY=$CLAUDE_API_KEY",
     }
@@ -184,6 +186,34 @@ def _framework_version() -> str:
         return package_version("jarviscore-framework")
     except PackageNotFoundError:
         return "2.1.0"
+
+
+def _framework_source() -> Path | None:
+    """The checkout this CLI runs from when installed from a local path (e.g. `pip install -e`).
+
+    Its version number can match a PyPI release that lacks what the checkout adds,
+    so a project generated from it must install the checkout, not resolve PyPI.
+    """
+    try:
+        raw = distribution("jarviscore-framework").read_text("direct_url.json")
+        url = json.loads(raw or "{}").get("url", "")
+    except (PackageNotFoundError, ValueError, OSError):
+        return None
+    if not url.startswith("file://"):
+        return None
+    from urllib.parse import unquote, urlparse
+
+    path = Path(unquote(urlparse(url).path))
+    return path if (path / "pyproject.toml").is_file() else None
+
+
+def _framework_source_block() -> str:
+    source = _framework_source()
+    if source is None:
+        return ""
+    return ("\n# Installed from a local checkout of the framework; remove to use PyPI.\n"
+            "[tool.uv.sources]\n"
+            f"jarviscore-framework = {{ path = {json.dumps(str(source))}, editable = true }}\n")
 
 
 def _uv_lock(root: Path) -> bool:

@@ -38,6 +38,7 @@ ZMQ_PORT_OFFSET = 1000
 DEFAULT_REDIS = "redis://localhost:6379/0"
 REDIS_IMAGE = "redis:7-alpine"
 STOP_TIMEOUT = 15.0
+SEED_BIND_TIMEOUT = 20.0
 DOCKER_TIMEOUT = 15
 # `docker run` may pull the image on first use.
 DOCKER_PULL_TIMEOUT = 300
@@ -328,9 +329,16 @@ class DevSession:
 
     def _wait_until_bound(self, peer: Peer) -> None:
         # Let the seed bind before others try to join it.
-        _wait_for(lambda: (_listening(peer.port + ZMQ_PORT_OFFSET) or peer.proc.poll() is not None
+        port = peer.port + ZMQ_PORT_OFFSET
+        _wait_for(lambda: (_listening(port) or peer.proc.poll() is not None
                            or self.stopping.is_set()),
-                  20, None)
+                  SEED_BIND_TIMEOUT, None)
+        if peer.proc.poll() is None and not self.stopping.is_set() and not _listening(port):
+            self.warn(
+                f"! {peer.label} did not open its mesh port {port} within "
+                f"{SEED_BIND_TIMEOUT:.0f}s; the other agents may not find it. If its log "
+                "mentions swim or zmq, install the p2p extra into the project "
+                "(\"jarviscore-framework[p2p,redis]\" in pyproject.toml).")
 
     def _start(self, peer: Peer) -> None:
         # The same environment `jarviscore serve` would build, without a second

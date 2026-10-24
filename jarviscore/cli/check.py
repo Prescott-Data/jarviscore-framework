@@ -406,10 +406,10 @@ class HealthChecker:
             print("\n" + "="*70)
             print("  Next Steps")
             print("="*70)
-            print("\n1. Initialize project:")
-            print("   jarviscore init")
+            print("\n1. Create a project (or run this inside one):")
+            print("   jarviscore init my-agents && cd my-agents")
             print("\n2. Configure your environment:")
-            print("   cp .env.example .env")
+            print("   cp .env.example .env   # if .env is missing")
             print("   # Edit .env and add one of:")
             print("   #   JARVISCORE_PROMO_TOKEN=jc_trial_...")
             print("   #   CLAUDE_API_KEY=sk-ant-...")
@@ -418,8 +418,8 @@ class HealthChecker:
             print("   #   LLM_ENDPOINT=http://localhost:8000 (for local vLLM)")
             print("\n3. Run health check again:")
             print("   jarviscore check --validate-llm")
-            print("\n4. Try the quickstart:")
-            print("   python examples/quickstart.py")
+            print("\n4. Run your agents:")
+            print("   jarviscore dev")
             print()
 
             return False
@@ -427,8 +427,8 @@ class HealthChecker:
         print("\n✓ All checks passed! Ready to use JarvisCore.\n")
         print("Next steps:")
         print("  1. Run smoke test:    jarviscore smoketest")
-        print("  2. Try quickstart:    python examples/quickstart.py")
-        print("  3. Full example set:  jarviscore init --examples")
+        print("  2. New project:       jarviscore init my-agents")
+        print("  3. Run it locally:    cd my-agents && jarviscore dev")
         print()
 
         return True

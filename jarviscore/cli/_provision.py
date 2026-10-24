@@ -128,6 +128,27 @@ def _minimal_dependencies(text: str) -> list[str]:
     raise ProvisionError("Unterminated [project].dependencies in pyproject.toml")
 
 
+_LOCAL_FRAMEWORK = re.compile(
+    r'^\s*jarviscore-framework\s*=\s*\{[^}\n]*\bpath\s*=\s*"((?:[^"\\]|\\.)*)"', re.MULTILINE)
+_FRAMEWORK_REQ = re.compile(r"^\s*jarviscore-framework\s*(\[[^\]]*\])?", re.IGNORECASE)
+
+
+def _with_local_framework(deps: list[str], pyproject_text: str) -> list[str]:
+    """pip ignores [tool.uv.sources]; honour a local framework path the same way uv does."""
+    match = _LOCAL_FRAMEWORK.search(pyproject_text)
+    if not match:
+        return deps
+    path = match.group(1).encode().decode("unicode_escape")
+    out: list[str] = []
+    for dep in deps:
+        req = _FRAMEWORK_REQ.match(dep)
+        if req:
+            out += ["-e", f"{path}{req.group(1) or ''}"]
+        else:
+            out.append(dep)
+    return out
+
+
 # ── Provisioning ─────────────────────────────────────────────────────────
 
 def plan(root: Path, *, which: Callable[[str], str | None] = shutil.which,
@@ -138,6 +159,8 @@ def plan(root: Path, *, which: Callable[[str], str | None] = shutil.which,
         return "uv", [[uv, "sync"]], f"cd {shlex.quote(str(root))} && uv sync"
     python = python or sys.executable
     deps = project_dependencies(root / "pyproject.toml")
+    if deps:
+        deps = _with_local_framework(deps, (root / "pyproject.toml").read_text())
     if not deps:
         raise ProvisionError(
             f"{root / 'pyproject.toml'} lists no [project].dependencies, so there is nothing "

@@ -46,6 +46,28 @@ def test_pyproject_pins_current_framework(tmp_path):
     assert "jarviscore-framework[p2p,redis]>=" in text
 
 
+def test_pyproject_uses_a_local_framework_checkout(tmp_path, monkeypatch):
+    tomllib = pytest.importorskip("tomllib")
+    from jarviscore.cli import project_init
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "pyproject.toml").write_text("")
+    monkeypatch.setattr(project_init, "_framework_source", lambda: checkout)
+    root = create_project(tmp_path, "demo", "minimal").root
+    data = tomllib.loads((root / "pyproject.toml").read_text())
+    assert data["tool"]["uv"]["sources"]["jarviscore-framework"] == {
+        "path": str(checkout), "editable": True}
+
+
+def test_pyproject_uses_pypi_for_a_released_framework(tmp_path, monkeypatch):
+    from jarviscore.cli import project_init
+
+    monkeypatch.setattr(project_init, "_framework_source", lambda: None)
+    root = create_project(tmp_path, "demo", "minimal").root
+    assert "tool.uv.sources" not in (root / "pyproject.toml").read_text()
+
+
 def test_gitignore_covers_local_secrets_and_build(tmp_path):
     lines = (create_project(tmp_path, "demo").root /
              ".gitignore").read_text().splitlines()

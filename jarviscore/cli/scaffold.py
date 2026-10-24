@@ -221,10 +221,13 @@ def _create_named_project(args) -> int:
         copy_skill(result.root, False)  # NAME --force never overwrites
 
     def rel(p): return p.relative_to(result.root)
-    print(
-        f"\n✓ Created {args.name}/ from the '{template}' template ({TEMPLATES[template]})")
-    for path in sorted(result.files):
-        print(f"    {rel(path)}")
+    if result.files:
+        verb = "Added missing files to" if result.skipped else "Created"
+        print(f"\n✓ {verb} {args.name}/ from the '{template}' template ({TEMPLATES[template]})")
+        for path in sorted(result.files):
+            print(f"    {rel(path)}")
+    else:
+        print(f"\n✓ {args.name}/ already has every file of the '{template}' template")
     if result.skipped:
         print("  Kept existing files (not overwritten):")
         for path in sorted(result.skipped):
