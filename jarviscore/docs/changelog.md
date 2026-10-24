@@ -98,6 +98,21 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   integration with an action id send any POST, PUT, PATCH or DELETE; the broker
   now holds it to the methods its declared effect allows.
 
+### Fixed
+
+- **Repairing an integration that acts on the world no longer performs it.**
+  A repair is proven by running it. For a write, notify or destructive
+  integration that performed the effect, with the arguments the repair carried
+  and nobody's approval: found in a live run, where a payment the person had
+  approved with no arguments was "repaired" and then paid with arguments nobody
+  saw. Repairs of such integrations are refused (`ATOM_REPAIR_WOULD_ACT`) and
+  reported for a person to fix; read integrations are repaired as before. In
+  strict mode the broker also refuses any mutation from code the model wrote that
+  carries no approval of that exact action (`unapproved-model-effect`).
+- **Nobody is asked to approve a call that cannot run.** A consequential call
+  missing a required argument was sent for approval as it was; it is now refused
+  with `ATOM_PARAMETERS_INVALID` first.
+
 ### Removed
 
 - `CoderSandbox._execute_local` and its helpers. Nothing called them, and they

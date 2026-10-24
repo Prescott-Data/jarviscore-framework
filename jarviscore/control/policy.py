@@ -189,6 +189,14 @@ def _builtin_refusal(call: ProviderCall) -> Optional[Tuple[str, str]]:
             f"{call.atom} was written by the model and its code does not verifiably "
             f"send {method} to this path, so it may not mutate {call.provider}.",
         )
+    if call.code_origin == "model" and mutation and not call.approval:
+        # Whatever path brought it here, code the model wrote in this run does not act
+        # on the world without a person's approval of that exact action.
+        return (
+            "unapproved-model-effect",
+            f"{call.atom or 'Code the model wrote'} would {method} to {call.provider} "
+            "with no approval of this exact action.",
+        )
     return None
 
 

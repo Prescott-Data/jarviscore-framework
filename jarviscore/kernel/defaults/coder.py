@@ -778,6 +778,25 @@ like any other.
                 "error": "; ".join(contract.problems) or "Replacement atom contract is invalid.",
                 "issues": list(contract.problems),
             }
+        current = read_contract(
+            self.code_registry.get_function_code(function_name) or "",
+            system=str(metadata.get("system") or ""),
+            expected_name=function_name,
+        ).atom
+        if failure["kind"] != "extension" and (
+            contract.atom.policy.effect != "read"
+            or (current is not None and current.policy.effect != "read")
+        ):
+            # A repair is proven by running it; for an atom that acts on the world that
+            # would perform the effect with nobody's approval, on arguments nobody saw.
+            return {
+                "status": "error",
+                "error": (
+                    f"`{function_name}` acts on the world, so it cannot be repaired by running "
+                    "the repair. Report what fails; a person fixes and registers it."
+                ),
+                "semantic_error": "ATOM_REPAIR_WOULD_ACT",
+            }
         if failure["kind"] == "extension":
             problem = self._extension_problem(
                 self.code_registry.get_function_code(function_name) or "",
@@ -1175,6 +1194,13 @@ like any other.
                     "semantic_error": "ATOM_REPAIR_INVALID",
                 }
             repair_atom = contract.atom
+            if repair_atom.policy.effect != "read":
+                # Proving it would perform its effect unapproved (see _tool_repair_atom).
+                return {
+                    "status": "error",
+                    "error": "An atom that acts on the world is not proven by running it.",
+                    "semantic_error": "ATOM_PROOF_WOULD_ACT",
+                }
             invocation_params = dict(candidate.get("invocation_params") or {})
             exec_code = f"{exec_code}\n\n{invocation(repair_atom, invocation_params)}"
             kwargs["_internal_atom"] = (
@@ -2128,6 +2154,18 @@ like any other.
                     "status": "error",
                     "error": f"`{name}` is no longer in the registry.",
                     "semantic_error": "ATOM_UNAVAILABLE",
+                }
+            # A call that cannot run is refused here: nobody is asked to approve it.
+            missing = [p.name for p in atom.parameters if p.required and params.get(p.name) is None]
+            try:
+                invocation(atom, params)
+                if missing:
+                    raise ValueError(f"{name} needs {', '.join(missing)}.")
+            except ValueError as exc:
+                return {
+                    "status": "error",
+                    "error": str(exc),
+                    "semantic_error": "ATOM_PARAMETERS_INVALID",
                 }
             action_id = self._atom_action_id(atom, params)
             if atom.policy.effect in {"write", "notify", "destructive"}:

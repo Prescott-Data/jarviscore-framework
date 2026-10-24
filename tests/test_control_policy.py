@@ -54,13 +54,21 @@ def test_a_shipped_read_may_post_but_model_written_code_may_not_without_a_verifi
 def test_model_written_code_may_only_send_operations_its_own_code_names():
     contract = read_operations(ISSUES, "github_create_issue")
     inside = strict().decide(call("POST", atom="github_create_issue", declared_effect="write",
-                                  code_origin="model", contract=contract))
+                                  code_origin="model", contract=contract, approval="d" * 64))
     outside = strict().decide(call("POST", url="https://api.github.com/repos/a/b/collaborators",
                                    atom="github_create_issue", declared_effect="write",
-                                   code_origin="model", contract=contract))
+                                   code_origin="model", contract=contract, approval="d" * 64))
 
     assert inside.allowed
     assert outside.rule == "outside-contract"
+
+
+def test_model_written_code_never_acts_without_an_approval_of_that_action():
+    contract = read_operations(ISSUES, "github_create_issue")
+    decision = strict().decide(call("POST", atom="github_create_issue", declared_effect="write",
+                                    code_origin="model", contract=contract))
+
+    assert decision.rule == "unapproved-model-effect"
 
 
 def test_model_written_code_with_an_unverified_contract_may_not_mutate():

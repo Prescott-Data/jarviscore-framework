@@ -114,7 +114,7 @@ async def test_an_allowed_atom_call_is_recorded_without_query_or_body(broker):
         "connection-1", "POST", "https://api.github.com/repos/acme/app/issues?secret=1",
         json={"title": "private title"},
         authority={"workflow_id": "wf", "step_id": "s1", "atom": "github_create_issue",
-                   "effect": "write", "code_origin": "model", "contract": contract, "action_id": "a1"},
+                   "effect": "write", "code_origin": "shipped", "contract": contract, "action_id": "a1"},
     )
 
     events = kinds(root, "wf/s1")
