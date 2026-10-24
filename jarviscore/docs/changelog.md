@@ -33,7 +33,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## Unreleased
+## 2.4.0 <span class="changelog-date">2026-10-24</span>
 
 ### Changed
 
