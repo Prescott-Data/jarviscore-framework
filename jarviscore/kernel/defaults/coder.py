@@ -1236,11 +1236,15 @@ like any other.
                 code_origin = "registry"
             # What this exact code can send, read before it runs; the broker holds every
             # call to it. Parent-side only: none of this reaches the child process.
+            required, binding = kwargs.get("_approval") or (False, None)
             grant = {
                 "atom": atom.name,
                 "effect": atom.policy.effect,
                 "code_origin": code_origin,
                 "contract": read_operations(exec_code, atom.name),
+                # The approval this run of the atom carries, checked by the broker.
+                "approval_required": bool(required),
+                "approval": binding,
             }
             exec_context["_atom_authority"] = {
                 **grant,
@@ -2130,24 +2134,44 @@ like any other.
                 refusal = await self._guard_refusal(atom, params)
                 if refusal is not None:
                     return refusal
-            if atom.policy.requires_approval:
+            from jarviscore.control.approvals import requirement_for
+            from jarviscore.control.policy import current_policy
+
+            # The integration's own approval is the default; the institution's policy decides.
+            policy = current_policy()
+            requirement = requirement_for(
+                provider=atom.system, atom=name, effect=atom.policy.effect,
+                integration_requires=atom.policy.requires_approval, rules=policy.approvals,
+            )
+            pending = HITLAction(
+                action_id=action_id,
+                tool=name,
+                system=atom.system,
+                params=dict(params),
+                description=atom.describe(),
+                consequence=atom.policy.consequence or atom.describe(),
+            ) if requirement.required else None
+            if pending is not None:
                 refusal = approval.gate(
                     self.redis_store,
                     self._run_context.get("workflow_id"),
                     self._run_context.get("step_id"),
-                    HITLAction(
-                        action_id=action_id,
-                        tool=name,
-                        system=atom.system,
-                        params=dict(params),
-                        description=atom.describe(),
-                        consequence=atom.policy.consequence,
-                    ),
+                    pending,
+                    requirement=requirement,
+                    directory=policy.principals,
                 )
                 if refusal is not None:
                     return refusal
             prior = self._idempotent_result(action_id)
             if prior is not None:
+                if requirement.required:
+                    approval.settle(
+                        self.redis_store,
+                        self._run_context.get("workflow_id"),
+                        self._run_context.get("step_id"),
+                        action_id,
+                        prior,
+                    )
                 return prior
             self._run_context["_nexus_connection_id"] = self._connection_handle(
                 atom.system
@@ -2168,6 +2192,7 @@ like any other.
                 description=f"{name} via {atom.system}",
                 _internal_atom=(atom, action_id),
                 _shipped_atom=(atom, params) if shipped_source(atom) == code else None,
+                _approval=(requirement.required, pending.binding_digest() if pending is not None else None),
             )
             self._record_atom_outcome(name, result, params=params)
             if (
@@ -2175,7 +2200,7 @@ like any other.
                 and result.get("status") == "success"
             ):
                 self._save_idempotent_result(action_id, result)
-            if atom.policy.requires_approval:
+            if requirement.required:
                 approval.settle(
                     self.redis_store,
                     self._run_context.get("workflow_id"),

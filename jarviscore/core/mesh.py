@@ -1730,14 +1730,26 @@ class Mesh:
         decision: str,
         resolved_by: str = "",
         note: str = "",
+        approver=None,
+        assertion: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Record a person's decision on a waiting action and continue its step."""
+        """Record a person's decision on a waiting action and continue its step.
+
+        Who decided comes from ``assertion`` (an approval assertion signed by your
+        backend over this exact action, see ``control.approvals.sign_assertion``),
+        else from ``approver`` (a ``control.approvals.Approver`` your code built),
+        else from ``resolved_by`` (recorded as unauthenticated). When the deployment
+        requires roles, a different person from the requester, or a verified
+        approver, an approval that does not meet it raises ``ApprovalRefused``.
+        The first decision stands; a later one raises ``ValueError``.
+        """
         from jarviscore.contracts.hitl import (
             APPROVED_DECISIONS,
             REJECTED_DECISIONS,
             normalize_hitl_decision,
         )
+        from jarviscore.kernel import approval
 
         if not self._started or self._redis_store is None:
             raise RuntimeError("A started Redis-backed Mesh is required to resolve HITL.")
@@ -1747,15 +1759,39 @@ class Mesh:
         step_id = self._redis_store.get_hitl_action_step(workflow_id, action_id)
         if step_id is None:
             raise KeyError(f"Workflow {workflow_id!r} has no action {action_id!r} awaiting a decision")
-        # The first decision stands: an approval and a refusal sent together cannot both land.
-        decided = self._redis_store.resolve_hitl_action_once(
-            workflow_id, step_id, action_id, normalized.value,
-            responder=resolved_by, comment=note,
+        approval.record_decision(
+            self._redis_store, workflow_id, step_id, action_id, normalized.value,
+            resolved_by=resolved_by, note=note, approver=approver, assertion=assertion,
         )
-        if decided is None:
-            raise KeyError(f"Workflow {workflow_id!r} has no action {action_id!r} awaiting a decision")
-        if decided is False:
-            raise ValueError("This action has already been decided.")
+        return await self.resume_goal(workflow_id, step_id, timeout=timeout)
+
+    async def reconcile_hitl(
+        self,
+        workflow_id: str,
+        action_id: str,
+        *,
+        performed: bool,
+        outcome: Optional[Dict[str, Any]] = None,
+        resolved_by: str = "",
+        note: str = "",
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Settle an approved action whose outcome is unknown (its run stopped while carrying it out).
+
+        Check the provider, then say whether it happened: ``performed=True`` records
+        ``outcome`` and the action never runs again; ``performed=False`` lets it run.
+        """
+        from jarviscore.kernel import approval
+
+        if not self._started or self._redis_store is None:
+            raise RuntimeError("A started Redis-backed Mesh is required to reconcile HITL.")
+        step_id = self._redis_store.get_hitl_action_step(workflow_id, action_id)
+        if step_id is None:
+            raise KeyError(f"Workflow {workflow_id!r} has no action {action_id!r}")
+        approval.reconcile(
+            self._redis_store, workflow_id, step_id, action_id,
+            performed=performed, outcome=outcome, resolved_by=resolved_by, note=note,
+        )
         return await self.resume_goal(workflow_id, step_id, timeout=timeout)
 
     async def replan_goal(

@@ -82,6 +82,28 @@ async def close_pooled_clients() -> None:
                 logger.debug("Closing a provider connection pool failed: %s", exc)
 
 
+#: Providers that deduplicate a mutation by a request header. An operation's id
+#: goes there, so a retried call is the same request and is carried out once.
+_IDEMPOTENCY_HEADERS = {
+    "stripe": "Idempotency-Key",
+    "adyen": "Idempotency-Key",
+    "mollie": "Idempotency-Key",
+    "gocardless": "Idempotency-Key",
+    "checkout": "Cko-Idempotency-Key",
+    "paypal": "PayPal-Request-Id",
+}
+
+
+def _with_idempotency_key(provider: str, method: str, headers, authority) -> Optional[Dict[str, str]]:
+    name = _IDEMPOTENCY_HEADERS.get(provider)
+    operation = (authority or {}).get("action_id")
+    if not name or not operation or method.upper() in ("GET", "HEAD", "OPTIONS"):
+        return headers
+    if any(key.lower() == name.lower() for key in (headers or {})):
+        return headers
+    return {**(headers or {}), name: str(operation)[:64]}
+
+
 def _run_name(authority: Optional[Dict[str, Any]]) -> str:
     """The journal run a call belongs to: its workflow step, or the workflow, or this process."""
     authority = authority or {}
@@ -117,6 +139,8 @@ def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, 
         code_origin=authority.get("code_origin") or ("shipped" if authority.get("atom") else "direct"),
         contract=authority.get("contract"),
         action_id=authority.get("action_id"),
+        approval_required=bool(authority.get("approval_required")),
+        approval=authority.get("approval"),
     )
     decision = policy.decide(call)
     host, path = describe(url)
@@ -134,6 +158,7 @@ def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, 
         "code_origin": call.code_origin,
         "verified": call.verified,
         "action_id": call.action_id,
+        "approval": call.approval,
         "outcome": decision.outcome,
         "rule": decision.rule,
         "enforced": decision.enforced,
@@ -274,6 +299,7 @@ class NexusCallProxy:
         provider = self._provider_for(connection_id)
         # Decided before anything leaves this process, including the credential lookup.
         call_id, run, journal, strict = _decide(provider, method, url, authority)
+        headers = _with_idempotency_key(provider, method, headers, authority)
 
         strategy = None
         request_kwargs = None

@@ -175,3 +175,47 @@ async def test_off_mode_neither_decides_nor_records(broker):
 
     import os
     assert not os.path.exists(root)
+
+
+@pytest.mark.asyncio
+async def test_a_mutation_to_a_provider_that_deduplicates_carries_the_operation_id(broker):
+    proxy, auth, _ = broker("report")
+    auth._connections = {"stripe": "connection-1"}
+    seen = {}
+
+    async def request(**kwargs):
+        seen.update(kwargs)
+        return Response()
+
+    Client.request = staticmethod(request)
+    try:
+        await proxy.call("connection-1", "POST", "https://api.stripe.com/v1/refunds",
+                         authority={"atom": "stripe_create_refund", "effect": "write",
+                                    "code_origin": "shipped", "action_id": "op-123"})
+    finally:
+        del Client.request
+
+    assert seen["headers"]["Idempotency-Key"] == "op-123"
+
+
+def test_a_square_payment_retried_carries_the_same_idempotency_key():
+    import asyncio
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "jarviscore/integrations/atoms/square"
+    for kind in ("payment", "customer", "order"):
+        bodies = []
+
+        async def nexus_call(method, url, **kwargs):
+            bodies.append(kwargs.get("json"))
+            return {"ok": True, "status_code": 200, "json": {}, "body": "{}", "content": b"{}"}
+
+        namespace = {"nexus_call": nexus_call}
+        exec(compile((root / f"square_create_{kind}.py").read_text(), kind, "exec"), namespace)
+        create = namespace[f"square_create_{kind}"]
+        asyncio.run(create({"amount": 5, "note": "a"}))
+        asyncio.run(create({"amount": 5, "note": "a"}))
+        asyncio.run(create({"amount": 6, "note": "a"}))
+
+        keys = [body["idempotency_key"] for body in bodies]
+        assert keys[0] == keys[1] != keys[2], kind

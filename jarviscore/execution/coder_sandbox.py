@@ -1103,6 +1103,8 @@ class CoderSandbox:
                             "code_origin": grant.get("code_origin") or "model",
                             "contract": grant.get("contract"),
                             "action_id": grant.get("action_id"),
+                            "approval_required": grant.get("approval_required"),
+                            "approval": grant.get("approval"),
                         }
                         call = self._recording_nexus_call(
                             lambda method, url, **kwargs: self._nexus_call_proxy.call(

@@ -406,6 +406,8 @@ How provider calls are decided on and recorded. See [Control and Evidence](../co
 | `CONTROL_POLICY_PATH` | (none) | JSON or YAML file of deployment rules: `deny` rules refuse more; an `allow` rule can lift only the refusal of a mutation that does not come from an integration. A file that cannot be read refuses every call. |
 | `JOURNAL_DIR` | `.jarviscore/journal` | Where the hash-linked journal of decisions and provider calls is written; `off` writes none. Check it with `jarviscore verify`. |
 | `NEXUS_KEEPALIVE_SECONDS` | `120` | Seconds an idle provider connection is kept for the next call, so calls reuse TLS instead of opening a connection each time. |
+| `APPROVAL_ASSERTION_KEY` | (none) | Key approval assertions are verified with (key id `default`). Your approving backend holds the same key and signs with `control.approvals.sign_assertion` after its own sign-in. |
+| `APPROVAL_ASSERTION_KEYS` | `{}` | JSON map of key id to key, for rotating assertion keys. |
 
 ---
 

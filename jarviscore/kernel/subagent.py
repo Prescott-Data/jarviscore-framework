@@ -2151,6 +2151,8 @@ class BaseSubAgent(ABC):
                             "action_id": tool_result.get("action_id"),
                             "action": tool_result.get("action"),
                             "consequence": tool_result.get("consequence"),
+                            # What an approval of this action must cover (approval assertions).
+                            "binding": tool_result.get("binding"),
                         },
                     )
 

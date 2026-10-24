@@ -145,6 +145,27 @@ the journal.
 
 ---
 
+## Approvals
+
+Consequential actions wait for a person ([Human-in-the-Loop](../guides/hitl.md#approving-an-agents-consequential-actions)).
+What holds for them:
+
+| Property | How |
+|---|---|
+| An approval covers the exact action the person saw | Bound to every argument (or the element and values a browser action touches); other arguments ask again |
+| The institution decides which actions need a person, and who may approve | `approvals:` rules: roles, not the requester, least assurance; waivers never for destructive actions |
+| The approver is who they say | Approval assertions signed by your backend over the exact action (`verified`) |
+| Policy is checked when the action runs, not only when it was approved | A tightened policy sends the action back to a person |
+| At most once | The first decision stands; starting the action is claimed atomically; an interrupted run leaves `OUTCOME_UNKNOWN` for a person to reconcile |
+| A gated call cannot reach a provider without its approval | The broker refuses `approval-missing`; `jarviscore verify` checks every call carrying an approval against an approval of that exact action |
+| Retries do not repeat a payment | Providers that deduplicate by key get the operation's id (Stripe, Adyen, Mollie, GoCardless, Checkout.com, PayPal headers; Square's `idempotency_key`) |
+
+The journal records `approval.request`, `approval.decision` (approver, roles,
+assurance, how they were authenticated), `approval.refused`, `approval.claim`,
+`approval.settle`, `approval.reopened` and `approval.reconciled`.
+
+---
+
 ## Performance
 
 Deciding and recording adds about 0.1 ms to a provider call. Provider calls now
@@ -158,5 +179,5 @@ HTTPS endpoint a call went from about 500 ms with a fresh connection to about
 
 Effects that do not go through a provider call are not decided on here yet:
 workspace files and processes, the browser, memory, and messages between agents.
-Approvals bound to the exact operation, typed limits on arguments, and signed,
-witnessed checkpoints come next, each with its own claim and tests.
+Typed limits on arguments and signed, witnessed checkpoints come next, each with
+its own claim and tests.

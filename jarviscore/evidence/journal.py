@@ -322,14 +322,27 @@ def verify(root: str) -> Verification:
 
 def _check_decisions(run: str, events: List[Dict[str, Any]], report: Verification) -> None:
     """Every provider call left only after an allow decision, and every decision led where it said."""
+    from jarviscore.contracts.hitl import APPROVED_DECISIONS
+
+    approving = {decision.value for decision in APPROVED_DECISIONS}
     decisions: Dict[str, Dict[str, Any]] = {}
+    approved: set = set()
     for event in events:
         data = event.get("data") or {}
         call = data.get("call_id")
+        if event.get("kind") == "approval.decision" and data.get("decision") in approving:
+            approved.add(data.get("binding"))
+        elif event.get("kind") == "approval.claim":
+            approved.add(data.get("binding"))
         if event.get("kind") == "policy.decision":
             decisions[call] = data
             if data.get("outcome") == "deny" and data.get("enforced"):
                 report.refused += 1
+            if data.get("approval") and data.get("outcome") == "allow" and data["approval"] not in approved:
+                report.problems.append(
+                    f"run {run} event {event['seq']}: a call carrying an approval with no "
+                    "approval of that exact action before it"
+                )
         elif event.get("kind") == "effect.attempt":
             report.effects += 1
             decision = decisions.get(call)

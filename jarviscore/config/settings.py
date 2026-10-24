@@ -221,6 +221,11 @@ class Settings(BaseSettings):
     journal_dir: Optional[str] = runtime_path("journal")
     # Seconds an idle provider connection is kept for the next call (TLS reuse).
     nexus_keepalive_seconds: float = 120.0
+    # Keys approval assertions are verified with: one key (key id "default"), or
+    # a JSON map of key id to key for rotation. Hold the same on the backend that
+    # signs them after its own sign-in (control.approvals.sign_assertion).
+    approval_assertion_key: Optional[str] = None
+    approval_assertion_keys: Dict[str, str] = {}
     typesafe_router_min_confidence: float = 0.5
     task_complexity_provider: str = "llm"
     typesafe_complexity_min_confidence: float = 0.5

@@ -62,8 +62,33 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   what it does not promise, and the tests behind it; a claim naming evidence that
   does not exist fails the build.
 
+- **The institution decides who may approve.** `approvals:` rules in the
+  control policy file decide which actions need a person (over each integration's
+  own setting), which roles may approve them, that the approver is not the person
+  who asked, and how strongly their identity must be established; a waiver never
+  removes approval from a destructive action. `Mesh.resolve_hitl` takes an
+  approval assertion signed by your backend over the exact action
+  (`control.approvals.sign_assertion`, `APPROVAL_ASSERTION_KEY`), an `Approver`,
+  or a bare name, recorded as `verified`, `asserted` or `unauthenticated`. An
+  approval that does not meet policy raises `ApprovalRefused`; the approver is
+  checked again under the policy in force when the action runs.
+- **An approved action is claimed once, and an interrupted one is reconciled.**
+  Starting it is claimed atomically; a run that stops before its outcome is
+  recorded leaves `OUTCOME_UNKNOWN`, never a blind retry. `Mesh.reconcile_hitl`
+  records what a person found. A gated call that reaches the broker without its
+  approval is refused, and `jarviscore verify` checks every call carrying an
+  approval against an approval of that exact action. Every approval step is in
+  the journal.
+- **Retries do not repeat a payment.** Mutations to Stripe, Adyen, Mollie,
+  GoCardless, Checkout.com and PayPal carry the operation's id as their
+  idempotency key.
+
 ### Changed
 
+- **Square integrations use a stable idempotency key.** `square_create_payment`,
+  `square_create_customer` and `square_create_order` made a new random key on
+  every call, so a retried payment was a new payment to Square. The key is now
+  derived from the payload.
 - **Provider calls reuse their connection.** `NexusCallProxy` opened a new HTTP
   client, and so a new TCP and TLS handshake, for every call. Calls on an event
   loop now share one pool, kept for `NEXUS_KEEPALIVE_SECONDS` (120); on a measured

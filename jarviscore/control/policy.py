@@ -61,6 +61,10 @@ class ProviderCall:
     code_origin: str = "direct"
     contract: Optional[OperationContract] = None
     action_id: Optional[str] = None
+    #: Whether policy requires a person's approval for this action, and the
+    #: binding of the approval it carries (see control.approvals).
+    approval_required: bool = False
+    approval: Optional[str] = None
 
     @property
     def effect(self) -> str:
@@ -112,6 +116,12 @@ class Rule:
 class ControlPolicy:
     mode: str = "report"
     rules: Tuple[Rule, ...] = ()
+    #: Which actions need a person, and who may decide (see control.approvals).
+    approvals: Tuple[Any, ...] = ()
+    #: Roles each approver holds, when their sign-in does not carry them.
+    principals: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    #: Digest of the policy file, recorded with every decision made under it.
+    digest: str = ""
 
     def decide(self, call: ProviderCall) -> Decision:
         enforced = self.mode == "strict"
@@ -139,6 +149,11 @@ _LIFTABLE = frozenset({"mutation-without-atom"})
 def _builtin_refusal(call: ProviderCall) -> Optional[Tuple[str, str]]:
     method = call.method.upper()
     mutation = method not in READ_METHODS
+    if call.approval_required and not call.approval:
+        return (
+            "approval-missing",
+            f"{call.atom} needs a person's approval and this call carries none.",
+        )
     if mutation and not call.atom:
         return (
             "mutation-without-atom",
@@ -204,22 +219,65 @@ def current_policy() -> ControlPolicy:
     if _cached is not None and _cached[0] == key:
         return _cached[1]
     rules: List[Rule] = []
+    approvals: List[Any] = []
+    principals: Dict[str, Tuple[str, ...]] = {}
+    digest = ""
     if path:
-        rules = _load_rules(path)
-    policy = ControlPolicy(mode=mode, rules=tuple(rules))
+        rules, approvals, principals, digest = _load_document(path)
+    policy = ControlPolicy(
+        mode=mode, rules=tuple(rules), approvals=tuple(approvals),
+        principals=principals, digest=digest,
+    )
     _cached = (key, policy)
     return policy
 
 
 def _load_rules(path: str) -> List[Rule]:
-    """Rules from a JSON or YAML file; a file that cannot be read refuses everything it would have governed."""
+    """The call rules of a policy file."""
+    return _load_document(path)[0]
+
+
+def _load_document(path: str):
+    """(rules, approval rules, principals, digest) from a JSON or YAML file.
+
+    A file that cannot be read refuses every call and requires a verified
+    approver for every action: a broken policy fails closed.
+    """
+    from jarviscore.control.approvals import ApprovalRule
+
     try:
-        with open(path, encoding="utf-8") as handle:
-            text = handle.read()
+        with open(path, "rb") as handle:
+            raw = handle.read()
+        text = raw.decode("utf-8")
         data = json.loads(text) if path.endswith(".json") else __import__("yaml").safe_load(text)
+        if data is not None and not isinstance(data, dict):
+            raise ValueError("the policy is not a mapping")
     except Exception as exc:  # noqa: BLE001 - a broken policy must fail closed
         logger.error("Control policy %s could not be read (%s); every provider call is refused.", path, exc)
-        return [Rule(name="unreadable-policy", decision="deny", match={})]
+        return (
+            [Rule(name="unreadable-policy", decision="deny", match={})],
+            [ApprovalRule(name="unreadable-policy", assurance="verified")],
+            {},
+            "",
+        )
+    import hashlib
+
+    digest = hashlib.sha256(raw).hexdigest()
+    approvals = []
+    for index, entry in enumerate((data or {}).get("approvals") or []):
+        require = str(entry.get("require") or "approval").lower()
+        approvals.append(ApprovalRule(
+            name=str(entry.get("name") or f"approval-{index}"),
+            match=dict(entry.get("match") or {}),
+            require="none" if require == "none" else "approval",
+            roles=tuple(str(r) for r in entry.get("roles") or ()),
+            distinct_from=tuple(str(d) for d in entry.get("distinct_from") or ()),
+            assurance=str(entry.get("assurance") or "unauthenticated"),
+        ))
+    principals = {
+        str(subject): tuple(str(role) for role in (roles or ()))
+        for subject, roles in ((data or {}).get("principals") or {}).items()
+    }
     rules = []
     for index, entry in enumerate((data or {}).get("rules") or []):
         decision = str(entry.get("decision") or "").lower()
@@ -231,4 +289,4 @@ def _load_rules(path: str) -> List[Rule]:
             decision=decision,
             match=dict(entry.get("match") or {}),
         ))
-    return rules
+    return rules, approvals, principals, digest
