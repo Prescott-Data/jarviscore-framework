@@ -23,6 +23,7 @@ Commands:
   memory      Manage agent memory infrastructure
   atom        Validate, test, and list integration atoms
   inspect     Read recorded traces from past runs
+  verify      Check the journal of decisions and provider calls
   human       Join the mesh as a person
   room        Work together on a shared workspace
 ```
@@ -536,3 +537,31 @@ jarviscore inspect wf-2024 --step analyze
 | `--errors` | flag | off | Only show failures and recoveries |
 
 See [Observability](../guides/observability.md) for how traces are recorded and what each event means.
+
+---
+
+## jarviscore verify
+
+Checks the journal of decisions and provider calls, offline. It needs no keys and
+no network, so it runs the same on a copy handed to an auditor.
+
+```bash
+# This deployment's journal (JOURNAL_DIR)
+jarviscore verify
+
+# A copy somewhere else
+jarviscore verify /path/to/journal
+
+# The report as JSON
+jarviscore verify --json
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `journal_dir` | `str` | `JOURNAL_DIR` (`./.jarviscore/journal`) | Journal to check |
+| `--json` | flag | off | Print the report as JSON |
+
+It checks each run's hash chain, that each run ends where the head log
+registered it, and that every provider call followed an allow decision. Exit
+status: `0` intact, `1` problems found, `2` no journal. See
+[Control and Evidence](../concepts/control-and-evidence.md) for what it detects and what it does not yet.

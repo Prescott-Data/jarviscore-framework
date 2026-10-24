@@ -21,7 +21,10 @@ Usage (direct):
                               json={"channel": "#general", "text": "Hello!"})
 """
 
+import asyncio
 import logging
+import uuid
+import weakref
 from typing import Any, Dict, Optional
 
 import httpx
@@ -30,6 +33,136 @@ from .strategy import apply_strategy
 from .hosts import HostNotAllowed, ensure_host_allowed
 
 logger = logging.getLogger(__name__)
+
+# One connection pool per event loop and client factory: a provider call reuses
+# the TCP and TLS connection the last one opened instead of paying a new
+# handshake every time. Keyed by factory too, so a replaced factory (tests) never
+# inherits another's client.
+_clients: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[Any, Any]]" = (
+    weakref.WeakKeyDictionary()
+)
+_HTTPX_CLIENT = httpx.AsyncClient
+
+
+def _keepalive_seconds() -> float:
+    import importlib
+
+    settings = importlib.import_module("jarviscore.config.settings").settings
+    return float(getattr(settings, "nexus_keepalive_seconds", 120.0))
+
+
+def _pooled_client():
+    loop = asyncio.get_running_loop()
+    factory = httpx.AsyncClient
+    by_factory = _clients.setdefault(loop, {})
+    client = by_factory.get(factory)
+    if client is None or getattr(client, "is_closed", False):
+        if factory is _HTTPX_CLIENT:
+            # Agent turns between provider calls often outlast httpx's 5 s default,
+            # which would close the connection the next call wants.
+            client = factory(limits=httpx.Limits(keepalive_expiry=_keepalive_seconds()))
+        else:
+            client = factory()
+        by_factory[factory] = client
+    return client
+
+
+async def close_pooled_clients() -> None:
+    """Close the provider connections this event loop holds; agent teardown calls it."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    for client in (_clients.pop(loop, None) or {}).values():
+        close = getattr(client, "aclose", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception as exc:  # noqa: BLE001 - closing must never fail a teardown
+                logger.debug("Closing a provider connection pool failed: %s", exc)
+
+
+def _run_name(authority: Optional[Dict[str, Any]]) -> str:
+    """The journal run a call belongs to: its workflow step, or the workflow, or this process."""
+    authority = authority or {}
+    workflow, step = authority.get("workflow_id"), authority.get("step_id")
+    if not workflow:
+        from jarviscore.orchestration.budget import current_workflow_budget
+
+        account = current_workflow_budget()
+        workflow = getattr(account, "workflow_id", None)
+    if workflow:
+        return f"{workflow}/{step}" if step else str(workflow)
+    import os
+
+    return f"process-{os.getpid()}"
+
+
+def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, Any]]):
+    """Decide on a call before any I/O, and record the decision. Returns (call_id, run, journal)."""
+    from jarviscore.control.operations import describe
+    from jarviscore.control.policy import PolicyDenied, ProviderCall, current_policy
+    from jarviscore.evidence.journal import current_journal
+
+    policy = current_policy()
+    if policy.mode == "off":
+        return None, None, None, False
+    authority = authority or {}
+    call = ProviderCall(
+        provider=provider,
+        method=method.upper(),
+        url=url,
+        atom=authority.get("atom"),
+        declared_effect=authority.get("effect"),
+        code_origin=authority.get("code_origin") or ("shipped" if authority.get("atom") else "direct"),
+        contract=authority.get("contract"),
+        action_id=authority.get("action_id"),
+    )
+    decision = policy.decide(call)
+    host, path = describe(url)
+    call_id = uuid.uuid4().hex
+    run = _run_name(authority)
+    journal = current_journal()
+    record = {
+        "call_id": call_id,
+        "provider": provider,
+        "method": call.method,
+        "host": host,
+        "path": path,
+        "atom": call.atom,
+        "effect": call.effect,
+        "code_origin": call.code_origin,
+        "verified": call.verified,
+        "action_id": call.action_id,
+        "outcome": decision.outcome,
+        "rule": decision.rule,
+        "enforced": decision.enforced,
+    }
+    if journal is not None:
+        try:
+            journal.append(run, "policy.decision", record)
+        except Exception as exc:  # noqa: BLE001
+            if policy.mode == "strict":
+                # Strict mode promises every decision is on record before the call leaves.
+                raise RuntimeError(f"The call was not made: its decision could not be recorded ({exc}).") from exc
+            logger.warning("Journal write failed for %s %s: %s", call.method, host, exc)
+            journal = None
+    if not decision.allowed:
+        if decision.enforced:
+            raise PolicyDenied(decision)
+        logger.info("[control] would refuse %s %s%s: %s", call.method, host, path, decision.reason)
+    return call_id, run, journal, policy.mode == "strict"
+
+
+def _record(journal, run, kind: str, data: Dict[str, Any], strict: bool) -> None:
+    if journal is None:
+        return
+    try:
+        journal.append(run, kind, data)
+    except Exception as exc:  # noqa: BLE001
+        if strict:
+            raise RuntimeError(f"The call was not made: it could not be recorded ({exc}).") from exc
+        logger.warning("Journal write failed: %s", exc)
 
 
 def _record_source(provider: str) -> None:
@@ -106,6 +239,8 @@ class NexusCallProxy:
         url: str,
         headers: Optional[Dict[str, str]] = None,
         timeout: float = 30.0,
+        *,
+        authority: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -117,6 +252,9 @@ class NexusCallProxy:
             url:            Full URL of the provider API endpoint.
             headers:        Optional additional headers (merged with auth headers).
             timeout:        Request timeout in seconds (default 30s).
+            authority:      What the call arrives with: the atom, its declared effect,
+                            where its code came from, its operation contract and the
+                            workflow step. Decided on before any I/O (see control.policy).
             **kwargs:       Passed directly to httpx (json=, params=, data=, etc.)
 
         Returns:
@@ -134,6 +272,8 @@ class NexusCallProxy:
         """
         from jarviscore.nexus.client import NexusClient
         provider = self._provider_for(connection_id)
+        # Decided before anything leaves this process, including the credential lookup.
+        call_id, run, journal, strict = _decide(provider, method, url, authority)
 
         strategy = None
         request_kwargs = None
@@ -173,7 +313,10 @@ class NexusCallProxy:
         request_kwargs.setdefault("timeout", timeout)
         _record_source(provider)
 
-        async with httpx.AsyncClient() as client:
+        client = _pooled_client()
+        _record(journal, run, "effect.attempt", {"call_id": call_id}, strict)
+        refreshed = False
+        try:
             response = await client.request(**request_kwargs)
 
             # Auto-retry on 401 — token may have been rotated externally
@@ -193,6 +336,7 @@ class NexusCallProxy:
                     )
                     request_kwargs.setdefault("timeout", timeout)
                     response = await client.request(**request_kwargs)
+                    refreshed = True
                     if response.status_code == 401:
                         logger.warning(
                             "NexusCallProxy: second 401 after refresh — "
@@ -213,18 +357,29 @@ class NexusCallProxy:
                 json_body = response.json()
             except Exception:
                 pass
+        except BaseException as exc:
+            # What became of a call that left matters most when it failed half way.
+            _record(journal, run, "effect.outcome", {
+                "call_id": call_id, "error": type(exc).__name__, "refreshed": refreshed,
+            }, False)
+            raise
+        _record(journal, run, "effect.outcome", {
+            "call_id": call_id, "status": response.status_code, "refreshed": refreshed,
+        }, False)
 
-            return {
-                "ok": response.status_code < 400,
-                "status_code": response.status_code,
-                "body": response.text,
-                "content": response.content,
-                "json": json_body,
-                "headers": dict(response.headers),
-            }
+        return {
+            "ok": response.status_code < 400,
+            "status_code": response.status_code,
+            "body": response.text,
+            "content": response.content,
+            "json": json_body,
+            "headers": dict(response.headers),
+        }
 
     @staticmethod
-    def make_nexus_call_fn(proxy: "NexusCallProxy", connection_id: str):
+    def make_nexus_call_fn(
+        proxy: "NexusCallProxy", connection_id: str, authority: Optional[Dict[str, Any]] = None,
+    ):
         """
         Create the `nexus_call` async function injected into the CoderSandbox namespace.
 
@@ -237,6 +392,8 @@ class NexusCallProxy:
         Args:
             proxy:         NexusCallProxy instance (holds auth_manager reference).
             connection_id: The opaque connection handle for this task's provider.
+            authority:     Who is calling and with what declared effect, decided on
+                           for every call (see control.policy).
 
         Returns:
             Async callable suitable for injection into a sandbox namespace.
@@ -263,6 +420,6 @@ class NexusCallProxy:
                 RuntimeError if Nexus connection is unavailable.
             """
             target = proxy.connection_handle(provider) if provider else connection_id
-            return await proxy.call(target, method, url, **kwargs)
+            return await proxy.call(target, method, url, authority=authority, **kwargs)
 
         return nexus_call

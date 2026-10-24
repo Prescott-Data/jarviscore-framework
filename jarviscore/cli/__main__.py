@@ -16,6 +16,7 @@ Usage:
     jarviscore atom list
     jarviscore inspect                       # List recorded runs
     jarviscore inspect <workflow_id>         # Timeline for one run
+    jarviscore verify [journal_dir]          # Check the journal of decisions and provider calls
     jarviscore human join alice --capabilities review --seed HOST:PORT
     jarviscore room watch launch
 """
@@ -34,6 +35,7 @@ def main():
         print("  memory     - Manage Athena MemOS (init, status, context, search)")
         print("  atom       - Validate, test, and list integration atoms")
         print("  inspect    - Read recorded traces: what did my agents do?")
+        print("  verify     - Check the journal: every record intact, every provider call decided")
         print("  human      - Join the mesh as a person (join, inbox, answer)")
         print("  room       - Work together on a shared workspace (ask, diff, accept, watch)")
         sys.exit(1)
@@ -62,6 +64,9 @@ def main():
     elif command == 'inspect':
         from .inspect import main as inspect_main
         inspect_main()
+    elif command == 'verify':
+        from .verify import main as verify_main
+        verify_main()
     elif command == 'human':
         from .human import main as human_main
         human_main()
@@ -70,7 +75,7 @@ def main():
         room_main()
     else:
         print(f"Unknown command: {command}")
-        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom, inspect, human, room")
+        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom, inspect, verify, human, room")
         sys.exit(1)
 
 

@@ -1226,15 +1226,30 @@ like any other.
             )
         ):
             atom, action_id = internal_atom
-            exec_context["_atom_authority"] = {
+            from jarviscore.control.operations import read_operations
+
+            if candidate and (candidate.get("new_atom") or candidate.get("repair_of")):
+                code_origin = "model"
+            elif kwargs.get("_shipped_atom") is not None:
+                code_origin = "shipped"
+            else:
+                code_origin = "registry"
+            # What this exact code can send, read before it runs; the broker holds every
+            # call to it. Parent-side only: none of this reaches the child process.
+            grant = {
                 "atom": atom.name,
+                "effect": atom.policy.effect,
+                "code_origin": code_origin,
+                "contract": read_operations(exec_code, atom.name),
+            }
+            exec_context["_atom_authority"] = {
+                **grant,
                 "system": str(atom.system or candidate and candidate.get("system") or "").lower(),
             }
             if not (candidate and candidate.get("new_atom")):
                 exec_context["_mutation_authority"] = {
-                    "atom": atom.name,
+                    **grant,
                     "action_id": str(action_id),
-                    "effect": atom.policy.effect,
                 }
         if self.code_registry is not None:
             exec_context["_atoms_for_system"] = self._registered_atom_names

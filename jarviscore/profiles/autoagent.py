@@ -482,6 +482,9 @@ class AutoAgent(Profile):
                 await llm.close()
             except Exception as exc:
                 self._logger.warning("[AutoAgent] LLM client close failed: %s", exc)
+        from jarviscore.nexus.call_proxy import close_pooled_clients
+
+        await close_pooled_clients()
         await super().teardown()
 
     def _load_agent_profile(self) -> None:

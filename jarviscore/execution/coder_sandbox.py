@@ -24,10 +24,8 @@ Output contract (result variable in generated code):
         "error": str | None,
     }
 """
-import ast
 import asyncio
 import hashlib
-import io
 import json
 import logging
 import os
@@ -39,7 +37,6 @@ import socket
 import subprocess
 import sys
 import time
-from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1094,9 +1091,22 @@ class CoderSandbox:
                             )
                         if not connection_id:
                             raise RuntimeError("No provider account is connected for this task.")
+                        # Code in the sandbox is the model's unless it runs as an atom.
+                        grant = mutation if isinstance(mutation, dict) else (
+                            authority if isinstance(authority, dict) else {}
+                        )
+                        call_authority = {
+                            "workflow_id": context.get("workflow_id"),
+                            "step_id": context.get("step_id"),
+                            "atom": grant.get("atom"),
+                            "effect": grant.get("effect"),
+                            "code_origin": grant.get("code_origin") or "model",
+                            "contract": grant.get("contract"),
+                            "action_id": grant.get("action_id"),
+                        }
                         call = self._recording_nexus_call(
                             lambda method, url, **kwargs: self._nexus_call_proxy.call(
-                                connection_id, method, url, **kwargs
+                                connection_id, method, url, authority=call_authority, **kwargs
                             ),
                             provider or str(connection_id),
                         )
@@ -1159,171 +1169,6 @@ class CoderSandbox:
         if value is None or isinstance(value, (str, int, float, bool)):
             return value
         return str(value)
-
-    async def _execute_local(
-        self,
-        code: str,
-        context: Optional[Dict] = None,
-        timeout: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """
-        Execute Python code with full file system + subprocess access.
-
-        Returns a dict compatible with SandboxExecutor's contract so the
-        Kernel's CoderSubAgent can call .get("status") and .get("output")
-        without crashing.  All CoderResult-specific fields (files_created,
-        git_branch, etc.) are embedded inside ``output`` AND promoted to
-        the top level for callers that read them directly.
-
-        Shape:
-            {
-                "status":        "success" | "failure",
-                "output":        CoderResult.to_dict(),   # the full structured result
-                "error":         str | None,
-                "error_type":    str | None,
-                "execution_time": float,
-                "mode":          "coder_sandbox",
-                # promoted fields (convenience):
-                "files_created":  [...],
-                "files_modified": [...],
-                "git_branch":     str | None,
-                "data":           Any,
-            }
-        """
-        """
-        Execute Python code with full file system + subprocess access.
-
-        Args:
-            code: Python code to execute. Must set `result` variable.
-            context: Extra variables to inject into namespace.
-            timeout: Per-call timeout override.
-
-        Returns:
-            CoderResult with files_created, git_branch, stdout, etc.
-        """
-        timeout = timeout or self.timeout
-        start = time.time()
-
-        self._access_failure = None
-        namespace = self._build_namespace(context)
-        stdout_capture = io.StringIO()
-        before = self._snapshot_output()
-
-        try:
-            # Syntax check before execution
-            try:
-                ast.parse(code)
-            except SyntaxError as e:
-                cr = CoderResult(
-                    success=False,
-                    error=f"SyntaxError at line {e.lineno}: {e.msg}",
-                    error_type="SyntaxError",
-                    execution_time=time.time() - start,
-                )
-                return self._to_sandbox_dict(cr)
-
-            is_async = "async def" in code or "await " in code or "asyncio" in code
-
-            if is_async:
-                exec_result = await asyncio.wait_for(
-                    self._run_async(code, namespace, stdout_capture),
-                    timeout=timeout,
-                )
-            else:
-                loop = asyncio.get_event_loop()
-                exec_result = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        self._run_sync,
-                        code, namespace, stdout_capture,
-                    ),
-                    timeout=timeout,
-                )
-
-            if exec_result.get("error"):
-                cr = CoderResult(
-                    success=False,
-                    stdout=stdout_capture.getvalue(),
-                    error=exec_result["error"],
-                    error_type=exec_result.get("error_type", "RuntimeError"),
-                    execution_time=time.time() - start,
-                )
-                return self._to_sandbox_dict(cr)
-
-            raw = namespace.get("result")
-            cr = self._parse_result(raw, stdout_capture.getvalue(), time.time() - start)
-            await self._collect_artifacts(cr, before)
-            return self._to_sandbox_dict(cr)
-
-        except asyncio.TimeoutError:
-            cr = CoderResult(
-                success=False,
-                stdout=stdout_capture.getvalue(),
-                error=f"Coder execution timed out after {timeout}s",
-                error_type="ExecutionTimeout",
-                execution_time=time.time() - start,
-            )
-            return self._to_sandbox_dict(cr)
-        except BashPermissionError as e:
-            cr = CoderResult(
-                success=False,
-                stdout=stdout_capture.getvalue(),
-                error=str(e),
-                error_type="BashPermissionError",
-                execution_time=time.time() - start,
-            )
-            return self._to_sandbox_dict(cr)
-        except Exception as e:
-            cr = CoderResult(
-                success=False,
-                stdout=stdout_capture.getvalue(),
-                error=str(e),
-                error_type=type(e).__name__,
-                execution_time=time.time() - start,
-            )
-            return self._to_sandbox_dict(cr)
-
-    # ─────────────────────────────────────────────────────────────
-    # Sync / Async runners
-    # ─────────────────────────────────────────────────────────────
-
-    def _run_sync(
-        self,
-        code: str,
-        namespace: Dict,
-        stdout_capture: io.StringIO,
-    ) -> Dict[str, Any]:
-        try:
-            with redirect_stdout(stdout_capture):
-                exec(code, namespace)  # noqa: S102 — deliberate, scoped
-            return {}
-        except Exception as e:
-            return {"error": str(e), "error_type": type(e).__name__}
-
-    async def _run_async(
-        self,
-        code: str,
-        namespace: Dict,
-        stdout_capture: io.StringIO,
-    ) -> Dict[str, Any]:
-        namespace["asyncio"] = asyncio
-        try:
-            with redirect_stdout(stdout_capture):
-                exec(code, namespace)  # noqa: S102
-                entry = None
-                if "main" in namespace and callable(namespace["main"]):
-                    entry = namespace["main"]
-                elif "run" in namespace and callable(namespace["run"]):
-                    entry = namespace["run"]
-                if entry is not None:
-                    returned = await entry()
-                    # What the entry point returns is the outcome. Code that
-                    # assigns `result` itself still wins when it returns nothing.
-                    if returned is not None:
-                        namespace["result"] = returned
-            return {}
-        except Exception as e:
-            return {"error": str(e), "error_type": type(e).__name__}
 
     # ─────────────────────────────────────────────────────────────
     # Namespace
@@ -1430,27 +1275,17 @@ class CoderSandbox:
             "textwrap": textwrap,
         }
 
-        # ── nexus_call: the ONLY way to call provider APIs ──────────────
-        # Resolves credentials internally via NexusCallProxy.
-        # Sandbox code sees nexus_call(method, url, **kwargs) → response dict.
-        # Credentials are NEVER in the namespace.
-        _conn_id = (context or {}).get("_nexus_connection_id") if context else None
-        if self._nexus_call_proxy and _conn_id:
-            from jarviscore.nexus.call_proxy import NexusCallProxy
-            namespace["nexus_call"] = self._recording_nexus_call(
-                NexusCallProxy.make_nexus_call_fn(self._nexus_call_proxy, _conn_id),
-                str((context or {}).get("_nexus_provider") or _conn_id),
+        # ── nexus_call ───────────────────────────────────────────────────
+        # Generated code runs in a confined child process, where nexus_call is an
+        # RPC the parent decides on (atom authority, operation contract, policy).
+        # This namespace only describes the sandbox to the model; it never holds a
+        # live nexus_call, so nothing can reach a provider from here unmediated.
+        async def _nexus_described(method: str, url: str, **kwargs):
+            raise RuntimeError(
+                "nexus_call runs inside the sandbox's child process, where each call "
+                "is decided on before it leaves."
             )
-        else:
-            # No Nexus connection available — inject a stub that raises clearly
-            async def _nexus_unavailable(method: str, url: str, **kwargs):
-                raise RuntimeError(
-                    "No provider account is connected for this task, so this call "
-                    "cannot be signed. Name the provider you need with "
-                    "write_code(system=...), and if it is registered but not yet "
-                    "connected, request_access will ask someone to approve it."
-                )
-            namespace["nexus_call"] = _nexus_unavailable
+        namespace["nexus_call"] = _nexus_described
 
         # ── Safe context injection (explicit allowlist) ──────────────────
         # Only non-credential task metadata is passed into the sandbox.

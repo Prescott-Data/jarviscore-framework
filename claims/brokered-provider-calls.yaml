@@ -1,0 +1,25 @@
+id: brokered-provider-calls
+claim: >-
+  In strict mode, a call to a connected provider is refused before any network
+  I/O unless policy allows it, and every decision and every call that leaves is
+  recorded in a hash-linked journal that `jarviscore verify` checks offline.
+scope:
+  - control_mode=strict for refusal; report mode records the same decisions without refusing.
+  - Calls made through NexusCallProxy (atoms, code in the sandbox, the Slack room, workspace sources).
+assumptions:
+  - Provider credentials are reachable only through NexusCallProxy (credentials never enter the sandbox).
+  - Whoever controls the journal directory does not rewrite all of it; anchoring outside the deployment comes later.
+not_claimed:
+  - Control of effects that do not go through a provider call (workspace files, browser, memory, peers). Later slices.
+  - That a provider performed what was sent; the journal records what JarvisCore decided and sent.
+evidence:
+  - tests/test_provider_broker.py::test_strict_mode_refuses_before_any_io
+  - tests/test_provider_broker.py::test_report_mode_records_the_refusal_and_lets_the_call_through
+  - tests/test_provider_broker.py::test_strict_mode_refuses_a_call_it_cannot_record
+  - tests/test_provider_broker.py::test_an_allowed_atom_call_is_recorded_without_query_or_body
+  - tests/test_evidence_journal.py::test_an_edited_event_is_detected
+  - tests/test_evidence_journal.py::test_a_removed_event_is_detected
+  - tests/test_evidence_journal.py::test_a_run_cut_short_is_detected_by_the_head_log
+  - tests/test_evidence_journal.py::test_a_removed_run_is_detected
+  - tests/test_evidence_journal.py::test_a_provider_call_without_a_decision_is_flagged
+published: []

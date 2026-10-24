@@ -396,6 +396,17 @@ jarviscore nexus test github
 
 The local stack's own secrets (`NEXUS_ENCRYPTION_KEY`, `NEXUS_STATE_KEY`, `NEXUS_BROKER_API_KEY`) live in `~/.jarviscore/nexus/stack.env` and are read by the broker and gateway containers only. Do not put them in a project `.env`.
 
+### Control and evidence
+
+How provider calls are decided on and recorded. See [Control and Evidence](../concepts/control-and-evidence.md).
+
+| Variable | Default | Description |
+|---|---|---|
+| `CONTROL_MODE` | `report` | `off`: provider calls are neither decided on nor recorded. `report`: decided and recorded, never refused. `strict`: refused before any network I/O when policy does not allow them, and refused when their decision cannot be recorded. `JARVISCORE_CONTROL_MODE` overrides it at run time. |
+| `CONTROL_POLICY_PATH` | (none) | JSON or YAML file of deployment rules: `deny` rules refuse more; an `allow` rule can lift only the refusal of a mutation that does not come from an integration. A file that cannot be read refuses every call. |
+| `JOURNAL_DIR` | `.jarviscore/journal` | Where the hash-linked journal of decisions and provider calls is written; `off` writes none. Check it with `jarviscore verify`. |
+| `NEXUS_KEEPALIVE_SECONDS` | `120` | Seconds an idle provider connection is kept for the next call, so calls reuse TLS instead of opening a connection each time. |
+
 ---
 
 ## P2P / SWIM Mesh

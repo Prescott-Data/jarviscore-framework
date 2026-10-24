@@ -160,8 +160,10 @@ class SlackApi:
             found = await auth.discover(provider) if auth is not None else None
             return found or provider  # without a gateway, the local vault holds it by name
 
-        return cls(NexusCallProxy.make_nexus_call_fn(proxy, await handle("slack")),
-                   NexusCallProxy.make_nexus_call_fn(proxy, await handle("slack_app")),
+        # The room's own transport: framework code whose effect is to notify people.
+        authority = {"atom": "room.slack", "effect": "notify", "code_origin": "runtime"}
+        return cls(NexusCallProxy.make_nexus_call_fn(proxy, await handle("slack"), authority),
+                   NexusCallProxy.make_nexus_call_fn(proxy, await handle("slack_app"), authority),
                    api_url=api_url)
 
     async def call(self, method: str, **params) -> Dict[str, Any]:

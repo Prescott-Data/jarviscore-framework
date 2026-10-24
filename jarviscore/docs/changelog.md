@@ -33,6 +33,51 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## Unreleased
+
+### Added
+
+- **Every provider call is decided on before it leaves, and recorded.** Calls
+  through `NexusCallProxy` (integrations, code in the sandbox, the Slack room,
+  workspace sources) are built from what is actually about to be sent and the
+  authority they arrive with, then decided on before any network I/O, including
+  the credential lookup. `CONTROL_MODE=report` (the default) records each
+  decision; `strict` refuses what policy does not allow, and refuses a call whose
+  decision cannot be recorded. Deployment rules (`CONTROL_POLICY_PATH`) can refuse
+  more. See [Control and Evidence](concepts/control-and-evidence.md).
+- **Operation contracts read from an integration's own code.** What an
+  integration can send through `nexus_call` (method and URL template) is read
+  statically, following constants, closures, helpers and dispatcher branches. 914
+  of 1,186 shipped integrations have a fully verified contract, and a test holds
+  the whole catalogue to this: no shipped integration contains reachable code that
+  can send beyond its declared effect. Code the model writes or repairs may
+  mutate a provider only through operations its own code verifiably sends.
+- **A hash-linked journal and `jarviscore verify`.** Each workflow step's
+  decisions and provider calls are written as hash-linked events, with a head log
+  registering every run's latest event. `jarviscore verify` checks a journal
+  offline: edited, removed, reordered or cut-short records, removed runs, and any
+  provider call without an allow decision before it. Records hold methods, hosts,
+  paths and decisions, never query strings, bodies or credentials.
+- **`claims/`**: each control and evidence claim with its scope, assumptions,
+  what it does not promise, and the tests behind it; a claim naming evidence that
+  does not exist fails the build.
+
+### Changed
+
+- **Provider calls reuse their connection.** `NexusCallProxy` opened a new HTTP
+  client, and so a new TCP and TLS handshake, for every call. Calls on an event
+  loop now share one pool, kept for `NEXUS_KEEPALIVE_SECONDS` (120); on a measured
+  HTTPS endpoint a call went from about 500 ms to about 90 ms. Deciding and
+  recording add about 0.1 ms. `AutoAgent.teardown()` closes the pool.
+- **An integration's mutation is held to what it declares.** The sandbox let any
+  integration with an action id send any POST, PUT, PATCH or DELETE; the broker
+  now holds it to the methods its declared effect allows.
+
+### Removed
+
+- `CoderSandbox._execute_local` and its helpers. Nothing called them, and they
+  would have given generated code a `nexus_call` no decision was made on.
+
 ## 2.4.0 <span class="changelog-date">2026-10-24</span>
 
 ### Changed

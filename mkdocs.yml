@@ -134,6 +134,7 @@ nav:
         - Contracts and Boundaries: concepts/contracts.md
         - System Bundles & Atoms: concepts/system-bundles.md
         - Nexus: concepts/nexus.md
+        - Control and Evidence: concepts/control-and-evidence.md
   - Guides:
       - Overview: guides/index.md
       - Build the Agents:

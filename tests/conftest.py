@@ -5,6 +5,20 @@ import pytest
 import logging
 
 
+@pytest.fixture(autouse=True, scope="session")
+def journal_outside_the_working_tree(tmp_path_factory):
+    """Provider calls in tests are recorded, as in a deployment, but never into the developer's runtime dir."""
+    import os
+
+    previous = os.environ.get("JARVISCORE_JOURNAL_DIR")
+    os.environ["JARVISCORE_JOURNAL_DIR"] = str(tmp_path_factory.mktemp("journal"))
+    yield
+    if previous is None:
+        os.environ.pop("JARVISCORE_JOURNAL_DIR", None)
+    else:
+        os.environ["JARVISCORE_JOURNAL_DIR"] = previous
+
+
 @pytest.fixture(autouse=True)
 def setup_logging():
     """Setup logging for tests."""

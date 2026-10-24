@@ -45,9 +45,11 @@ CALENDAR_SCRIPT = SCRIPT.replace("gmail.googleapis.com/gmail/v1/users/me/message
 class Proxy:
     def __init__(self):
         self.calls = []
+        self.authority = []
 
     async def call(self, connection_id, method, url, **kwargs):
         self.calls.append(url)
+        self.authority.append(kwargs.get("authority"))
         return {"ok": True, "status_code": 200, "content": True, "body": "",
                 "json": {"messages": [{"id": "m1"}], "id": url.rsplit("/", 1)[-1]}}
 
@@ -100,6 +102,18 @@ async def test_an_offered_atom_reaches_its_own_provider(coder):
 
     assert result["status"] == "success", result
     assert result["output"]["data"]["ids"] == ["m1"]
+
+
+@pytest.mark.asyncio
+async def test_an_atom_call_reaches_the_broker_with_its_authority_and_contract(coder):
+    await coder._atom_tool("gmail_list_messages")(query="from:me")
+
+    authority = coder.proxy.authority[-1]
+    assert authority["atom"] == "gmail_list_messages"
+    assert authority["effect"] == "read"
+    assert authority["code_origin"] == "registry"  # registered, not shipped with the package
+    assert authority["contract"].verified
+    assert authority["contract"].allows("GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages")
 
 
 @pytest.mark.asyncio

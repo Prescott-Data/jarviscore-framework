@@ -1,0 +1,18 @@
+id: model-code-within-own-contract
+claim: >-
+  In strict mode, code the model writes or repairs can change a provider only
+  through operations its own code verifiably sends, within the effect it
+  declares; anything else is refused before it leaves.
+scope:
+  - control_mode=strict; calls from the coder's sandbox through NexusCallProxy.
+assumptions:
+  - Provider credentials are reachable only through NexusCallProxy.
+not_claimed:
+  - That the declared effect is the right one for the task; that is the approval step's job.
+evidence:
+  - tests/test_provider_broker.py::test_model_written_code_outside_its_contract_is_refused
+  - tests/test_control_policy.py::test_model_written_code_may_only_send_operations_its_own_code_names
+  - tests/test_control_policy.py::test_model_written_code_with_an_unverified_contract_may_not_mutate
+  - tests/test_atom_only_provider_access.py::test_an_atom_call_reaches_the_broker_with_its_authority_and_contract
+  - tests/test_process_isolation.py::test_generated_code_cannot_mutate_provider_through_raw_nexus_call
+published: []

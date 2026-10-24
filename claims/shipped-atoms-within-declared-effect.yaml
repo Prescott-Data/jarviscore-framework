@@ -1,0 +1,15 @@
+id: shipped-atoms-within-declared-effect
+claim: >-
+  No integration shipped with JarvisCore contains reachable code that can send a
+  request beyond the effect it declares: a read cannot update or delete, and only
+  a destructive integration can delete.
+scope:
+  - Every non-legacy atom under jarviscore/integrations/atoms, read statically from its own code.
+assumptions:
+  - Requests leave only through nexus_call (enforced: atoms that reach a provider otherwise fail their contract).
+not_claimed:
+  - That a provider endpoint behaves as its HTTP method suggests; a read that POSTs to a query endpoint is allowed and held to its verified contract at run time.
+evidence:
+  - tests/test_control_operations.py::test_no_shipped_atom_can_send_more_than_it_declares
+  - tests/test_control_operations.py::test_a_method_never_exceeds_the_declared_effect
+published: []

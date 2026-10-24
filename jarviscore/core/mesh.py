@@ -1041,7 +1041,11 @@ class Mesh:
                 **dict(self.config.get("workspace_snapshot_limits") or {})
             )
             adapter = GitHubRepositorySource(
-                proxy.make_nexus_call_fn(proxy, handle), store, limits=limits
+                proxy.make_nexus_call_fn(proxy, handle, {
+                    "atom": "workspace.github_source", "effect": "read", "code_origin": "runtime",
+                }),
+                store,
+                limits=limits,
             )
         if adapter is None:
             raise ValueError(f"No workspace source adapter for {source.provider!r}")
