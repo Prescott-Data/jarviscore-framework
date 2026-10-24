@@ -384,13 +384,17 @@ class UnifiedLLMClient:
 
         Called from agent teardown; the client is not used after it.
         """
-        warm_task = getattr(self, "_warm_task", None)
-        if warm_task is not None and not warm_task.done():
-            warm_task.cancel()
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
+        warm_task = getattr(self, "_warm_task", None)
+        if warm_task is not None and not warm_task.done():
+            warm_task.cancel()
+            if loop is not None and warm_task.get_loop() is loop:
+                # Before Python 3.12 a cancelled wait_for takes a few more turns of
+                # the loop to finish; nothing of a closed client is left pending.
+                await asyncio.wait({warm_task}, timeout=1.0)
         sessions = getattr(self, "_vllm_sessions", None) or {}
         session = sessions.pop(loop, None) if loop is not None else None
         if session is not None and not session.closed:

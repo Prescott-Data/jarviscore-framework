@@ -232,6 +232,6 @@ class TestWarmingNeverFailsAStart:
         llm.start_warming()
         await asyncio.sleep(0)
         await llm.close()
-        await asyncio.sleep(0)
-        assert llm._warm_task.cancelled() or llm._warm_task.done()
+        # Nothing of a closed client is left pending, on any supported Python.
+        assert llm._warm_task.done()
         llm.azure_client.close.assert_called_once()
