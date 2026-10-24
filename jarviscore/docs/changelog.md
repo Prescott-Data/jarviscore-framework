@@ -103,7 +103,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   26-78% of input now cached where none was. Against LangGraph and CrewAI,
   JarvisCore is 2-3x cheaper on a 360-invoice ledger and 26-29x on 3,600
   invoices, where it alone answered correctly; on small tool tasks it still
-  costs 1.3-3.6x more.
+  costs 1.2-3.6x more.
 
 ### Added
 
