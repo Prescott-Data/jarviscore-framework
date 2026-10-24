@@ -185,6 +185,29 @@ class HITLAction(BaseModel):
     # What the action touches, independent of how it was addressed when proposed.
     target: Dict[str, Any] = Field(default_factory=dict)
 
+    def binding(self) -> Dict[str, Any]:
+        """Everything an approval of this action covers.
+
+        ``action_id`` names the operation (one invoice, one message); the binding is
+        the exact form of it a person saw: every argument, or the element and values
+        a browser action touches. A different binding is a different decision.
+        The wording (description, consequence) is not part of it, so the agent can
+        describe the same action again after a resume.
+        """
+        bound: Dict[str, Any] = {"tool": self.tool, "system": self.system, "location": self.location}
+        if self.target:
+            bound["target"] = self.target
+        else:
+            bound["params"] = self.params
+        return bound
+
+    def binding_digest(self) -> str:
+        import hashlib
+        import json
+
+        canonical = json.dumps(self.binding(), sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
 
 class HITLRequest(BaseModel):
     """
