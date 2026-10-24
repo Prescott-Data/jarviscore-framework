@@ -12,17 +12,24 @@ import asyncio
 import traceback
 import re
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import quote_plus, urlparse, urljoin
 
+from jarviscore.core.egress import Egress, configured_egress
 from jarviscore.core.search_deadlines import search_deadline
 
-# beautifulsoup4 — required for HTML→Markdown extraction.
-# Part of [web] or [research] extras.
+# beautifulsoup4 — required for HTML→Markdown extraction (a core dependency).
 try:
+    import warnings as _warnings
+
     from bs4 import BeautifulSoup
+    from bs4 import XMLParsedAsHTMLWarning as _XMLParsedAsHTMLWarning
+
+    # Feeds and sitemaps are read as HTML on purpose; the advice is for authors.
+    _warnings.filterwarnings("ignore", category=_XMLParsedAsHTMLWarning)
     _HAS_BS4 = True
 except ImportError:
     _HAS_BS4 = False
@@ -85,11 +92,11 @@ class CircuitBreaker:
             return True
         return False
 
-    def record_failure(self, service: str):
+    def record_failure(self, service: str, level: int = logging.WARNING):
         self.failures[service] = self.failures.get(service, 0) + 1
         self.last_failure_time[service] = time.time()
         if self.failures[service] >= self.failure_threshold:
-            logger.warning(f"Circuit breaker OPEN for {service} due to {self.failures[service]} failures")
+            logger.log(level, f"Circuit breaker OPEN for {service} due to {self.failures[service]} failures")
             self.state[service] = 'OPEN'
 
     def record_success(self, service: str):
@@ -120,8 +127,13 @@ class InternetSearch:
         *,
         search_timeout_seconds: float | None = None,
         grounded_timeout_seconds: float | None = None,
+        egress: Optional[Egress] = None,
+        egress_session: Optional[str] = None,
     ):
         self.session = None
+        # Pages read here leave through the developer's proxy; search APIs authenticate by key.
+        self.egress = egress if egress is not None else configured_egress()
+        self._egress_session = egress_session or uuid.uuid4().hex
         self.search_timeout_seconds = search_deadline(
             search_timeout_seconds, "RESEARCH_SEARCH_TIMEOUT_SECONDS", 15.0,
         )
@@ -143,6 +155,11 @@ class InternetSearch:
         )
         self.serper_api_key = os.environ.get("SERPER_API_KEY")
         self.searxng_url = os.environ.get("SEARXNG_INSTANCE_URL", "http://localhost:8080")
+        # The default URL is tried quietly: a SearXNG nobody configured being
+        # absent is not news, and its retries buried real errors in every run.
+        self._searxng_level = (
+            logging.WARNING if os.environ.get("SEARXNG_INSTANCE_URL") else logging.DEBUG
+        )
         self.circuit_breaker = CircuitBreaker()
 
         self._gemini_client = None
@@ -180,6 +197,13 @@ class InternetSearch:
         """Return the active session. Callers must call initialize() first."""
         assert self.session is not None, "HTTP session not initialised — call initialize() first"
         return self.session
+
+    def _page_proxy(self, url: str) -> Optional[str]:
+        return self.egress.http_proxy(url, self._egress_session) if self.egress else None
+
+    def browser_proxy(self) -> Optional[Dict[str, Any]]:
+        """The Playwright proxy for a browser reading pages for this search session."""
+        return self.egress.playwright(self._egress_session) if self.egress else None
 
     async def close(self):
         """Close the HTTP session"""
@@ -278,7 +302,10 @@ class InternetSearch:
             results: List[Dict[str, Any]] = []
             for provider, batch in zip(providers, provider_results):
                 if isinstance(batch, Exception):
-                    logger.warning(
+                    logger.log(
+                        self._searxng_level
+                        if provider == "searxng" and isinstance(batch, SearchProviderError)
+                        else logging.WARNING,
                         "Search provider=%s tier=%s failed error_type=%s deadline_seconds=%s",
                         provider, tier_name, type(batch).__name__, self._provider_timeout(provider),
                     )
@@ -397,7 +424,7 @@ class InternetSearch:
                 - json
         """
         if self.circuit_breaker.is_open("searxng"):
-            logger.warning("Skipping SearXNG search (Circuit Breaker OPEN)")
+            logger.log(self._searxng_level, "Skipping SearXNG search (Circuit Breaker OPEN)")
             raise SearchProviderError("searxng circuit breaker open")
 
         try:
@@ -446,12 +473,16 @@ class InternetSearch:
                             await asyncio.sleep(1.0 * (2 ** attempt))
                             continue
                 except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
-                    logger.warning("SearXNG connection attempt %d failed: %s", attempt + 1, e)
+                    logger.log(self._searxng_level, "SearXNG connection attempt %d failed: %s", attempt + 1, e)
                     last_failure = f"connection failed: {type(e).__name__}: {e}"
+                    if self._searxng_level == logging.DEBUG and isinstance(
+                        e, aiohttp.ClientConnectorError
+                    ):
+                        break  # nothing listens at the default URL; retrying only waits
                     await asyncio.sleep(1.0 * (2 ** attempt))
 
-            logger.warning("SearXNG search failed: %s", last_failure)
-            self.circuit_breaker.record_failure("searxng")
+            logger.log(self._searxng_level, "SearXNG search failed: %s", last_failure)
+            self.circuit_breaker.record_failure("searxng", level=self._searxng_level)
             raise SearchProviderError(f"searxng {last_failure}")
         except SearchProviderError:
             raise
@@ -938,13 +969,14 @@ class InternetSearch:
     async def _extract_via_browser(self, url: str) -> str:
         """Extract content using headful browser automation for SPAs and anti-bot."""
         if not _HAS_BROWSER or BrowserConfig is None or BrowserController is None:
-            logger.info("Browser not available for SPA extraction. Install: pip install jarviscore[browser]")
+            logger.info("Browser not available for SPA extraction. Install: pip install 'jarviscore-framework[browser]'")
             return ""
         logger.info(f"Using BrowserController to extract content from: {url}")
         browser_config = BrowserConfig(
             headless=os.environ.get("BROWSER_HEADLESS", "true").lower() in ("1", "true", "yes"),
             timeout_ms=30000,
             cdp_url=os.environ.get("BROWSER_CONTROL_URL") or os.environ.get("BROWSER_SERVICE_URL"),
+            proxy=self.browser_proxy(),
         )
         browser = BrowserController(browser_config)
         try:
@@ -1035,6 +1067,7 @@ class InternetSearch:
                 headers=headers,
                 allow_redirects=True,
                 timeout=aiohttp.ClientTimeout(total=20),
+                proxy=self._page_proxy(clean_url),
             ) as response:
                 if response.status == 200:
                     final_url = str(response.url)
@@ -1058,7 +1091,7 @@ class InternetSearch:
                             return {
                                 "url": clean_url,
                                 "error": f"HTTP error: {status}",
-                                "error_type": "TRANSIENT" if status in (429, 503) else "PERMANENT",
+                                "status_code": status,
                                 "content": "",
                                 "content_length": 0,
                             }
@@ -1148,16 +1181,11 @@ class InternetSearch:
                     }
                 else:
                     logger.warning(f"Failed to fetch {clean_url}, status code: {response.status}")
-                    
-                    # Return structured error
-                    error_type = "TRANSIENT" if response.status in (429, 503, 504) else "PERMANENT"
-                    if response.status in (401, 403):
-                        error_type = "AUTH_REQUIRED"
-                        
+
                     return {
                         "url": clean_url,
                         "error": f"HTTP error: {response.status}",
-                        "error_type": error_type,
+                        "status_code": response.status,
                         "content": "",
                         "content_length": 0
                     }
@@ -1175,7 +1203,7 @@ class InternetSearch:
             return {
                 "url": url,
                 "error": "Timeout",
-                "error_type": "TRANSIENT",
+                "error_type": "TIMEOUT",
                 "content": "",
                 "content_length": 0,
             }
@@ -1210,6 +1238,7 @@ class InternetSearch:
                     headers={"User-Agent": self.user_agent, "Accept": "application/pdf,*/*"},
                     allow_redirects=True,
                     timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+                    proxy=self._page_proxy(url),
                 ) as response:
                     last_status = response.status
                     last_type = response.headers.get("Content-Type", "")
@@ -1237,6 +1266,8 @@ class InternetSearch:
         except Exception:
             logger.warning("pypdf not installed; cannot extract PDF content")
             return ""
+        # pypdf reports every font it cannot fully decode; the text still comes out.
+        logging.getLogger("pypdf").setLevel(logging.ERROR)
         try:
             reader = pypdf.PdfReader(BytesIO(pdf_bytes))
             pages = []

@@ -1,3 +1,4 @@
+@charset "UTF-8";
 /* ============================================================
    JarvisCore Docs — Custom Theme
    ============================================================ */
@@ -2426,3 +2427,125 @@ body,
   background: rgba(23, 88, 245, 0.5);
 }
 
+/* ============================================================
+   VIDEO (click to play; see javascripts/video.js)
+   ============================================================ */
+
+.md-typeset .jc-video {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  margin: 1em 0;
+  border: 1px solid var(--jc-border);
+  border-radius: var(--jc-radius);
+  overflow: hidden;
+  background: #000;
+}
+
+.md-typeset .jc-video iframe,
+.md-typeset .jc-video .jc-video-poster,
+.md-typeset .jc-video img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+}
+
+.md-typeset .jc-video img { object-fit: cover; }
+
+.md-typeset .jc-video-play {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  width: 3.4rem;
+  height: 2.4rem;
+  border-radius: 0.6rem;
+  background: rgba(0, 0, 0, 0.72);
+  transition: background var(--jc-transition);
+}
+
+.md-typeset .jc-video-poster:hover .jc-video-play { background: var(--jc-brand); }
+
+.md-typeset .jc-video-play::after {
+  content: "";
+  position: absolute;
+  left: 52%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border-style: solid;
+  border-width: 0.5rem 0 0.5rem 0.85rem;
+  border-color: transparent transparent transparent #fff;
+}
+
+
+/* Docs home: no sidebars, so the page uses the full width. */
+@media screen and (min-width: 60em) {
+  .md-content__inner:has(> .jc-hero) .jc-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .md-content__inner:has(> .jc-hero) .jc-hero p { max-width: 44rem; }
+}
+
+/* ============================================================
+   DOCS HOME
+   ============================================================ */
+
+.md-content__inner:has(> .jc-hero) > .md-content__button { display: none; }
+.md-content__inner:has(> .jc-hero) > h2 { margin-top: 2.8rem; }
+
+.md-typeset .jc-video-home { max-width: 46rem; margin: 1rem auto 0; }
+.md-typeset .jc-caption { max-width: 46rem; margin: 0.6rem auto 0; text-align: center; font-size: 0.7rem; color: var(--jc-text-muted); }
+
+.jc-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.jc-tiles > p { display: contents; }
+
+.md-typeset a.jc-tile {
+  display: grid;
+  grid-template-columns: 1.2rem minmax(0, 1fr);
+  column-gap: 0.7rem;
+  row-gap: 0.15rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--jc-border);
+  border-radius: var(--jc-radius);
+  color: inherit;
+  transition: border-color var(--jc-transition), background var(--jc-transition);
+}
+
+.md-typeset a.jc-tile:hover { border-color: var(--jc-brand); background: var(--jc-gradient-subtle); }
+.md-typeset a.jc-tile .twemoji { grid-row: span 2; color: var(--jc-brand); margin-top: 0.05rem; }
+.md-typeset a.jc-tile strong { font-size: 0.76rem; }
+.md-typeset a.jc-tile span:last-child { font-size: 0.68rem; line-height: 1.5; color: var(--jc-text-muted); }
+
+/* Docs home headings: plain display type, without the docs' left rule. */
+.md-content__inner:has(> .jc-hero) > h2,
+[data-md-color-scheme="slate"] .md-content__inner:has(> .jc-hero) > h2 {
+  border-left: 0;
+  padding-left: 0;
+  color: var(--md-default-fg-color);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.md-content__inner:has(> .jc-hero) .admonition { margin: 1.4rem 0 0; }
+
+.md-typeset .jc-community { max-width: 46rem; }
+
+[data-md-color-scheme="slate"] .md-typeset a.jc-tile { border-color: rgba(255, 255, 255, 0.10); }
+[data-md-color-scheme="slate"] .md-typeset a.jc-tile .twemoji { color: var(--jc-brand-light); }
+
+@media screen and (max-width: 60em) {
+  .jc-tiles { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+@media screen and (max-width: 38em) {
+  .jc-tiles { grid-template-columns: minmax(0, 1fr); }
+}
+
+.md-content__inner:has(> .jc-hero) .md-typeset__table { display: block; }
+.md-content__inner:has(> .jc-hero) .md-typeset__table table:not([class]) { display: table; width: 100%; }
+.md-content__inner:has(> .jc-hero) .md-typeset__table td:first-child { white-space: nowrap; font-weight: 600; }

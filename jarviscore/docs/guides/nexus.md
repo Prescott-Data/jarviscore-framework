@@ -87,6 +87,20 @@ Without `NEXUS_SECRET`, the key is derived from the machine's hardware UUID. Cre
 
 ## Using Nexus in Agent Code
 
+Only agents that declare `requires_auth = True` can use provider credentials.
+This holds in both modes: an agent that does not declare it gets no
+`nexus_call` route to the gateway or to the local store, and the router is not
+told which providers are connected. A task that names a provider for such an
+agent yields with a message that says so.
+
+```python
+class CrmAgent(AutoAgent):
+    role = "crm"
+    capabilities = ["crm"]
+    requires_auth = True
+    system_prompt = "You keep the CRM up to date."
+```
+
 Use provider atoms where one exists. Custom generated code uses the injected
 asynchronous `nexus_call`; it never reads the local store or builds an auth
 header:
@@ -140,7 +154,7 @@ The gateway is managed entirely via the `jarviscore` CLI: no separate install re
 jarviscore nexus init
 ```
 
-This generates encryption keys, adds `NEXUS_GATEWAY_URL` and `NEXUS_RETURN_URL` to `.env`, and starts the Docker stack. After `init`, subsequent starts use:
+This generates the stack's keys into `~/.jarviscore/nexus/stack.env` (readable by you only), adds `NEXUS_GATEWAY_URL`, `NEXUS_RETURN_URL` and `NEXUS_GATEWAY_API_KEY` to `.env`, and starts the Docker stack. Agents hold the Gateway key only; the encryption key stays with the broker. After `init`, subsequent starts use:
 
 ```bash
 jarviscore nexus up
@@ -161,6 +175,8 @@ jarviscore nexus status
 ---
 
 ## Gateway API Contract
+
+A Gateway deployed with caller authentication (`GATEWAY_REQUIRE_API_KEY=true`, nexus-framework 0.6.0 and later) refuses every request without an `X-API-Key` header. Set `NEXUS_GATEWAY_API_KEY` next to `NEXUS_GATEWAY_URL` and `NexusClient`, `AuthenticationManager` and the `nexus` CLI send it on every call. Leave it unset for a Gateway without caller auth.
 
 When `NEXUS_GATEWAY_URL` is set, the CLI registers providers by calling the Gateway directly. You should not need to call this manually (`jarviscore nexus register` handles it) but the contract is documented here for completeness.
 

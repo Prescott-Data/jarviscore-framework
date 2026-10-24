@@ -7,15 +7,22 @@ credentials, model selection, expiry, quotas, and campaign budget controls.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
 import time
 import uuid
+import weakref
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from jarviscore.config.paths import runtime_path
+
+if TYPE_CHECKING:
+    import aiohttp
 
 from urllib.parse import urlparse
 
@@ -118,7 +125,8 @@ class PromoLLMClient:
         token: str,
         *,
         timeout: float = 120.0,
-        artifact_dir: str = "./traces/promo_calls",
+        artifact_dir: str = runtime_path("traces", "promo_calls"),
+        keepalive_seconds: float = 120.0,
     ) -> None:
         if not token or not token.strip():
             raise ValueError("A non-empty JARVISCORE_PROMO_TOKEN is required")
@@ -126,6 +134,42 @@ class PromoLLMClient:
         self._token = token.strip()
         self.timeout = timeout
         self.artifact_dir = Path(artifact_dir)
+        self.keepalive_seconds = keepalive_seconds
+        # One session per event loop: a session per call paid a TCP + TLS
+        # handshake (0.6-0.7 s measured) on every completion, and an
+        # aiohttp session is bound to the loop that created it.
+        self._sessions: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, aiohttp.ClientSession]" = (
+            weakref.WeakKeyDictionary()
+        )
+
+    def _session(self) -> "aiohttp.ClientSession":
+        import aiohttp
+
+        loop = asyncio.get_running_loop()
+        session = self._sessions.get(loop)
+        if session is None or session.closed:
+            session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                connector=aiohttp.TCPConnector(keepalive_timeout=self.keepalive_seconds),
+            )
+            self._sessions[loop] = session
+        return session
+
+    async def warm(self) -> None:
+        """Open the connection to the endpoint's host so the first call skips the handshake."""
+        parsed = urlparse(self.endpoint)
+        async with self._session().head(f"{parsed.scheme}://{parsed.netloc}/") as response:
+            await response.read()
+
+    async def close(self) -> None:
+        """Close the session opened on the running event loop."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        session = self._sessions.pop(loop, None)
+        if session is not None and not session.closed:
+            await session.close()
 
     @property
     def endpoint(self) -> str:
@@ -261,21 +305,17 @@ class PromoLLMClient:
         }
 
     async def _send(self, payload: Dict[str, Any], call_id: str) -> _HTTPResult:
-        import aiohttp
-
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
         headers = {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
             "X-JarvisCore-Call-ID": call_id,
         }
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(self.endpoint, json=payload, headers=headers) as response:
-                return _HTTPResult(
-                    status=response.status,
-                    headers=dict(response.headers),
-                    body=await response.text(),
-                )
+        async with self._session().post(self.endpoint, json=payload, headers=headers) as response:
+            return _HTTPResult(
+                status=response.status,
+                headers=dict(response.headers),
+                body=await response.text(),
+            )
 
     def _write_raw_artifact(
         self,

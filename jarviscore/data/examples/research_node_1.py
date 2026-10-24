@@ -22,7 +22,7 @@ Phases exercised (node 1)
 --------------------------
 Phase 2  : SWIM P2P joins synthesizer cluster, ZMQ messaging
 Phase 5  : Prometheus metrics (PROMETHEUS_ENABLED=true in .env)
-Phase 7  : Mesh._run_distributed_worker() claims "tech" step via Redis SETNX
+Phase 7  : Mesh._run_pool() claims "tech" step via Redis SETNX
 Phase 8  : UnifiedMemory (EpisodicLedger tracks every search query made)
 Phase 9  : Auto-injected redis + blob + mailbox before setup()
 """

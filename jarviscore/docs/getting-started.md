@@ -245,7 +245,8 @@ async def main():
             agent="researcher",
             task="What are the main architectural differences between the SWIM and Raft consensus protocols?",
         )
-        print(result["output"])
+        print(result["result_summary"])   # the answer, in prose
+        # result["output"] holds the structured data, result["evidence"] what the tools observed
     finally:
         await mesh.stop()
 
@@ -325,7 +326,7 @@ async def main():
                 "depends_on": [0],
             },
         ])
-        print(results[-1]["output"])
+        print(results[-1]["result_summary"])
     finally:
         await mesh.stop()
 
@@ -356,7 +357,13 @@ known in advance and several peers should own the work, use
 
 Once you have a working agent, add infrastructure incrementally based on your requirements.
 
-**Add persistent memory** so agents retain context across runs:
+**Memory across runs works out of the box.** When an agent decides something is
+worth keeping, it calls `remember`, and the fact is written under
+`.jarviscore/memory/`. The next run, in a new process, recalls facts relevant
+to its task before it starts. Nothing to install or run.
+
+**Add Redis** for durable workflows, crash recovery and several processes
+sharing work:
 
 ```bash
 docker run -d -p 6379:6379 redis:7-alpine
@@ -366,7 +373,8 @@ docker run -d -p 6379:6379 redis:7-alpine
 REDIS_URL=redis://localhost:6379/0
 ```
 
-**Add cross-session semantic memory** with Athena:
+**Add semantic memory shared across machines** with Athena, which replaces the
+local store:
 
 ```bash
 jarviscore memory init
@@ -376,7 +384,7 @@ jarviscore memory init
 
 ```bash
 jarviscore nexus init
-jarviscore nexus register github --client-id=YOUR_ID --client-secret=YOUR_SECRET
+jarviscore nexus register github --client-id=YOUR_ID   # prompts for the secret
 ```
 
 **Enable multi-node distributed execution** with P2P:

@@ -51,6 +51,10 @@ class Agent(ABC):
     p2p_responder: bool = False  # Set to True for agents that run a continuous listener loop (e.g. CustomAgent)
     output_schema: Optional[Any] = None  # Pydantic BaseModel class for output validation
     final_response_passthrough: bool = False
+    #: False for an agent people reach directly (a conversational interface, such
+    #: as a RoomAgent): it uses the mesh, but planners never route steps to it,
+    #: it claims none, and its capabilities are not announced to peers.
+    mesh_worker: bool = True
 
     def __init__(self, agent_id: Optional[str] = None):
         """
@@ -77,6 +81,8 @@ class Agent(ABC):
 
         # Initialize instance attributes
         self.agent_id = agent_id or f"{self.role}-{uuid4().hex[:8]}"
+        # Stable across restarts, unlike a generated agent_id.
+        self.memory_identity = agent_id or self.role
         self._mesh = None  # Set by Mesh when agent is added
         self._logger = logging.getLogger(f"jarviscore.agent.{self.agent_id}")
 
@@ -177,8 +183,12 @@ class Agent(ABC):
         interpretations: Dict[str, Any],
     ):
         """Decide whether upstream uncertainty materially prevents this task."""
+        from jarviscore.core.envelope import handoff_view
         from jarviscore.orchestration.envelopes import DependencyAuthorization
 
+        artifacts = {
+            step_id: handoff_view(artifact, step_id) for step_id, artifact in artifacts.items()
+        }
         unresolved = {
             step_id: interpretation
             for step_id, interpretation in interpretations.items()

@@ -12,7 +12,7 @@ Two responsibilities:
 
    Priority (highest → lowest, never trimmed → first trimmed):
      1. MISSION       — workflow_id, step_id, task description (fixed)
-     2. FAILURE MEMORY — recent failures (prevents repeat mistakes)
+     2. FAILURE MEMORY — recent failures, as recorded
      3. CURRENT PLAN  — active reasoning / next steps
      4. SCRATCHPAD    — working notes from this turn
      5. LONG-TERM MEM — compressed prior summaries
@@ -22,6 +22,7 @@ Two responsibilities:
 3. Auto-summarisation trigger — when cumulative token use crosses
    the configured threshold, signals the Kernel to compress and archive.
 """
+import importlib.util
 import json
 import logging
 import time
@@ -48,14 +49,24 @@ logger = logging.getLogger(__name__)
 
 # ── Token counting ──────────────────────────────────────────────────
 
-# Try tiktoken for exact counting; fall back to heuristic
-try:
-    import tiktoken
-    _ENCODER = tiktoken.get_encoding("cl100k_base")
-    _HAS_TIKTOKEN = True
-except ImportError:
-    _ENCODER = None
-    _HAS_TIKTOKEN = False
+# tiktoken counts exactly; its encoding is loaded on first use, not at import: it may
+# be downloaded, which fails offline (and in the code sandbox) and slows startup.
+_ENCODER = None
+_HAS_TIKTOKEN = importlib.util.find_spec("tiktoken") is not None
+
+
+def _encoder():
+    """The cl100k_base encoder, or None (heuristic counting) when it cannot be loaded."""
+    global _ENCODER, _HAS_TIKTOKEN
+    if _ENCODER is None and _HAS_TIKTOKEN:
+        try:
+            import tiktoken
+
+            _ENCODER = tiktoken.get_encoding("cl100k_base")
+        except Exception as exc:
+            logger.debug("tiktoken unavailable, counting tokens by words: %s", exc)
+            _HAS_TIKTOKEN = False
+    return _ENCODER
 
 # Tokens-per-word heuristic (matches llm.py Gemini fallback)
 _TOKENS_PER_WORD: float = 1.3
@@ -120,6 +131,16 @@ class BudgetConfig:
         return self.total_tokens - self.output_reserve - self.system_reserve
 
 
+#: Blocks that hold for a whole step: the task and what it was given. They lead
+#: the prompt so each turn repeats the last one's prefix and is served from cache.
+STEP_CONSTANT_BLOCKS = frozenset({"mission", "goal_state", "input_context", "recalled", "prior_steps"})
+
+
+def _is_empty(value) -> bool:
+    """An empty list, map or string under INPUT CONTEXT tells the agent nothing."""
+    return value is None or (isinstance(value, (str, list, tuple, dict, set)) and not value)
+
+
 class ContextManager:
     """
     Manages LLM token budgets and assembles prioritised prompt context.
@@ -148,9 +169,10 @@ class ContextManager:
         """
         if not text:
             return 0
-        if _HAS_TIKTOKEN and _ENCODER is not None:
+        encoder = _encoder()
+        if encoder is not None:
             try:
-                return len(_ENCODER.encode(text))
+                return len(encoder.encode(text))
             except Exception:
                 pass  # fall through to heuristic
         return max(1, int(len(text.split()) * _TOKENS_PER_WORD))
@@ -204,26 +226,44 @@ class ContextManager:
         established?") read a stale diagnosis as established. Here it is named
         for what it is, and what it is not.
         """
-        lines = [
-            "## FROM EARLIER SESSIONS",
-            "What this agent recorded before, retrieved by relevance to this task. "
-            "It describes the past: things may have changed since, and anything "
-            "that reads as a diagnosis of a failure is a hypothesis to re-test, "
-            "not a fact to build on.",
-        ]
+        def render(item: Any) -> str:
+            if not isinstance(item, dict):
+                return f"- {str(item).strip()}" if str(item).strip() else ""
+            text = item.get("content") or item.get("text") or item.get("summary") or ""
+            when = item.get("timestamp") or item.get("created_at") or ""
+            score = item.get("similarity_score")
+            tag = f" ({when})" if when else ""
+            rel = f" [relevance {score:.2f}]" if isinstance(score, (int, float)) else ""
+            return f"- {str(text).strip()}{tag}{rel}" if str(text).strip() else ""
+
         items = recalled if isinstance(recalled, list) else [recalled]
-        for item in items:
-            if isinstance(item, dict):
-                text = item.get("content") or item.get("text") or item.get("summary") or ""
-                when = item.get("timestamp") or item.get("created_at") or ""
-                score = item.get("similarity_score")
-                tag = f" ({when})" if when else ""
-                rel = f" [relevance {score:.2f}]" if isinstance(score, (int, float)) else ""
-                if str(text).strip():
-                    lines.append(f"- {str(text).strip()}{tag}{rel}")
-            elif str(item).strip():
-                lines.append(f"- {str(item).strip()}")
-        return "\n".join(lines) if len(lines) > 2 else ""
+        # What people said in a room's conversation is a record of what they told
+        # the team, not this agent's own earlier conclusions. Under the earlier
+        # sessions' caution ("a hypothesis to re-test") agents set it aside and
+        # answered that nobody had said.
+        said = [line for line in (render(i) for i in items
+                                  if isinstance(i, dict) and i.get("source") == "team") if line]
+        own = [line for line in (render(i) for i in items
+                                 if not (isinstance(i, dict) and i.get("source") == "team")) if line]
+        blocks = []
+        if said:
+            blocks.append("\n".join([
+                "## WHAT THE TEAM SAID",
+                "The room's conversation and decisions, as the people and the room recorded them. "
+                "This is what the team told each other; where it bears on the task, it is what "
+                "they want, unless the task or the files say otherwise.",
+                *said,
+            ]))
+        if own:
+            blocks.append("\n".join([
+                "## FROM EARLIER SESSIONS",
+                "What this agent recorded before, retrieved by relevance to this task. "
+                "It describes the past: things may have changed since, and anything "
+                "that reads as a diagnosis of a failure is a hypothesis to re-test, "
+                "not a fact to build on.",
+                *own,
+            ]))
+        return "\n\n".join(blocks)
 
     def _build_goal_state_block(self, context: Dict[str, Any]) -> str:
         """Render a goal execution's accumulated state — structured (issue #72).
@@ -267,32 +307,63 @@ class ContextManager:
         return "\n".join(lines)
 
 
-    def build_context(self, state: Any) -> str:
+    def build_context(self, state: Any, in_conversation: frozenset = frozenset()) -> str:
         """
         Assemble a priority-ordered prompt context string.
 
         Accepts either KernelState (Pydantic) or Dict. KernelState is
         preferred — it gives us structured tool history, failure memory,
         and belief state. Dict is kept for backward compatibility.
+        ``in_conversation`` names receipts the conversation already shows whole.
         """
         # Route to the appropriate builder
         if isinstance(state, dict):
             return self._build_context_from_dict(state)
-        return self._build_context_from_state(state)
+        return self._build_context_from_state(state, in_conversation)
 
-    def _build_context_from_state(self, state: "KernelState") -> str:
+    def build_context_parts(
+        self, state: Any, in_conversation: frozenset = frozenset(),
+        notes_in_view: Optional[frozenset] = None,
+    ) -> Tuple[str, str]:
+        """The turn's context as (what holds for the whole step, what changes each turn).
+
+        Providers cache a prompt's longest repeated prefix. The task and its inputs
+        lead the conversation and the turn's own state follows it, so every turn
+        repeats the one before and is served from cache; rendered as one block
+        after the conversation, each turn's prompt differed early and nothing was.
+        ``notes_in_view`` names notes the agent can read in its own calls in view;
+        they are not repeated.
+        """
+        if isinstance(state, dict):
+            return self._build_context_from_dict(state), ""
+        blocks = self._render_keyed(state, in_conversation, notes_in_view)
+        static = [text for key, text in blocks if key in STEP_CONSTANT_BLOCKS]
+        changing = [text for key, text in blocks if key not in STEP_CONSTANT_BLOCKS]
+        return "\n\n".join(static), "\n\n".join(changing)
+
+    def _build_context_from_state(
+        self, state: "KernelState", in_conversation: frozenset = frozenset()
+    ) -> str:
         """Build context from a KernelState Pydantic model.
 
         Blocks are composed once at full fidelity, then the least aggressive
         pressure tier that fits the budget is chosen. Values are never cut.
         """
+        # The budget's state reaches the agent as a pressure notice when it binds;
+        # a per-turn counter only made every prompt unique.
+        return "\n\n".join(text for _, text in self._render_keyed(state, in_conversation))
+
+    def _render_keyed(
+        self, state: "KernelState", in_conversation: frozenset = frozenset(),
+        notes_in_view: Optional[frozenset] = None,
+    ) -> List[Tuple[str, str]]:
         budget = self.config.usable_tokens
-        candidates = self._compose_blocks(state)
+        candidates = self._compose_blocks(state, in_conversation, notes_in_view)
         full_cost = sum(self.count_tokens(text) for _, text in candidates)
 
         for tier in LADDER:
             blocks = self._render_at_tier(state, candidates, tier)
-            used = sum(self.count_tokens(text) for text in blocks)
+            used = sum(self.count_tokens(text) for _, text in blocks)
             if used <= budget or tier is LADDER[-1]:
                 break
 
@@ -301,31 +372,29 @@ class ContextManager:
         if isinstance(state.internal_variables, dict):
             set_pressure(state.internal_variables, pressure)
         if tier is not PressureTier.NORMAL:
-            blocks.insert(1, format_pressure_notice(pressure))
+            blocks.insert(1, ("pressure", format_pressure_notice(pressure)))
+        return blocks
 
-        blocks.append(
-            f"\n---\n**Context Budget:** {used}/{budget} tokens "
-            f"({100 * used // budget if budget else 0}% used)"
-        )
-        return "\n\n".join(blocks)
-
-    def _render_at_tier(self, state: "KernelState", candidates, tier) -> List[str]:
+    def _render_at_tier(self, state: "KernelState", candidates, tier) -> List[Tuple[str, str]]:
         """Keep every block this tier allows, whole; reference the rest."""
-        rendered: List[str] = []
+        rendered: List[Tuple[str, str]] = []
         for key, text in candidates:
             if key == "input_context" and tier is not PressureTier.NORMAL:
                 text = self._compose_input_context(state, tier)
                 if not text:
                     continue
             if should_render_block(key, tier):
-                rendered.append(text)
+                rendered.append((key, text))
         if prior_step_mode(tier) == "references":
             prior = (state.context or {}).get("previous_step_results") or {}
             if prior:
-                rendered.append(format_step_references(state.workflow_id, prior.keys()))
+                rendered.append(("prior_steps", format_step_references(state.workflow_id, prior.keys())))
         return rendered
 
-    def _compose_blocks(self, state: "KernelState") -> List[tuple]:
+    def _compose_blocks(
+        self, state: "KernelState", in_conversation: frozenset = frozenset(),
+        notes_in_view: Optional[frozenset] = None,
+    ) -> List[tuple]:
         """Every block the turn could show, at full fidelity, in priority order."""
         blocks: List[tuple] = []
 
@@ -333,28 +402,36 @@ class ContextManager:
             if text and text.strip():
                 blocks.append((key, text))
 
+        # The workflow's id is unique to each run: leading the task, it made every
+        # run's prompt differ from the first lines on. Receipts still carry it.
         mission = f"""## MISSION
-**Workflow:** {state.workflow_id}
 **Step:** {state.step_id}
 **Task:** {state.task}
-**Status:** {state.status}
-**Turn:** {state.turn}
 """
         if state.last_error:
             mission += f"**CRITICAL ERROR TO FIX:** {state.last_error}\n"
         add("mission", mission)
         add("goal_state", self._build_goal_state_block(state.context or {}))
+        notes = [
+            note for note in getattr(state, "working_notes", None) or []
+            if notes_in_view is None or str(note.get("note", "")).strip() not in notes_in_view
+        ]
+        if notes:
+            add("working_notes", "## MY WORKING NOTES\nWhat I wrote down in this step (turn: note):\n" + "\n".join(
+                f"- [{note.get('turn')}] {note.get('note')}" for note in notes
+            ))
         mailbox_context = (state.context or {}).get("_mailbox_context")
         if mailbox_context:
             add("mailbox", str(mailbox_context))
 
         if state.failure_ledger:
-            lines = ["## FAILURE MEMORY (Do Not Repeat)"]
+            lines = ["## RECENT FAILURES"]
             for entry in state.failure_ledger[-5:]:
                 tool = entry.get("tool", "unknown")
                 err_type = entry.get("error_type", "UNKNOWN")
-                lines.append(f"- `{tool}` → `{err_type}`: {entry.get('error', '')}")
-            lines.append("Rule: if tool+params already failed recently, choose a different strategy.")
+                code = entry.get("status_code")
+                status = f" (status {code})" if code is not None else ""
+                lines.append(f"- `{tool}` → `{err_type}`{status}: {entry.get('error', '')}")
             add("failure_memory", "\n".join(lines))
 
         findings = state.internal_variables.get("research_findings", [])
@@ -409,22 +486,31 @@ class ContextManager:
                 ltm_block += f"…and {hidden} older memories held in long-term memory\n"
             add("long_term_memory", ltm_block)
 
-        if state.tool_history:
+        # A program's own calls stay evidence; the agent sees what the program reported.
+        # A call in the conversation is shown there with its receipt; only the
+        # calls that have left view are listed here.
+        shown_history = [turn for turn in state.tool_history if not getattr(turn, "via_program", False)]
+        out_of_view = [
+            turn for turn in shown_history
+            if not (getattr(turn, "receipt_id", "") and turn.receipt_id in in_conversation)
+        ]
+        if out_of_view:
             receipt_lines = [
                 f"- `{turn.receipt_id}`: {turn.tool_name}; observed at {turn.observed_at.isoformat()}"
-                for turn in state.tool_history[-20:]
+                for turn in out_of_view[-20:]
                 if getattr(turn, "receipt_id", "")
             ]
             if receipt_lines:
                 add(
                     "tool_receipts",
                     "## AUTHORITATIVE TOOL RECEIPTS\n"
-                    "Use these IDs when final JSON cites tool evidence. Full results "
-                    "remain in durable action history.\n"
+                    "Calls no longer in the conversation. When your result reports what "
+                    "one did, cite its receipt as `tool_receipt_id`; JarvisCore binds the "
+                    "runtime facts. Full results remain in durable action history.\n"
                     + "\n".join(receipt_lines),
                 )
             history_block, _ = self._format_tool_history(
-                state.tool_history, self.config.history_limit
+                shown_history, self.config.history_limit, in_conversation
             )
             add("tool_history", history_block)
 
@@ -444,16 +530,31 @@ class ContextManager:
 
         return blocks
 
+    @staticmethod
+    def _plan_view(plan: Dict[str, Any]) -> Dict[str, Any]:
+        """The plan as the agent reads it: a goal-wide source quote points to the goal it repeats."""
+        goal = str(plan.get("goal") or "").strip()
+        obligations = plan.get("obligations")
+        if not goal or not isinstance(obligations, list):
+            return plan
+        view = []
+        for obligation in obligations:
+            if isinstance(obligation, dict) and str(obligation.get("source_quote") or "").strip() == goal:
+                obligation = {**obligation, "source_quote": "(the whole goal above)"}
+            view.append(obligation)
+        return {**plan, "obligations": view}
+
     def _compose_input_context(self, state: "KernelState", tier) -> str:
         """Input context, whole values only; bulk keys drop entirely under pressure."""
+        from jarviscore.core.envelope import dependency_artifact, handoff_view
+
         if not state.context:
             return ""
         input_block = "## INPUT CONTEXT\n"
         prior = state.context.get("previous_step_results", {})
         if prior and prior_step_mode(tier) == "full":
             for step_id, step_result in prior.items():
-                output = (step_result.get("output", step_result)
-                          if isinstance(step_result, dict) else step_result)
+                output = handoff_view(dependency_artifact(step_result), step_id)
                 input_block += f"**[Prior Step: {step_id}]**\n{output}\n\n"
         interpretations = state.context.get("previous_step_interpretations", {})
         if interpretations:
@@ -473,11 +574,18 @@ class ContextManager:
                      # Memory is rendered as what it is, in its own block. Under
                      # INPUT CONTEXT it read as part of the task.
                      "_recalled", "_athena_memory", "_ltm_summary",
-                     "_mailbox_context"}
-        other = {key: value for key, value in state.context.items() if key not in skip_keys}
+                     "_mailbox_context",
+                     # The router's own record of choosing this role, for the envelope.
+                     "_kernel_routing"}
+        other = {
+            key: value for key, value in state.context.items()
+            if key not in skip_keys and not _is_empty(value)
+        }
         allowed = set(filter_input_context_keys(other.keys(), tier))
         cleaned = self._scrub_dict({k: v for k, v in other.items() if k in allowed})
         for key, value in cleaned.items():
+            if key == "workflow_plan" and isinstance(value, dict):
+                value = self._plan_view(value)
             if hasattr(value, "model_json_schema"):
                 try:
                     value = json.dumps(value.model_json_schema(), indent=2)
@@ -490,6 +598,7 @@ class ContextManager:
         self,
         history: List[Any],
         budget: int,
+        in_conversation: frozenset = frozenset(),
     ) -> Tuple[str, int]:
         """Format recent tool history to fit within budget.
 
@@ -502,16 +611,31 @@ class ContextManager:
         formatted = []
         current = header_tokens
         withheld = 0
+        perception_tools = getattr(self, "perception_tools", frozenset())
+        recent = history[-20:]
+        latest_perception = max(
+            (i for i, turn in enumerate(recent) if getattr(turn, "tool_name", None) in perception_tools),
+            default=None,
+        )
 
         # Process most-recent first (max 20 entries)
-        for turn in reversed(history[-20:]):
+        for index, turn in reversed(list(enumerate(recent))):
             if hasattr(turn, "tool_name"):
                 # KernelState.ToolResult model
+                output = turn.tool_output
+                if turn.receipt_id and turn.receipt_id in in_conversation:
+                    # Shown in the conversation with its call and receipt.
+                    continue
+                if turn.tool_name in perception_tools and index != latest_perception:
+                    output = (
+                        f"replaced by a later {turn.tool_name}; read it in full with "
+                        "read_turn_result"
+                    )
                 entry = (
                     f"**{turn.tool_name}** [{turn.status}]\n"
                     f"  Receipt: {turn.receipt_id or 'legacy-unreceipted'}\n"
                     f"  Input: {json.dumps(turn.tool_input, default=str)}\n"
-                    f"  Output: {turn.tool_output}"
+                    f"  Output: {output}"
                 )
                 if turn.error:
                     entry += f"\n  Error: {turn.error}"
@@ -536,7 +660,7 @@ class ContextManager:
         if withheld:
             formatted.append(
                 f"…{withheld} earlier action(s) not inlined this turn — "
-                "call TOOL: read_turn_result to read any of them in full."
+                "call read_turn_result to read any of them in full."
             )
         return header + "\n\n".join(formatted), current
 
@@ -716,6 +840,7 @@ class ContextManager:
         archive = state.internal_variables.setdefault("_archived_turns", [])
         for tr in old_entries:
             archive.append({
+                "receipt_id": getattr(tr, "receipt_id", None),
                 "tool_name": tr.tool_name,
                 "tool_input": json.loads(json.dumps(tr.tool_input, default=str)),
                 "tool_output": str(tr.tool_output),

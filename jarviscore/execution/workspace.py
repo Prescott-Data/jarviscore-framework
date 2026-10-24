@@ -15,6 +15,20 @@ from typing import Mapping
 from jarviscore.storage import BlobStorage
 
 
+#: Folders whose files are never part of what a step changed: tooling caches and the
+#: runtime's own folder (sandbox scratch and artifacts live in ``.jarviscore/``).
+#: A project folder named ``output`` is the project's, so it is not on the list.
+DELTA_IGNORED_NAMES: tuple[str, ...] = (
+    ".git",
+    ".jarviscore",
+    ".tmp",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "target",
+)
+
+
 def _safe_relative_path(value: str) -> PurePosixPath:
     path = PurePosixPath(value)
     windows_path = PureWindowsPath(value)
@@ -183,6 +197,23 @@ class BlobSnapshotStore:
 
             entries.sort(key=lambda entry: entry.path)
 
+        return await self.compose(source, resolved_revision, entries)
+
+    async def compose(
+        self,
+        source: SourceRef,
+        resolved_revision: str,
+        entries: "list[SnapshotEntry] | tuple[SnapshotEntry, ...]",
+    ) -> SourceSnapshot:
+        """Persist a snapshot whose file blobs are already in BlobStorage.
+
+        For a source assembled from earlier snapshots and deltas, such as a
+        shared room's current state, without re-reading or re-writing bytes.
+        """
+        seen_paths: dict[str, str] = {}
+        for entry in entries:
+            _register_workspace_path(entry.path, seen_paths)
+        entries = sorted(entries, key=lambda entry: entry.path)
         identity = json.dumps({
             "source": asdict(source),
             "resolved_revision": resolved_revision,
@@ -321,6 +352,22 @@ class BlobSnapshotStore:
                 target.chmod(target.stat().st_mode | 0o100)
 
 
+class WorkspaceAccess:
+    """The least an agent needs for the Mesh to give each of its steps a workspace.
+
+    AutoAgent has a full code sandbox. Any other agent can set
+    ``self.sandbox = WorkspaceAccess()``; on a step whose goal has a workspace
+    source, the step's files are then at ``task["context"]["workspace_binding"]["path"]``
+    and whatever the agent changes there becomes the step's workspace delta.
+    """
+
+    def __init__(self, workspace: Path | None = None):
+        self.workspace = workspace
+
+    def for_workspace(self, workspace_dir: Path, **_options) -> "WorkspaceAccess":
+        return WorkspaceAccess(Path(workspace_dir))
+
+
 class SandboxBinding:
     """Ephemeral filesystem projection of a durable source snapshot."""
 
@@ -433,8 +480,18 @@ class SandboxBinding:
                 target.chmod(target.stat().st_mode | 0o100)
 
     async def apply_deltas(self, deltas: list[WorkspaceDelta]) -> None:
-        """Apply compatible dependency deltas and reject ambiguous merges."""
+        """Apply compatible dependency deltas and reject ambiguous merges.
+
+        Branches that changed different lines of the same text file are
+        combined line by line; changes to the same lines that differ, or a file
+        deleted on one branch and changed on another, are a conflict.
+        """
+        from jarviscore.execution.merge import merge_text
+
+        baseline = {entry.path.casefold(): entry for entry in self.snapshot.entries}
         decisions: dict[str, tuple[str, str, str | None]] = {}
+        contents: dict[str, bytes] = {}
+        merged: dict[str, bytes] = {}
         for delta in deltas:
             if delta.snapshot_id != self.snapshot.snapshot_id:
                 raise ValueError("Workspace delta belongs to a different source snapshot")
@@ -448,27 +505,44 @@ class SandboxBinding:
                 key = entry.path.casefold()
                 decision = (entry.path, "content", entry.sha256)
                 if key in decisions and decisions[key] != decision:
-                    raise WorkspaceDeltaConflict(
-                        f"Conflicting workspace deltas for {entry.path!r}"
+                    earlier = decisions[key]
+                    combined = None
+                    if earlier[1] == "content" and key in baseline:
+                        combined = merge_text(
+                            await self._read(baseline[key].blob_path),
+                            contents[key],
+                            await self._read(entry.blob_path),
+                        )
+                    if combined is None:
+                        raise WorkspaceDeltaConflict(
+                            f"Conflicting workspace deltas for {entry.path!r}"
+                        )
+                    merged[key] = contents[key] = combined
+                    decisions[key] = (
+                        entry.path, "content", hashlib.sha256(combined).hexdigest()
                     )
+                    continue
                 decisions[key] = decision
+                contents[key] = await self._read(entry.blob_path)
         for delta in deltas:
             await self.apply_delta(delta)
+        for key, payload in merged.items():
+            target = self.workspace.joinpath(
+                *_safe_relative_path(decisions[key][0]).parts
+            )
+            target.write_bytes(payload)
+
+    async def _read(self, blob_path: str) -> bytes:
+        payload = await self.store.blob_storage.read(blob_path)
+        if payload is None:
+            raise FileNotFoundError(blob_path)
+        return _bytes(payload)
 
     async def export_delta(
         self,
         prefix: str,
         *,
-        ignored_names: tuple[str, ...] = (
-            ".git",
-            ".jarviscore",
-            ".tmp",
-            ".venv",
-            "__pycache__",
-            "node_modules",
-            "output",
-            "target",
-        ),
+        ignored_names: tuple[str, ...] = DELTA_IGNORED_NAMES,
     ) -> WorkspaceDelta:
         if self.workspace is None:
             raise RuntimeError("Enter the SandboxBinding before exporting a delta")

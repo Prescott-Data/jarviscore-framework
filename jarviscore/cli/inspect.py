@@ -149,7 +149,10 @@ _RENDERERS = {
     "thinking": lambda d: f"thinking: {_clip(d.get('thought', d))}",
     "kernel_delegate": lambda d: f"delegated to {d.get('subagent', '?')}: {_clip(d.get('task', ''))}",
     "subagent_yield": lambda d: f"subagent {d.get('subagent', '?')} yielded: {_clip(d.get('reason', ''))}",
-    "tool_start": lambda d: f"tool {d.get('tool_name', d.get('tool', '?'))} {_clip(d.get('params', ''))}",
+    # The kernel's tracer writes "tool"/"args"; telemetry.TraceManager writes "params".
+    "tool_start": lambda d: (
+        f"tool {d.get('tool_name', d.get('tool', '?'))} {_clip(d.get('params', d.get('args', '')))}"
+    ),
     "tool_result": lambda d: f"  -> {_clip(d.get('result', d))}",
     "llm_request": lambda d: (
         f"llm call ({d['model']})" if d.get("model") else "llm call"

@@ -225,6 +225,19 @@ class _CheckpointMemory:
         return []
 
 
+class _PlainAgent(BaseSubAgent):
+    """No product gate: only the runtime's own receipt grounding decides."""
+
+    def __init__(self, llm):
+        super().__init__(agent_id="plain", role="browser", llm_client=llm)
+
+    def get_system_prompt(self, *args, **kwargs) -> str:
+        return "system"
+
+    def setup_tools(self) -> None:
+        return None
+
+
 class _ActionGatedAgent(BaseSubAgent):
     def __init__(self, llm):
         super().__init__(agent_id="action-gated", role="coder", llm_client=llm)
@@ -262,6 +275,39 @@ def _observations(llm: _ScriptedLLM) -> List[str]:
 
 
 class TestRejectionReachesTheAgent:
+
+    def test_a_run_that_stops_unanswered_carries_what_it_established(self):
+        """Live: a refused answer on the last turn lost every finding."""
+        refused = _done(
+            '{"tool_receipt_id": "tool:wf-1", "failures": ["2299131 run 1272015726: 1 row rejected"]}'
+        )
+        llm = _ScriptedLLM([
+            "THOUGHT: looking\nNOTE: 2299131 run 1272015726 rejected 1 row (event_time > 1 week)\n"
+            + refused.split("\n", 1)[1],
+        ])
+        agent = _PlainAgent(llm)
+
+        result = asyncio.run(agent.run(task="t", context={"workflow_id": "wf-1"}, max_turns=1))
+
+        assert result.status != "success"
+        progress = result.metadata["progress"]
+        assert progress["verified"] is False
+        assert progress["working_notes"] == [
+            "2299131 run 1272015726 rejected 1 row (event_time > 1 week)"
+        ]
+        assert progress["refused_answer"]["result"]["failures"] == [
+            "2299131 run 1272015726: 1 row rejected"
+        ]
+        assert "Unknown tool receipt 'tool:wf-1'" in progress["refused_answer"]["refused_because"]
+
+    def test_an_accepted_answer_carries_no_progress(self):
+        llm = _ScriptedLLM(["THOUGHT: t\nNOTE: found it\n" + _done().split("\n", 1)[1]])
+        agent = _PlainAgent(llm)
+
+        result = asyncio.run(agent.run(task="t", max_turns=1))
+
+        assert result.status == "success"
+        assert "progress" not in result.metadata
 
     def test_the_agent_is_shown_the_evidence(self):
         llm = _ScriptedLLM([_done(), _done('{"a": 2}')])
@@ -422,27 +468,27 @@ class TestResearcherGate:
         from jarviscore.kernel.defaults.researcher import ResearcherSubAgent
         return ResearcherSubAgent.__new__(ResearcherSubAgent)
 
-    def test_no_research_reports_what_was_run(self):
-        ok, evidence = self._researcher()._can_complete(_state(), {"result": {}})
-
-        assert ok is False
-        assert evidence.check == "research_performed"
-        assert evidence.observed["tool_calls"] == 0
-        assert evidence.observed["content_tool_successes"] == 0
-
-    def test_a_claimed_summary_and_evidence_are_not_research(self, monkeypatch):
+    def test_a_result_with_no_research_behind_it_completes_on_the_record(self, monkeypatch):
+        """How the work was done is recorded with the result, not demanded before it."""
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
         parsed = {"result": {
             "summary": "Searches were attempted but returned nothing.",
             "evidence": [{"pointer": "https://example.com/team"}],
         }}
+        state = _state()
 
-        ok, evidence = self._researcher()._can_complete(_state(), parsed)
+        ok, reason = self._researcher()._can_complete(state, parsed)
+
+        assert ok is True, reason
+        assert self._researcher()._work_record(state) == {}
+
+    def test_a_result_missing_its_summary_names_what_is_missing(self, monkeypatch):
+        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
+
+        ok, evidence = self._researcher()._can_complete(_state(), {"result": {}})
 
         assert ok is False
-        assert evidence.check == "research_performed"
-        assert evidence.observed["result_summary"] is True
-        assert evidence.observed["result_evidence"] == 1
+        assert evidence.check == "summary"
 
     def test_upstream_step_results_are_material_to_work_from(self, monkeypatch):
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
@@ -506,35 +552,19 @@ class TestResearcherGate:
 
         assert ok is True, reason
 
-    def test_a_failed_search_is_not_research(self, monkeypatch):
+    def test_a_failed_search_is_recorded_as_failed(self, monkeypatch):
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
         state = _state(tool_history=[
             ToolResult(tool_name="search_internet", status="failure", error="blocked"),
         ])
         parsed = {"result": {"summary": "s", "evidence": [{"pointer": "x"}]}}
 
-        ok, evidence = self._researcher()._can_complete(state, parsed)
+        ok, reason = self._researcher()._can_complete(state, parsed)
 
-        assert ok is False
-        assert evidence.check == "research_performed"
-
-    @pytest.mark.parametrize("tool_name", ["rag_query", "read_file"])
-    def test_a_read_that_found_nothing_is_not_research(self, monkeypatch, tool_name):
-        monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "true")
-        state = _state(tool_history=[
-            ToolResult(
-                tool_name=tool_name,
-                status="success",
-                tool_output={"status": "success", "results": [], "content_found": False},
-            ),
-        ])
-        parsed = {"result": {"summary": "s", "evidence": [{"pointer": "index"}]}}
-
-        ok, evidence = self._researcher()._can_complete(state, parsed)
-
-        assert ok is False
-        assert evidence.check == "research_performed"
-
+        assert ok is True, reason
+        assert self._researcher()._work_record(state) == {
+            "search_internet": {"calls": 1, "succeeded": 0}
+        }
     def test_an_empty_index_and_an_empty_file_record_no_finding(self, tmp_path):
         from types import SimpleNamespace
 
@@ -760,17 +790,17 @@ class TestCoderGate:
         assert ok is True
         assert evidence == ""
 
-    def test_no_attempt_cannot_finish_with_an_unsupported_result(self):
+    def test_a_result_without_tool_calls_completes_on_the_record(self):
         state = _state(tool_history=[])
 
-        ok, evidence = self._coder()._can_complete(
+        ok, reason = self._coder()._can_complete(
             state, {"result": {"status": "blocked", "reason": "Assumed failure"}}
         )
 
-        assert ok is False
-        assert evidence.check == "meaningful_attempt"
+        assert (ok, reason) == (True, "")
+        assert self._coder()._work_record(state) == {}
 
-    def test_first_turn_prompt_requires_a_relevant_tool_not_success(self):
+    def test_first_turn_prompt_offers_relevant_tools_without_demanding_one(self):
         coder = self._coder()
         coder.role = "coder"
         coder._tools = {
@@ -780,7 +810,8 @@ class TestCoderGate:
 
         prompt = coder._build_user_prompt(_state(tool_history=[]), "## MISSION")
 
-        assert "MUST use one relevant tool" in prompt
+        assert "No tool has run" in prompt
+        assert "MUST" not in prompt.split("No tool has run", 1)[1]
         assert "hubspot_list_deals" in prompt
         assert "ask_peer" in prompt
         assert "ask_capability" in prompt
@@ -937,3 +968,59 @@ class TestCoderGate:
         assert result["status"] == "success"
         assert result["skipped"] is True
         assert result["semantic_outcome"] == "EFFECT_ALREADY_SATISFIED"
+
+
+class TestTheResultMeetsItsDeclaredContract:
+    """output_schema typed done's arguments, but its validators were never checked:
+    a result that broke the contract either passed or failed the whole step, and the
+    agent never learned which rule it broke (found live in Software Reliability)."""
+
+    @staticmethod
+    def contract():
+        from pydantic import BaseModel, model_validator
+
+        class Verification(BaseModel):
+            selection_receipt: str
+            execution_receipt: str
+
+            @model_validator(mode="after")
+            def distinct(self):
+                if self.selection_receipt == self.execution_receipt:
+                    raise ValueError("collection and execution need distinct receipts")
+                return self
+
+        return Verification
+
+    def test_a_result_that_breaks_the_contract_is_refused_and_then_fixed(self):
+        llm = _ScriptedLLM([
+            _done('{"selection_receipt": "r1", "execution_receipt": "r1"}'),
+            _done('{"selection_receipt": "r1", "execution_receipt": "r2"}'),
+        ])
+        agent = _PlainAgent(llm)
+
+        result = asyncio.run(agent.run(
+            task="t", context={"output_schema": self.contract()}, max_turns=2,
+        ))
+
+        shown = "\n".join(_observations(llm))
+        assert "DONE_GATE_UNSATISFIED: output_schema" in shown
+        assert "collection and execution need distinct receipts" in shown
+        assert result.status == "success"
+        assert result.payload["execution_receipt"] == "r2"
+
+    def test_a_result_that_meets_the_contract_is_accepted_at_once(self):
+        llm = _ScriptedLLM([_done('{"selection_receipt": "r1", "execution_receipt": "r2"}')])
+        result = asyncio.run(_PlainAgent(llm).run(
+            task="t", context={"output_schema": self.contract()}, max_turns=1,
+        ))
+        assert result.status == "success"
+
+    def test_an_agent_that_could_not_finish_is_not_held_to_the_contract(self):
+        llm = _ScriptedLLM([
+            "THOUGHT: blocked\nCOMPLETE: no\nDONE: python is unavailable\nRESULT: {}",
+        ])
+        result = asyncio.run(_PlainAgent(llm).run(
+            task="t", context={"output_schema": self.contract()}, max_turns=1,
+        ))
+        assert result.status == "failure"
+        assert "python is unavailable" in str(result.summary)

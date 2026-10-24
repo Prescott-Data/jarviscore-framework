@@ -25,18 +25,22 @@ class CommunicatorSubAgent(BaseSubAgent):
     """
     Communication subagent for the kernel.
 
-    Tools:
-    - draft_message: Draft a message for a target audience (thinking)
-    - format_report: Format structured data into a report (thinking)
+    Tools offered to the model:
     - send_to_peer: Send a message to another agent via mailbox (action)
     - write_file: Write content to a file (action)
     - read_file: Read content from a file (thinking)
     - list_files: List files in a directory (thinking)
 
+    draft_message and format_report stay callable but are not offered: each
+    only handed its input back, so the model wrote the answer twice, once into
+    the tool and again into done, at the cost of a whole turn.
+
     The communicator specializes in transforming raw data/findings into
     human-readable or agent-readable messages with appropriate tone
     and formatting, and persisting outputs to the workspace.
     """
+
+    hidden_tools = BaseSubAgent.hidden_tools | {"draft_message", "format_report"}
 
     SYSTEM_PROMPT = """\
 You are a COMMUNICATION SPECIALIST in a multi-agent orchestration framework.
@@ -58,12 +62,13 @@ Your job: transform raw data into clear, actionable output for your audience.
    - Use read_file to check existing content before overwriting
    - Use list_files to discover workspace structure
 
-4. **Peer Communication** — Send messages to other agents:
+4. **Peer Communication** — When another agent is reachable, send it messages:
    - Use send_to_peer for inter-agent coordination
    - Include context so the receiving agent can act without ambiguity
 
 ## RULES
 
+- Write the finished answer directly into done; there is no drafting step
 - Adjust tone for the audience (technical vs non-technical)
 - Keep messages concise and actionable
 - Include key data points, not raw dumps
@@ -231,6 +236,13 @@ Your job: transform raw data into clear, actionable output for your audience.
             return {"status": "error", "error": "Missing peer_role — specify which agent to message"}
         if not message:
             return {"status": "error", "error": "Missing message — specify what to send"}
+
+        from jarviscore.orchestration.envelopes import downstream_peer_refusal
+
+        state = getattr(self, "_current_state", None)
+        refusal = downstream_peer_refusal(getattr(state, "context", None), peer_role)
+        if refusal:
+            return refusal
 
         if self.peers is not None:
             sent = await self.peers.notify(

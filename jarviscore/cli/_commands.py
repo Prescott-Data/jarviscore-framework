@@ -16,6 +16,8 @@ LEGACY_COMMANDS = [
     ("memory", "memory", "run", "Manage Athena MemOS (init, status, context, search)"),
     ("atom", "atom", "main", "Validate, test, and list integration atoms"),
     ("inspect", "inspect", "main", "Read recorded traces: what did my agents do?"),
+    ("human", "human", "main", "Join the mesh as a person (join, inbox, answer)"),
+    ("room", "room", "main", "Work together on a shared workspace (ask, diff, accept, watch)"),
 ]
 
 LEGACY_BY_NAME = {spec[0]: spec for spec in LEGACY_COMMANDS}

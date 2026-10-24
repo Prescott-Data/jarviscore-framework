@@ -11,7 +11,7 @@ async def test_stop_is_bounded_when_deannouncement_hangs(monkeypatch):
     coordinator = P2PCoordinator([], {})
     coordinator._started = True
 
-    async def never_returns():
+    async def never_returns(timeout=None):
         await asyncio.sleep(3600)
 
     coordinator.deannounce_capabilities = never_returns

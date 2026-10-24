@@ -1611,3 +1611,53 @@ class TestPartialResultPreservation:
         assert execution.result is not None
         assert "[PARTIAL RESULT]" in execution.result
         assert "finished s0" in execution.result
+
+
+class TestGoalAnswerIsReadable:
+    @pytest.mark.asyncio
+    async def test_the_answer_keeps_facts_and_leaves_out_working_state(self):
+        from unittest.mock import AsyncMock, patch
+        from jarviscore.profiles.autoagent import AutoAgent
+
+        class _GoalAgent(AutoAgent):
+            role = "goal-readable"
+            capabilities = ["x"]
+            system_prompt = "test"
+
+        agent = _GoalAgent()
+        agent.llm = object()
+
+        def fact(value):
+            return {"value": value, "source": "s", "confidence": 0.9}
+
+        class _Kernel:
+            blob_storage = None
+            auth_manager = None
+
+            async def retain_browser_procedure(self, *args, **kwargs):
+                return False
+
+            async def execute(self, task, **kwargs):
+                return _make_output(
+                    summary="Read all 32 books across 2 pages.",
+                    metadata={"distilled_facts": {
+                        "record_count": fact(32),
+                        "browser_programs": fact(["books = read_pages(url)\nprint(books)"]),
+                        "report": fact("# Report\n\n| Title | Price |"),
+                    }},
+                )
+
+        agent._kernel = _Kernel()
+        with patch(
+            "jarviscore.planning.planner.Planner.plan",
+            new=AsyncMock(return_value=[PlannedStep("a", "read the books", "done", depends_on=[])]),
+        ), patch(
+            "jarviscore.planning.evaluator.StepEvaluator.evaluate",
+            new=AsyncMock(return_value=_make_evaluation(verdict="pass")),
+        ):
+            execution = await agent.execute_goal("report on the books")
+
+        assert execution.result.startswith("Read all 32 books across 2 pages.")
+        assert "- record_count: 32" in execution.result
+        assert "read_pages" not in execution.result
+        assert "| Title |" not in execution.result

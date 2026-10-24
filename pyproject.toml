@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarviscore-framework"
-version = "2.1.0"
+version = "2.4.1"
 description = "Orchestrate multi-agent systems with peer-to-peer coordination, unified memory, and built-in auth."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,6 +47,11 @@ dependencies = [
     # `pipx install jarviscore-framework` must ship the client. The `redis`
     # extra below is kept so existing `[redis]` installs keep resolving.
     "redis>=4.6.0",
+    # The researcher reads web pages on its first task; without this every
+    # page read failed with "'NoneType' object is not callable".
+    "beautifulsoup4>=4.12.0",
+    # Papers and reports are PDFs; no extra declared it, so none could read one.
+    "pypdf>=4.0.0",
 
     # LLM Providers — the engine. Always available, zero-config.
     # Developer picks which provider to use via env vars, not pip extras.

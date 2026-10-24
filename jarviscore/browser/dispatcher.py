@@ -211,15 +211,6 @@ class BrowserDispatcher:
             if isinstance(result.data, dict):
                 result.data["target_id"] = active_target_id
 
-        if result.error:
-            data = data or {}
-            error_type = self._classify_error(result.error)
-            data["error_type"] = error_type
-            if isinstance(result.data, dict):
-                result.data["error_type"] = error_type
-            elif result.data is None:
-                result.data = {"error_type": error_type}
-
         if os.environ.get("BROWSER_TRACE_SCREENSHOTS", "false").lower() in ("1", "true", "yes") and action.kind not in ("screenshot", "snapshot", "snapshot_ai", "pdf"):
             try:
                 shot = await controller.screenshot(
@@ -262,23 +253,6 @@ class BrowserDispatcher:
             kind=action.kind,
             ref=getattr(result, "ref", None),
         )
-
-    @staticmethod
-    def _classify_error(message: str) -> str:
-        msg = (message or "").lower()
-        if "not connected" in msg:
-            return "NOT_CONNECTED"
-        if "cdp" in msg and "reach" in msg:
-            return "CDP_UNREACHABLE"
-        if "timeout" in msg:
-            return "TIMEOUT"
-        if "tab not found" in msg or "target" in msg:
-            return "TARGET_NOT_FOUND"
-        if "navigation" in msg:
-            return "NAVIGATION_FAILED"
-        if "ref" in msg and "unknown" in msg:
-            return "REF_NOT_FOUND"
-        return "UNKNOWN"
 
     async def dispatch_batch(
         self,

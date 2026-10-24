@@ -17,7 +17,7 @@ Sub-agents are the specialised execution units that live inside the Kernel and r
 
 A sub-agent is not a mesh agent. It has no `role` in peer discovery, cannot be addressed by `peers`, and is never added to the Mesh directly. It is an internal worker that the Kernel dispatches to when it classifies a task.
 
-Each sub-agent exposes a **system prompt** that shapes LLM behaviour and a **tool set** that defines what the LLM can call. The OODA loop, convergence governor, epistemic ledger, failure ledger, and token budget tracking are all inherited from `BaseSubAgent`. You provide the prompt and the tools.
+Each sub-agent exposes a **system prompt** that shapes LLM behaviour and a **tool set** that defines what the LLM can call. The OODA loop, working notes, failure ledger, and token budget tracking are all inherited from `BaseSubAgent`. You provide the prompt and the tools.
 
 The Kernel caches sub-agents by `(step_id, role)`, they are reused within a workflow step and destroyed when the step completes.
 
@@ -134,6 +134,8 @@ Override these to intervene inside the loop without modifying it.
 ### `_can_complete(state, parsed) -> tuple[bool, GateEvidence | str]`
 
 Called when the LLM emits `DONE`. Return `(True, "")` to allow, or `(False, evidence)` to reject and keep the loop running.
+
+Only `DONE` completes a step. `RESULT` is the structured payload that accompanies `DONE`; a `RESULT` on its own (a plan, a partial table, `{"status": "in_progress"}`) is not a completion, and the agent is asked to repair the protocol on its next turn.
 
 Report what the agent produced, not a verdict on it:
 
@@ -292,13 +294,71 @@ execution stack.
 
 | Feature | Notes |
 |---|---|
-| OODA loop (Observe → Orient → Decide → Act) | Full loop with rolling 10-turn conversation history |
+| OODA loop (Observe → Orient → Decide → Act) | Full loop with at least the last 10 exchanges in view (older ones leave five at a time), carried through checkpoints so a resumed step continues the same conversation. Each turn's prompt extends the previous one, so providers that cache prompt prefixes serve most of it from cache |
+| Runtime notices | The date, and the remaining tokens, wall clock and turns, are reported as facts, never stored as the agent's own thoughts. Under native tool calls the budget is stated when a run starts and again each turn once any part of it is down to a quarter, and the agent is told before exchanges leave view; text-protocol turns report the budget every turn |
 | Token budget and lease enforcement | Via `AgentCognitionManager` |
-| Same-tool streak detection | Via `ConvergenceGovernor`, grants one strategic pivot, then yields |
-| Repeat failure blocking | Via `FailureLedger`, fingerprints `(tool, params)` pairs |
-| Duplicate search/URL blocking | Via `EpistemicLedger`, prevents wasteful re-reads before they happen |
+| Failure record | Via `FailureLedger`, classifies and records failures; recent failures are shown to the agent, never used to refuse a call |
+| Identical-call record | An exact repeat of an earlier call runs, and its result notes the earlier receipt and whether the result changed |
 | Trace event emission | `log_thinking`, `log_tool_start`, `log_tool_result`, `log_step_complete` |
 | Memory checkpointing | Per-turn checkpoint to `UnifiedMemory` when injected by Kernel |
+| Working notes | The `working_notes` argument on any native tool call, or `NOTE: <fact>` lines on the text protocol, is written to the step's `WorkingScratchpad` and kept across epochs; notes cost no turn. A native call's notes are read in that call while it is in view and in MY WORKING NOTES after it leaves |
+| Approved actions | A person's decisions are carried out once when the step resumes, before the next turn. A tool that refuses before acting returns `"performed": False`, which leaves the approval open instead of settling it |
+| Parallel calls | Calls that do not depend on each other arrive in one reply and all run that turn, in order, each through the same hooks, receipts and checkpoints. A `done` sent alongside them waits for their results |
+| Tool programs | `run_tool_program` lets the model call your tools from a Python program in the Kernel's sandbox (see below) |
+
+### What the model is offered
+
+Each turn offers your tools plus the built-ins that can act on this run. Peer tools
+(`ask_peer`, `ask_capability`, `send_to_peer`, `list_peers`, `broadcast_update`,
+`read_mailbox`) appear only while another agent is reachable; `remember` and
+`recall` only when cross-session memory is attached; `inspect_workflow` and
+`read_workflow_step` only when the step has a workflow around it; and
+`read_turn_result` once an earlier result can have left the model's view. A tool
+that could do nothing here would cost its schema on every turn and invite a
+wasted call.
+
+To keep a method callable but never offered to the model, name it in
+`hidden_tools`:
+
+```python
+class ReportWriter(BaseSubAgent):
+    hidden_tools = BaseSubAgent.hidden_tools | {"render_preview"}
+```
+
+### Tool programs
+
+When the Kernel has a sandbox that can run code on this host, a sub-agent with its
+own tools is also offered `run_tool_program`. The model writes a short Python
+program that calls your tools as functions, loops over pages, filters, joins and
+totals, and only what the program prints (or puts in `result`) returns to the
+model. The tool results it reads never enter the model's context.
+
+```python
+# What the model writes; list_invoices and get_customer_name are your tools.
+totals = {}
+first = list_invoices(1)
+for page in range(1, first["pages"] + 1):
+    for invoice in list_invoices(page)["invoices"]:
+        if invoice["status"] == "open" and invoice["due"] < "2026-09-23":
+            totals[invoice["customer_id"]] = totals.get(invoice["customer_id"], 0) + invoice["amount"]
+for customer_id, total in sorted(totals.items(), key=lambda kv: -kv[1])[:5]:
+    print(get_customer_name(customer_id), round(total, 2))
+```
+
+- The program runs in the sandbox's child process. Each call crosses back to the
+  agent and goes through its normal tool path: `_pre_execute_hook`, execution, a
+  receipt and trace events. Receipts are marked `via_program` and kept as
+  evidence, outside the model's context.
+- A call that would wait for a person's decision is refused inside a program; the
+  model calls that tool directly instead. A tool error is raised in the program.
+- JSON text comes back already decoded. The function list shows each tool's
+  return shape (field names and types, never values), learned from earlier calls
+  for the agent's lifetime, so programs use real field names.
+- The report names the calls made per function, so a program that read one page
+  of eight shows it.
+
+Set `programmable = False` on a role that should not host programs; the built-in
+coder does, since it already writes and runs code.
 
 ---
 

@@ -19,7 +19,7 @@ The HITL system enforces a strict **category gate**. Every escalation request mu
 | Category | When to use |
 |---|---|
 | `auth_required` | A Nexus credential is missing, expired, or has insufficient scope. The agent cannot proceed without a human supplying or re-authorising a credential. |
-| `data_required` | A piece of data that only a human can supply is missing (e.g., a founder's personal bank details, an unpublished contract, internal pricing). |
+| `data_required` | A piece of data that only a person can supply is missing (e.g., a client's bank details, an unpublished contract, internal pricing). |
 | `critical_action` | The next action is irreversible or high-consequence (e.g., sending a bulk email campaign, triggering a payment, deploying to production). |
 
 **Do not escalate for:**
@@ -29,7 +29,24 @@ The HITL system enforces a strict **category gate**. Every escalation request mu
 - General uncertainty where the agent can take a safe fallback action
 - Routine content review
 
-Agents must handle those cases autonomously. The HITL queue is for the founder's inbox, not for the agent's confidence management.
+Agents must handle those cases autonomously. The HITL queue is for decisions only a person can make, not for the agent's confidence management.
+
+### Who responds
+
+An escalation goes to whoever your deployment makes responsible for it: an on-call engineer for an expired credential, a finance approver for a payment, the account owner for a client's data. JarvisCore does not assume who that is. Each request carries `targets`, the people or roles that should respond, and your review surface (a dashboard, a Slack channel, a ticket queue) uses them to put the item in front of the right person.
+
+Set the default for a deployment with `HITL_TARGETS` (comma-separated, default `reviewer`) or `Mesh(config={"hitl_targets": [...]})`, and name someone for a single request with `targets=`:
+
+```python
+self.hitl.request(
+    title="Approve the €40,000 supplier payment",
+    content="Invoice INV-2291 from Northwind, due Friday.",
+    category="critical_action",
+    targets=["finance-approver"],
+)
+```
+
+HITL is a gate on one agent's action. When a person should do part of the work itself, such as reviewing a draft, deciding between options, or editing a file, put them on the mesh as a [human peer](human-peers.md) instead, or let the whole team work on it together in a [room](rooms.md).
 
 ```mermaid
 stateDiagram-v2
@@ -97,6 +114,7 @@ item_id = self.hitl.request(
 | `urgency` | `str` | No | One of `"low"`, `"normal"`, `"high"`, `"critical"`. Default: `"normal"`. |
 | `category` | `str` | Yes | One of `"auth_required"`, `"data_required"`, `"critical_action"`. Any other value raises `ValueError`. |
 | `context` | `dict` | No | Structured metadata. String values are truncated to 1,000 characters. |
+| `targets` | `list[str]` | No | Who should respond, e.g. `["finance-approver"]`. Default: the deployment's `hitl_targets`. |
 
 Raises `ValueError` if `urgency` or `category` is invalid.
 
@@ -112,7 +130,7 @@ if resolution is not None:
     if resolution.is_approved:
         await self._proceed()
     else:
-        logger.warning("Action rejected: %s", resolution.reason)
+        logger.warning("Action rejected: %s", resolution.note)
 ```
 
 The resolution is checked against the flat JSON file first (always available), then against Redis if configured.
@@ -129,7 +147,7 @@ try:
     if resolution.is_approved:
         await self._send_email_campaign()
     else:
-        return {"status": "cancelled", "reason": resolution.reason}
+        return {"status": "cancelled", "reason": resolution.note}
 except TimeoutError:
     return {"status": "timeout", "message": "No decision received within 1 hour."}
 ```
@@ -157,18 +175,18 @@ if not already_waiting:
 
 ### resolve
 
-Programmatically resolves a HITL item. Intended for testing and auto-approval logic. In production, items are resolved by human reviewers writing to the JSON file or the Redis store.
+Records a person's decision on an item. A review dashboard calls it when the reviewer decides (see [Resolving Items from a Dashboard](#resolving-items-from-a-dashboard)); tests call it to stand in for one.
 
 ```python
-# In a test
-self.hitl.resolve(item_id, decision="approved", reason="Test auto-approval")
+self.hitl.resolve(item_id, decision="approved", reason="Numbers checked", by="dana")
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
 | `request_id` | `str` | ID of the item to resolve |
 | `decision` | `str` | `"approved"` or `"rejected"` |
-| `reason` | `str` | Optional explanation stored on the resolution |
+| `reason` | `str` | The reviewer's explanation; `check()` and `wait()` return it as `resolution.note` |
+| `by` | `str` | Who decided; returned as `resolution.resolved_by` |
 
 ---
 
@@ -218,9 +236,47 @@ class CampaignSenderAgent(CustomAgent):
             return {
                 "status": "cancelled",
                 "campaign_id": campaign["id"],
-                "reason": resolution.reason,
+                "reason": resolution.note,
             }
 ```
+
+---
+
+## Approving an Agent's Consequential Actions
+
+The Kernel's browser and coder subagents raise `critical_action` approvals
+themselves. When an agent marks a tool call `irreversible` with a
+`consequence`, the action is not performed: a typed `HITLRequest` carrying the
+exact action (`HITLAction`: tool, target, page or system, description and
+consequence) is written to the Redis store and the step pauses with
+`WAITING_FOR_APPROVAL`. Nothing runs and no tokens are spent while it waits.
+
+Resolve it with the Mesh, which records the decision and resumes the step:
+
+```python
+result = await mesh.resolve_hitl(
+    workflow_id,
+    action_id,                 # from the waiting step's result
+    decision="approved",       # or "rejected"
+    resolved_by="ops@example.com",
+    note="Checked the basket",
+)
+```
+
+On resume, JarvisCore carries out the decision before the agent's next turn.
+An approved action runs through the normal tool path and the agent receives
+its receipt; a declined one is reported and never run. An approval covers one
+exact action in one step, with exactly the arguments the person saw (for a
+browser action, the element and the values entered): the same operation with
+other arguments asks the person again. The action runs at most once, and the
+first decision sent on it stands. If the action could
+not be carried out (the target moved, or something blocked it), nothing
+happened, so the outcome is reported to the agent and the action is not
+marked as done. See
+[Browser Automation: Consequential actions](./browser-automation.md#consequential-actions).
+
+These approvals need a started, Redis-backed Mesh; without durable workflow
+state the action is refused with `APPROVAL_UNAVAILABLE`.
 
 ---
 
@@ -244,23 +300,26 @@ A resolution written to either store is detected by `check()` and `wait()` autom
 
 ## Resolving Items from a Dashboard
 
-To resolve an item from a custom dashboard, update the JSON file:
+A dashboard lists what is waiting and records decisions through a `HITLQueue` on the same inbox directory (and Redis, when the agents use it):
 
 ```python
-import json
-from pathlib import Path
+from jarviscore.hitl import HITLQueue
 
-def resolve_item(request_id: str, decision: str, reason: str = ""):
-    filepath = Path(".jarviscore/hitl_inbox") / f"{request_id}.json"
-    data = json.loads(filepath.read_text())
-    data["status"] = decision        # "approved" or "rejected"
-    data["decision"] = decision
-    data["decision_reason"] = reason
-    data["decided_at"] = "2026-05-01T15:30:00"
-    filepath.write_text(json.dumps(data, indent=2))
+queue = HITLQueue(agent_id="review-dashboard")
+
+for item in queue.inbox("finance-approver"):          # pending items for these targets, from every agent
+    show(item["title"], item["content"], item["category"])
+
+queue.resolve(request_id, decision="rejected", reason="Wrong supplier", by="dana")
 ```
 
-The agent's `wait()` loop detects the status change on its next poll cycle.
+The agent's `wait()` returns the decision on its next poll. Write through `resolve()` rather than editing the JSON files: it records the decision in the shape `check()` reads, in both stores.
+
+## Work routed to people
+
+Every item records which mesh step raised it (`context["mesh_workflow_id"]` and `context["mesh_step_id"]`) and, when the work runs for someone, their tenant (`context["tenant"]`). `inbox(target, tenant="acme")` lists one tenant's items only. When an agent's escalation paused a step of mesh work, answering it with `resolve()` resumes that step, with the answer in its context as `hitl_resolution`. An item is answered once: with Redis, the first answer from any host stands and later ones return False.
+
+The same store holds work that is routed to a person rather than escalated by an agent. When a [human peer](human-peers.md) on the mesh is given a step, their HumanAgent files it with `HITLQueue.assign(...)` (type `input_request`, no escalation category), and it is answered with `resolve()` like any other item: from the person's terminal, `jarviscore human answer`, your dashboard, or a [room's chat](chat-surfaces.md). One review surface can therefore show everything waiting on a person.
 
 ---
 

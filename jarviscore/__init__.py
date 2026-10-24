@@ -58,12 +58,15 @@ _LAZY = {
     "Profile": "jarviscore.core.profile",
     "Mesh": "jarviscore.core.mesh",
     "MeshMode": "jarviscore.core.mesh",
+    "Pool": "jarviscore.core.pool",
     "AutoAgent": "jarviscore.profiles.autoagent",
     "CustomAgent": "jarviscore.profiles.customagent",
+    "HumanAgent": "jarviscore.human",
     **dict.fromkeys([
         "BlobSnapshotStore", "SandboxBinding", "SnapshotEntry", "SourceRef",
-        "SourceSnapshot", "WorkspaceDelta", "WorkspaceDeltaConflict",
+        "SourceSnapshot", "WorkspaceAccess", "WorkspaceDelta", "WorkspaceDeltaConflict",
     ], "jarviscore.execution.workspace"),
+    **dict.fromkeys(["Proposal", "Room", "RoomConflict"], "jarviscore.room"),
     **dict.fromkeys([
         "SourceAdapter", "SourceAdapterError", "SourceContractError", "SourceIntegrityError",
     ], "jarviscore.execution.sources"),
@@ -71,7 +74,8 @@ _LAZY = {
     "wrap": "jarviscore.adapter",
     **dict.fromkeys(["JarvisContext", "MemoryAccessor", "DependencyAccessor"], "jarviscore.context"),
     **dict.fromkeys(
-        ["DecisionClientError", "DecisionResult", "JevDecisionClient"], "jarviscore.execution.decisions"),
+        ["DecisionClientError", "DecisionClient", "DecisionResult", "JevDecisionClient"],
+        "jarviscore.execution.decisions"),
     **dict.fromkeys([
         "ArtifactReference", "ArtifactReferenceError", "CommandObservation", "WorkspaceMutation",
         "hydrate_artifact_references", "hydrate_receipt_evidence",
@@ -127,15 +131,19 @@ if TYPE_CHECKING:
     from jarviscore.core.agent import Agent
     from jarviscore.core.agent import Agent as JarvisAgent
     from jarviscore.core.mesh import Mesh, MeshMode
+    from jarviscore.core.pool import Pool
     from jarviscore.core.profile import Profile
-    from jarviscore.execution.decisions import DecisionClientError, DecisionResult, JevDecisionClient
+    from jarviscore.execution.decisions import (
+        DecisionClient, DecisionClientError, DecisionResult, JevDecisionClient,
+    )
     from jarviscore.execution.sources import (
         SourceAdapter, SourceAdapterError, SourceContractError, SourceIntegrityError,
     )
     from jarviscore.execution.workspace import (
         BlobSnapshotStore, SandboxBinding, SnapshotEntry, SourceRef, SourceSnapshot,
-        WorkspaceDelta, WorkspaceDeltaConflict,
+        WorkspaceAccess, WorkspaceDelta, WorkspaceDeltaConflict,
     )
+    from jarviscore.human import HumanAgent
     from jarviscore.kernel.state import (
         ArtifactReference, ArtifactReferenceError, CommandObservation, WorkspaceMutation,
         hydrate_artifact_references, hydrate_receipt_evidence,
@@ -147,6 +155,7 @@ if TYPE_CHECKING:
     )
     from jarviscore.profiles.autoagent import AutoAgent
     from jarviscore.profiles.customagent import CustomAgent
+    from jarviscore.room import Proposal, Room, RoomConflict
 
     __version__: str
 
@@ -160,10 +169,12 @@ __all__ = [
     "Profile",
     "Mesh",
     "MeshMode",
+    "Pool",
 
     # Profiles
     "AutoAgent",
     "CustomAgent",
+    "HumanAgent",
 
     # Durable source snapshots and ephemeral execution bindings
     "SourceRef",
@@ -173,6 +184,12 @@ __all__ = [
     "WorkspaceDeltaConflict",
     "BlobSnapshotStore",
     "SandboxBinding",
+    "WorkspaceAccess",
+
+    # Rooms: shared workspaces people and agents change together
+    "Room",
+    "Proposal",
+    "RoomConflict",
     "SourceAdapter",
     "SourceAdapterError",
     "SourceContractError",
@@ -193,6 +210,7 @@ __all__ = [
 
     # Decision models
     "DecisionClientError",
+    "DecisionClient",
     "DecisionResult",
     "JevDecisionClient",
 

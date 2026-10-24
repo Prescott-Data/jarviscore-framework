@@ -285,12 +285,14 @@ flowchart LR
 
 | Phase | What happens |
 |---|---|
-| Observe | The Kernel calls `UnifiedMemory.rehydrate_bundle()` to load all available context: recent episodic turns, the LTM summary, the scratchpad, and any Athena context. |
+| Observe | The Kernel recalls what earlier sessions recorded about the task (`UnifiedMemory.recall()`). Each turn the agent sees the mission and at least its last ten exchanges, with its working notes and the receipts of calls that have left view; a continued step restores these from its checkpoint. |
 | Orient | The Kernel formats all context into a system prompt and calls the LLM to produce a next-action decision. |
 | Decide | The LLM response is parsed into a structured action: a tool call, a sub-agent invocation, a HITL escalation, or a completion signal. |
 | Act | The framework executes the chosen action and writes the outcome back to memory via `UnifiedMemory.log_turn()`. |
 
 The loop continues until the Kernel receives a completion signal, hits the turn limit, or encounters a fatal error.
+
+Each Decide is one action. Where every configured provider supports function calling (Azure OpenAI, Claude, Gemini, Vertex AI, vLLM), the tools are offered natively, the model must call one per turn, and `done` carries the answer and its data. A chain that includes a provider without native tool calls, such as promotional access, uses the equivalent text protocol (`TOOL`/`PARAMS`, `DONE`/`RESULT`).
 
 ---
 

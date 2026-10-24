@@ -99,13 +99,41 @@ These become important once you run more than two agents concurrently against a 
 | Variable | Default | Description |
 |---|---|---|
 | `LLM_TIMEOUT` | `120.0` | Seconds before an LLM call times out. |
+| `LLM_CONNECT_TIMEOUT` | `10.0` | Seconds to establish the connection (TCP and TLS), separate from `LLM_TIMEOUT`. |
+| `LLM_KEEPALIVE_SECONDS` | `120.0` | Seconds an idle provider connection is kept for the next call (Azure, Claude, the promotion endpoint and vLLM). The SDK default of 5 s is shorter than the tool work between agent turns, so most calls reconnected; keep this below your provider's idle timeout (Azure: 240 s). |
+| `LLM_PREWARM` | `true` | Open the primary provider's connection while an agent starts, so its first call skips the TCP and TLS handshake. Only a bare request to the provider's host is sent; a failed warm-up is ignored. |
 | `LLM_TEMPERATURE` | `0.7` | Sampling temperature for all providers. |
-| `LLM_MAX_CONCURRENT` | `0` | Maximum concurrent LLM calls across the whole process. `0` means unlimited. Set to approximately `RPM ÷ avg_latency_seconds` to avoid 429 storms in multi-agent deployments. |
+| `LLM_MAX_CONCURRENT` | `0` | Most calls in flight per deployment. `0` leaves the governor to find the level (up to `LLM_CONCURRENCY_CEILING`). With the governor disabled, a process-wide cap. |
 | `LLM_MAX_RETRIES_429` | `4` | Retry attempts when a provider returns 429 before giving up. |
 | `LLM_429_BASE_DELAY` | `2.0` | Exponential backoff base delay in seconds. Actual delay: `min(base × 2^attempt, 60s)`. |
 | `LLM_MODEL_OUTPUT_LIMITS` | `{}` | JSON map of model or deployment name to its completion-token ceiling, e.g. `{"gpt-5.2-chat": 128000}`. Calls that do not set `max_tokens` receive the serving model's declared ceiling, bounded by the remaining workflow budget. Declare reasoning models here: their hidden reasoning is billed against the same allowance. |
 | `LLM_DEFAULT_MAX_TOKENS` | `4000` | Output allowance for calls to models without a declared ceiling. |
+| `LLM_PRICES` | `{}` | JSON map of model or deployment name to its price per 1M tokens, e.g. `{"gpt-5.6-luna": {"input": 1.25, "output": 10.0, "cached": 0.125}}`. Declared prices override the built-in table. Cached input is billed at `cached` when given. A model with no known price is costed at $3/$15 per 1M input/output tokens, logged once as an estimate, and its calls report `price_source: "default"`. |
 | `AZURE_CONTENT_FILTER_REPAIR_ENABLED` | `false` | Opt into an Azure-specific content-filter retry that applies a provider-safe preamble and neutral wording after the raw prompt is rejected. Off by default so prompt rewriting never hides developer intent. |
+
+### Provider governor
+
+Every model call is admitted per deployment (for example `azure:gpt-4o`)
+before it is sent. Calls in flight start at `LLM_INITIAL_CONCURRENCY`, grow
+while the provider keeps up, and halve on a 429 or near-empty rate-limit
+headers. None of these needs setting.
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLM_GOVERNOR_ENABLED` | `true` | Admit every call through the governor. |
+| `LLM_LIMITS` | `{}` | Known limits per deployment, enforced in a 60 s window shared through Redis by every process, e.g. `{"azure:gpt-4o": {"rpm": 3000, "tpm": 1000000}}`. |
+| `LLM_INITIAL_CONCURRENCY` | `8` | Calls in flight per deployment at start. |
+| `LLM_CONCURRENCY_CEILING` | `256` | Most calls in flight per deployment the governor will grow to. |
+| `LLM_BULK_RESERVE` | `0.15` | Share of a deployment's calls in flight held back from bulk work for interactive calls. |
+
+Run background work in the bulk lane so people waiting on chat keep headroom:
+
+```python
+from jarviscore.execution.governor import BULK, lane_scope
+
+with lane_scope(BULK):
+    await mesh.execute_goal("Re-verify every claim in the data room")
+```
 
 ---
 
@@ -117,11 +145,13 @@ requires one generative LLM provider from the preceding section.
 
 | Variable | Default | Description |
 |---|---|---|
+| `DECISION_CLIENT_FACTORY` | (none) | `module:callable` returning any `DecisionClient`; takes precedence over `TYPESAFE_API_KEY`. See [Bring any decision model](../concepts/decision-models.md#bring-any-decision-model). |
 | `TYPESAFE_API_KEY` | (none) | Enables the shared Jev decision client. |
 | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | TypeSafe model used for decisions. |
 | `TYPESAFE_BASE_URL` | TypeSafe SDK default | Optional compatible gateway or test endpoint. |
 | `TYPESAFE_TIMEOUT` | `10.0` | Decision request timeout in seconds. |
 | `KERNEL_ROUTER_PROVIDER` | `llm` | Set to `typesafe` to opt into Jev-backed Kernel role selection. |
+| `KERNEL_ROUTER_MAY_ANSWER` | `true` | Let the router answer, in the same call, a task that needs no role (summarising, rewording, explaining or drafting from the task text, with no tool, data, calculation or action). Applies only when the router runs on the model the communicator would use. |
 | `TYPESAFE_ROUTER_MIN_CONFIDENCE` | `0.5` | Minimum Jev routing confidence. Validate against your workload before changing production behavior. |
 | `TASK_COMPLEXITY_PROVIDER` | `llm` | Set to `typesafe` to classify direct Kernel versus Planner execution with Jev. |
 | `TYPESAFE_COMPLEXITY_MIN_CONFIDENCE` | `0.5` | Below this confidence, preserve the full planning path. |
@@ -175,7 +205,7 @@ These values are `Mesh(config={...})` keys, not environment variables:
 | `workspace_source_catalog` | built-in provider descriptions | Trusted provider descriptions used to resolve explicit source identity from a goal |
 | `workspace_source_resolver` | planning-model resolver | Optional trusted callable that returns source identity before adapter capture |
 | `workspace_snapshot_limits` | framework defaults | Trusted `max_files`, `max_total_bytes`, `max_file_bytes`, and acquisition `concurrency` limits enforced before planning |
-| `workspace_allowed_commands` | `[]` | Additional trusted executable names available to `workspace_run`; caller context cannot expand this list |
+| `workspace_allowed_commands` | `[]` | Additional trusted executable names available to `workspace_run`; caller context cannot expand this list. A node that sets it decides for every step it runs, whoever asked |
 | `workspace_command_timeout_seconds` | `120` | Trusted per-command workspace limit; a timeout is evidence and does not stop the DAG |
 | `workspace_command_environment` | `{}` | Trusted recognized package-manager cache paths passed without inheriting parent secrets |
 | `workspace_delta_ignored_names` | runtime/build defaults | Directory names excluded from persisted deltas, including `.git`, `.venv`, `node_modules`, `output`, and `target` |
@@ -225,8 +255,9 @@ Blob storage is used by agents to persist large outputs (reports, datasets, gene
 
 | Variable | Default | Description |
 |---|---|---|
-| `STORAGE_BACKEND` | `local` | `local` or `azure` |
+| `STORAGE_BACKEND` | `local` | `local`, `azure`, or `redis` (file contents in `REDIS_URL`, so one Redis serves every machine) |
 | `STORAGE_BASE_PATH` | `./.jarviscore/blob_storage` | Base directory path for the local backend |
+| `STORAGE_REDIS_MAX_BLOB_BYTES` | `33554432` | Largest single file the `redis` backend accepts |
 | `AZURE_STORAGE_CONNECTION_STRING` | (none) | Required when `STORAGE_BACKEND=azure` |
 
 For Azure:
@@ -250,6 +281,7 @@ AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
 |---|---|---|
 | `RESEARCH_GROUNDED_TIMEOUT_SECONDS` | `45` | Per-call deadline for Google Grounded (generative search) |
 | `RESEARCH_SEARCH_TIMEOUT_SECONDS` | `15` | Per-call deadline for each other search provider |
+| `RESEARCH_ALLOW_WIKIPEDIA_FALLBACK` | `false` | Search Wikipedia when no other provider found anything, even with web providers configured |
 
 Both `InternetSearch` implementations accept `grounded_timeout_seconds` and
 `search_timeout_seconds` keyword arguments, which take precedence over these
@@ -312,6 +344,29 @@ playwright install chromium
 |---|---|---|
 | `BROWSER_ENABLED` | `false` | Enable `BrowserSubAgent` |
 | `BROWSER_HEADLESS` | `true` | Run the browser in headless mode |
+| `BROWSER_SITE_INTERVAL_S` | `1.5` | Seconds between requests to the same site |
+| `BROWSER_SETTLE_TIMEOUT_MS` | `3000` | How long a page may keep changing after an action before the agent looks again |
+| `BROWSER_DATA_TIMEOUT_MS` | `10000` | Longest an action waits for the site's own data requests to finish |
+| `BROWSER_CODE_TIMEOUT_S` | `600` | Default and maximum program duration; also bounded by the remaining execution lease |
+| `BROWSER_PARALLEL_PAGES` | `4` | Pages `read_pages` opens at once in a run's browser session |
+| `BROWSER_HISTORY_PAGES` | `50` | Most pages `read_pages` turns through one history before reporting that it goes on (`more`) |
+| `BROWSER_ACT_MIN_CONFIDENCE` | `0.7` | Decision confidence at which `act` performs the action itself; below it, `act` returns candidates |
+| `BROWSER_CONTINUATION_HOLD_S` | `120` | How long a browser stays open for the step's next execution epoch to continue on the same page |
+| `BROWSER_LOCALE` | host's | Locale the browser presents, e.g. `en-GB`; match it to the egress proxy's region |
+| `BROWSER_TIMEZONE` | host's | IANA timezone the browser presents, e.g. `Europe/London` |
+
+---
+
+## Egress Proxy
+
+JarvisCore supplies no IP addresses. To give agents a reputable, stable or regional exit, point them at your own proxy provider. The browser and the pages the researcher reads leave through it; search-provider APIs, LLM calls and Nexus do not.
+
+| Variable | Default | Description |
+|---|---|---|
+| `EGRESS_PROXY_URL` | (none) | `http://` or `https://` proxy, e.g. `http://user-session-{session}:pass@gw.provider.example:7000`. `{session}` becomes a stable 16-character id per tenant profile or workflow, so a provider that pins an exit IP per session keeps one IP for a login or checkout. |
+| `EGRESS_PROXY_BYPASS` | (none) | Comma-separated hosts that go direct, e.g. `searxng,.internal`. Loopback always goes direct. |
+
+See [Browser Automation: Your own proxy](browser.md#your-own-proxy).
 
 ---
 
@@ -322,6 +377,7 @@ Required only when agents call third-party services (GitHub, Slack, Jira, Stripe
 | Variable | Default | Description |
 |---|---|---|
 | `NEXUS_GATEWAY_URL` | (none) | Gateway URL, e.g. `http://localhost:8090` |
+| `NEXUS_GATEWAY_API_KEY` | (none) | Sent as `X-API-Key` on every Gateway call. Written by `jarviscore nexus init`. Grants Gateway access only, never the broker's encryption key. |
 | `NEXUS_BROKER_URL` | (none) | Broker URL, e.g. `http://localhost:8080`. Used by dashboard and SDK to POST credentials directly to the Broker's `/auth/capture-credential` endpoint for non-OAuth providers. |
 | `NEXUS_RETURN_URL` | `http://localhost:8000/oauth/callback` | OAuth callback URL; the Nexus broker redirects here after consent. |
 | `NEXUS_DEFAULT_USER_ID` | `jarviscore-agent` | User identity passed to Nexus for credential lookups. |
@@ -334,11 +390,11 @@ Initial setup:
 
 ```bash
 jarviscore nexus init
-jarviscore nexus register github \
-    --client-id=YOUR_ID \
-    --client-secret=YOUR_SECRET
+jarviscore nexus register github --client-id=YOUR_ID   # prompts for the secret
 jarviscore nexus test github
 ```
+
+The local stack's own secrets (`NEXUS_ENCRYPTION_KEY`, `NEXUS_STATE_KEY`, `NEXUS_BROKER_API_KEY`) live in `~/.jarviscore/nexus/stack.env` and are read by the broker and gateway containers only. Do not put them in a project `.env`.
 
 ---
 
@@ -376,6 +432,7 @@ Advanced execution parameters for the OODA loop Kernel. The defaults are appropr
 | `HITL_ENABLED` | `false` | Enable Human-in-the-Loop escalation. |
 | `HITL_MAX_CONFIDENCE` | `0.8` | Escalate when the Kernel's action confidence is below this value. |
 | `HITL_MIN_RISK_SCORE` | `0.7` | Escalate when the evaluated risk score exceeds this value. |
+| `HITL_TARGETS` | `reviewer` | Who responds to escalations, comma-separated (e.g. `ops-oncall,finance-approver`). Carried on every request as `targets`; a request can name its own. See [Who responds](../guides/hitl.md#who-responds). |
 | `MAX_GOAL_STEPS` | `30` | Hard ceiling on plan steps for goal-oriented agents before the goal is marked `blocked`. |
 | `MAX_REPLAN_ATTEMPTS` | `8` | Maximum replanning cycles before the Kernel returns a failure result. |
 
@@ -392,11 +449,15 @@ These control how the Kernel allocates context across its OODA turns. You will n
 
 **Tool result observation**
 
-Each tool result is shown inline up to a limit with an explicit marker, and is kept whole so the agent can read the rest with `read_turn_result`. Nothing is cut: older results are released whole, and the agent is told why.
+Each tool result is shown to the agent whole, once: in the conversation while it
+is among the agent's recent exchanges, and in the list of recent actions after
+that. Results of the last few turns also stay readable with `read_turn_result`,
+a page at a time. Nothing is cut: older results are released whole, and the
+agent is told why.
 
 | Variable | Default | Description |
 |---|---|---|
-| `SUBAGENT_OBSERVATION_LIMIT` | `800` | Characters of each tool result shown inline before the retrieval marker. |
+| `SUBAGENT_OBSERVATION_LIMIT` | removed | Tool results are no longer clipped; the agent sees each one whole. The setting is ignored. |
 | `SUBAGENT_TURN_RESULT_WINDOW` | `10` | Number of recent tool results kept whole for `read_turn_result`. |
 | `SUBAGENT_TURN_RESULT_BUDGET` | `2000000` | Total characters kept across those results; older results are released whole when exceeded. |
 | `SUBAGENT_READ_PAGE_LIMIT` | `20000` | Largest page `read_turn_result` returns; each page is shown whole. |

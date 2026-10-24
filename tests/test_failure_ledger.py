@@ -1,106 +1,64 @@
 """
-Tests for issue #60: FailureLedger integrity.
+FailureLedger records failures as facts.
 
 What these tests prove:
-- Structured signals (error_type field, status_code) outrank prose sniffing
-- Numeric codes in prose match on word boundaries — "1404 rows" is not a 404
-- record() feeds the structured output into classification
-- is_guarded() queries Redis with the SAME workflow id record() writes
-- UNKNOWN guarding is configurable (guard = historical default, skip = lenient)
+- A class the tool declares (error_type) is recorded; nothing is guessed from prose or codes
+- A status code is recorded as a fact beside the class
+- The whole error is kept, never clipped
+- record() indexes the failure under the run's workflow id
+- The ledger records; it never guards a call
 """
 
 from unittest.mock import MagicMock
 
-import jarviscore.kernel.cognition as cognition
 from jarviscore.kernel.cognition import FailureLedger
 
 
-classify = FailureLedger._classify_error
+def _recorded(**kwargs):
+    ledger = FailureLedger(agent_id="a", workflow_id="wf-1")
+    ledger.record("call_api", {"x": 1}, **kwargs)
+    return ledger.recent_failures[-1]
 
 
-class TestStructuredFirstClassification:
+class TestRecordsWhatTheToolSaid:
 
-    def test_explicit_error_type_field_wins(self):
-        out = {"status": "error", "error_type": "quota_exceeded", "error": "404 not found"}
-        assert classify("404 not found", output=out) == "QUOTA_EXCEEDED"
+    def test_a_declared_error_type_is_recorded(self):
+        entry = _recorded(error="404 not found", output={"status": "error", "error_type": "quota_exceeded"})
+        assert entry["error_type"] == "QUOTA_EXCEEDED"
 
-    def test_status_code_outranks_prose(self):
-        out = {"status": "error", "status_code": 429, "error": "the request failed"}
-        assert classify("the request failed", output=out) == "RATE_LIMIT"
+    def test_prose_is_never_turned_into_a_class(self):
+        for text in ("rate limit exceeded", "HTTP 401 from gateway", "connection refused", "not found"):
+            assert _recorded(error=text)["error_type"] == "UNKNOWN"
 
-    def test_code_key_also_recognized(self):
-        assert classify("boom", output={"code": 403}) == "AUTH_FORBIDDEN"
+    def test_a_status_code_is_a_fact_not_a_class(self):
+        entry = _recorded(error="request failed", output={"status": "error", "status_code": 429})
+        assert entry["error_type"] == "UNKNOWN"
+        assert entry["status_code"] == 429
 
-    def test_5xx_classifies_as_network(self):
-        assert classify("server error", output={"status_code": 503}) == "NETWORK"
-
-    def test_non_numeric_code_falls_through_to_prose(self):
-        assert classify("connection reset", output={"code": "ERR_RESET"}) == "NETWORK"
-
-
-class TestWordBoundaryProse:
-
-    def test_1404_rows_is_not_a_404(self):
-        assert classify("processed 1404 rows before failing") == "UNKNOWN"
-
-    def test_plain_404_still_matches(self):
-        assert classify("upstream returned 404") == "NOT_FOUND"
-
-    def test_race_condition_401_boundary(self):
-        assert classify("id 84012 missing") == "UNKNOWN"
-        assert classify("HTTP 401 from gateway") == "AUTH_UNAUTHORIZED"
-
-    def test_historical_text_classes_unchanged(self):
-        assert classify("request timed out after 30s") == "TIMEOUT"
-        assert classify("rate limit exceeded") == "RATE_LIMIT"
-        assert classify("schema validation failed") == "SCHEMA_VALIDATION"
-        assert classify("connection refused") == "NETWORK"
+    def test_the_whole_error_is_kept(self):
+        error = "upstream said: " + "x" * 5000
+        assert _recorded(error=error)["error"] == error
 
 
-class TestRecordUsesStructuredOutput:
+class TestRecordIndexing:
 
-    def test_record_classifies_from_output_dict(self):
-        ledger = FailureLedger(agent_id="a", workflow_id="wf-1")
-        ledger.record(
-            "call_api", {"x": 1},
-            error="request failed",
-            output={"status": "error", "status_code": 429},
-        )
-        assert ledger.recent_failures[-1]["error_type"] == "RATE_LIMIT"
-
-
-class TestGuardKeyAlignment:
-
-    def test_is_guarded_queries_the_workflow_id_record_writes(self):
+    def test_record_indexes_under_its_workflow_id(self):
         redis = MagicMock()
-        redis.has_failure_guard = MagicMock(return_value=False)
         redis.index_failure_event = MagicMock()
 
         ledger = FailureLedger(agent_id="agent-9", workflow_id="wf-real-42", redis_store=redis)
-        fp = ledger.record("web_search", {"q": "x"}, error="403 forbidden")
-        ledger.is_guarded(fp)
+        ledger.record("web_search", {"q": "x"}, error="403 forbidden", output={"error_type": "auth_forbidden"})
 
-        written_wf = redis.index_failure_event.call_args.kwargs["workflow_id"]
-        read_wf = redis.has_failure_guard.call_args.args[1]
-        assert written_wf == read_wf == "wf-real-42"
+        kwargs = redis.index_failure_event.call_args.kwargs
+        assert kwargs["workflow_id"] == "wf-real-42"
+        assert kwargs["error_type"] == "AUTH_FORBIDDEN"
 
 
-class TestUnknownGuardPolicy:
+class TestRecordsWithoutGuarding:
 
-    def _guarded_after_unknown_failure(self):
+    def test_ledger_offers_no_guard(self):
         ledger = FailureLedger(agent_id="a", workflow_id="wf")
-        fp = ledger.record("tool", {"p": 1}, error="something inexplicable")
+        ledger.record("tool", {"p": 1}, error="something inexplicable")
         assert ledger.recent_failures[-1]["error_type"] == "UNKNOWN"
-        return ledger.is_guarded(fp)
-
-    def test_default_guards_unknown(self):
-        assert self._guarded_after_unknown_failure() is True
-
-    def test_skip_mode_does_not_guard_unknown(self, monkeypatch):
-        monkeypatch.setattr(cognition, "_FAILURE_GUARD_UNKNOWN", "skip")
-        assert self._guarded_after_unknown_failure() is False
-
-    def test_transient_failures_never_guarded_either_way(self):
-        ledger = FailureLedger(agent_id="a", workflow_id="wf")
-        fp = ledger.record("tool", {"p": 1}, error="connection timed out")
-        assert ledger.is_guarded(fp) is False
+        assert not hasattr(ledger, "is_guarded")
+        assert not hasattr(ledger, "render_block")

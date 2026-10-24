@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 MEMBERSHIP_CHECK_INTERVAL = 2.0
 DEANNOUNCE_TIMEOUT = 3.0
 
+# How long a request for one of this node's agents waits for its PeerClient
+# to be registered while the Mesh is still starting.
+PEER_CLIENT_WAIT_SECONDS = 10.0
+
 
 class P2PCoordinator:
     """
@@ -265,6 +269,8 @@ class P2PCoordinator:
         capabilities: Dict[str, List[str]] = {}
         agents_info = {}
         for agent in self.agents:
+            if not getattr(agent, "mesh_worker", True):
+                continue  # reached directly by people, not offered to the mesh
             for cap in agent.capabilities:
                 capabilities.setdefault(cap, []).append(agent.agent_id)
             agents_info[agent.agent_id] = {
@@ -471,12 +477,13 @@ class P2PCoordinator:
         except Exception as e:
             logger.error(f"Error handling capability request: {e}")
 
-    async def deannounce_capabilities(self):
+    async def deannounce_capabilities(self, timeout: float = 30.0):
         """
         Broadcast capability removal to mesh.
 
         Called when agent leaves mesh gracefully to notify other nodes
-        that this agent's capabilities are no longer available.
+        that this agent's capabilities are no longer available. ``timeout``
+        bounds the wait for each peer; the goodbye is sent to all at once.
         """
         import time
 
@@ -499,7 +506,7 @@ class P2PCoordinator:
             'timestamp': time.time()
         }
 
-        await self._broadcast_p2p_message("CAPABILITY_DEANNOUNCEMENT", payload)
+        await self._broadcast_p2p_message("CAPABILITY_DEANNOUNCEMENT", payload, timeout=timeout)
         logger.info(f"Deannounced capabilities: {capabilities}")
 
     async def query_mesh(self, capability: str) -> List[str]:
@@ -543,11 +550,15 @@ class P2PCoordinator:
 
         logger.info("Stopping P2P coordinator...")
         # Say goodbye while still started: deannounce_capabilities() is a no-op once stopped.
-        # Bounded: peers that are shutting down too would otherwise hold each send open.
+        # Peers that do not answer within seconds are gone or going: SWIM tells the
+        # rest, so stopping never waits on them. The outer bound covers a goodbye
+        # that hangs before it reaches any peer.
         try:
-            await asyncio.wait_for(self.deannounce_capabilities(), DEANNOUNCE_TIMEOUT)
+            await asyncio.wait_for(
+                self.deannounce_capabilities(timeout=DEANNOUNCE_TIMEOUT), DEANNOUNCE_TIMEOUT + 1)
         except asyncio.TimeoutError:
-            logger.warning(f"Deannouncing capabilities timed out after {DEANNOUNCE_TIMEOUT}s; peers will notice via SWIM")
+            logger.warning(
+                f"Deannouncing capabilities timed out after {DEANNOUNCE_TIMEOUT + 1}s; peers will notice via SWIM")
         except Exception as exc:
             logger.warning(f"Could not deannounce capabilities on stop: {exc}")
         self._started = False
@@ -579,7 +590,7 @@ class P2PCoordinator:
             return f"{addr[0]}:{addr[1]}"
         return "unknown"
 
-    async def _send_p2p_message(self, target: str, msg_type: str, payload: Dict) -> bool:
+    async def _send_p2p_message(self, target: str, msg_type: str, payload: Dict, timeout: float = 30.0) -> bool:
         """
         Send message to specific peer.
 
@@ -616,13 +627,17 @@ class P2PCoordinator:
                     return False
                 handoff = asyncio.run_coroutine_threadsafe(send, swim_loop)
                 try:
-                    success = await asyncio.wait_for(asyncio.wrap_future(handoff), timeout=30)
+                    success = await asyncio.wait_for(asyncio.wrap_future(handoff), timeout=timeout)
                 except asyncio.TimeoutError:
                     handoff.cancel()
                     logger.warning(f"P2P send to {target} timed out on the SWIM loop")
                     return False
             else:
-                success = await send
+                try:
+                    success = await asyncio.wait_for(send, timeout=timeout)
+                except asyncio.TimeoutError:
+                    logger.warning(f"P2P send to {target} timed out")
+                    return False
 
             # Record activity for keepalive suppression
             if self.keepalive_manager:
@@ -633,7 +648,7 @@ class P2PCoordinator:
             logger.error(f"Failed to send P2P message to {target}: {e}")
             return False
 
-    async def _broadcast_p2p_message(self, msg_type: str, payload: Dict) -> int:
+    async def _broadcast_p2p_message(self, msg_type: str, payload: Dict, timeout: float = 30.0) -> int:
         """
         Broadcast message to all alive members.
 
@@ -652,10 +667,12 @@ class P2PCoordinator:
         try:
             alive_members = self.swim_manager.swim_node.members.get_alive_members(exclude_self=True)
 
-            for member in alive_members:
-                target = f"{member.addr[0]}:{member.addr[1]}"
-                if await self._send_p2p_message(target, msg_type, payload):
-                    count += 1
+            # All at once: a peer that has gone silent must not delay the others.
+            results = await asyncio.gather(*(
+                self._send_p2p_message(f"{member.addr[0]}:{member.addr[1]}", msg_type, payload, timeout=timeout)
+                for member in alive_members
+            ), return_exceptions=True)
+            count = sum(1 for result in results if result is True)
 
             logger.debug(f"Broadcasted {msg_type} to {count} peers")
         except Exception as e:
@@ -829,7 +846,7 @@ class P2PCoordinator:
             target = payload.get('target')
 
             # Find target agent's PeerClient
-            target_client = self._find_peer_client_by_role_or_id(target)
+            target_client = await self._await_peer_client(target)
             if not target_client:
                 logger.warning(f"Peer notify: target '{target}' not found")
                 return
@@ -860,7 +877,7 @@ class P2PCoordinator:
             logger.info(f"[COORDINATOR] Target: {target}, Payload keys: {list(payload.keys())}")
 
             # Find target agent's PeerClient
-            target_client = self._find_peer_client_by_role_or_id(target)
+            target_client = await self._await_peer_client(target)
             if not target_client:
                 logger.warning(f"Peer request: target '{target}' not found")
                 logger.warning(f"Available agents: {[a.agent_id for a in self.agents]}")
@@ -914,6 +931,25 @@ class P2PCoordinator:
 
         except Exception as e:
             logger.error(f"Error handling peer response: {e}")
+
+    async def _await_peer_client(self, target: str, timeout: float = PEER_CLIENT_WAIT_SECONDS):
+        """
+        The PeerClient for a target, waiting briefly when it is one of this
+        node's agents whose client is not registered yet.
+
+        This node answers capability requests as soon as SWIM starts, before the
+        Mesh has injected PeerClients, so a peer can learn of an agent and ask it
+        something inside that window. Dropping the request there leaves the
+        asker waiting out its whole timeout.
+        """
+        client = self._find_peer_client_by_role_or_id(target)
+        if client or not any(target in (a.agent_id, a.role) for a in self.agents):
+            return client
+        deadline = asyncio.get_running_loop().time() + timeout
+        while client is None and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+            client = self._find_peer_client_by_role_or_id(target)
+        return client
 
     def _find_peer_client_by_role_or_id(self, target: str):
         """

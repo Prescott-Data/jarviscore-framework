@@ -579,6 +579,281 @@ async def test_azure_content_filter_repair_is_explicit_opt_in():
     assert result["content_filter_repaired"] is True
 
 
+def test_native_tools_need_every_provider_in_the_chain_to_carry_them():
+    llm = UnifiedLLMClient.__new__(UnifiedLLMClient)
+    llm.config = {"azure_deployment": "gpt-5.2-chat"}
+
+    llm.provider_order = [LLMProvider.AZURE]
+    assert llm.carries_native_tools() is True
+    assert llm.carries_native_tools("gpt-5.1-codex") is True
+    llm.provider_order = [LLMProvider.AZURE, LLMProvider.CLAUDE, LLMProvider.VLLM]
+    assert llm.carries_native_tools() is True
+
+    # The promotion endpoint is not known to forward tools, so its chain keeps text.
+    llm.provider_order = [LLMProvider.PROMO]
+    assert llm.carries_native_tools() is False
+    llm.provider_order = []
+    assert llm.carries_native_tools() is False
+
+
+@pytest.mark.asyncio
+async def test_azure_returns_the_models_function_calls():
+    llm = UnifiedLLMClient.__new__(UnifiedLLMClient)
+    llm.config = {"azure_deployment": "gpt-5.2-chat"}
+    call = SimpleNamespace(
+        id="call_1",
+        function=SimpleNamespace(name="search", arguments='{"query": "x"}'),
+    )
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(
+            message=SimpleNamespace(content=None, tool_calls=[call]),
+            finish_reason="tool_calls",
+        )],
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=3, total_tokens=13),
+    )
+    create = AsyncMock(return_value=response)
+    llm.azure_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    tools = [{"type": "function", "function": {"name": "search", "parameters": {}}}]
+
+    result = await llm._call_azure(
+        messages=[{"role": "user", "content": "find x"}],
+        temperature=0.0,
+        max_tokens=10,
+        tools=tools,
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
+
+    sent = create.await_args.kwargs
+    assert sent["tools"] == tools
+    assert sent["tool_choice"] == "required"
+    assert sent["parallel_tool_calls"] is False
+    assert result["tool_calls"] == [
+        {"id": "call_1", "name": "search", "arguments": '{"query": "x"}'}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_definitions_are_reserved_with_the_prompt():
+    store = MockRedisContextStore()
+    store.register_workflow_goal(
+        "wf-llm-tools", "Reserve the tool definitions", budget={"max_tokens": 1000},
+    )
+    llm = _budget_test_client({"content": "", "tokens": {"total": 3}})
+    tools = [{"type": "function", "function": {
+        "name": "search", "description": "evidence " * 2000, "parameters": {},
+    }}]
+
+    with workflow_budget_scope(store, "wf-llm-tools"):
+        with pytest.raises(WorkflowBudgetExceeded):
+            await llm.generate(prompt="hello", max_tokens=20, tools=tools)
+
+    llm._generate_inner.assert_not_awaited()
+
+
+# A native tool turn as the kernel threads it: one call, its result, the next request.
+_SEARCH_TOOLS = [{"type": "function", "function": {
+    "name": "search",
+    "description": "Search the record.",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+}}]
+_THREADED_TURN = [
+    {"role": "system", "content": "system"},
+    {"role": "user", "content": "find revenue"},
+    {"role": "assistant", "content": None, "tool_calls": [{
+        "id": "call_1", "type": "function",
+        "function": {"name": "search", "arguments": '{"query": "revenue"}'},
+        "signature": "c2lnbmF0dXJl",
+    }]},
+    {"role": "tool", "tool_call_id": "call_1", "content": "revenue was 5"},
+    {"role": "user", "content": "next turn"},
+]
+
+
+def _bare_client(**config):
+    llm = UnifiedLLMClient.__new__(UnifiedLLMClient)
+    llm.config = config
+    return llm
+
+
+@pytest.mark.asyncio
+async def test_azure_chat_sends_the_threaded_turn_without_foreign_keys():
+    llm = _bare_client(azure_deployment="gpt-5.2-chat")
+    create = AsyncMock(return_value=_fake_azure_response("ok"))
+    llm.azure_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+    await llm._call_azure(_THREADED_TURN, 0.0, 10, tools=_SEARCH_TOOLS, tool_choice="required")
+
+    sent_call = create.await_args.kwargs["messages"][2]["tool_calls"][0]
+    assert sent_call == {
+        "id": "call_1", "type": "function",
+        "function": {"name": "search", "arguments": '{"query": "revenue"}'},
+    }
+
+
+@pytest.mark.asyncio
+async def test_azure_responses_carries_function_calls_and_their_outputs():
+    llm = _bare_client(azure_deployment="gpt-5.1-codex")
+    response = SimpleNamespace(
+        output_text="",
+        usage=SimpleNamespace(input_tokens=10, output_tokens=3, total_tokens=13),
+        incomplete_details=None, status="completed", error=None,
+        output=[{"type": "function_call", "call_id": "call_2", "name": "search",
+                 "arguments": '{"query": "profit"}'}],
+    )
+    create = AsyncMock(return_value=response)
+    llm.azure_client = SimpleNamespace(responses=SimpleNamespace(create=create))
+
+    result = await llm._call_azure(
+        _THREADED_TURN, 0.0, 10, tools=_SEARCH_TOOLS, tool_choice="required",
+        parallel_tool_calls=False,
+    )
+
+    sent = create.await_args.kwargs
+    assert sent["tools"][0]["name"] == "search" and sent["tools"][0]["strict"] is False
+    assert sent["tool_choice"] == "required" and sent["parallel_tool_calls"] is False
+    items = sent["input"]
+    assert {"type": "function_call", "call_id": "call_1", "name": "search",
+            "arguments": '{"query": "revenue"}'} in items
+    assert {"type": "function_call_output", "call_id": "call_1",
+            "output": "revenue was 5"} in items
+    assert result["tool_calls"] == [
+        {"id": "call_2", "name": "search", "arguments": '{"query": "profit"}'}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_claude_carries_tool_use_and_tool_results():
+    llm = _bare_client(claude_model="claude-sonnet-4")
+    response = SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", id="toolu_2", name="search",
+                                 input={"query": "profit"})],
+        usage=SimpleNamespace(input_tokens=10, output_tokens=3),
+        stop_reason="tool_use", stop_sequence=None,
+    )
+    create = MagicMock(return_value=response)
+    llm.claude_client = SimpleNamespace(messages=SimpleNamespace(create=create))
+
+    result = await llm._call_claude(
+        _THREADED_TURN, 0.0, 10, tools=_SEARCH_TOOLS, tool_choice="required",
+        parallel_tool_calls=False,
+    )
+
+    sent = create.call_args.kwargs
+    assert sent["system"] == "system"
+    assert sent["tools"][0]["input_schema"]["properties"] == {"query": {"type": "string"}}
+    assert sent["tool_choice"] == {"type": "any", "disable_parallel_tool_use": True}
+    assistant, result_turn = sent["messages"][1], sent["messages"][2]
+    assert assistant["content"] == [{"type": "tool_use", "id": "call_1", "name": "search",
+                                     "input": {"query": "revenue"}}]
+    assert result_turn["role"] == "user"
+    assert result_turn["content"][0] == {"type": "tool_result", "tool_use_id": "call_1",
+                                         "content": "revenue was 5"}
+    assert result_turn["content"][1] == {"type": "text", "text": "next turn"}
+    assert result["tool_calls"] == [
+        {"id": "toolu_2", "name": "search", "arguments": '{"query": "profit"}'}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_genai_carries_function_calls_with_their_signatures():
+    from google.genai import types
+
+    llm = _bare_client()
+    part = types.Part(
+        function_call=types.FunctionCall(name="search", args={"query": "profit"}),
+        thought_signature=b"next",
+    )
+    response = SimpleNamespace(
+        candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]), finish_reason="STOP")],
+        usage_metadata=None, text="", prompt_feedback=None,
+    )
+    generate = AsyncMock(return_value=response)
+    client = SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate)))
+
+    result = await llm._call_genai_client(
+        client=client, model_name="gemini-2.5-flash", prompt="p", temperature=0.0,
+        max_tokens=10, provider_label="gemini", default_pricing={"input": 0, "output": 0},
+        messages=_THREADED_TURN, tools=_SEARCH_TOOLS, tool_choice="required",
+    )
+
+    config = generate.await_args.kwargs["config"]
+    assert config["system_instruction"] == "system"
+    assert config["tool_config"].function_calling_config.mode == "ANY"
+    assert config["tools"][0].function_declarations[0].name == "search"
+    contents = generate.await_args.kwargs["contents"]
+    assert [content.role for content in contents] == ["user", "model", "user"]
+    call_part = contents[1].parts[0]
+    assert call_part.function_call.name == "search" and call_part.function_call.id == "call_1"
+    assert call_part.thought_signature == b"signature"
+    response_part = contents[2].parts[0]
+    assert response_part.function_response.name == "search"
+    assert response_part.function_response.response == {"output": "revenue was 5"}
+    assert contents[2].parts[1].text == "next turn"
+
+    (call,) = result["tool_calls"]
+    assert call["name"] == "search" and call["arguments"] == '{"query": "profit"}'
+    assert call["signature"] == "bmV4dA=="
+    assert call["id"].startswith("jc_call_")
+
+
+@pytest.mark.asyncio
+async def test_vllm_sends_tools_and_returns_function_calls():
+    llm = _bare_client(llm_model="served-model", llm_timeout=5)
+    llm.vllm_endpoint = "http://vllm"
+    body = {
+        "choices": [{"finish_reason": "tool_calls", "message": {"content": None, "tool_calls": [
+            {"id": "call_2", "type": "function",
+             "function": {"name": "search", "arguments": '{"query": "profit"}'}},
+        ]}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13},
+    }
+    sent = {}
+
+    class _Response:
+        status = 200
+
+        async def json(self):
+            return body
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Session:
+        closed = False
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def post(self, url, json):
+            sent.update(json)
+            return _Response()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    with patch.object(_llm_module.aiohttp, "ClientSession", _Session):
+        result = await llm._call_vllm(
+            _THREADED_TURN, 0.0, 10, tools=_SEARCH_TOOLS, tool_choice="required",
+            parallel_tool_calls=False,
+        )
+
+    assert sent["tools"] == _SEARCH_TOOLS
+    assert sent["tool_choice"] == "required" and sent["parallel_tool_calls"] is False
+    assert "signature" not in sent["messages"][2]["tool_calls"][0]
+    assert result["tool_calls"] == [
+        {"id": "call_2", "name": "search", "arguments": '{"query": "profit"}'}
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Vertex AI provider tests (mocked — no real GCP credentials required)
 # ---------------------------------------------------------------------------
@@ -827,7 +1102,9 @@ async def test_vertex_ai_tool_calls_parsed_from_response():
             max_tokens=100,
         )
 
-    assert result["tool_calls"] == [{"name": "search", "args": {"query": "latest AI news"}}]
+    (call,) = result["tool_calls"]
+    assert (call["name"], call["args"]) == ("search", {"query": "latest AI news"})
+    assert call["arguments"] == '{"query": "latest AI news"}'
     assert result["content"] == ""
     assert result["provider"] == "vertex_ai"
 
@@ -879,3 +1156,14 @@ async def test_gemini_forwards_tools_kwarg():
         or {}
     )
     assert "tools" in sent_config, "tools kwarg was not forwarded to generate_content"
+
+
+def test_a_call_says_where_its_price_came_from(monkeypatch):
+    from jarviscore.config import settings
+
+    monkeypatch.setattr(settings, "llm_prices", {"luna": {"input": 2.0, "output": 8.0, "cached": 0.5}})
+    # 600k uncached at $2, 400k cached at $0.50 and 100k output at $8, per 1M tokens.
+    cost, source = _llm_module._call_cost("luna", 1_000_000, 100_000, 400_000)
+    assert (round(cost, 6), source) == (2.2, "declared")
+    assert _llm_module._call_cost("gpt-4o", 1_000_000, 0)[1] == "builtin"
+    assert _llm_module._call_cost("unpriced-model", 1_000_000, 0) == (3.0, "default")

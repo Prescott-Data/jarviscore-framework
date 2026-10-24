@@ -11,7 +11,7 @@ Run after starting the synthesizer (port 7949):
 Phases exercised (node 2)
 --------------------------
 Phase 2  : SWIM P2P joins synthesizer cluster
-Phase 7  : Mesh._run_distributed_worker() claims "market" step via Redis SETNX;
+Phase 7  : Mesh._run_pool() claims "market" step via Redis SETNX;
            crash recovery: kill and restart — SETNX prevents double-execution
 Phase 8  : EpisodicLedger tracks research queries per session
 Phase 9  : Auto-injected redis + blob + mailbox

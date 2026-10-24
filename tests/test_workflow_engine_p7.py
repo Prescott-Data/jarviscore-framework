@@ -3,7 +3,8 @@ Tests for Phase 7B: WorkflowEngine reactive loop.
 
 What these tests prove:
 - Single step executes and returns a result
-- Parallel steps (no deps) run concurrently (timing proof)
+- Parallel steps (no deps) run concurrently on a pooled agent (timing proof);
+  an agent without a pool never runs two steps at once
 - Sequential steps (with deps) run in order
 - Failed step is recorded but does not block unrelated steps
 - Waiting status is preserved in workflow results
@@ -21,7 +22,7 @@ from typing import Any, Dict
 
 import pytest
 
-from jarviscore import Mesh
+from jarviscore import Mesh, Pool
 from jarviscore.core.agent import Agent
 from jarviscore.orchestration.engine import WorkflowEngine
 
@@ -59,6 +60,24 @@ class SlowAgent(Agent):
     async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         await asyncio.sleep(0.1)
         return {"status": "success", "output": "slow_done"}
+
+
+class OverlapProbe(Agent):
+    """Records how many tasks one class of agent runs at the same moment."""
+    role = "overlap_probe"
+    capabilities = ["overlap_probe"]
+    running = 0
+    peak = 0
+
+    async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        cls = type(self)
+        cls.running += 1
+        cls.peak = max(cls.peak, cls.running)
+        try:
+            await asyncio.sleep(0.02)
+        finally:
+            cls.running -= 1
+        return {"status": "success", "output": "ok"}
 
 
 class CancelAwareAgent(Agent):
@@ -118,6 +137,17 @@ class FakeRemoteRedis:
 
     def get_step_output(self, workflow_id: str, step_id: str):
         return None
+
+
+class FailedRemoteRedis:
+    def __init__(self, output):
+        self.output = output
+
+    def get_step_status(self, workflow_id: str, step_id: str) -> str:
+        return "failed"
+
+    def get_step_output(self, workflow_id: str, step_id: str):
+        return None if self.output is None else {"output": self.output}
 
 
 class ContextAgent(Agent):
@@ -182,7 +212,7 @@ class TestParallelExecution:
     async def test_independent_steps_run_concurrently(self):
         """Two slow steps without deps should complete ~0.1 s, not ~0.2 s."""
         mesh = make_mesh()
-        mesh.add(SlowAgent)
+        mesh.add(SlowAgent, pool=Pool(max=2))
         mesh.add(EchoAgent)
         await mesh.start()
 
@@ -199,6 +229,22 @@ class TestParallelExecution:
         assert all(r["status"] == "success" for r in results)
         # Sequential would take ≥ 0.2 s; concurrent takes < 0.18 s
         assert elapsed < 0.18, f"Steps ran sequentially (took {elapsed:.3f}s)"
+
+    async def test_one_instance_never_runs_two_steps_at_once(self):
+        """Without a pool an agent is one instance, and an instance holds one task's state."""
+        OverlapProbe.running = OverlapProbe.peak = 0
+        mesh = make_mesh()
+        mesh.add(OverlapProbe)
+        await mesh.start()
+        try:
+            results = await mesh.workflow("wf-one-instance", [
+                {"id": f"s{i}", "agent": "overlap_probe", "task": "go"} for i in range(3)
+            ])
+        finally:
+            await mesh.stop()
+
+        assert all(r["status"] == "success" for r in results)
+        assert OverlapProbe.peak == 1
 
     async def test_workflow_cancellation_cancels_running_steps(self):
         """Cancelling workflow execution must propagate to in-flight step tasks."""
@@ -357,6 +403,37 @@ class TestFailureHandling:
 
         assert result["status"] == "failure"
         assert "no output" in result["error"]
+
+    async def test_remote_failure_keeps_its_reason(self):
+        engine = WorkflowEngine(
+            mesh=type("MeshStub", (), {"agents": []})(),
+            redis_store=FailedRemoteRedis({
+                "status": "failure",
+                "error": "alice rejected: too vague",
+                "output": {"decision": "rejected"},
+            }),
+        )
+
+        result = await engine._wait_remote_step("wf-remote", "remote-step", timeout=0.01)
+
+        assert result["status"] == "failure"
+        assert result["error"] == "alice rejected: too vague"
+        assert result["output"] == {"decision": "rejected"}
+        assert result["step_id"] == "remote-step"
+
+    async def test_remote_failure_without_a_stored_reason_says_so(self):
+        engine = WorkflowEngine(
+            mesh=type("MeshStub", (), {"agents": []})(),
+            redis_store=FailedRemoteRedis(None),
+        )
+
+        result = await engine._wait_remote_step("wf-remote", "remote-step", timeout=0.01)
+
+        assert result == {
+            "status": "failure",
+            "error": "Remote node reported step failure",
+            "step_id": "remote-step",
+        }
 
 
 # ======================================================================

@@ -395,7 +395,11 @@ async def _resolve_all(bundle: str, connection_id: str, nexus_url: str, count: i
 
     import httpx
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    # Same lookup as `jarviscore nexus`: NEXUS_GATEWAY_API_KEY from the
+    # environment, else from ./.env.
+    from jarviscore.cli.nexus import _gateway_headers
+
+    async with httpx.AsyncClient(timeout=10.0, headers=_gateway_headers()) as client:
         health = health_exc = None
         try:
             health = await client.get(f"{nexus_url}/health")
@@ -434,15 +438,16 @@ async def _resolve_one(client, health, health_exc, bundle: str, connection_id: s
     payload = None
     try:
         resp = await client.get(
-            f"{nexus_url}/v1/connections/{connection_id}/token",
+            f"{nexus_url}/v1/token/{connection_id}",
         )
         if resp.status_code == 200:
             payload = resp.json()
             emit(f"  {_ok(f'connection_id resolved — token payload received')}")
             # Show non-sensitive fields
+            # Credentials sit under "credentials"; every field there is secret.
             safe_payload = {
                 k: v for k, v in payload.items()
-                if k not in ("access_token", "refresh_token", "client_secret", "api_key")
+                if k not in ("credentials", "access_token", "refresh_token", "client_secret", "api_key")
             }
             if safe_payload:
                 emit(f"  {_dim('Token fields (secrets redacted):')}")
@@ -487,8 +492,20 @@ def _get_all_bundles() -> List[str]:
 
 # ── Sub-command: test ─────────────────────────────────────────────────────────
 
+DEFAULT_NEXUS_URL = "http://localhost:8090"
+
+
+def _resolve_nexus_url(explicit: "str | None") -> str:
+    """The Gateway for `atom test`: --nexus-url, else NEXUS_GATEWAY_URL from the
+    environment or ./.env (the same lookup that supplies the API key), else the
+    local default. Resolving URL and key from the same place keeps a key read
+    from ./.env from being sent to localhost."""
+    from jarviscore.cli.nexus import _gateway_url
+    return explicit or _gateway_url() or DEFAULT_NEXUS_URL
+
+
 def cmd_test(args):
-    nexus_url = args.nexus_url or os.getenv("NEXUS_GATEWAY_URL", "http://localhost:8090")
+    nexus_url = _resolve_nexus_url(args.nexus_url)
 
     print(f"\n{_bold('JarvisCore Atom Test Harness')}")
     print(f"{_dim('Mode: ' + args.mode)}")
@@ -628,9 +645,9 @@ Examples:
                         help="Nexus connection_id (required for --mode integration)")
     test_p.add_argument("--mode",          choices=["dry-run", "integration"], default="dry-run",
                         help="Test mode (default: dry-run)")
-    test_p.add_argument("--nexus-url",     dest="nexus_url",
-                        default=os.getenv("NEXUS_GATEWAY_URL", "http://localhost:8090"),
-                        help="Nexus Gateway URL (default: NEXUS_GATEWAY_URL env var or http://localhost:8090)")
+    test_p.add_argument("--nexus-url",     dest="nexus_url", default=None,
+                        help="Nexus Gateway URL (default: NEXUS_GATEWAY_URL from the environment or ./.env, "
+                             "else http://localhost:8090)")
     test_p.add_argument("--all",           action="store_true",
                         help="Test every atom across all bundles (dry-run only)")
 

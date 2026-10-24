@@ -23,7 +23,7 @@ A production harness needs explicit answers to seven questions.
 | Concern | JarvisCore mechanism |
 |---|---|
 | **Reasoning loop** | Kernel Observe, Orient, Decide, Act loop with role-specific execution leases |
-| **Context** | Goal context, epistemic ledger, dependency evidence, workflow inspection, and labeled summaries |
+| **Context** | Goal context, working notes, dependency evidence, workflow inspection, and labeled summaries |
 | **Tools** | Versioned atom registry, typed schemas, provider integrations, browser and search sub-agents |
 | **Execution** | Isolated coder sandbox with bounded validation and repair |
 | **Permissions** | Capability contracts, Nexus credential injection, effect review, and typed HITL boundaries |

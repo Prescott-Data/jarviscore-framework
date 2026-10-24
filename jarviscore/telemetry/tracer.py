@@ -2,9 +2,9 @@
 TraceManager for JarvisCore v1.0.1.
 
 Three output channels for every trace event:
-1. Redis List — persistent, replayable (key: traces:{workflow_id}:{step_id})
+1. Redis List — seven-day history (key: trace_log:trace_events:{workflow_id})
 2. Redis PubSub — real-time streaming (channel: trace_events:{workflow_id})
-3. JSONL file — fallback for compliance and offline replay
+3. JSONL file — local record for offline analysis
 
 Ported from IA's tracing.py with improvements:
 - Typed event enum (not free-form strings)
@@ -30,10 +30,10 @@ class TraceManager:
     """
     Flight data recorder for agent execution.
 
-    Every kernel turn, tool call, mailbox message, and HITL request
-    is recorded through this manager. Consumers can:
+    Every event logged through this manager is written to the channels
+    above. Consumers can:
     - Subscribe to Redis PubSub for live dashboards
-    - Read Redis List for replay/debugging
+    - Read the Redis List for debugging
     - Parse JSONL files for offline analysis
     """
 

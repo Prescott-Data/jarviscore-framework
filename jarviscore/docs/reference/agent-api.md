@@ -38,7 +38,7 @@ behavior.
 | `capability_contracts` | `Dict[str, dict]` | `{}` when absent | Authorized `effects`, provider `systems`, and planner-visible artifact production and consumption declarations. |
 | `artifact_reference_paths` | `tuple[tuple[str, ...], ...]` | `()` | Output paths whose non-null artifacts must be exact `artifact_ref` values hydrated from dependency outputs before validation. Use `"*"` for list members. |
 | `final_response_passthrough` | `bool` | `False` | For a `final_response` capability with exactly one direct dependency, persist that validated artifact unchanged instead of invoking the response agent again. Multi-input responses still execute normally. |
-| `output_schema` | `type[BaseModel]` | `None` | Optional Pydantic model enforced on CoderSubAgent execution output. Other role outputs require application validation. |
+| `output_schema` | `type[BaseModel]` | `None` | Optional Pydantic model for the agent's result, in every role. `done` is refused, with the failing rules shown to the agent, until the result is a valid instance. |
 | `goal_oriented` | `bool` | `False` | When `True`, tasks are classified first: complex work uses `Plan → Execute → Evaluate`; bounded work can run as one direct Kernel turn. See [Planning](../concepts/planning.md). |
 | `default_kernel_role` | `str` | `None` | Fallback sub-agent role when the Planner emits `subagent_hint: null`. Built-in values are `"coder"`, `"researcher"`, `"communicator"`, and `"browser"`; products may register custom roles through an extended Kernel. Leave `None` for generalist agents. |
 | `requires_auth` | `bool` | `False` | Opts into post-`setup()` `AuthenticationManager` injection when connected-app authentication is configured. Connected-app calls require a reachable Nexus Gateway. |
@@ -255,10 +255,35 @@ The Mesh auto-detects available infrastructure at `start()` time. Do not pass `m
 #### add
 
 ```python
-def add(agent_class_or_instance, agent_id: Optional[str] = None, **kwargs) -> Agent
+def add(
+    agent_class_or_instance,
+    agent_id: Optional[str] = None,
+    *,
+    pool: Optional[Pool] = None,
+    **kwargs,
+) -> Agent
 ```
 
 Register an agent with the Mesh. Accepts a class (which will be instantiated) or a pre-instantiated agent. Returns the `Agent` instance.
+
+`pool` lets the Mesh run more members of this agent when its work queues up:
+
+```python
+from jarviscore import Pool
+
+mesh.add(Verifier, pool=Pool(min=1, max=16, idle_seconds=60, lane="bulk"))
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `min` | `1` | Members kept warm, including the registered agent. |
+| `max` | `8` | Most members running work at once in this process. |
+| `idle_seconds` | `60.0` | An idle member above `min` retires after this long. |
+| `lane` | `"interactive"` | `"bulk"` lets the provider governor hold capacity back for interactive work. |
+
+`get_diagnostics()` reports each pool. An agent added without `pool` runs one
+piece of work at a time, whether it arrives as a goal step, a `workflow()` step,
+a `fanout()` item, a `delegate()` call or a peer request. See [Scaling one agent: pools](../guides/production.md#scaling-one-agent-pools).
 
 Raises `ValueError` if an agent with the same `agent_id` is already registered, or if a class-based agent with the same `role` is added without an explicit `agent_id`. Raises `TypeError` if the class does not inherit from `Agent`.
 
@@ -417,7 +442,8 @@ async def resume_goal(
 
 Resume a waiting step with optional human or external context. The original
 executor affinity is retained and blocked descendants become claimable after
-the resumed step succeeds.
+the resumed step succeeds. A final response written while the step waited is
+reopened and written again from the resumed work.
 
 #### cancel_goal
 
@@ -460,7 +486,15 @@ after publication.
 async def stop() -> None
 ```
 
-Request shutdown for all agents, call `teardown()` on each, stop the P2P coordinator and workflow engine, and close all infrastructure connections.
+Drain the node, then request shutdown for all agents, call `teardown()` on each, stop the P2P coordinator and workflow engine, and close all infrastructure connections. Shutdown completes even when agent code swallows the cancellation of a running step.
+
+#### drain
+
+```python
+def drain() -> None
+```
+
+Stop taking new work while this node's own goals finish. After draining, the node starts no new goal and claims no step outside the workflows its `execute_goal()` calls are still waiting on, so an application can await those calls before `stop()`.
 
 #### has_capability
 

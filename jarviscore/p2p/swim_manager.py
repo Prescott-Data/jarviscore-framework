@@ -10,14 +10,30 @@ import asyncio
 import contextlib
 import io
 import logging
+import os
 import threading
 from typing import Optional
 
 from .scheduling import SchedulingMonitor
 from .suspicion import SuspicionGuard
 
+
+@contextlib.contextmanager
+def _without_dotenv():
+    """swim.main calls load_dotenv() at import; the host process owns its environment."""
+    previous = os.environ.get("PYTHON_DOTENV_DISABLED")
+    os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("PYTHON_DOTENV_DISABLED", None)
+        else:
+            os.environ["PYTHON_DOTENV_DISABLED"] = previous
+
+
 # swim-p2p announces itself on stdout at import; a library must stay quiet
-with contextlib.redirect_stdout(io.StringIO()) as _swim_import_noise:
+with contextlib.redirect_stdout(io.StringIO()) as _swim_import_noise, _without_dotenv():
     from swim.transport.hybrid import HybridTransport
     from swim.protocol.node import Node
     from swim.config import get_config as get_swim_config, validate_config as validate_swim_config
@@ -28,6 +44,19 @@ with contextlib.redirect_stdout(io.StringIO()) as _swim_import_noise:
 logger = logging.getLogger(__name__)
 if _swim_import_noise.getvalue():
     logger.debug("swim-p2p import output: %s", _swim_import_noise.getvalue().strip())
+
+
+def _quiet_swim_metrics(node) -> None:
+    """Stop SWIM printing a "Metrics Report" dict to stdout every minute.
+
+    The metrics stay on: Lifeguard's adaptive probe timeouts read them. Only
+    the reporting thread, which prints and nothing else, is stopped.
+    """
+    collector = getattr(node, "metrics_collector", None)
+    if collector is None:
+        return
+    collector._running = False
+    collector.report_metrics = lambda: {}
 
 
 class SWIMThreadManager:
@@ -205,6 +234,7 @@ class SWIMThreadManager:
                 return
 
             logger.info(f"SWIM node created at {self.bind_addr}")
+            _quiet_swim_metrics(self.swim_node)
 
             # Watch this loop's own scheduling before the protocol starts, so the
             # first probe already has a window to check against.

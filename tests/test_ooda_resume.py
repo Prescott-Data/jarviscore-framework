@@ -94,6 +94,87 @@ async def test_resume_starts_after_the_waiting_turn():
 
 
 @pytest.mark.asyncio
+async def test_a_continued_step_resumes_with_its_own_recent_reasoning():
+    WaitingAgent.calls = 0
+    memory = CheckpointMemory()
+    context = {"workflow_id": "wf-1", "step_id": "step-1"}
+    await WaitingAgent(
+        agent_id="mail-agent", role="coder",
+        llm_client=QueueLLM([
+            (
+                'THOUGHT: KNOWN: the invoice is from Acme, £420. Need Gmail\n'
+                'TOOL: request_access\nPARAMS: {"system": "gmail"}'
+            ),
+        ]),
+    ).run("process my mailbox", context=context, memory=memory)
+
+    class RecordingLLM(QueueLLM):
+        async def generate(self, **kwargs):
+            self.seen = kwargs["messages"]
+            return await super().generate(**kwargs)
+
+    llm = RecordingLLM(['THOUGHT: continue\nDONE: Mailbox processed.\nRESULT: {"processed": true}'])
+    await WaitingAgent(agent_id="mail-agent", role="coder", llm_client=llm).run(
+        "process my mailbox",
+        context=context | {"_resume": True, "_new_execution_epoch": True},
+        memory=memory,
+    )
+
+    carried = [m["content"] for m in llm.seen if m["role"] == "assistant"]
+    assert any("the invoice is from Acme, £420" in str(c) for c in carried)
+    assert any("Waiting for Gmail access" in str(m["content"]) for m in llm.seen if m["role"] == "user")
+
+
+@pytest.mark.asyncio
+async def test_the_next_epoch_finds_what_the_last_one_read_and_its_results_by_receipt():
+    class ReadingAgent(BaseSubAgent):
+        def setup_tools(self):
+            pass
+
+        def get_system_prompt(self):
+            return "Read the list."
+
+        async def _tool_read_list(self):
+            self.__dict__.setdefault("_records", []).append("page 1")
+            return {"status": "success", "rows": ["alpha", "beta"]}
+
+        def _save_subagent_state(self, state):
+            state.internal_variables["_records"] = list(getattr(self, "_records", []))
+
+        def _restore_subagent_state(self, state):
+            self._records = list(state.internal_variables.get("_records") or [])
+
+    memory = CheckpointMemory()
+    context = {
+        "workflow_id": "wf-read", "step_id": "read",
+        "execution_budget": {"max_epochs_per_step": 3}, "execution_epoch": 1,
+    }
+    first = await ReadingAgent(
+        agent_id="reader", role="browser",
+        llm_client=QueueLLM(['THOUGHT: read it\nTOOL: read_list\nPARAMS: {}']),
+    ).run("read the list", context=context, memory=memory, max_turns=1)
+    assert first.status == "epoch_exhausted"
+
+    second = ReadingAgent(
+        agent_id="reader", role="browser",
+        llm_client=QueueLLM([
+            'THOUGHT: see it again\nTOOL: read_turn_result\nPARAMS: {"turn": 1}',
+            'DONE: Two rows.\nRESULT: {}',
+        ]),
+    )
+    await second.run(
+        "read the list",
+        context=context | {"_resume": True, "_new_execution_epoch": True, "execution_epoch": 2},
+        memory=memory, max_turns=3,
+    )
+
+    assert second._records == ["page 1"]
+    reread = KernelState.model_validate_json(memory.checkpoint).tool_history[-1]
+    assert reread.tool_name == "read_turn_result"
+    assert reread.status == "success" and "alpha" in str(reread.tool_output)
+
+
+@pytest.mark.asyncio
 async def test_new_execution_epoch_preserves_action_evidence_and_closes_gap(tmp_path):
     memory = CheckpointMemory()
     state = KernelState(

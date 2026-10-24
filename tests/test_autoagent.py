@@ -240,6 +240,41 @@ class TestAutoAgentSetup:
         assert captured["allow_unsafe_local_execution"] is expected
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("requires_auth", [False, True])
+    async def test_only_an_agent_that_requires_auth_can_reach_provider_credentials(
+        self, monkeypatch, requires_auth
+    ):
+        from types import SimpleNamespace
+
+        captured = {}
+
+        def create_sandbox(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace()
+
+        monkeypatch.setattr("jarviscore.execution.create_coder_sandbox", create_sandbox)
+        monkeypatch.setattr(AutoAgent, "_load_agent_profile", lambda self: None)
+
+        class Integrator(AutoAgent):
+            role = "integrator"
+            capabilities = ["crm"]
+            system_prompt = "You work with the CRM."
+
+            def _create_kernel(self):
+                return SimpleNamespace(provider_access=None)
+
+        Integrator.requires_auth = requires_auth
+        agent = Integrator()
+        agent._mesh = SimpleNamespace(
+            config={}, _settings=SimpleNamespace(allow_unsafe_local_execution=True),
+        )
+
+        await agent.setup()
+
+        assert (captured["nexus_call_proxy"] is not None) is requires_auth
+        assert agent._kernel.provider_access is requires_auth
+
+    @pytest.mark.asyncio
     async def test_typesafe_features_require_injected_decision_client(self):
         from types import SimpleNamespace
 
@@ -677,6 +712,45 @@ class TestAutoAgentExecution:
         )
 
         assert decision.role == "communicator"
+
+    @pytest.mark.asyncio
+    async def test_a_declared_role_is_the_role_the_task_runs_in(self):
+        from jarviscore.kernel.kernel import Kernel
+        from jarviscore.testing import MockLLMClient
+
+        class WebResearcher(AutoAgent):
+            role = "web_researcher"
+            capabilities = ["web_browsing"]
+            default_kernel_role = "browser"
+            system_prompt = "You browse websites."
+
+        router = MockLLMClient(responses=[{"content": json.dumps({
+            "role": "coder", "confidence": 0.9, "reason": "scraping is code",
+        })}])
+        kernel = Kernel(llm_client=router)
+        agent = WebResearcher()
+        routed = []
+
+        async def execute(**kwargs):
+            decision = await kernel._route_task(
+                kwargs["task"], kwargs["context"],
+                agent_default_role=kwargs["agent_default_role"],
+                use_default_role_as_fallback=kwargs["use_default_role_as_fallback"],
+            )
+            routed.append(decision.role)
+            from types import SimpleNamespace
+            return SimpleNamespace(status="success", payload={}, summary="ok", metadata={})
+
+        cast(Any, agent)._kernel = SimpleNamespaceKernel(execute)
+        await agent.execute_task({"task": "Count Einstein quotes on quotes.toscrape.com"})
+
+        assert routed == ["browser"]
+
+
+class SimpleNamespaceKernel:
+    def __init__(self, execute):
+        self.auth_manager = None
+        self.execute = execute
 
 
 class TestAutoAgentInheritance:

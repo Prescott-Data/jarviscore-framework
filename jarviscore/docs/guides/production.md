@@ -24,7 +24,7 @@ This guide covers what changes when you move JarvisCore from a local development
 | Blob storage | `STORAGE_BACKEND=local` writes to local filesystem | `STORAGE_BACKEND=azure` or a mounted persistent volume |
 | Athena memory | Optional | Required for cross-session memory via `ATHENA_URL` |
 | Prometheus | Off by default | Enabled with `PROMETHEUS_ENABLED=true` |
-| LLM concurrency | Unlimited | Set `LLM_MAX_CONCURRENT` to match your provider's RPM |
+| LLM concurrency | The provider governor finds the level from the provider's rate-limit headers | Declare known limits in `LLM_LIMITS` so every process shares one window; set `LLM_MAX_CONCURRENT` only as a hard cap on calls in flight per deployment |
 | P2P bind host | `127.0.0.1` | `0.0.0.0` to be reachable by other nodes |
 | Log level | `DEBUG` or `INFO` | `INFO` or `WARNING` |
 
@@ -41,7 +41,7 @@ Before deploying, confirm each item:
 - [ ] `STORAGE_BACKEND` is set to `azure` or points to a volume-backed path
 - [ ] `ALLOW_UNSAFE_LOCAL_EXECUTION` is off wherever agents read untrusted content
 - [ ] `PROMETHEUS_ENABLED=true` and your scrape target is registered
-- [ ] `LLM_MAX_CONCURRENT` is set to prevent cascading 429 errors
+- [ ] `LLM_LIMITS` declares each deployment's known limits when several processes share it
 - [ ] `LOG_LEVEL=INFO` is set to avoid token content appearing in logs
 - [ ] `P2P_ENABLED` and per-node bind ports are configured correctly for multi-node deployments
 - [ ] `EXECUTION_TIMEOUT` is tuned for your expected task durations
@@ -72,16 +72,89 @@ GEMINI_API_KEY=...
 
 ### LLM rate limiting
 
-In a multi-agent deployment, agents generate concurrent LLM calls. Without a concurrency cap, all agents will hit provider 429 rate limits simultaneously. Set `LLM_MAX_CONCURRENT` using this formula: divide your provider's requests-per-minute limit by the expected average call latency in seconds.
+The provider governor paces every model call per deployment. It starts at 8
+calls in flight, grows while the provider keeps up, and halves on a 429 or when
+the provider's rate-limit headers run low, so most deployments need no
+setting. When several processes share one deployment, declare its limits so
+they share one window through Redis:
 
 ```bash
-# Example: RPM=60, average latency=5s → 60 ÷ 12 = 5
-LLM_MAX_CONCURRENT=5
+LLM_LIMITS='{"azure:gpt-4o": {"rpm": 3000, "tpm": 1000000}}'
+
+# Optional hard cap on calls in flight per deployment
+LLM_MAX_CONCURRENT=16
 
 # 429 retry backoff: 4 retries with exponential delay, starting at 2s, capped at 60s
 LLM_MAX_RETRIES_429=4
 LLM_429_BASE_DELAY=2.0
 ```
+
+See [Provider governor](../reference/configuration.md#provider-governor)
+for every setting.
+
+### Scaling one agent: pools
+
+A pool runs one logical agent across as many members as its queued work needs,
+in one process:
+
+```python
+from jarviscore import Mesh, Pool
+
+mesh = Mesh()
+mesh.add(Verifier, pool=Pool(min=1, max=16, idle_seconds=60))
+```
+
+Members share the agent's id. Idle members above `min` retire after
+`idle_seconds`; `mesh.get_diagnostics()` reports each pool. A pool with
+`lane="bulk"` runs its model calls in the governor's bulk lane.
+
+#### How a pool spawns members
+
+Pass the agent class, not an instance: the pool creates new members from it.
+Each pool has one dispatcher, so members do not each poll Redis. On every pass
+the dispatcher looks for steps that are ready for the agent's role or
+capabilities and hands each one to an idle member. When no member is idle and
+the pool is below `max`, it creates a new member from the class, wires it to
+the same infrastructure as the registered agent (including storage, peer
+clients and, when the agent requires them, credentials), runs its `setup()`,
+and gives it the step. Each step is claimed
+atomically in Redis before it runs, so two members, or two nodes, never run the
+same step.
+
+When the work runs out, members above `min` that have been idle for
+`idle_seconds` are retired: the pool calls their `teardown()` and closes their
+peer clients. The registered agent itself is never retired.
+
+Because members run in parallel, a batch of independent steps takes about as
+long as its slowest step. Their model calls still pass through the
+[provider governor](../reference/configuration.md#provider-governor), so a
+larger pool cannot push a deployment past its rate limits.
+
+#### All work goes through the pool
+
+An agent instance runs one piece of work at a time: a running task keeps its
+routing decisions and its bound workspace on the instance. So every way work
+reaches an agent takes a member from its pool for as long as the work runs:
+
+- durable goal steps and capability needs from other agents, claimed by the
+  dispatcher;
+- steps of `mesh.workflow()`;
+- items of `mesh.fanout()`;
+- `mesh.delegate()` and `mesh.run_task()`;
+- requests from peers.
+
+An agent registered without a pool is a pool of one instance: its work runs one
+piece at a time, and work arriving while it is busy waits for it. Give it a
+`Pool` to let that work run in parallel. If a call chain waits on an agent
+whose every instance that chain already holds (an agent delegating to its own
+role, for example), the call raises an error naming the agent instead of
+waiting forever.
+
+#### Draining before shutdown
+
+Before stopping a node that still has goals in flight, call `mesh.drain()`: the
+node starts no new goal and claims nothing outside the workflows it is waiting
+on. `mesh.stop()` drains first.
 
 ### Model routing
 
@@ -124,7 +197,7 @@ Or use the bundled Docker Compose file for initial setup:
 jarviscore nexus init
 ```
 
-This command generates `NEXUS_ENCRYPTION_KEY` and `NEXUS_STATE_KEY`, writes them to `.env`, and starts the stack. For production, extract these values and store them in your platform's secret manager before they reach version control.
+This command generates the stack's secrets into `~/.jarviscore/nexus/stack.env` and gives the project `.env` only `NEXUS_GATEWAY_URL` and `NEXUS_GATEWAY_API_KEY`. For production, keep `ENCRYPTION_KEY` and `STATE_KEY` in your platform's secret manager and give them to the Broker and Gateway only; agents never need them.
 
 ### Nexus Gateway architecture
 
@@ -136,17 +209,18 @@ The stack has three components:
 | Gateway | 8090 | The control plane that JarvisCore communicates with |
 | Postgres | 5432 | Broker persistence |
 
-The Gateway always dials the Broker at `localhost:8080` within the same network namespace. In the provided Docker Compose configuration, the Gateway runs with `network_mode: service:nexus-broker` so that `localhost` resolves to the Broker container correctly.
+The Gateway reaches the Broker at `BROKER_BASE_URL` and authenticates with the Broker's `API_KEY`. Agents authenticate to the Gateway with `NEXUS_GATEWAY_API_KEY` (`GATEWAY_REQUIRE_API_KEY=true`). Without either key requirement, any caller that reaches the port can list connections and read back their decrypted credentials.
 
 ### Required environment variables for Gateway mode
 
 ```bash
 NEXUS_GATEWAY_URL=https://your-nexus-gateway.internal:8090
+NEXUS_GATEWAY_API_KEY=<one of the Gateway's GATEWAY_API_KEYS>
 NEXUS_RETURN_URL=https://your-app.com/oauth/callback   # OAuth redirect target after consent
 NEXUS_SECRET=<long-random-secret>                       # Key derivation for local store fallback
-NEXUS_ENCRYPTION_KEY=<openssl rand -base64 32>          # Gateway token encryption key
-NEXUS_STATE_KEY=<openssl rand -base64 32>               # OAuth state parameter for CSRF protection
 ```
+
+`ENCRYPTION_KEY` and `STATE_KEY` belong to the Broker (and `STATE_KEY` to the Gateway), set from your secret manager. They are not agent settings: a process that holds `ENCRYPTION_KEY` can decrypt every stored credential.
 
 > [!CAUTION]
 > If `NEXUS_SECRET` is not set, the local credential store falls back to machine UUID for key derivation and logs a warning. In a containerised environment this is unreliable. Always set `NEXUS_SECRET`.
@@ -232,6 +306,7 @@ Athena is the framework's Tier 3 and Tier 4 memory layer. It provides structured
 
 ```bash
 ATHENA_URL=http://athena.internal:8080
+ATHENA_API_KEY=<service key>  # an Athena service key ("<key>=*" in Athena's MEMORY_OS_API_KEYS)
 
 ATHENA_TENANT_ID=default      # Namespace for multi-tenant Athena deployments
 ATHENA_HTTP_TIMEOUT=10.0      # Seconds before an Athena HTTP call times out

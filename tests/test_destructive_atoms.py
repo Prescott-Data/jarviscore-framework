@@ -4,6 +4,7 @@ import pytest
 
 from jarviscore.execution.atom_contract import read_contract
 from jarviscore.kernel.defaults.coder import CoderSubAgent
+from jarviscore.testing.mocks import MockRedisContextStore
 
 
 SOURCE = '''
@@ -104,7 +105,7 @@ async def test_approval_precedes_execution_and_retry_is_idempotent():
     agent._atoms = {atom.name: atom}
     agent._run_context = {"workflow_id": "wf", "step_id": "step"}
     agent.code_registry = Registry()
-    agent.redis_store = ExecutionStore()
+    agent.redis_store = MockRedisContextStore()
     agent._tool_execute_code = AsyncMock(
         return_value={"status": "success", "data": {"deleted": True}}
     )
@@ -114,13 +115,42 @@ async def test_approval_precedes_execution_and_retry_is_idempotent():
     assert waiting["typed_outcome"] == "WAITING_FOR_APPROVAL"
     assert waiting["consequence"] == "Permanently deletes the message."
     agent._tool_execute_code.assert_not_awaited()
+    request = agent.redis_store.get_hitl_request("wf", "step", waiting["action_id"])
+    assert request["action"]["params"] == {"message_id": "m-1"}
 
-    agent._run_context["_approved_actions"] = [waiting["action_id"]]
+    agent.redis_store.resolve_hitl_request(
+        "wf", "step", "approve", action_id=waiting["action_id"]
+    )
     first = await call(message_id="m-1")
     retry = await call(message_id="m-1")
 
-    assert first == retry
+    assert first["status"] == retry["status"] == "success"
+    assert "already ran" in retry["note"]
     agent._tool_execute_code.assert_awaited_once()
+    settled = agent.redis_store.get_hitl_request("wf", "step", waiting["action_id"])
+    assert settled["outcome"] == {"status": "success", "data": {"deleted": True}}
+
+
+@pytest.mark.asyncio
+async def test_a_declined_atom_never_runs():
+    atom = read_contract(
+        SOURCE, system="gmail", expected_name="gmail_delete_message"
+    ).atom
+    agent = CoderSubAgent.__new__(CoderSubAgent)
+    agent._atoms = {atom.name: atom}
+    agent._run_context = {"workflow_id": "wf", "step_id": "step"}
+    agent.code_registry = Registry()
+    agent.redis_store = MockRedisContextStore()
+    agent._tool_execute_code = AsyncMock()
+    call = agent._atom_tool(atom.name)
+
+    waiting = await call(message_id="m-1")
+    agent.redis_store.resolve_hitl_request(
+        "wf", "step", "reject", action_id=waiting["action_id"]
+    )
+
+    assert (await call(message_id="m-1"))["semantic_error"] == "ACTION_DECLINED"
+    agent._tool_execute_code.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -199,7 +229,7 @@ async def test_an_application_guard_refuses_before_approval_or_execution():
     agent._atoms = {atom.name: atom}
     agent._run_context = {"workflow_id": "wf", "step_id": "step"}
     agent.code_registry = Registry()
-    agent.redis_store = ExecutionStore()
+    agent.redis_store = MockRedisContextStore()
     agent.effect_guards = (guard,)
     agent._tool_execute_code = AsyncMock()
 

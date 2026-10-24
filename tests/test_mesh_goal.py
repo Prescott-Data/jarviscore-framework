@@ -384,6 +384,9 @@ async def test_execute_goal_compiles_publishes_and_peers_claim_by_capability(mon
     assert result["status"] == "completed"
     assert result["result_summary"] == "The evidence was analysed successfully."
     assert [step["status"] for step in result["steps"]] == ["completed", "completed"]
+    # What the goal delivered, as run_task returns it: no digging through steps.
+    assert result["output"] == {"used": {"evidence": ["source-1"]}}
+    assert result["evidence"] == [] and result["waiting"] is None
     assert researcher.received[0]["context"]["objective"] == "Find evidence and analyse it"
     assert researcher.received[0]["context"]["source_context"]["lead"]["email"] == (
         "lead@example.com"
@@ -476,6 +479,75 @@ async def test_execute_goal_uses_validated_template_without_planner_calls(monkey
     assert store.get_workflow_planning_status("wf-template")["source"] == "template"
 
 
+class HeldResearchPeer(ResearchPeer):
+    def __init__(self, llm, agent_id=None):
+        super().__init__(llm, agent_id)
+        self.release = asyncio.Event()
+
+    async def execute_task(self, task):
+        await self.release.wait()
+        return await super().execute_task(task)
+
+
+@pytest.mark.asyncio
+async def test_a_draining_mesh_finishes_its_goals_and_takes_no_new_work(monkeypatch):
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    researcher = mesh.add(HeldResearchPeer(MockLLMClient(), agent_id="researcher-1"))
+    analyst = mesh.add(AnalysisPeer(agent_id="analyst-1"))
+    goal = "Find evidence and analyse it"
+    template = {
+        "obligations": [{"id": "o1", "description": "Answer from evidence", "source_quote": goal}],
+        "steps": [{
+            "id": "research", "capability": "research", "effect": "read",
+            "systems": [], "task": "Find evidence",
+            "success_criterion": "Evidence exists", "expected_findings": ["evidence"],
+            "depends_on": [], "covers": [],
+        }, {
+            "id": "analyse", "capability": "analysis", "effect": "read",
+            "systems": [], "task": "Analyse the evidence",
+            "success_criterion": "Analysis uses evidence",
+            "expected_findings": ["analysis"], "depends_on": ["research"],
+            "covers": ["o1"],
+        }],
+    }
+
+    await mesh.start()
+    try:
+        driven = asyncio.create_task(mesh.execute_goal(
+            goal, workflow_id="wf-driven", plan_template=template, timeout=10,
+        ))
+        deadline = time.monotonic() + 5
+        while store.get_step_status("wf-driven", "research") != "in_progress":
+            assert time.monotonic() < deadline
+            await asyncio.sleep(0.01)
+
+        mesh.drain()
+        # Work another node submitted after this one began draining.
+        store.publish_workflow(
+            "wf-elsewhere", goal="Research elsewhere", obligations=[],
+            steps=[{"id": "research", "capability": "research", "effect": "read",
+                    "task": "Find other evidence", "depends_on": []}],
+        )
+        with pytest.raises(RuntimeError, match="draining"):
+            await mesh.submit_goal(goal, workflow_id="wf-new", plan_template=template)
+
+        researcher.release.set()
+        result = await asyncio.wait_for(driven, 5)
+        await asyncio.sleep(0.2)
+    finally:
+        await mesh.stop()
+
+    assert result["status"] == "completed"
+    assert len(analyst.received) == 1
+    assert store.get_step_status("wf-elsewhere", "research") == "pending"
+    assert store.get_workflow_definition("wf-new") is None
+
+
 @pytest.mark.asyncio
 async def test_execute_goal_falls_back_to_generated_plan_when_template_mismatches(monkeypatch):
     llm = MockLLMClient(responses=goal_responses())
@@ -551,6 +623,72 @@ async def test_execute_goal_propagates_non_success_without_hanging(
     assert result["status"] == expected_status
     assert [step["status"] for step in result["steps"]] == [upstream_status, "blocked"]
     assert analyst.received == []
+    if expected_status == "failed":
+        assert result["error"] == "source unavailable", "the failing step's reason, not only in steps"
+
+
+class ApprovalPeer(ResearchPeer):
+    """Pauses on one consequential action through JarvisCore HITL."""
+
+    async def execute_task(self, task):
+        from jarviscore.contracts.hitl import HITLAction
+        from jarviscore.kernel import approval
+
+        self.received.append(task)
+        context = task.get("context", {})
+        workflow_id, step_id = context["workflow_id"], context["step_id"]
+        decided = approval.decided(self._redis_store, workflow_id, step_id)
+        if decided:
+            action, approved = decided[0]
+            approval.settle(self._redis_store, workflow_id, step_id, action.action_id, {
+                "status": "success" if approved else "declined",
+            })
+            return {"status": "success", "output": {"evidence": [
+                "performed" if approved else "declined",
+            ]}}
+        waiting = approval.gate(self._redis_store, workflow_id, step_id, HITLAction(
+            action_id="a" * 64, tool="click", system="browser",
+            description="Click “Place order”", consequence="Places the order",
+        ))
+        return {"status": "waiting", "output": waiting}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decision, evidence", [("approve", "performed"), ("reject", "declined")])
+async def test_a_person_resolves_a_waiting_action_through_hitl(monkeypatch, decision, evidence):
+    llm = MockLLMClient(responses=goal_responses())
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.01})
+    mesh.add(ApprovalPeer(llm, agent_id="researcher-1"))
+    analyst = mesh.add(AnalysisPeer(agent_id="analyst-1"))
+
+    await mesh.start()
+    try:
+        first = await mesh.execute_goal(
+            "Find evidence and analyse it", workflow_id="wf-hitl", timeout=1,
+        )
+        pending = store.get_hitl_request("wf-hitl", "research", "a" * 64)
+        resumed = await mesh.resolve_hitl(
+            "wf-hitl", "a" * 64, decision=decision, resolved_by="owner", timeout=1,
+        )
+        with pytest.raises(ValueError, match="already been decided"):
+            await mesh.resolve_hitl("wf-hitl", "a" * 64, decision="approve", timeout=1)
+    finally:
+        await mesh.stop()
+
+    assert first["status"] == "waiting"
+    assert first["waiting"]["step_id"] == "research" and first["output"] is None
+    assert pending["status"] == "pending" and pending["action"]["consequence"] == "Places the order"
+    assert resumed["status"] == "completed"
+    assert analyst.received[0]["context"]["previous_step_results"] == {
+        "research": {"evidence": [evidence]},
+    }
+    events = [entry.get("event") for entry in store.get_ledger_full("wf-hitl")]
+    assert {"hitl_requested", "hitl_resolved", "hitl_action_settled"} <= set(events)
 
 
 @pytest.mark.asyncio
@@ -588,6 +726,103 @@ async def test_waiting_goal_resumes_same_peer_and_unblocks_downstream(monkeypatc
     assert analyst.received[0]["context"]["previous_step_results"] == {
         "research": {"evidence": ["approved-source"]},
     }
+
+
+@pytest.mark.asyncio
+async def test_a_response_composed_during_the_pause_is_composed_again_after_resume(monkeypatch):
+    llm = MockLLMClient(responses=goal_responses())
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={
+        "p2p_enabled": False,
+        "distributed_poll_interval": 0.01,
+        "mesh_response_capability": "final_response",
+    })
+    mesh.add(WaitingResearchPeer(llm, agent_id="researcher-1"))
+    mesh.add(AnalysisPeer(agent_id="analyst-1"))
+    responder = mesh.add(ResponsePeer(agent_id="responder"))
+
+    await mesh.start()
+    try:
+        first = await mesh.execute_goal(
+            "Find evidence and analyse it", workflow_id="wf-stale-response", timeout=1,
+        )
+        response_id = next(
+            step["id"] for step in first["steps"] if step.get("effect") == "final_response"
+        )
+        for _ in range(100):
+            if store.get_step_status("wf-stale-response", response_id) == "completed":
+                break
+            await asyncio.sleep(0.01)
+        assert store.get_step_status("wf-stale-response", response_id) == "completed"
+        resumed = await mesh.resume_goal(
+            "wf-stale-response", "research", context={"human_response": "approved"}, timeout=2,
+        )
+    finally:
+        await mesh.stop()
+
+    assert first["status"] == "waiting"
+    assert resumed["status"] == "completed"
+    assert len(responder.received) == 2
+    assert responder.received[1]["context"]["previous_step_results"]["research"] == {
+        "evidence": ["approved-source"],
+    }
+
+
+class StalledResponsePeer(ResponsePeer):
+    async def execute_task(self, task):
+        self.received.append(task)
+        await asyncio.Event().wait()
+
+
+class CancellationAbsorbingResponsePeer(ResponsePeer):
+    """Agent code that turns a cancellation into a normal result, as some libraries do."""
+
+    async def execute_task(self, task):
+        self.received.append(task)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            pass
+        return {"status": "success", "output": {}, "result_summary": "Stopped."}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("responder_class", [StalledResponsePeer, CancellationAbsorbingResponsePeer])
+async def test_stop_returns_while_this_node_runs_the_response_to_a_waiting_goal(monkeypatch, responder_class):
+    # A node whose goal paused for a person may claim that goal's final response itself.
+    llm = MockLLMClient(responses=goal_responses())
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={
+        "p2p_enabled": False,
+        "distributed_poll_interval": 0.01,
+        "mesh_response_capability": "final_response",
+    })
+    mesh.add(WaitingResearchPeer(llm, agent_id="researcher-1"))
+    mesh.add(AnalysisPeer(agent_id="analyst-1"))
+    responder = mesh.add(responder_class(agent_id="responder"))
+
+    await mesh.start()
+    try:
+        first = await mesh.execute_goal(
+            "Find evidence and analyse it", workflow_id="wf-wait-stop", timeout=1,
+        )
+        for _ in range(100):
+            if responder.received:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await asyncio.wait_for(mesh.stop(), timeout=5)
+
+    assert first["status"] == "waiting"
+    assert responder.received, "the node never claimed the final response"
 
 
 @pytest.mark.asyncio
@@ -805,6 +1040,60 @@ async def test_execute_goal_reconciles_actionable_semantic_hold(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_failed_amendment_settles_the_revision_and_still_answers(monkeypatch):
+    initial_steps = [{
+        "step_id": "locate", "capability": "verification", "effect": "read",
+        "task": "Locate and verify usable content", "success_criterion": "Content is verified",
+        "expected_findings": ["content verification"], "depends_on": [],
+        "covers": ["o0", "o1"],
+    }]
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"obligations": [{
+            "id": "o0", "description": "Locate the resource", "source_ref": "source-1",
+        }, {
+            "id": "o1", "description": "Verify usable content", "source_ref": "source-1",
+        }]})},
+        {"content": json.dumps({"steps": initial_steps})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+        {"content": json.dumps({
+            "decision": "amend", "reason": "The available verification capability can inspect content.",
+        })},
+        {"content": "not json"},
+    ])
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    mesh = Mesh(config={
+        "p2p_enabled": False,
+        "distributed_poll_interval": 0.01,
+        "mesh_response_capability": "final_response",
+    })
+    mesh.add(RemediatingPeer(llm, agent_id="verifier"))
+    responder = mesh.add(RevisionResponsePeer(agent_id="responder"))
+
+    await mesh.start()
+    try:
+        result = await mesh.execute_goal(
+            "Locate and verify usable content", workflow_id="wf-amend-fails", timeout=2,
+        )
+    finally:
+        await mesh.stop()
+
+    assert store.get_workflow_planning_status("wf-amend-fails")["status"] == "failed"
+    assert result["revision"] == 1
+    assert result["obligation_status"] == "blocked"
+    assert result["response_status"] == "completed"
+    assert [task["id"] for task in responder.received] == ["final_response"]
+    settled = [
+        event for event in store.get_ledger_full("wf-amend-fails")
+        if event.get("event") == "semantic_reconciliation_settled"
+    ]
+    assert settled and "could not be planned" in settled[-1]["reason"]
+
+
+@pytest.mark.asyncio
 async def test_execute_goal_surfaces_durable_planning_failure_without_timeout(monkeypatch):
     llm = MockLLMClient(responses=[{"content": "not json"}])
     store = MockRedisContextStore()
@@ -817,17 +1106,51 @@ async def test_execute_goal_surfaces_durable_planning_failure_without_timeout(mo
 
     await mesh.start()
     try:
-        with pytest.raises(RuntimeError, match="planning failed.*not valid JSON"):
-            await mesh.execute_goal(
-                "Find evidence",
-                workflow_id="wf-invalid-plan",
-                timeout=1,
-            )
+        result = await mesh.execute_goal(
+            "Find evidence",
+            workflow_id="wf-invalid-plan",
+            timeout=1,
+        )
+        resubmitted = await mesh.execute_goal(
+            "Find evidence",
+            workflow_id="wf-invalid-plan",
+            timeout=1,
+        )
     finally:
         await mesh.stop()
 
+    assert result["status"] == "failed"
+    assert result["failure_stage"] == "planning"
+    assert "not valid JSON" in result["error"]
+    assert resubmitted == result
     assert store.get_workflow_planning_status("wf-invalid-plan")["status"] == "failed"
     assert "wf-invalid-plan" not in store.get_pending_workflow_goals()
+
+
+@pytest.mark.asyncio
+async def test_a_pending_goal_whose_record_expired_is_settled_once_not_replanned_forever(monkeypatch):
+    store = MockRedisContextStore()
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: store)
+    monkeypatch.setattr(Mesh, "_init_blob_storage", lambda self, settings: None)
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    store.register_workflow_goal("wf-expired", "Find evidence")
+    store._redis.delete("workflow_goal:wf-expired")
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.05})
+    mesh.add(ResearchPeer(MockLLMClient(responses=[]), agent_id="researcher-1"))
+
+    await mesh.start()
+    try:
+        await asyncio.sleep(0.5)
+    finally:
+        await mesh.stop()
+
+    status = store.get_workflow_planning_status("wf-expired")
+    assert status["status"] == "failed"
+    assert "expired" in status["error"]
+    assert "wf-expired" not in store.get_pending_workflow_goals()
+    events = [entry["event"] for _, entry in store._redis.xrange("ledgers:wf-expired")]
+    assert events.count("planning_planning") == 1
 
 
 @pytest.mark.asyncio
@@ -1295,3 +1618,13 @@ async def test_cancelling_execute_goal_tombstones_shared_workflow(monkeypatch):
     assert store.is_workflow_cancelled("wf-cancel-goal") is True
     assert store.get_step_status("wf-cancel-goal", "unavailable") == "cancelled"
     assert "wf-cancel-goal" not in store.get_active_workflows()
+
+def test_a_failed_goal_names_the_failed_step_not_one_blocked_behind_it():
+    from jarviscore.core.mesh import Mesh
+
+    result = Mesh._goal_result({"status": "failed", "steps": [
+        {"id": "publish", "status": "blocked", "blocked_by": ["fetch"]},
+        {"id": "fetch", "status": "failed", "output": {"error": "source unavailable"}},
+    ]}, {"publish", "fetch"}, set())
+
+    assert result["error"] == "source unavailable"

@@ -24,6 +24,7 @@ import os
 from typing import Any, Optional
 
 from jarviscore.context.fidelity import Record, select_whole
+from jarviscore.core.envelope import OBSERVATION_REASONING_RULE
 from .goal_context import GoalExecution, PlannedStep, StepEvaluation
 
 _EVAL_SCHEMA = """\
@@ -81,7 +82,7 @@ Withheld facts:
   The accumulated goal facts may end with a note saying some records are not
   shown. That note concerns the fact list only — the step output above is
   always complete. Judge the criterion against the output as given.
-"""
+""" + "\n" + OBSERVATION_REASONING_RULE
 
 
 class EvaluatorError(Exception):

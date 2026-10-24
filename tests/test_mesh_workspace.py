@@ -664,7 +664,11 @@ async def test_capability_request_receives_isolated_workflow_workspace(tmp_path)
         context={},
     )
 
-    await mesh._service_capability_needs(peer, {"runtime_diagnosis"})
+    [(workflow_id, need)] = list(mesh._open_capability_needs())
+    assert redis.claim_capability_need(
+        workflow_id, need_id, "peer:claim", {"runtime_diagnosis"}
+    )
+    await mesh._run_capability_need(peer, workflow_id, need, "peer:claim", 60)
 
     need = redis.get_capability_need("wf-capability-workspace", need_id)
     assert need["status"] == "fulfilled"
@@ -1053,3 +1057,84 @@ async def test_mesh_rejects_receipt_overwritten_before_final_delta(tmp_path):
     saved = redis.get_step_output("wf-overwritten", "repair")["output"]
     assert redis.get_step_status("wf-overwritten", "repair") == "failed"
     assert "Unknown tool receipt" in saved["error"]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("node_commands,expected", [
+    (["pytest"], {"pytest"}),   # the running node decides
+    (None, {"cargo"}),          # with nothing of its own, the asking node's list applies
+    ([], set()),                # a node may allow nothing
+])
+async def test_the_node_running_a_step_decides_its_commands(tmp_path, node_commands, expected):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    snapshot = await BlobSnapshotStore(blobs).capture(
+        SourceRef("fixture", "project", "main"), "commit-1", {"notes.md": "x\n"})
+    seen = {}
+
+    class Recorder:
+        def for_workspace(self, workspace_dir, *, allowed_commands=None, **_):
+            seen["allowed"] = set(allowed_commands or ())
+            return self
+
+    class Peer(Agent):
+        role = "peer"
+        capabilities: ClassVar[list[str]] = ["checking"]
+
+        async def execute_task(self, task):
+            raise AssertionError("not a DAG step")
+
+        async def execute_capability_request(self, capability, question, context):
+            return {"status": "success", "output": "ok"}
+
+    redis = __import__("jarviscore.testing", fromlist=["MockRedisContextStore"]).MockRedisContextStore()
+    config = {"p2p_enabled": False}
+    if node_commands is not None:
+        config["workspace_allowed_commands"] = node_commands
+    mesh = Mesh(config=config)
+    mesh._redis_store = redis
+    mesh._blob_storage = blobs
+    peer = mesh.add(Peer)
+    peer.sandbox = Recorder()
+    redis.publish_workflow(
+        "wf-commands", goal="Check", obligations=[],
+        context={"source_snapshot": {
+            "manifest_blob_path": snapshot.manifest_blob_path,
+            "allowed_commands": ["cargo"],
+            "storage_scope": "node", "materializer_node_id": mesh._node_id,
+        }},
+        steps=[{"id": "map", "capability": "mapping", "effect": "read", "task": "Map", "depends_on": []}],
+    )
+    need_id = redis.publish_capability_need(
+        "wf-commands", requester_agent_id="mapper", requester_step_id="map",
+        capability="checking", question="Check", context={})
+
+    [(workflow_id, need)] = list(mesh._open_capability_needs())
+    assert redis.claim_capability_need(workflow_id, need_id, "peer:claim", {"checking"})
+    await mesh._run_capability_need(peer, workflow_id, need, "peer:claim", 60)
+
+    assert seen["allowed"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend,scope", [("redis", "shared"), ("local", "node")])
+async def test_snapshots_on_shared_storage_can_be_claimed_by_any_node(tmp_path, backend, scope):
+    import fakeredis
+    from jarviscore.storage.redis_blob import RedisBlobStorage
+
+    blobs = (RedisBlobStorage("redis://unused", client=fakeredis.FakeRedis())
+             if backend == "redis" else LocalBlobStorage(str(tmp_path / "blobs")))
+    expected = await BlobSnapshotStore(blobs).capture(
+        SourceRef("fixture", "project", "main"), "commit-1", {"plan.md": "x\n"})
+
+    class Adapter:
+        async def capture(self, source):
+            return expected
+
+    mesh = Mesh(config={"workspace_source_adapters": {"fixture": Adapter()},
+                        "storage_backend": backend})
+    mesh._blob_storage = blobs
+    mesh._storage_backend = backend
+
+    context = await mesh._prepare_workspace_source("wf-1", {"workspace_source": {
+        "provider": "fixture", "locator": "project", "revision": "main"}})
+
+    assert context["source_snapshot"]["storage_scope"] == scope

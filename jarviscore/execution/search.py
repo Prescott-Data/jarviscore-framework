@@ -24,11 +24,13 @@ import logging
 import os
 import re
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus, urlparse
 
 import aiohttp
 
+from jarviscore.core.egress import Egress, configured_egress
 from jarviscore.core.search_deadlines import search_deadline
 
 logger = logging.getLogger(__name__)
@@ -107,8 +109,12 @@ class InternetSearch:
         *,
         search_timeout_seconds: float | None = None,
         grounded_timeout_seconds: float | None = None,
+        egress: Optional[Egress] = None,
     ):
         self.session: Optional[aiohttp.ClientSession] = None
+        # Pages read here leave through the developer's proxy; search APIs authenticate by key.
+        self.egress = egress if egress is not None else configured_egress()
+        self._egress_session = uuid.uuid4().hex
         self.search_timeout_seconds = search_deadline(
             search_timeout_seconds, "RESEARCH_SEARCH_TIMEOUT_SECONDS", 15.0,
         )
@@ -660,7 +666,8 @@ class InternetSearch:
 
         try:
             async with self._session.get(
-                url, timeout=aiohttp.ClientTimeout(total=15)
+                url, timeout=aiohttp.ClientTimeout(total=15),
+                proxy=self.egress.http_proxy(url, self._egress_session) if self.egress else None,
             ) as response:
                 if response.status != 200:
                     return {"url": url, "success": False, "error": f"HTTP {response.status}"}

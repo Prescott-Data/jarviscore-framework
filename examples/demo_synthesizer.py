@@ -71,6 +71,7 @@ class SynthesizerAgent(AutoAgent):
     """
     role = "synthesizer"
     capabilities = ["synthesis", "reporting", "research_coordination"]
+    requires_auth = True  # posts to Slack through Nexus
     system_prompt = """
     You are a senior research director. You synthesise findings from three specialist
     researchers (technology, market, regulatory) into a single coherent briefing.

@@ -27,7 +27,7 @@ MarketDataAgent  →  AnalysisAgent  →  ReportAgent
     (OHLCV data)    (signals, alerts)  (Markdown briefing)
 ```
 
-The final Markdown briefing is saved to `blob_storage/reports/financial-daily-001.md`.
+The final Markdown briefing is saved to `.jarviscore/blob_storage/reports/financial-daily-001.md`.
 
 ---
 
@@ -118,6 +118,6 @@ redis-cli keys "*financial-daily-001*"
 ## Success criteria
 
 - [ ] All 3 steps complete: `fetch → analyse → report`
-- [ ] Report saved to `blob_storage/reports/financial-daily-001.md`
+- [ ] Report saved to `.jarviscore/blob_storage/reports/financial-daily-001.md`
 - [ ] Console prints `Pipeline complete: 3/3 steps successful`
 - [ ] Re-running skips completed steps (crash recovery)

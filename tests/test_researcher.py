@@ -3,7 +3,7 @@ Tests for the production ResearcherSubAgent.
 
 Covers:
 - Phase lifecycle (INIT → SEARCHING → EXTRACTING → VERIFYING → DONE/STUCK)
-- Phase-tool contract enforcement
+- Phases are recorded, never used to refuse a tool
 - URL registry (anti-hallucination URL tracking)
 - Completion validation (evidence quality gates)
 - Search integration (single + batch)
@@ -199,77 +199,63 @@ class TestPhaseLifecycle:
 
 
 # ═════════════════════════════════════════════════════════════════
-# Phase-Tool Contract Enforcement
+# Phases are recorded, never enforced
 # ═════════════════════════════════════════════════════════════════
 
-class TestPhaseToolContract:
+class TestPhasesAreRecorded:
 
-    def test_init_allows_search_tools(self, researcher):
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.INIT)
-        assert "search_internet" in allowed
-        assert "search_internet_batch" in allowed
-        assert "read_file" in allowed
-        assert "grep_codebase" in allowed
-        assert "probe_target_api" in allowed
+    def test_no_phase_tool_contract_remains(self, researcher):
+        assert not hasattr(researcher, "_allowed_tools_for_phase")
+        assert not hasattr(researcher, "_check_phase_tool_contract")
 
-    def test_init_blocks_extract_api(self, researcher):
-        """extract_api_details requires prior doc reading — not available in INIT."""
-        violation = researcher._check_phase_tool_contract("extract_api_details")
-        # extract_api_details IS allowed in INIT actually
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.INIT)
-        if "extract_api_details" in allowed:
-            assert violation is None
-        else:
-            assert violation is not None
-
-    def test_extracting_allows_read_and_browser(self, researcher):
-        researcher._set_research_phase(ResearchPhase.EXTRACTING, "test")
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.EXTRACTING)
-        assert "read_web_content" in allowed
-        assert "rag_query" in allowed
-        assert "extract_api_details" in allowed
-        assert "browser_navigate" in allowed
-        assert "browser_get_page_text" in allowed
-
-    def test_extracting_blocks_search_internet(self, researcher):
-        researcher._set_research_phase(ResearchPhase.EXTRACTING, "test")
-        violation = researcher._check_phase_tool_contract("search_internet")
-        assert violation is not None
-        assert "not allowed" in violation
-
-    def test_stuck_only_allows_publish(self, researcher):
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.STUCK)
-        assert allowed == {"publish_research_findings"}
-
-    def test_done_only_allows_publish(self, researcher):
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.DONE)
-        assert allowed == {"publish_research_findings"}
-
-    def test_done_tool_returns_contract_violation(self, researcher):
-        """The old 'done' tool is removed — using it should return an error."""
-        violation = researcher._check_phase_tool_contract("done")
-        assert violation is not None
-        assert "EPISTEMIC CONTRACT VIOLATION" in violation
-
-    def test_error_tool_always_allowed(self, researcher):
+    @pytest.mark.asyncio
+    async def test_every_registered_tool_is_reachable_in_every_phase(self, researcher):
+        state = researcher.current_state
+        offered = [tool.name for tool in researcher._offered_tools(state.context)]
+        assert "search_internet" in offered
         for phase in ResearchPhase:
             researcher._set_research_phase(phase, "test")
-            assert researcher._check_phase_tool_contract("error") is None
+            for name in offered:
+                assert researcher._tool_is_actionable(name, state), (phase, name)
+            assert await researcher._pre_execute_hook("search_internet", {}, state) is None
 
-    def test_phase_enforcement_disabled_by_env(self, researcher):
-        with patch.dict(os.environ, {"RESEARCH_STRICT_PHASE_CONTRACT": "false"}):
-            researcher._set_research_phase(ResearchPhase.STUCK, "test")
-            violation = researcher._check_phase_tool_contract("search_internet")
-            assert violation is None
+    @pytest.mark.asyncio
+    async def test_coordinate_click_runs_when_snapshot_refs_exist(self, researcher, monkeypatch):
+        researcher.current_state.internal_variables["browser_state"] = {"last_snapshot_refs": ["e1"]}
+        monkeypatch.setattr(
+            researcher, "_coord_action", AsyncMock(return_value=(True, {"clicked": True}, ""))
+        )
+        result = await researcher._tool_browser_click_coord(
+            x=10, y=20, reason="canvas control has no ref", verify_snapshot=False,
+        )
+        assert result["status"] == "success"
 
-    def test_verifying_allows_broad_tool_access(self, researcher):
-        """VERIFYING phase allows both search and extraction tools for cross-referencing."""
-        allowed = researcher._allowed_tools_for_phase(ResearchPhase.VERIFYING)
-        assert "search_internet" in allowed
-        assert "read_web_content" in allowed
-        assert "grep_codebase" in allowed
-        assert "publish_research_findings" in allowed
-        assert "browser_navigate" in allowed
+    @pytest.mark.asyncio
+    async def test_a_failed_click_is_reported_and_nothing_else_is_clicked(self, researcher, monkeypatch):
+        failed = MagicMock(success=False, error="element is covered", ref="e3", data=None)
+        dispatch = AsyncMock(return_value=failed)
+        monkeypatch.setattr(researcher, "_bdispatch", dispatch)
+
+        result = await researcher._tool_browser_click(ref="e3")
+
+        assert result == {"status": "error", "error": "element is covered", "ref": "e3"}
+        assert [call.args[0] for call in dispatch.await_args_list] == ["click"]
+        assert dispatch.await_args.kwargs["ref"] == "e3"
+
+    @pytest.mark.asyncio
+    async def test_a_refused_fetch_reports_its_status_and_marks_the_page_protected(self, researcher):
+        researcher.internet_search.extract_content = AsyncMock(
+            return_value={"url": "https://example.com/r", "error": "HTTP error: 403", "status_code": 403}
+        )
+
+        result = await researcher._tool_read_web_content(
+            urls=["https://example.com/r"], auto_escalate=False,
+        )
+
+        page = result["pages"][0]
+        assert page["status_code"] == 403
+        assert page["access"] == "protected"
+        assert page["error"] == "HTTP error: 403"
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -323,6 +309,22 @@ class TestCompletionValidation:
         )
         assert not valid
         assert "summary" in reason.lower()
+
+    def test_a_product_shaped_result_is_summarised_by_its_done_answer(self, researcher):
+        product_result = {
+            "status": "research_incomplete",
+            "qualification_summary": "Unipart fits, but no current buyer is verified.",
+            "evidence": [{"pointer": "https://www.unipart.com/news"}],
+        }
+
+        valid, _, _ = researcher._validate_done_payload(
+            researcher.current_state, product_result,
+            answer="Unipart is a plausible fit; the decision-maker is not yet verified.",
+        )
+        without_answer, reason, _ = researcher._validate_done_payload(researcher.current_state, product_result)
+
+        assert valid
+        assert not without_answer and "summary" in reason.lower()
 
     def test_rejects_no_evidence(self, researcher):
         valid, reason, report = researcher._validate_done_payload(
@@ -439,6 +441,73 @@ class TestSearchInternet:
         await researcher._tool_search_internet_batch(queries=["q1", "q2"])
         assert researcher._current_research_phase() == ResearchPhase.SEARCHING
 
+    @pytest.mark.asyncio
+    async def test_preferred_domains_rank_first_without_excluding_the_web(self, llm):
+        r = ResearcherSubAgent(agent_id="pref", llm_client=llm, internet_search=_SiteAwareSearch())
+        r.current_state = KernelState(workflow_id="w", step_id="s", agent_id="pref", task="t")
+
+        results = json.loads(
+            await r._tool_search_internet("INFA price 2025-05-27", preferred_domains=["sec.gov"])
+        )
+
+        urls = [item["url"] for item in results]
+        assert urls[0] == "https://www.sec.gov/filing"
+        assert "https://www.investing.com/infa-history" in urls
+        assert urls.count("https://www.sec.gov/filing") == 1
+
+    @pytest.mark.asyncio
+    async def test_batch_preferred_domains_keep_open_web_results_under_the_query(self, llm):
+        r = ResearcherSubAgent(agent_id="pref", llm_client=llm, internet_search=_SiteAwareSearch())
+        r.current_state = KernelState(workflow_id="w", step_id="s", agent_id="pref", task="t")
+
+        out = await r._tool_search_internet_batch(
+            queries=["INFA price"], preferred_domains=["sec.gov"],
+        )
+
+        urls = [item["url"] for item in out["by_query"]["INFA price"]["results"]]
+        assert urls[0] == "https://www.sec.gov/filing"
+        assert "https://www.investing.com/infa-history" in urls
+
+    @pytest.mark.asyncio
+    async def test_preferred_search_fails_only_when_both_searches_fail(self, llm):
+        r = ResearcherSubAgent(agent_id="pref", llm_client=llm, internet_search=_SiteBlockedSearch())
+        r.current_state = KernelState(workflow_id="w", step_id="s", agent_id="pref", task="t")
+
+        results = json.loads(
+            await r._tool_search_internet("INFA price", preferred_domains=["sec.gov"])
+        )
+
+        assert [item["url"] for item in results] == ["https://www.investing.com/infa-history"]
+
+    @pytest.mark.asyncio
+    async def test_search_urls_can_be_read_by_url_after_a_batch(self, researcher, monkeypatch):
+        monkeypatch.setattr(researcher, "_ensure_dispatcher", AsyncMock(), raising=False)
+        await researcher._tool_search_internet_batch(queries=["stripe api"])
+        assert researcher._get_url_registry()
+
+        result = await researcher._tool_read_web_content(urls=["https://docs.stripe.com/api"])
+
+        assert result.get("error") != "URL_ID_SELECTION_REQUIRED"
+        assert result.get("status") != "error"
+
+
+class _SiteAwareSearch(MockInternetSearch):
+    async def search_answered(self, query, max_results=5, **kwargs):
+        if "site:sec.gov" in query:
+            return [{"title": "10-K", "snippet": "filing", "url": "https://www.sec.gov/filing"}]
+        return [
+            {"title": "INFA history", "snippet": "close 24.01", "url": "https://www.investing.com/infa-history"},
+            {"title": "10-K", "snippet": "filing", "url": "https://www.sec.gov/filing"},
+        ]
+
+
+class _SiteBlockedSearch(MockInternetSearch):
+    async def search_answered(self, query, max_results=5, **kwargs):
+        if "site:" in query:
+            from jarviscore.search.internet_search import SearchUnavailable
+            raise SearchUnavailable({"searxng": "engines did not answer"})
+        return [{"title": "INFA history", "snippet": "close", "url": "https://www.investing.com/infa-history"}]
+
 
 class _UnavailableSearch(MockInternetSearch):
     async def search_answered(self, query, max_results=5, **kwargs):
@@ -501,7 +570,10 @@ class TestSearchReceipts:
         ok, evidence = await self._gate_after(researcher, "search_internet", query="firm")
 
         assert researcher.current_state.tool_history[-1].status == "failure"
-        assert ok is False and evidence.check == "research_performed"
+        assert ok is True
+        assert researcher._work_record(researcher.current_state) == {
+            "search_internet": {"calls": 1, "succeeded": 0}
+        }
 
     @pytest.mark.asyncio
     async def test_unavailable_batch_search_is_a_failed_receipt(self, llm, monkeypatch):
@@ -513,7 +585,10 @@ class TestSearchReceipts:
         )
 
         assert researcher.current_state.tool_history[-1].status == "failure"
-        assert ok is False and evidence.check == "research_performed"
+        assert ok is True
+        assert researcher._work_record(researcher.current_state) == {
+            "search_internet_batch": {"calls": 1, "succeeded": 0}
+        }
 
     @pytest.mark.asyncio
     async def test_an_answered_empty_search_is_a_negative_result(self, llm, monkeypatch):
@@ -704,13 +779,27 @@ class TestPublishFindings:
         assert researcher._current_research_phase() == ResearchPhase.DONE
 
     @pytest.mark.asyncio
-    async def test_publish_returns_candidate_ready(self, researcher):
+    async def test_publish_delivers_findings_not_working_state(self, researcher):
         result = await researcher._tool_publish_research_findings(
-            summary="Stripe uses Bearer auth",
-            evidence=[{"pointer": "https://docs.stripe.com", "kind": "web_doc"}],
+            summary="Qdrant fuses dense and sparse scores natively.",
+            evidence=[{"pointer": "https://qdrant.tech/documentation", "kind": "web_doc"}],
         )
-        assert result.get("status") == "candidate_ready"
-        assert result.get("action_required") == "delegate_coding"
+        assert result["summary"] == "Qdrant fuses dense and sparse scores natively."
+        assert result["evidence"]
+        for internal in ("status", "action_required", "done_validation",
+                         "research_checkpoint", "url_registry", "api_specs", "libraries"):
+            assert internal not in result, internal
+        assert researcher.current_state.internal_variables["done_validation"]
+        assert researcher.current_state.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_publish_keeps_api_specs_when_there_are_some(self, researcher):
+        result = await researcher._tool_publish_research_findings(
+            summary="Stripe charges are created with POST /v1/charges.",
+            evidence=[{"pointer": "https://docs.stripe.com", "kind": "web_doc"}],
+            api_specs=[{"method": "POST", "url": "/v1/charges", "body_schema": {"amount": "int"}}],
+        )
+        assert result["api_specs"][0]["url"] == "/v1/charges"
 
     @pytest.mark.asyncio
     async def test_publish_rejects_empty_summary(self, researcher):
@@ -732,7 +821,8 @@ class TestPublishFindings:
             evidence=[],  # empty explicit evidence → fallback to accumulated
         )
         # Should still succeed via accumulated findings fallback
-        assert result.get("status") in ("candidate_ready", "error")
+        assert result.get("status") != "error"
+        assert result["evidence"][0]["pointer"] == "https://docs.stripe.com/api"
 
 
 # ═════════════════════════════════════════════════════════════════

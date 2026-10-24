@@ -67,6 +67,25 @@ class TestCountTokens:
 # ======================================================================
 
 class TestBuildContext:
+    @pytest.mark.parametrize("status", ["failure", "epoch_exhausted", "yield"])
+    def test_unfinished_dependency_keeps_status_and_progress(self, status):
+        from jarviscore.kernel.state import KernelState
+
+        state = KernelState(
+            workflow_id="wf", step_id="final", task="Report findings",
+            context={"previous_step_results": {"read": {
+                "status": status, "output": None, "error": "Budget exhausted",
+                "progress": {"verified": False, "working_notes": ["Evidence remains available"]},
+            }}},
+        )
+
+        rendered = ContextManager().build_context(state)
+
+        assert status in rendered
+        assert "Budget exhausted" in rendered
+        assert "Evidence remains available" in rendered
+        assert "'verified': False" in rendered
+
     def test_mission_always_present(self, cm):
         ctx = cm.build_context({"workflow_id": "wf-1", "step_id": "s1", "task": "analyse"})
         assert "wf-1" in ctx
@@ -350,6 +369,21 @@ class TestZeroLossSummarization:
         assert len(state.tool_history) == 7
 
     @pytest.mark.asyncio
+    async def test_receipts_after_compaction_never_reuse_an_issued_id(self):
+        cm = _compressing_cm()
+        state = _state_ready_to_compress()
+        issued = {result.receipt_id for result in state.tool_history}
+        llm = MagicMock()
+        llm.generate = AsyncMock(return_value={"content": "- discovered things"})
+
+        assert await cm._summarize_state(state, llm) is True
+        archived = {turn["receipt_id"] for turn in state.internal_variables["_archived_turns"]}
+        later = state.add_tool_result("web_search", {"query": "next"}, {"status": "success"})
+
+        assert archived <= issued
+        assert later.receipt_id not in issued
+
+    @pytest.mark.asyncio
     async def test_summary_is_labeled_lossy(self):
         cm = _compressing_cm()
         state = _state_ready_to_compress()
@@ -619,3 +653,21 @@ class TestGoalStateBlock:
         rendered = big_cm.build_context(_kernel_state(context=ctx))
         assert "H" * 900 in rendered
         assert "truncated" not in rendered
+
+
+def test_the_plan_states_the_goal_once_and_keeps_every_specific_quote(big_cm):
+    goal = "Order noodles and rice under £6, delivered by Wednesday."
+    plan = {
+        "goal": goal,
+        "obligations": [
+            {"id": "o1", "description": "Order noodles.", "source_quote": goal},
+            {"id": "o2", "description": "Stay under £6.", "source_quote": "under £6"},
+        ],
+        "steps": [{"id": "step-1", "task": "Order"}],
+    }
+
+    rendered = big_cm.build_context(_kernel_state(context={"workflow_plan": plan}))
+
+    assert rendered.count(goal) == 1
+    assert "'source_quote': 'under £6'" in rendered and "(the whole goal above)" in rendered
+    assert plan["obligations"][0]["source_quote"] == goal

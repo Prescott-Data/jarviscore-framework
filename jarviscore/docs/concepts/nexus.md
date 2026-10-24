@@ -113,7 +113,7 @@ Agent calls GitHub → NexusLocalStore decrypts at call time
 For multi-node deployments, Nexus operates in gateway mode. A central gateway serves credentials to agents across the network. Run the following commands to set it up:
 
 ```bash
-jarviscore nexus init   # Generates keys, writes .env, and starts the Docker stack
+jarviscore nexus init   # Generates keys, gives agents a Gateway key, and starts the Docker stack
 jarviscore nexus up     # Use this for subsequent starts after the initial setup
 ```
 

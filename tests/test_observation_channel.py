@@ -2,8 +2,7 @@
 Tests for issue #57: observation channel integrity.
 
 What these tests prove:
-- Clipped observations carry an explicit marker with the retrieval call
-- Unclipped observations are byte-identical to before (non-breaking)
+- Tool results are observed whole: nothing is clipped
 - The full result of recent turns is retrievable via read_turn_result,
   in chunks, with honest offset/remaining accounting
 - read_turn_result is auto-registered on every subagent and classified
@@ -16,9 +15,7 @@ from jarviscore.kernel.cognition import THINKING_TOOLS
 from jarviscore.kernel.state import KernelState
 from jarviscore.kernel.subagent import (
     BaseSubAgent,
-    _OBSERVATION_LIMIT,
     _TURN_RESULT_WINDOW,
-    _clip_observation,
     _observe,
     _READ_PAGE_LIMIT,
     _retain_turn_result,
@@ -53,23 +50,11 @@ def state_with_ring(agent):
     return state
 
 
-class TestClipObservation:
+class TestObservedWhole:
 
-    def test_short_results_pass_through_unchanged(self):
-        assert _clip_observation("small", turn=2) == "small"
-
-    def test_exactly_at_limit_passes_through(self):
-        text = "x" * _OBSERVATION_LIMIT
-        assert _clip_observation(text, turn=2) == text
-
-    def test_clipped_result_carries_marker_with_retrieval_call(self):
-        text = "y" * (_OBSERVATION_LIMIT + 500)
-        out = _clip_observation(text, turn=7)
-        assert out.startswith("y" * _OBSERVATION_LIMIT)
-        assert f"showing {_OBSERVATION_LIMIT} of {len(text)} chars" in out
-        assert "read_turn_result" in out
-        assert '"turn": 7' in out
-        assert f'"offset": {_OBSERVATION_LIMIT}' in out
+    def test_a_long_result_is_observed_whole(self):
+        text = "y" * 50_000
+        assert _observe("gmail_list_messages", text, turn=7) == text
 
 
 class TestReadTurnResult:
@@ -153,7 +138,6 @@ class TestReadTurnResult:
         assert len(page["output"]) == _READ_PAGE_LIMIT
         assert page["remaining_chars"] == _READ_PAGE_LIMIT * 2
         assert _observe("read_turn_result", page, turn=6) == str(page)
-        assert "showing" in _observe("gmail_list_messages", "x" * (_OBSERVATION_LIMIT + 1), turn=6)
 
 
 class TestToolRegistration:

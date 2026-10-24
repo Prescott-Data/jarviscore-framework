@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import os
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -47,6 +48,12 @@ PROVIDER_META: Dict[str, Dict[str, Any]] = {
         "auth_type": "oauth2",
         "status": "verified",
         "capabilities": ["messaging", "channels", "users", "reactions"],
+    },
+    "slack_app": {
+        "category": "communication",
+        "auth_type": "api_key",
+        "status": "verified",
+        "capabilities": ["socket_mode"],
     },
     "github": {
         "category": "development",
@@ -1015,9 +1022,9 @@ def seed_registry(
                     existing_source.encode("utf-8")
                 ).hexdigest()
                 if existing_hash == shipped_hash:
-                    # Identical source: the contract check below always skips it
-                    # (either both contracts are ok or the shipped one is not), so
-                    # avoid parsing every atom twice on each agent start.
+                    # Identical source reads as an identical contract, and the
+                    # rule below skips every converged atom whatever its
+                    # contract says. Parsing both only cost every start seconds.
                     report["skipped"].append({
                         "function": function_name,
                         "system": system,
@@ -1077,14 +1084,14 @@ def seed_registry(
 
             # Read and validate syntax
             try:
-                ast.parse(source)
+                tree = ast.parse(source)
             except SyntaxError as e:
                 logger.error("[Seed] Syntax error in %s: %s", atom_path, e)
                 report["failed"].append({"function": function_name, "system": system, "error": str(e)})
                 continue
 
             # Build description from function signature
-            description = _extract_description(function_name, source)
+            description = _extract_description(function_name, source, tree=tree)
 
             # Determine capabilities for this specific function
             func_caps = _infer_capabilities(function_name, meta["capabilities"])
@@ -1121,7 +1128,7 @@ def seed_registry(
                         "system": system,
                         "stage": meta["status"],
                     })
-                    logger.info("[Seed] Registered %s (%s/%s)", function_name, system, meta["status"])
+                    logger.debug("[Seed] Registered %s (%s/%s)", function_name, system, meta["status"])
                 else:
                     report["failed"].append({"function": function_name, "system": system, "error": "register_function returned False"})
             except Exception as exc:
@@ -1136,15 +1143,40 @@ def seed_registry(
     return report
 
 
-def _extract_description(function_name: str, source: str) -> str:
+def _documented(node: ast.AST, function_name: str) -> Optional[str]:
+    if (isinstance(node, ast.FunctionDef) and node.name == function_name
+            and node.body and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)):
+        return node.body[0].value.value[:200]
+    return None
+
+
+def _walk_statements(tree: ast.AST):
+    """ast.walk's breadth-first order, restricted to nodes that can hold a def.
+
+    A function definition only ever sits in a statement body, so expression
+    subtrees are skipped. The nodes kept keep their depth and queue order, so the
+    first match is the one ast.walk would find, without visiting every node.
+    """
+    queue = deque([tree])
+    while queue:
+        node = queue.popleft()
+        yield node
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.stmt, ast.excepthandler, ast.match_case)):
+                queue.append(child)
+
+
+def _extract_description(
+    function_name: str, source: str, tree: Optional[ast.Module] = None
+) -> str:
     """Extract or synthesise a description from the function source."""
     try:
-        tree = ast.parse(source)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == function_name:
-                if (node.body and isinstance(node.body[0], ast.Expr)
-                        and isinstance(node.body[0].value, ast.Constant)):
-                    return node.body[0].value.value[:200]
+        tree = tree if tree is not None else ast.parse(source)
+        for node in _walk_statements(tree):
+            found = _documented(node, function_name)
+            if found is not None:
+                return found
     except Exception:
         pass
     # Synthesise from name: "slack_send_message" → "Slack: send message"

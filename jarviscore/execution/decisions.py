@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
+from jarviscore.auth.spending import PersonCharge
 from jarviscore.orchestration.budget import current_workflow_budget
 
 
@@ -35,6 +36,24 @@ class DecisionResult:
             "cost_usd": self.cost_usd,
             "request_id": self.request_id,
         }
+
+
+@runtime_checkable
+class DecisionClient(Protocol):
+    """Any decision model JarvisCore can consult.
+
+    ``evaluate`` answers typed questions about explicit state. A ``choice``
+    question has ``criteria`` mapping option ids to descriptions and is answered
+    ``{"type": "choice", "choice": <id>, "probabilities": {<id>: p},
+    "confidence": c}``; ``score`` and ``noul`` answers follow the same shape
+    with ``score``/``noul`` values. Providers report their own usage and cost.
+    """
+
+    async def evaluate(
+        self, *, state: Any, questions: Mapping[str, Any], model: Optional[str] = None,
+    ) -> DecisionResult: ...
+
+    async def close(self) -> None: ...
 
 
 class JevDecisionClient:
@@ -90,6 +109,12 @@ class JevDecisionClient:
                 ).encode("utf-8")
             )
             reservation_id = budget_account.reserve(request_bytes + (256 * len(questions)))
+        try:
+            charge = PersonCharge(len(json.dumps(questions, default=str)) + 256 * len(questions))
+        except BaseException:
+            if budget_account is not None and reservation_id is not None:
+                budget_account.release(reservation_id)
+            raise
 
         call_kwargs: dict[str, Any] = {
             "state": state,
@@ -102,6 +127,7 @@ class JevDecisionClient:
         except BaseException as exc:
             if budget_account is not None and reservation_id is not None:
                 budget_account.release(reservation_id)
+            charge.release()
             if not isinstance(exc, Exception):
                 raise
             raise DecisionClientError(
@@ -118,6 +144,7 @@ class JevDecisionClient:
                 input_tokens + output_tokens,
                 cost_usd,
             )
+        charge.settle(input_tokens + output_tokens, cost_usd)
         answers = {
             name: self._normalize_answer(answer) for name, answer in response.answers.items()
         }
@@ -168,13 +195,33 @@ class JevDecisionClient:
 
 def create_decision_client(
     config: Optional[Mapping[str, Any]] = None,
-) -> Optional[JevDecisionClient]:
-    """Create the configured TypeSafe client, or return None when disabled."""
+) -> Optional[DecisionClient]:
+    """Create the configured decision model client, or return None when none is configured.
+
+    ``decision_client_factory`` (``DECISION_CLIENT_FACTORY``) names any
+    ``module:callable`` that takes the resolved configuration and returns a
+    ``DecisionClient``; otherwise TypeSafe Jev is used when its key is set.
+    """
     from jarviscore.config import settings
 
     resolved = settings.model_dump()
     if config:
         resolved.update(config)
+    factory_path = resolved.get("decision_client_factory")
+    if factory_path:
+        import importlib
+
+        module_name, _, attribute = str(factory_path).partition(":")
+        if not module_name or not attribute:
+            raise DecisionClientError(
+                "decision_client_factory must be 'module:callable'"
+            )
+        client = getattr(importlib.import_module(module_name), attribute)(resolved)
+        if not isinstance(client, DecisionClient):
+            raise DecisionClientError(
+                f"{factory_path} did not return a DecisionClient"
+            )
+        return client
     api_key = resolved.get("typesafe_api_key")
     if not api_key:
         return None

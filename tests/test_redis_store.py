@@ -67,6 +67,20 @@ class TestStepOutputs:
         """Reading a step that hasn't run returns None."""
         assert store.get_step_output("wf-1", "nonexistent") is None
 
+    def test_listing_a_workflows_outputs_never_scans_the_keyspace(self, store, monkeypatch):
+        store.save_step_output("wf-1", "step-1", output="a")
+        store.save_step_output("wf-1", "step-2", output="b")
+        store.save_step_output("wf-2", "step-1", output="c")
+        store._redis.hset("workflow_graph:wf-1", "step-3", "{}")
+        store._redis.hset("step_output:wf-1:step-3", "output", "\"before the index\"")
+
+        def scan_forbidden(*args, **kwargs):
+            raise AssertionError("SCAN walks every key in the database")
+
+        monkeypatch.setattr(store._redis, "scan_iter", scan_forbidden)
+
+        assert store.list_step_output_ids("wf-1") == ["step-1", "step-2", "step-3"]
+
     def test_overwrite(self, store):
         """Saving the same step again overwrites (retry/repair scenario)."""
         store.save_step_output("wf-1", "step-1", output="first")
@@ -853,6 +867,52 @@ class TestWorkflowDAG:
         assert current["revision"] == 2
         assert current["attempt_states"] == {"verify_retry": "satisfied"}
 
+    def test_a_blanket_verdict_does_not_satisfy_an_unnamed_obligation(self, store):
+        obligations = [
+            {"id": "o1", "description": "Verify stage", "source_quote": "Verify stage"},
+            {"id": "o2", "description": "Verify owner", "source_quote": "Verify owner"},
+        ]
+        step = {
+            "id": "verify", "capability": "verification", "effect": "read",
+            "task": "Verify stage", "depends_on": [], "covers": ["o1", "o2"],
+        }
+        store.publish_workflow(
+            "wf-blanket", goal="Verify stage", obligations=obligations, steps=[step],
+        )
+        assert store.claim_step("wf-blanket", "verify", "peer:verify", 30)
+        assert store.finish_claimed_step(
+            "wf-blanket", "verify", "peer:verify", {
+                "status": "success",
+                "output": {"stage": "unknown"},
+                "interpretation": {
+                    "verdict": "satisfied", "decision": "proceed",
+                    "satisfied_requirements": ["o1"],
+                    "unmet_requirements": [],
+                },
+            },
+        )
+        projection = store.get_obligation_projection("wf-blanket")
+        assert projection["o1"]["state"] == "satisfied"
+        assert projection["o2"]["state"] == "unresolved"
+
+    def test_a_completed_step_without_interpretation_still_satisfies_its_obligation(self, store):
+        obligations = [{
+            "id": "o1", "description": "Verify stage", "source_quote": "Verify stage",
+        }]
+        step = {
+            "id": "verify", "capability": "verification", "effect": "read",
+            "task": "Verify stage", "depends_on": [], "covers": ["o1"],
+        }
+        store.publish_workflow(
+            "wf-no-interpretation", goal="Verify stage", obligations=obligations, steps=[step],
+        )
+        assert store.claim_step("wf-no-interpretation", "verify", "peer:verify", 30)
+        assert store.finish_claimed_step(
+            "wf-no-interpretation", "verify", "peer:verify",
+            {"status": "success", "output": {"stage": "done"}},
+        )
+        assert store.get_obligation_projection("wf-no-interpretation")["o1"]["state"] == "satisfied"
+
     def test_obligation_projection_resolves_not_applicable_condition(self, store):
         obligations = [{
             "id": "o1",
@@ -1228,6 +1288,40 @@ class TestAtomicStepClaiming:
         assert store.claim_step(
             "wf-response-reconciliation", "respond", "peer:respond", 30
         )
+
+    def test_resuming_a_step_rejects_a_response_still_composing_from_the_pause(self, store):
+        store.publish_workflow(
+            "wf-response-inflight",
+            goal="Order then report",
+            obligations=[{"id": "o1", "description": "Order", "source_quote": "Order"}],
+            steps=[
+                {
+                    "id": "order", "capability": "shop", "effect": "write",
+                    "task": "Order", "depends_on": [], "covers": ["o1"],
+                    "plan_revision": 1,
+                },
+                {
+                    "id": "respond", "capability": "response",
+                    "effect": "final_response", "task": "Respond",
+                    "depends_on": ["order"], "plan_revision": 1,
+                },
+            ],
+        )
+        assert store.claim_step("wf-response-inflight", "order", "peer:order", 30)
+        assert store.finish_claimed_step(
+            "wf-response-inflight", "order", "peer:order",
+            {"status": "waiting", "reason": "approval required"},
+        )
+        assert store.claim_step("wf-response-inflight", "respond", "peer:respond", 30)
+
+        store.resume_workflow_step("wf-response-inflight", "order")
+
+        assert store.get_step_status("wf-response-inflight", "respond") == "pending"
+        assert not store.finish_claimed_step(
+            "wf-response-inflight", "respond", "peer:respond",
+            {"status": "success", "result_summary": "Awaiting your approval."},
+        )
+        assert store.get_step_output("wf-response-inflight", "respond") is None
 
     def test_final_response_cannot_satisfy_source_obligations(self, store):
         store.publish_workflow(

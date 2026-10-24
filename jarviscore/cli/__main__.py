@@ -16,6 +16,8 @@ Usage:
     jarviscore atom list
     jarviscore inspect                       # List recorded runs
     jarviscore inspect <workflow_id>         # Timeline for one run
+    jarviscore human join alice --capabilities review --seed HOST:PORT
+    jarviscore room watch launch
 """
 
 

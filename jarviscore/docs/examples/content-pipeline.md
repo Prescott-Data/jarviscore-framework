@@ -125,8 +125,8 @@ class SEOAgent(CustomAgent):
 ## Success criteria
 
 - [ ] All 4 steps complete: `research → write → seo → publish`
-- [ ] Draft at `blob_storage/content/drafts/`
-- [ ] SEO metadata at `blob_storage/content/seo/content-pipeline-metadata.json`
-- [ ] Final article at `blob_storage/content/published/`
+- [ ] Draft at `.jarviscore/blob_storage/content/drafts/`
+- [ ] SEO metadata at `.jarviscore/blob_storage/content/seo/content-pipeline-metadata.json`
+- [ ] Final article at `.jarviscore/blob_storage/content/published/`
 - [ ] LTM key set: `redis-cli get ltm:content-pipeline`
 - [ ] Researcher receives mailbox notification from Publisher

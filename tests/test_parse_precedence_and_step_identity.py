@@ -4,7 +4,7 @@ Tests for issues #61 and #62.
 #61 — _parse_response directive precedence:
 - A quoted "DONE:" line before a real TOOL call must not falsely complete
 - A quoted TOOL example before a real DONE must still complete
-- RESULT alone only completes when it carries structured JSON
+- RESULT without DONE is never a completion
 - Single-directive responses parse exactly as before (non-breaking)
 
 #62 — WorkflowEngine result identity:
@@ -81,10 +81,9 @@ class TestDirectivePrecedence:
 
 class TestResultAloneRequiresJson:
 
-    def test_result_alone_with_json_completes(self):
-        parsed = parse('RESULT: {"answer": 42}')
-        assert parsed["type"] == "done"
-        assert parsed["result"] == {"answer": 42}
+    def test_result_alone_is_never_a_completion(self):
+        assert parse('RESULT: {"answer": 42}')["type"] == "raw"
+        assert parse('THOUGHT: read the page first\nRESULT: {"status":"in_progress"}')["type"] == "raw"
 
     def test_result_alone_prose_is_not_a_completion(self):
         parsed = parse("THOUGHT: the final\nRESULT: pending — need one more read")

@@ -16,6 +16,7 @@ All IA-specific imports replaced with jarviscore equivalents.
 
 import asyncio
 import fnmatch
+import importlib.util
 import logging
 import json
 import glob
@@ -25,8 +26,8 @@ import subprocess
 from typing import Dict, Any, List, Optional, Literal, cast, Set, Tuple
 from urllib.parse import urlparse
 
-from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image, with_images
-from jarviscore.kernel.subagent import BaseSubAgent
+from jarviscore.execution.multimodal import OBSERVED_IMAGES, Image
+from jarviscore.kernel.subagent import BaseSubAgent, _extract_json_object
 from jarviscore.kernel.gate import GateEvidence
 from jarviscore.kernel.state import KernelState
 from jarviscore.kernel.defaults.research_flow import ResearchFlow, ResearchPhase
@@ -98,11 +99,16 @@ class ResearcherSubAgent(BaseSubAgent):
     """
     
     def __init__(self, *args, **kwargs):
+        import uuid
+
+        # The researcher's page reads and its browser leave from one sticky exit.
+        egress_session = uuid.uuid4().hex
         # Accept optional internet_search injection (e.g. for testing)
         internet_search = kwargs.pop('internet_search', None)
         self.internet_search = internet_search or InternetSearch(
             pdf_timeout_seconds=_env_int("RESEARCH_PDF_TIMEOUT_SECONDS", 90),
             pdf_max_retries=_env_int("RESEARCH_PDF_MAX_RETRIES", 3),
+            egress_session=egress_session,
         )
         
         # Browser controller config — graceful degradation if [browser] not installed
@@ -113,7 +119,6 @@ class ResearcherSubAgent(BaseSubAgent):
         
         cdp_url = _env_str("BROWSER_CONTROL_URL") or _env_str("BROWSER_SERVICE_URL")
         
-        import uuid
         session_id = str(uuid.uuid4())[:8]
         unique_profile_dir = os.path.join(
             _env_str("BROWSER_PROFILE_USER_DATA_BASE", os.path.join(os.path.expanduser("~"), ".jarviscore", "browser_profiles")),
@@ -123,6 +128,9 @@ class ResearcherSubAgent(BaseSubAgent):
         
         self._browser_profile_name = f"researcher_{session_id}"
         if _HAS_BROWSER and BrowserConfig is not None:
+            from jarviscore.core.egress import configured_egress
+
+            egress = configured_egress()
             step_timeout = _env_float("STEP_EXECUTION_TIMEOUT", 0)
             self._browser_config = BrowserConfig(
                 headless=browser_headless,
@@ -134,6 +142,9 @@ class ResearcherSubAgent(BaseSubAgent):
                 ignore_https_errors=_env_bool("BROWSER_IGNORE_HTTPS_ERRORS", True),
                 stealth_enabled=_env_bool("BROWSER_STEALTH_ENABLED", False),
                 cdp_url=cdp_url,
+                locale=_env_str("BROWSER_LOCALE", "") or None,
+                timezone_id=_env_str("BROWSER_TIMEZONE", "") or None,
+                proxy=egress.playwright(egress_session) if egress and not cdp_url else None,
             )
         else:
             self._browser_config = None
@@ -399,7 +410,7 @@ You do NOT guess. You do NOT hallucinate. If you cannot find it, you report "Not
 
 2. **PHASE 2: INGESTION (Filter & Read)**
    - **COPY-PASTE URLs** - Use `read_web_content(urls=[...])` with the EXACT URLs from search results.
-   - Prefer `read_web_content(url_ids=[...])` using keys from `search_internet_batch.url_registry`.
+   - `read_web_content(url_ids=[...])` with keys from `search_internet_batch.url_registry` also works.
    - **FAST PATH:** This tool performs "Search -> Visit -> Extract Markdown". It uses High-Tech extraction.
    - If HTTP returns "Page Not Found", the page DOES NOT EXIST. Do NOT try browser. Search for a different page instead.
    - If local evidence exists, use `rag_query` to retrieve vetted passages.
@@ -505,90 +516,28 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     return p
         return ResearchPhase.INIT
 
-    def _allowed_tools_for_phase(self, phase: ResearchPhase) -> Set[str]:
-        """Tools allowed in each research phase."""
-        shared_ui = {
-            "browser_navigate", "browser_snapshot", "browser_screenshot", "ui_snapshot_with_som",
-            "browser_click", "browser_type", "browser_click_coord",
-            "browser_type_coord", "browser_get_text", "browser_get_page_text",
-            "browser_wait", "browser_close",
-        }
-        mapping: Dict[ResearchPhase, Set[str]] = {
-            ResearchPhase.INIT: {"search_internet", "search_internet_batch", "read_file", "read_web_content", "rag_query", "grep_codebase", "extract_api_details", "probe_target_api"},
-            ResearchPhase.SEARCHING: {"search_internet", "search_internet_batch", "read_web_content", "rag_query", "grep_codebase", "extract_api_details", "probe_target_api", "publish_research_findings"},
-            ResearchPhase.EXTRACTING: {"read_web_content", "rag_query", "extract_api_details", "publish_research_findings"} | shared_ui,
-            ResearchPhase.VERIFYING: {"search_internet", "search_internet_batch", "read_web_content", "rag_query", "extract_api_details", "grep_codebase", "probe_target_api", "publish_research_findings", "read_file"} | shared_ui,
-            ResearchPhase.DIAGNOSING: {"search_internet", "search_internet_batch", "read_web_content", "rag_query", "grep_codebase", "extract_api_details", "probe_target_api", "publish_research_findings"} | shared_ui,
-            ResearchPhase.STUCK: {"publish_research_findings"},
-            ResearchPhase.DONE: {"publish_research_findings"},
-        }
-        return mapping.get(phase, set())
-
-    def _check_phase_tool_contract(self, tool_name: str) -> Optional[str]:
-        """Check if a tool is allowed in the current research phase."""
-        if not _env_bool("RESEARCH_STRICT_PHASE_CONTRACT", True):
-            return None
-        if tool_name == "done":
-            return ("EPISTEMIC CONTRACT VIOLATION: The 'done' tool has been removed. "
-                    "You MUST use 'publish_research_findings' to exit your turn.")
-        if tool_name == "error":
-            return None
-        phase = self._current_research_phase()
-        allowed = self._allowed_tools_for_phase(phase)
-        if tool_name not in allowed:
-            return (
-                f"PHASE_TOOL_CONTRACT_VIOLATION: tool '{tool_name}' is not allowed "
-                f"in phase '{phase.value}'. Allowed tools: {sorted(list(allowed))}"
-            )
-        return None
-
-    def _tool_is_actionable(self, tool_name: str, state: Any) -> bool:
-        return (
-            super()._tool_is_actionable(tool_name, state)
-            and self._check_phase_tool_contract(tool_name) is None
-        )
-
-    async def _pre_execute_hook(
-        self,
-        tool_name: str,
-        params: Dict[str, Any],
-        state: Any,
-    ) -> Optional[Dict[str, Any]]:
-        """Enforce research phase-tool contract before execution.
-
-        Checks whether the requested tool is allowed in the current
-        research phase. If not, returns an error dict (which the base
-        loop uses as the tool result, skipping actual execution).
-        """
-        violation = self._check_phase_tool_contract(str(tool_name))
-        if violation:
-            state.add_thought(f"[RESEARCH_CONTRACT] {violation}")
-            self.tracer.log_tool_start(str(tool_name), params)
-            self.tracer.log_tool_result(str(tool_name), None, violation)
-            return {
-                "status": "error",
-                "error": violation,
-                "semantic_error": "PHASE_TOOL_CONTRACT_VIOLATION",
-            }
-        return None
-
     #: What each named done-payload check reads, stated once for the agent.
     _DONE_REQUIREMENTS = {
-        "summary": "a non-empty summary",
+        "summary": "a statement of what was found: the DONE answer, or a non-empty summary",
         "evidence": "at least one evidence entry, or a recorded research finding",
         "evidence_pointers": "every evidence entry carries a pointer or url",
         "api_specs": "every api_spec entry carries a method and a url or path",
     }
+
+    def _autodiscover_tools(self) -> None:
+        super()._autodiscover_tools()
+        # The index needs the [rag] extra; offering the tool without it only
+        # produced a failed call and an install hint the model cannot act on.
+        if importlib.util.find_spec("sentence_transformers") is None:
+            self._tools.pop("rag_query", None)
 
     _CONTENT_TOOLS = frozenset({
         "read_web_content", "browser_get_text", "browser_get_page_text",
         "rag_query", "read_file", "extract_api_details",
     })
 
-    _SEARCH_TOOLS = frozenset({"search_internet", "search_internet_batch"})
-
     def _can_complete(self, state, parsed: Dict[str, Any]) -> Tuple[bool, Any]:
-        """Reject premature DONE, reporting what the result actually contains."""
+        """Check the result's own shape; what research ran is recorded, not demanded."""
         base_ok, base_reason = super()._can_complete(state, parsed)
         if not base_ok:
             return base_ok, base_reason
@@ -617,7 +566,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     "missing_tool_groups": missing,
                 },
             )
-        evidence_items = params.get("evidence")
         content_successes = sum(
             1 for t in state.tool_history
             if t.status == "success" and t.tool_name in self._CONTENT_TOOLS
@@ -626,38 +574,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 and t.tool_output.get("content_found") is False
             )
         )
-        # A search that ran is a receipt even when it found nothing: a
-        # negative result is research, a summary with no search behind it is not.
-        search_successes = sum(
-            1 for t in state.tool_history
-            if t.status == "success" and t.tool_name in self._SEARCH_TOOLS
-        )
-        findings = (getattr(state, "internal_variables", None) or {}).get("research_findings")
-        recorded_findings = len(findings) if isinstance(findings, list) else 0
-        upstream_results = bool((getattr(state, "context", None) or {}).get("previous_step_results"))
-        # A summary or evidence list is a claim about research, not proof of it.
-        if not (content_successes or search_successes or recorded_findings or upstream_results):
-            return False, GateEvidence(
-                check="research_performed",
-                requirement=(
-                    "one successful search or content read, or upstream step "
-                    "results to work from"
-                ),
-                observed={
-                    "tool_calls": len(state.tool_history),
-                    "content_tool_successes": 0,
-                    "search_successes": 0,
-                    "content_tools": sorted(self._CONTENT_TOOLS),
-                    "search_tools": sorted(self._SEARCH_TOOLS),
-                    "recorded_findings": 0,
-                    "upstream_results": False,
-                    "result_summary": bool(params.get("summary")),
-                    "result_evidence": (
-                        len(evidence_items) if isinstance(evidence_items, list) else 0
-                    ),
-                },
-            )
-        valid, _reason, report = self._validate_done_payload(state, params)
+        valid, _reason, report = self._validate_done_payload(state, params, answer=parsed.get("answer"))
         if not valid:
             check = report.get("check", "done_payload")
             observed = {key: value for key, value in report.items() if key != "check"}
@@ -669,9 +586,13 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             )
         return True, ""
 
-    def _validate_done_payload(self, state, params: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    def _validate_done_payload(
+        self, state, params: Dict[str, Any], answer: Optional[str] = None,
+    ) -> Tuple[bool, str, Dict[str, Any]]:
         strict = _env_bool("RESEARCH_STRICT_DONE_VALIDATION", True)
-        summary = str(params.get("summary") or "").strip()
+        # The DONE answer is the human statement of what was found; a product
+        # that owns its result shape need not repeat it as a `summary` field.
+        summary = str(params.get("summary") or answer or "").strip()
         evidence = params.get("evidence")
         api_specs = params.get("api_specs") or []
         findings = state.internal_variables.get("research_findings", []) if getattr(state, "internal_variables", None) else []
@@ -765,170 +686,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         browser_state["som_updated_at"] = asyncio.get_event_loop().time()
         self.current_state.internal_variables["browser_state"] = browser_state
 
-    def _get_ui_memory(self) -> Dict[str, Any]:
-        if not self.current_state:
-            return {"page_states": {}}
-        raw = self.current_state.internal_variables.get("ui_memory", {})
-        if isinstance(raw, dict):
-            raw.setdefault("page_states", {})
-            return raw
-        return {"page_states": {}}
-
-    def _set_ui_memory(self, memory: Dict[str, Any]) -> None:
-        if self.current_state:
-            self.current_state.internal_variables["ui_memory"] = memory
-
-    async def _current_page_signature(self) -> str:
-        result = await self._bdispatch("evaluate", expression="({url: location.href, title: document.title})")
-        if not result.success:
-            return "unknown:unknown"
-        data = (result.data or {}).get("result", {})
-        if not isinstance(data, dict):
-            return "unknown:unknown"
-        return f"{data.get('url', '')}|{data.get('title', '')}"
-
-    async def _record_ui_action_success(self, action: str, ref: str) -> None:
-        if not ref:
-            return
-        sig = await self._current_page_signature()
-        memory = self._get_ui_memory()
-        page_states = memory.get("page_states", {})
-        if not isinstance(page_states, dict):
-            page_states = {}
-        state = page_states.get(sig, {})
-        if not isinstance(state, dict):
-            state = {}
-        by_action = state.get("successful_refs", {})
-        if not isinstance(by_action, dict):
-            by_action = {}
-        refs = by_action.get(action, [])
-        if not isinstance(refs, list):
-            refs = []
-        refs = [r for r in refs if r != ref]
-        refs.insert(0, ref)
-        by_action[action] = refs[:8]
-        state["successful_refs"] = by_action
-        state["updated_at"] = asyncio.get_event_loop().time()
-        page_states[sig] = state
-        memory["page_states"] = page_states
-        self._set_ui_memory(memory)
-
-    def _repair_candidates_from_snapshot(self, failed_ref: str, action: str, refs_map: Dict[str, Any]) -> List[str]:
-        candidates: List[str] = []
-        if failed_ref and failed_ref in refs_map:
-            candidates.append(failed_ref)
-        if failed_ref:
-            for key in sorted(refs_map.keys()):
-                if key.startswith(failed_ref[:1]) and key != failed_ref:
-                    candidates.append(key)
-        for key in sorted(refs_map.keys()):
-            if key not in candidates:
-                candidates.append(key)
-        return candidates[:6]
-
-    async def _attempt_ui_repair(
-        self,
-        action: Literal["click", "type"],
-        failed_ref: str,
-        text: Optional[str] = None,
-        submit: bool = False,
-        slowly: bool = False,
-        timeout_ms: int = 30000,
-    ) -> Dict[str, Any]:
-        # Adaptive repair horizon - give the agent room to think/recover
-        max_turns = max(2, int(os.getenv("RESEARCH_REPAIR_MAX_TURNS", "5")))
-        sig = await self._current_page_signature()
-        memory = self._get_ui_memory()
-        page_states = memory.get("page_states", {})
-        memory_refs: List[str] = []
-        if isinstance(page_states, dict):
-            state = page_states.get(sig, {})
-            if isinstance(state, dict):
-                successful = state.get("successful_refs", {})
-                if isinstance(successful, dict):
-                    memory_refs = list(successful.get(action, []) or [])
-
-        attempted: Set[str] = set()
-        for turn in range(1, max_turns + 1):
-            snap = await self._bdispatch("snapshot", interactive_only=True, compact=True)
-            if snap.success and isinstance(snap.data, dict):
-                self._persist_som_snapshot(snap.data)
-                refs_map = snap.data.get("refs") or {}
-            else:
-                refs_map = {}
-
-            candidates = []
-            for ref in memory_refs:
-                if ref and ref not in candidates:
-                    candidates.append(ref)
-            for ref in self._repair_candidates_from_snapshot(failed_ref, action, refs_map):
-                if ref not in candidates:
-                    candidates.append(ref)
-
-            for ref in candidates:
-                if ref in attempted:
-                    continue
-                attempted.add(ref)
-                if action == "click":
-                    res = await self._bdispatch("click", ref=ref, timeout_ms=timeout_ms)
-                else:
-                    res = await self._bdispatch("type", ref=ref, text=text or "", submit=submit, slowly=slowly, timeout_ms=timeout_ms)
-                if res.success:
-                    await self._record_ui_action_success(action, ref)
-                    return {
-                        "status": "success",
-                        "repaired": True,
-                        "repair_turns": turn,
-                        "ref": ref,
-                        "hint": "Recovered via bounded repair loop.",
-                    }
-
-        try:
-            ss = await self._bdispatch("screenshot", full_page=False, format="png")
-            ss_bytes = (ss.data or {}).get("bytes") if ss.success else None
-            if isinstance(ss_bytes, bytes):
-                vision_prompt = (
-                    f'I need to {action} an element described as: "{failed_ref}". '
-                    "Find the closest matching interactive element on this page.\n"
-                    'Return JSON: {"found": true/false, "x": int, "y": int, "label": "..."}'
-                )
-                reply = await self.llm_client.generate(messages=[
-                    {"role": "system", "content": "You locate UI elements in screenshots. Return only JSON."},
-                    {"role": "user", "content": with_images(
-                        vision_prompt, [Image(data=ss_bytes, media_type="image/png")]
-                    )},
-                ])
-                raw = str(reply.get("content") or "")
-                parsed = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
-                if parsed.get("found") and parsed.get("x") is not None:
-                    ok, data, err = await self._coord_action(int(parsed["x"]), int(parsed["y"]), text if action == "type" else None)
-                    if ok:
-                        return {
-                            "status": "success",
-                            "repaired": True,
-                            "repair_method": "vision_locate",
-                            "x": parsed["x"],
-                            "y": parsed["y"],
-                            "label": parsed.get("label"),
-                        }
-        except Exception as exc:
-            logger.warning("[RESEARCHER] Vision repair failed: %s", exc)
-
-        return {
-            "status": "error",
-            "error": "REPAIR_FAILED",
-            "semantic_error": "REPAIR_FAILED",
-            "failed_ref": failed_ref,
-            "attempted_refs": sorted(list(attempted)),
-        }
-
-    def _som_refs_available(self) -> bool:
-        if not self.current_state:
-            return False
-        browser_state = self.current_state.internal_variables.get("browser_state", {})
-        refs = browser_state.get("last_snapshot_refs", [])
-        return isinstance(refs, list) and len(refs) > 0
-
     # --- STATE MANAGEMENT HELPERS ---
 
     async def _track_content_cost(self, content: str, source: str):
@@ -1020,19 +777,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         if self.current_state:
             self.current_state.internal_variables["research_checkpoint"] = cp
 
-    def _suggest_recovery_strategy(self) -> str:
-        cp = self._checkpoint()
-        actions = cp.get("actions_taken", [])
-        if not isinstance(actions, list):
-            actions = []
-        recent = actions[-10:]
-        failures = [a for a in recent if isinstance(a, dict) and not a.get("success")]
-        if len(failures) >= 6:
-            return "High failure ratio. Use url_ids from registry and fetch one official source URL first."
-        if recent and all(isinstance(a, dict) and a.get("action") == "search_internet_batch" for a in recent[-3:]):
-            return "Search-heavy stagnation. Stop searching; call read_web_content with url_ids from last search."
-        return "Switch strategy: read one minted official documentation URL, then verify extracted endpoint evidence."
-
     def _get_rag_ingested_sources(self) -> set:
         if not self.current_state:
             return set()
@@ -1066,6 +810,8 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             return {"status": "skipped", "reason": "RAG_AUTO_INGEST disabled"}
         if not documents:
             return {"status": "skipped", "reason": "no documents"}
+        if importlib.util.find_spec("sentence_transformers") is None:
+            return {"status": "skipped", "reason": "the [rag] extra is not installed"}
         try:
             rag = self._get_rag_pipeline()
             return rag.ingest_documents(documents)
@@ -1823,6 +1569,34 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         search = getattr(self.internet_search, "search_answered", None) or self.internet_search.search
         return await search(query, **kwargs)
 
+    async def _search_preferring(
+        self, query: str, preferred_domains: Optional[List[str]], **kwargs
+    ) -> List[Dict[str, Any]]:
+        """Results from the preferred domains first, then the open web: a preference, not a filter."""
+        if not preferred_domains:
+            return await self._answered_search(query, **kwargs)
+        site_hint = " OR ".join(f"site:{d.strip()}" for d in preferred_domains[:3])
+        preferred, general = await asyncio.gather(
+            self._answered_search(f"{query} ({site_hint})", **kwargs),
+            self._answered_search(query, **kwargs),
+            return_exceptions=True,
+        )
+        if isinstance(preferred, BaseException) and isinstance(general, BaseException):
+            raise preferred
+        merged: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for results in (preferred, general):
+            if isinstance(results, BaseException):
+                continue
+            for result in results or []:
+                url = result.get("url") if isinstance(result, dict) else None
+                if url and url in seen:
+                    continue
+                if url:
+                    seen.add(url)
+                merged.append(result)
+        return merged
+
     async def _tool_search_internet(
         self, query: str, preferred_domains: Optional[List[str]] = None
     ) -> Any:
@@ -1830,17 +1604,12 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         Search the internet.
         Args:
             query: Search query string.
-            preferred_domains: Optional list of domains to bias results toward
-                (e.g. ['docs.example.com', 'api.example.com']). Appended as
-                site: hints so the search engine prioritises official sources.
+            preferred_domains: Optional list of domains whose results are listed
+                first (e.g. ['sec.gov']). Results from elsewhere are still returned.
         """
-        effective_query = query
-        if preferred_domains:
-            site_hint = " OR ".join(f"site:{d.strip()}" for d in preferred_domains[:3])
-            effective_query = f"{query} ({site_hint})"
-
-        self.tracer.log_tool_start("search_internet", {"query": effective_query, "preferred_domains": preferred_domains})
-        logger.info("[RESEARCHER] Searching: %s", effective_query)
+        limit = 10 if preferred_domains else 5
+        self.tracer.log_tool_start("search_internet", {"query": query, "preferred_domains": preferred_domains})
+        logger.info("[RESEARCHER] Searching: %s (preferring %s)", query, preferred_domains or "none")
         # ═══ COGNITIVE COST PYRAMID: Level 3 web-search counter ═══
         if self.current_state is not None:
             count = int(self.current_state.internal_variables.get("_web_search_count") or 0) + 1
@@ -1848,24 +1617,21 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
             self.tracer.log_event("planning_timeout_fallback", {
                 "reason": "web_search_used",
                 "search_count": count,
-                "query": effective_query,
+                "query": query,
             })
 
         try:
             await self.internet_search.initialize()
-            results = await self._answered_search(effective_query, max_results=5)
+            results = await self._search_preferring(query, preferred_domains, max_results=5)
             results = self._filter_search_results(results)
-            results = self._compact_search_results(results, limit=5)
+            results = self._compact_search_results(results, limit=limit)
             # Register URLs to prevent hallucination
             for r in results:
                 if isinstance(r, dict) and r.get("url"):
                     self._add_known_url(r["url"])
 
             # Phase transition: any successful search leaves INIT (mirrors
-            # the batch variant at _tool_search_internet_batch).  Without
-            # this, the researcher stays in INIT where
-            # publish_research_findings is blocked, producing the
-            # PHASE_TOOL_CONTRACT_VIOLATION seen in prod traces (Bug #2).
+            # the batch variant at _tool_search_internet_batch).
             if self._current_research_phase() == ResearchPhase.INIT:
                 self._set_research_phase(ResearchPhase.SEARCHING, "search_internet_completed")
 
@@ -1886,18 +1652,14 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         Args:
             queries: List of search query strings.
             max_results_per_query: Max results returned per query (default 3).
-            preferred_domains: Optional list of domains to bias all queries toward
-                (e.g. ['docs.example.com']). Applied as site: hints to every query.
+            preferred_domains: Optional list of domains whose results are listed
+                first for every query (e.g. ['sec.gov']). Results from elsewhere
+                are still returned.
         """
         self._set_research_phase(ResearchPhase.SEARCHING, "batch_discovery")
 
-        site_hint: str = ""
-        if preferred_domains:
-            site_hint = " OR ".join(f"site:{d.strip()}" for d in preferred_domains[:3])
-
-        effective_queries = [
-            f"{q} ({site_hint})" if site_hint else q for q in (queries or [])
-        ]
+        effective_queries = list(queries or [])
+        limit = max_results_per_query * (2 if preferred_domains else 1)
 
         self.tracer.log_tool_start("search_internet_batch", {"queries": effective_queries, "preferred_domains": preferred_domains})
         # ═══ COGNITIVE COST PYRAMID: Level 3 web-search counter ═══
@@ -1927,8 +1689,9 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
         # wasted parallel network slots and latency on every batch search.
         _academic_skip = set(self._ACADEMIC_PROVIDERS) if not self._get_provider_allowlist() else set()
         tasks = [
-            self._answered_search(
+            self._search_preferring(
                 q,
+                preferred_domains,
                 max_results=max_results_per_query,
                 exclude_providers=_academic_skip,
             )
@@ -1941,7 +1704,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 out["by_query"][q] = {"error": str(res), "results": []}
             elif isinstance(res, list):
                 filtered = self._filter_search_results(res)
-                filtered = self._compact_search_results(filtered, limit=max_results_per_query)
+                filtered = self._compact_search_results(filtered, limit=limit)
                 out["by_query"][q] = {"results": filtered}
                 # Register URLs from search results to prevent hallucination
                 for r in filtered:
@@ -2010,20 +1773,7 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     safe_urls.append(mapped)
                 elif isinstance(uid, str) and uid.startswith(("http://", "https://")):
                     safe_urls.append(uid)
-        if _env_bool("RESEARCH_REQUIRE_URL_IDS", True):
-            registry = self._get_url_registry()
-            if registry and not url_ids and safe_urls:
-                exact_values = {str(v).strip() for v in registry.values() if isinstance(v, str)}
-                unmatched_urls = [u for u in safe_urls if str(u or "").strip() not in exact_values]
-                return {
-                    "status": "error",
-                    "error": "URL_ID_SELECTION_REQUIRED",
-                    "semantic_error": "URL_ID_SELECTION_REQUIRED",
-                    "reason": "URL registry exists; select target URLs via url_ids for deterministic selection.",
-                    "unminted_urls": unmatched_urls,
-                    "available_url_ids": sorted(list(registry.keys())),
-                }
-        
+
         if not safe_urls:
             error = "No URLs provided"
             self.tracer.log_tool_result("read_web_content", None, error=error)
@@ -2112,9 +1862,10 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     "url": url,
                     "status": "error",
                     "error": error or "No content extracted",
-                    "hint": "This URL may not exist. Use exact URLs from search results.",
                     "semantic_error": "CONTENT_FETCH_FAILED"
                 }
+                if extracted.get("status_code") is not None:
+                    entry["status_code"] = extracted["status_code"]
                 results.append(entry)
                 continue
 
@@ -2323,7 +2074,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                     allowed_urls = [str(u) for u in raw_urls if u][:10]
                     reverse = self._reverse_url_registry()
                     allowed_url_ids = [reverse[u] for u in allowed_urls if u in reverse]
-            strategy = self._suggest_recovery_strategy()
             self._set_research_phase(ResearchPhase.DIAGNOSING, "no_content_extracted")
             self._record_checkpoint_action("read_web_content", False, {"reason": "NO_CONTENT_EXTRACTED"})
             self.tracer.log_tool_result(
@@ -2338,7 +2088,6 @@ CRITICAL EPISTEMIC CONTRACT: You CANNOT exit your turn by saying "I need to rese
                 "reason": "All candidate pages failed extraction or provenance checks.",
                 "allowed_urls": allowed_urls,
                 "allowed_url_ids": allowed_url_ids,
-                "recovery_strategy": strategy,
                 "pages": results,
             }
 
@@ -2503,17 +2252,27 @@ Rules:
 - If you cannot determine a value, omit the key rather than guessing.
 
 DOCUMENTATION TEXT:
-{text[:20000]}
+{text}
 """
-        if not hasattr(self.llm, "query_json"):
-            error = "LLM does not support structured query"
+        try:
+            response = await self.llm_client.generate(
+                messages=[
+                    {"role": "system", "content": "You are a precise API specification extractor. Return only valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0,
+            )
+            result = _extract_json_object(str((response or {}).get("content") or ""))
+        except Exception as exc:
+            error = f"API extraction failed: {exc}"
             self.tracer.log_tool_result("extract_api_details", None, error=error)
             return {"error": error}
-
-        result = await self.llm.query_json(
-            "You are a precise API specification extractor. Return only valid JSON.", prompt
-        )
-        extracted_specs = result.get("api_specs") if isinstance(result, dict) else []
+        if result is None:
+            error = "API extraction returned no JSON object"
+            self.tracer.log_tool_result("extract_api_details", None, error=error)
+            return {"error": error}
+        extracted_specs = result.get("api_specs")
         spec_count = len(extracted_specs) if isinstance(extracted_specs, list) else 0
 
         if isinstance(extracted_specs, list) and extracted_specs:
@@ -2860,7 +2619,6 @@ DOCUMENTATION TEXT:
             
             if result.success:
                 logger.info(f"[RESEARCHER] Clicked ref={ref}")
-                await self._record_ui_action_success("click", ref)
                 self.tracer.log_tool_result("browser_click", {"ref": ref, "status": "success"})
                 return {
                     "status": "success",
@@ -2868,15 +2626,6 @@ DOCUMENTATION TEXT:
                     "hint": "Page may have changed. Call browser_snapshot() to get fresh refs."
                 }
             else:
-                if _env_bool("RESEARCH_REPAIR_LOOP_ENABLED", True):
-                    repaired = await self._attempt_ui_repair(
-                        action="click",
-                        failed_ref=str(ref or result.ref or ""),
-                        timeout_ms=timeout_ms,
-                    )
-                    if repaired.get("status") == "success":
-                        self.tracer.log_tool_result("browser_click", repaired)
-                        return repaired
                 self.tracer.log_tool_result("browser_click", None, error=result.error)
                 return {"status": "error", "error": result.error, "ref": result.ref}
         except Exception as e:
@@ -2909,7 +2658,6 @@ DOCUMENTATION TEXT:
             
             if result.success:
                 logger.info(f"[RESEARCHER] Typed into ref={ref}, submit={submit}")
-                await self._record_ui_action_success("type", ref)
                 self.tracer.log_tool_result("browser_type", {"ref": ref, "status": "success"})
                 return {
                     "status": "success",
@@ -2918,19 +2666,6 @@ DOCUMENTATION TEXT:
                     "submitted": submit
                 }
             else:
-                if _env_bool("RESEARCH_REPAIR_LOOP_ENABLED", True):
-                    repaired = await self._attempt_ui_repair(
-                        action="type",
-                        failed_ref=str(ref or result.ref or ""),
-                        text=text,
-                        submit=submit,
-                        slowly=slowly,
-                        timeout_ms=timeout_ms,
-                    )
-                    if repaired.get("status") == "success":
-                        repaired["typed"] = text
-                        self.tracer.log_tool_result("browser_type", repaired)
-                        return repaired
                 self.tracer.log_tool_result("browser_type", None, error=result.error)
                 return {"status": "error", "error": result.error, "ref": result.ref}
         except Exception as e:
@@ -2973,15 +2708,12 @@ DOCUMENTATION TEXT:
         x: int,
         y: int,
         reason: str = "",
-        force: bool = False,
         verify_snapshot: bool = True,
     ) -> Dict[str, Any]:
         if not _env_bool("RESEARCH_COORD_FALLBACK_ENABLED", True):
             return {"status": "error", "error": "COORD_FALLBACK_DISABLED"}
         if not reason:
             return {"status": "error", "error": "COORD_REASON_REQUIRED"}
-        if self._som_refs_available() and not force:
-            return {"status": "error", "error": "COORD_BLOCKED_SOM_AVAILABLE", "hint": "Use SoM refs first."}
         ok, data, err = await self._coord_action(x=x, y=y, text=None)
         if not ok:
             return {"status": "error", "error": err, "x": x, "y": y}
@@ -2996,15 +2728,12 @@ DOCUMENTATION TEXT:
         y: int,
         text: str,
         reason: str = "",
-        force: bool = False,
         verify_snapshot: bool = True,
     ) -> Dict[str, Any]:
         if not _env_bool("RESEARCH_COORD_FALLBACK_ENABLED", True):
             return {"status": "error", "error": "COORD_FALLBACK_DISABLED"}
         if not reason:
             return {"status": "error", "error": "COORD_REASON_REQUIRED"}
-        if self._som_refs_available() and not force:
-            return {"status": "error", "error": "COORD_BLOCKED_SOM_AVAILABLE", "hint": "Use SoM refs first."}
         ok, data, err = await self._coord_action(x=x, y=y, text=text)
         if not ok:
             return {"status": "error", "error": err, "x": x, "y": y}
@@ -3309,14 +3038,16 @@ DOCUMENTATION TEXT:
                 "validation_report": report
             }
             
-        out["research_checkpoint"] = self._checkpoint()
-        out["url_registry"] = self._get_url_registry()
-        out["done_validation"] = report
-        
-        # Explicit output contract to tell Kernel to move back to coding
-        out["status"] = "candidate_ready"
-        out["action_required"] = "delegate_coding"
-        
+        # The result is what the research delivered. The checkpoint, URL registry
+        # and validation report are the researcher's working state: they stay in
+        # its state and trace rather than in the answer every caller receives.
+        if self.current_state:
+            self._checkpoint()
+            self.current_state.internal_variables["done_validation"] = report
+        for key in ("api_specs", "libraries"):
+            if not out.get(key):
+                out.pop(key, None)
+
         # CRITICAL: We must set the state status to 'completed' to break the OODA loop,
         # just like the old 'done' tool used to do in base.py.
         if self.current_state:
@@ -3348,7 +3079,10 @@ DOCUMENTATION TEXT:
 
         api_specs = payload.get("api_specs") if isinstance(payload, dict) else None
         evidence = payload.get("evidence") if isinstance(payload, dict) else None
-        done_validation = payload.get("done_validation") if isinstance(payload, dict) else None
+        done_validation = (
+            self.current_state.internal_variables.get("done_validation")
+            if self.current_state else None
+        )
         status = str(getattr(output, "status", "") or "").lower()
         return {
             "status": status,

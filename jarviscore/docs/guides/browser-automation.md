@@ -1,212 +1,182 @@
 ---
 icon: material/web
 title: "AI Browser Automation with Playwright and Computer Use"
-description: "Automate navigation, forms, and JavaScript-heavy websites with BrowserSubAgent using computer-use and multimodal language models."
+description: "Give an AutoAgent a real browser: read JavaScript sites page after page, fill forms, stay logged in, and wait for approval before anything that commits you."
 ---
 
 # Browser Automation
 
-JarvisCore's `BrowserSubAgent` drives a real Chromium browser via Playwright. It is activated when the Kernel routes a task to the `browser` role through a structured routing decision or by setting `default_kernel_role = "browser"` on your `AutoAgent`.
+An `AutoAgent` can work a real Chromium browser: read sites that need
+JavaScript, go through every page of a catalogue, log in, fill forms. You
+describe the goal; the agent decides when the browser is the right tool.
 
-The browser subagent is **not** a replacement for web search. Use it only when the target page requires JavaScript execution, cookie-based authentication, interactive UI automation, or form submission. For static content and API-based research, the `ResearcherSubAgent`'s `web_search` and `read_url` tools are faster and cheaper.
+Use it when a page has to be *used*. When it only has to be *read*, the
+[researcher's](internet-search.md) `web_search` and `read_url` are faster and
+cheaper, and the agent picks them on its own.
+
+| Good fit | Use search instead |
+|---|---|
+| Sites that render with JavaScript (dashboards, single-page apps) | Static articles and docs |
+| Every page of a listing, or every record behind a click | One page you already have the address of |
+| Logging in, filling and submitting forms | Public APIs and feeds |
 
 ---
 
-## Installation
+## Set up in three steps
 
-Playwright is not bundled with JarvisCore. Install it separately:
+**1. Install the browser extra and Chromium.**
 
 ```bash
-pip install playwright
+pip install "jarviscore-framework[browser]"
 playwright install chromium
 ```
 
-JarvisCore imports Playwright lazily, the framework loads and runs correctly without it. When Playwright is not installed and a task is routed to the `browser` role, the sub-agent returns a clear error message rather than crashing.
-
----
-
-## Enabling browser automation
-
-Set `BROWSER_ENABLED=true` in your `.env`. Without this, the browser role should not be selected for normal tasks, even if Playwright is installed.
-
-Also set `BROWSER_MODEL` to a CUA or multimodal model. Without it, the framework falls back to `TASK_MODEL_STANDARD`, which may be a text-only model that cannot interpret screenshots.
+**2. Turn the browser on** in `.env`, next to your model key:
 
 ```bash title=".env"
 BROWSER_ENABLED=true
-
-# CUA model for browser automation (strongly recommended)
-# Gemini:  BROWSER_MODEL=gemini-2.5-computer-use
-# OpenAI:  BROWSER_MODEL=gpt-5.4-mini
-# Fallback (multimodal, not CUA): BROWSER_MODEL=gpt-4o or gemini-2.5-flash
-BROWSER_MODEL=gemini-2.5-computer-use
-
-# Defaults to true (headless). Set false to see the browser window during development.
-BROWSER_HEADLESS=true
 ```
 
-The kernel reads `browser_headless` from settings and passes it to `BrowserSubAgent` at instantiation. The default viewport is `1280x720`, hardcoded in `BrowserSubAgent.__init__()` and not currently configurable via environment variable.
+`BROWSER_MODEL` picks the model that drives the browser. Without it your
+standard task model is used, which is enough for reading pages as text. Set it
+to a computer-use or multimodal model (for example `gemini-2.5-computer-use`,
+`gpt-5.4-mini` or `gpt-4o`) when the agent should also see screenshots.
+
+**3. Give an agent a goal that needs a browser.**
+
+```python title="catalogue.py"
+import asyncio
+from jarviscore import AutoAgent, Mesh
+
+
+class Analyst(AutoAgent):
+    role = "analyst"
+    capabilities = ["web_research", "data_analysis", "reporting"]
+    system_prompt = "You collect complete data, compute with code and report clearly."
+    goal_oriented = True
+
+
+async def main():
+    mesh = Mesh()
+    mesh.add(Analyst)
+    await mesh.start()
+    try:
+        result = await mesh.run_task(agent="analyst", task=(
+            "Collect every book in the Mystery category of https://books.toscrape.com, "
+            "across all pages, with its title, price and star rating. Report how many "
+            "there are, the count per rating, the average price and the three most "
+            "expensive, and save the report as mystery_report.md."
+        ))
+        print(result["result_summary"])   # the answer
+        print(result["evidence"])         # what it read and the files it wrote
+    finally:
+        await mesh.stop()
+
+
+asyncio.run(main())
+```
+
+The agent opens the site, reads every page of the category in one Playwright
+program, computes the figures in code and writes the report. `result_summary`
+holds the answer; `evidence` lists the pages and files behind it. To watch it
+work, add `BROWSER_HEADLESS=false` to `.env`.
 
 ---
 
-## How routing works
+## What the agent does on a page
 
-The Kernel routes tasks with a structured router. The router sees the task, context summary, valid roles, and role contracts, then returns a typed decision with confidence and reason. Invalid or low-confidence routing fails visibly instead of guessing.
+- **Reads the page as text**, the way a person reads it: headings, tables as
+  rows, notices, and a ref such as `[e12]` on everything it can act on.
+- **Acts by ref:** `click`, `type_text`, `fill_form`, `select_option`. Each
+  action returns the page as it stands afterwards. A covered or disabled
+  element is refused with the reason, before anything is clicked.
+- **Writes Playwright code** for work that spans many pages, so a whole listing
+  is one step, not a hundred clicks. The code runs confined: no network and no
+  files beyond its scratch space.
+- **Waits for the site's data** after every action and **paces its requests**
+  to each site the way a person browses.
+- **Keeps what it read** in the step's record, so a later step or a crash
+  recovery picks up where it was instead of reading the site again.
 
-You can also make browser routing explicit by declaring it on your agent class:
+Every tool and its parameters are in the [Browser Reference](../reference/browser.md#tools).
+
+---
+
+## Always use the browser
+
+An agent with a goal chooses its tools. To make one a browser agent on every
+task, declare it:
 
 ```python
-class MyAgent(AutoAgent):
-    role = "web-scraper"
-    capabilities = ["scraping"]
-    system_prompt = "..."
-    default_kernel_role = "browser"   # always routes to BrowserSubAgent
-```
-
----
-
-## Tools available to the LLM
-
-The browser sub-agent registers the following tools. The LLM calls them by emitting `TOOL: <name>` in its OODA loop turns.
-
-### Navigation
-
-| Tool | Description | Key parameters |
-|---|---|---|
-| `navigate` | Go to a URL and wait for load | `url`, `wait_for` (`networkidle`\|`domcontentloaded`\|`load`) |
-| `close_page` | Close current page, open a fresh one |, |
-
-### Inspection
-
-| Tool | Description | Key parameters |
-|---|---|---|
-| `get_text` | Extract text from an element or the full page | `selector` (empty = full page), `max_chars` (default 5000) |
-| `get_attribute` | Get an attribute value from an element | `selector`, `attribute` |
-| `get_links` | Extract all `<a>` links from the page | `selector` (optional scope), `max` (default 50) |
-| `get_cookies` | Get cookies for the current page, returns name, domain, path only (httpOnly values are not exposed) |, |
-| `screenshot` | See the current page; the image is attached to the next model turn | `full_page` (default false) |
-
-### Interaction
-
-| Tool | Description | Key parameters |
-|---|---|---|
-| `click` | Click an element by CSS selector or visible text | `selector` (CSS), `text` (text match, used if selector is empty) |
-| `type_text` | Type text into an input, clears field first by default | `selector`, `text`, `clear_first` (default true), `delay_ms` (default 50) |
-| `fill_form` | Fill multiple form fields in one call | `fields: [{"selector": "...", "value": "..."}]` |
-| `select_option` | Select a `<select>` dropdown value by value or label | `selector`, `value` |
-| `scroll` | Scroll the page | `direction` (`down`\|`up`\|`top`\|`bottom`), `pixels` (default 500) |
-| `hover` | Hover over an element | `selector` |
-
-### Waiting
-
-| Tool | Description | Key parameters |
-|---|---|---|
-| `wait_for` | Wait for an element to reach a state | `selector`, `timeout_ms` (default 10000), `state` (`visible`\|`hidden`\|`attached`\|`detached`) |
-
-### JavaScript
-
-| Tool | Description | Key parameters |
-|---|---|---|
-| `evaluate` | Execute a JavaScript expression on the page and return the result | `script` |
-
----
-
-## Session lifecycle
-
-The browser a run works in depends on configuration:
-
-| Setting | Browser |
-|---|---|
-| `BROWSER_CONTROL_URL` | The browser the person already has open, attached over CDP. The run opens its own tab and closes only that tab. |
-| `BROWSER_PROFILE_DIR` | A persistent profile per tenant, so logins and cookies survive between runs. The tenant is the Mesh's `memory_scope_field`; a step that names no tenant gets a fresh browser, never someone else's profile. Without a scope field the Mesh has one shared profile. |
-| neither | A fresh Chromium for each `run()` call. |
-
-Within a single `run()`:
-- Pages are reused, so cookies and auth state persist across tool calls
-- `close_page` opens a fresh page but keeps the same browser context (cookies survive)
-- What the run opened is closed when `run()` exits; an attached browser stays open
-
-Chromium locks a profile to one process. Runs for the same tenant in one
-process take turns; if another process holds the profile, the browser tools
-report that error to the agent.
-
-Screenshots reach the model as images on every provider (Azure OpenAI,
-Claude, Gemini, Vertex AI, vLLM). The tool result keeps a receipt with the
-image's hash and size, not the pixels.
-
-The browser launch arguments disable sandbox and automation flags to reduce detection:
-```
---no-sandbox
---disable-setuid-sandbox
---disable-dev-shm-usage
---disable-blink-features=AutomationControlled
-```
-
-The user agent is set to a realistic Chrome string to avoid bot detection on common sites.
-
----
-
-## What tasks suit `BrowserSubAgent`
-
-Good fits:
-- Logging into a web application and extracting account data
-- Filling and submitting forms that don't have an API
-- Scraping JavaScript-rendered content (SPAs, dashboards)
-- Automating multi-step UI workflows
-- Downloading files via browser interactions
-
-Poor fits, use the Researcher instead:
-- Reading static HTML pages (use `read_url`)
-- Querying public APIs (use `web_search` or a Nexus atom)
-- Fetching RSS feeds or structured data endpoints
-
----
-
-## Example agent
-
-```python title="agents/dashboard_scraper.py"
-from jarviscore import AutoAgent
-
-class DashboardScraper(AutoAgent):
-    role = "scraper"
-    capabilities = ["web-scraping", "dashboard"]
+class PortalAgent(AutoAgent):
+    role = "portal"
+    capabilities = ["portal_operations"]
+    system_prompt = "You operate our supplier portal."
     default_kernel_role = "browser"
-    system_prompt = """
-    You are a web automation specialist. Your task is to log into dashboards and
-    extract structured data. Always:
-    1. Call navigate() first.
-    2. Use wait_for() to confirm interactive elements are present before clicking.
-    3. Take a screenshot if you are unsure about page state.
-    4. Store all extracted data in a variable named `result`.
-    """
-```
-
-```python title="main.py"
-from jarviscore import Mesh
-from agents.dashboard_scraper import DashboardScraper
-
-mesh = Mesh()
-mesh.add(DashboardScraper)
-await mesh.start()
-
-results = await mesh.workflow("dashboard-job", [
-    {
-        "id":    "extract",
-        "agent": "scraper",
-        "task":  "Navigate to https://app.example.com/login, log in with username 'admin' "
-                 "and password from the DASHBOARD_PASSWORD env var, then extract the "
-                 "monthly revenue figure from the summary panel.",
-    }
-])
 ```
 
 ---
 
-## Connecting to an existing browser (CDP)
+## Consequential actions
 
-Start Chrome with `--remote-debugging-port=9222` and set
-`BROWSER_CONTROL_URL=http://127.0.0.1:9222`. `BrowserSubAgent` and the
-Researcher both attach to it, so the person watches the agent work and can take
-over in the same window.
+Placing an order, sending a message, paying, deleting: anything that commits
+the person waits for that person's approval. The agent proposes the exact
+action ("Click *Place order* on shop.example/checkout: 3 items, £18.40"),
+the step pauses, and no tokens are spent while it waits. Approved, JarvisCore
+reopens the page, restores what the person saw and performs that one action
+once. Declined, nothing happens.
+
+The agent does not have to remember to ask: a click or submit it did not mark
+is judged first, and one that could commit the person is refused until it is
+approved. Approvals need a workflow step with Redis
+([HITL Escalation](hitl.md)). The full rules are in the
+[Browser Reference](../reference/browser.md#consequential-actions).
+
+---
+
+## Recipes
+
+### Use the browser you already have open
+
+Start Chrome with `--remote-debugging-port=9222`, then:
+
+```bash title=".env"
+BROWSER_CONTROL_URL=http://127.0.0.1:9222
+```
+
+The agent opens its own tab in your browser, with your logins, and closes only
+that tab. You watch it work and can take over in the same window.
+
+### Stay logged in between runs
+
+```bash title=".env"
+BROWSER_PROFILE_DIR=.jarviscore/browser-profiles
+```
+
+Each tenant gets its own persistent profile, so cookies and logins survive
+restarts. A step that names no tenant gets a fresh browser, never someone
+else's profile.
+
+### Behind your own proxy
+
+Many sites refuse cloud and datacenter IPs. JarvisCore supplies none; point it
+at your provider:
+
+```bash title=".env"
+EGRESS_PROXY_URL=http://user-session-{session}:pass@gw.provider.example:7000
+BROWSER_LOCALE=en-GB
+BROWSER_TIMEZONE=Europe/London
+```
+
+`{session}` becomes a stable id, so a login or checkout keeps one exit IP.
+Model calls, search APIs and Nexus go direct. Details, including
+`EGRESS_PROXY_BYPASS`, are in the [Browser Reference](../reference/browser.md#your-own-proxy).
+
+### Long tasks
+
+A task that outlasts one execution epoch keeps its browser: the next epoch
+continues on the same page, with forms, basket and login intact
+([Session lifecycle](../reference/browser.md#which-browser-is-used)).
 
 ---
 
@@ -217,13 +187,21 @@ over in the same window.
 | Task not routed to browser | `BROWSER_ENABLED` not set | Add `BROWSER_ENABLED=true` to `.env` |
 | `Playwright not installed` error in tool result | Playwright not installed | `pip install playwright && playwright install chromium` |
 | `Browser not initialized` error from tools | Playwright launched but Chromium failed | Check system dependencies; try running `playwright install chromium` again |
-| Page load timeout | `networkidle` timeout (30s default) | Add `wait_for: "domcontentloaded"` in the navigate call for slow pages |
-| Element not found | Selector wrong or page not fully loaded | Use `wait_for` before `click` or `type_text`; use `screenshot` to inspect page state |
+| Page read as a loading shell or empty table | The site's data took longer than `BROWSER_DATA_TIMEOUT_MS` | Raise `BROWSER_DATA_TIMEOUT_MS` for slow back ends |
+| Element not found | Stale ref or page not fully loaded | Take a new `snapshot` after the page changes and use its refs |
+| `STALE_REF` | The ref came from an earlier snapshot or the page reloaded | Nothing was done; take a new `snapshot` and use its refs |
+| `ELEMENT_NOT_ACTIONABLE` from `click` or `type_text` | The element is disabled, hidden or covered (often a cookie dialog) | The error names what covers it; deal with that first, then act again |
+| `navigate` result has `"access": {"denied": true}` | The site turned the browser away (block, bot check, captcha) | The page was not served. Datacenter IPs are often refused; set [`EGRESS_PROXY_URL`](#behind-your-own-proxy) to your own provider |
+| `APPROVAL_REQUIRED` | The agent clicked or submitted something that could commit the person without marking it | Nothing was done; the agent re-issues it with `irreversible` and `consequence` |
+| `APPROVAL_UNAVAILABLE` | A consequential action without durable workflow state | Run the agent in a Mesh workflow step with Redis configured |
+| `find` and `act` are missing | No decision model on the Mesh | Configure a [decision model](../concepts/decision-models.md) |
+| Step resumes on a fresh page after its epoch ended | The continuation came after `BROWSER_CONTINUATION_HOLD_S` | Raise `BROWSER_CONTINUATION_HOLD_S` |
 
 ---
 
-## Further Reading
+## Next
 
-- [AutoAgent Guide](./autoagent.md), execution budgets for the browser role (60k thinking + 60k action tokens, 5 min wall clock, 28-turn fuse)
-- [Internet Search](./internet-search.md), the researcher's alternative for pages that don't need a real browser
-- [Model Routing](../concepts/model-routing.md), CUA and multimodal model requirements for the browser tier
+- [Browser Reference](../reference/browser.md): every tool, programs, approvals, sessions and pacing
+- [Configuration](../reference/configuration.md): every `BROWSER_*` setting
+- [AutoAgent Guide](autoagent.md): execution budgets for the browser role
+- [Internet Search](internet-search.md): the researcher, for pages that only need reading

@@ -28,13 +28,13 @@ Storage Layout:
         └── ...
 """
 
-import ast
 import asyncio
 import hashlib
 import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -163,6 +163,10 @@ class FunctionRegistry:
         # In-memory registries
         self.functions: Dict[str, Optional[Callable]] = {}
         self.function_metadata: Dict[str, Dict[str, Any]] = {}
+        # Source registered but not yet compiled; get_function() compiles on
+        # first use. Executing every catalogue module at load made each start
+        # pay seconds for callables nothing had asked for.
+        self._uncompiled: Set[str] = set()
 
         # Multi-dimensional indexes
         self.functions_by_system: Dict[str, Set[str]] = {}
@@ -362,10 +366,11 @@ class FunctionRegistry:
             import inspect
             source_code = inspect.getsource(function)
             self.functions[function_name] = function
+            self._uncompiled.discard(function_name)
         elif isinstance(function, str):
             source_code = function
-            # Model-written source only ever runs in the sandbox, never in this process.
-            self._register_source_only(function_name, source_code)
+            self.functions[function_name] = None
+            self._uncompiled.add(function_name)
         else:
             logger.error(f"Invalid function type: {type(function)}")
             return False
@@ -462,6 +467,7 @@ class FunctionRegistry:
 
         metadata = self.function_metadata.pop(function_name, {})
         self.functions.pop(function_name, None)
+        self._uncompiled.discard(function_name)
 
         # Remove from indexes — extract primitives to avoid passing the full stored dict
         self._deindex_function(
@@ -490,6 +496,18 @@ class FunctionRegistry:
 
     def get_function(self, function_name: str) -> Optional[Callable]:
         """Get callable function object, or None if not found/source-only."""
+        if function_name in self._uncompiled:
+            self._uncompiled.discard(function_name)
+            source_code = self.get_function_code(function_name)
+            if source_code:
+                try:
+                    self._try_load_callable(function_name, source_code)
+                except Exception as exc:
+                    self.functions[function_name] = None
+                    logger.debug(
+                        "Source-only function %s (not importable): %s",
+                        function_name, exc,
+                    )
         return self.functions.get(function_name)
 
     def get_function_code(self, function_name: str) -> Optional[str]:
@@ -1123,7 +1141,11 @@ class FunctionRegistry:
                     "function_name", meta_file.stem
                 )
                 self.function_metadata[function_name] = metadata
+
+                atom_path = metadata.get("atom_path")
                 self.functions[function_name] = None
+                if atom_path and Path(atom_path).exists():
+                    self._uncompiled.add(function_name)
 
             except Exception as e:
                 logger.error(f"Failed to load metadata from {meta_file}: {e}")
@@ -1379,32 +1401,30 @@ class FunctionRegistry:
             return pool.submit(asyncio.run, coro).result()
 
     # ─────────────────────────────────────────────────────────────
-    # Source-Only Registration (AST fallback)
+    # Callable Loading (on first get_function)
     # ─────────────────────────────────────────────────────────────
 
-    def _register_source_only(self, function_name: str, source_code: str) -> None:
-        """Register function via AST without importing (no callable)."""
+    def _try_load_callable(self, function_name: str, source_code: str) -> None:
+        """Try to dynamically import function as callable."""
+        import types
+
+        module = types.ModuleType(f"_registry_{function_name}")
         try:
-            tree = ast.parse(source_code)
-            # Validate that at least one function/class definition exists
-            has_def = any(
-                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                for node in ast.walk(tree)
-            )
-            if has_def:
-                self.functions[function_name] = None  # Source-only marker
-                logger.debug(f"Source-only registration: {function_name}")
+            exec(compile(source_code, f"<registry:{function_name}>", "exec"), module.__dict__)
+            # Look for the function in module namespace
+            if hasattr(module, function_name):
+                self.functions[function_name] = getattr(module, function_name)
             else:
-                # Still register — code might be a script-style function
-                self.functions[function_name] = None
-                logger.debug(
-                    f"Source-only registration (no def): {function_name}"
-                )
-        except SyntaxError as e:
-            logger.warning(
-                f"Failed to parse source for {function_name}: {e}"
-            )
-            self.functions[function_name] = None
+                # Try to find any callable
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if callable(attr) and not attr_name.startswith("_"):
+                        self.functions[function_name] = attr
+                        break
+                else:
+                    self.functions[function_name] = None
+        except Exception:
+            raise
 
     # ─────────────────────────────────────────────────────────────
     # Bundle Cache Helpers
@@ -1530,6 +1550,26 @@ def create_function_registry(
     return registry
 
 
+_SHARED_REGISTRIES: Dict[str, "FunctionRegistry"] = {}
+_SHARED_REGISTRIES_LOCK = threading.Lock()
+
+
+def shared_function_registry(
+    storage_path: str = runtime_path("logs", "function_registry"),
+) -> FunctionRegistry:
+    """The process's one registry for this directory, loaded and seeded once.
+
+    Agents writing the same directory see one index instead of diverging copies,
+    and a pool member joins in microseconds instead of reloading the catalogue.
+    """
+    key = str(Path(storage_path).resolve())
+    with _SHARED_REGISTRIES_LOCK:
+        registry = _SHARED_REGISTRIES.get(key)
+        if registry is None:
+            registry = _SHARED_REGISTRIES[key] = create_function_registry(storage_path)
+        return registry
+
+
 def _seed_shipped_atoms(registry: FunctionRegistry) -> None:
     """Load the packaged atoms so a fresh registry is not an empty one.
 
@@ -1562,11 +1602,7 @@ def _seed_shipped_atoms(registry: FunctionRegistry) -> None:
     )
     if failed:
         logger.warning("%d atom(s) in the catalogue could not be loaded", len(failed))
-    already = sum(
-        1 for item in report.get("skipped", [])
-        if item.get("reason") == "already registered"
-    )
-    if not registered and not already:
+    if not registry.function_metadata:
         # A silent no-op here is what made an empty registry look like normal
         # operation for as long as it did.
         logger.warning(

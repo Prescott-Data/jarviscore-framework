@@ -100,10 +100,17 @@ result = await mesh.execute_goal(
     context={"tenant_id": "acme"},
 )
 
-print(result["status"])
-print(result["obligation_status"])
-print(result["response_status"])
+print(result["status"])            # completed, waiting, failed or cancelled
+print(result["result_summary"])    # the answer
+print(result["output"])            # what the final step delivered
+print(result["evidence"])          # every step's tool observations
 ```
+
+`output` and `evidence` are the same as `run_task()` returns. A failed goal
+carries `error`, the failing step's reason. When a step is
+paused for a person, `status` is `waiting` and `result["waiting"]` names the
+step, why it waits and its `metadata`. `steps` still holds every step's record
+for anything more detailed.
 
 Caller context is copied without private keys or execution authority. The
 framework derives capability, effect and systems from the published step and
@@ -242,6 +249,13 @@ history, mutation receipts, and file state therefore advance together. A request
 larger than an entire epoch is terminal because starting another identical epoch
 cannot make it fit.
 
+A run that stops without an accepted answer, whether its last epoch ran out or
+its answer was refused, carries what it established in `progress`: the agent's
+working notes and its last refused answer with the reason, marked
+`"verified": false`. A step that reaches `max_epochs_per_step` keeps that
+`progress` in its `EXECUTION_EPOCH_LIMIT_REACHED` record, so the replanner and
+the final answer can report what was found and what remains.
+
 Kernel coroutine tools execute on the asyncio event loop. Synchronous tools run
 in a worker thread with the current workflow context propagated, so a blocking
 provider or sandbox call cannot starve distributed claim renewal. Redis fencing
@@ -273,6 +287,13 @@ receipt before accepting DONE. Direct dependencies carry already-grounded receip
 to downstream synthesis. Missing and unknown receipts fail closed and keep the
 same agent state active. Products can use the public `CommandObservation` model
 without implementing evidence matching or retry logic.
+
+Other cited tool results carry `observed_tool_result`: the original tool input,
+output, status and error. The agent's authored conclusion remains separate from
+that observation. Evaluators reason from the actual query, scope, period and
+coverage rather than treating a real citation as proof of the conclusion.
+Unfinished dependency records retain their status and `progress` in follow-up
+and final-response context; they are not reduced to an empty output.
 
 `workspace_write` and hash-guarded `workspace_edit` use the same contract through
 the public `WorkspaceMutation` model. JarvisCore binds path, hash, byte size and
@@ -426,6 +447,12 @@ result = await mesh.resume_goal(
     context={"human_response": "approved"},
 )
 ```
+
+The final response can be written while a step waits, so the person sees what
+the goal is waiting for. Resuming the step reopens that response: it is written
+again from the resumed work, and a response still being written from the
+paused state is discarded when it finishes. The resumed result's
+`result_summary` therefore describes what actually happened after the decision.
 
 Cancellation is durable. It fences future claims and prevents an expired
 executor from committing after cancellation:

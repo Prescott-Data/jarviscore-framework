@@ -20,11 +20,22 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_serializer
 
 
 class ToolReceiptError(ValueError):
     """A final artifact references missing or incompatible tool evidence."""
+
+
+def _foreign_receipt(receipt_id: str, workflow_prefix: str) -> bool:
+    """Whether ``receipt_id`` names another workflow (a cut-short id of this one does not)."""
+    return bool(workflow_prefix) and not f"{receipt_id}:".startswith(workflow_prefix)
+
+
+def _unknown_receipt(receipt_id: str) -> ToolReceiptError:
+    return ToolReceiptError(
+        f"Unknown tool receipt {receipt_id!r}; cite a receipt id exactly as a tool result gave it"
+    )
 
 
 class ArtifactReferenceError(ValueError):
@@ -67,6 +78,20 @@ class WorkspaceMutation(BaseModel):
     observed_at: datetime
 
 
+class ObservationReceipt(BaseModel):
+    """Original tool evidence alongside the agent's interpretation of it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_receipt_id: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    observed_at: datetime
+    tool_input: Dict[str, Any] = Field(default_factory=dict)
+    tool_output: Any = None
+    status: Literal["success", "failure", "blocked"] = "success"
+    error: Optional[str] = None
+
+
 class ToolResult(BaseModel):
     """Record of a single tool invocation within the OODA loop."""
 
@@ -78,6 +103,8 @@ class ToolResult(BaseModel):
     timestamp: float = Field(default_factory=time.time)
     duration_ms: int = Field(default=0, ge=0)
     receipt_id: str = ""
+    #: Made by a tool program: kept as evidence, never shown to the agent as context.
+    via_program: bool = False
 
     @property
     def succeeded(self) -> bool:
@@ -86,6 +113,17 @@ class ToolResult(BaseModel):
     @property
     def observed_at(self) -> datetime:
         return datetime.fromtimestamp(self.timestamp, tz=timezone.utc)
+
+    def observation(self) -> ObservationReceipt:
+        return ObservationReceipt(
+            tool_receipt_id=self.receipt_id,
+            tool_name=self.tool_name,
+            observed_at=self.observed_at,
+            tool_input=self.tool_input,
+            tool_output=self.tool_output,
+            status=self.status,
+            error=self.error,
+        )
 
     def command_observation(self) -> CommandObservation:
         """Project a workspace command result into immutable evidence."""
@@ -161,12 +199,25 @@ class KernelState(BaseModel):
     system_prompt: str = ""
     context: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_serializer("context")
+    def _persisted_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        # Classes such as a declared output_schema are code, not state; a resume
+        # receives them again with the caller's context.
+        return {key: value for key, value in context.items() if not isinstance(value, type)}
+
     # Structured tool execution history (OODA loop audit trail)
     tool_history: List[ToolResult] = Field(default_factory=list)
+    # Tool results ever recorded in this state; compaction shortens tool_history, never this.
+    tool_results_recorded: int = 0
 
     # Working memory — thoughts, scratchpad notes
     thoughts: List[str] = Field(default_factory=list)
     scratchpad_notes: str = ""
+    # What the agent wrote in this step's working scratchpad; shown every turn and kept across epochs.
+    working_notes: List[Dict[str, Any]] = Field(default_factory=list)
+    # The agent's recent exchanges (its reasoning and what it observed), so a
+    # continued step resumes where it was rather than from the task alone.
+    conversation: List[Dict[str, Any]] = Field(default_factory=list)
 
     # Flexible key-value store for subagent-specific state
     # (e.g. research_findings, candidate_code, shared_context)
@@ -219,6 +270,7 @@ class KernelState(BaseModel):
         *,
         timestamp: Optional[float] = None,
         duration_ms: int = 0,
+        via_program: bool = False,
     ) -> ToolResult:
         """Record a tool invocation result.
 
@@ -234,6 +286,8 @@ class KernelState(BaseModel):
                 if not error:
                     error = tool_output.get("error")
 
+        # Receipt ids must never be reissued: compaction drops the oldest entries.
+        self.tool_results_recorded = max(self.tool_results_recorded, len(self.tool_history)) + 1
         result = ToolResult(
             tool_name=tool_name,
             tool_input=tool_input,
@@ -242,15 +296,16 @@ class KernelState(BaseModel):
             status=status,
             timestamp=time.time() if timestamp is None else timestamp,
             duration_ms=max(0, int(duration_ms)),
+            via_program=via_program,
             receipt_id=(
                 f"tool:{self.workflow_id or f'local-{self.agent_id}-{int(self.started_at * 1_000_000)}'}:"
-                f"{self.step_id or self.agent_id}:{len(self.tool_history) + 1}"
+                f"{self.step_id or self.agent_id}:{self.tool_results_recorded}"
             ),
         )
         self.tool_history.append(result)
 
         if error:
-            self.last_error = str(error)[:500]
+            self.last_error = str(error)
         return result
 
     def hydrate_tool_receipts(
@@ -316,7 +371,7 @@ class KernelState(BaseModel):
                 for field in ("sha256", "bytes", "executable")
             )
             if receipt_id:
-                if workflow_prefix and not receipt_id.startswith(workflow_prefix):
+                if _foreign_receipt(receipt_id, workflow_prefix):
                     raise ToolReceiptError(
                         f"Tool receipt {receipt_id!r} belongs to another workflow"
                     )
@@ -325,18 +380,24 @@ class KernelState(BaseModel):
                     evidence: BaseModel = receipt.workspace_mutation()
                 elif mutation_claim:
                     evidence = prior_mutations.get(receipt_id)
+                elif receipt is not None and receipt.tool_name in {"workspace_write", "workspace_edit"}:
+                    evidence = receipt.workspace_mutation()
+                elif receipt is not None and (receipt.tool_name == "workspace_run" or command_claim):
+                    evidence = receipt.command_observation()
                 elif receipt is not None:
-                    evidence = (
-                        receipt.workspace_mutation()
-                        if receipt.tool_name in {"workspace_write", "workspace_edit"}
-                        else receipt.command_observation()
-                    )
+                    return {
+                        **{key: hydrate(item) for key, item in candidate.items()
+                           if key != "observed_tool_result"},
+                        "observed_tool_result": receipt.observation().model_dump(
+                            mode="json", exclude={"tool_receipt_id"}
+                        ),
+                    }
                 else:
                     evidence = prior_mutations.get(receipt_id) or prior_observations.get(
                         receipt_id
                     )
                 if evidence is None:
-                    raise ToolReceiptError(f"Unknown tool receipt {receipt_id!r}")
+                    raise _unknown_receipt(receipt_id)
                 return evidence.model_dump(mode="json")
             if require_command_receipts and command_claim:
                 raise ToolReceiptError(
@@ -379,7 +440,7 @@ class KernelState(BaseModel):
                 elif receipt.tool_name in {"workspace_write", "workspace_edit"}:
                     item = receipt.workspace_mutation()
                 else:
-                    continue
+                    item = receipt.observation()
             except ToolReceiptError:
                 continue
             evidence.append(item.model_dump(mode="json"))
@@ -415,18 +476,35 @@ class KernelState(BaseModel):
         """
         return self.output
 
-    def unfinished_account(self) -> Optional[str]:
-        """What the agent was doing when the run stopped, for a run with no answer."""
+    def refuse_answer(self, parsed: Dict[str, Any], reason: str) -> None:
+        """Keep an answer the runtime did not accept, with why, so it is not lost."""
+        self.internal_variables["refused_answer"] = {
+            "turn": self.turn,
+            "summary": parsed.get("summary"),
+            "result": parsed.get("result"),
+            "refused_because": reason,
+        }
+
+    def progress(self) -> Optional[Dict[str, Any]]:
+        """What a run that stopped without an accepted answer had established.
+
+        Its working notes and the last answer it gave that the runtime refused, labelled
+        as unverified, so the step that reads this can report what was found and what
+        remains instead of only that the run stopped.
+        """
         if self.output is not None:
             return None
-        parts = []
-        if self.thoughts:
-            parts.append(f"Last reasoning: {self.thoughts[-1]}")
-        for tr in reversed(self.tool_history):
-            if tr.succeeded and tr.tool_output is not None:
-                parts.append(f"Last tool: {tr.tool_name}")
-                break
-        return " | ".join(parts) or None
+        notes = [entry.get("note") for entry in self.working_notes if entry.get("note")]
+        refused = self.internal_variables.get("refused_answer")
+        if not notes and not refused:
+            return None
+        return {
+            "verified": False,
+            "meaning": "The run stopped before an answer was accepted; this is what it had established.",
+            "working_notes": notes,
+            **({"refused_answer": refused} if refused else {}),
+            **({"last_error": self.last_error} if self.last_error else {}),
+        }
 
 
 def hydrate_receipt_evidence(
@@ -440,6 +518,17 @@ def hydrate_receipt_evidence(
     """Ground receipt-bearing output after all product normalization hooks."""
     commands: Dict[str, CommandObservation] = {}
     mutations: Dict[str, WorkspaceMutation] = {}
+    # Only this step's own receipts: a prior step's output keeps an observation
+    # claim as written, so its shape is no proof the receipt exists.
+    observations: Dict[str, ObservationReceipt] = {}
+    for item in receipt_evidence:
+        if not isinstance(item, dict):
+            continue
+        try:
+            observation = ObservationReceipt.model_validate(item)
+        except ValidationError:
+            continue
+        observations[observation.tool_receipt_id] = observation
     workflow_prefix = f"tool:{workflow_id}:" if workflow_id else ""
 
     def collect(candidate: Any) -> None:
@@ -481,7 +570,7 @@ def hydrate_receipt_evidence(
             field in candidate for field in ("sha256", "bytes", "executable")
         )
         if receipt_id:
-            if workflow_prefix and not receipt_id.startswith(workflow_prefix):
+            if _foreign_receipt(receipt_id, workflow_prefix):
                 raise ToolReceiptError(
                     f"Tool receipt {receipt_id!r} belongs to another workflow"
                 )
@@ -492,8 +581,21 @@ def hydrate_receipt_evidence(
                 evidence = commands.get(receipt_id)
                 if evidence is None:
                     evidence = mutations.get(receipt_id)
+            if evidence is None and receipt_id in observations:
+                if command_claim:
+                    raise ToolReceiptError(
+                        f"Tool receipt {receipt_id!r} is not command evidence"
+                    )
+                if not mutation_claim:
+                    return {
+                        **{key: hydrate(item) for key, item in candidate.items()
+                           if key != "observed_tool_result"},
+                        "observed_tool_result": observations[receipt_id].model_dump(
+                            mode="json", exclude={"tool_receipt_id"}
+                        ),
+                    }
             if evidence is None:
-                raise ToolReceiptError(f"Unknown tool receipt {receipt_id!r}")
+                raise _unknown_receipt(receipt_id)
             return evidence.model_dump(mode="json")
         if require_receipts and command_claim:
             raise ToolReceiptError(

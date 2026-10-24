@@ -239,7 +239,7 @@ class TestAggregation:
         out = await result.summarize(_LLM(), "Synthesize the board read.")
         assert out == "the summary"
         prompt = captured["prompt"]
-        assert "…[truncated: showing 800 of 2000 chars]" in prompt  # honest clip
+        assert "Z" * 2000 in prompt and "truncated" not in prompt  # whole evidence
         assert "b: FAILED — broke" in prompt                        # failures visible
         assert "skipped by budget" in prompt                        # skips visible
 
@@ -247,7 +247,7 @@ class TestAggregation:
         with pytest.raises(ValueError, match="concurrency"):
             asyncio.run(
                 run_fanout(
-                    fanout_id="f", find_agent=lambda s: None, agent="a",
+                    fanout_id="f", lease_agent=None, agent="a",
                     items=[], task="t", concurrency=0,
                 )
             )

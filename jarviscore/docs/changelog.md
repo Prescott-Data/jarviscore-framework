@@ -19,10 +19,403 @@ All notable changes to JarvisCore Framework are documented here. This project fo
     - **MINOR** (1.**x**.0): new features, new public API surface, backward-compatible behavioral changes.
     - **MAJOR** (**x**.0.0): breaking changes to the public API.
 
+    **The public API** is what `jarviscore` exports in `__all__`, the settings
+    in the [configuration reference](reference/configuration.md), and the
+    behaviour the guides document. Kernel internals, prompts and private
+    (`_`-prefixed) names are not covered and may change in any release.
+    Public API is deprecated with a warning in a minor release before it is
+    removed, and removals are batched into planned major releases.
+
     Versions **1.0.3** and **1.0.4** contain critical regressions and should be
     avoided. They will be yanked from PyPI. Pin `jarviscore-framework>=1.1.0`.
 
 ---
+
+<div class="changelog-release" markdown>
+
+## 2.4.1 <span class="changelog-date">2026-10-24</span>
+
+### Fixed
+
+- **An approval covers only the arguments the person saw.** A consequential
+  action's approval was looked up by its operation identity (the atom and its
+  idempotency fields), and the action then ran with whatever arguments the agent
+  passed. After a person approved "pay invoice INV-1, 10 to account A", a call
+  for INV-1 with another amount or account ran under that approval. 20 of the 155
+  shipped integrations that require approval take arguments outside their
+  identity (for example `cc` on `msgraph_send_email`, `from_email` on
+  `sendgrid_send_email`, `visibility` on `linkedin_create_post`). An approval is
+  now bound to every argument (for browser actions, to the element and values
+  touched), and different arguments ask the person again. An operation that has
+  already run still returns its recorded outcome, so it is never run twice.
+- **The first decision on an action stands.** `Mesh.resolve_hitl` checked that
+  an action was undecided and then wrote the decision, so an approval and a
+  refusal sent together could both pass the check and the last one won. The
+  decision is now written atomically (`resolve_hitl_action_once`); the later one
+  gets `ValueError`.
+
+## 2.4.0 <span class="changelog-date">2026-10-24</span>
+
+### Changed
+
+- **Agents start in a fraction of the time.** Opening the function registry
+  executed all 1,229 shipped atom modules to hold callables nothing asked for,
+  and merging the catalogue parsed every atom's contract twice even when the
+  stored source was the shipped source. A warm start spent 5 to 6 seconds
+  there and a cold one 4 to 14, before any work began. Callables now compile
+  on first `get_function()`, an atom identical to the shipped one is skipped
+  by hash, and each atom is parsed once. Warm registry open drops to about
+  0.25 s and a cold seed to about 2 s, with identical registry contents.
+- **LLM calls keep their connection.** The provider SDKs closed idle
+  connections after 5 s, shorter than the tool work between agent turns, so
+  most calls paid a new TCP and TLS handshake (about a second to a distant
+  region), and promotion and vLLM calls opened a new session every time.
+  Idle connections are now kept for `LLM_KEEPALIVE_SECONDS` (default 120),
+  promotion and vLLM calls reuse one session per event loop, and an agent
+  opens its primary provider's connection while it starts (`LLM_PREWARM`).
+  Measured against Azure: a call after an idle gap went from 2.9–3.2 s to
+  1.1–1.2 s, and an agent's first call from 2.9 s to 2.0 s.
+- **The observability guide says what a trace is.** It described the
+  per-step trace as suitable for replay and audit retention. It is a
+  debugging record: LLM prompts and responses are previews, tool results are
+  cut to 2,000 characters, routing, planning and evaluation calls are not yet
+  traced, entries expire after seven days, and writes are best effort. The
+  guide, the memory concept page and the tracer docstrings now say so, and
+  the event table lists the fields the runtime writes.
+
+- **Agent turns carry only what the agent can use.** A working turn sent
+  19-29 tool schemas, each repeating a long note description, peer tools with
+  no peers present, memory and workflow tools with nothing behind them, an
+  echo tool that made the model write its answer twice, internal routing data,
+  per-turn counters and a reasoning scaffold the model wrote out every call.
+  Each is now offered only where it can act, and independent tool calls in one
+  reply all run in the same turn. On a three-lookup support task: 5 calls and
+  ~17k input tokens became 3 calls and ~5k, with output tokens cut by more than
+  half.
+- **Tool programs.** A sub-agent's own tools can be called from a Python
+  program in the Kernel's sandbox (`run_tool_program`), so paging, filtering
+  and totals happen in code and only the result reaches the model. Every call
+  still runs through the agent's hooks and leaves a receipt. On an
+  accounts-receivable task over 3,600 invoices, JarvisCore answered correctly
+  for $0.024 in 21 s; LangGraph, CrewAI and Hermes, on the same model, spent
+  $0.18-0.46 and 32-111 s and got it wrong.
+- **The router answers tasks that need no role.** Summarising or rewording what
+  the task gives is answered in the routing call (one model call instead of
+  two), on the model the communicator would use. Calculations still go to the
+  coder. `KERNEL_ROUTER_MAY_ANSWER=false` turns it off.
+- **Each turn's prompt extends the last one, so providers serve it from
+  cache.** Tool definitions stay fixed for a run and the task leads the
+  conversation. What the runtime tells the agent (the date, the budget at the
+  start and again once a quarter remains, a warning before exchanges leave
+  view) is said once and stays where it was said. Notes, receipts and recent
+  actions are listed only for calls that have left view, exchanges leave view
+  five at a time, and the run's workflow id no longer leads the task. On
+  Azure, a prompt that strictly extends the last was served 9.1k of 9.2k
+  tokens from cache; one whose closing message was replaced, 5.4k of 9.1k.
+- **Notes when they are needed.** The agent is asked to note what it will
+  still need when exchanges are about to leave view, instead of on every
+  call; output tokens on a support ticket fell from ~550 to ~300.
+- **Receipts stay out of the answer.** `done` says receipts are cited in
+  `result` as `tool_receipt_id`, never in the summary; replies to customers
+  had carried receipt ids in their prose.
+- Measured head to head (same model, three interleaved rounds), against the
+  release before these turn changes: support lookups 1.8x cheaper, compute
+  1.7x, research 1.3x, five recurring tickets 2.2x (and 1.5x faster), with
+  26-78% of input now cached where none was. Against LangGraph and CrewAI,
+  JarvisCore is 2-3x cheaper on a 360-invoice ledger and 26x on 3,600
+  invoices, where it alone answered correctly; on small tool tasks it still
+  costs 1.2-3.6x more.
+
+### Added
+
+- `UnifiedLLMClient.close()` and `PromoLLMClient.close()` release the
+  client's connections; `AutoAgent.teardown()` calls it. The `Profile`
+  teardown example already called `llm.close()`, which did not exist.
+
+### Fixed
+
+- **`jarviscore inspect` shows each tool call's arguments.** The kernel's
+  tracer records them as `args` and the timeline read only `params`, so every
+  tool call in a real run printed without them.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 2.3.1 <span class="changelog-date">2026-10-23</span>
+
+### Fixed
+
+- **A goal returns what it delivered.** `Mesh.execute_goal()` and
+  `resume_goal()` now return `output` (the final step's delivered work) and
+  `evidence` (every step's tool observations), as `run_task()` does, and
+  `waiting` (the step paused for a person, with why). Before, callers had to
+  dig them out of `steps`. A failed goal also carries `error`, the failing
+  step's own reason.
+- **A result is checked against its declared contract before it is accepted.**
+  `output_schema` shaped the `done` call but its validators were never run, so
+  a result that broke a rule the JSON schema cannot express (a reproduction
+  needs a failing run) either passed or failed the whole step. `done` is now
+  refused with the rules that failed, and the agent fixes the result in its
+  next turn. An agent that says it could not finish (`complete: false`) is not
+  held to the contract.
+- **The room agent's replies are written for people.** A reply could end with
+  a runtime receipt id ("Tool receipt: tool:room-…:1"); the agent is told not
+  to, and any that slips through is removed before the reply is posted.
+- **Files the agents write under `output/` reach the room.** In a room or any
+  bound workspace, the sandbox put its own scratch folder at `output/` and the
+  change collector skipped every folder of that name, so a PDF an agent made was
+  reported done but never proposed. The runtime's folder is `.jarviscore/output`
+  again, `output/` is the project's own, and a write left out of a step's change
+  is logged.
+- **New work goes in a new file; a revision edits what it revises.** Agents were
+  told only to change "the room's files", so a new topic overwrote whatever file
+  was there. They are now told to put new work in a new file, and a revision is
+  given the files and text of the attempt it redoes.
+- **One version of a piece of work lands.** Two people giving the same feedback
+  started two revisions, and the later one could be accepted over the team's
+  choice. A revision is now reserved before it starts, so feedback given at the
+  same moment is kept for it rather than starting another. Accepting a version
+  replaces what it revised, closes the other versions of that line of work
+  (and revisions built on them), and stops work still making one; decisions on
+  one line of work are made one at a time, and a version built on one the team
+  did not take cannot be accepted. Work that finishes after that files nothing
+  (`superseded`). Revisions of held work stay held.
+- **Nothing anyone adds to running work is lost.** The room agent gains
+  `update_work`: an addition or correction to work in progress, or feedback on a
+  proposal already being redone, is kept (`ask.queued`), and when the work ends
+  one follow-up takes up every addition from its result, in the same thread.
+- **A failed goal names the step that failed**, not a step blocked behind it.
+- **The room agent knows what is running and how work ended.** Its brief lists
+  running work, additions waiting, and recent results (including work that
+  changed no files), and it answers questions and agreement itself instead of
+  starting new work. `ask_agents` and `room.ask` take a short `title`; a
+  proposal is no longer titled with the whole request.
+- **A plan cut short says how to fix it.** When a reasoning model spent its
+  whole output allowance thinking, planning failed with token counts only; the
+  error now names `LLM_MODEL_OUTPUT_LIMITS` and the model to declare.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 2.3.0 <span class="changelog-date">2026-10-22</span>
+
+Multiplayer: a team and its agents work on the same files, from Slack or your
+own product. Also a hardened local Nexus stack and Gateway API keys.
+
+### Added
+
+- **Multiplayer.** People ask in their own words, agents propose changes, and
+  people decide as themselves. Start with
+  [Build a Multiplayer Agent](guides/multiplayer-agents.md).
+    - **Rooms** (`Room`): versioned shared files with roles, proposals, line-level
+      merging, and work held for whoever's own access it used.
+    - **`RoomAgent`**: the agent the team talks to. It asks the agents and
+      prepares decisions; people confirm them with one tap.
+    - **Chat surfaces**: `RoomConversation` connects a room to any surface; Slack
+      is built in (`SlackApp`, `jarviscore room slack`).
+    - **People as peers** (`HumanAgent`): planners route steps to people, who
+      answer from a terminal, the CLI or a room's chat.
+    - **Testing** without a model or a workspace: `MemorySurface`,
+      `ScriptedRoomAgent`, `FakeSlack`.
+- **Room memory.** A room remembers in Athena, or in the local store without
+  it. What work learns through someone's own access stays private to them.
+  `room.forget` erases it all.
+- **Per-person spending caps** (`Spending`) and an **audit** of who did what,
+  with whose access and at what cost (`Room.audit()`).
+- **Steps act for the person who asked** (`context["acting_for"]`): their own
+  connections and access, in their name.
+- **HITL:** items record their step and tenant, and answering one resumes the
+  step. `HITL_TARGETS` names who responds; `HITLQueue.assign` routes work to a
+  person.
+- `mesh_worker = False`, CustomAgents working on files with no extra code, and
+  `STORAGE_BACKEND=redis`.
+
+### Changed
+
+- The bundled Athena stack is pinned to **Athena v0.2.0** (authentication and
+  per-tenant memory).
+- Every Kernel role can open and change a step's files; only the coder runs
+  commands.
+- The new [Browser Reference](reference/browser.md) holds the detail behind a
+  shorter Browser Automation guide.
+
+### Security
+
+- **Gateway API keys.** `NexusClient`, `AuthenticationManager` and the CLI
+  send `NEXUS_GATEWAY_API_KEY` as `X-API-Key`.
+- **The local Nexus stack is locked down.** Nexus v0.6.7 now requires keys on the
+  broker and the gateway and listens on `127.0.0.1` only; before, anything on
+  your network could read stored credentials.
+- **Agents no longer hold the encryption key.** Stack secrets moved from `.env`
+  to `~/.jarviscore/nexus/stack.env` (mode 0600); agents get the gateway URL
+  and key only.
+- `nexus register` prompts for secrets instead of taking them as flags.
+
+### Fixed
+
+- The bundled Athena stack starts, keeps every event, and summarises with
+  Azure deployments.
+- Room work uses the room's tenant in Athena, not the deployment's default.
+- HITL requests go to the people you name rather than a hard-coded "founder",
+  and a reviewer's reason reaches the agent.
+- A peer's first request to a node that has just joined is no longer dropped,
+  and a step that fails on another node keeps its reason.
+- The local vault derives its key once instead of on every credential read.
+- `jarviscore atom test --mode integration` works.
+
+### Removed
+
+- The stale repository-root `docker-compose.nexus.yml` and Nexus migration;
+  `jarviscore nexus init` uses the bundled compose file.
+
+### Upgrading from 2.2
+
+1. **Local Nexus:** run `jarviscore nexus up`. It moves the stack's keys out of
+   `.env` (keeping the ones that decrypt your credentials) and restarts on
+   v0.6.7.
+2. **A gateway you deploy yourself** with `GATEWAY_REQUIRE_API_KEY=true`:
+   set `NEXUS_GATEWAY_API_KEY` on every agent host.
+3. **Athena:** run `jarviscore memory init`, then
+   `docker exec athena ./ltm-purge-unscoped`.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 2.2.0 <span class="changelog-date">2026-10-22</span>
+
+One agent can run as several workers, every model call is paced to the
+provider's real limits, and agents act through native tool calls. Results come
+back with the evidence behind them, and the browser holds together on long,
+real tasks.
+
+### Added
+
+- **Elastic worker pools.** `mesh.add(Agent, pool=Pool(min=1, max=8))` runs one
+  agent as several workers as work queues up. Verifying 196 claims took 9.4
+  minutes instead of 202. See
+  [RFC 0002](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0002-elastic-execution.md).
+- **Draining.** `Mesh.drain()` lets started goals finish without taking new
+  work; `stop()` drains first.
+- **Provider governor.** Calls are admitted per deployment, grow while the
+  provider keeps up and back off on rate limits. `LLM_LIMITS` shares limits
+  across processes. See
+  [Provider governor](reference/configuration.md#provider-governor).
+- **Native tool turns** on Azure, Claude, Gemini, Vertex AI and vLLM: every
+  turn is a real tool call, or `done` typed from the step's `output_schema`.
+- **Working notes and a work record.** Agents note what they have established
+  (never dropped from context), and every result carries
+  `metadata["work_record"]`.
+- **Memory across runs with nothing to install**, in `.jarviscore/memory/`
+  when Athena is not configured.
+- **Consequential actions wait for a person.** An action marked `irreversible`
+  pauses the step; `Mesh.resolve_hitl()` resumes it, and the action runs once.
+- **A browser for real tasks:**
+    - page views as a person reads them, and every action returns the page it
+      leaves behind;
+    - `find` and `act` with a decision model;
+    - `run_playwright` programs for repeated work, with `read_pages` and
+      `open_each` for many pages and paged histories;
+    - continuing across execution epochs, site pacing, and your own egress
+      proxy (`EGRESS_PROXY_URL`).
+
+  See the [Browser Reference](reference/browser.md).
+- **One runtime folder.** Everything the framework writes goes under
+  `./.jarviscore/`. Thanks to @whoisnjoguu (#146).
+
+### Changed
+
+- **Answers come with evidence.** `run_task()` and `workflow()` return the
+  answer in `output` and `result_summary`, and the tool observations in
+  `evidence`.
+- **Agents act as declared.** A declared `default_kernel_role` is used, and
+  only agents with `requires_auth = True` can use provider credentials.
+- **Memory follows the agent** across restarts: it is keyed to the role rather
+  than a per-process id.
+- **One instance, one piece of work.** Add `pool=Pool(max=N)` to run an
+  agent's work in parallel.
+- **Agents see every tool result whole**, and later steps read what a step
+  delivered, not its working state.
+- **The runtime records what an agent did instead of policing how it works.**
+  The runtime no longer clicks for the agent; leases, approvals, contracts and
+  credential limits stay. See
+  [RFC 0003](https://github.com/Prescott-Data/jarviscore-framework/blob/main/rfcs/0003-record-not-police.md).
+- `fill_form` fills every kind of field. The browser offers fewer tools;
+  `run_playwright` covers the rest.
+
+### Fixed
+
+- **Honest results.** An agent that could not do the task reports `failure`
+  with its reason. Only `DONE` completes a step, and receipts are never reused
+  or invented.
+- **Plain installs work.** Keys in `.env` reach every part of the runtime, the
+  researcher reads web pages and PDFs without extras, logs report only real
+  problems, and importing JarvisCore no longer loads a `.env` file.
+- **Workflows and the mesh.** Tasks started in the same second get their own
+  steps, and an expired goal no longer stalls a node. `Mesh.stop()` no longer
+  hangs, pools no longer block the event loop, and the governor no longer
+  strands calls.
+- **Long steps hold together.** Reaching the turn cap continues the step, and
+  running out of budget keeps what was found. The next epoch finds what the
+  last one read.
+- **The browser.** Stale refs are refused, clickable rows and dropdown choices
+  are visible, and approvals restore form values and run only once. A browser
+  that goes away mid-step is reopened, and agents know the date.
+- **Research and memory.** A research answer is the findings, not the working
+  state, `recall()` keeps to its limit, and costs say where their price came
+  from.
+
+### Known limitations
+
+- Counting across many paged histories can still be off, though the data is
+  read completely.
+
+### Upgrading from 2.1
+
+1. Runtime files moved to `./.jarviscore/`. To keep the old folders, set
+   `STORAGE_BASE_PATH=./blob_storage`, `LOG_DIRECTORY=./logs` and
+   `TELEMETRY_TRACE_DIR=./traces`.
+2. Steps that must search or read declare it with `required_tool_groups`. The
+   `CONVERGENCE_*`, `FAILURE_GUARD_*` and `RESEARCH_*` enforcement settings
+   are ignored.
+3. A turn with `RESULT` but no `DONE` no longer completes a step.
+4. Resolve browser approvals with `Mesh.resolve_hitl()`.
+5. Parallel work for one agent needs `pool=Pool(max=N)`.
+6. Agents that call providers declare `requires_auth = True`.
+7. A declared `default_kernel_role` binds direct tasks; remove it to let the
+   router choose.
+8. `complete: false` now returns `status: "failure"` with the reason in
+   `error`.
+9. Tool observations are in `result["evidence"]`; `delegate()` still returns
+   the raw envelope.
+10. Researcher results carry `summary` and `evidence`; the old checkpoint
+    fields are gone.
+11. The browser's model tools changed: `run_playwright` replaces `evaluate`,
+    `wait_for`, `get_text`, `get_links`, `scroll`, `get_attribute`,
+    `get_cookies` and `close_page`.
+
+</div>
+
+<div class="changelog-release" markdown>
+
+## 2.1.1 <span class="changelog-date">2026-10-16</span>
+
+### Fixed
+
+- **Peers that leave the mesh now leave every other node's roster.** Remote
+  agents were added when a peer announced itself and never removed, so
+  `peers.list_peers()`, `discover()` and the Mesh capability catalog kept
+  listing departed agents, and requests to them timed out. `P2PCoordinator.stop()`
+  now sends a capability deannouncement before shutting SWIM down, so a clean
+  exit leaves other rosters within a second. A crash sends no goodbye, and
+  swim-p2p only reports a failure on the node whose own probes time out, so the
+  coordinator also checks SWIM membership every two seconds and drops agents on
+  nodes it declares dead. Suspect nodes are kept, and a dropped node that comes
+  back alive is asked to announce again. ([#267](https://github.com/Prescott-Data/jarviscore-framework/issues/267))
+
+</div>
 
 <div class="changelog-release" markdown>
 

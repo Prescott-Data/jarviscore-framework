@@ -22,7 +22,10 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from jarviscore.contracts.hitl import HITLAction
+from jarviscore.kernel import approval
 from jarviscore.kernel.subagent import BaseSubAgent
+from jarviscore.kernel.workspace_tools import register_workspace_tools
 from jarviscore.kernel.state import KernelState
 
 logger = logging.getLogger(__name__)
@@ -94,8 +97,11 @@ class CoderSubAgent(BaseSubAgent):
     3. execute_code(function_name) → SandboxExecutor
     4. On success → register in FunctionRegistry (VERIFIED stage)
     5. On failure → diagnose error, fix code, re-execute (max 2 attempts)
-    6. On persistent failure → delegate_research (HARD GATE: must write first)
+    6. On persistent failure → delegate_research
     """
+
+    # The coder already writes and runs code; it is not also a program host.
+    programmable = False
 
     DEFAULT_SYSTEM_PROMPT = """\
 You are a CODE EXECUTION SPECIALIST in a multi-agent orchestration framework.
@@ -330,12 +336,6 @@ like any other.
         self._failed_atom_calls: Dict[str, Dict[str, Any]] = {}
         self._observed_atom_calls: Dict[str, Dict[str, Any]] = {}
         self._callable_atoms_by_system: Dict[str, List[str]] = {}
-
-        # Hard gate flag — delegate_research blocked until first write_code
-        self._has_written_code: bool = False
-
-        # URL content cache — session-scoped dedup for read_api_docs
-        self._read_urls: set = set()
         self._current_task: str = ""
 
         super().__init__(
@@ -370,10 +370,10 @@ like any other.
                 if name in self._tools
             ]
             first_attempt = (
-                "\n\nYou have not investigated this task yet. Your next response MUST "
-                "use one relevant tool before emitting DONE or a final artifact. "
+                "\n\nNo tool has run in this task yet. "
                 f"Relevant available paths include: {', '.join(useful) or 'the registered tools above'}. "
-                "Choose from the current gap; do not call a tool merely to make the run pass."
+                "A result that depends on live data rests on one of them; the tools this "
+                "run used are recorded with its result."
             )
         return (
             f"{prompt}\n\n"
@@ -399,7 +399,7 @@ like any other.
         state: KernelState,
         parsed: Dict[str, Any],
     ) -> tuple:
-        """Require investigation and one bounded peer review of blocked work."""
+        """Require product-declared actions; record the rest rather than demand it."""
         contract = state.context.get("execution_contract") or {}
         raw_groups = contract.get("required_tool_groups") or []
         groups = [
@@ -422,18 +422,6 @@ like any other.
                         "tools_used": sorted(tools_used),
                         "missing_tool_groups": missing,
                     },
-                ),
-            )
-        if not state.tool_history:
-            return (
-                False,
-                GateEvidence(
-                    check="meaningful_attempt",
-                    requirement=(
-                        "use a relevant provider, code, workflow, mailbox, or peer tool "
-                        "before claiming success or a blocker"
-                    ),
-                    observed={"tool_calls": 0},
                 ),
             )
         return super()._can_complete(state, parsed)
@@ -547,69 +535,7 @@ like any other.
     # ─────────────────────────────────────────────────────────────
 
     def setup_tools(self) -> None:
-        self.register_tool(
-            "workspace_list",
-            self._tool_workspace_list,
-            (
-                "List files or directories in the current bound workspace. "
-                "Params: {\"path\": \".\", \"recursive\": false, \"limit\": 500}"
-            ),
-            phase="thinking",
-        )
-        self.register_tool(
-            "workspace_read",
-            self._tool_workspace_read,
-            (
-                "Read a bounded UTF-8 line range from a workspace file. "
-                "Params: {\"path\": \"README.md\", \"start_line\": 1, \"end_line\": 400}"
-            ),
-            phase="thinking",
-        )
-        self.register_tool(
-            "workspace_search",
-            self._tool_workspace_search,
-            (
-                "Search workspace text with literal matching by default and return file/line evidence. "
-                "Params: {\"query\": \"TODO\", \"path\": \".\", \"glob\": \"*.py\", "
-                "\"regex\": false, \"limit\": 100}"
-            ),
-            phase="thinking",
-        )
-        self.register_tool(
-            "workspace_write",
-            self._tool_workspace_write,
-            (
-                "Create or fully replace one bounded UTF-8 file inside the copy-on-write "
-                "workspace. content must contain the complete final file; never use this "
-                "for a partial edit. Use workspace_edit for existing source files. "
-                "Use this for new tests and fixtures instead of shell redirection, heredocs, "
-                "or generated writer scripts. Params: {\"path\": \"tests/case.json\", "
-                "\"content\": \"<exact file content>\", \"executable\": false}"
-            ),
-            phase="action",
-        )
-        self.register_tool(
-            "workspace_edit",
-            self._tool_workspace_edit,
-            (
-                "Replace an inclusive line range in an existing UTF-8 file while preserving "
-                "all other content. First call workspace_read and pass its sha256 as "
-                "expected_sha256; stale source fails closed. Params: {\"path\": "
-                "\"src/store.rs\", \"start_line\": 43, \"end_line\": 49, "
-                "\"replacement\": \"<complete replacement lines>\", "
-                "\"expected_sha256\": \"<sha256 from workspace_read>\"}"
-            ),
-            phase="action",
-        )
-        self.register_tool(
-            "workspace_run",
-            self._tool_workspace_run,
-            (
-                "Run an allow-listed command in a workspace directory and return exit code/stdout/stderr. "
-                "Params: {\"command\": \"python -m pytest -q\", \"cwd\": \".\"}"
-            ),
-            phase="action",
-        )
+        register_workspace_tools(self, lambda: self.sandbox, run=True)
         self.register_tool(
             "check_registry",
             self._tool_check_registry,
@@ -712,80 +638,12 @@ like any other.
             "delegate_research",
             self._tool_delegate_research,
             (
-                "ABSOLUTE LAST RESORT — delegate to the researcher when you are stuck after multiple "
-                "failed attempts AND self-research via quick_api_search/read_api_docs. "
-                "HARD GATE: you MUST call write_code at least once before "
-                "this tool becomes available. "
+                "Delegate a question to the researcher when self-research via "
+                "quick_api_search/read_api_docs has not answered it. "
                 "Params: {\"question\": \"<what you need to know>\", \"context\": \"<what you've tried>\"}"
             ),
             phase="thinking",
         )
-
-    def _tool_workspace_list(
-        self, path: str = ".", recursive: bool = False, limit: int = 500, **kwargs
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.list_workspace(path, recursive=recursive, limit=limit)
-
-    def _tool_workspace_read(
-        self, path: str, start_line: int = 1, end_line: int = 400, **kwargs
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.read_workspace(path, start_line=start_line, end_line=end_line)
-
-    def _tool_workspace_search(
-        self,
-        query: str,
-        path: str = ".",
-        glob: str = "*",
-        regex: bool = False,
-        limit: int = 100,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.search_workspace(
-            query, path=path, glob=glob, regex=regex, limit=limit
-        )
-
-    def _tool_workspace_write(
-        self,
-        path: str,
-        content: str,
-        executable: bool = False,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.write_workspace(path, content, executable=executable)
-
-    def _tool_workspace_edit(
-        self,
-        path: str,
-        start_line: int,
-        end_line: int,
-        replacement: str,
-        expected_sha256: str,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.edit_workspace(
-            path,
-            start_line,
-            end_line,
-            replacement,
-            expected_sha256,
-        )
-
-    def _tool_workspace_run(
-        self, command: str, cwd: str = ".", **kwargs
-    ) -> Dict[str, Any]:
-        if self.sandbox is None:
-            return {"status": "error", "error": "No workspace sandbox is attached."}
-        return self.sandbox.run_workspace(command, cwd=cwd)
 
     async def _execute_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
         """Execute tools, auto-running validated code when runtime proof is required."""
@@ -1089,7 +947,6 @@ like any other.
         **kwargs,
     ) -> Dict[str, Any]:
         """Record + validate a code candidate, or a new atom proven by one stated call."""
-        self._has_written_code = True  # Unlock delegate_research gate
 
         # Often the agent is the first to work out which provider the task needs.
         # Offerings are refreshed here so a proven atom or a missing consent is
@@ -1650,7 +1507,7 @@ like any other.
             }
 
     # ─────────────────────────────────────────────────────────────
-    # Tool: delegate_research (HARD GATE)
+    # Tool: delegate_research
     # ─────────────────────────────────────────────────────────────
 
     def _tool_delegate_research(
@@ -1661,21 +1518,7 @@ like any other.
     ) -> Dict[str, Any]:
         """
         Delegate a question to the researcher subagent.
-
-        HARD GATE: This tool is blocked until write_code has been called
-        at least once. The coder must attempt to solve the problem from
-        training knowledge before delegating.
         """
-        if not self._has_written_code:
-            return {
-                "status": "blocked",
-                "error": (
-                    "HARD GATE: You must call write_code at least once before "
-                    "delegating to research. Write code from your training knowledge first. "
-                    "Research is a LAST RESORT, not a first step."
-                ),
-            }
-
         # Signal to the kernel that research is needed.
         # The kernel will read signal_researcher from the output metadata
         # and dispatch a ResearcherSubAgent.
@@ -1801,23 +1644,12 @@ like any other.
     ) -> Dict[str, Any]:
         """Read content from a single API documentation URL.
 
-        Session-scoped dedup prevents re-reading the same URL. Content
-        truncated to 10KB. Ported from ResearcherSubAgent._tool_read_url.
+        Content truncated to 10KB. Ported from ResearcherSubAgent._tool_read_url.
         """
         if not self.search_client:
             return {
                 "status": "unavailable",
                 "message": "No search_client configured.",
-            }
-
-        # Session dedup — don't re-read within the same run
-        if url in self._read_urls:
-            return {
-                "status": "cached",
-                "message": (
-                    f"URL already read in this session. "
-                    "Use the information from the previous read."
-                ),
             }
 
         logger.info("[CODER] read_api_docs: %s", url)
@@ -1832,8 +1664,6 @@ like any other.
             result = self.search_client.extract_content(url, max_length=12000)
             if hasattr(result, "__await__"):
                 result = await result
-
-            self._read_urls.add(url)
 
             if isinstance(result, dict):
                 if result.get("success"):
@@ -1890,8 +1720,6 @@ like any other.
     async def run(self, task, context=None, max_turns=15, model=None, **kwargs):
         """Fresh candidate list per run — no state bleed between tasks."""
         self._candidates = []
-        self._has_written_code = False
-        self._read_urls = set()
         self._registered_this_run = False
         self._current_task = str(task)
         self._run_context = context or {}
@@ -2059,7 +1887,7 @@ like any other.
     def _connection_state(self, system: Optional[str]):
         from jarviscore.nexus.store import ConnectionState, get_store
 
-        if not system:
+        if not system or not getattr(self, "provider_access", True):
             return ConnectionState.ABSENT
         # The gateway knows what has been connected; the vault knows what was
         # registered here. A token that landed elsewhere lives only in the first.
@@ -2141,6 +1969,8 @@ like any other.
         marked as needing re-consent (the auth manager knows).
         """
         pending: Dict[str, int] = {}
+        if not getattr(self, "provider_access", True):
+            return []
         connected_at_gateway = getattr(self.auth_manager, "is_connected", lambda _p: False)
         try:
             from jarviscore.nexus.store import get_store
@@ -2285,22 +2115,22 @@ like any other.
                 refusal = await self._guard_refusal(atom, params)
                 if refusal is not None:
                     return refusal
-            if atom.policy.requires_approval and action_id not in set(
-                self._run_context.get("_approved_actions") or ()
-            ):
-                return {
-                    "status": "waiting",
-                    "hitl_required": True,
-                    "hitl_type": "approval",
-                    "typed_outcome": "WAITING_FOR_APPROVAL",
-                    "system": atom.system,
-                    "action_id": action_id,
-                    "action": atom.describe(),
-                    "consequence": atom.policy.consequence,
-                    "workflow_id": self._run_context.get("workflow_id"),
-                    "step_id": self._run_context.get("step_id"),
-                    "detail": f"Waiting for approval before {atom.name} runs.",
-                }
+            if atom.policy.requires_approval:
+                refusal = approval.gate(
+                    self.redis_store,
+                    self._run_context.get("workflow_id"),
+                    self._run_context.get("step_id"),
+                    HITLAction(
+                        action_id=action_id,
+                        tool=name,
+                        system=atom.system,
+                        params=dict(params),
+                        description=atom.describe(),
+                        consequence=atom.policy.consequence,
+                    ),
+                )
+                if refusal is not None:
+                    return refusal
             prior = self._idempotent_result(action_id)
             if prior is not None:
                 return prior
@@ -2330,6 +2160,14 @@ like any other.
                 and result.get("status") == "success"
             ):
                 self._save_idempotent_result(action_id, result)
+            if atom.policy.requires_approval:
+                approval.settle(
+                    self.redis_store,
+                    self._run_context.get("workflow_id"),
+                    self._run_context.get("step_id"),
+                    action_id,
+                    result,
+                )
             return result
         call.__name__ = name
         return call

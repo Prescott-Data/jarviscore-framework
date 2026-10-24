@@ -91,9 +91,7 @@ async def main(mode: str) -> int:
         else:
             say(f"step {i + 1} → {result.get('status', '?')}")
     say("")
-    output = results[-1].get("output", "")
-    if isinstance(output, dict):
-        output = "\n".join(str(x) for x in output.get("data", [output]))
+    output = results[-1].get("result_summary") or results[-1].get("output", "")
     for line in str(output).strip().splitlines():
         if line.strip():
             say(line.strip())

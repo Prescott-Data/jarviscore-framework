@@ -19,7 +19,8 @@ from typing import TYPE_CHECKING
 _LAZY = {
     **dict.fromkeys(["UnifiedLLMClient", "LLMProvider", "TOKEN_PRICING", "create_llm_client"], "llm"),
     **dict.fromkeys(
-        ["DecisionClientError", "DecisionResult", "JevDecisionClient", "create_decision_client"],
+        ["DecisionClientError", "DecisionClient", "DecisionResult", "JevDecisionClient",
+         "create_decision_client"],
         "decisions"),
     **dict.fromkeys(["InternetSearch", "create_search_client"], "search"),
     **dict.fromkeys(["CodeGenerator", "GeneratedCode", "create_code_generator"], "generator"),
@@ -46,7 +47,7 @@ _LAZY = {
         ["ResultHandler", "ResultStatus", "ErrorCategory", "create_result_handler"], "result_handler"),
     **dict.fromkeys([
         "FunctionRegistry", "FunctionStatus", "create_function_registry",
-        "CodeRegistry", "create_code_registry",
+        "shared_function_registry", "CodeRegistry", "create_code_registry",
     ], "code_registry"),
 }
 
@@ -66,7 +67,8 @@ def __dir__():
 if TYPE_CHECKING:
     from .llm import UnifiedLLMClient, LLMProvider, TOKEN_PRICING, create_llm_client
     from .decisions import (
-        DecisionClientError, DecisionResult, JevDecisionClient, create_decision_client,
+        DecisionClient, DecisionClientError, DecisionResult, JevDecisionClient,
+        create_decision_client,
     )
     from .search import InternetSearch, create_search_client
     from .generator import CodeGenerator, GeneratedCode, create_code_generator
@@ -91,7 +93,7 @@ if TYPE_CHECKING:
     from .repair import AutonomousRepair, create_autonomous_repair
     from .result_handler import ResultHandler, ResultStatus, ErrorCategory, create_result_handler
     from .code_registry import (
-        FunctionRegistry, FunctionStatus, create_function_registry,
+        FunctionRegistry, FunctionStatus, create_function_registry, shared_function_registry,
         CodeRegistry, create_code_registry,
     )
 
@@ -104,6 +106,7 @@ __all__ = [
 
     # Decision models
     'DecisionClientError',
+    'DecisionClient',
     'DecisionResult',
     'JevDecisionClient',
     'create_decision_client',
@@ -173,6 +176,7 @@ __all__ = [
     'FunctionRegistry',
     'FunctionStatus',
     'create_function_registry',
+    'shared_function_registry',
     # Backward-compatible aliases
     'CodeRegistry',
     'create_code_registry',

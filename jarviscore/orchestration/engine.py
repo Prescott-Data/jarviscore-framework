@@ -22,8 +22,6 @@ import json
 import logging
 import time
 from typing import Any, Dict, List, Optional, Set
-
-from .claimer import StepClaimer
 from .dependency import DependencyManager
 from .state import WorkflowState
 from .status import StatusManager, StepStatus
@@ -55,11 +53,12 @@ class WorkflowEngine:
     ):
         self.mesh = mesh
         self.p2p = p2p_coordinator
+        # workflow_id -> step_id -> roles of the steps that consume its result
+        self._downstream_roles: Dict[str, Dict[str, List[str]]] = {}
         self.config = config or {}
         self.redis_store = redis_store  # Phase 7: optional Redis backing
 
         # Core components
-        self.claimer = StepClaimer(mesh.agents)
         self.status_manager = StatusManager()
 
         # Working memory (step_id → result)
@@ -201,6 +200,7 @@ class WorkflowEngine:
             default_step_timeout = float(self.config.get("workflow_step_timeout", 300.0))
 
         step_map = {s["id"]: s for s in steps}
+        self._downstream_roles[workflow_id] = self._roles_after(steps)
         pending: Set[str] = set(step_map.keys())
         running_tasks: Dict[str, asyncio.Task] = {}
         results: Dict[str, Any] = dict(pre_results or {})
@@ -421,10 +421,22 @@ class WorkflowEngine:
         step_timeout: float = 300.0,
     ) -> Dict[str, Any]:
         """Execute a single step and return its result dict."""
-        step_id = step["id"]
+        required = step.get("agent") or step.get("role") or step.get("capability")
+        # Parallel steps for one agent each hold their own instance from its pool.
+        async with self.mesh._lease_agent(required) as agent:
+            return await self._execute_step_on(
+                agent, workflow_id, step, dep_outputs, step_timeout
+            )
 
-        # Find agent
-        agent = self.claimer.find_agent(step)
+    async def _execute_step_on(
+        self,
+        agent: Any,
+        workflow_id: str,
+        step: Dict[str, Any],
+        dep_outputs: Dict[str, Any],
+        step_timeout: float,
+    ) -> Dict[str, Any]:
+        step_id = step["id"]
         if not agent:
             if self.redis_store:
                 # No local agent — reset to "pending" so a distributed node can claim it
@@ -457,6 +469,7 @@ class WorkflowEngine:
             "previous_step_results": dep_outputs,
             "workflow_id": workflow_id,
             "step_id": step_id,
+            "downstream_roles": self._downstream_roles.get(workflow_id, {}).get(step_id, []),
         }
 
         # Auth resolution (Phase 7D)
@@ -542,6 +555,11 @@ class WorkflowEngine:
                     "step_id": step_id,
                 }
             if status == "failed":
+                # The remote node stores its failure; its reason is what the caller needs.
+                saved = self.redis_store.get_step_output(workflow_id, step_id) or {}
+                failure = saved.get("output")
+                if isinstance(failure, dict) and failure.get("error"):
+                    return {**failure, "status": "failure", "step_id": step_id}
                 return {
                     "status": "failure",
                     "error": "Remote node reported step failure",
@@ -692,6 +710,31 @@ class WorkflowEngine:
                 step["id"] = f"step{i}"
             normalized.append(step)
         return normalized
+
+    def _roles_after(self, steps: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """For each step, the roles of every step that depends on it, directly or not."""
+        children: Dict[str, List[str]] = {s["id"]: [] for s in steps}
+        for step in steps:
+            for dep in self._resolve_dependency_ids(step.get("depends_on", []), steps):
+                children.setdefault(dep, []).append(step["id"])
+        by_id = {s["id"]: s for s in steps}
+        roles_after: Dict[str, List[str]] = {}
+        for step_id in by_id:
+            seen: set = set()
+            stack = list(children.get(step_id, []))
+            while stack:
+                child = stack.pop()
+                if child not in seen:
+                    seen.add(child)
+                    stack.extend(children.get(child, []))
+            own = by_id[step_id].get("agent") or by_id[step_id].get("role")
+            roles_after[step_id] = sorted({
+                str(by_id[c].get("agent") or by_id[c].get("role") or by_id[c].get("capability"))
+                for c in seen
+                if (by_id[c].get("agent") or by_id[c].get("role") or by_id[c].get("capability"))
+                and (by_id[c].get("agent") or by_id[c].get("role")) != own
+            })
+        return roles_after
 
     def _resolve_dependency_ids(
         self,

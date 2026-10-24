@@ -6,7 +6,7 @@ loop, artifact tracking, and error handling without real LLM calls.
 """
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jarviscore.kernel.defaults import (
@@ -69,12 +69,11 @@ class TestCoderSubAgent:
         assert parsed["answer"] == parsed["summary"]
         assert parsed["result"]["files"][0] == "Scoreboard"
 
-    def test_a_result_without_done_carries_no_authored_answer(self, mock_llm):
+    def test_a_result_without_done_is_not_a_completion(self, mock_llm):
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
         parsed = coder._parse_response('RESULT: {"files": ["Scoreboard"]}')
 
-        assert parsed["type"] == "done"
-        assert parsed["answer"] is None
+        assert parsed["type"] == "raw"
 
     def test_json_finish_done_is_the_authored_answer(self, mock_llm):
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
@@ -124,7 +123,33 @@ class TestCoderSubAgent:
         memory.save_checkpoint.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_oversized_request_fails_instead_of_restarting_forever(self):
+    @pytest.mark.parametrize("max_epochs, continued", [(3, True), (1, False)])
+    async def test_running_out_of_turns_mid_work_continues_while_epochs_remain(
+        self, mock_llm, mock_sandbox, max_epochs, continued,
+    ):
+        # A browser step reached the kernel's turn cap one click from done and the
+        # whole goal failed, while an exhausted token budget would have continued.
+        mock_llm.responses = [_coder_write_response("x = 1")] * 3
+        memory = AsyncMock()
+        memory.load_checkpoint.return_value = None
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, sandbox=mock_sandbox)
+
+        result = await coder.run(
+            task="Continue durable work",
+            context={
+                "workflow_id": "wf-long", "step_id": "step-1", "execution_epoch": 1,
+                "execution_budget": {"max_epochs_per_step": max_epochs},
+            },
+            max_turns=2,
+            memory=memory,
+        )
+
+        if continued:
+            assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+            assert result.metadata["lease_exhausted"] == "turn_cap(2)"
+            memory.save_checkpoint.assert_awaited()
+        else:
+            assert result.metadata["typed_outcome"] == "YIELD_EMERGENCY_TURN_FUSE"
         from jarviscore.orchestration.budget import WorkflowBudgetExceeded
 
         class OversizedLLM:
@@ -274,11 +299,64 @@ class TestCoderSubAgent:
             memory=memory,
         )
 
-        # The gate rejects an evidence-free landing either way; precedence is what differs.
-        assert result.status == "epoch_exhausted"
-        assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+        # Earlier epochs keep working. A landing result that names itself incomplete
+        # is not success, including on the last epoch.
         assert llm.calls == (2 if landing_attempted else 1)
-        memory.save_checkpoint.assert_awaited_once()
+        if landing_attempted:
+            assert result.status == "epoch_exhausted"
+            assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+            memory.save_checkpoint.assert_awaited_once()
+        else:
+            assert result.status == "epoch_exhausted"
+            assert result.metadata["typed_outcome"] == "CONTINUE_NEW_EXECUTION_EPOCH"
+            memory.save_checkpoint.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_refused_landing_answer_leaves_with_the_step(self):
+        """The last epoch's landing answer, refused, must not take the findings with it."""
+        from jarviscore.kernel.cognition import AgentCognitionManager
+        from jarviscore.kernel.lease import ExecutionLease
+
+        class LandingLLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def generate(self, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "content": "THOUGHT: reading\nNOTE: revenue row is 4.2m in FY25",
+                        "tokens": {"input": 4, "output": 4, "total": 8},
+                    }
+                return {
+                    "content": 'DONE: Partial\nRESULT: {"tool_receipt_id": "tool:wf-epochs", "revenue": "4.2m"}',
+                    "tokens": {"input": 4, "output": 4, "total": 8},
+                }
+
+        lease = ExecutionLease.for_role("coder")
+        lease.action_budget = 1
+        memory = AsyncMock()
+        memory.load_checkpoint.return_value = None
+        coder = CoderSubAgent(agent_id="r1", llm_client=LandingLLM())
+
+        result = await coder.run(
+            task="Find the revenue row",
+            context={
+                "workflow_id": "wf-epochs",
+                "step_id": "step-1",
+                "execution_budget": {"max_epochs_per_step": 8},
+                "execution_epoch": 8,
+            },
+            max_turns=3,
+            cognition=AgentCognitionManager(lease=lease, agent_id="r1"),
+            memory=memory,
+        )
+
+        assert result.status == "epoch_exhausted"
+        progress = result.metadata["progress"]
+        assert progress["working_notes"] == ["revenue row is 4.2m in FY25"]
+        assert progress["refused_answer"]["result"]["revenue"] == "4.2m"
+        assert "Unknown tool receipt" in progress["refused_answer"]["refused_because"]
 
     """Tests for CoderSubAgent."""
 
@@ -426,14 +504,15 @@ class TestCoderSubAgent:
 
     @pytest.mark.asyncio
     async def test_full_run_done_immediately(self, mock_llm):
-        """Coder rejects DONE without executable proof of work."""
+        """A direct answer completes, and its record shows that no tool ran."""
         mock_llm.responses = [
             _llm_response("THOUGHT: Simple task\nDONE: Completed\nRESULT: {\"value\": 42}")
         ]
         coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
         output = await coder.run("compute 42", max_turns=1)
-        assert output.status == "yield"
-        assert output.metadata["typed_outcome"] == "YIELD_EMERGENCY_TURN_FUSE"
+        assert output.status == "success"
+        assert output.payload == {"value": 42}
+        assert output.metadata["work_record"] == {}
 
     @pytest.mark.asyncio
     async def test_full_run_tool_then_done(self, mock_llm, mock_sandbox):
@@ -465,6 +544,23 @@ class TestCoderSubAgent:
         # Candidates should be empty (no write_code called in second run)
         assert len(coder.candidates) == 0
 
+    def test_research_can_be_delegated_before_any_code_is_written(self, mock_llm):
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm)
+        result = coder._tool_delegate_research(question="Which endpoint lists invoices?")
+        assert result["status"] == "delegated"
+        assert result["signal_researcher"] is True
+
+    @pytest.mark.asyncio
+    async def test_api_docs_can_be_read_again(self, mock_llm):
+        search = MagicMock()
+        search.extract_content = MagicMock(
+            side_effect=[{"success": True, "content": "v1"}, {"success": True, "content": "v2"}]
+        )
+        coder = CoderSubAgent(agent_id="c1", llm_client=mock_llm, search_client=search)
+        first = await coder._tool_read_api_docs(url="https://docs.example.com/api")
+        second = await coder._tool_read_api_docs(url="https://docs.example.com/api")
+        assert (first["content"], second["content"]) == ("v1", "v2")
+
 
 # ══════════════════════════════════════════════════════════════════════
 # ResearcherSubAgent Tests
@@ -472,6 +568,33 @@ class TestCoderSubAgent:
 
 class TestResearcherSubAgent:
     """Tests for ResearcherSubAgent."""
+
+    def test_rag_query_is_offered_only_when_the_rag_extra_is_installed(self, mock_llm, monkeypatch):
+        import importlib.util
+
+        real = importlib.util.find_spec
+        monkeypatch.setattr(
+            importlib.util, "find_spec",
+            lambda name, *a: None if name == "sentence_transformers" else real(name, *a),
+        )
+        assert "rag_query" not in ResearcherSubAgent(agent_id="r1", llm_client=mock_llm).tool_names
+
+        monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: object())
+        assert "rag_query" in ResearcherSubAgent(agent_id="r2", llm_client=mock_llm).tool_names
+
+    def test_pages_are_not_indexed_without_the_rag_extra(self, mock_llm, monkeypatch):
+        import importlib.util
+
+        researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
+        monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None)
+        monkeypatch.setattr(
+            researcher, "_get_rag_pipeline",
+            lambda: (_ for _ in ()).throw(AssertionError("no index without [rag]")),
+        )
+
+        result = researcher._ingest_rag_documents([{"url": "https://a.test", "content": "x"}])
+
+        assert result["status"] == "skipped"
 
     def test_registers_expected_tools(self, mock_llm):
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
@@ -502,10 +625,9 @@ class TestResearcherSubAgent:
         """publish_research_findings works with no arguments (empty research)."""
         researcher = ResearcherSubAgent(agent_id="r1", llm_client=mock_llm)
         result = await researcher._tool_publish_research_findings()
-        assert "api_specs" in result
-        assert "libraries" in result
         assert "evidence" in result
         assert "summary" in result
+        assert "api_specs" not in result and "libraries" not in result
 
     @pytest.mark.asyncio
     async def test_grep_codebase_finds_pattern(self, mock_llm):
@@ -523,8 +645,7 @@ class TestResearcherSubAgent:
 
     @pytest.mark.asyncio
     async def test_full_run_with_findings(self, mock_llm, monkeypatch):
-        """Researcher calls publish_research_findings and completes (phase checks disabled)."""
-        monkeypatch.setenv("RESEARCH_STRICT_PHASE_CONTRACT", "false")
+        """Researcher calls publish_research_findings and completes."""
         monkeypatch.setenv("RESEARCH_STRICT_DONE_VALIDATION", "false")
         mock_llm.responses = [
             _llm_response(

@@ -28,6 +28,20 @@ Complete API reference, configuration options, CLI commands, and troubleshooting
 
     [Read more →](chat-api.md)
 
+-   :material-account-group: **Multiplayer API**
+
+    Rooms, the room agent, chat surfaces, Slack, human peers, and the HITL
+    methods people's work uses.
+
+    [Read more →](multiplayer-api.md)
+
+-   :material-web-box: **Browser Reference**
+
+    Every browser tool, confined Playwright programs, approvals, sessions,
+    pacing and proxies.
+
+    [Read more →](browser.md)
+
 -   :material-console: **CLI Reference**
 
     All `jarviscore` CLI commands, flags, and examples.

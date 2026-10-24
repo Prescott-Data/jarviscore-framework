@@ -144,7 +144,7 @@ def test_plan_template_validates_without_calling_llm_and_adds_response_step():
         "research", "answer", "final_response",
     ]
     assert plan.steps[1].depends_on == ["research"]
-    assert plan.steps[2].depends_on == ["answer"]
+    assert plan.steps[2].depends_on == ["research", "answer"]
 
 
 def test_plan_template_rejects_capability_mismatch_without_calling_llm():
@@ -292,8 +292,11 @@ async def test_remembering_for_later_is_agent_memory_not_a_provider_write():
         assert "uses effect `propose` with empty systems" in prompt
         assert "read full content only for items that evidence marks as possibly" in prompt
         assert "estimate is not a total to reconcile against" in prompt
+        assert "a current status or latest result speaks for the latest state, not for" in prompt
+        assert "cover each item's record for that whole period" in prompt
     assert "every agent has its own cross-session\nmemory, so it needs no provider system" in audit_prompt
     assert "do not require full-content readback of every item unless the goal asks for it" in audit_prompt
+    assert "flag a plan that judges\nitems from their current status" in audit_prompt
 
 
 def test_mesh_planning_brief_reaches_amendment_and_reconciliation_prompts():
@@ -334,8 +337,8 @@ def test_mesh_planning_brief_reaches_amendment_and_reconciliation_prompts():
             plan, current_steps=[], reason="Evidence missing", planning_brief=brief,
         ),
         planner._amendment_repair_prompt(
-            plan, audit={"complete": False}, current_steps=[],
-            reason="Evidence missing", planning_brief=brief,
+            plan, audit={"complete": False}, target_obligation_ids={"o1"},
+            current_steps=[], reason="Evidence missing", planning_brief=brief,
         ),
         planner._invalid_amendment_repair_prompt(
             plan.goal, plan.obligations, current_steps=[], rejected={"steps": []},
@@ -468,6 +471,26 @@ async def test_mesh_planner_adds_configured_user_response_as_the_terminal_step()
     assert response_step.covers == []
     assert "source goal's requested format" in response_step.task
     assert "source goal's output constraints" in response_step.success_criterion
+
+
+@pytest.mark.asyncio
+async def test_the_dag_prompt_says_the_framework_owns_the_response_step():
+    # Unstated, planners covered obligations with their own response step,
+    # which the framework replaces, and a third of plans needed a repair call.
+    llm = MockLLMClient(responses=responses())
+    planner = MeshPlanner(
+        llm,
+        capabilities={"research": "Research evidence", "action_briefing": "Produce the user-facing decision"},
+        response_capability="action_briefing",
+    )
+
+    await planner.plan("Find evidence")
+
+    dag_prompt = llm.calls[1]["messages"][0]["content"]
+    assert "JarvisCore appends the user-facing response step (action_briefing" in dag_prompt
+    assert "every obligation must be covered by a domain step" in dag_prompt
+    assert planner._amendment_prompt("Find evidence", [], set(), [], "r", {}).count("JarvisCore appends") == 1
+    assert MeshPlanner(llm, capabilities={"research": "Research evidence"})._response_rule() == ""
 
 
 @pytest.mark.asyncio
@@ -679,6 +702,37 @@ async def test_mesh_planner_hydrates_source_quote_from_compiler_owned_reference(
     assert '"id": "source-1"' in obligation_prompt
     assert "source_ref" in obligation_prompt
     assert "source_quote" not in obligation_prompt
+
+
+@pytest.mark.asyncio
+async def test_the_audit_reads_obligations_as_the_model_was_asked_to_write_them():
+    # Shown source_quote while told the ledger uses source_ref, the auditor
+    # rejected correct plans for a field it was never asked to produce.
+    llm = MockLLMClient(responses=responses())
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    plan = await planner.plan("Find evidence")
+
+    audit_prompt = llm.calls[2]["messages"][0]["content"]
+    ledger = json.loads(audit_prompt.split("OBLIGATIONS:\n", 1)[1].split("\n", 1)[0])
+    assert ledger == [{"id": "o1", "kind": "outcome", "description": "Find evidence", "source_ref": "source-1"}]
+    assert plan.obligations[0].to_dict()["source_quote"] == "Find evidence"
+
+
+def test_a_template_quote_is_referenced_by_the_source_block_holding_it():
+    goal = "Book a table.\nNo peanuts anywhere.\nNo peanuts anywhere."
+    obligations = MeshPlanner._parse_obligations(
+        {"obligations": [
+            {"id": "o1", "description": "Book", "source_quote": "a table"},
+            {"id": "o2", "description": "Whole goal", "source_quote": goal},
+            {"id": "o3", "description": "Avoid peanuts", "source_quote": "No peanuts"},
+        ]},
+        goal,
+    )
+    assert obligations[0].ledger_entry()["source_ref"] == "source-1"
+    assert obligations[1].ledger_entry()["source_ref"] == "source-all"
+    # Held by two lines, the quote is shown rather than guessed between them.
+    assert obligations[2].ledger_entry()["source_quote"] == "No peanuts"
 
 
 @pytest.mark.asyncio
@@ -1329,6 +1383,7 @@ def test_amendment_audit_and_repair_include_failed_terminal_evidence():
     )
     repair_prompt = MeshPlanner._amendment_repair_prompt(
         plan, audit={"complete": False, "missing": ["repair"]},
+        target_obligation_ids={"o1"},
         current_steps=[failed], reason="Correct the failed verification",
     )
 
@@ -1487,6 +1542,122 @@ async def test_amendment_response_uses_the_attempt_that_satisfied_the_obligation
     assert plan.steps[-1].depends_on == ["step-3", "outreach-a"]
 
 
+def _gtm_reverification_history():
+    """Shape of live run gtm-live-73455c56 when its first revision was planned."""
+    obligations = [
+        {"id": f"obligation-{n}", "description": f"Need {n}", "source_quote": "account"}
+        for n in range(1, 9)
+    ]
+    step = {
+        "capability": "gtm", "effect": "read", "systems": [],
+        "success_criterion": "Done", "expected_findings": [], "status": "completed",
+    }
+    current_steps = [
+        {**step, "id": "step-1", "task": "Research", "depends_on": [],
+         "covers": ["obligation-1", "obligation-2", "obligation-3", "obligation-4"]},
+        {**step, "id": "step-2", "task": "Assess fit", "depends_on": ["step-1"],
+         "covers": ["obligation-5"]},
+        {**step, "id": "step-3", "effect": "propose", "task": "Draft email",
+         "depends_on": ["step-1", "step-2"],
+         "covers": ["obligation-6", "obligation-7", "obligation-8"]},
+        {**step, "id": "final_response", "capability": "action_briefing",
+         "effect": "final_response", "task": "Answer",
+         "depends_on": ["step-3", "step-1", "step-2"], "covers": []},
+    ]
+    targets = {"obligation-1", "obligation-4", "obligation-5", "obligation-6", "obligation-7"}
+    projection = {
+        item["id"]: (
+            {"state": "unresolved", "attempt_states": {"step-1": "unresolved"}}
+            if item["id"] in targets else
+            {"state": "satisfied", "attempt_states": {
+                "step-3" if item["id"] == "obligation-8" else "step-1": "satisfied"
+            }}
+        )
+        for item in obligations
+    }
+
+    def new(step_id, effect, covers, depends_on):
+        return {
+            "step_id": step_id, "capability": "gtm", "effect": effect, "systems": [],
+            "task": f"{step_id} work", "success_criterion": "Done",
+            "expected_findings": [], "depends_on": depends_on, "covers": covers,
+        }
+
+    delta = [
+        new("step-4", "read", ["obligation-1", "obligation-4"], ["step-1"]),
+        new("step-5", "read", ["obligation-5"], ["step-4", "step-2"]),
+        new("step-6", "propose", ["obligation-6", "obligation-7"],
+            ["step-4", "step-5", "step-3"]),
+    ]
+    return obligations, current_steps, targets, projection, delta
+
+
+@pytest.mark.asyncio
+async def test_amendment_response_depends_on_every_new_producer():
+    """The answer reads all new evidence, not only the last new step's artifact."""
+    obligations, current_steps, targets, projection, delta = (
+        _gtm_reverification_history()
+    )
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"steps": delta})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(
+        llm,
+        capabilities={"gtm": "Go to market", "action_briefing": "Brief the user"},
+        response_capability="action_briefing",
+    )
+
+    plan = await planner.amend(
+        "Qualify one account and draft outreach",
+        obligations=obligations,
+        target_obligation_ids=targets,
+        current_steps=current_steps,
+        reason="Re-verify the decision-maker",
+        revision=1,
+        obligation_projection=projection,
+    )
+
+    response = plan.steps[-1]
+    assert response.step_id == "final_response_2"
+    assert response.depends_on == ["step-4", "step-5", "step-6", "step-1", "step-3"]
+
+
+@pytest.mark.asyncio
+async def test_amendment_repair_is_asked_to_cover_only_the_amendment_targets():
+    obligations, current_steps, targets, projection, delta = (
+        _gtm_reverification_history()
+    )
+    llm = MockLLMClient(responses=[
+        {"content": json.dumps({"steps": delta})},
+        {"content": json.dumps({"complete": False, "missing": ["Draft lacks a source"]})},
+        {"content": json.dumps({"steps": delta})},
+        {"content": json.dumps({"complete": True, "missing": []})},
+    ])
+    planner = MeshPlanner(
+        llm,
+        capabilities={"gtm": "Go to market", "action_briefing": "Brief the user"},
+        response_capability="action_briefing",
+    )
+
+    await planner.amend(
+        "Qualify one account and draft outreach",
+        obligations=obligations,
+        target_obligation_ids=targets,
+        current_steps=current_steps,
+        reason="Re-verify the decision-maker",
+        revision=1,
+        obligation_projection=projection,
+    )
+
+    repair_prompt = llm.calls[2]["messages"][0]["content"]
+    assert (
+        "cover every UNRESOLVED OBLIGATION ID exactly through new work: "
+        + json.dumps(sorted(targets))
+    ) in repair_prompt
+    assert '"obligation-2"' not in repair_prompt.split("INVARIANTS:", 1)[1]
+
+
 @pytest.mark.asyncio
 async def test_mesh_amendment_cannot_supersede_satisfied_obligations():
     obligations = [
@@ -1637,3 +1808,33 @@ async def test_mesh_planner_requires_one_provider_for_mutating_outcomes(systems)
 
     with pytest.raises(MeshPlanError, match="exactly one system"):
         await planner.plan("Find evidence")
+
+@pytest.mark.asyncio
+async def test_the_audit_knows_proposing_is_how_shared_files_change():
+    """A redo on a room's files was refused: the audit demanded a `write` nobody can do."""
+    llm = MockLLMClient(responses=responses() + responses())
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    await planner.plan("Find evidence", {"source_snapshot": {"snapshot_id": "s1"}})
+    await planner.plan("Find evidence", {})
+
+    with_files = llm.calls[2]["messages"][0]["content"]
+    without_files = llm.calls[5]["messages"][0]["content"]
+    assert "Never require a `write` or a system to edit them" in with_files
+    assert "including a redo of an earlier attempt" in with_files
+    assert "Never require a `write` or a system to edit them" not in without_files
+
+
+@pytest.mark.asyncio
+async def test_a_plan_cut_off_by_the_output_allowance_says_how_to_raise_it():
+    """A reasoning model can spend its whole allowance thinking and return no plan."""
+
+    class Exhausted:
+        async def generate(self, **_):
+            return {"content": "", "finish_reason": "length", "model": "gpt-5.6-luna",
+                    "tokens": {"output": 4000}}
+
+    with pytest.raises(MeshPlanError) as error:
+        await MeshPlanner(Exhausted(), capabilities={"research": "Find evidence"}).plan("Find evidence")
+    assert "LLM_MODEL_OUTPUT_LIMITS" in str(error.value)
+    assert '"gpt-5.6-luna": 32000' in str(error.value)

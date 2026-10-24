@@ -162,6 +162,27 @@ class AthenaClient:
             logger.debug(f"[Athena] get_session failed for '{session_id}': {exc}")
             return None
 
+    async def erase_memory(self, tenant_id: str, user_id: str = "", agent_id: str = "") -> Dict[str, Any]:
+        """Erase everything Athena holds for a scope: a tenant's user, one agent of a
+        user, or (``user_id`` empty) the whole tenant. Sessions, short-term memory,
+        events, summaries, vectors, payloads and long-term graph knowledge go.
+
+        Returns Athena's counts. Raises on failure: an erasure that did not happen
+        must not look as if it did. Safe to retry.
+        """
+        if not tenant_id:
+            raise ValueError("erase_memory needs a tenant_id")
+        http = await self._http()
+        resp = await http.post("/api/v1/memory/erase",
+                               json={"tenant_id": tenant_id, "user_id": user_id, "agent_id": agent_id})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Athena did not erase {tenant_id}/{user_id or '*'}"
+                               f"{'/' + agent_id if agent_id else ''}: {resp.status_code} {resp.text[:200]}")
+        data = resp.json()
+        if not data.get("success"):
+            raise RuntimeError(f"Athena did not erase {tenant_id}/{user_id or '*'}: {data}")
+        return data
+
     async def delete_session(self, session_id: str) -> bool:
         """Delete one Athena session."""
         try:
@@ -179,6 +200,7 @@ class AthenaClient:
         metadata: Optional[Dict[str, str]] = None,
         *,
         user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Create an Athena memory session for an agent.
@@ -190,6 +212,7 @@ class AthenaClient:
             agent_id:  Unique agent identifier (e.g. "researcher", "analyst")
             metadata:  Optional k/v tags (e.g. {"team": "data"})
             user_id:   Athena user scope. Defaults to ``agent_id`` for compatibility.
+            tenant_id: Athena tenant; defaults to the client's. Athena isolates tenants.
 
         Returns:
             Athena session_id string, or None on failure.
@@ -197,7 +220,7 @@ class AthenaClient:
         try:
             http = await self._http()
             payload: Dict[str, Any] = {
-                "tenant_id": self._tenant_id,
+                "tenant_id": tenant_id or self._tenant_id,
                 "user_id": user_id or agent_id,
                 "agent_id": agent_id,
                 "metadata": {
@@ -223,6 +246,7 @@ class AthenaClient:
         metadata: Optional[Dict[str, str]] = None,
         *,
         user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Return the existing Athena session for this agent, or create one.
@@ -243,13 +267,14 @@ class AthenaClient:
             session_id string, or None if creation fails.
         """
         resolved_user_id = user_id or agent_id
-        if user_id:
+        tenant = tenant_id or self._tenant_id
+        if user_id or tenant_id:
             # An explicit scope lives in its own namespace, with each part
             # encoded: it can never resolve to an agent's default session, to
             # the legacy key (which belongs to no scope), or to a mapping
             # written before scoping existed.
             redis_key = "athena_session:scoped:" + ":".join(
-                quote(part, safe="") for part in (self._tenant_id, user_id, agent_id)
+                quote(part, safe="") for part in (tenant, resolved_user_id, agent_id)
             )
             legacy_redis_key = None
         else:
@@ -281,7 +306,7 @@ class AthenaClient:
 
         # 2. Create new session
         session_id = await self.create_session(
-            agent_id, metadata, user_id=resolved_user_id
+            agent_id, metadata, user_id=resolved_user_id, tenant_id=tenant
         )
         if not session_id:
             return None
@@ -568,7 +593,7 @@ class AthenaClient:
         session_id: str,
         query: str,
         limit: int = 5,
-        similarity_threshold: float = 0.7,
+        similarity_threshold: float = 0.0,
         metadata_filter: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -580,7 +605,10 @@ class AthenaClient:
             session_id:           Athena session_id
             query:                Natural language query
             limit:                Max results to return
-            similarity_threshold: Min cosine similarity (0.0–1.0)
+            similarity_threshold: Min cosine similarity (-1.0–1.0) for chain results.
+                                  0 (default) returns the ``limit`` most similar. Related
+                                  memories typically score 0.4–0.7 with OpenAI embeddings,
+                                  so high thresholds drop relevant results.
 
         Returns:
             List of SearchResult dicts with content, similarity_score, source_type.

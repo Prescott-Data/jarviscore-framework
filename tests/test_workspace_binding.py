@@ -1,3 +1,4 @@
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -444,3 +445,48 @@ async def test_delta_ignores_build_outputs_without_deleting_tracked_files(tmp_pa
     assert delta.added == ()
     assert delta.modified == ()
     assert delta.deleted == ()
+
+@pytest.mark.asyncio
+async def test_a_project_output_folder_is_part_of_the_change_but_runtime_files_are_not(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    snapshot = await store.capture(
+        SourceRef(provider="archive", locator="fixture", revision="main"),
+        "commit-1",
+        {"brief.md": "# Brief\n"},
+    )
+    pdf = b"%PDF-1.4\n\x00\xff binary body\n%%EOF\n"
+
+    async with SandboxBinding(store, snapshot) as binding:
+        (binding.workspace / "output").mkdir()
+        (binding.workspace / "output/review.pdf").write_bytes(pdf)
+        (binding.workspace / ".jarviscore/output").mkdir(parents=True)
+        (binding.workspace / ".jarviscore/output/scratch.txt").write_text("scratch")
+        delta = await binding.export_delta("workflows/wf/pdf")
+
+    assert [entry.path for entry in delta.added] == ["output/review.pdf"]
+    assert delta.added[0].sha256 == hashlib.sha256(pdf).hexdigest()
+    assert delta.modified == () and delta.deleted == ()
+
+
+@pytest.mark.asyncio
+async def test_binding_combines_parallel_edits_to_different_lines(tmp_path):
+    blobs = LocalBlobStorage(str(tmp_path / "blobs"))
+    store = BlobSnapshotStore(blobs)
+    snapshot = await store.capture(
+        SourceRef(provider="archive", locator="fixture", revision="main"),
+        "commit-1",
+        {"plan.md": "# Plan\n\nGoals: TBD\n\nDates: TBD\n"},
+    )
+    deltas = []
+    for index, (old, new) in enumerate((("Goals: TBD", "Goals: grow"), ("Dates: TBD", "Dates: May")), 1):
+        async with SandboxBinding(store, snapshot) as branch:
+            path = branch.workspace / "plan.md"
+            path.write_text(path.read_text().replace(old, new))
+            deltas.append(await branch.export_delta(f"workflows/wf/branch-{index}"))
+
+    async with SandboxBinding(store, snapshot) as merged:
+        await merged.apply_deltas(deltas)
+        assert (merged.workspace / "plan.md").read_text() == "# Plan\n\nGoals: grow\n\nDates: May\n"
+        combined = await merged.export_delta("workflows/wf/editor")
+    assert [entry.path for entry in combined.modified] == ["plan.md"]
