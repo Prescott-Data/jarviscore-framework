@@ -876,6 +876,8 @@ class CoderSandbox:
             "allow_unsafe_local_execution": self.allow_unsafe_local_execution,
             "browser": self.browser_proxy is not None,
             "browser_session": self.browser_proxy is not None,
+            # The agent's tools the program may call, by name and argument order.
+            "tools": (context or {}).get("_tool_signatures") or {},
         }
         command_dirs = {
             str(Path(found).parent)
@@ -1111,6 +1113,12 @@ class CoderSandbox:
                         if isinstance(content, str):
                             content = content.encode()
                         result = {"content": base64.b64encode(content).decode("ascii")}
+                    elif request["operation"] == "tool_call":
+                        bridge = context.get("_tool_bridge")
+                        if not callable(bridge):
+                            raise RuntimeError("This program was not given any tools.")
+                        payload = request["payload"]
+                        result = await bridge(str(payload.get("name") or ""), payload.get("params") or {})
                     elif request["operation"] == "mesh_list_peers":
                         if self._mesh_proxy is None:
                             raise RuntimeError("No mesh is attached to this agent.")

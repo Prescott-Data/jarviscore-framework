@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     llm_timeout: float = 120.0
     # Connecting (TCP + TLS) gets its own short limit; the SDK retries a failed connect.
     llm_connect_timeout: float = 10.0
+    # Seconds an idle provider connection is kept for the next call. The SDKs
+    # default to 5 s, shorter than the tool work between agent turns, so most
+    # calls paid a new TCP + TLS handshake (about 1 s to a distant region).
+    llm_keepalive_seconds: float = 120.0
+    # Open the primary provider's connection while an agent starts, so its
+    # first call does not pay the handshake.
+    llm_prewarm: bool = True
     llm_temperature: float = 0.7
     # Output cap when a caller passes none. Reasoning deployments bill hidden
     # reasoning against it, so a low cap returns empty or truncated completions.
@@ -198,6 +205,9 @@ class Settings(BaseSettings):
     kernel_action_budget: int = 24000
     kernel_wall_clock_ms: int = 180000
     kernel_router_provider: str = "llm"
+    # Let the router answer a task that needs no role (no tools, data or effects)
+    # in the same call, when it runs on the model the communicator would use.
+    kernel_router_may_answer: bool = True
     typesafe_router_min_confidence: float = 0.5
     task_complexity_provider: str = "llm"
     typesafe_complexity_min_confidence: float = 0.5

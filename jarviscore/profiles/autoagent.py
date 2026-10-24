@@ -339,6 +339,10 @@ class AutoAgent(Profile):
         # 1. Initialize LLM (auto-detects providers)
         self._logger.info("Initializing LLM client...")
         self.llm = create_llm_client(config)
+        # The handshake overlaps the rest of setup instead of the first call.
+        start_warming = getattr(self.llm, "start_warming", None)
+        if callable(start_warming):
+            start_warming()
 
         # 2. Initialize search (zero-config)
         self._logger.info("Initializing internet search...")
@@ -472,6 +476,12 @@ class AutoAgent(Profile):
                 await search.close()
             except Exception as exc:
                 self._logger.warning("[AutoAgent] Search client close failed: %s", exc)
+        llm = getattr(self, "llm", None)
+        if llm is not None and hasattr(llm, "close"):
+            try:
+                await llm.close()
+            except Exception as exc:
+                self._logger.warning("[AutoAgent] LLM client close failed: %s", exc)
         await super().teardown()
 
     def _load_agent_profile(self) -> None:

@@ -33,6 +33,94 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 2.4.0 <span class="changelog-date">2026-10-24</span>
+
+### Changed
+
+- **Agents start in a fraction of the time.** Opening the function registry
+  executed all 1,229 shipped atom modules to hold callables nothing asked for,
+  and merging the catalogue parsed every atom's contract twice even when the
+  stored source was the shipped source. A warm start spent 5 to 6 seconds
+  there and a cold one 4 to 14, before any work began. Callables now compile
+  on first `get_function()`, an atom identical to the shipped one is skipped
+  by hash, and each atom is parsed once. Warm registry open drops to about
+  0.25 s and a cold seed to about 2 s, with identical registry contents.
+- **LLM calls keep their connection.** The provider SDKs closed idle
+  connections after 5 s, shorter than the tool work between agent turns, so
+  most calls paid a new TCP and TLS handshake (about a second to a distant
+  region), and promotion and vLLM calls opened a new session every time.
+  Idle connections are now kept for `LLM_KEEPALIVE_SECONDS` (default 120),
+  promotion and vLLM calls reuse one session per event loop, and an agent
+  opens its primary provider's connection while it starts (`LLM_PREWARM`).
+  Measured against Azure: a call after an idle gap went from 2.9–3.2 s to
+  1.1–1.2 s, and an agent's first call from 2.9 s to 2.0 s.
+- **The observability guide says what a trace is.** It described the
+  per-step trace as suitable for replay and audit retention. It is a
+  debugging record: LLM prompts and responses are previews, tool results are
+  cut to 2,000 characters, routing, planning and evaluation calls are not yet
+  traced, entries expire after seven days, and writes are best effort. The
+  guide, the memory concept page and the tracer docstrings now say so, and
+  the event table lists the fields the runtime writes.
+
+- **Agent turns carry only what the agent can use.** A working turn sent
+  19-29 tool schemas, each repeating a long note description, peer tools with
+  no peers present, memory and workflow tools with nothing behind them, an
+  echo tool that made the model write its answer twice, internal routing data,
+  per-turn counters and a reasoning scaffold the model wrote out every call.
+  Each is now offered only where it can act, and independent tool calls in one
+  reply all run in the same turn. On a three-lookup support task: 5 calls and
+  ~17k input tokens became 3 calls and ~5k, with output tokens cut by more than
+  half.
+- **Tool programs.** A sub-agent's own tools can be called from a Python
+  program in the Kernel's sandbox (`run_tool_program`), so paging, filtering
+  and totals happen in code and only the result reaches the model. Every call
+  still runs through the agent's hooks and leaves a receipt. On an
+  accounts-receivable task over 3,600 invoices, JarvisCore answered correctly
+  for $0.024 in 21 s; LangGraph, CrewAI and Hermes, on the same model, spent
+  $0.18-0.46 and 32-111 s and got it wrong.
+- **The router answers tasks that need no role.** Summarising or rewording what
+  the task gives is answered in the routing call (one model call instead of
+  two), on the model the communicator would use. Calculations still go to the
+  coder. `KERNEL_ROUTER_MAY_ANSWER=false` turns it off.
+- **Each turn's prompt extends the last one, so providers serve it from
+  cache.** Tool definitions stay fixed for a run and the task leads the
+  conversation. What the runtime tells the agent (the date, the budget at the
+  start and again once a quarter remains, a warning before exchanges leave
+  view) is said once and stays where it was said. Notes, receipts and recent
+  actions are listed only for calls that have left view, exchanges leave view
+  five at a time, and the run's workflow id no longer leads the task. On
+  Azure, a prompt that strictly extends the last was served 9.1k of 9.2k
+  tokens from cache; one whose closing message was replaced, 5.4k of 9.1k.
+- **Notes when they are needed.** The agent is asked to note what it will
+  still need when exchanges are about to leave view, instead of on every
+  call; output tokens on a support ticket fell from ~550 to ~300.
+- **Receipts stay out of the answer.** `done` says receipts are cited in
+  `result` as `tool_receipt_id`, never in the summary; replies to customers
+  had carried receipt ids in their prose.
+- Measured head to head (same model, three interleaved rounds), against the
+  release before these turn changes: support lookups 1.8x cheaper, compute
+  1.7x, research 1.3x, five recurring tickets 2.2x (and 1.5x faster), with
+  26-78% of input now cached where none was. Against LangGraph and CrewAI,
+  JarvisCore is 2-3x cheaper on a 360-invoice ledger and 26x on 3,600
+  invoices, where it alone answered correctly; on small tool tasks it still
+  costs 1.2-3.6x more.
+
+### Added
+
+- `UnifiedLLMClient.close()` and `PromoLLMClient.close()` release the
+  client's connections; `AutoAgent.teardown()` calls it. The `Profile`
+  teardown example already called `llm.close()`, which did not exist.
+
+### Fixed
+
+- **`jarviscore inspect` shows each tool call's arguments.** The kernel's
+  tracer records them as `args` and the timeline read only `params`, so every
+  tool call in a real run printed without them.
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 2.3.1 <span class="changelog-date">2026-10-23</span>
 
 ### Fixed

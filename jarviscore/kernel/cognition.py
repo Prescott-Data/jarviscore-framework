@@ -312,6 +312,19 @@ class AgentCognitionManager:
             facts.append(f"{max(0, fuse - lease.turns_used)} of {fuse} turns")
         return "Remaining: " + ", ".join(facts) + "."
 
+    def budget_running_low(self, below: float = 0.25) -> bool:
+        """Whether any part of this run's budget is down to its last quarter."""
+        lease = self.lease
+        left = []
+        if getattr(lease, "max_total_tokens", 0) > 0:
+            left.append(lease.remaining_total() / lease.max_total_tokens)
+        if getattr(lease, "wall_clock_ms", 0) > 0:
+            left.append(lease.remaining_wall_clock_ms() / lease.wall_clock_ms)
+        fuse = getattr(lease, "emergency_turn_fuse", 0)
+        if fuse:
+            left.append(max(0, fuse - lease.turns_used) / fuse)
+        return any(fraction <= below for fraction in left)
+
     # ── Failure Ledger convenience pass-throughs ──────────────────────────────
 
     def record_failure(

@@ -100,6 +100,8 @@ These become important once you run more than two agents concurrently against a 
 |---|---|---|
 | `LLM_TIMEOUT` | `120.0` | Seconds before an LLM call times out. |
 | `LLM_CONNECT_TIMEOUT` | `10.0` | Seconds to establish the connection (TCP and TLS), separate from `LLM_TIMEOUT`. |
+| `LLM_KEEPALIVE_SECONDS` | `120.0` | Seconds an idle provider connection is kept for the next call (Azure, Claude, the promotion endpoint and vLLM). The SDK default of 5 s is shorter than the tool work between agent turns, so most calls reconnected; keep this below your provider's idle timeout (Azure: 240 s). |
+| `LLM_PREWARM` | `true` | Open the primary provider's connection while an agent starts, so its first call skips the TCP and TLS handshake. Only a bare request to the provider's host is sent; a failed warm-up is ignored. |
 | `LLM_TEMPERATURE` | `0.7` | Sampling temperature for all providers. |
 | `LLM_MAX_CONCURRENT` | `0` | Most calls in flight per deployment. `0` leaves the governor to find the level (up to `LLM_CONCURRENCY_CEILING`). With the governor disabled, a process-wide cap. |
 | `LLM_MAX_RETRIES_429` | `4` | Retry attempts when a provider returns 429 before giving up. |
@@ -149,6 +151,7 @@ requires one generative LLM provider from the preceding section.
 | `TYPESAFE_BASE_URL` | TypeSafe SDK default | Optional compatible gateway or test endpoint. |
 | `TYPESAFE_TIMEOUT` | `10.0` | Decision request timeout in seconds. |
 | `KERNEL_ROUTER_PROVIDER` | `llm` | Set to `typesafe` to opt into Jev-backed Kernel role selection. |
+| `KERNEL_ROUTER_MAY_ANSWER` | `true` | Let the router answer, in the same call, a task that needs no role (summarising, rewording, explaining or drafting from the task text, with no tool, data, calculation or action). Applies only when the router runs on the model the communicator would use. |
 | `TYPESAFE_ROUTER_MIN_CONFIDENCE` | `0.5` | Minimum Jev routing confidence. Validate against your workload before changing production behavior. |
 | `TASK_COMPLEXITY_PROVIDER` | `llm` | Set to `typesafe` to classify direct Kernel versus Planner execution with Jev. |
 | `TYPESAFE_COMPLEXITY_MIN_CONFIDENCE` | `0.5` | Below this confidence, preserve the full planning path. |

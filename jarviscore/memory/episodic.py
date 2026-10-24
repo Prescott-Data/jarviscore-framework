@@ -3,7 +3,7 @@ EpisodicLedger — Chronological event log backed by Redis Streams.
 
 Every meaningful event in a workflow step (turn start, tool call, result,
 error) is appended here via Redis XADD. The stream preserves insertion
-order with auto-incrementing IDs, making it a reliable audit trail.
+order with auto-incrementing IDs, so it reads back as the step's history.
 
 Redis key: ledgers:{workflow_id}
 TTL: managed by RedisContextStore (default 7 days)

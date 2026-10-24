@@ -6,13 +6,13 @@ description: "Capture JarvisCore execution traces in Redis, JSONL, and PubSub, e
 
 # Observability & Telemetry
 
-JarvisCore ships with a built-in, two-layer observability system. Every agent turn, tool call, LLM request, mailbox message, and HITL event is captured automatically: no instrumentation required in your agent code.
+JarvisCore ships with a built-in, two-layer observability system. Every subagent step is traced automatically: its reasoning, each tool call with its arguments and result, each LLM request and response, and the step's outcome. No instrumentation is required in your agent code.
 
 The two layers serve different purposes:
 
 | Layer | What it does | Where data goes |
 |---|---|---|
-| **Structured Tracing** (`TraceManager`) | Records *what happened*: the full execution narrative | Redis List (persistent), Redis PubSub (real-time), JSONL (compliance fallback) |
+| **Structured Tracing** (`TraceManager`) | Records *what happened*: the execution narrative of each step | Redis List (seven-day history), Redis PubSub (real-time), JSONL file (local record) |
 | **Operational Metrics** (`metrics.py`) | Records *how it performed*: counters, histograms, and gauges | Prometheus (scrape endpoint on port 9090) |
 
 Both layers are **non-blocking by design**. If Redis is unavailable, tracing falls back to JSONL. If `prometheus-client` is not installed, metrics become silent no-ops. Neither failure will crash your agent.
@@ -40,11 +40,11 @@ tracer = TraceManager(
 
 Every event emitted through `TraceManager.log_event()` is written to up to three places simultaneously:
 
-**1. Redis List (persistent)**
+**1. Redis List (seven-day history)**
 ```
 Key: traces:{workflow_id}:{step_id}
 ```
-Suitable for replay, post-mortem debugging, and audit log retention. Survives process restarts.
+Read it for post-mortem debugging; it survives process restarts. Entries expire seven days after the step's last event.
 
 **2. Redis PubSub (real-time)**
 ```
@@ -52,11 +52,23 @@ Channel: trace_events:{workflow_id}
 ```
 Subscribe from a dashboard, alerting system, or log aggregator to receive events as they happen.
 
-**3. JSONL file (compliance fallback)**
+**3. JSONL file (local record)**
 ```
 Path: {trace_dir}/{workflow_id}_{step_id}.jsonl
 ```
 Written even when Redis is unavailable. Each line is a self-contained JSON event: parseable with any standard tooling.
+
+### What a trace holds
+
+A trace is a debugging record, not an audit log:
+
+- **Previews, not payloads.** LLM events carry the first 300 characters of the system prompt, 500 of the user prompt and 500 of the response, with latency and token count. Tool results are cut to 2,000 characters.
+- **Subagent steps only.** Routing, goal planning and step evaluation calls are not traced yet.
+- **Programs included.** Each call a tool program makes is traced as its own `tool_start`/`tool_result` and kept as a receipt marked `via_program`, even though its result never enters the model's context.
+- **Redacted.** Values under credential-like keys and token-shaped strings are replaced with `***` before anything is written.
+- **Best effort.** A failed Redis or file write is logged and skipped, never retried. Files can be edited after the fact and nothing detects it.
+
+The kernel writes the channels above for every subagent step. `jarviscore.telemetry.TraceManager`, shown earlier for emitting your own events, keeps its Redis history under `trace_log:trace_events:{workflow_id}` instead.
 
 ### Reading Traces: `jarviscore inspect`
 
@@ -84,7 +96,7 @@ Every event has the same envelope:
   "type": "tool_start",
   "data": {
     "tool": "slack_send_message_v1",
-    "params": { "channel": "#alerts", "text": "Deploy complete" }
+    "args": { "channel": "#alerts", "text": "Deploy complete" }
   }
 }
 ```
@@ -116,14 +128,14 @@ All event types are defined in `TraceEventType` (a typed `str` enum). The full s
 #### Tool Execution
 | Event | When emitted |
 |---|---|
-| `tool_start` | Tool invocation begins; includes tool name and parameters |
-| `tool_result` | Tool invocation completes; includes result preview or error |
+| `tool_start` | Tool invocation begins; includes tool name and arguments |
+| `tool_result` | Tool invocation completes; includes the first 2,000 characters of the result, or the error |
 
 #### LLM Interaction
 | Event | When emitted |
 |---|---|
-| `llm_request` | Outgoing request to an LLM provider; includes provider, model, prompt preview |
-| `llm_response` | LLM response received; includes latency, input tokens, output tokens |
+| `llm_request` | Outgoing request to an LLM provider; includes model and previews of the system and user prompts |
+| `llm_response` | LLM response received; includes a response preview, latency and total tokens |
 
 #### Mailbox
 | Event | When emitted |
@@ -175,7 +187,7 @@ for message in ps.listen():
         print(event["type"], event["data"])
 ```
 
-**Replay from JSONL:**
+**Query the JSONL record:**
 ```bash
 # All events for a workflow
 cat .jarviscore/traces/wf-abc123_step-001.jsonl | jq .

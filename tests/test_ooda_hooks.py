@@ -15,7 +15,7 @@ import json
 import pytest
 from typing import Any, Dict, Optional, Tuple
 
-from jarviscore.kernel.subagent import BaseSubAgent
+from jarviscore.kernel.subagent import BaseSubAgent, _now_fact
 from jarviscore.kernel.state import KernelState
 
 
@@ -150,13 +150,14 @@ class TestPreExecuteHook:
         assert hook_pos < exec_pos
 
     def test_hook_block_uses_continue(self):
-        """When hook returns a result, the loop should continue (not execute)."""
+        """When hook returns a result, the call is skipped (not executed) and the loop moves on."""
         source = inspect.getsource(BaseSubAgent._run_turns)
         hook_idx = source.index("_pre_execute_hook")
-        # Find the continue after the hook block
+        # The block ends this call without executing it: the turn loop's
+        # `continue`, or `return None` from the per-call action.
         block = source[hook_idx:hook_idx + 1500]
         assert "pre_execute_block" in block
-        assert "continue" in block
+        assert "continue" in block or "return None" in block
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -381,7 +382,8 @@ class TestNativeToolTurns:
 
         first = llm.requests[0]
         assert first["tool_choice"] == "required"
-        assert first["parallel_tool_calls"] is False
+        # Independent calls arrive together and all run this turn.
+        assert first["parallel_tool_calls"] is True
         functions = _functions(first)
         assert {"search", "crm_lookup", "done"} <= set(functions)
         assert functions["search"]["parameters"] == {
@@ -389,10 +391,14 @@ class TestNativeToolTurns:
             "properties": {
                 "query": {"type": "string"},
                 "limit": {"type": "integer"},
-                "working_notes": functions["done"]["parameters"]["properties"]["working_notes"],
+                "working_notes": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["query"],
         }
+        # done ends the run: no notes to keep, and the summary is the answer.
+        done = functions["done"]["parameters"]
+        assert "working_notes" not in done["properties"]
+        assert done["required"] == ["summary", "complete"]
         system = first["messages"][0]["content"]
         assert "TOOL:" not in system and "Available tools:" not in system
 
@@ -404,6 +410,50 @@ class TestNativeToolTurns:
         assert tool_message["role"] == "tool"
         assert tool_message["tool_call_id"] == "call_search"
         assert "revenue was 5" in tool_message["content"]
+
+    def test_independent_calls_in_one_reply_all_run_in_one_turn(self):
+        both = {"tool_calls": [
+            {"id": "call_a", "name": "search", "arguments": json.dumps({"query": "revenue"})},
+            {"id": "call_b", "name": "search", "arguments": json.dumps({"query": "margin", "working_notes": ["margin asked"]})},
+        ]}
+        llm = _NativeLLM([both, _call("done", {"summary": "Both found.", "complete": True})])
+        agent = _NativeAgent(llm)
+
+        result = asyncio.run(agent.run(task="find revenue and margin"))
+
+        assert result.status == "success"
+        assert agent.searched == [("revenue", 5), ("margin", 5)]
+        # Two calls, one model turn: the second request already holds both results.
+        assert len(llm.requests) == 2
+        threaded = llm.requests[1]["messages"]
+        answered = [m["tool_call_id"] for m in threaded if m.get("role") == "tool"]
+        assert answered == ["call_a", "call_b"]
+        assert len(agent._current_state.tool_history) == 2
+        assert any("margin asked" in str(note) for note in agent._current_state.working_notes)
+
+    def test_done_sent_with_other_calls_waits_for_their_results(self):
+        rushed = {"tool_calls": [
+            {"id": "call_a", "name": "search", "arguments": json.dumps({"query": "revenue"})},
+            {"id": "call_done", "name": "done", "arguments": json.dumps({"summary": "guess", "complete": True})},
+        ]}
+        llm = _NativeLLM([rushed, _call("done", {"summary": "Revenue was 5.", "complete": True})])
+        agent = _NativeAgent(llm)
+
+        result = asyncio.run(agent.run(task="find revenue"))
+
+        assert agent.searched == [("revenue", 5)]
+        assert result.summary == "Revenue was 5."
+        assert len(llm.requests) == 2
+
+    def test_done_without_a_result_carries_an_empty_one(self):
+        llm = _NativeLLM([_call("done", {"summary": "Nothing to hand on.", "complete": True})])
+        agent = _NativeAgent(llm)
+
+        result = asyncio.run(agent.run(task="say hello"))
+
+        assert result.status == "success"
+        assert result.payload == {}
+        assert result.summary == "Nothing to hand on."
 
     def test_a_long_result_reaches_the_agent_whole_and_once(self):
         report = "row " * 5000 + "LAST ROW: 15 rejected"
@@ -421,7 +471,9 @@ class TestNativeToolTurns:
 
         prompt = "\n".join(str(m.get("content")) for m in llm.requests[1]["messages"])
         assert prompt.count("LAST ROW: 15 rejected") == 1
-        assert "in the conversation, under this receipt" in prompt
+        # Shown in the conversation under its receipt, and not listed again.
+        assert "RECENT ACTIONS" not in prompt
+        assert "AUTHORITATIVE TOOL RECEIPTS" not in prompt
 
     def test_a_providers_call_signature_is_threaded_back_with_the_call(self):
         signed = _call("search", {"query": "revenue"})
@@ -461,7 +513,10 @@ class TestNativeToolTurns:
         assert [n["note"] for n in agent._current_state.working_notes] == [
             "FY25 report is on page 4", "Revenue was 5",
         ]
-        assert "FY25 report is on page 4" in llm.requests[1]["messages"][-1]["content"]
+        # The note is read in the call that carried it while that call is in view.
+        later = json.dumps(llm.requests[1]["messages"])
+        assert later.count("FY25 report is on page 4") == 1
+        assert "MY WORKING NOTES" not in later
         assert "working_notes" in llm.requests[0]["messages"][0]["content"]
 
     def test_a_tool_cannot_claim_the_notes_argument(self):
@@ -763,6 +818,98 @@ class TestRuntimeRecordsAgentDecides:
         assert "ran 11 time(s) earlier" in last
         for request in llm.requests:
             text = "\n".join(str(m.get("content")) for m in request["messages"])
-            assert "## RUNTIME NOTICE (this turn)" in text
+            assert "## RUNTIME NOTICE" in text
             for phrase in _STEERING:
                 assert phrase not in text, phrase
+
+
+class TestEachPromptExtendsTheLast:
+    """Providers serve a prompt's repeated prefix from cache, so a turn adds to the last prompt rather than rewriting it."""
+
+    _NOTE = "order A1 ships from the Leeds depot"
+
+    def _run(self, polls, note_first=False, context=None):
+        first = {"order": "A1", **({"working_notes": [self._NOTE]} if note_first else {})}
+        llm = _NativeLLM(
+            [_call("poll", first, call_id="call_0")]
+            + [_call("poll", {"order": "A1"}, call_id=f"call_{i}") for i in range(1, polls)]
+        )
+        agent = _PollingAgent([])
+        agent.llm_client = llm
+        asyncio.run(agent.run(task="watch order A1", context=context, max_turns=polls + 2))
+        return agent, llm
+
+    @staticmethod
+    def _text(request):
+        return json.dumps(request["messages"])
+
+    def test_each_prompt_begins_with_the_whole_of_the_last_one(self):
+        _, llm = self._run(6)
+
+        for before, after in zip(llm.requests, llm.requests[1:]):
+            assert after["tools"] == before["tools"]
+            assert after["messages"][:len(before["messages"])] == before["messages"]
+
+    def test_the_conversation_slides_five_exchanges_at_a_time(self):
+        _, llm = self._run(17)
+
+        shown = [sum(m["role"] == "tool" for m in r["messages"]) for r in llm.requests]
+        assert shown[:15] == list(range(15))
+        assert shown[15:17] == [10, 11]
+
+    def test_a_note_returns_once_the_call_that_carried_it_leaves_view(self):
+        _, llm = self._run(16, note_first=True)
+
+        in_view = self._text(llm.requests[14])
+        assert in_view.count(self._NOTE) == 1
+        assert "MY WORKING NOTES" not in in_view
+        after_slide = self._text(llm.requests[15])
+        assert "MY WORKING NOTES" in after_slide
+        assert after_slide.count(self._NOTE) == 1
+
+    def test_the_agent_is_told_before_exchanges_leave_view(self):
+        _, llm = self._run(14)
+
+        warning = "leave your view within a turn or two"
+        assert warning not in self._text(llm.requests[11])
+        assert warning in llm.requests[12]["messages"][-1]["content"]
+
+    def test_the_date_and_budget_are_said_once_not_every_turn(self):
+        from datetime import datetime
+
+        _, llm = self._run(6)
+
+        today = datetime.now().astimezone().strftime("%d %B %Y")
+        assert "Remaining: " in self._text(llm.requests[0])
+        last = self._text(llm.requests[-1])
+        assert last.count("Now: ") == 1 and today in last
+        assert last.count("Remaining: ") == 1
+        # The notice the first turn was given stays where it was, unchanged.
+        assert llm.requests[-1]["messages"][2] == llm.requests[0]["messages"][2]
+
+    def test_the_budget_is_said_again_once_it_runs_low(self):
+        agent, _ = self._run(1)
+        agent._cognition.lease.max_total_tokens = 100
+        agent._cognition.lease.thinking_used = 90
+
+        news = agent._turn_news([], [{"lead": "## RUNTIME NOTICE\n" + _now_fact()}], first=False)
+
+        assert "Remaining: " in news
+        assert "Now: " not in news
+
+    def test_the_run_id_does_not_lead_the_prompt(self):
+        _, llm = self._run(2, context={"workflow_id": "wf-run-4711", "step_id": "lookup"})
+
+        leading = json.dumps(llm.requests[1]["messages"][:2])
+        assert "wf-run-4711" not in leading
+        assert "lookup" in leading
+
+    def test_receipts_are_cited_in_result_never_in_the_summary(self):
+        _, llm = self._run(1)
+
+        done = next(t for t in llm.requests[0]["tools"] if t["function"]["name"] == "done")
+        fields = done["function"]["parameters"]["properties"]
+        assert "tool_receipt_id" in fields["result"]["description"]
+        assert "No receipt ids" in fields["summary"]["description"]
+        # Said once, where done is called.
+        assert "tool_receipt_id" not in llm.requests[0]["messages"][0]["content"]

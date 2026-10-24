@@ -180,12 +180,40 @@ class TestEpistemicDecisionPrompt:
                     "ask_capability", lambda **_: {}, "Ask by capability"
                 )
 
+        class OnePeer:
+            def list_peers(self):
+                return [{"role": "analyst", "agent_id": "a-1"}]
+
         agent = StubAgent(agent_id="test", role="researcher", llm_client=None)
+        agent.peer_directory = OnePeer()
         prompt = agent._build_user_prompt(_make_state(), "## MISSION\n**Task:** Test")
 
         assert "Before concluding blocked" in prompt
         assert "ask_peer" in prompt
         assert "ask_capability" in prompt
+
+    def test_an_agent_alone_is_neither_offered_peers_nor_told_to_ask_them(self):
+        class StubAgent(BaseSubAgent):
+            def get_system_prompt(self):
+                return "Test system prompt"
+
+            def setup_tools(self):
+                self.register_tool("ask_peer", lambda **_: {}, "Ask a peer")
+                self.register_tool("search", lambda **_: {}, "Search")
+
+        class NoPeers:
+            def list_peers(self):
+                return []
+
+        agent = StubAgent(agent_id="test", role="researcher", llm_client=None)
+        agent.peer_directory = NoPeers()
+        state = _make_state()
+        prompt = agent._build_user_prompt(state, "## MISSION\n**Task:** Test")
+        offered = {spec["function"]["name"] for spec in agent._native_tool_specs(state.context)[0]}
+
+        assert "Before concluding blocked" not in prompt
+        assert "ask_peer" not in offered
+        assert "search" in offered
 
     def test_prompt_includes_role(self):
         prompt = self._build_prompt()
@@ -249,8 +277,14 @@ class TestTurnDigest:
     """Verify turn digests include structured reflection prompts."""
 
     def test_observation_format_in_source(self):
-        """The observation string should include turn number and reflection prompt."""
+        """An observation names its call and receipt; it carries no per-result boilerplate.
+
+        Every observation is repeated in the history of each later turn, so a
+        reflection prompt appended to each one was paid for again and again.
+        """
         import inspect
         source = inspect.getsource(BaseSubAgent._run_turns)
-        assert "Reflect:" in source
-        assert "[Turn {turn}]" in source or "Turn {turn}" in source
+        assert "[Turn {call}] {turn_log['status']}, " in source
+        assert "Tool '{tool_name}' returned" not in source
+        assert "receipt {tool_receipt.receipt_id}" in source
+        assert "Reflect:" not in source

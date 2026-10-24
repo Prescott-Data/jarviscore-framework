@@ -131,6 +131,16 @@ class BudgetConfig:
         return self.total_tokens - self.output_reserve - self.system_reserve
 
 
+#: Blocks that hold for a whole step: the task and what it was given. They lead
+#: the prompt so each turn repeats the last one's prefix and is served from cache.
+STEP_CONSTANT_BLOCKS = frozenset({"mission", "goal_state", "input_context", "recalled", "prior_steps"})
+
+
+def _is_empty(value) -> bool:
+    """An empty list, map or string under INPUT CONTEXT tells the agent nothing."""
+    return value is None or (isinstance(value, (str, list, tuple, dict, set)) and not value)
+
+
 class ContextManager:
     """
     Manages LLM token budgets and assembles prioritised prompt context.
@@ -311,6 +321,26 @@ class ContextManager:
             return self._build_context_from_dict(state)
         return self._build_context_from_state(state, in_conversation)
 
+    def build_context_parts(
+        self, state: Any, in_conversation: frozenset = frozenset(),
+        notes_in_view: Optional[frozenset] = None,
+    ) -> Tuple[str, str]:
+        """The turn's context as (what holds for the whole step, what changes each turn).
+
+        Providers cache a prompt's longest repeated prefix. The task and its inputs
+        lead the conversation and the turn's own state follows it, so every turn
+        repeats the one before and is served from cache; rendered as one block
+        after the conversation, each turn's prompt differed early and nothing was.
+        ``notes_in_view`` names notes the agent can read in its own calls in view;
+        they are not repeated.
+        """
+        if isinstance(state, dict):
+            return self._build_context_from_dict(state), ""
+        blocks = self._render_keyed(state, in_conversation, notes_in_view)
+        static = [text for key, text in blocks if key in STEP_CONSTANT_BLOCKS]
+        changing = [text for key, text in blocks if key not in STEP_CONSTANT_BLOCKS]
+        return "\n\n".join(static), "\n\n".join(changing)
+
     def _build_context_from_state(
         self, state: "KernelState", in_conversation: frozenset = frozenset()
     ) -> str:
@@ -319,13 +349,21 @@ class ContextManager:
         Blocks are composed once at full fidelity, then the least aggressive
         pressure tier that fits the budget is chosen. Values are never cut.
         """
+        # The budget's state reaches the agent as a pressure notice when it binds;
+        # a per-turn counter only made every prompt unique.
+        return "\n\n".join(text for _, text in self._render_keyed(state, in_conversation))
+
+    def _render_keyed(
+        self, state: "KernelState", in_conversation: frozenset = frozenset(),
+        notes_in_view: Optional[frozenset] = None,
+    ) -> List[Tuple[str, str]]:
         budget = self.config.usable_tokens
-        candidates = self._compose_blocks(state, in_conversation)
+        candidates = self._compose_blocks(state, in_conversation, notes_in_view)
         full_cost = sum(self.count_tokens(text) for _, text in candidates)
 
         for tier in LADDER:
             blocks = self._render_at_tier(state, candidates, tier)
-            used = sum(self.count_tokens(text) for text in blocks)
+            used = sum(self.count_tokens(text) for _, text in blocks)
             if used <= budget or tier is LADDER[-1]:
                 break
 
@@ -334,32 +372,28 @@ class ContextManager:
         if isinstance(state.internal_variables, dict):
             set_pressure(state.internal_variables, pressure)
         if tier is not PressureTier.NORMAL:
-            blocks.insert(1, format_pressure_notice(pressure))
+            blocks.insert(1, ("pressure", format_pressure_notice(pressure)))
+        return blocks
 
-        blocks.append(
-            f"\n---\n**Context Budget:** {used}/{budget} tokens "
-            f"({100 * used // budget if budget else 0}% used)"
-        )
-        return "\n\n".join(blocks)
-
-    def _render_at_tier(self, state: "KernelState", candidates, tier) -> List[str]:
+    def _render_at_tier(self, state: "KernelState", candidates, tier) -> List[Tuple[str, str]]:
         """Keep every block this tier allows, whole; reference the rest."""
-        rendered: List[str] = []
+        rendered: List[Tuple[str, str]] = []
         for key, text in candidates:
             if key == "input_context" and tier is not PressureTier.NORMAL:
                 text = self._compose_input_context(state, tier)
                 if not text:
                     continue
             if should_render_block(key, tier):
-                rendered.append(text)
+                rendered.append((key, text))
         if prior_step_mode(tier) == "references":
             prior = (state.context or {}).get("previous_step_results") or {}
             if prior:
-                rendered.append(format_step_references(state.workflow_id, prior.keys()))
+                rendered.append(("prior_steps", format_step_references(state.workflow_id, prior.keys())))
         return rendered
 
     def _compose_blocks(
-        self, state: "KernelState", in_conversation: frozenset = frozenset()
+        self, state: "KernelState", in_conversation: frozenset = frozenset(),
+        notes_in_view: Optional[frozenset] = None,
     ) -> List[tuple]:
         """Every block the turn could show, at full fidelity, in priority order."""
         blocks: List[tuple] = []
@@ -368,18 +402,20 @@ class ContextManager:
             if text and text.strip():
                 blocks.append((key, text))
 
+        # The workflow's id is unique to each run: leading the task, it made every
+        # run's prompt differ from the first lines on. Receipts still carry it.
         mission = f"""## MISSION
-**Workflow:** {state.workflow_id}
 **Step:** {state.step_id}
 **Task:** {state.task}
-**Status:** {state.status}
-**Turn:** {state.turn}
 """
         if state.last_error:
             mission += f"**CRITICAL ERROR TO FIX:** {state.last_error}\n"
         add("mission", mission)
         add("goal_state", self._build_goal_state_block(state.context or {}))
-        notes = getattr(state, "working_notes", None) or []
+        notes = [
+            note for note in getattr(state, "working_notes", None) or []
+            if notes_in_view is None or str(note.get("note", "")).strip() not in notes_in_view
+        ]
         if notes:
             add("working_notes", "## MY WORKING NOTES\nWhat I wrote down in this step (turn: note):\n" + "\n".join(
                 f"- [{note.get('turn')}] {note.get('note')}" for note in notes
@@ -450,22 +486,31 @@ class ContextManager:
                 ltm_block += f"…and {hidden} older memories held in long-term memory\n"
             add("long_term_memory", ltm_block)
 
-        if state.tool_history:
+        # A program's own calls stay evidence; the agent sees what the program reported.
+        # A call in the conversation is shown there with its receipt; only the
+        # calls that have left view are listed here.
+        shown_history = [turn for turn in state.tool_history if not getattr(turn, "via_program", False)]
+        out_of_view = [
+            turn for turn in shown_history
+            if not (getattr(turn, "receipt_id", "") and turn.receipt_id in in_conversation)
+        ]
+        if out_of_view:
             receipt_lines = [
                 f"- `{turn.receipt_id}`: {turn.tool_name}; observed at {turn.observed_at.isoformat()}"
-                for turn in state.tool_history[-20:]
+                for turn in out_of_view[-20:]
                 if getattr(turn, "receipt_id", "")
             ]
             if receipt_lines:
                 add(
                     "tool_receipts",
                     "## AUTHORITATIVE TOOL RECEIPTS\n"
-                    "Use these IDs when final JSON cites tool evidence. Full results "
-                    "remain in durable action history.\n"
+                    "Calls no longer in the conversation. When your result reports what "
+                    "one did, cite its receipt as `tool_receipt_id`; JarvisCore binds the "
+                    "runtime facts. Full results remain in durable action history.\n"
                     + "\n".join(receipt_lines),
                 )
             history_block, _ = self._format_tool_history(
-                state.tool_history, self.config.history_limit, in_conversation
+                shown_history, self.config.history_limit, in_conversation
             )
             add("tool_history", history_block)
 
@@ -529,8 +574,13 @@ class ContextManager:
                      # Memory is rendered as what it is, in its own block. Under
                      # INPUT CONTEXT it read as part of the task.
                      "_recalled", "_athena_memory", "_ltm_summary",
-                     "_mailbox_context"}
-        other = {key: value for key, value in state.context.items() if key not in skip_keys}
+                     "_mailbox_context",
+                     # The router's own record of choosing this role, for the envelope.
+                     "_kernel_routing"}
+        other = {
+            key: value for key, value in state.context.items()
+            if key not in skip_keys and not _is_empty(value)
+        }
         allowed = set(filter_input_context_keys(other.keys(), tier))
         cleaned = self._scrub_dict({k: v for k, v in other.items() if k in allowed})
         for key, value in cleaned.items():
@@ -574,8 +624,9 @@ class ContextManager:
                 # KernelState.ToolResult model
                 output = turn.tool_output
                 if turn.receipt_id and turn.receipt_id in in_conversation:
-                    output = "in the conversation, under this receipt"
-                elif turn.tool_name in perception_tools and index != latest_perception:
+                    # Shown in the conversation with its call and receipt.
+                    continue
+                if turn.tool_name in perception_tools and index != latest_perception:
                     output = (
                         f"replaced by a later {turn.tool_name}; read it in full with "
                         "read_turn_result"

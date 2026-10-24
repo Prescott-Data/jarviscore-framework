@@ -2089,3 +2089,78 @@ class TestStepsOnFiles:
         subagent = kernel._create_subagent("communicator", "c-1")
         kernel._equip_for_step(subagent, {"effect": "read"})
         assert "workspace_write" not in subagent._tools
+
+
+class TestTheRouterMayAnswer:
+    """A task that needs no role is answered in the routing call: one round trip, not two."""
+
+    @staticmethod
+    def _answer(text, finish_reason="stop"):
+        response = _llm_response(json.dumps({
+            "role": "answer", "confidence": 1.0, "reason": "from the task text", "answer": text,
+        }))
+        response["finish_reason"] = finish_reason
+        return response
+
+    @pytest.mark.asyncio
+    async def test_a_task_needing_no_role_is_answered_in_the_routing_call(self, kernel, mock_llm):
+        mock_llm.responses = [self._answer("- one\n- two\n- three")]
+
+        output = await kernel.execute(task="Summarise this in three bullets: ...", max_dispatches=1,
+                                      context={"system_prompt": "Be concise."})
+
+        assert output.status == "success"
+        assert output.summary == "- one\n- two\n- three"
+        assert output.payload == {}
+        assert output.metadata["answered_by"] == "router"
+        assert len(mock_llm.calls) == 1
+        payload = json.loads(mock_llm.calls[0]["messages"][1]["content"])
+        assert payload["may_answer"] is True
+        assert payload["agent_instructions"] == "Be concise."
+        # An answer is as long as the task needs, not capped at a route's 500 tokens.
+        assert mock_llm.calls[0].get("max_tokens") != 500
+
+    @pytest.mark.asyncio
+    async def test_a_cut_off_answer_is_not_an_answer(self, kernel, mock_llm):
+        mock_llm.responses = [self._answer("- one\n- tw", finish_reason="length")]
+
+        decision = await kernel._route_task("Summarise this: ...")
+
+        assert decision.role == "communicator"
+        assert decision.answer is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("context", [
+        {"system": "gmail"},
+        {"effect": "write"},
+        {"workspace_binding": {"root": "/repo"}},
+        {"output_schema": {"type": "object"}},
+        {"previous_step_results": {"s1": {"ok": True}}},
+        {"registry_candidate": {"function_name": "slack_send_message"}},
+    ])
+    async def test_work_that_needs_a_role_is_never_answered_by_the_router(self, kernel, mock_llm, context):
+        assert kernel._router_may_answer(context) is False
+
+    def test_the_router_answers_only_on_the_model_the_communicator_would_use(self, mock_llm, mock_sandbox):
+        cheaper_router = Kernel(
+            llm_client=mock_llm, sandbox=mock_sandbox,
+            config={"task_model": "gpt-4o", "task_model_nano": "gpt-4o-mini",
+                    "kernel_role_profiles": {"communicator": {"complexity": "standard"}}},
+        )
+        assert cheaper_router._router_may_answer({}) is False
+
+    def test_answering_can_be_turned_off(self, mock_llm, mock_sandbox):
+        off = Kernel(llm_client=mock_llm, sandbox=mock_sandbox,
+                     config={"task_model": "gpt-4o", "kernel_router_may_answer": False})
+        assert off._router_may_answer({}) is False
+
+    @pytest.mark.asyncio
+    async def test_without_permission_an_answer_role_is_invalid(self, mock_llm, mock_sandbox):
+        off = Kernel(llm_client=mock_llm, sandbox=mock_sandbox,
+                     config={"task_model": "gpt-4o", "kernel_router_may_answer": False})
+        mock_llm.responses = [self._answer("an answer it was not asked for")]
+
+        output = await off.execute(task="Summarise this: ...", max_dispatches=1)
+
+        assert output.status == "failure"
+        assert output.metadata["routing_error"]

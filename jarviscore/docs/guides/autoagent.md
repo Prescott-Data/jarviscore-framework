@@ -260,7 +260,12 @@ Some steps already say which sub-agent they need, so the Kernel routes them with
 | Declares a role (`execution_contract.kernel_role` or `default_kernel_role`) | that role |
 | The Mesh's own response step (`effect: final_response`) | `communicator` |
 
-Everything else goes to the structured router.
+Everything else goes to the structured router. When the task needs no role at
+all (summarising, rewording, explaining or drafting from what the task gives,
+with no tool, lookup, calculation or action), the router answers it in the same
+call, following the agent's `system_prompt`, so the reply costs one model call.
+This applies only when the router runs on the model the communicator would use;
+set `KERNEL_ROUTER_MAY_ANSWER=false` to always route.
 
 ### Analysis, not code: the `single_response` contract
 
