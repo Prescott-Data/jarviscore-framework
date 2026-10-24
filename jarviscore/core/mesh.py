@@ -1743,12 +1743,15 @@ class Mesh:
         step_id = self._redis_store.get_hitl_action_step(workflow_id, action_id)
         if step_id is None:
             raise KeyError(f"Workflow {workflow_id!r} has no action {action_id!r} awaiting a decision")
-        if self._redis_store.get_hitl_resolution(workflow_id, step_id, action_id) is not None:
-            raise ValueError("This action has already been decided.")
-        self._redis_store.resolve_hitl_request(
-            workflow_id, step_id, normalized.value,
-            responder=resolved_by, comment=note, action_id=action_id,
+        # The first decision stands: an approval and a refusal sent together cannot both land.
+        decided = self._redis_store.resolve_hitl_action_once(
+            workflow_id, step_id, action_id, normalized.value,
+            responder=resolved_by, comment=note,
         )
+        if decided is None:
+            raise KeyError(f"Workflow {workflow_id!r} has no action {action_id!r} awaiting a decision")
+        if decided is False:
+            raise ValueError("This action has already been decided.")
         return await self.resume_goal(workflow_id, step_id, timeout=timeout)
 
     async def replan_goal(

@@ -2984,10 +2984,11 @@ class RedisContextStore:
         logger.info(f"HITL resolved: {workflow_id}/{step_id} -> {decision}")
         return True
 
-    def _close_hitl(self, workflow_id: str, step_id: str, fields: Dict[str, str]) -> Optional[bool]:
+    def _close_hitl(self, workflow_id: str, step_id: str, fields: Dict[str, str],
+                    action_id: Optional[str] = None) -> Optional[bool]:
         """Write ``fields`` only if the request is still pending: True if this call
         closed it, False if something else did first, None if there is no request."""
-        key = f"hitl_request:{workflow_id}:{step_id}"
+        key = self._hitl_key(workflow_id, step_id, action_id)
         with self._redis.pipeline() as pipe:
             while True:
                 try:
@@ -3017,6 +3018,27 @@ class RedisContextStore:
             "resolved_by": responder, "note": comment,
             "resolved_at": str(time.time()),
         })
+
+    def resolve_hitl_action_once(self, workflow_id: str, step_id: str, action_id: str,
+                                 decision: str, responder: str = "",
+                                 comment: str = "") -> Optional[bool]:
+        """Decide a waiting consequential action atomically: True if this call decided
+        it, False if it was already decided, None if there is no such request."""
+        normalized = normalize_hitl_decision(decision).value
+        won = self._close_hitl(workflow_id, step_id, {
+            "status": HITLStatus.resolved.value,
+            "decision": normalized,
+            "responder": responder, "comment": comment,
+            "resolved_by": responder, "note": comment,
+            "resolved_at": str(time.time()),
+        }, action_id=action_id)
+        if won:
+            self.append_ledger_entry(workflow_id, {
+                "event": "hitl_resolved", "step_id": step_id,
+                "action_id": action_id, "decision": normalized,
+                "resolved_by": responder, "timestamp": str(time.time()),
+            })
+        return won
 
     def expire_hitl_request(self, workflow_id: str, step_id: str) -> Optional[bool]:
         """Close a pending request nobody answered: True if it was still pending."""
