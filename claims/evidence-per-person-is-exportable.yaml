@@ -14,8 +14,8 @@ assumptions:
   - The deployment's head log is the one it wrote (anchoring it outside the deployment is not yet done).
 not_claimed:
   - That an export is complete: proving no run for the person was left out needs the whole journal.
-  - That the head log hides other runs' names (it holds every run's name and hash, not content).
-  - Erasure of content another person's run also used (content is shared by digest).
+  - That the export's head entries prove anything about runs outside it (they are that export's runs only).
+  - Erasure of the content of a run that also worked for someone else, or that another person's run also used (it is their record too).
 evidence:
   - tests/test_evidence_people.py::test_the_account_of_a_person_is_every_run_done_for_them_and_nothing_else
   - tests/test_evidence_people.py::test_the_account_of_a_tenant_covers_all_its_people_and_no_other_tenant
@@ -24,4 +24,6 @@ evidence:
   - tests/test_evidence_people.py::test_an_export_is_not_a_whole_journal_and_a_whole_journal_cannot_pass_as_one
   - tests/test_evidence_people.py::test_erasing_a_persons_content_keeps_the_journal_verifiable_and_others_replayable
   - tests/test_evidence_people.py::test_the_cli_lists_and_exports_a_persons_evidence
+  - tests/test_evidence_people.py::test_erasing_one_person_keeps_the_content_of_a_run_that_also_worked_for_another
+  - tests/test_evidence_journal.py::test_events_or_runs_added_outside_the_journal_are_problems
 published: []

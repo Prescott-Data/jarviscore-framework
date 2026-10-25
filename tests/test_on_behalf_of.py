@@ -224,3 +224,30 @@ async def test_a_dag_an_agent_builds_while_working_for_someone_stays_theirs():
         identity = await built.register(store)
     definition = store.get_workflow_definition(identity)
     assert Mesh._acting_for(definition) == "acme/u_1" and Mesh._mandate(definition) == TRIP
+
+
+def test_a_conversation_is_its_starters_no_one_else_continues_or_reads_it(monkeypatch):
+    from fastapi import HTTPException
+
+    from jarviscore.integrations import chat as chat_module
+
+    monkeypatch.setattr(chat_module, "_OWNERS", {})
+    monkeypatch.setattr(chat_module, "_get_redis", lambda: None)
+
+    def signed_in(request):
+        user = request.headers.get("x-test-user")
+        if not user:
+            raise HTTPException(status_code=401)
+        return OnBehalfOf.of("acme", user)
+
+    client = _client(Kernel(), on_behalf_of=signed_in)
+    ada, bob = {"x-test-user": "ada"}, {"x-test-user": "bob"}
+    started = client.post("/chat", json={"message": "hi"}, headers=ada).json()["workflow_id"]
+
+    assert client.post("/chat", json={"message": "more", "workflow_id": started}, headers=ada).status_code == 200
+    assert client.post("/chat", json={"message": "mine now", "workflow_id": started}, headers=bob).status_code == 403
+    assert client.get(f"/chat/stream/{started}", headers=bob).status_code == 403
+    assert client.get(f"/chat/history/{started}/step_1", headers=bob).status_code == 403
+    assert client.get("/chat/stream/never-started", headers=ada).status_code == 403
+    assert client.get(f"/chat/history/{started}/step_1", headers=ada).status_code != 403
+    assert client.get(f"/chat/stream/{started}").status_code == 401

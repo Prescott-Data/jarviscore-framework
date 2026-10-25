@@ -3769,13 +3769,16 @@ class Mesh:
         *,
         on_behalf_of: Any,
         return_url: Optional[str] = None,
-        scopes: Optional[List[str]] = None,
+        provider_scopes: Optional[List[str]] = None,
     ) -> Dict[str, str]:
         """Start connecting a person's ``provider`` account; returns ``auth_url`` to send them to.
 
         The person consents in their browser and lands on ``return_url``. From
         then on, work done ``on_behalf_of`` them finds the connection by itself.
-        Returns ``{"auth_url": ..., "connection_id": ...}``.
+        ``provider_scopes`` are the provider's OAuth scopes to ask for (default: the
+        provider's registered ones), not your organisation's scopes. Returns
+        ``{"auth_url": ..., "connection_id": ...}``. Raises ``RuntimeError`` when the
+        mesh has no Nexus gateway (``NEXUS_GATEWAY_URL``) or ``auth_mode``.
         """
         from jarviscore.auth.principal import act_for, on_behalf_of as resolve
 
@@ -3785,7 +3788,7 @@ class Mesh:
         manager = self._people_accounts()
         with act_for(principal):
             connection_id, auth_url = await manager.begin_authentication(
-                provider, scopes=scopes, return_url=return_url,
+                provider, scopes=provider_scopes, return_url=return_url,
             )
         return {"auth_url": auth_url, "connection_id": connection_id}
 

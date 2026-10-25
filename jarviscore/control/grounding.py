@@ -181,6 +181,41 @@ def _path_params(pattern: "re.Pattern[str]", path: str) -> Optional[Dict[str, st
 
 # ── The request as it will leave ────────────────────────────────────────────
 
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+
+def normalized_path(path: str) -> str:
+    """``path`` as a server reads it, for matching rules: ``//x``, ``/./x``, ``/a/../x``,
+    ``%61`` and ``;matrix`` parameters are the same operation as ``/x``."""
+    decoded = re.sub(
+        r"%([0-9A-Fa-f]{2})",
+        lambda m: chr(int(m.group(1), 16)) if chr(int(m.group(1), 16)) in _UNRESERVED else m.group(0).upper(),
+        path or "/",
+    )
+    segments: List[str] = []
+    for segment in decoded.split("/"):
+        segment = segment.split(";", 1)[0]
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            if segments:
+                segments.pop()
+            continue
+        segments.append(segment)
+    return "/" + "/".join(segments)
+
+
+def path_variants(path: str) -> List[str]:
+    """Every reading of ``path`` a server might route on (encoded slashes decoded; any case)."""
+    normal = normalized_path(path)
+    slashed = normalized_path(re.sub(r"%(2[Ff]|5[Cc])", "/", normal))
+    found = []
+    for candidate in (normal, slashed, normal.lower(), slashed.lower()):
+        if candidate not in found:
+            found.append(candidate)
+    return found
+
+
 
 @dataclass(frozen=True)
 class Request:
@@ -227,7 +262,7 @@ def request_from(method: str, url: str, kwargs: Dict[str, Any]) -> Request:
     form = data if isinstance(data, dict) and data and not opaque else None
     json_body = body if not opaque and form is None else None
     return Request(
-        method=method.upper(), host=parts.netloc.lower(), path=parts.path or "/",
+        method=method.upper(), host=parts.netloc.lower(), path=normalized_path(parts.path or "/"),
         query=query, json=json_body, form=form, opaque=opaque or opaque_query,
     )
 
@@ -295,7 +330,8 @@ class GroundingRule:
                     return False
             elif key == "path":
                 try:
-                    if not any(_path_params(_template(str(o))[0], request.path) is not None for o in options):
+                    if not any(_path_params(_template(str(o))[0], variant) is not None
+                               for o in options for variant in path_variants(request.path)):
                         return False
                 except ValueError:
                     continue  # an unreadable path refuses, through a recorded decision, what else it matches

@@ -162,6 +162,11 @@ class ControlPolicy:
         from jarviscore.control.scopes import PERSONAL_RULES
 
         enforced = self.mode == "strict"
+        # What the person may do comes first and holds whenever control is on: a deployment
+        # rule that also refuses the call must not turn it into a report-only "would refuse".
+        personal = _personal_refusal(call)
+        if personal is not None and self.mode != "off":
+            return Decision(False, personal[0], personal[1], True)
         for rule in self.rules:
             if rule.decision == "deny" and rule.applies(call):
                 return Decision(False, f"deployment:{rule.name}", f"Deployment rule {rule.name!r} refuses this call.", enforced)
@@ -184,17 +189,23 @@ class ControlPolicy:
 _LIFTABLE = frozenset({"mutation-without-atom"})
 
 
-def _builtin_refusal(call: ProviderCall) -> Optional[Tuple[str, str]]:
-    method = call.method.upper()
-    mutation = method not in READ_METHODS
+def _personal_refusal(call: ProviderCall) -> Optional[Tuple[str, str]]:
+    """Beyond what the person delegated or may do: never liftable, never report-only."""
     if call.mandate is not None:
-        # Not liftable: no deployment rule widens what a person delegated.
         outside = call.mandate.refusal(call.provider, call.effect)
         if outside:
             return ("outside-mandate", outside)
     if call.scope is not None and not call.scope.allowed:
-        # Not liftable: no deployment rule gives a person a scope they do not hold.
         return (call.scope.rule, call.scope.reason)
+    return None
+
+
+def _builtin_refusal(call: ProviderCall) -> Optional[Tuple[str, str]]:
+    method = call.method.upper()
+    mutation = method not in READ_METHODS
+    personal = _personal_refusal(call)
+    if personal is not None:
+        return personal
     if call.approval_required and not call.approval:
         return (
             "approval-missing",

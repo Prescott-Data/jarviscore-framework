@@ -101,20 +101,33 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   them. In strict mode, model-written code and commands are refused when they
   would run outside a confined sandbox, unless a rule allows it. A test fails the
   build when a raw effect call in the package is neither decided on nor
-  classified. See [Every other effect](concepts/control-and-evidence.md#every-other-effect).
+  classified. Your own tools and `CustomAgent`s can put their effects through the
+  same decision point with `mediated(Effect(...))`. See
+  [Every other effect](concepts/control-and-evidence.md#every-other-effect).
+- **`jarviscore policy check`, `review` and `scopes`.** `check` names every rule a
+  deployment would silently fail closed on, and whether this host can confine
+  the sandbox; `review` groups what strict mode would refuse (or refused) from a
+  journal, with what to do about each; `scopes` prints who may do what. See
+  [Turning On Control](guides/control-policy.md).
 - **What a browser page sends is decided where it leaves.** Every top-level
   navigation and every request carrying data out of the browser (forms,
   `fetch`, XHR, beacons, including ones browser code starts with `evaluate`) is
   decided and recorded (`browser` sink). In strict mode a page sends only to the
   site it is on unless a rule allows another host (`browser-send-off-site`);
-  requests are intercepted there and only observed in report mode.
+  requests are intercepted there and only observed in report mode (intercepted
+  in report mode too wherever a scope names a browser target, whose reads, in a
+  frame or `fetch`, are then decided as well). An approval of a form submission
+  shows the values the form will submit and where to, read from the page; once
+  performed, the result says what the form carried (`submitted`) and exactly
+  what left the browser.
 - **An agent acts for a person with that person's credential only, within what
   they delegated.** JarvisCore names the person, agent and operation on every
   credential request to Nexus (which, from 0.7, releases a credential only for
   its owner); a credential Nexus refuses is not replaced by another, and the
   credential cache is per person. A mandate registered with the work
-  (`context["mandate"]`: systems, effects, expiry) is enforced at every provider
-  call (`outside-mandate`, not liftable). Every decision in the journal names
+  (`on_behalf_of` or `context["mandate"]`: systems, effects, scopes, expiry) is
+  enforced at every provider call (`outside-mandate`, not liftable, in report
+  mode as in strict). Every decision in the journal names
   `acting_for`. See [Acting for a person](concepts/control-and-evidence.md#acting-for-a-person).
 - **`on_behalf_of` on every entry point, for applications with their own users
   and tenants.** `run_task`, `execute_goal`, `submit_goal`, `workflow` and
@@ -124,7 +137,9 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   and `mandate` from the request body. Workflows, including DAGs an agent builds
   while working for someone, register the person with their definition, so steps
   on other nodes act for the same person. `mesh.connect(provider, on_behalf_of=...)`
-  starts a user's consent and `mesh.connected(...)` checks it. `OnBehalfOf`,
+  starts a user's consent and `mesh.connected(...)` checks it. With a resolver,
+  each chat conversation belongs to whoever started it: nobody else can continue
+  it, stream it or read its history. `OnBehalfOf`,
   `Person` and `act_for` are exported from `jarviscore`. See
   [Agents That Act for Your Users](guides/acting-for-your-users.md).
 - **Your organisation's scopes: an agent working for a person does only what
@@ -153,7 +168,9 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   `acme/` for a tenant) lists each run done for them with every decision and
   approval; `--export DIR` copies those runs with the deployment's head log for
   an auditor, who checks them with `jarviscore verify --export DIR`; runs that
-  also worked for others are left out. `--erase --yes` erases a person's replay
+  also worked for others are left out, and the export carries only its own runs'
+  head entries (no other run's name). `jarviscore.evidence.people` offers the
+  same from Python (`account`, `export`, `erase`). `--erase --yes` erases a person's replay
   content while the journal still verifies. Each run records whom it was for
   (`run.start`), and replays as that person.
 - **Replay any recorded run.** Each agent run keeps every model request and
@@ -205,6 +222,19 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - **A mandate is enforced in report mode too.** What a person delegated
   (`outside-mandate`) was only recorded outside strict mode; like scopes, it now
   holds whenever control is on.
+- **Review findings on scopes and evidence (before release).**
+    - A deployment `deny` rule matching the same call no longer turns a person's
+      refusal (scope, mandate) into a report-only "would refuse".
+    - Scope and grounding rules match the path as a server reads it (`//x`,
+      `/./x`, `%61`, `;matrix`, encoded slashes, any case), so a variant of an
+      operation's path is held to it.
+    - `verify` again reports events appended after a run's registered head, or a
+      run the head log never registered, beyond the one event an interrupted
+      write can leave.
+    - Erasing one person's replay content keeps the content of runs that also
+      worked for someone else.
+    - The browser request broker decides for the person the current run is for,
+      not whoever opened a reused browser.
 - **Review findings on control and evidence.**
     - Code not shipped with JarvisCore (registry, model-written, direct) is never
       taken as doing less than its method: a "read" that POSTs is decided as a write.

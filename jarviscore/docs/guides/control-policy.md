@@ -14,6 +14,10 @@ what your policy does not allow does not happen, in five steps.
 
 How it works is in [Control and Evidence](../concepts/control-and-evidence.md);
 every key of the policy file is in the [Control Policy Reference](../reference/control-policy.md).
+If your agents work for your application's users, what each of them may do
+(their scopes, and what they delegate for a piece of work) is in
+[Agents That Act for Your Users](acting-for-your-users.md); those refusals hold in
+report mode too.
 
 ---
 
@@ -22,7 +26,7 @@ every key of the policy file is in the [Control Policy Reference](../reference/c
 The defaults already do this:
 
 ```bash
-CONTROL_MODE=report                 # decide and record; refuse nothing
+CONTROL_MODE=report                 # decide and record; refuse only what a person may not do
 JOURNAL_DIR=.jarviscore/journal     # where the record is kept
 ```
 
@@ -98,7 +102,7 @@ jarviscore policy check control-policy.yaml
 ```
 
 ```text
-control-policy.yaml: 0 rules, 1 approvals, 0 principals, 1 grounding, 2 effects
+control-policy.yaml: 0 rules, 1 approvals, 0 principals, 1 grounding, 2 effects, 0 scopes
 
 Mode: report. Sandbox confinement: available.
 Every rule reads as written.
@@ -122,7 +126,8 @@ Strict mode needs two things from the host:
   (`unconfined-execution`). `jarviscore policy check` says whether this host has
   it. If you must run unconfined, say so: `effects: allow {sink: code}`.
 - **A writable journal.** In strict mode an effect whose decision cannot be
-  recorded does not happen.
+  recorded does not happen. (With `JOURNAL_DIR=off` there is nothing to record
+  to, and decisions go unrecorded.)
 
 Keep running `jarviscore policy review`: in strict mode it lists what *was*
 refused, and what was refused before anyone was asked to approve it.
@@ -158,11 +163,12 @@ exceptions it can catch.
 | `ATOM_PARAMETERS_INVALID` | An integration was called without what it needs |
 | `EFFECT_INTENT_UNRESOLVED` | The same action was held back twice for missing evidence; the agent reports what is missing |
 | `OUTCOME_UNKNOWN` | A run stopped while carrying an approved action out; a person reconciles it |
+| `SCOPE_MISSING` | The person the work is for may not use this integration (it was offered as refused); nothing ran |
 
 | Exception | Raised by |
 |---|---|
-| `jarviscore.control.policy.PolicyDenied` | A provider call strict mode refused |
-| `jarviscore.control.effects.EffectDenied` | Any other effect strict mode refused |
+| `jarviscore.control.policy.PolicyDenied` | A provider call refused: by strict mode, or in any mode beyond what the person may do |
+| `jarviscore.control.effects.EffectDenied` | Any other effect refused, likewise |
 | `jarviscore.control.approvals.ApprovalRefused` | An approval that does not meet policy (`Mesh.resolve_hitl`) |
 
 ## Your own effects

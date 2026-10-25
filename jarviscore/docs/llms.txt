@@ -45,5 +45,5 @@ JarvisCore is both a multi-agent framework and a production agent harness. The r
 
 - [Configuration](https://jarviscore.developers.prescottdata.io/reference/configuration/): every environment variable
 - [Control Policy](https://jarviscore.developers.prescottdata.io/reference/control-policy/): every key of the control policy file, the built-in refusals, the journal's events
-- [CLI](https://jarviscore.developers.prescottdata.io/reference/cli/): init, check, memory, nexus, atom, inspect, verify, policy
+- [CLI](https://jarviscore.developers.prescottdata.io/reference/cli/): init, check, memory, nexus, atom, inspect, verify, policy (check, review, scopes), replay, evidence
 - [AI Editor Setup](https://jarviscore.developers.prescottdata.io/guides/ai-editors/): skill for Copilot, Claude Code, Cursor

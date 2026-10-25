@@ -621,7 +621,8 @@ jarviscore evidence acme/u_123 --erase --yes         # erase it
 | `--erase [--yes]` | Count, then erase, the replay content only their runs used; the journal still verifies |
 | `--json` | JSON output |
 
-Exit status: `0`, or `2` when there is no journal or nothing was done for them.
+Exit status: `0`; `1` when no person or tenant is given; `2` when there is no
+journal, nothing was done for them, or the `--export` directory is not empty.
 See [Agents That Act for Your Users](../guides/acting-for-your-users.md#7-evidence-per-user-and-per-tenant).
 
 ---
@@ -629,7 +630,7 @@ See [Agents That Act for Your Users](../guides/acting-for-your-users.md#7-eviden
 ## jarviscore policy
 
 Checks a control policy file, and reviews a journal for what strict mode refuses.
-Both run offline.
+All three run offline.
 
 ```bash
 # Every rule reads as written? (default: CONTROL_POLICY_PATH)
@@ -642,7 +643,7 @@ jarviscore policy review
 # Who may do what: each operation's scope and limits, and the grants on file
 jarviscore policy scopes control-policy.yaml
 
-# Either as JSON
+# Any of them as JSON
 jarviscore policy check control-policy.yaml --json
 ```
 
@@ -653,8 +654,8 @@ confine the sandbox, which strict mode needs. Exit status: `0` every rule reads
 as written, `1` problems found, `2` no policy file. `review` exits `0`. `scopes`
 lists each scope requirement (what it matches, who must hold which scope, its
 limits), the grants on file and what unattended work holds, and notes a
-requirement matched only by integration name; it exits `1` when any cannot be
-read. See [Turning On Control](../guides/control-policy.md) and
+requirement matched only by integration name; it exits `1` when the file or any
+requirement cannot be read, and `2` when there is no policy file. See [Turning On Control](../guides/control-policy.md) and
 [your organisation's scopes](../guides/acting-for-your-users.md#4-hold-them-to-your-organisations-scopes).
 
 ---

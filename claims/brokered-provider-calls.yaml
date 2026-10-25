@@ -4,13 +4,13 @@ claim: >-
   I/O unless policy allows it, and every decision and every call that leaves is
   recorded in a hash-linked journal that `jarviscore verify` checks offline.
 scope:
-  - control_mode=strict for refusal; report mode records the same decisions without refusing.
+  - control_mode=strict for refusal; report mode records the same decisions without refusing them (except what a person may not do, see agents-act-within-the-persons-scopes).
   - Calls made through NexusCallProxy (atoms, code in the sandbox, the Slack room, workspace sources).
 assumptions:
   - Provider credentials are reachable only through NexusCallProxy (credentials never enter the sandbox).
   - Whoever controls the journal directory does not rewrite all of it; anchoring outside the deployment comes later.
 not_claimed:
-  - Control of effects that do not go through a provider call (workspace files, browser, memory, peers). Later slices.
+  - Control of effects that do not go through a provider call: see every-effect-is-decided-and-recorded.
   - That a provider performed what was sent; the journal records what JarvisCore decided and sent.
 evidence:
   - tests/test_provider_broker.py::test_strict_mode_refuses_before_any_io

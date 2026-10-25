@@ -37,7 +37,7 @@ def create_chat_router(
 | `kernel` | `Kernel` | required | The Kernel that executes chat messages |
 | `prefix` | `str` | `""` | Additional route prefix appended inside the router (independent of `app.include_router(prefix=...)`) |
 | `tags` | `List[str]` | `["chat"]` | FastAPI OpenAPI tag list |
-| `on_behalf_of` | callable | `None` | Whom each chat is for, from your own sign-in: a function of the request (sync or async) returning an `OnBehalfOf`, a `Person`, a person key or `None`. Raise `HTTPException` there to refuse. The chat then uses that person's credentials, within their mandate, and every record names them. `acting_for` and `mandate` in the request's `context` are always dropped |
+| `on_behalf_of` | callable | `None` | Whom each chat is for, from your own sign-in: a function of the request (sync or async) returning an `OnBehalfOf`, a `Person`, a person key or `None`. Raise `HTTPException` there to refuse. The chat then uses that person's credentials, within their mandate, and every record names them. A `None` result means the chat is for no one: the deployment's own identity. `acting_for`, `mandate` and `scopes` in the request's `context` are always dropped. With a resolver, each conversation (`workflow_id`) belongs to whoever started it: continuing it, streaming it (`/chat/stream`) or reading its history (`/chat/history`) as anyone else is refused with 403 |
 
 Returns an `APIRouter` ready for `app.include_router()`.
 
@@ -71,7 +71,7 @@ Trace events stream in real time on `GET /chat/stream/{workflow_id}` while the P
 | `workflow_id` | `str` | No | auto-generated (`chat_<12hex>`) | Workflow identifier; supply your own to correlate with the SSE stream |
 | `agent_id` | `str` | No | `"chat"` | Agent identity passed to the Kernel |
 | `system_prompt` | `str` | No | `""` | System prompt prepended to the Kernel call |
-| `context` | `dict` | No | `{}` | Arbitrary key-value context forwarded to the Kernel. `workflow_id` and `step_id` are merged in automatically |
+| `context` | `dict` | No | `{}` | Arbitrary key-value context forwarded to the Kernel. `workflow_id` and `step_id` are merged in automatically; `acting_for`, `mandate` and `scopes` are dropped (whom a chat is for comes from `on_behalf_of`) |
 
 ### Response body
 

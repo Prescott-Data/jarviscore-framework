@@ -211,3 +211,75 @@ async def test_the_broker_keeps_what_each_action_really_sent_for_the_agent_to_re
     assert [(s["to"], s["outcome"]) for s in brokers[0].sent] == [
         ("127.0.0.1/api/order", "sent"), ("localhost/api/order", "refused"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_page_the_person_may_not_read_is_refused_in_a_frame_or_fetch_too(control, server, tmp_path):
+    """Review: an iframe or fetch reached a scoped page that only navigations were held to."""
+    from jarviscore import OnBehalfOf, act_for
+
+    root = control("report")
+    (tmp_path / "policy.json").write_text(json.dumps({"scopes": {"require": [{
+        "name": "finance", "match": {"sink": "browser", "target": "localhost/finance/*"},
+        "requires": "finance.reports.read"}]}}))
+    policy_module._cached = None
+
+    async def read_finance(person):
+        before = len(server.received)
+        with act_for(person):
+            async with playwright.async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                try:
+                    context = await browser.new_context()
+                    await attach(context, {"workflow_id": "wf", "step_id": "s1", "agent": "browser-1"})
+                    page = await context.new_page()
+                    await page.goto(f"http://127.0.0.1:{server.port}/")
+                    await page.evaluate(f"""() => {{
+                        const f = document.createElement('iframe');
+                        f.src = 'http://localhost:{server.port}/finance/q3'; document.body.appendChild(f);
+                        fetch('http://localhost:{server.port}/finance/q4').catch(() => null);
+                    }}""")
+                    await asyncio.sleep(0.5)
+                finally:
+                    await browser.close()
+        return [r for r in server.received[before:] if r[2].startswith("/finance")]
+
+    assert await read_finance(OnBehalfOf.of("acme", "dave", scopes=[])) == []
+    allowed = await read_finance(OnBehalfOf.of("acme", "erin", scopes=["finance.reports.read"]))
+    assert {r[2] for r in allowed} == {"/finance/q3", "/finance/q4"}
+    refused = [d for d in decisions(root) if d["rule"] == "scope-missing"]
+    assert {d["target"] for d in refused} == {"localhost/finance/q3", "localhost/finance/q4"}
+    assert all(d["enforced"] and d["acting_for"] == "acme/dave" for d in refused)
+    assert verify(root).ok, verify(root).problems
+
+
+@pytest.mark.asyncio
+async def test_a_browser_reused_by_another_persons_run_is_decided_for_that_person(control, server, tmp_path):
+    from jarviscore import OnBehalfOf, act_for
+
+    root = control("report")
+    (tmp_path / "policy.json").write_text(json.dumps({"scopes": {"require": [{
+        "name": "finance", "match": {"sink": "browser", "target": "localhost/finance/*"},
+        "requires": "finance.reports.read"}]}}))
+    policy_module._cached = None
+    erin = OnBehalfOf.of("acme", "erin", scopes=["finance.reports.read"])
+    dave = OnBehalfOf.of("acme", "dave", scopes=[])
+
+    with act_for(erin):  # the browser and its event handlers start in Erin's work
+        async with playwright.async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                context = await browser.new_context()
+                await attach(context, {"workflow_id": "wf", "step_id": "s1"})
+                page = await context.new_page()
+                await page.goto(f"http://127.0.0.1:{server.port}/")
+                with act_for(dave):  # Dave's run reuses it
+                    await attach(context, {"workflow_id": "wf", "step_id": "s1"})
+                    before = len(server.received)
+                    await page.evaluate(f"fetch('http://localhost:{server.port}/finance/q3').catch(() => null)")
+                    await asyncio.sleep(0.4)
+                    assert not [r for r in server.received[before:] if r[2].startswith("/finance")]
+            finally:
+                await browser.close()
+    refused = [d for d in decisions(root) if d["rule"] == "scope-missing"]
+    assert refused and all(d["acting_for"] == "acme/dave" for d in refused)

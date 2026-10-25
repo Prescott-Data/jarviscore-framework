@@ -6,9 +6,12 @@
 
 Whom a run was for is what the runtime recorded on it (``acting_for``, set by
 ``on_behalf_of`` / ``act_for``), never what an agent wrote. An export holds those
-runs exactly as written and the deployment's own head log, so each run still
-proves it is the one the deployment recorded. It cannot prove that no run for
-the person was left out: that needs the whole journal, checked with ``verify``.
+runs exactly as written and the head-log entries the deployment wrote for them
+(no other run's name), so each run still shows it ends where the deployment
+registered it; the manifest records the head log's last hash and length when
+exported, for comparison with a checkpoint kept outside the deployment. It
+cannot prove that no run for the person was left out: that needs the whole
+journal, checked with ``verify``.
 """
 from __future__ import annotations
 
@@ -148,10 +151,24 @@ def export(root: str, who: str, dest: str, content: bool = False) -> Dict[str, A
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 shutil.copy2(source, target)
                 copied += 1
-    if os.path.exists(os.path.join(root, HEADS)):
-        shutil.copy2(os.path.join(root, HEADS), os.path.join(dest, HEADS))
+    checkpoint = {"entries": 0, "last_hash": None}
+    heads = os.path.join(root, HEADS)
+    if os.path.exists(heads):
+        # Only these runs' head entries: the deployment's other runs (and their names) stay out.
+        wanted = set(included)
+        with open(heads, encoding="utf-8") as source, open(os.path.join(dest, HEADS), "w", encoding="utf-8") as out:
+            for line in source:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                checkpoint = {"entries": checkpoint["entries"] + 1, "last_hash": entry.get("hash")}
+                if entry.get("run") in wanted:
+                    out.write(line if line.endswith("\n") else line + "\n")
     manifest = {
         "for": who, "runs": included, "left_out_shared": shared,
+        # The deployment's head log when exported, to compare with a checkpoint anchored outside it.
+        "head_log": checkpoint,
         "content": copied if content else None,
         "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -163,9 +180,10 @@ def export(root: str, who: str, dest: str, content: bool = False) -> Dict[str, A
 def erase(root: str, who: str, dry_run: bool = False) -> Dict[str, int]:
     """Erase the replay content kept for ``who``'s runs (a person's right to erasure).
 
-    The chain keeps only digests, so it still verifies and still shows every
-    decision; those runs just cannot be replayed any more. Content another
-    person's run also used is kept. ``dry_run`` counts without erasing.
+    The chain keeps only digests of that content, so it still verifies and still
+    shows every decision (and still names the person); those runs just cannot be
+    replayed any more. Content of a run that also worked for someone else, or
+    that another person's run also used, is kept. ``dry_run`` counts without erasing.
     """
     who = str(who or "").strip()
     if not who:
@@ -177,10 +195,12 @@ def erase(root: str, who: str, dry_run: bool = False) -> Dict[str, int]:
         keys: Set[str] = set()
         for event in events:
             _digests(event.get("data"), keys)
-        if any(matches(p, who) for p in _people(events)):
+        people = _people(events)
+        if people and all(matches(p, who) for p in people):
             theirs |= keys
             runs += 1
         else:
+            # A run that also worked for someone else is their record too: its content stays.
             others |= keys
     erased = 0
     for key in sorted(theirs - others):

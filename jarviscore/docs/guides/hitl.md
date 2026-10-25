@@ -305,7 +305,7 @@ approvals:
     match: {provider: hubspot, effect: write}
     require: none                    # no approval (never for a destructive action)
 principals:                          # roles for approvers whose sign-in carries none
-  carol@bank.example: [finance_approver]
+  bank/carol: [finance_approver]     # the same person key work is done for
 ```
 
 How the approver is known decides their assurance:
@@ -330,13 +330,18 @@ waiting = result["waiting"]["metadata"]       # workflow_id, action_id, conseque
 # On your backend, after your own sign-in, when the person presses Approve:
 token = sign_assertion(
     APPROVAL_ASSERTION_KEY,
-    subject=user.email, roles=user.roles, decision="approved",
+    subject=user.person_key, roles=user.roles, decision="approved",   # e.g. "bank/carol"
     workflow_id=waiting["workflow_id"], action_id=waiting["action_id"],
     binding=waiting["binding"],
 )
 await mesh.resolve_hitl(waiting["workflow_id"], waiting["action_id"],
                         decision="approved", assertion=token)
 ```
+
+Use the same identity for the approver as for whom work is done (the person key
+you pass as `on_behalf_of`, such as `bank/carol`): `distinct_from: [requester]`
+compares the two, so an approver named some other way (an email) is never
+recognised as the person who asked.
 
 Where an action's [scope requirement](acting-for-your-users.md#4-hold-them-to-your-organisations-scopes)
 names `approved_by`, pass the approver's scopes too (`sign_assertion(..., scopes=...)`):

@@ -73,7 +73,9 @@ app.include_router(
 If your application signs users in, pass `on_behalf_of=` a function of the
 request that returns whom the chat is for (`OnBehalfOf.of(tenant, user)`); each
 chat then uses that user's own accounts. A client can never name someone else:
-`acting_for` and `mandate` in the request body are dropped. See
+`acting_for`, `mandate` and `scopes` in the request body are dropped. Each
+conversation then belongs to the user who started it: nobody else can continue
+it, stream it or read its history (403). See
 [Agents That Act for Your Users](acting-for-your-users.md#from-a-chat-endpoint).
 
 ---

@@ -36,7 +36,7 @@ The exact claims, their assumptions and the tests behind them are in
 | Mode | Decides | Records | Refuses |
 |---|---|---|---|
 | `off` | No | No | No |
-| `report` (default) | Yes | Yes | No: the call goes through, marked as one strict mode would refuse |
+| `report` (default) | Yes | Yes | Only what the person the work is for may not do (`outside-mandate`, `scope-missing`, `over-scope-limit`); anything else goes through, marked as one strict mode would refuse |
 | `strict` | Yes | Yes | Yes, before any network I/O, including the credential lookup |
 
 Start in `report`, read what strict mode would have refused (`jarviscore policy
@@ -44,7 +44,9 @@ review` groups it by rule and target, with what to do about each), then switch
 to `strict`.
 
 In strict mode a decision that cannot be recorded refuses the call too: the
-promise is that every call that leaves has its decision on record.
+promise is that every call that leaves has its decision on record. (Switching the
+journal off, `JOURNAL_DIR=off`, gives that promise up: decisions are then made but
+not recorded.)
 
 ---
 
@@ -181,7 +183,7 @@ What holds for them:
 | The approver is who they say | Approval assertions signed by your backend over the exact action (`verified`) |
 | Policy is checked when the action runs, not only when it was approved | A tightened policy sends the action back to a person |
 | At most once | The first decision stands; starting the action is claimed atomically; an interrupted run leaves `OUTCOME_UNKNOWN` for a person to reconcile |
-| A gated call cannot reach a provider without its approval | The broker refuses `approval-missing`; `jarviscore verify` checks every call carrying an approval against an approval of that exact action |
+| A gated call cannot reach a provider without its approval | In strict mode the broker refuses `approval-missing` (report mode records it); `jarviscore verify` checks every call carrying an approval against an approval of that exact action |
 | Retries do not repeat a payment | Providers that deduplicate by key get the operation's id (Stripe, Adyen, Mollie, GoCardless, Checkout.com, PayPal headers; Square's `idempotency_key`) |
 
 The journal records `approval.request`, `approval.decision` (approver, roles,
@@ -209,8 +211,10 @@ jarviscore replay journal/ wf-12/pay
 wf-12/pay: reproduced (2 decision(s), 3 model call(s), 3 request(s) identical to the record)
 ```
 
-A replay rebuilds the agent and answers every model call, gate and tool from
-the record. **Nothing is called and nothing acts.** A run reproduces when the
+A replay rebuilds the agent (by its class name; an agent class defined in a script
+or inside a function needs `replay(root, run, factory=...)` from Python) and
+answers every model call, gate and tool from the record, under the person,
+mandate and scopes the run had. **Nothing is called and nothing acts.** A run reproduces when the
 agent makes the same decisions (each tool, with the same arguments) and ends the
 same way. It also says how many model requests were identical to the record,
 with the runtime clock masked, the one thing a replay cannot reproduce. A run
@@ -325,8 +329,12 @@ effects:
 ```
 
 Requests are intercepted in strict mode (Playwright then disables the browser's
-HTTP cache) and only observed in report mode, at no cost. Plain reads (images,
-scripts, GET data) are neither decided on nor recorded. Strict mode blocks
+HTTP cache) and only observed in report mode, at no cost, unless a
+[scope](../guides/acting-for-your-users.md#4-hold-them-to-your-organisations-scopes)
+names a browser target: then they are intercepted in report mode too, so a scope's
+refusal holds. Plain reads (images, scripts, GET data) are neither decided on nor
+recorded, except reads of a target a scope names (a frame or `fetch` included),
+which are decided like a navigation. Strict mode blocks
 service workers in contexts JarvisCore creates. Not covered: WebSocket and
 WebRTC traffic, and data a GET request carries in its address.
 

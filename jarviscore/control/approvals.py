@@ -45,6 +45,12 @@ class Approver:
     #: The approver's organisation scopes (control.scopes), from their sign-in.
     scopes: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self):
+        if self.scopes:
+            from jarviscore.control.scopes import parse_grant
+
+            object.__setattr__(self, "scopes", parse_grant(self.scopes))
+
     def as_record(self) -> Dict[str, Any]:
         return {
             "approver": self.subject,

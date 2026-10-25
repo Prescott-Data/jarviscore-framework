@@ -152,17 +152,18 @@ def decide(effect: Effect):
 
     policy = current_policy()
     enforced = policy.mode == "strict"
-    for rule in policy.effect_rules:
-        if rule.decision == "deny" and rule.applies(effect):
-            return Decision(False, f"deployment:{rule.name}", f"Deployment rule {rule.name!r} refuses this {effect.sink} effect.", enforced)
     checked = None
     if policy.scopes is not None and policy.scopes.active:
         from jarviscore.control.scopes import check_effect, current_person
 
         checked = check_effect(policy.scopes, effect, current_person(policy.scopes))
         if checked is not None and not checked.allowed:
-            # Not liftable, and held in report mode too: the application said what the person may do.
+            # First, not liftable, and held in report mode too: the application said what the
+            # person may do, and a deployment rule that also refuses it must not soften that.
             return Decision(False, checked.rule, checked.reason, policy.mode != "off", checked)
+    for rule in policy.effect_rules:
+        if rule.decision == "deny" and rule.applies(effect):
+            return Decision(False, f"deployment:{rule.name}", f"Deployment rule {rule.name!r} refuses this {effect.sink} effect.", enforced, checked)
     refusal = _builtin_refusal(effect)
     if refusal is not None:
         name, reason = refusal

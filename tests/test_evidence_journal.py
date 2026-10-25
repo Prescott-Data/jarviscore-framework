@@ -97,7 +97,20 @@ def test_a_journal_being_written_is_noted_not_reported_as_tampered(tmp_path):
     rewrite(heads, lines(heads)[:-1])
 
     report = verify(str(tmp_path))
-    assert report.ok and any("after its registered head" in note for note in report.notes)
+    assert report.ok and any("one event after its registered head" in note for note in report.notes)
+
+
+def test_events_or_runs_added_outside_the_journal_are_problems(tmp_path):
+    journal = Journal(str(tmp_path))
+    write_run(journal)
+    heads = os.path.join(str(tmp_path), HEADS)
+    rewrite(heads, lines(heads)[:-2])  # two events now trail the registered head
+    assert any("events after its registered head" in p for p in verify(str(tmp_path)).problems)
+
+    other = Journal(str(tmp_path / "forged"))
+    write_run(other)
+    os.remove(os.path.join(str(tmp_path / "forged"), HEADS))  # a whole run nobody registered
+    assert any("none in the head log" in p for p in verify(str(tmp_path / "forged")).problems)
 
 
 def test_a_provider_call_without_a_decision_is_flagged(tmp_path):

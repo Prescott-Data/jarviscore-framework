@@ -37,7 +37,7 @@ rules:
 |---|---|
 | `name` | Recorded with every decision the rule makes |
 | `decision` | `deny`, or `allow` (lifts only `mutation-without-atom`); anything else is treated as `deny` |
-| `match.provider` / `system` | Provider name |
+| `match.provider` / `system` | Provider name (`system` is the same) |
 | `match.atom` | Integration name |
 | `match.effect` | `read`, `propose`, `write`, `notify`, `destructive` |
 | `match.method` | HTTP method |
@@ -193,8 +193,9 @@ What a person delegated travels with the work, registered by your application:
 | `scopes` | Of the person's own scopes, the ones this work may use (narrows, never widens) |
 | `expires_at` | ISO 8601 time with a zone, or epoch seconds |
 
+A mandate holds provider calls (for browser pages and other effects, use scopes).
 Unknown keys or malformed values make the mandate unreadable, which refuses every
-call. See [Acting for a person](../concepts/control-and-evidence.md#acting-for-a-person).
+provider call. See [Acting for a person](../concepts/control-and-evidence.md#acting-for-a-person).
 
 ## Built-in refusals
 
@@ -243,6 +244,10 @@ strings or credentials.
 | `jarviscore.control.approvals.sign_assertion(..., scopes=...)` | Sign an approval in your backend, for `verified` assurance, with the approver's scopes |
 | `jarviscore.OnBehalfOf(person, mandate=..., scopes=...)` | Whom work is for, what they delegated, what they may do |
 | `jarviscore.control.scopes.parse_section(raw)` | The `scopes` section as the deployment reads it |
+| `jarviscore.act_for(person, delegated=None, held=None)` | Run a block of your own code for a person, within their mandate and scopes |
+| `jarviscore.control.approvals.Approver(subject, roles, assurance, authenticated_by, scopes)` | An approver your code established (`asserted`), for `resolve_hitl(approver=...)` |
+| `Mesh.connect(provider, on_behalf_of=..., return_url=...)` / `Mesh.connected(...)` | Start, or check, a person's consent to a provider |
+| `jarviscore.evidence.people.account(root, who)` / `export(root, who, dest, content=False)` / `erase(root, who, dry_run=False)` | What was done for a person or tenant; an export for their auditor; erase their replay content |
 
-Settings: `CONTROL_MODE`, `CONTROL_POLICY_PATH`, `JOURNAL_DIR`,
-`APPROVAL_ASSERTION_KEY(S)` ([Configuration](configuration.md)).
+Settings: `CONTROL_MODE`, `CONTROL_POLICY_PATH`, `JOURNAL_DIR`, `JOURNAL_CAPTURE`,
+`JOURNAL_CONTENT_DAYS`, `APPROVAL_ASSERTION_KEY(S)` ([Configuration](configuration.md)).

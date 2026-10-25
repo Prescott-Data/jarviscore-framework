@@ -80,7 +80,11 @@ def test_an_export_holds_the_tenants_runs_verifiable_on_their_own(recorded, tmp_
     report = verify(out, export=True)
     assert report.ok, report.problems
     assert report.runs == 2 and report.refused == 1
-    assert any("an export for acme/" in note and "3 other run(s)" in note for note in report.notes)
+    assert any("an export for acme/" in note for note in report.notes)
+    # Nothing in it names the deployment's other runs.
+    exported = open(os.path.join(out, "heads.jsonl")).read() + open(os.path.join(out, "export.json")).read()
+    assert "wf-3" not in exported and "wf-5" not in exported  # wf-4 also worked for acme: listed as left out
+    assert manifest["head_log"]["entries"] > 0 and len(manifest["head_log"]["last_hash"]) == 64
     with pytest.raises(FileExistsError):
         export(recorded, "acme/", out)
 
@@ -96,7 +100,7 @@ def test_an_export_still_shows_tampering_and_a_run_it_claims_but_lacks(recorded,
     os.remove(os.path.join(out, "runs", "wf-2_a.jsonl"))
 
     problems = " | ".join(verify(out, export=True).problems)
-    assert "does not match its hash" in problems
+    assert "does not match its hash" in problems or "is not the one the head log registered" in problems
     assert "wf-2/a: listed in this export but its record is missing" in problems
 
 
@@ -202,3 +206,21 @@ async def test_a_run_records_what_the_person_held_and_replays_with_it(journal):
     report = await replay(journal, "wf/pay", factory=lambda agent_id, llm: Witness(llm_client=llm))
     assert report.reproduced, report.divergence
     assert seen and seen[-1] == recorded == ("acme/carol", carol.scopes, {"systems": ["erp"]})
+
+
+def test_erasing_one_person_keeps_the_content_of_a_run_that_also_worked_for_another(tmp_path):
+    from jarviscore.evidence.journal import store_content
+
+    root = str(tmp_path / "journal")
+    log = Journal(root)
+    alone, shared, theirs = (store_content(root, {"task": t}) for t in ("mine", "both", "bobs"))
+    log.append("wf-a/s", "run.start", {"acting_for": "acme/u_1", "task": alone})
+    log.append("wf-s/s", "run.start", {"acting_for": "acme/u_1", "task": shared})
+    log.append("wf-s/s", "policy.decision", {"acting_for": "acme/u_2", "outcome": "allow"})
+    log.append("wf-b/s", "run.start", {"acting_for": "acme/u_2", "task": theirs})
+    log.close()
+
+    assert erase(root, "acme/u_1") == {"runs": 1, "erased": 1, "kept_shared": 0}
+    remaining = {name for _, _, names in os.walk(os.path.join(root, "content")) for name in names}
+    assert remaining == {f"{shared}.json", f"{theirs}.json"}
+    assert verify(root).ok

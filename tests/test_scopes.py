@@ -537,3 +537,48 @@ async def test_a_capability_the_person_may_not_use_is_shown_as_refused_and_never
     with act_for(OnBehalfOf("acme/payer", scopes=["payments.make"])):
         agent._offer_system_capabilities_for(["erp"])
     assert atom.name in agent._atoms and not registered["erp_pay_invoice"][1].startswith("OUT OF REACH")
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_deny_rule_never_softens_a_persons_refusal_in_report_mode(broker):
+    document = {**POLICY, "rules": [{"name": "preview-no-writes", "decision": "deny",
+                                     "match": {"provider": "erp", "effect": "write"}}],
+                "effects": [{"name": "preview-no-browser", "decision": "deny", "match": {"sink": "browser"}}]}
+    proxy, _, _ = broker("report", document)
+    with act_for(DAVE):
+        with pytest.raises(PolicyDenied) as refused:
+            await approve(proxy, "10")
+        page = effects.Effect("browser", "navigate", target="finance.acme.test/q3", origin="page")
+        decision = effects.decide(page)
+    assert refused.value.decision.rule == "scope-missing" and refused.value.decision.enforced
+    assert decision.rule == "scope-missing" and decision.enforced
+    assert not Client.sent
+    with act_for(CAROL):  # within her scope, the deployment's rule is report-only as before
+        assert (await approve(proxy, "10"))["ok"]
+
+
+@pytest.mark.parametrize("path", [
+    "/claims/7/approve", "//claims/7/approve", "/claims/7/./approve", "/claims/x/../7/approve",
+    "/claims/7/%61pprove", "/claims/7/approve;jsessionid=1", "/claims%2F7/approve", "/CLAIMS/7/APPROVE",
+    "/claims/7/approve/",
+])
+@pytest.mark.asyncio
+async def test_a_path_a_server_reads_as_the_operation_is_held_to_its_scope(broker, path):
+    document = {"scopes": {"require": [{
+        "name": "claim-approval", "match": {"provider": "erp", "method": "POST", "path": "/claims/{id}/approve"},
+        "requires": "claims.approve"}]}}
+    proxy, _, _ = broker("report", document)
+    with act_for(DAVE):
+        with pytest.raises(PolicyDenied, match="does not hold claims.approve"):
+            await proxy.call("conn-erp", "POST", f"{ERP}{path}", json={"amount": "1"},
+                             authority={**authority("x"), "atom": "my_own", "code_origin": "registry"})
+
+
+def test_grounding_matches_the_same_readings():
+    from jarviscore.control.grounding import normalized_path, parse_rule, request_from
+
+    rule = parse_rule({"name": "pay", "match": {"provider": "erp", "method": "POST", "path": "/payments"},
+                       "bind": [], "require": []}, 0)
+    for path in ("/payments", "//payments", "/./payments", "/%70ayments", "/payments;x=1"):
+        assert rule.applies("erp", None, request_from("POST", f"{ERP}{path}", {})), path
+    assert normalized_path("/a//b/./c/../d;m=1/%7Ee") == "/a/b/d/~e"

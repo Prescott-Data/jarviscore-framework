@@ -33,4 +33,5 @@ evidence:
   - tests/test_on_behalf_of.py::test_a_dag_an_agent_builds_while_working_for_someone_stays_theirs
   - tests/test_on_behalf_of.py::test_a_chat_is_for_whom_the_application_authenticated_never_whom_the_client_claims
   - tests/test_on_behalf_of.py::test_connecting_a_users_account_is_done_as_that_user
+  - tests/test_on_behalf_of.py::test_a_conversation_is_its_starters_no_one_else_continues_or_reads_it
 published: []

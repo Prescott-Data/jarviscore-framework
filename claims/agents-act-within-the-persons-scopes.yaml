@@ -14,12 +14,12 @@ scope:
   - Work started with on_behalf_of or act_for, and its sub-agents, workflows and steps on other nodes.
 assumptions:
   - The application names whom the work is for and what they hold, from its own authentication and roles.
-  - Approvers' scopes come from an assertion the application's backend signs, or an Approver its code builds.
+  - Approvers' scopes come from an assertion the application's backend signs, an Approver its code builds, or scopes.grants.
   - The provider enforces each person's own permissions on their credential (scopes narrow, never widen, them).
 not_claimed:
   - Scopes on effects other than provider calls and browser navigations and sends (memory, peers, code), unless a requirement names that sink.
   - A requirement matched only by integration name holds other code reaching the same operation (match method and path for that).
-  - A browser page's own reads (fetch/XHR GET).
+  - A browser page's reads of targets no scope names.
   - That the person's scopes are true: they are what the application says.
 evidence:
   - tests/test_scopes.py::test_a_person_does_what_their_scope_allows_and_is_refused_beyond_it_even_in_report_mode
@@ -35,6 +35,10 @@ evidence:
   - tests/test_scopes.py::test_an_approved_by_scope_requires_an_approval_from_someone_known_to_hold_it
   - tests/test_scopes.py::test_a_browser_page_the_person_may_not_open_is_refused_even_in_report_mode
   - tests/test_scopes.py::test_work_for_bob_inside_work_for_ada_never_keeps_adas_mandate_or_scopes
+  - tests/test_scopes.py::test_a_deployment_deny_rule_never_softens_a_persons_refusal_in_report_mode
+  - tests/test_scopes.py::test_a_path_a_server_reads_as_the_operation_is_held_to_its_scope
+  - tests/test_browser_requests.py::test_a_page_the_person_may_not_read_is_refused_in_a_frame_or_fetch_too
+  - tests/test_browser_requests.py::test_a_browser_reused_by_another_persons_run_is_decided_for_that_person
   - tests/test_scopes.py::test_scopes_travel_with_the_work_and_only_from_the_application
   - tests/test_scopes.py::test_only_the_actions_whose_operations_match_wait_for_an_approved_by_approver
   - tests/test_scopes.py::test_a_capability_the_person_may_not_use_is_shown_as_refused_and_never_run

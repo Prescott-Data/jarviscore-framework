@@ -10,7 +10,8 @@
     jarviscore evidence acme/u_1 --erase --yes     # erase it; the journal still verifies
 
 An export is checked on its own with ``jarviscore verify --export DIR``. Exit
-status is 0, or 2 when there is no journal or nothing was done for them.
+status: 0; 1 when no person or tenant is given; 2 when there is no journal,
+nothing was done for them, or the export directory is not empty.
 """
 import json
 import os
@@ -53,8 +54,11 @@ def main() -> None:
                   f"kept {counts['kept_shared']} also used by others' runs.")
             print("The journal still verifies; those runs can no longer be replayed."
                   if done else "Run again with --yes to erase.")
-        sys.exit(0)
+        sys.exit(0 if counts["runs"] else 2)
     if destination:
+        if os.path.exists(destination) and os.listdir(destination):
+            print(f"{destination} is not empty; export into a new or empty directory.")
+            sys.exit(2)
         manifest = export(root, who, destination, content="--content" in sys.argv[1:])
         if "--json" in sys.argv[1:]:
             print(json.dumps(manifest, indent=2))

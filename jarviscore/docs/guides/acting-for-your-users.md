@@ -26,7 +26,7 @@ whoever your application says the work is for.
 
 | You are building | What you need |
 |---|---|
-| An internal tool, a script, one team | Nothing on this page. Work runs as the deployment's own user (`NEXUS_USER_ID`). |
+| An internal tool, a script, one team | Nothing on this page. Work runs as the deployment's own identity (`NEXUS_DEFAULT_USER_ID`, default `jarviscore-agent`). |
 | A product with signed-in users, each connecting their own accounts | [Name whom the work is for](#1-name-whom-the-work-is-for), [connect their accounts](#2-connect-each-users-accounts), [turn on subject binding](#3-make-nexus-hold-you-to-it) |
 | A multi-tenant SaaS | All of the above with tenant-qualified people (`OnBehalfOf.of(tenant, user)`), plus [per-tenant evidence](#7-evidence-per-user-and-per-tenant) |
 | Teams where only some people may do some things (approve claims, read financial reports, file a SAR) | Also [your organisation's scopes](#4-hold-them-to-your-organisations-scopes) |
@@ -56,13 +56,15 @@ person key string. For the length of the work it decides:
 - what the work may do (their [scopes](#4-hold-them-to-your-organisations-scopes) and its [mandate](#5-limit-what-they-delegated-for-this-work));
 - whom every journal record names (`acting_for`).
 
-It holds for every step, every sub-agent and every peer on any node of the mesh.
+It holds for every step and sub-agent of the work, and, for work registered as a
+workflow (`execute_goal`, `submit_goal`, `workflow`, or a DAG an agent builds), for
+every peer that picks up one of its steps on any node. `run_task` runs on this node.
 
 !!! warning "Always qualify by tenant"
     `OnBehalfOf.of("acme", "u_123")` is `acme/u_123`. Credentials, Nexus
     workspaces and records are keyed by this string, so two tenants that both
-    have a user `u_123` must never share it. A tenant or user id containing `/`
-    is refused.
+    have a user `u_123` must never share it. A tenant or user id containing `/`,
+    `{` or `}` is refused.
 
 Whom work is for comes only from your code, never from what a client sends or
 an agent writes. `submit_goal` refuses a `context["acting_for"]` that disagrees
@@ -96,8 +98,11 @@ app.include_router(create_chat_router(kernel, on_behalf_of=signed_in_user), pref
 ```
 
 The resolver can be sync or async. An exception you raise there (such as a 401)
-becomes the response. Whatever the request body carries as `acting_for` or
-`mandate` is dropped: a client cannot claim to be someone else.
+becomes the response; returning `None` makes the chat for no one (the deployment's
+own identity). Whatever the request body carries as `acting_for`, `mandate` or
+`scopes` is dropped: a client cannot claim to be someone else. Each conversation
+(`workflow_id`) belongs to the user who started it: another user cannot continue
+it, stream its trace or read its history (403).
 
 ---
 
@@ -118,7 +123,10 @@ async def connect(provider: str, request: Request):
 ```
 
 Each user's connection is stored in their own Nexus workspace, derived from the
-person key. If work needs an account the user has not connected, the agent stops
+person key. `connect` and `connected` need the mesh to reach a Nexus gateway
+(`NEXUS_GATEWAY_URL`, or an `auth_mode`) and raise `RuntimeError` otherwise.
+`provider_scopes=` asks the provider for particular OAuth scopes; it has nothing to
+do with your organisation's scopes below. If work needs an account the user has not connected, the agent stops
 and asks for consent through your [HITL surface](hitl.md); the link it raises is
 for that user's workspace too.
 
@@ -202,7 +210,8 @@ who holds only `claims.vet`, approving any claim is refused (`scope-missing`).
   refused; `"*"` states that there is none. A value the request does not carry, or
   carries where it cannot be read, is refused. Every item of a list is checked.
 - **Checked on what leaves.** Limits are read from the request as it is sent, with
-  typed comparison (money as decimals, email by domain). Add a
+  typed comparison (money as decimals; an email address exactly, except that its
+  domain is compared case-insensitively). Add a
   [grounding rule](../concepts/control-and-evidence.md#grounding) on the same
   operation, and the amount must also be the claims system's own figure, so an
   agent cannot understate it to get under the limit.
@@ -225,8 +234,10 @@ whoever approves holds a scope, within its limits for this exact request:
 Such an action always waits for an approval, whatever the `approvals:` rules
 say, and only an approver known to hold the scope may give it: one your backend
 signs with `sign_assertion(..., scopes=...)`, or an `Approver(..., scopes=...)`
-your code builds (a bare name is refused). The approver's limit is checked
-against the request when the action runs.
+your code builds (a bare name is refused); `scopes.grants` can also say what an
+approver holds. The approver's limit is checked against the request when the
+action runs. Only an integration's action can wait for an approval: any other code
+reaching an `approved_by` operation carries none and is refused (`scope-missing`).
 
 **People without your sign-in** (rooms, people peers) take their scopes from the
 policy file; your application's grant comes first for any scope it names:
@@ -266,9 +277,10 @@ user = OnBehalfOf.of(tenant, user_id, mandate={
 ```
 
 Derive it from your own roles. A viewer's agent gets `["read"]`; an admin's may
-`write`. A call outside the mandate is refused (`outside-mandate`), in report
-mode as in strict, recorded, and never lifted by a deployment rule. A mandate
-that cannot be read refuses everything. See
+`write`. A provider call outside the mandate is refused (`outside-mandate`), in
+report mode as in strict, recorded, and never lifted by a deployment rule. A
+mandate holds provider calls; for browser pages and other effects, use scopes. A
+mandate that cannot be read refuses every provider call. See
 [Control and Evidence](../concepts/control-and-evidence.md#acting-for-a-person).
 
 ---
@@ -283,6 +295,7 @@ your institution's approval rules:
 from jarviscore.control.approvals import sign_assertion
 
 approver = OnBehalfOf.of(session.tenant_id, session.user_id)
+w = result["waiting"]["metadata"]       # from execute_goal / run_task: workflow_id, action_id, binding
 token = sign_assertion(APPROVAL_ASSERTION_KEY, subject=approver.person, roles=session.roles,
                        scopes=session.scopes,          # for approved_by scopes
                        decision="approved", workflow_id=w["workflow_id"],
@@ -291,7 +304,9 @@ await mesh.resolve_hitl(w["workflow_id"], w["action_id"], decision="approved", a
 ```
 
 Use the approver's person key (`OnBehalfOf.of(tenant, user).person`) as the
-subject, so `grants` and the record name them as everywhere else. See
+subject: it is what work is recorded as being for, so maker-checker
+(`distinct_from: [requester]`) can tell that the approver is the person who asked,
+and `grants` and the record name them as everywhere else. See
 [HITL: approving consequential actions](hitl.md#approving-an-agents-consequential-actions).
 
 ---
@@ -307,9 +322,10 @@ jarviscore evidence acme/
 ```
 
 ```text
-2026-07-14T09:12:03Z  wf-42/pay  agent=ledger  for=acme/u_123  outcome=success
-    2026-07-14T09:12:04Z  allowed      provider GET      erp.example/invoices
-    2026-07-14T09:12:06Z  refused      provider POST     erp.example/payments  [outside-mandate]
+2026-10-25T21:27:36.817144+00:00  wf-42/pay  agent=ledger  for=acme/u_123  outcome=failure
+    2026-10-25T21:27:36.817696+00:00  allowed      provider  GET      erp.example/invoices/7  [within-policy]
+    2026-10-25T21:27:36.817813+00:00  refused      provider  POST     erp.example/payments  [over-scope-limit]  scopes: payments
+        json.amount is beyond what acme/u_123 may do under payments.make (amount is the limit).
 
 1 run(s), 2 decision(s), 1 effect(s), 1 refused.
 ```
@@ -321,19 +337,21 @@ jarviscore evidence acme/ --export acme-evidence/
 jarviscore verify --export acme-evidence/        # what the auditor runs; no keys, no network
 ```
 
-The export holds that tenant's runs exactly as written, and the deployment's own
-head log, so the auditor can check that every run is intact and is the one the
-deployment recorded. A run that also worked for another tenant is left out and
-listed, so one tenant never receives another's work. Add `--content` to include
-what [replay](../concepts/control-and-evidence.md#replay) needs (tasks, model
-calls, tool results); that is personal data, so include it only where that is
-allowed. The head log carries run names and hashes for every run in the
-deployment, not their content. An export proves each run in it is intact. It
-cannot prove that no run was left out; that needs the whole journal and
-`jarviscore verify`.
+The export holds that tenant's runs exactly as written, with the head-log entries
+the deployment wrote for them (and no other run's name), so the auditor can check
+that every run is intact and ends where the deployment registered it. A run that
+also worked for anyone the export does not cover is left out and listed, so it
+never hands one tenant someone else's work. Its `export.json` records the head
+log's last hash and length when it was exported, to compare with a checkpoint
+kept outside the deployment. Add `--content` to include what
+[replay](../concepts/control-and-evidence.md#replay) needs (tasks, model calls,
+tool results); that is personal data, so include it only where that is allowed.
+An export proves each run in it is intact. It cannot prove that no run was left
+out; that needs the whole journal and `jarviscore verify`.
 
-From Python, use `jarviscore.evidence.people.account(root, who)` and
-`export(root, who, dest)` to build this into your admin console.
+From Python, use `jarviscore.evidence.people.account(root, who)`,
+`export(root, who, dest, content=False)` and `erase(root, who, dry_run=False)` to
+build this into your admin console.
 
 ### Erasure
 
@@ -342,11 +360,13 @@ jarviscore evidence acme/u_123 --erase           # what would go
 jarviscore evidence acme/u_123 --erase --yes     # erase it
 ```
 
-This erases the replay content kept for that user's runs. The journal keeps only
-digests, so it still verifies and still shows every decision; those runs can no
-longer be replayed. Content another user's run also used (an identical task
-text, say) is kept. Content unused for `JOURNAL_CONTENT_DAYS` (30 by default) is
-erased anyway.
+This erases the replay content (tasks, model calls, tool results) kept for runs
+done only for that user. The journal holds just digests of that content, so it
+still verifies and still shows every decision; those runs can no longer be
+replayed. The journal itself still names the person, approvers, hosts and paths:
+it is the record of what was done. Content of a run that also worked for someone
+else, or that another person's run also used (an identical task text, say), is
+kept. Content unused for `JOURNAL_CONTENT_DAYS` (30 by default) is erased anyway.
 
 ---
 

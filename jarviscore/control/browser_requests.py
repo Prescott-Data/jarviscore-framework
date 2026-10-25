@@ -82,11 +82,40 @@ def describe(request) -> Optional[effects.Effect]:
     )
 
 
+def _scoped_read(request) -> Optional[effects.Effect]:
+    """A read (an iframe, a fetch, a script) that a person's scope covers: decided like a send.
+
+    Other reads are not decided on: they carry nothing out and record nothing.
+    """
+    from jarviscore.control.policy import current_policy
+
+    scopes = getattr(current_policy(), "scopes", None)
+    if scopes is None or not scopes.active:
+        return None
+    url = request.url
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        return None
+    effect = effects.Effect(
+        "browser", "read", target=f"{(parts.hostname or '').lower()}{parts.path or '/'}", origin="page",
+        attributes={"method": request.method.upper(), "host": (parts.hostname or "").lower(),
+                    "page": _host(_page_url(request)), "resource": request.resource_type},
+    )
+    if scopes.problems or any(r.applies_to_effect(effect) or (r.invalid and not r.match) for r in scopes.require):
+        return effect
+    return None
+
+
 class RequestBroker:
     """Decides on and records one browser context's navigations and sends."""
 
     def __init__(self, scope: Optional[Dict[str, Any]]):
+        from jarviscore.auth.principal import registered
+
         self.scope = dict(scope or {})
+        #: Whom the browser works for now: set when a run attaches, so a browser reused by
+        #: another person's run is decided for that person, not whoever first opened it.
+        self.principal = registered()
         self._open: Dict[int, effects.Mediation] = {}
         #: Every request that carried data out, in order: what the agent's actions really sent.
         self.sent: list = []
@@ -110,13 +139,16 @@ class RequestBroker:
 
     async def route(self, route, request) -> None:
         """Strict mode: decided before it leaves; a refusal aborts it."""
-        effect = describe(request)
+        effect = describe(request) or _scoped_read(request)
         if effect is None:
             await route.continue_()
             return
         mediation = self._mediation(effect)
+        from jarviscore.auth.principal import as_registered
+
         try:
-            mediation.__enter__()
+            with as_registered(self.principal):
+                mediation.__enter__()
         except effects.EffectDenied as exc:
             logger.info("[browser] refused %s %s: %s", request.method, effect.target, exc)
             self._note(effect, mediation, refused=True)
@@ -135,8 +167,11 @@ class RequestBroker:
         if effect is None:
             return
         mediation = self._mediation(effect)
+        from jarviscore.auth.principal import as_registered
+
         try:
-            mediation.__enter__()
+            with as_registered(self.principal):
+                mediation.__enter__()
         except effects.EffectDenied:  # report mode never enforces; a strict switch mid-run does
             return
         except Exception as exc:  # noqa: BLE001 - observing must never break the page
@@ -187,7 +222,10 @@ async def attach(context, scope: Optional[Dict[str, Any]] = None) -> Optional[Re
         return None
     existing = getattr(context, "_jc_request_broker", None)
     if existing is not None:
+        from jarviscore.auth.principal import registered
+
         existing.scope = dict(scope or effects.scope.get() or {})
+        existing.principal = registered()
         return existing
     broker = RequestBroker(scope or effects.scope.get())
     context._jc_request_broker = broker

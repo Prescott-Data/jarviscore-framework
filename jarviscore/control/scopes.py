@@ -188,12 +188,17 @@ class Requirement:
 
 
 def _path_matches(template: str, path: str) -> bool:
-    from jarviscore.control.grounding import _path_params, _template
+    """Whether any reading of ``path`` a server might route on is this operation (fails closed)."""
+    from jarviscore.control.grounding import _path_params, _template, path_variants
 
     try:
-        return _path_params(_template(template)[0], path) is not None
+        pattern, lowered = _template(template)[0], _template(template.lower())[0]
     except ValueError:
         return True  # an unreadable path is reported by policy check, and refuses what it may match
+    for variant in path_variants(path):
+        if _path_params(pattern, variant) is not None or _path_params(lowered, variant.lower()) is not None:
+            return True
+    return False
 
 
 def parse_requirement(entry: Any, index: int) -> Requirement:

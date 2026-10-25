@@ -289,6 +289,21 @@ def _check_chain(path: str, label: str, problems: List[str]) -> List[Dict[str, A
     return events
 
 
+def _check_entries(path: str, problems: List[str]) -> List[Dict[str, Any]]:
+    """Head entries of an export, each checked against its own hash (not a whole chain)."""
+    entries: List[Dict[str, Any]] = []
+    for number, entry, _ in _events(path):
+        if entry is None:
+            problems.append(f"head log line {number}: not a JSON event")
+            continue
+        body = {key: value for key, value in entry.items() if key != "hash"}
+        if digest(body) != entry.get("hash"):
+            problems.append(f"head log line {number}: its content does not match its hash")
+            continue
+        entries.append(entry)
+    return entries
+
+
 def verify(root: str, export: bool = False) -> Verification:
     """Check every run under ``root`` against its own chain, the head log, and its decisions.
 
@@ -299,8 +314,12 @@ def verify(root: str, export: bool = False) -> Verification:
     heads_path = os.path.join(root, HEADS)
     heads: Dict[str, Tuple[int, str]] = {}
     if os.path.exists(heads_path):
-        for head in _check_chain(heads_path, "head log", report.problems):
-            heads[head["run"]] = (head["run_seq"], head["run_hash"])
+        # An export holds only its runs' head entries: each is checked on its own hash.
+        entries = _check_entries(heads_path, report.problems) if export else _check_chain(
+            heads_path, "head log", report.problems)
+        for head in entries:
+            if head.get("run") not in heads or head["run_seq"] >= heads[head["run"]][0]:
+                heads[head["run"]] = (head["run_seq"], head["run_hash"])
     runs_dir = os.path.join(root, RUNS)
     seen = set()
     every: Dict[Tuple[str, int], Dict[str, Any]] = {}
@@ -319,10 +338,14 @@ def verify(root: str, export: bool = False) -> Verification:
         registered = heads.get(run)
         last = events[-1]
         if registered is None:
-            report.notes.append(
-                f"run {run}: not yet in the head log (being written, an interrupted write, "
-                "or added outside the journal)"
-            )
+            # A run's first event is written just before its head entry: a crash between them
+            # leaves one unregistered event. More than that was not written by the journal.
+            if len(events) == 1:
+                report.notes.append(f"run {run}: its first event is not yet in the head log (being written, "
+                                    "or an interrupted write)")
+            else:
+                report.problems.append(f"run {run}: {len(events)} events and none in the head log (added "
+                                       "outside the journal)")
         else:
             seq, hashed = registered
             at = next((e for e in events if e.get("seq") == seq), None)
@@ -333,10 +356,14 @@ def verify(root: str, export: bool = False) -> Verification:
                 )
             elif at.get("hash") != hashed:
                 report.problems.append(f"run {run}: event {seq} is not the one the head log registered (rewritten)")
-            elif last["seq"] > seq:
+            elif last["seq"] == seq + 1:
                 report.notes.append(
-                    f"run {run}: {last['seq'] - seq} event(s) after its registered head "
-                    "(being written, or an interrupted write)"
+                    f"run {run}: one event after its registered head (being written, or an interrupted write)"
+                )
+            elif last["seq"] > seq + 1:
+                report.problems.append(
+                    f"run {run}: {last['seq'] - seq} events after its registered head (appended outside "
+                    "the journal)"
                 )
         _check_decisions(run, events, report)
         for event in events:
@@ -359,10 +386,11 @@ def verify(root: str, export: bool = False) -> Verification:
         # An export of one person's or tenant's runs: the rest were left out on purpose.
         for run in sorted(set(exported.get("runs") or []) - seen):
             report.problems.append(f"run {run}: listed in this export but its record is missing")
-        left_out = len(set(heads) - seen - set(exported.get("runs") or []))
+        for run in sorted(set(heads) - set(exported.get("runs") or [])):
+            report.problems.append(f"run {run}: in this export's head entries but not one of its runs")
         report.notes.append(
-            f"an export for {exported.get('for')}: {len(seen)} run(s), each checked against the "
-            f"deployment's head log; {left_out} other run(s) in that log are not part of it"
+            f"an export for {exported.get('for')}: {len(seen)} run(s), each checked against the head "
+            "entries the deployment wrote for it; that no run was left out needs the whole journal"
         )
     for where, decision in groundings:
         _check_grounding(where, decision, every, report, partial=exported is not None)

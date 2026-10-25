@@ -91,6 +91,24 @@ def registered() -> Optional[dict]:
 
 
 @contextmanager
+def as_registered(record: Optional[dict]) -> Iterator[None]:
+    """Work exactly as ``record`` (from :func:`registered`) says: no person when it names none.
+
+    For callbacks that run in a task created for other work (a browser's event handlers),
+    where whatever principal that task started with must not stand in.
+    """
+    record = record or {}
+    tokens = [(acting_for, acting_for.set(record.get("acting_for"))),
+              (mandate, mandate.set(record.get("mandate"))),
+              (scopes, scopes.set(record.get("scopes")))]
+    try:
+        yield
+    finally:
+        for variable, token in reversed(tokens):
+            variable.reset(token)
+
+
+@contextmanager
 def act_for(person: Any, delegated: Optional[dict] = None, held: Any = None) -> Iterator[None]:
     """Run the enclosed work on behalf of ``person``, within what they ``delegated``.
 
