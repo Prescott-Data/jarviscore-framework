@@ -126,9 +126,13 @@ def _run_name(authority: Optional[Dict[str, Any]]) -> str:
 
 
 def _provider_call(provider: str, method: str, url: str, authority: Dict[str, Any], grounding=None):
+    from jarviscore.auth.principal import acting_for
+    from jarviscore.control.mandate import current as current_mandate
     from jarviscore.control.policy import ProviderCall
 
     return ProviderCall(
+        acting_for=acting_for.get(),
+        mandate=current_mandate(),
         provider=provider,
         method=method.upper(),
         url=url,
@@ -194,6 +198,8 @@ def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, 
         "verified": call.verified,
         "action_id": call.action_id,
         "approval": call.approval,
+        "acting_for": call.acting_for,
+        **({"mandate": call.mandate.record()} if call.mandate is not None else {}),
         "outcome": decision.outcome,
         "rule": decision.rule,
         "enforced": decision.enforced,
@@ -226,6 +232,13 @@ def _record(journal, run, kind: str, data: Dict[str, Any], strict: bool) -> Opti
             raise RuntimeError(f"The call was not made: it could not be recorded ({exc}).") from exc
         logger.warning("Journal write failed: %s", exc)
         return None
+
+
+def _refusal_code(exc) -> str:
+    try:
+        return str(exc.response.json().get("error") or exc.response.status_code)
+    except Exception:  # noqa: BLE001
+        return "403"
 
 
 def _grounding_rules():
@@ -361,14 +374,28 @@ class NexusCallProxy:
         request_kwargs = None
 
         # ── Try auth_manager (gateway mode) first ─────────────────────────────
+        from jarviscore.auth.principal import operation
+
+        # Nexus records which operation each credential was released for.
+        operation_token = operation.set((authority or {}).get("action_id") or call_id)
         try:
             strategy = await self._auth.resolve_strategy(connection_id)
         except Exception as gateway_exc:
+            status = getattr(getattr(gateway_exc, "response", None), "status_code", None)
+            if status == 403:
+                # Nexus refused this credential for the person the work acts for: that is
+                # the answer, not a reason to use some other credential instead.
+                raise PermissionError(
+                    f"Nexus refused the {provider} credential for the person this work acts for "
+                    f"({_refusal_code(gateway_exc)})."
+                ) from gateway_exc
             logger.debug(
                 "NexusCallProxy: gateway resolve failed for %r (%s) — "
                 "falling back to local credential store",
                 connection_id, gateway_exc,
             )
+        finally:
+            operation.reset(operation_token)
         if strategy is not None:
             # Resolve inside the credential boundary, then bind the destination
             # before placing that credential. Policy or placement failures must
@@ -416,7 +443,11 @@ class NexusCallProxy:
                 try:
                     if self._auth.nexus_client:
                         await self._auth.nexus_client.refresh_connection(connection_id)
-                    self._auth._strategy_cache.pop(connection_id, None)
+                    forget = getattr(self._auth, "forget_strategy", None)
+                    if callable(forget):
+                        forget(connection_id)
+                    else:
+                        self._auth._strategy_cache.pop(connection_id, None)
                     strategy = await self._auth.resolve_strategy(connection_id)
                     ensure_host_allowed(provider, url, strategy.config)
                     request_kwargs = NexusClient.apply_strategy_to_request(

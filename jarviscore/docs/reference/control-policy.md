@@ -134,12 +134,27 @@ effects:
 
 ---
 
+## Mandate (workflow context, not this file)
+
+What a person delegated travels with the work, registered by your application:
+`execute_goal(..., context={"acting_for": ..., "mandate": {...}})`.
+
+| Key | Values |
+|---|---|
+| `systems` | Providers the work may call |
+| `effects` | Any of `read`, `propose`, `write`, `notify`, `destructive` |
+| `expires_at` | ISO 8601 time with a zone, or epoch seconds |
+
+Unknown keys or malformed values make the mandate unreadable, which refuses every
+call. See [Acting for a person](../concepts/control-and-evidence.md#acting-for-a-person).
+
 ## Built-in refusals
 
 Made in report and strict mode alike; enforced only in strict.
 
 | Rule | Refuses | Liftable |
 |---|---|---|
+| `outside-mandate` | A provider call outside what the person delegated (system, effect, expiry) | No |
 | `approval-missing` | A gated action reaching the broker without its approval | No |
 | `ungrounded-argument` | A call a `grounding` rule matches whose values are not grounded | No |
 | `mutation-without-atom` | A provider mutation not from an integration | `rules: allow` |

@@ -173,6 +173,39 @@ assurance, how they were authenticated), `approval.refused`, `approval.claim`,
 
 ---
 
+## Acting for a person
+
+An agent working for someone uses that person's own access, within what they
+handed over, and every record names them.
+
+| Property | How |
+|---|---|
+| Their credential, nobody else's | JarvisCore names the person on every credential request (`X-Nexus-Subject`, with the agent and operation); Nexus releases a credential only for the person whose connection it is. With Nexus `SUBJECT_BINDING=required`, a connection id alone releases nothing. A credential Nexus refuses is not replaced by any other, and one cached for one person is never served to another |
+| Never more than they could do | It is their credential, so the provider holds the agent to that person's own permissions |
+| Within what they delegated | A **mandate** registered with the work narrows it further: the systems, effects and time the person handed over. A call outside it is refused (`outside-mandate`); no deployment rule widens it |
+| On record | Every decision in the journal names the person (`acting_for`) and the mandate's digest; Nexus's audit names the subject, agent and operation of every credential it releases or refuses |
+
+```python
+await mesh.execute_goal(
+    "Pay supplier invoice INV-7",
+    context={
+        "acting_for": "ada@example.com",
+        "mandate": {"systems": ["erp"], "effects": ["read", "write"],
+                    "expires_at": "2026-11-01T00:00:00Z"},
+    },
+)
+```
+
+`acting_for` and `mandate` come only from the context your application registers
+the goal with, never from what agents write, and hold for every step and peer of
+that workflow. A mandate that cannot be read refuses every call.
+
+What this does not do: Nexus binds a credential to the subject your runtime
+names; it does not authenticate the person itself. Keep the gateway key with the
+runtime, and authenticate people where they ask for work.
+
+---
+
 ## Every other effect
 
 What an agent does outside its step that is not a provider call goes through one

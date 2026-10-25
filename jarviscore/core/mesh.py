@@ -1252,7 +1252,7 @@ class Mesh:
                             planning_brief=self.config.get("mesh_planning_brief"),
                         )
                         # Planning is model use for the person the goal is for, too.
-                        with act_for(self._acting_for(source)), spending_scope(self._redis_store), \
+                        with act_for(self._acting_for(source), self._mandate(source)), spending_scope(self._redis_store), \
                                 workflow_budget_scope(
                             self._redis_store,
                             workflow_id,
@@ -2391,7 +2391,7 @@ class Mesh:
         )
         try:
             try:
-                with act_for(self._acting_for(workflow)), spending_scope(self._redis_store), \
+                with act_for(self._acting_for(workflow), self._mandate(workflow)), spending_scope(self._redis_store), \
                         workflow_budget_scope(
                     self._redis_store,
                     workflow_id,
@@ -2516,7 +2516,7 @@ class Mesh:
         lease_lost = asyncio.Event()
 
         async def owned_work():
-            with act_for(self._acting_for(workflow)), spending_scope(self._redis_store), \
+            with act_for(self._acting_for(workflow), self._mandate(workflow)), spending_scope(self._redis_store), \
                     in_step(workflow_id, step_id), workflow_budget_scope(
                 self._redis_store,
                 workflow_id,
@@ -2872,6 +2872,13 @@ class Mesh:
         """
         value = (workflow.get("context") or {}).get("acting_for")
         return str(value) if value else None
+
+    @staticmethod
+    def _mandate(workflow: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """What the person delegated for this workflow (control.mandate), as registered
+        with its goal by trusted application code; never from what agents write."""
+        value = (workflow.get("context") or {}).get("mandate")
+        return value if value is not None else None
 
     def _node_can_access_workspace(self, workflow_id: str) -> bool:
         workflow = self._redis_store.get_workflow_definition(workflow_id) or {}

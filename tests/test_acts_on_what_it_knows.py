@@ -92,7 +92,7 @@ def manager(monkeypatch):
     m = AuthenticationManager({})
     m._connections["slack"] = "conn-slack"
     m._connections["hubspot"] = "conn-hubspot"
-    m._strategy_cache["conn-slack"] = (object(), 0.0)
+    m._strategy_cache[("conn-slack", m._person())] = (object(), 0.0)
     return m
 
 
@@ -115,7 +115,7 @@ def test_attention_names_the_provider_that_needs_a_person(manager):
 def test_attention_drops_the_cached_strategy(manager):
     """A cached strategy for a revoked connection is a stale credential."""
     manager._connection_needs_attention("conn-slack")
-    assert "conn-slack" not in manager._strategy_cache
+    assert not [key for key in manager._strategy_cache if key[0] == "conn-slack"]
 
 
 def test_attention_for_an_unknown_connection_changes_nothing(manager):

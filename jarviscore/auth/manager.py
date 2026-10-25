@@ -90,6 +90,7 @@ class AuthenticationManager:
         self.lifecycle_monitor: Optional[LifecycleMonitor] = None
         if gateway_url:
             self.nexus_client = NexusClient(gateway_url, api_key=gateway_api_key)
+            self.nexus_client.default_subject = self.user_id
             # The monitor noticed revoked tokens and told nobody: it took an
             # on_attention callback and was built without one, so the next
             # agent run failed at the provider one full run after the system
@@ -122,7 +123,9 @@ class AuthenticationManager:
         self._discovered: Dict[str, Tuple[str, str]] = {}
 
         # _strategy_cache is package-private — only NexusCallProxy reads it
-        self._strategy_cache: Dict[str, Tuple[DynamicStrategy, float]] = {}
+        # Keyed by (connection, person): a credential released for one person is never
+        # served from cache to work acting for another.
+        self._strategy_cache: Dict[Tuple[str, str], Tuple[DynamicStrategy, float]] = {}
 
     # ── Who the work is for ──────────────────────────────────────────────────────
 
@@ -152,7 +155,12 @@ class AuthenticationManager:
                         "Connection for %s needs re-consent; its handle is withdrawn "
                         "until a person approves access again.", provider,
                     )
-        self._strategy_cache.pop(connection_id, None)
+        self.forget_strategy(connection_id)
+
+    def forget_strategy(self, connection_id: str) -> None:
+        """Drop every cached credential for ``connection_id``, whoever it was for."""
+        for key in [key for key in self._strategy_cache if key[0] == connection_id]:
+            self._strategy_cache.pop(key, None)
 
     def providers_needing_attention(self) -> List[str]:
         """Providers that were connected and now need a person to re-consent."""
@@ -375,8 +383,9 @@ class AuthenticationManager:
 
         Uses a TTL cache (default 300s) to avoid hammering the Gateway.
         """
-        if connection_id in self._strategy_cache:
-            strategy, cached_at = self._strategy_cache[connection_id]
+        key = (connection_id, self._person())
+        if key in self._strategy_cache:
+            strategy, cached_at = self._strategy_cache[key]
             if time.time() - cached_at < self.cache_ttl and not strategy.is_expired():
                 return strategy
 
@@ -392,7 +401,7 @@ class AuthenticationManager:
             strategy = self._strategy_from_resolve(payload)
         else:
             strategy = await self.nexus_client.resolve_strategy(connection_id)
-        self._strategy_cache[connection_id] = (strategy, time.time())
+        self._strategy_cache[key] = (strategy, time.time())
         return strategy
 
     @staticmethod

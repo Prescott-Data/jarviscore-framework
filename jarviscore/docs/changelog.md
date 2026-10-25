@@ -108,6 +108,14 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   decided and recorded (`browser` sink). In strict mode a page sends only to the
   site it is on unless a rule allows another host (`browser-send-off-site`);
   requests are intercepted there and only observed in report mode.
+- **An agent acts for a person with that person's credential only, within what
+  they delegated.** JarvisCore names the person, agent and operation on every
+  credential request to Nexus (which, from 0.7, releases a credential only for
+  its owner); a credential Nexus refuses is not replaced by another, and the
+  credential cache is per person. A mandate registered with the work
+  (`context["mandate"]`: systems, effects, expiry) is enforced at every provider
+  call (`outside-mandate`, not liftable). Every decision in the journal names
+  `acting_for`. See [Acting for a person](concepts/control-and-evidence.md#acting-for-a-person).
 - **Nobody is asked to approve what policy will refuse.** Where a grounding rule
   could apply, a consequential action is previewed before a person is asked: its
   code runs with every change held at the broker after the decision. A change

@@ -219,6 +219,7 @@ class Mediation:
             "target": self.effect.target,
             "origin": self.effect.origin,
             "agent": self.agent,
+            "acting_for": _acting_for(),
             "attributes": dict(self.effect.attributes),
             "outcome": decision.outcome,
             "rule": decision.rule,
@@ -269,6 +270,12 @@ async def run_mediated(effect: Effect, run, *, workflow_id=None, step_id=None, o
         if ok is not None:
             mediation.done(ok=bool(ok(result)))
         return result
+
+
+def _acting_for() -> Optional[str]:
+    from jarviscore.auth.principal import acting_for
+
+    return acting_for.get()
 
 
 def mediated(effect: Effect, *, workflow_id: Optional[str] = None, step_id: Optional[str] = None) -> Mediation:

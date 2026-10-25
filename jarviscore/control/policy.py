@@ -75,6 +75,9 @@ class ProviderCall:
     approval: Optional[str] = None
     #: How the call's arguments were held to records the runtime read (control.grounding).
     grounding: Any = None
+    #: The person the work acts for, and what they delegated (control.mandate).
+    acting_for: Optional[str] = None
+    mandate: Any = None
 
     @property
     def effect(self) -> str:
@@ -163,6 +166,11 @@ _LIFTABLE = frozenset({"mutation-without-atom"})
 def _builtin_refusal(call: ProviderCall) -> Optional[Tuple[str, str]]:
     method = call.method.upper()
     mutation = method not in READ_METHODS
+    if call.mandate is not None:
+        # Not liftable: no deployment rule widens what a person delegated.
+        outside = call.mandate.refusal(call.provider, call.effect)
+        if outside:
+            return ("outside-mandate", outside)
     if call.approval_required and not call.approval:
         return (
             "approval-missing",
