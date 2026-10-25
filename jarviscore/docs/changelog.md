@@ -148,6 +148,11 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   reported for a person to fix; read integrations are repaired as before. In
   strict mode the broker also refuses any mutation from code the model wrote that
   carries no approval of that exact action (`unapproved-model-effect`).
+- **An answer written after the budget ran out reports only what happened.** The
+  landing turn wrote its final answer from memory and, in a live browser run,
+  reported a refused send as done; its output also replaced the run's trajectory
+  with one entry. It now gets the run's own list of attempts that were refused,
+  failed or are waiting, and keeps the full trajectory.
 - **Nobody is asked to approve a call that cannot run.** A consequential call
   missing a required argument was sent for approval as it was; it is now refused
   with `ATOM_PARAMETERS_INVALID` first.
