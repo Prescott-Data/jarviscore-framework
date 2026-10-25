@@ -233,3 +233,27 @@ async def test_old_replay_content_is_pruned_and_the_journal_still_verifies(journ
     assert verify(root).ok
     report = await replay(root, "wf/pay")
     assert not report.reproduced and "not kept" in report.divergence
+
+
+@pytest.mark.asyncio
+async def test_a_tool_offered_at_run_time_is_replayed_as_it_was_offered(journal):
+    root = journal()
+    agent = LedgerAgent(llm_client=ScriptedLLM(SCRIPT))
+    schema = {"type": "object", "properties": {"invoice": {"type": "string"}}}
+    agent.register_tool("erp_extra", lambda **_: {"status": "success"}, "An integration offered at run time.",
+                        phase="action", parameters=schema)
+    await agent.run(task="Pay invoice INV-7", context={"workflow_id": "wf", "step_id": "pay"})
+
+    rebuilt = []
+
+    def factory(agent_id, llm):
+        rebuilt.append(LedgerAgent(agent_id=agent_id, llm_client=llm))
+        return rebuilt[-1]
+
+    report = await replay(root, "wf/pay", factory=factory)
+    assert report.reproduced, report.divergence
+    tool = rebuilt[0]._tools["erp_extra"]
+    # Same description and schema the model saw, charged to the same budget.
+    assert (tool.description, tool.declared_phase, tool.parameters) == (
+        "An integration offered at run time.", "action", schema)
+    assert report.requests_matched == report.model_calls

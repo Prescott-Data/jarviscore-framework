@@ -161,6 +161,12 @@ class Recorder:
                 "task": self.keep(task),
                 "context": self.keep({k: v for k, v in (context or {}).items() if not str(k).startswith("_")}),
                 "tools": sorted(getattr(agent, "_tools", {}) or {}),
+                # How each tool was offered: a replay offers the ones it cannot rebuild the same way.
+                "tool_specs": self.keep({
+                    name: {"description": getattr(tool, "description", ""), "phase": getattr(tool, "declared_phase", None),
+                           "parameters": getattr(tool, "parameters", None)}
+                    for name, tool in (getattr(agent, "_tools", {}) or {}).items()
+                }),
                 "max_turns": max_turns,
                 "model": str(model) if model else None,
                 "lease": {name: getattr(lease, name) for name in LEASE_FIELDS if hasattr(lease, name)} if lease else None,
@@ -423,9 +429,18 @@ async def replay(root: str, run: str, factory: Optional[Callable[[str, Any], Any
     agent._pre_execute_hook, agent._execute_tool = played_hook, played_tool
     agent._carry_out_decided_actions = played_carry
     agent._pre_run_hook = agent._post_run_hook = nothing
+    specs = {}
+    if start.get("tool_specs"):
+        try:
+            specs = content(start["tool_specs"])
+        except _Diverged:
+            specs = {}
     for tool in start.get("tools") or ():
         if tool not in agent._tools:
-            agent.register_tool(tool, nothing, f"(recorded tool {tool})")
+            # Offered as it was (description, schema, and the budget phase it is charged to).
+            spec = specs.get(tool) or {}
+            agent.register_tool(tool, nothing, spec.get("description") or f"(recorded tool {tool})",
+                                phase=spec.get("phase"), parameters=spec.get("parameters"))
     try:
         from jarviscore.auth.principal import act_for
         from jarviscore.control.effects import scope
