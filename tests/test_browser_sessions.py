@@ -55,7 +55,8 @@ class _Context:
         return _Session(self.log)
 
     def on(self, event, handler):
-        self.page_handlers.append(handler)
+        if event == "page":
+            self.page_handlers.append(handler)
 
     async def close(self):
         self.log.append("context.close")

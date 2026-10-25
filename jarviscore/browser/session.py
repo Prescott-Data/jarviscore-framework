@@ -398,6 +398,9 @@ class BrowserSession:
                 self._context = await self._browser.new_context(**context_options)
             if self.permissions:
                 await self._context.grant_permissions(self.permissions)
+            from jarviscore.control.browser_requests import attach
+
+            await attach(self._context)
         else:
             # Launch new browser
             logger.info(f"Launching new browser (headless={self.headless})")
@@ -436,6 +439,9 @@ class BrowserSession:
 
             if self.permissions:
                 await self._context.grant_permissions(self.permissions)
+            from jarviscore.control.browser_requests import attach
+
+            await attach(self._context)
 
             pages = self._context.pages
             if pages:

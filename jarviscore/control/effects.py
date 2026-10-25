@@ -16,6 +16,8 @@ workspace  a step's changes to its files, exported for the next step or
 memory     a fact kept for later sessions
 peer       a message to another agent: sent, delegated, or broadcast
 output     a step's result delivered to the steps and caller after it
+browser    a page's navigation, or a request carrying data out of the
+           browser (control.browser_requests)
 =========  ==============================================================
 
 Each effect is decided before it happens and recorded in the run's journal as a
@@ -40,10 +42,11 @@ from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-SINKS = ("code", "process", "artifact", "workspace", "memory", "peer", "output")
+SINKS = ("code", "process", "artifact", "workspace", "memory", "peer", "output", "browser")
 #: Where an effect's content came from: the framework itself, an atom shipped with
-#: the package or kept in the registry, or the model (code, commands, words).
-ORIGINS = ("runtime", "shipped", "registry", "model")
+#: the package or kept in the registry, the model (code, commands, words), or a
+#: web page's own scripts.
+ORIGINS = ("runtime", "shipped", "registry", "model", "page")
 
 #: The workflow step effects belong to when a site does not name it.
 scope: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
@@ -116,7 +119,7 @@ def parse_rules(entries) -> Tuple[EffectRule, ...]:
 
 
 #: Built-in refusals a deployment may lift with an ``allow`` rule.
-_LIFTABLE = frozenset({"unconfined-execution"})
+_LIFTABLE = frozenset({"unconfined-execution", "browser-send-off-site"})
 
 
 def _builtin_refusal(effect: Effect) -> Optional[Tuple[str, str]]:
@@ -130,6 +133,15 @@ def _builtin_refusal(effect: Effect) -> Optional[Tuple[str, str]]:
             f"{'Code' if effect.sink == 'code' else 'A command'} the model chose would run "
             "outside a confined sandbox, where it reaches the network and host past every "
             "broker. Run it confined, or allow it by deployment rule.",
+        )
+    if (
+        effect.sink == "browser" and effect.action == "send"
+        and effect.attributes.get("host") != effect.attributes.get("page")
+    ):
+        return (
+            "browser-send-off-site",
+            f"The page would send data to {effect.attributes.get('host')}, which is not the site "
+            f"it is on ({effect.attributes.get('page') or 'none'}). Allow that host by deployment rule.",
         )
     return None
 

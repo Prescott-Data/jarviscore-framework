@@ -1199,6 +1199,11 @@ repair that part and continue. Current facts always come from this run.
                 for key, value in (("locale", self.locale), ("timezone_id", self.timezone))
                 if value
             }
+            from jarviscore.control.policy import current_policy
+
+            if current_policy().mode == "strict":
+                # Requests a service worker makes are not seen by the request broker.
+                presented["service_workers"] = "block"
             if self.control_url:
                 if self.egress:
                     logger.info("[browser] An attached browser leaves from its own network; EGRESS_PROXY_URL is not applied")
@@ -1239,6 +1244,10 @@ repair that part and continue. Current facts always come from this run.
                     **presented,
                 )
                 self._page = await self._context.new_page()
+            from jarviscore.control.browser_requests import attach
+
+            # What pages send is decided and recorded where it leaves (control.browser_requests).
+            await attach(self._context)
             if not self._attached:
                 await self._present_as_browser()
             self._watch_requests(self._page)
