@@ -219,6 +219,10 @@ class Settings(BaseSettings):
     # Where the hash-linked journal of decisions and provider calls is written;
     # "off" writes none.
     journal_dir: Optional[str] = runtime_path("journal")
+    # What each agent run keeps for replay beside the journal: "full" (model calls,
+    # gate and tool results, content-addressed; the chain holds their digests),
+    # "digests" (digests only: verifiable, not replayable) or "off".
+    journal_capture: str = "full"
     # Seconds an idle provider connection is kept for the next call (TLS reuse).
     nexus_keepalive_seconds: float = 120.0
     # Keys approval assertions are verified with: one key (key id "default"), or

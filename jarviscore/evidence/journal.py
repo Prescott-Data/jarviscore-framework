@@ -383,3 +383,51 @@ def _check_decisions(run: str, events: List[Dict[str, Any]], report: Verificatio
                 report.problems.append(f"run {run} event {event['seq']}: a provider call with no decision before it")
             elif decision.get("outcome") == "deny" and decision.get("enforced"):
                 report.problems.append(f"run {run} event {event['seq']}: a provider call that policy refused")
+
+
+# ── Content: what the chain's digests stand for ─────────────────────────────
+
+CONTENT = "content"
+
+
+def store_content(root: str, value: Any) -> str:
+    """Keep ``value`` content-addressed beside the journal; return its digest.
+
+    The hash-linked chain holds only digests, so content can be erased (a person's
+    right to erasure, a retention limit) without breaking ``verify``; what it was
+    can still be proven against the digest while it is kept.
+    """
+    key = digest(value)
+    # Kept as it was (key order included), so a replay sees exactly what the agent saw;
+    # the digest is over the canonical form, which reading it back checks.
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    path = os.path.join(root, CONTENT, key[:2], f"{key}.json")
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        temporary = f"{path}.{os.getpid()}.tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, path)
+    return key
+
+
+def load_content(root: str, key: str) -> Any:
+    """Content kept under ``key``, checked against it; KeyError when it is not kept."""
+    path = os.path.join(root, CONTENT, str(key)[:2], f"{key}.json")
+    if not os.path.exists(path):
+        raise KeyError(key)
+    with open(path, encoding="utf-8") as handle:
+        value = json.loads(handle.read())
+    if digest(value) != key:
+        raise ValueError(f"content {key} does not match its digest")
+    return value
+
+
+def capture_mode() -> str:
+    """What runs keep for replay: ``full`` (default), ``digests`` or ``off`` (JOURNAL_CAPTURE)."""
+    import importlib
+
+    settings = importlib.import_module("jarviscore.config.settings").settings
+    value = os.environ.get("JARVISCORE_JOURNAL_CAPTURE") or getattr(settings, "journal_capture", None) or "full"
+    value = str(value).lower()
+    return value if value in ("full", "digests", "off") else "full"

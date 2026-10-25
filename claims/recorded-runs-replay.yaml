@@ -1,0 +1,22 @@
+id: recorded-runs-replay
+claim: >-
+  A recorded agent run can be re-simulated from its record with every model call,
+  gate and tool answered from that record, so nothing is called and nothing acts;
+  jarviscore replay reports whether the agent makes the same decisions (each tool,
+  with the same arguments) and ends the same way, and otherwise the first
+  decision where it diverges. Recorded content that was changed fails its digest.
+scope:
+  - Sub-agent runs (the kernel's agent loop) with JOURNAL_CAPTURE=full.
+assumptions:
+  - The agent's code is the code being replayed (a changed agent may diverge, which is the point).
+  - The recorded content is still kept (erased content makes a run verifiable but not replayable).
+not_claimed:
+  - That the model would answer the same today: replay uses the recorded answers.
+  - Replay of CustomAgent code outside the kernel's agent loop.
+  - Exact reproduction of the runtime clock the agent was shown (masked when comparing requests).
+evidence:
+  - tests/test_replay.py::test_a_recorded_run_replays_to_the_same_decisions_with_no_model_and_no_effect
+  - tests/test_replay.py::test_an_agent_that_now_decides_differently_diverges_at_that_decision
+  - tests/test_replay.py::test_tampered_content_is_caught
+  - tests/test_replay.py::test_a_digest_only_record_is_verifiable_but_says_it_cannot_be_replayed
+published: []

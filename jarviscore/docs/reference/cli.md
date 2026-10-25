@@ -25,6 +25,7 @@ Commands:
   inspect     Read recorded traces from past runs
   verify      Check the journal of decisions and effects
   policy      Check a control policy file; review what strict mode would refuse
+  replay      Re-simulate recorded agent runs from the journal, every effect stubbed
   human       Join the mesh as a person
   room        Work together on a shared workspace
 ```
@@ -568,6 +569,24 @@ registered it, that every effect followed an allow decision, and that every
 grounded call cites reads that are in the record. Exit
 status: `0` intact, `1` problems found, `2` no journal. See
 [Control and Evidence](../concepts/control-and-evidence.md) for what it detects and what it does not yet.
+
+---
+
+## jarviscore replay
+
+Re-simulates recorded agent runs from the journal. Every model call, gate and
+tool is answered from the record, so nothing is called and nothing acts.
+
+```bash
+jarviscore replay                        # every recorded run in JOURNAL_DIR
+jarviscore replay /path/to/journal wf-12/pay
+jarviscore replay --json
+```
+
+A run reproduces when the agent makes the same decisions and ends the same way;
+otherwise the report names the first decision where it diverged. Exit status:
+`0` all reproduced, `1` any diverged, `2` nothing to replay. Needs
+`JOURNAL_CAPTURE=full` (the default). See [Replay](../concepts/control-and-evidence.md#replay).
 
 ---
 

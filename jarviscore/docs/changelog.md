@@ -116,6 +116,14 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   (`context["mandate"]`: systems, effects, expiry) is enforced at every provider
   call (`outside-mandate`, not liftable). Every decision in the journal names
   `acting_for`. See [Acting for a person](concepts/control-and-evidence.md#acting-for-a-person).
+- **Replay any recorded run.** Each agent run keeps every model request and
+  response, gate result and tool result (content-addressed beside the journal;
+  the chain holds their digests), and `jarviscore replay` re-simulates it from
+  that record with every model call, gate and tool answered from it, so nothing
+  is called and nothing acts. It reports whether the agent made the same
+  decisions and ended the same way, how many model requests were identical
+  (runtime clock masked), and otherwise the first divergence. `JOURNAL_CAPTURE`:
+  `full` (default), `digests`, `off`. See [Replay](concepts/control-and-evidence.md#replay).
 - **Nobody is asked to approve what policy will refuse.** Where a grounding rule
   could apply, a consequential action is previewed before a person is asked: its
   code runs with every change held at the broker after the decision. A change

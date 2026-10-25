@@ -173,6 +173,42 @@ assurance, how they were authenticated), `approval.refused`, `approval.claim`,
 
 ---
 
+## Replay
+
+Every agent run keeps, in its step's journal, what its decisions depended on
+from outside its own logic: each model request and response, what each gate
+returned (approvals, previews, reviews), what each tool returned, and the
+task, context, tools, budget and versions it started with. The chain holds
+their digests; the content is kept beside it, content-addressed, so it can be
+erased (a retention limit, a person's right to erasure) without breaking
+`jarviscore verify`.
+
+```bash
+jarviscore replay                  # every recorded run
+jarviscore replay journal/ wf-12/pay
+```
+
+```text
+wf-12/pay: reproduced (2 decision(s), 3 model call(s), 3 request(s) identical to the record)
+```
+
+A replay rebuilds the agent and answers every model call, gate and tool from
+the record. **Nothing is called and nothing acts.** A run reproduces when the
+agent makes the same decisions (each tool, with the same arguments) and ends the
+same way. It also says how many model requests were identical to the record,
+with the runtime clock masked, the one thing a replay cannot reproduce. A run
+whose agent logic, prompts or record changed diverges, and the report says at
+which decision. Content that was changed fails its digest.
+
+`JOURNAL_CAPTURE` sets what is kept: `full` (default, replayable), `digests`
+(verifiable, not replayable) or `off`.
+
+What replay does not do: run the model again. It shows that the recorded inputs
+lead to the recorded decisions under the agent's code, not what a model would
+answer today.
+
+---
+
 ## Acting for a person
 
 An agent working for someone uses that person's own access, within what they
