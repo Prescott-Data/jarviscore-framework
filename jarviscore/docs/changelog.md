@@ -127,6 +127,28 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   starts a user's consent and `mesh.connected(...)` checks it. `OnBehalfOf`,
   `Person` and `act_for` are exported from `jarviscore`. See
   [Agents That Act for Your Users](guides/acting-for-your-users.md).
+- **Your organisation's scopes: an agent working for a person does only what
+  that person may do.** A `scopes:` section in the control policy says which
+  operations need which scope (`requires`), who must hold a scope to approve
+  them (`approved_by`), and limits checked against the request as it leaves
+  (`at_most`, `one_of`, `equals`, typed as money, email and so on). Your
+  application says what each person holds: `OnBehalfOf(..., scopes={"claims.approve":
+  {"amount": "10000"}})`; `scopes.grants` covers people without your sign-in, and
+  `unattended` work done for no one. Approving Carol's 4,000 claim is allowed,
+  her 40,000 claim is refused (`over-scope-limit`), and Dave, without the scope,
+  is refused outright (`scope-missing`). The refusals hold in report mode as well
+  as strict, no deployment rule lifts them, a grant that does not state a limit
+  is refused (`"*"` states none), and a mandate's `scopes` narrows them for one
+  piece of work. They hold for provider calls and for browser pages (`sink:
+  browser`), across sub-agents and nodes, and are replayed with the run. An
+  `approved_by` scope makes the action wait for an approver known to hold it
+  (`sign_assertion(..., scopes=...)`), whose limit is checked when it runs. The
+  agent is told what is out of reach, and an integration the person can never use
+  is shown to it as refused (calling it runs nothing and is recorded), so it says
+  the person may not instead of doing something else in its place. `jarviscore policy scopes` prints who may do what;
+  `jarviscore policy check` validates the section; `jarviscore evidence` shows
+  the scopes each decision was checked against. See
+  [Agents That Act for Your Users](guides/acting-for-your-users.md#4-hold-them-to-your-organisations-scopes).
 - **Evidence per person and per tenant.** `jarviscore evidence acme/u_1` (or
   `acme/` for a tenant) lists each run done for them with every decision and
   approval; `--export DIR` copies those runs with the deployment's head log for
@@ -177,6 +199,12 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Fixed
 
+- **Work for one person inside work for another keeps nothing of the first.**
+  `act_for(bob)` inside work for Ada kept Ada's mandate. Naming a person now
+  replaces the whole principal (person, mandate, scopes).
+- **A mandate is enforced in report mode too.** What a person delegated
+  (`outside-mandate`) was only recorded outside strict mode; like scopes, it now
+  holds whenever control is on.
 - **Review findings on control and evidence.**
     - Code not shipped with JarvisCore (registry, model-written, direct) is never
       taken as doing less than its method: a "read" that POSTs is decided as a write.

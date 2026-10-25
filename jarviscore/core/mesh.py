@@ -1267,7 +1267,7 @@ class Mesh:
                             planning_brief=self.config.get("mesh_planning_brief"),
                         )
                         # Planning is model use for the person the goal is for, too.
-                        with act_for(self._acting_for(source), self._mandate(source)), spending_scope(self._redis_store), \
+                        with act_for(self._acting_for(source), self._mandate(source), self._scopes(source)), spending_scope(self._redis_store), \
                                 workflow_budget_scope(
                             self._redis_store,
                             workflow_id,
@@ -2406,7 +2406,7 @@ class Mesh:
         )
         try:
             try:
-                with act_for(self._acting_for(workflow), self._mandate(workflow)), spending_scope(self._redis_store), \
+                with act_for(self._acting_for(workflow), self._mandate(workflow), self._scopes(workflow)), spending_scope(self._redis_store), \
                         workflow_budget_scope(
                     self._redis_store,
                     workflow_id,
@@ -2531,7 +2531,7 @@ class Mesh:
         lease_lost = asyncio.Event()
 
         async def owned_work():
-            with act_for(self._acting_for(workflow), self._mandate(workflow)), spending_scope(self._redis_store), \
+            with act_for(self._acting_for(workflow), self._mandate(workflow), self._scopes(workflow)), spending_scope(self._redis_store), \
                     in_step(workflow_id, step_id), workflow_budget_scope(
                 self._redis_store,
                 workflow_id,
@@ -2893,6 +2893,13 @@ class Mesh:
         """What the person delegated for this workflow (control.mandate), as registered
         with its goal by trusted application code; never from what agents write."""
         value = (workflow.get("context") or {}).get("mandate")
+        return value if value is not None else None
+
+    @staticmethod
+    def _scopes(workflow: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """What the person may do in their organisation (control.scopes), as registered with
+        the work by trusted application code; never from what agents write."""
+        value = (workflow.get("context") or {}).get("scopes")
         return value if value is not None else None
 
     def _node_can_access_workspace(self, workflow_id: str) -> bool:
@@ -3968,7 +3975,8 @@ def _with_principal(context: Optional[Dict[str, Any]], value: Any) -> Optional[D
     if principal is None:
         return context
     merged = dict(context or {})
-    for key, value in (("acting_for", principal.person), ("mandate", principal.mandate)):
+    for key, value in (("acting_for", principal.person), ("mandate", principal.mandate),
+                       ("scopes", principal.scopes)):
         if value is None:
             continue
         if key in merged and merged[key] != value:

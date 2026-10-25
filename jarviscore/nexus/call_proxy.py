@@ -125,12 +125,15 @@ def _run_name(authority: Optional[Dict[str, Any]]) -> str:
     return f"{workflow}/{step}" if step and not workflow.startswith("process-") else workflow
 
 
-def _provider_call(provider: str, method: str, url: str, authority: Dict[str, Any], grounding=None):
+def _provider_call(provider: str, method: str, url: str, authority: Dict[str, Any], grounding=None,
+                   request_kwargs: Optional[Dict[str, Any]] = None):
+    from dataclasses import replace
+
     from jarviscore.auth.principal import acting_for
     from jarviscore.control.mandate import current as current_mandate
-    from jarviscore.control.policy import ProviderCall
+    from jarviscore.control.policy import ProviderCall, current_policy
 
-    return ProviderCall(
+    call = ProviderCall(
         acting_for=acting_for.get(),
         mandate=current_mandate(),
         provider=provider,
@@ -145,16 +148,41 @@ def _provider_call(provider: str, method: str, url: str, authority: Dict[str, An
         approval=authority.get("approval"),
         grounding=grounding,
     )
+    scopes = current_policy().scopes
+    if scopes is None or not scopes.active:
+        return call
+    return replace(call, scope=_scope_check(scopes, call, url, authority, request_kwargs))
 
 
-def _preview(provider: str, method: str, url: str, authority: Dict[str, Any], grounding) -> None:
+def _scope_check(scopes, call, url: str, authority: Dict[str, Any], request_kwargs):
+    """The person's (and an approver's) organisation scopes, held to the request as it will leave."""
+    from jarviscore.control import scopes as s
+    from jarviscore.control.grounding import request_from
+    from jarviscore.control.operations import describe
+
+    try:
+        request = request_from(call.method, url, request_kwargs or {})
+    except Exception:  # noqa: BLE001 - a request that cannot be read is not one a limit vouches for
+        request = None
+    host, path = describe(url)
+    facts = s.Facts(provider=call.provider, atom=call.atom, effect=call.effect, method=call.method,
+                    host=(request.host if request is not None else host), path=(request.path if request is not None else path))
+    return s.check_call(
+        scopes, facts, request, s.current_person(scopes),
+        s.approver_holder(scopes, authority.get("approver")),
+        preview=isinstance(authority.get("preview"), list),
+    )
+
+
+def _preview(provider: str, method: str, url: str, authority: Dict[str, Any], grounding,
+             request_kwargs: Optional[Dict[str, Any]] = None) -> None:
     """Decide on a change without making it: note the decision for the caller, then hold."""
     from jarviscore.control.operations import describe
     from jarviscore.control.policy import PreviewHeld, current_policy
 
     from jarviscore.evidence.journal import current_journal
 
-    call = _provider_call(provider, method, url, authority, grounding)
+    call = _provider_call(provider, method, url, authority, grounding, request_kwargs)
     decision = current_policy().decide(call)
     host, path = describe(url)
     noted = {
@@ -163,6 +191,7 @@ def _preview(provider: str, method: str, url: str, authority: Dict[str, Any], gr
         "outcome": decision.outcome, "rule": decision.rule, "reason": decision.reason,
         "enforced": decision.enforced,
         "grounding": grounding.record() if grounding is not None else None,
+        **({"scope": call.scope.record()} if call.scope is not None else {}),
     }
     # On record too: a change refused before anyone was asked is evidence of an attempt.
     _record(current_journal(), _run_name(authority), "policy.preview", noted, False)
@@ -170,7 +199,8 @@ def _preview(provider: str, method: str, url: str, authority: Dict[str, Any], gr
     raise PreviewHeld(decision)
 
 
-def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, Any]], grounding=None):
+def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, Any]], grounding=None,
+            request_kwargs: Optional[Dict[str, Any]] = None):
     """Decide on a call before any I/O, and record the decision. Returns (call_id, run, journal)."""
     from jarviscore.control.operations import describe
     from jarviscore.control.policy import PolicyDenied, current_policy
@@ -180,7 +210,7 @@ def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, 
     if policy.mode == "off":
         return None, None, None, False
     authority = authority or {}
-    call = _provider_call(provider, method, url, authority, grounding)
+    call = _provider_call(provider, method, url, authority, grounding, request_kwargs)
     decision = policy.decide(call)
     host, path = describe(url)
     call_id = uuid.uuid4().hex
@@ -206,6 +236,10 @@ def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, 
     }
     if grounding is not None:
         record["grounding"] = grounding.record()
+    if call.scope is not None:
+        record["scope"] = call.scope.record()
+    if not decision.allowed:
+        record["reason"] = decision.reason
     if journal is not None:
         try:
             journal.append(run, "policy.decision", record)
@@ -220,6 +254,24 @@ def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, 
             raise PolicyDenied(decision)
         logger.info("[control] would refuse %s %s%s: %s", call.method, host, path, decision.reason)
     return call_id, run, journal, policy.mode == "strict"
+
+
+def record_refusal(authority: Dict[str, Any], *, provider: str, rule: str, reason: str, scope: str = "") -> None:
+    """Record a call refused before it was built (a capability the person may not use)."""
+    from jarviscore.auth.principal import acting_for
+    from jarviscore.control.policy import current_policy
+    from jarviscore.evidence.journal import current_journal
+
+    if current_policy().mode == "off":
+        return
+    _record(current_journal(), _run_name(authority), "policy.decision", {
+        "call_id": uuid.uuid4().hex, "provider": provider, "atom": authority.get("atom"),
+        "effect": authority.get("effect"), "acting_for": acting_for.get(),
+        "outcome": "deny", "rule": rule, "enforced": True, "reason": reason,
+        **({"scope": {"allowed": False, "requirements": [], "checks": [
+            {"scope": scope, "holder": "person", "subject": acting_for.get(), "held": False, "limits": []}],
+            "reason": reason}} if scope else {}),
+    }, False)
 
 
 def _record(journal, run, kind: str, data: Dict[str, Any], strict: bool) -> Optional[Dict[str, Any]]:
@@ -365,9 +417,9 @@ class NexusCallProxy:
             )
         if isinstance((authority or {}).get("preview"), list) and method.upper() not in ("GET", "HEAD", "OPTIONS"):
             # A preview of an action before a person is asked: decided, never sent.
-            _preview(provider, method, url, authority, grounding)
+            _preview(provider, method, url, authority, grounding, kwargs)
         # Decided before anything leaves this process, including the credential lookup.
-        call_id, run, journal, strict = _decide(provider, method, url, authority, grounding)
+        call_id, run, journal, strict = _decide(provider, method, url, authority, grounding, kwargs)
         headers = _with_idempotency_key(provider, method, headers, authority)
 
         strategy = None

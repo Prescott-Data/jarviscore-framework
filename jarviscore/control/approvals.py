@@ -42,6 +42,8 @@ class Approver:
     roles: FrozenSet[str] = frozenset()
     assurance: str = "unauthenticated"
     authenticated_by: str = ""
+    #: The approver's organisation scopes (control.scopes), from their sign-in.
+    scopes: Mapping[str, Any] = field(default_factory=dict)
 
     def as_record(self) -> Dict[str, Any]:
         return {
@@ -49,7 +51,12 @@ class Approver:
             "approver_roles": sorted(self.roles),
             "assurance": self.assurance,
             "authenticated_by": self.authenticated_by,
+            **({"approver_scopes": dict(self.scopes)} if self.scopes else {}),
         }
+
+    def holder(self) -> Dict[str, Any]:
+        """Who approved, and what they hold, as the broker checks an ``approved_by`` scope."""
+        return {"subject": self.subject, "scopes": dict(self.scopes)}
 
     @classmethod
     def from_record(cls, record: Mapping[str, Any]) -> Optional["Approver"]:
@@ -62,11 +69,18 @@ class Approver:
                 roles = json.loads(roles)
             except ValueError:
                 roles = [roles]
+        scopes = record.get("approver_scopes") or {}
+        if isinstance(scopes, str):
+            try:
+                scopes = json.loads(scopes)
+            except ValueError:
+                scopes = {}
         return cls(
             subject=str(subject),
             roles=frozenset(str(role) for role in roles),
             assurance=str(record.get("assurance") or "unauthenticated"),
             authenticated_by=str(record.get("authenticated_by") or ""),
+            scopes=scopes if isinstance(scopes, dict) else {},
         )
 
 
@@ -79,11 +93,14 @@ class ApprovalRequirement:
     roles: Tuple[str, ...] = ()
     distinct_from: Tuple[str, ...] = ()
     assurance: str = "unauthenticated"
+    #: Scopes the approver must hold (``approved_by`` in control.scopes).
+    scopes: Tuple[str, ...] = ()
 
     def as_record(self) -> Dict[str, Any]:
         return {
             "required": self.required, "rule": self.rule, "roles": list(self.roles),
             "distinct_from": list(self.distinct_from), "assurance": self.assurance,
+            **({"scopes": list(self.scopes)} if self.scopes else {}),
         }
 
     @classmethod
@@ -96,6 +113,7 @@ class ApprovalRequirement:
             roles=tuple(record.get("roles") or ()),
             distinct_from=tuple(record.get("distinct_from") or ()),
             assurance=str(record.get("assurance") or "unauthenticated"),
+            scopes=tuple(record.get("scopes") or ()),
         )
 
 
@@ -123,8 +141,26 @@ def requirement_for(
     effect: str,
     integration_requires: bool,
     rules: Iterable[ApprovalRule] = (),
+    scopes: Any = None,
+    operations: Any = None,
 ) -> ApprovalRequirement:
-    """What this deployment requires before ``atom`` runs: the first matching rule, else the integration's own."""
+    """What this deployment requires before ``atom`` runs: the first matching rule, else the
+    integration's own; and, where a scope requirement names ``approved_by``, an approver
+    who holds that scope, whatever the rest says."""
+    base = _requirement_for(provider, atom, effect, integration_requires, rules)
+    needed = scopes.for_approval(provider, atom, effect, operations) if scopes is not None else ()
+    if not needed:
+        return base
+    from dataclasses import replace
+
+    floor = base.assurance if base.required else "unauthenticated"
+    # A scope is only as good as who is known to hold it: never a bare name.
+    assurance = floor if ASSURANCE.index(floor) >= ASSURANCE.index("asserted") else "asserted"
+    return replace(base, required=True, scopes=needed, assurance=assurance,
+                   rule=base.rule if base.required else f"scope:{','.join(needed)}")
+
+
+def _requirement_for(provider, atom, effect, integration_requires, rules) -> ApprovalRequirement:
     facts = {"provider": provider, "system": provider, "atom": atom, "effect": effect}
     for rule in rules:
         if not rule.applies(facts):
@@ -150,11 +186,13 @@ def check_approver(
     *,
     requester: str = "",
     directory: Optional[Mapping[str, Iterable[str]]] = None,
+    grants: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> Optional[str]:
     """Why ``approver`` may not decide on an action with this requirement, or None when they may."""
     if requirement is None or not requirement.required:
         return None
-    if not (requirement.roles or requirement.distinct_from or requirement.assurance != "unauthenticated"):
+    if not (requirement.roles or requirement.distinct_from or requirement.scopes
+            or requirement.assurance != "unauthenticated"):
         # Nothing is required of the approver beyond deciding: any decision stands.
         return None
     if approver is None or not approver.subject:
@@ -175,6 +213,19 @@ def check_approver(
             )
     if "requester" in requirement.distinct_from and requester and approver.subject == requester:
         return f"{approver.subject!r} asked for this action and may not also approve it."
+    if requirement.scopes:
+        if grants is None:
+            from jarviscore.control.policy import current_policy
+
+            section = current_policy().scopes
+            grants = section.grants if section is not None else {}
+        held = set(approver.scopes or {}) | set((grants or {}).get(approver.subject, {}))
+        missing = [scope for scope in requirement.scopes if scope not in held]
+        if missing:
+            return (
+                f"This action needs an approver who holds {', '.join(missing)}; "
+                f"{approver.subject!r} does not."
+            )
     return None
 
 
@@ -200,6 +251,7 @@ def sign_assertion(
     roles: Iterable[str] = (),
     key_id: str = "default",
     issued_at: Optional[float] = None,
+    scopes: Any = None,
 ) -> str:
     """An approval assertion, for an application's backend to sign after its own sign-in.
 
@@ -212,6 +264,11 @@ def sign_assertion(
         "workflow_id": workflow_id, "action_id": action_id, "binding": binding,
         "iat": int(issued_at if issued_at is not None else time.time()),
     }
+    if scopes is not None:
+        from jarviscore.control.scopes import parse_grant
+
+        # What the approver may do in the organisation, signed with the decision.
+        payload["scopes"] = parse_grant(scopes)
     body = _b64(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     signed = f"{ASSERTION_VERSION}.{body}"
     signature = hmac.new(key.encode("utf-8"), signed.encode("ascii"), hashlib.sha256).digest()
@@ -252,9 +309,16 @@ def verify_assertion(
     age = (now if now is not None else time.time()) - float(payload.get("iat") or 0)
     if age < -60 or age > MAX_ASSERTION_AGE_SECONDS:
         raise ApprovalRefused("The approval assertion is stale or from the future.")
+    from jarviscore.control.scopes import ScopeError, parse_grant
+
+    try:
+        scopes = parse_grant(payload.get("scopes"))
+    except ScopeError as exc:
+        raise ApprovalRefused(f"The approval assertion's scopes cannot be read ({exc}).") from exc
     return Approver(
         subject=str(payload.get("sub") or ""),
         roles=frozenset(str(role) for role in payload.get("roles") or ()),
         assurance="verified",
         authenticated_by=f"assertion:{payload.get('kid') or 'default'}",
+        scopes=scopes,
     )

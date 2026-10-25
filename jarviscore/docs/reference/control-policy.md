@@ -1,12 +1,12 @@
 ---
 icon: material/file-cog
 title: "Control Policy Reference: Every Section, Key and Built-in Rule"
-description: "The complete schema of JarvisCore's control policy file (rules, approvals, principals, grounding, effects), the built-in refusals, the journal's event kinds, and the Python API."
+description: "The complete schema of JarvisCore's control policy file (rules, approvals, principals, grounding, effects, scopes), the built-in refusals, the journal's event kinds, and the Python API."
 ---
 
 # Control Policy Reference
 
-`CONTROL_POLICY_PATH` names one YAML or JSON file with up to five sections. All
+`CONTROL_POLICY_PATH` names one YAML or JSON file with up to six sections (`rules`, `approvals`, `principals`, `grounding`, `effects`, `scopes`). All
 are optional. To adopt it step by step, see [Turning On Control](../guides/control-policy.md);
 for what each part guarantees, [Control and Evidence](../concepts/control-and-evidence.md).
 
@@ -134,16 +134,63 @@ effects:
 
 ---
 
+## `scopes`: what each person may do in your organisation
+
+```yaml
+scopes:
+  require:
+    - name: claim-approval
+      match: {provider: guidewire, method: POST, path: "/claims/{id}/approve"}
+      requires: claims.approve
+      limits:
+        - {field: json.amount, kind: money, at_most: amount}
+    - name: claim-payment
+      match: {provider: guidewire, method: POST, path: "/claims/{id}/payments"}
+      requires: claims.pay
+      approved_by: claims.approve
+      limits:
+        - {field: json.amount, kind: money, at_most: amount}
+    - name: finance-portal
+      match: {sink: browser, target: "finance.acme.com/*"}
+      requires: finance.reports.read
+  grants:
+    acme/carol: {claims.approve: {amount: "10000"}, claims.vet: {}}
+  unattended: {}
+```
+
+| Key | Meaning |
+|---|---|
+| `require[].match` | A provider call (`provider`/`system`, `method`, `host`, `path` with `{variables}`, `atom`, `effect`) or another effect (`sink`, `action`, `target` glob, `origin`, `agent`), not both. Match the operation (`method` and `path`) to hold any code reaching it; `atom` alone holds only that integration |
+| `require[].requires` | The scope the person the work is for must hold |
+| `require[].approved_by` | The scope the approver must hold (provider calls only). The action then always needs an approval from an `asserted` or `verified` approver |
+| `require[].limits` | Each `{field, kind, at_most\|one_of\|equals: <term>}`: the request `field` (`json.*`, `query.*`, `form.*`, `path.<variable>`; effects: `attributes.*`, `target`) compared as `kind` (`money`, `number`, `email`, `iban`, `id`, `text`, `exact`) with the holder's grant term. `at_most` takes `money` or `number` |
+| `grants` | Scopes per person key, for people whose sign-in does not carry them. Your application's `OnBehalfOf(..., scopes=...)` comes first for every scope it names |
+| `unattended` | Scopes work done for no one holds |
+
+A grant is `{scope: {term: value}}` or a list of scope names. A term the
+requirement checks and the grant does not state is refused; `"*"` states no
+limit. Every requirement a call matches must hold. A value the request does not
+carry, or carries in a body that cannot be read, is refused; every item of a list
+is checked. A requirement that cannot be read refuses what it matches (everything,
+when its match cannot be read); a `scopes` section that cannot be read refuses
+everything. `jarviscore policy check` names each problem; `jarviscore policy
+scopes` prints who may do what.
+
+Browser requests are intercepted, in report mode too, wherever a `sink: browser`
+requirement exists, so a refusal stops them. A page's own reads (`fetch`/XHR
+`GET`) are not decided on; its navigations and sends are.
+
 ## Mandate (workflow context, not this file)
 
 What a person delegated travels with the work, registered by your application:
-`execute_goal(..., on_behalf_of=OnBehalfOf(person, mandate={...}))` (or the same
+`execute_goal(..., on_behalf_of=OnBehalfOf(person, mandate={...}, scopes={...}))` (or the same
 `on_behalf_of` on `run_task`, `workflow`, `submit_goal`, `create_chat_router`).
 
 | Key | Values |
 |---|---|
 | `systems` | Providers the work may call |
 | `effects` | Any of `read`, `propose`, `write`, `notify`, `destructive` |
+| `scopes` | Of the person's own scopes, the ones this work may use (narrows, never widens) |
 | `expires_at` | ISO 8601 time with a zone, or epoch seconds |
 
 Unknown keys or malformed values make the mandate unreadable, which refuses every
@@ -151,11 +198,15 @@ call. See [Acting for a person](../concepts/control-and-evidence.md#acting-for-a
 
 ## Built-in refusals
 
-Made in report and strict mode alike; enforced only in strict.
+Made in report and strict mode alike; enforced only in strict, except what a
+person may do (`outside-mandate`, `scope-missing`, `over-scope-limit`), which is
+enforced in report mode too: your application said what the person may do.
 
 | Rule | Refuses | Liftable |
 |---|---|---|
-| `outside-mandate` | A provider call outside what the person delegated (system, effect, expiry) | No |
+| `outside-mandate` | A provider call outside what the person delegated (system, effect, expiry, scopes) | No |
+| `scope-missing` | A call or effect needing a scope the person (or, for `approved_by`, the approver) does not hold, or one a `scopes` section that cannot be read may cover | No |
+| `over-scope-limit` | A request beyond the limit of the holder's scope, or one whose limit cannot be checked | No |
 | `approval-missing` | A gated action reaching the broker without its approval | No |
 | `ungrounded-argument` | A call a `grounding` rule matches whose values are not grounded | No |
 | `mutation-without-atom` | A provider mutation not from an integration | `rules: allow` |
@@ -173,7 +224,7 @@ with every run's latest event registered in `JOURNAL_DIR/heads.jsonl`.
 
 | Kind | Holds |
 |---|---|
-| `policy.decision` | One decision: the call or effect, `outcome`, `rule`, `enforced`, and for grounded calls the checks and the reads cited |
+| `policy.decision` | One decision: the call or effect, `outcome`, `rule`, `enforced`, `acting_for`, the `reason` for a refusal, for grounded calls the checks and the reads cited, and for scoped calls the requirements, each holder, whether they held the scope and each limit's outcome (`scope`; never the values) |
 | `policy.preview` | A decision on a previewed action, before anyone was asked |
 | `effect.attempt` / `effect.outcome` | That it was attempted, and what became of it |
 | `approval.request` / `decision` / `refused` / `claim` / `settle` / `reopened` / `reconciled` | An approval's life |
@@ -189,7 +240,9 @@ strings or credentials.
 | `jarviscore.control.policy.review_journal(root)` | Refusals grouped by rule and target, as `jarviscore policy review` |
 | `jarviscore.control.effects.mediated(Effect(...))` | Decide on and record your own effect ([guide](../guides/control-policy.md#your-own-effects)) |
 | `jarviscore.evidence.journal.verify(root)` | The checks `jarviscore verify` runs |
-| `jarviscore.control.approvals.sign_assertion(...)` | Sign an approval in your backend, for `verified` assurance |
+| `jarviscore.control.approvals.sign_assertion(..., scopes=...)` | Sign an approval in your backend, for `verified` assurance, with the approver's scopes |
+| `jarviscore.OnBehalfOf(person, mandate=..., scopes=...)` | Whom work is for, what they delegated, what they may do |
+| `jarviscore.control.scopes.parse_section(raw)` | The `scopes` section as the deployment reads it |
 
 Settings: `CONTROL_MODE`, `CONTROL_POLICY_PATH`, `JOURNAL_DIR`,
 `APPROVAL_ASSERTION_KEY(S)` ([Configuration](configuration.md)).

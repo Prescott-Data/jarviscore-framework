@@ -174,3 +174,31 @@ async def test_erasing_a_persons_content_keeps_the_journal_verifiable_and_others
     assert verify(root).ok
     assert not (await replay(root, "wf/mine")).reproduced
     assert (await replay(root, "wf/theirs")).reproduced
+
+
+@pytest.mark.asyncio
+async def test_a_run_records_what_the_person_held_and_replays_with_it(journal):
+    from jarviscore.auth import principal
+
+    seen = []
+
+    class Witness(LedgerAgent):
+        def get_system_prompt(self) -> str:
+            seen.append((principal.acting_for.get(), principal.scopes.get(), principal.mandate.get()))
+            return super().get_system_prompt()
+
+    carol = OnBehalfOf.of("acme", "carol", mandate={"systems": ["erp"]},
+                          scopes={"claims.approve": {"amount": "10000"}})
+    with act_for(carol):
+        await Witness(llm_client=ScriptedLLM(SCRIPT)).run(
+            task="Pay invoice INV-7", context={"workflow_id": "wf", "step_id": "pay"})
+    journal_module._journal.close()
+    with open(os.path.join(journal, "runs", "wf_pay.jsonl")) as handle:
+        start = json.loads(handle.readline())["data"]
+    assert start["acting_for"] == "acme/carol" and start["scopes"] and start["mandate"]
+
+    recorded = seen[-1]
+    seen.clear()
+    report = await replay(journal, "wf/pay", factory=lambda agent_id, llm: Witness(llm_client=llm))
+    assert report.reproduced, report.divergence
+    assert seen and seen[-1] == recorded == ("acme/carol", carol.scopes, {"systems": ["erp"]})

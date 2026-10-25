@@ -1157,6 +1157,7 @@ class CoderSandbox:
                             "action_id": grant.get("action_id"),
                             "approval_required": grant.get("approval_required"),
                             "approval": grant.get("approval"),
+                            "approver": grant.get("approver"),
                             # Parent-side list a preview's decisions are noted in.
                             "preview": grant.get("preview"),
                         }

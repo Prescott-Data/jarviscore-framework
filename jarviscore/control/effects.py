@@ -155,6 +155,14 @@ def decide(effect: Effect):
     for rule in policy.effect_rules:
         if rule.decision == "deny" and rule.applies(effect):
             return Decision(False, f"deployment:{rule.name}", f"Deployment rule {rule.name!r} refuses this {effect.sink} effect.", enforced)
+    checked = None
+    if policy.scopes is not None and policy.scopes.active:
+        from jarviscore.control.scopes import check_effect, current_person
+
+        checked = check_effect(policy.scopes, effect, current_person(policy.scopes))
+        if checked is not None and not checked.allowed:
+            # Not liftable, and held in report mode too: the application said what the person may do.
+            return Decision(False, checked.rule, checked.reason, policy.mode != "off", checked)
     refusal = _builtin_refusal(effect)
     if refusal is not None:
         name, reason = refusal
@@ -163,9 +171,9 @@ def decide(effect: Effect):
             None,
         )
         if lifted is None:
-            return Decision(False, name, reason, enforced)
-        return Decision(True, f"deployment:{lifted.name}", f"Allowed by deployment rule {lifted.name!r} over {name}.", enforced)
-    return Decision(True, "within-policy", "", enforced)
+            return Decision(False, name, reason, enforced, checked)
+        return Decision(True, f"deployment:{lifted.name}", f"Allowed by deployment rule {lifted.name!r} over {name}.", enforced, checked)
+    return Decision(True, "within-policy", "", enforced, checked)
 
 
 def content_digest(value: Any) -> Dict[str, Any]:
@@ -233,6 +241,7 @@ class Mediation:
             "rule": decision.rule,
             "enforced": decision.enforced,
             **({"reason": decision.reason} if decision.reason else {}),
+            **({"scope": decision.scope.record()} if getattr(decision, "scope", None) is not None else {}),
         }
         self._append("policy.decision", record, required=True)
         if not decision.allowed:

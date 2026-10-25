@@ -371,3 +371,34 @@ def test_verify_flags_a_call_whose_approval_is_not_in_the_record(tmp_path):
     journal.append("wf/step", "effect.attempt", {"call_id": "c"})
 
     assert any("no approval of that exact action" in p for p in verify(str(tmp_path)).problems)
+
+
+SCOPED = {**POLICY, "scopes": {"require": [{
+    "name": "payments", "match": {"provider": "erp", "atom": "erp_pay_invoice"},
+    "requires": "payments.make", "approved_by": "payments.approve",
+    "limits": [{"field": "json.amount", "kind": "money", "at_most": "amount"}],
+}]}}
+
+
+@pytest.mark.asyncio
+async def test_an_approver_must_hold_the_approved_by_scope_and_the_broker_gets_what_they_hold(deployment):
+    root = deployment(SCOPED)
+    agent, pay = payer()
+    waiting = await ask(pay)
+    assert waiting["typed_outcome"] == "WAITING_FOR_APPROVAL"
+
+    with pytest.raises(ApprovalRefused, match="holds payments.approve"):
+        approval.record_decision(agent.redis_store, "wf", "step", waiting["action_id"], "approve",
+                                 assertion=assertion(waiting, "carol@bank.example"))
+    carol = approval.record_decision(
+        agent.redis_store, "wf", "step", waiting["action_id"], "approve",
+        assertion=assertion(waiting, "carol@bank.example", scopes={"payments.approve": {"amount": "100"}}),
+    )
+    assert carol.scopes == {"payments.approve": {"amount": "100"}}
+
+    assert (await ask(pay))["status"] == "success"
+    sent = agent._tool_execute_code.await_args.kwargs["_approval"]
+    # Whoever approved, and what they hold, goes to the broker, which holds the request to it.
+    assert sent[0] is True and sent[2] == {"subject": "carol@bank.example",
+                                          "scopes": {"payments.approve": {"amount": "100"}}}
+    assert verify(root).ok

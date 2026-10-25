@@ -32,7 +32,7 @@ def test_a_policy_that_reads_as_written_has_no_problems(tmp_path):
     problems, summary = check_policy(write(tmp_path, GOOD))
 
     assert problems == []
-    assert summary == {"rules": 1, "approvals": 1, "principals": 1, "grounding": 1, "effects": 1}
+    assert summary == {"rules": 1, "approvals": 1, "principals": 1, "grounding": 1, "effects": 1, "scopes": 0}
 
 
 @pytest.mark.parametrize("change, problem", [

@@ -160,7 +160,7 @@ An export holds the runs exactly as written, plus the deployment's head log, so
 each run is still checked against what the deployment registered. Runs that also
 worked for someone else are left out. A plain `verify` refuses an export, so a
 whole journal cannot pass as one with runs missing. See
-[Agents That Act for Your Users](../guides/acting-for-your-users.md#6-evidence-per-user-and-per-tenant).
+[Agents That Act for Your Users](../guides/acting-for-your-users.md#7-evidence-per-user-and-per-tenant).
 
 **Not yet detected:** a rewrite of the whole journal, head log included, by
 whoever controls the directory. That needs the head log anchored outside the
@@ -239,8 +239,10 @@ handed over, and every record names them.
 |---|---|
 | Their credential, nobody else's | JarvisCore names the person on every credential request (`X-Nexus-Subject`, with the agent and operation); Nexus releases a credential only for the person whose connection it is. With Nexus `SUBJECT_BINDING=required`, a connection id alone releases nothing. A credential Nexus refuses is not replaced by any other, and one cached for one person is never served to another |
 | Never more than they could do | It is their credential, so the provider holds the agent to that person's own permissions |
-| Within what they delegated | A **mandate** registered with the work narrows it further: the systems, effects and time the person handed over. A call outside it is refused (`outside-mandate`); no deployment rule widens it |
-| On record | Every decision in the journal names the person (`acting_for`) and the mandate's digest; Nexus's audit names the subject, agent and operation of every credential it releases or refuses |
+| Within what they may do in your organisation | Your **scopes**: which operations need which scope (`scopes.require`, matched on the operation, with limits checked on the request as it leaves) and which the person holds (`OnBehalfOf(..., scopes=...)` from your roles). Approving can need its own scope (`approved_by`). A call or browser page beyond them is refused (`scope-missing`, `over-scope-limit`), and what the person can never do is shown to the agent as refused, never run. See [the guide](../guides/acting-for-your-users.md#4-hold-them-to-your-organisations-scopes) |
+| Within what they delegated | A **mandate** registered with the work narrows it further: the systems, effects, scopes and time the person handed over. A call outside it is refused (`outside-mandate`); no deployment rule widens it |
+| On record | Every decision in the journal names the person (`acting_for`), the mandate's digest and the scopes it was checked against; Nexus's audit names the subject, agent and operation of every credential it releases or refuses |
+| In every mode but off | What a person may do (`outside-mandate`, `scope-missing`, `over-scope-limit`) is enforced in report mode too: your application said what they may do |
 
 ```python
 from jarviscore import OnBehalfOf

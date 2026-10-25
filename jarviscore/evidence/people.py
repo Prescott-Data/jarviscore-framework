@@ -62,6 +62,7 @@ def _action(event: Dict[str, Any]) -> Dict[str, Any]:
         "target": data.get("target") or f"{data.get('host', '')}{data.get('path', '')}",
         "outcome": data.get("outcome"), "rule": data.get("rule"), "enforced": data.get("enforced"),
         **({"reason": data["reason"]} if data.get("reason") else {}),
+        **({"scopes": (data.get("scope") or {}).get("requirements") or []} if data.get("scope") else {}),
     }
 
 

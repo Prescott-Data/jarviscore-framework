@@ -148,10 +148,13 @@ class Recorder:
 
             lease = getattr(cognition, "lease", None)
             carries = getattr(agent.llm_client, "carries_native_tools", None)
-            from jarviscore.auth.principal import acting_for
+            from jarviscore.auth.principal import acting_for, mandate, scopes
 
+            held, delegated = scopes.get(), mandate.get()
             self.note("run.start", {
                 "acting_for": acting_for.get(),
+                **({"scopes": self.keep(held)} if held is not None else {}),
+                **({"mandate": self.keep(delegated)} if delegated is not None else {}),
                 "agent_class": f"{type(agent).__module__}.{type(agent).__qualname__}",
                 "agent_id": getattr(agent, "agent_id", None),
                 "role": getattr(agent, "role", None),
@@ -429,7 +432,10 @@ async def replay(root: str, run: str, factory: Optional[Callable[[str, Any], Any
 
         token, replaying = scope.set({"replay": True}), REPLAYING.set(True)
         try:
-            with act_for(start.get("acting_for")):  # the same person the run worked for
+            # The same person the run worked for, with what they held and delegated.
+            held = content(start["scopes"]) if start.get("scopes") else None
+            delegated = content(start["mandate"]) if start.get("mandate") else None
+            with act_for(start.get("acting_for"), delegated, held):
                 output = await agent.run(task=content(start["task"]), context=content(start["context"]),
                                          max_turns=start.get("max_turns") or 15, model=start.get("model"),
                                          cognition=_cognition(start, agent))

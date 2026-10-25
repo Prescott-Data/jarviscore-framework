@@ -129,6 +129,12 @@ def _atom_parameters_schema(atom) -> Dict[str, Any]:
 _EFFECT_REDIRECT_LIMIT = 2
 
 
+def _acting_for_now() -> Optional[str]:
+    from jarviscore.auth.principal import acting_for
+
+    return acting_for.get()
+
+
 class CoderSubAgent(BaseSubAgent):
     """
     Code generation + execution subagent.
@@ -433,6 +439,18 @@ capability; if one fails, report what failed.
                 "A result that depends on live data rests on one of them; the tools this "
                 "run used are recorded with its result."
             )
+            unreachable = getattr(self, "_out_of_reach", None) or {}
+            if unreachable:
+                person = _acting_for_now() or "the person this work is for"
+                first_attempt += (
+                    f"\n\n## OUT OF REACH FOR {person}\n"
+                    "Their organisation does not let them do the following, so no path does it for them:\n"
+                    + "\n".join(f"- {(what or name).split('. ')[0].rstrip('.')} ({name}): needs the scope {scope}"
+                                 for name, (scope, what) in sorted(unreachable.items()))
+                    + "\nIf the task asks for one of these, do not do anything else in its place (no other "
+                    "action that changes something stands in for it). Finish without it and say plainly "
+                    "that this person does not hold the scope and someone who does must do it."
+                )
         return (
             f"{prompt}\n\n"
             "## EXECUTION INTEGRITY\n"
@@ -1365,7 +1383,7 @@ capability; if one fails, report what failed.
                 code_origin = "registry"
             # What this exact code can send, read before it runs; the broker holds every
             # call to it. Parent-side only: none of this reaches the child process.
-            required, binding = kwargs.get("_approval") or (False, None)
+            required, binding, approver = (tuple(kwargs.get("_approval") or ()) + (False, None, None))[:3]
             grant = {
                 "atom": atom.name,
                 "effect": atom.policy.effect,
@@ -1374,6 +1392,8 @@ capability; if one fails, report what failed.
                 # The approval this run of the atom carries, checked by the broker.
                 "approval_required": bool(required),
                 "approval": binding,
+                # Who approved, and what they hold: an approved_by scope is checked on the request.
+                "approver": approver,
                 "preview": kwargs.get("_preview"),
             }
             exec_context["_atom_authority"] = {
@@ -1951,6 +1971,24 @@ capability; if one fails, report what failed.
         self._atoms = {}
         for system in systems:
             self._atoms.update(self._valid_atoms(system))
+        # What the person can never do is shown as refused, never run: an agent that cannot see
+        # the capability it was asked for reaches for the nearest one it can (measured live).
+        self._out_of_reach = {}
+        if self._scopes_active():
+            for name, atom in list(self._atoms.items()):
+                needed = self._scope_out_of_reach(atom, self._atom_source(atom))
+                if needed:
+                    self._out_of_reach[name] = (needed, atom.describe())
+                    del self._atoms[name]
+                    self.register_tool(
+                        name,
+                        self._refused_atom_tool(name, atom, needed),
+                        f"OUT OF REACH for this person (needs the scope {needed}): {atom.describe()} "
+                        "Calling it does nothing and returns the refusal.",
+                        phase="action",
+                        parameters=_atom_parameters_schema(atom),
+                    )
+                    self._atom_tools.append(name)
 
         for name, atom in self._atoms.items():
             self.register_tool(
@@ -1968,6 +2006,51 @@ capability; if one fails, report what failed.
                 "Offering %d capability(ies) across %s: %s",
                 len(self._atom_tools), ", ".join(systems), ", ".join(self._atom_tools),
             )
+
+    @staticmethod
+    def _verified_operations(atom, code: Optional[str], policy) -> Optional[Any]:
+        """The operations ``atom``'s code sends, when all are known; read only where scopes apply."""
+        if policy.scopes is None or not policy.scopes.active or not code:
+            return None
+        from jarviscore.control.operations import read_operations
+
+        contract = read_operations(code, atom.name)
+        return contract.operations if contract.verified else None
+
+    @staticmethod
+    def _scopes_active() -> bool:
+        from jarviscore.control.policy import current_policy
+
+        section = current_policy().scopes
+        return section is not None and section.active
+
+    def _atom_source(self, atom) -> Optional[str]:
+        from jarviscore.execution.atom_contract import shipped_source
+
+        try:
+            registry = getattr(self, "code_registry", None)
+            return (registry.get_function_code(atom.name) if registry is not None else None) or shipped_source(atom)
+        except Exception:  # noqa: BLE001 - unknown operations leave the atom offered
+            return None
+
+    @staticmethod
+    def _scope_out_of_reach(atom, code: Optional[str] = None) -> Optional[str]:
+        """The scope ``atom`` always needs that the person this work is for does not hold."""
+        from jarviscore.control.policy import current_policy
+
+        section = current_policy().scopes
+        if section is None or not section.active:
+            return None
+        from jarviscore.control.scopes import current_person, out_of_reach
+
+        operations = None
+        if code:
+            from jarviscore.control.operations import read_operations
+
+            contract = read_operations(code, atom.name)
+            operations = contract.operations if contract.verified else None
+        return out_of_reach(section, current_person(section), atom.system, atom.name,
+                            atom.policy.effect, operations)
 
     def _registered_atom_names(self, system: str) -> List[str]:
         """Callable atoms the registry holds for a system; provider access goes through them."""
@@ -1994,6 +2077,8 @@ capability; if one fails, report what failed.
         code = self.code_registry.get_function_code(name) if self.code_registry else None
         atom = read_contract(code or "", system=system, expected_name=name).atom
         if atom is None:
+            return
+        if self._scopes_active() and self._scope_out_of_reach(atom, code):
             return
         if not hasattr(self, "_atoms"):
             self._atoms = {}
@@ -2248,6 +2333,27 @@ capability; if one fails, report what failed.
 
         return request_access
 
+    def _refused_atom_tool(self, name: str, atom, scope: str):
+        """A capability the person may not use: refused and recorded, never run."""
+        async def call(**params):
+            from jarviscore.nexus.call_proxy import record_refusal
+
+            person = _acting_for_now() or "work done for no one"
+            reason = (f"Refused before anything reached {atom.system}: {person} does not hold the "
+                      f"scope {scope}, which {name} needs. Nothing was done.")
+            record_refusal(
+                {"workflow_id": self._run_context.get("workflow_id"), "step_id": self._run_context.get("step_id"),
+                 "atom": name, "effect": atom.policy.effect},
+                provider=atom.system, rule="scope-missing", reason=reason, scope=scope,
+            )
+            return {
+                "status": "error", "semantic_error": "SCOPE_MISSING", "performed": False,
+                "error": (f"{reason} Do not do anything else in its place; tell the person that "
+                          f"someone who holds {scope} must do it."),
+            }
+        call.__name__ = name
+        return call
+
     def _atom_tool(self, name: str):
         async def call(**params):
             from jarviscore.execution.atom_contract import invocation, shipped_source
@@ -2286,6 +2392,7 @@ capability; if one fails, report what failed.
             requirement = requirement_for(
                 provider=atom.system, atom=name, effect=atom.policy.effect,
                 integration_requires=atom.policy.requires_approval, rules=policy.approvals,
+                scopes=policy.scopes, operations=self._verified_operations(atom, code, policy),
             )
             pending = HITLAction(
                 action_id=action_id,
@@ -2360,7 +2467,14 @@ capability; if one fails, report what failed.
                 description=f"{name} via {atom.system}",
                 _internal_atom=(atom, action_id),
                 _shipped_atom=(atom, params) if shipped_source(atom) == code else None,
-                _approval=(requirement.required, pending.binding_digest() if pending is not None else None),
+                _approval=(
+                    requirement.required,
+                    pending.binding_digest() if pending is not None else None,
+                    approval.approver_of(
+                        self.redis_store, self._run_context.get("workflow_id"),
+                        self._run_context.get("step_id"), action_id,
+                    ) if pending is not None else None,
+                ),
             )
             self._record_atom_outcome(name, result, params=params)
             if (

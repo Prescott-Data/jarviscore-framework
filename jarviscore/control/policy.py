@@ -82,6 +82,8 @@ class ProviderCall:
     #: The person the work acts for, and what they delegated (control.mandate).
     acting_for: Optional[str] = None
     mandate: Any = None
+    #: The person's (and an approver's) organisation scopes, checked (control.scopes).
+    scope: Any = None
 
     @property
     def effect(self) -> str:
@@ -106,6 +108,8 @@ class Decision:
     rule: str
     reason: str
     enforced: bool
+    #: The scope check behind it, for effects other than provider calls (control.scopes).
+    scope: Any = None
 
     @property
     def outcome(self) -> str:
@@ -149,10 +153,14 @@ class ControlPolicy:
     grounding: Tuple[Any, ...] = ()
     #: Rules on effects other than provider calls (control.effects).
     effect_rules: Tuple[Any, ...] = ()
+    #: Your organisation's scopes: which operations need which (control.scopes).
+    scopes: Any = None
     #: Digest of the policy file, recorded with every decision made under it.
     digest: str = ""
 
     def decide(self, call: ProviderCall) -> Decision:
+        from jarviscore.control.scopes import PERSONAL_RULES
+
         enforced = self.mode == "strict"
         for rule in self.rules:
             if rule.decision == "deny" and rule.applies(call):
@@ -165,7 +173,8 @@ class ControlPolicy:
                 None,
             )
             if lifted is None:
-                return Decision(False, rule, reason, enforced)
+                # What a person may do holds whenever control is on: the application said so.
+                return Decision(False, rule, reason, enforced or (rule in PERSONAL_RULES and self.mode != "off"))
             return Decision(True, f"deployment:{lifted.name}", f"Allowed by deployment rule {lifted.name!r} over {rule}.", enforced)
         return Decision(True, "within-policy", "", enforced)
 
@@ -183,6 +192,9 @@ def _builtin_refusal(call: ProviderCall) -> Optional[Tuple[str, str]]:
         outside = call.mandate.refusal(call.provider, call.effect)
         if outside:
             return ("outside-mandate", outside)
+    if call.scope is not None and not call.scope.allowed:
+        # Not liftable: no deployment rule gives a person a scope they do not hold.
+        return (call.scope.rule, call.scope.reason)
     if call.approval_required and not call.approval:
         return (
             "approval-missing",
@@ -270,14 +282,19 @@ def current_policy() -> ControlPolicy:
     principals: Dict[str, Tuple[str, ...]] = {}
     grounding: List[Any] = []
     effect_rules: Tuple[Any, ...] = ()
+    from jarviscore.control.scopes import Scopes
+
+    scopes = Scopes()
     digest = ""
     if path:
         rules, approvals, principals, digest = _load_document(path)
         grounding = _load_grounding(path)
         effect_rules = _load_effect_rules(path, broken=any(r.name == "unreadable-policy" for r in rules))
+        scopes = _load_scopes(path)
     policy = ControlPolicy(
         mode=mode, rules=tuple(rules), approvals=tuple(approvals),
-        principals=principals, grounding=tuple(grounding), effect_rules=effect_rules, digest=digest,
+        principals=principals, grounding=tuple(grounding), effect_rules=effect_rules,
+        scopes=scopes, digest=digest,
     )
     _cached = (key, policy)
     return policy
@@ -304,6 +321,27 @@ def _load_effect_rules(path: str, broken: bool) -> Tuple[Any, ...]:
     if entries is not None and not isinstance(entries, list):
         return (EffectRule(name="unreadable-effects", decision="deny"),)
     return parse_rules(entries)
+
+
+def _load_scopes(path: str):
+    """The ``scopes:`` section; one that cannot be read refuses whatever may need a scope."""
+    from jarviscore.control.scopes import Scopes, parse_section
+
+    try:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8")
+        data = json.loads(text) if path.endswith(".json") else __import__("yaml").safe_load(text)
+        raw = (data or {}).get("scopes") if isinstance(data, dict) else None
+    except Exception:  # noqa: BLE001 - _load_document already refuses every call
+        return Scopes()
+    section = parse_section(raw)
+    for problem in section.problems:
+        logger.error("Control policy scopes: %s; whatever may need a scope is refused.", problem)
+    for requirement in section.require:
+        if requirement.invalid:
+            logger.error("Scope requirement %s is invalid (%s); calls it matches are refused.",
+                         requirement.name, requirement.invalid)
+    return section
 
 
 def _load_grounding(path: str) -> List[Any]:
@@ -388,7 +426,7 @@ def _load_document(path: str):
     return rules, approvals, principals, digest
 
 
-_SECTIONS = {"rules", "approvals", "principals", "grounding", "effects"}
+_SECTIONS = {"rules", "approvals", "principals", "grounding", "effects", "scopes"}
 _RULE_MATCH = {"provider", "system", "atom", "effect", "method", "code_origin", "verified"}
 _APPROVAL_KEYS = {"name", "match", "require", "roles", "distinct_from", "assurance"}
 _APPROVAL_MATCH = {"provider", "system", "atom", "effect"}
@@ -445,6 +483,15 @@ def check_policy(path: str) -> Tuple[List[str], Dict[str, Any]]:
         grounding.append(rule)
         if rule.invalid:
             problems.append(f"grounding: {rule.name!r} cannot be read ({rule.invalid}); the calls it matches are refused.")
+    from jarviscore.control.scopes import parse_section
+
+    scopes = parse_section(data.get("scopes"))
+    for problem in scopes.problems:
+        problems.append(f"scopes: {problem}; whatever may need a scope would be refused.")
+    for requirement in scopes.require:
+        if requirement.invalid:
+            where = "every call and effect" if not requirement.match else "the calls it matches"
+            problems.append(f"scopes: {requirement.name!r} cannot be read ({requirement.invalid}); {where} would be refused.")
     effect_rules = parse_rules(data.get("effects") or [])
     for rule in effect_rules:
         if rule.name.endswith("(unreadable)"):
@@ -458,6 +505,7 @@ def check_policy(path: str) -> Tuple[List[str], Dict[str, Any]]:
         "principals": len(data.get("principals") or {}),
         "grounding": len(grounding),
         "effects": len(effect_rules),
+        "scopes": len(scopes.require),
     }
     return problems, summary
 
@@ -473,6 +521,9 @@ REMEDIES = {
     "outside-contract": "Model-written code sent an operation its own code does not contain.",
     "unverified-model-code": "Model-written code mutating where its operations cannot be read; register a reviewed integration.",
     "unapproved-model-effect": "Code the model wrote may not act without a person's approval of that exact action.",
+    "scope-missing": "The person the work was for (or its approver) does not hold the scope this operation requires. Grant it in your application (OnBehalfOf scopes) or scopes.grants, if they should.",
+    "over-scope-limit": "The request goes beyond the limit of the person's (or approver's) scope, or the grant does not state that limit.",
+    "outside-mandate": "The person did not delegate this for the work; widen the mandate the application registers, if they should.",
 }
 
 

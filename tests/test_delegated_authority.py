@@ -35,7 +35,7 @@ def test_a_mandate_holds_work_to_the_systems_effects_and_time_delegated():
 
 
 @pytest.mark.parametrize("raw", [
-    "everything", {"systems": "erp"}, {"effects": ["delete"]}, {"scopes": ["x"]}, {"expires_at": "tomorrow"},
+    "everything", {"systems": "erp"}, {"effects": ["delete"]}, {"budgets": ["x"]}, {"scopes": "claims.vet"}, {"expires_at": "tomorrow"},
     {"expires_at": "2099-01-01T00:00:00"},
 ])
 def test_a_mandate_that_cannot_be_read_refuses_everything(raw):

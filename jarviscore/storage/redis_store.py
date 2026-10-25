@@ -3172,7 +3172,7 @@ class RedisContextStore:
             "status": HITLStatus.pending.value, "reopened_because": reason,
         })
         self._redis.hdel(key, "decision", "resolved_by", "responder", "approver",
-                         "approver_roles", "assurance", "authenticated_by", "resolved_at")
+                         "approver_roles", "approver_scopes", "assurance", "authenticated_by", "resolved_at")
 
     def settle_hitl_action(self, workflow_id: str, step_id: str,
                            action_id: str, outcome: Dict[str, Any]) -> None:

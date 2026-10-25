@@ -1,6 +1,6 @@
 ---
 icon: material/account-key
-title: "Agents That Act for Your Users: Tenants, Consent, Mandates and Evidence"
+title: "Agents That Act for Your Users: Tenants, Consent, Scopes, Mandates and Evidence"
 description: "How to run JarvisCore agents on behalf of your application's own users and tenants: whom work is for, connecting each user's accounts, limiting what they delegate, approvals from your sign-in, and per-tenant evidence for their auditors."
 ---
 
@@ -12,7 +12,9 @@ JarvisCore, so that an agent working for one of your users:
 
 - uses **that user's own accounts** (their Salesforce, their Gmail), never
   another user's and never a shared service account;
-- does **only what they delegated** for this work;
+- does **only what they may do in your organisation** (your scopes: approve
+  claims up to their limit, read financial reports) and **only what they
+  delegated** for this work;
 - leaves a record that **names them**, which you can hand to their auditor.
 
 You keep user management. JarvisCore never authenticates your users; it acts for
@@ -26,8 +28,9 @@ whoever your application says the work is for.
 |---|---|
 | An internal tool, a script, one team | Nothing on this page. Work runs as the deployment's own user (`NEXUS_USER_ID`). |
 | A product with signed-in users, each connecting their own accounts | [Name whom the work is for](#1-name-whom-the-work-is-for), [connect their accounts](#2-connect-each-users-accounts), [turn on subject binding](#3-make-nexus-hold-you-to-it) |
-| A multi-tenant SaaS | All of the above with tenant-qualified people (`OnBehalfOf.of(tenant, user)`), plus [per-tenant evidence](#6-evidence-per-user-and-per-tenant) |
-| Agents your users' admins configure | Also [mandates from your roles](#4-limit-what-they-delegated) and [approvals from your sign-in](#5-approvals-from-your-sign-in) |
+| A multi-tenant SaaS | All of the above with tenant-qualified people (`OnBehalfOf.of(tenant, user)`), plus [per-tenant evidence](#7-evidence-per-user-and-per-tenant) |
+| Teams where only some people may do some things (approve claims, read financial reports, file a SAR) | Also [your organisation's scopes](#4-hold-them-to-your-organisations-scopes) |
+| Agents your users' admins configure | Also [mandates from your roles](#5-limit-what-they-delegated-for-this-work) and [approvals from your sign-in](#6-approvals-from-your-sign-in) |
 
 ---
 
@@ -50,7 +53,7 @@ workflow_id = await mesh.submit_goal("Prepare the board pack", on_behalf_of=user
 person key string. For the length of the work it decides:
 
 - whose credentials every provider call uses;
-- what the work may do (its [mandate](#4-limit-what-they-delegated));
+- what the work may do (their [scopes](#4-hold-them-to-your-organisations-scopes) and its [mandate](#5-limit-what-they-delegated-for-this-work));
 - whom every journal record names (`acting_for`).
 
 It holds for every step, every sub-agent and every peer on any node of the mesh.
@@ -141,28 +144,136 @@ runtime, and authenticate users in your application, as above.
 
 ---
 
-## 4. Limit what they delegated
+## 4. Hold them to your organisation's scopes
 
-A user's credential already limits the agent to what that user may do. A
-**mandate** narrows it to what they handed over for this piece of work: which
-systems, which effects, until when.
+A provider's own scopes (`read`, `write`) say what a credential can reach. They
+cannot say that only Carol may approve claims, and only up to 10,000; that
+suspicious-activity reports go only to the MLRO; that only finance opens
+financial reports. Those are **your organisation's scopes**, you define them, and
+an agent working for a person holds exactly that person's.
+
+**Your application says what each person holds**, from its own roles or identity
+provider:
+
+```python
+carol = OnBehalfOf.of("acme", "carol", scopes={
+    "claims.vet": {},
+    "claims.approve": {"amount": "10000"},             # a level: up to 10,000
+    "fincrime.sar.send": {"recipients": ["mlro@acme.com"]},
+})
+await mesh.execute_goal("Settle the claims in today's queue", on_behalf_of=carol)
+```
+
+**Your policy file says which operations need which scope**, and the limits:
+
+```yaml title="control-policy.yaml"
+scopes:
+  require:
+    - name: claim-approval
+      match: {provider: guidewire, method: POST, path: "/claims/{id}/approve"}
+      requires: claims.approve
+      limits:
+        - {field: json.amount, kind: money, at_most: amount}
+    - name: sar-recipients
+      match: {provider: casework, method: POST, path: "/sars/{id}/send"}
+      requires: fincrime.sar.send
+      limits:
+        - {field: json.to, kind: email, one_of: recipients}
+    - name: financial-reports
+      match: {provider: erp, method: GET, path: "/reports/financial/{id}"}
+      requires: finance.reports.read
+    - name: finance-portal                   # the same, in a browser
+      match: {sink: browser, target: "finance.acme.com/*"}
+      requires: finance.reports.read
+```
+
+Then, for work done for Carol: a 4,000 claim is approved; a 40,000 claim is
+refused (`over-scope-limit`); a SAR to anyone but the MLRO is refused. For Dave,
+who holds only `claims.vet`, approving any claim is refused (`scope-missing`).
+
+**The answer is no, every time:**
+
+- **In report mode too.** Your application said what the person may do, so a
+  scope is never only reported. (`CONTROL_MODE=off` switches all control off.)
+- **Whatever code tries.** Match on the operation (`method` and `path`), and an
+  integration, code the model wrote, or your own client reaching it are all held.
+  `atom:` alone holds only that integration; `jarviscore policy scopes` flags it.
+- **Fail closed.** A grant that does not state a limit the requirement checks is
+  refused; `"*"` states that there is none. A value the request does not carry, or
+  carries where it cannot be read, is refused. Every item of a list is checked.
+- **Checked on what leaves.** Limits are read from the request as it is sent, with
+  typed comparison (money as decimals, email by domain). Add a
+  [grounding rule](../concepts/control-and-evidence.md#grounding) on the same
+  operation, and the amount must also be the claims system's own figure, so an
+  agent cannot understate it to get under the limit.
+- **No deployment rule lifts it**, and the agent never holds more than the person:
+  a [mandate](#5-limit-what-they-delegated-for-this-work) can narrow scopes for one
+  piece of work (`"scopes": ["claims.vet"]`), never widen them.
+
+**Doing and authorising are different scopes.** `approved_by` requires that
+whoever approves holds a scope, within its limits for this exact request:
+
+```yaml
+    - name: claim-payment
+      match: {provider: guidewire, method: POST, path: "/claims/{id}/payments"}
+      requires: claims.pay              # the person the agent works for
+      approved_by: claims.approve       # whoever approves it
+      limits:
+        - {field: json.amount, kind: money, at_most: amount}
+```
+
+Such an action always waits for an approval, whatever the `approvals:` rules
+say, and only an approver known to hold the scope may give it: one your backend
+signs with `sign_assertion(..., scopes=...)`, or an `Approver(..., scopes=...)`
+your code builds (a bare name is refused). The approver's limit is checked
+against the request when the action runs.
+
+**People without your sign-in** (rooms, people peers) take their scopes from the
+policy file; your application's grant comes first for any scope it names:
+
+```yaml
+scopes:
+  grants:
+    acme/carol: {claims.approve: {amount: "10000"}}
+  unattended: {}       # what work done for no one holds
+```
+
+The agent is told what is out of reach. An integration every one of whose
+operations needs a scope the person lacks is shown to it as refused: calling it
+runs nothing, reaches nothing, and returns the refusal, which is recorded. So
+the agent says the person may not, rather than reaching for the nearest thing
+it can do (an agent that could not see "approve" was seen raising a payment
+instead). Every decision records the
+requirements and limits it was checked against (never the values), and
+`jarviscore evidence` shows them. `jarviscore policy scopes` prints who may do
+what, for you and your auditors.
+
+---
+
+## 5. Limit what they delegated for this work
+
+A user's credential and scopes already limit the agent to what that user may do.
+A **mandate** narrows it to what they handed over for this piece of work: which
+systems, which effects, which of their scopes, until when.
 
 ```python
 user = OnBehalfOf.of(tenant, user_id, mandate={
     "systems": ["salesforce", "gmail"],
     "effects": ["read", "propose"],          # read, propose, write, notify, destructive
+    "scopes": ["claims.vet"],                # of their scopes, these only
     "expires_at": "2026-11-01T00:00:00Z",
 })
 ```
 
 Derive it from your own roles. A viewer's agent gets `["read"]`; an admin's may
-`write`. A call outside the mandate is refused (`outside-mandate`), recorded,
-and never lifted by a deployment rule. A mandate that cannot be read refuses
-everything. See [Control and Evidence](../concepts/control-and-evidence.md#acting-for-a-person).
+`write`. A call outside the mandate is refused (`outside-mandate`), in report
+mode as in strict, recorded, and never lifted by a deployment rule. A mandate
+that cannot be read refuses everything. See
+[Control and Evidence](../concepts/control-and-evidence.md#acting-for-a-person).
 
 ---
 
-## 5. Approvals from your sign-in
+## 6. Approvals from your sign-in
 
 When an action needs a person's approval, your backend signs the approval after
 your own sign-in, over the exact action. JarvisCore checks the signature and
@@ -171,17 +282,21 @@ your institution's approval rules:
 ```python
 from jarviscore.control.approvals import sign_assertion
 
-token = sign_assertion(APPROVAL_ASSERTION_KEY, subject=session.user_id, roles=session.roles,
+approver = OnBehalfOf.of(session.tenant_id, session.user_id)
+token = sign_assertion(APPROVAL_ASSERTION_KEY, subject=approver.person, roles=session.roles,
+                       scopes=session.scopes,          # for approved_by scopes
                        decision="approved", workflow_id=w["workflow_id"],
                        action_id=w["action_id"], binding=w["binding"])
 await mesh.resolve_hitl(w["workflow_id"], w["action_id"], decision="approved", assertion=token)
 ```
 
-See [HITL: approving consequential actions](hitl.md#approving-an-agents-consequential-actions).
+Use the approver's person key (`OnBehalfOf.of(tenant, user).person`) as the
+subject, so `grants` and the record name them as everywhere else. See
+[HITL: approving consequential actions](hitl.md#approving-an-agents-consequential-actions).
 
 ---
 
-## 6. Evidence per user and per tenant
+## 7. Evidence per user and per tenant
 
 Everything an agent did for a user is in the journal under their name. Ask for
 one user, or a whole tenant (a key ending in `/`):
@@ -242,6 +357,8 @@ erased anyway.
 - [ ] `create_chat_router(..., on_behalf_of=...)` if you expose chat.
 - [ ] Each user connects their own accounts (`mesh.connect`); no shared service credentials for user work.
 - [ ] Nexus broker runs with `SUBJECT_BINDING=required`.
+- [ ] What only some people may do is a scope: required in `scopes.require` (matched on the operation), granted on `OnBehalfOf(..., scopes=...)` from your roles.
+- [ ] `jarviscore policy check` and `jarviscore policy scopes` read your policy as you meant it.
 - [ ] Mandates come from your roles.
-- [ ] Approvals are signed by your backend (`APPROVAL_ASSERTION_KEY`).
+- [ ] Approvals are signed by your backend (`APPROVAL_ASSERTION_KEY`), with the approver's scopes where `approved_by` asks for them.
 - [ ] You know how to answer "what did the agent do for us?" (`jarviscore evidence acme/ --export`).

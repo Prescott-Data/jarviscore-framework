@@ -8,6 +8,7 @@ over for this work:
     mandate:
       systems: [erp, gmail]          # providers the work may call
       effects: [read, write]         # read, propose, write, notify, destructive
+      scopes: [claims.vet]           # of the person's own scopes (control.scopes), these only
       expires_at: "2026-11-01T00:00:00Z"
 
 It is registered with the workflow by trusted application code (the caller's
@@ -33,6 +34,8 @@ class Mandate:
     systems: Optional[FrozenSet[str]] = None
     effects: Optional[FrozenSet[str]] = None
     expires_at: Optional[float] = None
+    #: Of the person's own scopes (control.scopes), the ones this work may use.
+    scopes: Optional[FrozenSet[str]] = None
     digest: str = ""
     #: Why the mandate could not be read; an unreadable mandate refuses every call.
     invalid: str = ""
@@ -76,7 +79,7 @@ def parse(raw: Any) -> Optional[Mandate]:
     try:
         if not isinstance(raw, dict):
             raise ValueError("a mandate is a mapping")
-        unknown = set(raw) - {"systems", "effects", "expires_at"}
+        unknown = set(raw) - {"systems", "effects", "expires_at", "scopes"}
         if unknown:
             raise ValueError(f"unknown keys {sorted(unknown)}")
         systems = raw.get("systems")
@@ -86,7 +89,11 @@ def parse(raw: Any) -> Optional[Mandate]:
         if effects is not None:
             if not (isinstance(effects, list) and all(e in EFFECTS for e in effects)):
                 raise ValueError(f"effects is a list of {', '.join(EFFECTS)}")
+        narrowed = raw.get("scopes")
+        if narrowed is not None and not (isinstance(narrowed, list) and all(isinstance(n, str) for n in narrowed)):
+            raise ValueError("scopes is a list of scope names")
         return Mandate(
+            scopes=frozenset(narrowed) if narrowed is not None else None,
             systems=frozenset(s.lower() for s in systems) if systems is not None else None,
             effects=frozenset(effects) if effects is not None else None,
             expires_at=_instant(raw["expires_at"]) if raw.get("expires_at") is not None else None,

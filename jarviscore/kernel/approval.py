@@ -213,6 +213,18 @@ def gate(
     return None
 
 
+def approver_of(store, workflow_id: str, step_id: str, action_id: str) -> Optional[dict[str, Any]]:
+    """Who approved the action, with the scopes they hold, as the broker checks them; or None."""
+    from jarviscore.control.approvals import Approver
+
+    try:
+        record = store.get_hitl_request(workflow_id, step_id, action_id) if store is not None else None
+    except Exception:  # noqa: BLE001 - no approver known: an approved_by scope then refuses
+        return None
+    approver = Approver.from_record(record) if isinstance(record, dict) else None
+    return approver.holder() if approver is not None else None
+
+
 def _unknown(action: HITLAction, workflow_id: str, step_id: str) -> dict[str, Any]:
     return {
         "status": "error",

@@ -82,7 +82,10 @@ def main() -> None:
             state = "refused" if d["outcome"] == "deny" and d["enforced"] else (
                 "would refuse" if d["outcome"] == "deny" else "allowed")
             print(f"    {d['at']}  {state:<12} {d['sink']:<9} {d['action'] or '':<8} {d['target']}"
-                  + (f"  [{d['rule']}]" if d["rule"] else ""))
+                  + (f"  [{d['rule']}]" if d["rule"] else "")
+                  + (f"  scopes: {', '.join(d['scopes'])}" if d.get("scopes") else ""))
+            if d.get("reason") and d["outcome"] == "deny":
+                print(f"        {d['reason']}")
         for a in run["approvals"]:
             print(f"    {a['at']}  {a['kind']:<20} {a['decision'] or ''} {a['by'] or ''}")
     print(f"\n{len(runs)} run(s), {sum(len(r['decisions']) for r in runs)} decision(s), "

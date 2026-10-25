@@ -17,7 +17,7 @@ Usage:
     jarviscore inspect                       # List recorded runs
     jarviscore inspect <workflow_id>         # Timeline for one run
     jarviscore verify [journal_dir]          # Check the journal of decisions and effects
-    jarviscore policy check|review           # Check a control policy; review what strict mode refuses
+    jarviscore policy check|review|scopes    # Check a control policy; review refusals; who may do what
     jarviscore replay [journal_dir] [run]    # Re-simulate recorded runs from the journal
     jarviscore evidence acme/u_1 [--export DIR]  # What agents did for a person (or acme/ for a tenant)
     jarviscore human join alice --capabilities review --seed HOST:PORT
@@ -39,7 +39,7 @@ def main():
         print("  atom       - Validate, test, and list integration atoms")
         print("  inspect    - Read recorded traces: what did my agents do?")
         print("  verify     - Check the journal: every record intact, every effect decided")
-        print("  policy     - Check a control policy file; review what strict mode would refuse")
+        print("  policy     - Check a control policy file; review what strict mode would refuse; who may do what")
         print("  replay     - Re-simulate recorded agent runs from the journal, every effect stubbed")
         print("  evidence   - What agents did for a person or tenant; export it for their auditor")
         print("  human      - Join the mesh as a person (join, inbox, answer)")

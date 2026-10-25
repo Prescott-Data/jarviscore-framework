@@ -24,7 +24,7 @@ Commands:
   atom        Validate, test, and list integration atoms
   inspect     Read recorded traces from past runs
   verify      Check the journal of decisions and effects
-  policy      Check a control policy file; review what strict mode would refuse
+  policy      Check a control policy file; review what strict mode would refuse; who may do what
   replay      Re-simulate recorded agent runs from the journal, every effect stubbed
   evidence    What agents did for a person or tenant; export it for their auditor
   human       Join the mesh as a person
@@ -622,7 +622,7 @@ jarviscore evidence acme/u_123 --erase --yes         # erase it
 | `--json` | JSON output |
 
 Exit status: `0`, or `2` when there is no journal or nothing was done for them.
-See [Agents That Act for Your Users](../guides/acting-for-your-users.md#6-evidence-per-user-and-per-tenant).
+See [Agents That Act for Your Users](../guides/acting-for-your-users.md#7-evidence-per-user-and-per-tenant).
 
 ---
 
@@ -639,6 +639,9 @@ jarviscore policy check control-policy.yaml
 # with what to do about each (default: JOURNAL_DIR)
 jarviscore policy review
 
+# Who may do what: each operation's scope and limits, and the grants on file
+jarviscore policy scopes control-policy.yaml
+
 # Either as JSON
 jarviscore policy check control-policy.yaml --json
 ```
@@ -647,8 +650,12 @@ jarviscore policy check control-policy.yaml --json
 section, a match key a rule can never meet, a grounding requirement that refers
 to nothing bound, an unreadable `effects` rule), and says whether this host can
 confine the sandbox, which strict mode needs. Exit status: `0` every rule reads
-as written, `1` problems found, `2` no policy file. `review` exits `0`. See
-[Turning On Control](../guides/control-policy.md).
+as written, `1` problems found, `2` no policy file. `review` exits `0`. `scopes`
+lists each scope requirement (what it matches, who must hold which scope, its
+limits), the grants on file and what unattended work holds, and notes a
+requirement matched only by integration name; it exits `1` when any cannot be
+read. See [Turning On Control](../guides/control-policy.md) and
+[your organisation's scopes](../guides/acting-for-your-users.md#4-hold-them-to-your-organisations-scopes).
 
 ---
 

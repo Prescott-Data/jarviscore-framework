@@ -338,6 +338,11 @@ await mesh.resolve_hitl(waiting["workflow_id"], waiting["action_id"],
                         decision="approved", assertion=token)
 ```
 
+Where an action's [scope requirement](acting-for-your-users.md#4-hold-them-to-your-organisations-scopes)
+names `approved_by`, pass the approver's scopes too (`sign_assertion(..., scopes=...)`):
+only someone who holds that scope may approve, and their limit is checked against
+the request when the action runs.
+
 An approval the policy does not accept raises `ApprovalRefused` and is recorded;
 anyone may decline. The approver is checked again when the action is about to
 run, under the policy in force then: if it was tightened since, the action goes

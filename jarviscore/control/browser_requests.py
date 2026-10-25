@@ -165,6 +165,19 @@ class RequestBroker:
         mediation.__exit__(None, None, None)
 
 
+def _scoped(policy) -> bool:
+    scopes = getattr(policy, "scopes", None)
+    if scopes is None or not scopes.active:
+        return False
+    for requirement in scopes.require:
+        if not requirement.match:
+            return True  # an unreadable requirement refuses everything, browser included
+        sink = dict(requirement.match).get("sink")
+        if requirement.on_effects and (sink is None or "browser" in (sink if isinstance(sink, list) else [sink])):
+            return True
+    return bool(scopes.problems)
+
+
 async def attach(context, scope: Optional[Dict[str, Any]] = None) -> Optional[RequestBroker]:
     """Decide on and record what pages in ``context`` send, as the current mode says."""
     from jarviscore.control.policy import current_policy
@@ -178,7 +191,8 @@ async def attach(context, scope: Optional[Dict[str, Any]] = None) -> Optional[Re
         return existing
     broker = RequestBroker(scope or effects.scope.get())
     context._jc_request_broker = broker
-    if policy.mode == "strict":
+    if policy.mode == "strict" or _scoped(policy):
+        # Intercepted where a refusal must hold: strict mode, or a scope this browser's work may need.
         await context.route("**/*", broker.route)
     else:
         context.on("request", broker.observe)

@@ -134,7 +134,7 @@ def create_chat_router(
 
         context: Dict[str, Any] = dict(req.context or {})
         # Whom the work is for comes from the application's authentication, never the client.
-        for authority in ("acting_for", "mandate"):
+        for authority in ("acting_for", "mandate", "scopes"):
             context.pop(authority, None)
         context["workflow_id"] = workflow_id
         context["step_id"] = step_id

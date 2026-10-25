@@ -128,7 +128,8 @@ class Kernel:
         self.seen = []
 
     async def execute(self, task, system_prompt, context, agent_id):
-        self.seen.append((principal.acting_for.get(), principal.mandate.get(), dict(context)))
+        self.seen.append((principal.acting_for.get(), principal.mandate.get(), dict(context),
+                          principal.scopes.get()))
         from types import SimpleNamespace
 
         return SimpleNamespace(status="success", summary="ok", payload="ok", metadata={})
@@ -153,11 +154,12 @@ def test_a_chat_is_for_whom_the_application_authenticated_never_whom_the_client_
         user = request.headers.get("x-test-user")
         if not user:
             raise HTTPException(status_code=401, detail="sign in")
-        return OnBehalfOf.of("acme", user, TRIP)
+        return OnBehalfOf.of("acme", user, TRIP, scopes=["claims.vet"])
 
     kernel = Kernel()
     client = _client(kernel, on_behalf_of=signed_in)
-    claimed = {"acting_for": "acme/ceo", "mandate": {"systems": ["*"]}, "topic": "q3"}
+    claimed = {"acting_for": "acme/ceo", "mandate": {"systems": ["*"]}, "topic": "q3",
+               "scopes": {"payments.approve": {"amount": "*"}}}
 
     assert client.post("/chat", json={"message": "hi", "context": claimed}).status_code == 401
     assert kernel.seen == []
@@ -165,9 +167,10 @@ def test_a_chat_is_for_whom_the_application_authenticated_never_whom_the_client_
     reply = client.post("/chat", json={"message": "hi", "context": claimed},
                         headers={"x-test-user": "u_1"})
     assert reply.status_code == 200
-    acting, granted, context = kernel.seen[0]
-    assert (acting, granted) == ("acme/u_1", TRIP)
-    assert "acting_for" not in context and "mandate" not in context and context["topic"] == "q3"
+    acting, granted, context, held = kernel.seen[0]
+    assert (acting, granted, held) == ("acme/u_1", TRIP, {"claims.vet": {}})
+    assert "acting_for" not in context and "mandate" not in context and "scopes" not in context
+    assert context["topic"] == "q3"
 
 
 def test_a_chat_without_a_resolver_is_for_no_one_whatever_the_client_claims():
