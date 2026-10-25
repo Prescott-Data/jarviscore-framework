@@ -65,7 +65,7 @@ def test_a_run_cut_short_is_detected_by_the_head_log(tmp_path):
     rewrite(path, lines(path)[:2])
 
     problems = verify(str(tmp_path)).problems
-    assert any("cut short or rewritten" in p for p in problems)
+    assert any("cut short" in p for p in problems)
 
 
 def test_a_removed_run_is_detected(tmp_path):
@@ -80,9 +80,24 @@ def test_an_edited_head_log_is_detected(tmp_path):
     journal = Journal(str(tmp_path))
     write_run(journal)
     heads = os.path.join(str(tmp_path), HEADS)
-    rewrite(heads, lines(heads)[:-1])
+    edited = lines(heads)
+    edited[0] = edited[0].replace('"run_seq":0', '"run_seq":9')
+    assert edited[0] != lines(heads)[0]
+    rewrite(heads, edited)
 
     assert not verify(str(tmp_path)).ok
+
+
+def test_a_journal_being_written_is_noted_not_reported_as_tampered(tmp_path):
+    journal = Journal(str(tmp_path))
+    write_run(journal)
+    heads = os.path.join(str(tmp_path), HEADS)
+    # What verify sees when a run is appended after it read the head log, or a write
+    # was interrupted between the run and the head log: nothing registered is lost.
+    rewrite(heads, lines(heads)[:-1])
+
+    report = verify(str(tmp_path))
+    assert report.ok and any("after its registered head" in note for note in report.notes)
 
 
 def test_a_provider_call_without_a_decision_is_flagged(tmp_path):

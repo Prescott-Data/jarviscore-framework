@@ -207,3 +207,19 @@ async def test_a_credential_cached_for_one_person_is_never_served_to_another():
         await manager.resolve_strategy("conn-1")
 
     assert manager.nexus_client.resolve_strategy.await_count == 2
+
+
+
+@pytest.mark.asyncio
+async def test_work_for_a_person_never_falls_back_to_the_deployments_own_credential(broker, monkeypatch):
+    proxy, auth, _ = broker("strict")
+    auth.user_id = "jarviscore-agent"
+    auth.nexus_client = object()
+    auth.resolve_strategy = AsyncMock(side_effect=RuntimeError("The github connection is no longer active"))
+    used_local = []
+    monkeypatch.setattr("jarviscore.nexus.store.get_store", lambda: used_local.append(True))
+
+    with act_for("ada@example.com"), pytest.raises(RuntimeError, match="for the person this work acts for"):
+        await proxy.call("conn-erp", "GET", "https://erp.example.test/x",
+                         authority={**AUTHORITY, "effect": "read", "atom": "erp_get"})
+    assert not used_local and Client.sent == []

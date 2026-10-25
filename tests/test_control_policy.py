@@ -133,3 +133,23 @@ def test_current_policy_reads_the_mode(monkeypatch, mode):
     monkeypatch.setattr(policy_module, "_cached", None)
 
     assert policy_module.current_policy().mode == mode
+
+
+
+def test_untrusted_code_that_calls_itself_read_is_held_to_what_its_method_does():
+    from jarviscore.control.mandate import parse
+    from jarviscore.control.operations import read_operations
+    from jarviscore.control.policy import ControlPolicy, ProviderCall
+
+    code = 'async def refund(id: str):\n    return await nexus_call("POST", "https://api.stripe.com/v1/refunds", json={"id": id})\n'
+    contract = read_operations(code, "refund")
+    for origin in ("registry", "model"):
+        call = ProviderCall(provider="stripe", method="POST", url="https://api.stripe.com/v1/refunds", atom="refund",
+                            declared_effect="read", code_origin=origin, contract=contract, action_id="a")
+        assert call.effect == "write"
+        assert not ControlPolicy(mode="strict").decide(call).allowed
+        limited = ProviderCall(**{**call.__dict__, "mandate": parse({"effects": ["read"]})})
+        assert ControlPolicy(mode="strict").decide(limited).rule == "outside-mandate"
+    shipped = ProviderCall(provider="stripe", method="POST", url="https://api.stripe.com/v1/refunds", atom="refund",
+                           declared_effect="read", code_origin="shipped", contract=contract, action_id="a")
+    assert shipped.effect == "read"  # reviewed search-style POSTs stay reads

@@ -157,7 +157,10 @@ class WorkflowEngine:
 
         # ── Fresh start ──────────────────────────────────────────────
         if self.redis_store:
-            self.redis_store.init_workflow_graph(workflow_id, normalized)
+            from jarviscore.auth.principal import registered
+
+            # Steps another node runs act for the same person, within the same mandate.
+            self.redis_store.init_workflow_graph(workflow_id, normalized, context=registered())
             self.redis_store.register_active_workflow(workflow_id)
 
         state = WorkflowState(

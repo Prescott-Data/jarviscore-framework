@@ -223,6 +223,9 @@ class Settings(BaseSettings):
     # gate and tool results, content-addressed; the chain holds their digests),
     # "digests" (digests only: verifiable, not replayable) or "off".
     journal_capture: str = "full"
+    # Days replay content is kept after its last use; older content is erased in the
+    # background (the chain holds digests, so verify still passes). 0 keeps it all.
+    journal_content_days: int = 30
     # Seconds an idle provider connection is kept for the next call (TLS reuse).
     nexus_keepalive_seconds: float = 120.0
     # Keys approval assertions are verified with: one key (key id "default"), or

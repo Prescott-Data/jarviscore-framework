@@ -37,6 +37,7 @@ JarvisCore is both a multi-agent framework and a production agent harness. The r
 - [Control and Evidence](https://jarviscore.developers.prescottdata.io/concepts/control-and-evidence/): every provider call and effect decided before it happens and recorded in a verifiable journal; grounding of payment values in the system of record
 - [Turning On Control](https://jarviscore.developers.prescottdata.io/guides/control-policy/): report mode to strict mode, `jarviscore policy check` and `review`, your own effects with `mediated()`
 - [Nexus Credentials](https://jarviscore.developers.prescottdata.io/guides/nexus/): zero-trust auth
+- [Agents That Act for Your Users](https://jarviscore.developers.prescottdata.io/guides/acting-for-your-users/): `on_behalf_of` / `OnBehalfOf.of(tenant, user)`, per-user consent with `mesh.connect`, mandates from your roles, per-tenant evidence with `jarviscore evidence`
 - [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/): built-in service bundles and prebuilt actions; inspect the installed catalog with [jarviscore atom list](https://jarviscore.developers.prescottdata.io/reference/cli/#atom-list)
 - [Production Deployment](https://jarviscore.developers.prescottdata.io/guides/production/): sandbox isolation, Nexus credentials, persistent Redis, durable storage, monitoring and crash recovery for production deployments
 

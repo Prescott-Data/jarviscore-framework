@@ -145,6 +145,23 @@ jarviscore verify --json
 | A removed run | The head log registered it |
 | A provider call with no decision before it, or one policy refused | Each `effect.attempt` is checked against its `policy.decision` |
 
+`verify` also prints notes that are not tampering: a run still being written, or
+events after a run's registered head from an interrupted write.
+
+### Per person and per tenant
+
+```bash
+jarviscore evidence acme/u_123                      # what agents did for one person
+jarviscore evidence acme/ --export acme-evidence/   # a tenant's runs, for its auditor
+jarviscore verify --export acme-evidence/
+```
+
+An export holds the runs exactly as written, plus the deployment's head log, so
+each run is still checked against what the deployment registered. Runs that also
+worked for someone else are left out. A plain `verify` refuses an export, so a
+whole journal cannot pass as one with runs missing. See
+[Agents That Act for Your Users](../guides/acting-for-your-users.md#6-evidence-per-user-and-per-tenant).
+
 **Not yet detected:** a rewrite of the whole journal, head log included, by
 whoever controls the directory. That needs the head log anchored outside the
 deployment (signed checkpoints, independent witnesses), which is the next step for
@@ -201,7 +218,11 @@ whose agent logic, prompts or record changed diverges, and the report says at
 which decision. Content that was changed fails its digest.
 
 `JOURNAL_CAPTURE` sets what is kept: `full` (default, replayable), `digests`
-(verifiable, not replayable) or `off`.
+(verifiable, not replayable) or `off`. A coder step keeps about 70 KB.
+Content unused for `JOURNAL_CONTENT_DAYS` (default 30; `0` keeps it) is erased
+in the background, and `jarviscore evidence <person> --erase --yes` erases one
+person's; either way the journal still verifies. A run records whom it worked
+for, and replays as that person.
 
 What replay does not do: run the model again. It shows that the recorded inputs
 lead to the recorded decisions under the agent's code, not what a model would
@@ -222,19 +243,21 @@ handed over, and every record names them.
 | On record | Every decision in the journal names the person (`acting_for`) and the mandate's digest; Nexus's audit names the subject, agent and operation of every credential it releases or refuses |
 
 ```python
-await mesh.execute_goal(
-    "Pay supplier invoice INV-7",
-    context={
-        "acting_for": "ada@example.com",
-        "mandate": {"systems": ["erp"], "effects": ["read", "write"],
-                    "expires_at": "2026-11-01T00:00:00Z"},
-    },
-)
+from jarviscore import OnBehalfOf
+
+ada = OnBehalfOf.of("acme", "ada", mandate={
+    "systems": ["erp"], "effects": ["read", "write"], "expires_at": "2026-11-01T00:00:00Z",
+})
+await mesh.execute_goal("Pay supplier invoice INV-7", on_behalf_of=ada)
 ```
 
-`acting_for` and `mandate` come only from the context your application registers
-the goal with, never from what agents write, and hold for every step and peer of
-that workflow. A mandate that cannot be read refuses every call.
+`run_task`, `workflow`, `submit_goal` and `create_chat_router` take the same
+`on_behalf_of`, and `act_for` covers a block of your own code. Whom work is for
+comes only from your application, never from what a client sends or an agent
+writes, and holds for every step, sub-agent and peer of the work on any node,
+including workflows an agent builds while doing it. A mandate that cannot be read
+refuses every call. For applications with their own users and tenants, see
+[Agents That Act for Your Users](../guides/acting-for-your-users.md).
 
 What this does not do: Nexus binds a credential to the subject your runtime
 names; it does not authenticate the person itself. Keep the gateway key with the

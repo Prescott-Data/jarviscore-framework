@@ -205,13 +205,18 @@ class Request:
 def request_from(method: str, url: str, kwargs: Dict[str, Any]) -> Request:
     """The request httpx will send for ``method``, ``url`` and its keyword arguments."""
     parts = urlsplit(url)
-    pairs = list(parse_qsl(parts.query, keep_blank_values=True))
     params = kwargs.get("params")
-    if isinstance(params, dict):
-        for key, value in params.items():
-            pairs.extend((str(key), item) for item in (value if isinstance(value, (list, tuple)) else [value]))
-    elif isinstance(params, (list, tuple)):
-        pairs.extend((str(key), value) for key, value in params)
+    opaque_query = False
+    try:
+        # The query httpx will send, built by httpx itself: params of any accepted
+        # form (dict, list, str, bytes, QueryParams) merged into the URL as it merges them.
+        import httpx
+
+        sent = httpx.Request(method or "GET", url, params=params) if params is not None else None
+        pairs = list(sent.url.params.multi_items()) if sent is not None else list(
+            parse_qsl(parts.query, keep_blank_values=True))
+    except Exception:  # noqa: BLE001 - a query grounding cannot read is not one it vouches for
+        pairs, opaque_query = [], True
     query: Dict[str, Any] = {}
     for key, value in pairs:
         query[key] = [*query[key], value] if isinstance(query.get(key), list) else (
@@ -223,7 +228,7 @@ def request_from(method: str, url: str, kwargs: Dict[str, Any]) -> Request:
     json_body = body if not opaque and form is None else None
     return Request(
         method=method.upper(), host=parts.netloc.lower(), path=parts.path or "/",
-        query=query, json=json_body, form=form, opaque=opaque,
+        query=query, json=json_body, form=form, opaque=opaque or opaque_query,
     )
 
 
@@ -289,11 +294,16 @@ class GroundingRule:
                 if request.host not in [str(o).lower() for o in options]:
                     return False
             elif key == "path":
-                if not any(_path_params(_template(str(o))[0], request.path) is not None for o in options):
-                    return False
+                try:
+                    if not any(_path_params(_template(str(o))[0], request.path) is not None for o in options):
+                        return False
+                except ValueError:
+                    continue  # an unreadable path refuses, through a recorded decision, what else it matches
         return True
 
     def path_params(self, request: Request) -> Dict[str, str]:
+        if self.invalid:
+            return {}
         for key, wanted in self.match:
             if key == "path":
                 for option in wanted if isinstance(wanted, list) else [wanted]:
@@ -590,8 +600,14 @@ async def _ground_rule(
         # A record is the model's choice if anything that selected it was.
         chosen_by = {_origin(expression, origins) for _, expression in source.where}
         origins[source.name] = "request" if "request" in chosen_by else "input"
-        if rule.fresh == "reread" and fetch is not None:
+        fresh_after = None
+        if rule.fresh == "reread":
+            if fetch is None:
+                fail(f"{source.name} must be read again before acting, and nothing can read it here")
+                return
             reads = observations.reads(workflow, source.provider)
+            # Only what this re-read returns counts: an earlier read is what "reread" distrusts.
+            fresh_after = max((o.order for o in reads), default=-1)
             host = next((o.host for o in reversed(reads) if source.pattern.match(o.path)), request.host)
             try:
                 await fetch(source, selectors, host)
@@ -601,6 +617,8 @@ async def _ground_rule(
         latest: Dict[str, Tuple[Observation, Any]] = {}
         changed = False
         for observation in observations.reads(workflow, source.provider):
+            if fresh_after is not None and observation.order <= fresh_after:
+                continue
             params = _path_params(source.pattern, observation.path)
             if params is None:
                 continue

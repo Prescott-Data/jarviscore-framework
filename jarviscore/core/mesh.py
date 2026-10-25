@@ -614,6 +614,7 @@ class Mesh:
         workflow_id: str,
         steps: List[Dict[str, Any]],
         timeout_per_step: Optional[float] = None,
+        on_behalf_of: Any = None,
     ) -> List[Dict[str, Any]]:
         """
         Execute a multi-step workflow.
@@ -670,9 +671,13 @@ class Mesh:
         self._logger.info("Executing workflow: %s (%d steps)", workflow_id, len(steps))
         from jarviscore.core.envelope import caller_view
 
-        results = await self._workflow_engine.execute(
-            workflow_id, steps, timeout_per_step=timeout_per_step
-        )
+        from jarviscore.auth.principal import act_for
+
+        # Steps run in this process, in tasks that inherit whom the work is for.
+        with act_for(on_behalf_of):
+            results = await self._workflow_engine.execute(
+                workflow_id, steps, timeout_per_step=timeout_per_step
+            )
         return [caller_view(item) for item in results] if isinstance(results, list) else results
 
     async def execute_goal(
@@ -683,11 +688,16 @@ class Mesh:
         context: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         plan_template: Optional[Dict[str, Any]] = None,
+        on_behalf_of: Any = None,
     ) -> Dict[str, Any]:
-        """Compile one source goal (or publish a validated template) and observe peer claims."""
+        """Compile one source goal (or publish a validated template) and observe peer claims.
+
+        ``on_behalf_of`` (an ``OnBehalfOf``, ``Person`` or person key) is whom every
+        step works for and what they delegated; see ``submit_goal``.
+        """
         identity = await self.submit_goal(
             goal, workflow_id=workflow_id, context=context, timeout=timeout,
-            plan_template=plan_template,
+            plan_template=plan_template, on_behalf_of=on_behalf_of,
         )
         self._driving[identity] = self._driving.get(identity, 0) + 1
         try:
@@ -750,8 +760,12 @@ class Mesh:
         context: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         plan_template: Optional[Dict[str, Any]] = None,
+        on_behalf_of: Any = None,
     ) -> str:
         """Register a goal for the mesh planner and return without waiting.
+
+        ``on_behalf_of`` is registered with the goal, so every step and peer on any
+        node works for that person, with their credentials, within their mandate.
 
         A valid ``plan_template`` is published as the DAG without a planning
         call; an invalid one is recorded and the goal is planned instead. The
@@ -767,6 +781,7 @@ class Mesh:
         source = (goal or "").strip()
         if not source:
             raise ValueError("A mesh goal cannot be empty.")
+        context = _with_principal(context, on_behalf_of)
         identity = workflow_id or f"wf-{uuid4().hex[:12]}"
         public_context = neutral_context(context)
         public_context = await self._prepare_workspace_source(
@@ -3681,9 +3696,13 @@ class Mesh:
         task: str = "",
         context: Optional[Dict[str, Any]] = None,
         complexity: Optional[str] = None,
+        on_behalf_of: Any = None,
     ) -> Dict[str, Any]:
         """
         Dispatch a single task to an agent by role.
+
+        ``on_behalf_of`` (an ``OnBehalfOf``, ``Person`` or person key) is whom the
+        task works for: their credentials, within their mandate, named on every record.
 
         This is the primary user-facing API for running a task on a specific
         agent.  It wraps ``delegate()`` with a friendlier signature and adds
@@ -3720,7 +3739,59 @@ class Mesh:
 
         from jarviscore.core.envelope import caller_view
 
-        return caller_view(await self.delegate(to=role, task=task, context=ctx or None))
+        from jarviscore.auth.principal import act_for
+
+        with act_for(on_behalf_of):
+            return caller_view(await self.delegate(to=role, task=task, context=ctx or None))
+
+    # ─────────────────────────────────────────────────────────────────
+    # YOUR USERS' ACCOUNTS
+    # ─────────────────────────────────────────────────────────────────
+
+    def _people_accounts(self):
+        if self._auth_manager is None:
+            raise RuntimeError(
+                "No account can be connected: start the mesh with a Nexus gateway "
+                "(NEXUS_GATEWAY_URL) or an auth_mode."
+            )
+        return self._auth_manager
+
+    async def connect(
+        self,
+        provider: str,
+        *,
+        on_behalf_of: Any,
+        return_url: Optional[str] = None,
+        scopes: Optional[List[str]] = None,
+    ) -> Dict[str, str]:
+        """Start connecting a person's ``provider`` account; returns ``auth_url`` to send them to.
+
+        The person consents in their browser and lands on ``return_url``. From
+        then on, work done ``on_behalf_of`` them finds the connection by itself.
+        Returns ``{"auth_url": ..., "connection_id": ...}``.
+        """
+        from jarviscore.auth.principal import act_for, on_behalf_of as resolve
+
+        principal = resolve(on_behalf_of)
+        if principal is None:
+            raise ValueError("connect() needs the person whose account this is")
+        manager = self._people_accounts()
+        with act_for(principal):
+            connection_id, auth_url = await manager.begin_authentication(
+                provider, scopes=scopes, return_url=return_url,
+            )
+        return {"auth_url": auth_url, "connection_id": connection_id}
+
+    async def connected(self, provider: str, *, on_behalf_of: Any) -> bool:
+        """Whether the person has an active ``provider`` connection the agents can use."""
+        from jarviscore.auth.principal import act_for, on_behalf_of as resolve
+
+        principal = resolve(on_behalf_of)
+        if principal is None:
+            raise ValueError("connected() needs the person whose account this is")
+        manager = self._people_accounts()
+        with act_for(principal):
+            return bool(await manager.discover(provider))
 
     # ─────────────────────────────────────────────────────────────────
     # DIAGNOSTICS
@@ -3887,3 +3958,20 @@ class Mesh:
             f"agents={len(self.agents)} "
             f"started={self._started}>"
         )
+
+
+def _with_principal(context: Optional[Dict[str, Any]], value: Any) -> Optional[Dict[str, Any]]:
+    """``context`` with whom the work is for, from ``on_behalf_of``: one source, never two."""
+    from jarviscore.auth.principal import on_behalf_of
+
+    principal = on_behalf_of(value)
+    if principal is None:
+        return context
+    merged = dict(context or {})
+    for key, value in (("acting_for", principal.person), ("mandate", principal.mandate)):
+        if value is None:
+            continue
+        if key in merged and merged[key] != value:
+            raise ValueError(f"context[{key!r}] and on_behalf_of disagree; pass whom the work is for once")
+        merged[key] = value
+    return merged

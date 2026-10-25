@@ -87,6 +87,12 @@ Without `NEXUS_SECRET`, the key is derived from the machine's hardware UUID. Cre
 
 ## Using Nexus in Agent Code
 
+!!! tip "Agents working for your application's users"
+    To have each of your users connect their own accounts and have agents use
+    them only for that user (`mesh.connect`, `on_behalf_of`, Nexus
+    `SUBJECT_BINDING=required`), see
+    [Agents That Act for Your Users](acting-for-your-users.md).
+
 Only agents that declare `requires_auth = True` can use provider credentials.
 This holds in both modes: an agent that does not declare it gets no
 `nexus_call` route to the gateway or to the local store, and the router is not

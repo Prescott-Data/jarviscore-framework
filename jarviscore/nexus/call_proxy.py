@@ -389,6 +389,17 @@ class NexusCallProxy:
                     f"Nexus refused the {provider} credential for the person this work acts for "
                     f"({_refusal_code(gateway_exc)})."
                 ) from gateway_exc
+            from jarviscore.auth.principal import acting_for
+
+            person = acting_for.get()
+            deployment = getattr(self._auth, "user_id", None)
+            if person and person != deployment and getattr(self._auth, "nexus_client", None) is not None:
+                # Work for a person uses that person's credential or none: the deployment's
+                # own local credential is not theirs.
+                raise RuntimeError(
+                    f"No usable {provider} credential for the person this work acts for "
+                    f"({type(gateway_exc).__name__}: {gateway_exc})."
+                ) from gateway_exc
             logger.debug(
                 "NexusCallProxy: gateway resolve failed for %r (%s) — "
                 "falling back to local credential store",
@@ -530,11 +541,13 @@ class NexusCallProxy:
 
         async def read_again(source, selectors, host):
             handle = connection_id if source.provider == provider else self.connection_handle(source.provider)
-            await self.call(handle, "GET", f"{scheme}://{host}{g.fill(source, selectors)}", authority={
+            response = await self.call(handle, "GET", f"{scheme}://{host}{g.fill(source, selectors)}", authority={
                 "workflow_id": (authority or {}).get("workflow_id") or workflow,
                 "step_id": (authority or {}).get("step_id"),
                 "atom": "control.grounding", "effect": "read", "code_origin": "runtime",
             })
+            if not response.get("ok") or response.get("json") is None:
+                raise RuntimeError(f"re-read returned {response.get('status_code')}")
 
         return await g.ground(
             applying, request, workflow, inputs=g.workflow_input(workflow), fetch=read_again,

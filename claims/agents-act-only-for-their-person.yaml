@@ -9,7 +9,8 @@ claim: >-
   release names the person.
 scope:
   - Provider calls through NexusCallProxy with Nexus 0.7 or later in gateway mode, SUBJECT_BINDING=required.
-  - Mandates registered with the workflow by application code (context["mandate"]).
+  - Mandates registered with the work by application code (on_behalf_of, or context["mandate"]).
+  - Work started with on_behalf_of from run_task, execute_goal, submit_goal, workflow or create_chat_router, and workflows started inside it on any node.
 assumptions:
   - The runtime holds the Nexus gateway key and names the person its work is for; people are authenticated where they ask for work.
   - The provider enforces each person's own permissions on their credential.
@@ -24,4 +25,12 @@ evidence:
   - tests/test_delegated_authority.py::test_nexus_is_told_whom_by_which_agent_and_for_which_operation
   - tests/test_delegated_authority.py::test_a_credential_cached_for_one_person_is_never_served_to_another
   - tests/test_delegated_authority.py::test_a_mandate_that_cannot_be_read_refuses_everything
+  - tests/test_delegated_authority.py::test_work_for_a_person_never_falls_back_to_the_deployments_own_credential
+  - tests/test_on_behalf_of.py::test_a_user_of_a_tenant_is_keyed_uniquely_across_tenants
+  - tests/test_on_behalf_of.py::test_run_task_and_workflow_work_for_the_person_and_no_longer
+  - tests/test_on_behalf_of.py::test_a_goal_names_whom_it_is_for_once
+  - tests/test_on_behalf_of.py::test_a_workflows_steps_on_other_nodes_act_for_the_same_person
+  - tests/test_on_behalf_of.py::test_a_dag_an_agent_builds_while_working_for_someone_stays_theirs
+  - tests/test_on_behalf_of.py::test_a_chat_is_for_whom_the_application_authenticated_never_whom_the_client_claims
+  - tests/test_on_behalf_of.py::test_connecting_a_users_account_is_done_as_that_user
 published: []

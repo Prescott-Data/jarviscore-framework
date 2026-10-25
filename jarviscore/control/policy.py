@@ -28,9 +28,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from jarviscore.control.operations import (
     READ_METHODS,
     OperationContract,
+    effect_rank,
     method_floor,
     method_within_effect,
 )
+
+#: Code reviewed with the package: its declared effect is what the call is.
+TRUSTED_ORIGINS = ("shipped", "runtime")
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +85,15 @@ class ProviderCall:
 
     @property
     def effect(self) -> str:
-        return self.declared_effect or method_floor(self.method)
+        """What the call does: as declared by reviewed code; for anything else, never
+        less than its method implies (a "read" that POSTs is a write)."""
+        floor = method_floor(self.method)
+        declared = self.declared_effect
+        if not declared:
+            return floor
+        if self.code_origin in TRUSTED_ORIGINS:
+            return declared
+        return floor if effect_rank(floor) > effect_rank(declared) else declared
 
     @property
     def verified(self) -> bool:
@@ -197,8 +209,10 @@ def _builtin_refusal(call: ProviderCall) -> Optional[Tuple[str, str]]:
             f"{call.atom} does not send {method} to this path: it is not one of the "
             "operations its code declares.",
         )
+    # Only reviewed code earns "a read may POST to the search endpoint its contract
+    # names": for untrusted code the contract is whatever that code says.
     if call.atom and call.declared_effect and not method_within_effect(
-        method, call.declared_effect, contract, call.url
+        method, call.declared_effect, contract if call.code_origin in TRUSTED_ORIGINS else None, call.url
     ):
         if not (
             call.code_origin in ("shipped", "runtime")

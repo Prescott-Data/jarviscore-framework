@@ -36,9 +36,17 @@ LEASE_FIELDS = ("max_total_tokens", "thinking_budget", "action_budget", "wall_cl
 
 
 def _jsonable(value: Any) -> Any:
+    """``value`` as plain JSON: keys as text, anything else by its text."""
     import json
 
-    return json.loads(json.dumps(value, default=str))
+    def plain(item):
+        if isinstance(item, dict):
+            return {str(key): plain(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple, set, frozenset)):
+            return [plain(child) for child in item]
+        return item
+
+    return json.loads(json.dumps(plain(value), default=str))
 
 
 _CLOCK = (
@@ -65,8 +73,16 @@ def comparable(value: Any) -> Any:
     return value
 
 
+#: The recorder of the run in progress in this task (concurrent runs never share one).
+CURRENT: contextvars.ContextVar[Optional["Recorder"]] = contextvars.ContextVar("jarviscore_recorder", default=None)
+
+
 class Recorder:
-    """Keeps what one sub-agent run depended on, in its step's journal run."""
+    """Keeps what one sub-agent run depended on, in its step's journal run.
+
+    Recording never fails or changes the run: what cannot be kept is logged, and
+    content that cannot be stored is kept as its digest only.
+    """
 
     def __init__(self, journal, root: str, run: str, full: bool):
         self.journal, self.root, self.run, self.full = journal, root, run, full
@@ -76,25 +92,39 @@ class Recorder:
 
     @classmethod
     def for_run(cls, context: Optional[Dict[str, Any]]) -> Optional["Recorder"]:
-        from jarviscore.control.policy import current_policy
-        from jarviscore.evidence.journal import capture_mode, current_journal
-        from jarviscore.nexus.call_proxy import _run_name
+        try:
+            from jarviscore.control.policy import current_policy
+            from jarviscore.evidence.journal import capture_mode, current_journal, prune_content_soon
+            from jarviscore.nexus.call_proxy import _run_name
 
-        mode = capture_mode()
-        if REPLAYING.get() or mode == "off" or current_policy().mode == "off":
+            mode = capture_mode()
+            if REPLAYING.get() or mode == "off" or current_policy().mode == "off":
+                return None
+            journal = current_journal()
+            if journal is None:
+                return None
+            if mode == "full":
+                prune_content_soon(journal.root)
+            return cls(journal, journal.root, _run_name({
+                "workflow_id": (context or {}).get("workflow_id"), "step_id": (context or {}).get("step_id"),
+            }), full=mode == "full")
+        except Exception as exc:  # noqa: BLE001 - recording never fails a run
+            logger.warning("Run not recorded for replay: %s", exc)
             return None
-        journal = current_journal()
-        if journal is None:
-            return None
-        return cls(journal, journal.root, _run_name({
-            "workflow_id": (context or {}).get("workflow_id"), "step_id": (context or {}).get("step_id"),
-        }), full=mode == "full")
 
     def keep(self, value: Any) -> str:
         from jarviscore.evidence.journal import digest, store_content
 
-        value = _jsonable(value)
-        return store_content(self.root, value) if self.full else digest(value)
+        try:
+            value = _jsonable(value)
+        except Exception:  # noqa: BLE001
+            value = repr(value)
+        if self.full:
+            try:
+                return store_content(self.root, value)
+            except Exception as exc:  # noqa: BLE001 - kept as its digest: verifiable, not replayable
+                logger.warning("Replay content not stored (%s); its digest is kept", exc)
+        return digest(value)
 
     def note(self, kind: str, data: Dict[str, Any]) -> None:
         try:
@@ -102,84 +132,112 @@ class Recorder:
         except Exception as exc:  # noqa: BLE001 - the record must never break the run
             logger.warning("Replay record %s not written: %s", kind, exc)
 
-    # ── Attaching to one run ──────────────────────────────────────────────
+    def safely(self, record) -> None:
+        try:
+            record()
+        except Exception as exc:  # noqa: BLE001 - recording never fails a run
+            logger.warning("Replay record not written: %s", exc)
 
-    def attach(self, agent, task: str, context: Optional[Dict[str, Any]], max_turns: int, model, cognition=None) -> None:
-        import jarviscore
+    # ── One run ───────────────────────────────────────────────────────────
 
-        from jarviscore.control.policy import current_policy
+    def start(self, agent, task: str, context: Optional[Dict[str, Any]], max_turns: int, model, cognition=None) -> None:
+        def record():
+            import jarviscore
 
-        lease = getattr(cognition, "lease", None)
-        carries = getattr(agent.llm_client, "carries_native_tools", None)
-        self.note("run.start", {
-            "agent_class": f"{type(agent).__module__}.{type(agent).__qualname__}",
-            "agent_id": getattr(agent, "agent_id", None),
-            "role": getattr(agent, "role", None),
-            "task": self.keep(task),
-            "context": self.keep({k: v for k, v in (context or {}).items() if not str(k).startswith("_")}),
-            "tools": sorted(getattr(agent, "_tools", {}) or {}),
-            "max_turns": max_turns,
-            "model": str(model) if model else None,
-            "lease": {name: getattr(lease, name) for name in LEASE_FIELDS if hasattr(lease, name)} if lease else None,
-            "native": bool(callable(carries) and carries(model) is True),
-            "version": getattr(jarviscore, "__version__", ""),
-            "policy": current_policy().digest,
-        })
-        recorder = self
-        original_llm = agent.llm_client
+            from jarviscore.control.policy import current_policy
 
-        class RecordingLLM:
-            def __getattr__(self, name):
-                return getattr(original_llm, name)
+            lease = getattr(cognition, "lease", None)
+            carries = getattr(agent.llm_client, "carries_native_tools", None)
+            from jarviscore.auth.principal import acting_for
 
-            async def generate(self, *args, **kwargs):
-                response = await original_llm.generate(*args, **kwargs)
-                recorder.note("model.call", {
-                    "request": recorder.keep({"args": list(args), "kwargs": {k: v for k, v in kwargs.items()}}),
-                    "response": recorder.keep(response),
-                    "model": kwargs.get("model") or (response.get("model") if isinstance(response, dict) else None),
-                })
-                return response
-
-        agent.llm_client = RecordingLLM()
-        hook, execute, carry = agent._pre_execute_hook, agent._execute_tool, agent._carry_out_decided_actions
-
-        async def recorded_hook(name, params, state):
-            result = await hook(name, params, state)
-            recorder.note("hook.result", {"tool": name, "params": recorder.keep(params), "result": recorder.keep(result),
-                                          "depth": recorder.depth})
-            return result
-
-        async def recorded_tool(name, params):
-            depth = recorder.depth
-            recorder.depth += 1
-            try:
-                result = await execute(name, params)
-            finally:
-                recorder.depth = depth
-            recorder.note("tool.result", {
-                "tool": name, "params": recorder.keep(params), "result": recorder.keep(result),
-                "phase": recorder.phase, "depth": depth,
+            self.note("run.start", {
+                "acting_for": acting_for.get(),
+                "agent_class": f"{type(agent).__module__}.{type(agent).__qualname__}",
+                "agent_id": getattr(agent, "agent_id", None),
+                "role": getattr(agent, "role", None),
+                "task": self.keep(task),
+                "context": self.keep({k: v for k, v in (context or {}).items() if not str(k).startswith("_")}),
+                "tools": sorted(getattr(agent, "_tools", {}) or {}),
+                "max_turns": max_turns,
+                "model": str(model) if model else None,
+                "lease": {name: getattr(lease, name) for name in LEASE_FIELDS if hasattr(lease, name)} if lease else None,
+                "native": bool(callable(carries) and carries(model) is True),
+                "version": getattr(jarviscore, "__version__", ""),
+                "policy": current_policy().digest,
             })
-            return result
+        self.safely(record)
 
-        async def recorded_carry(state, trace):
+    def end(self, output) -> None:
+        self.safely(lambda: self.note("run.end", _outcome(self, output)))
+
+
+class _RecordingLLM:
+    """The agent's model client, recording each call into the current run's record."""
+
+    def __init__(self, inner):
+        self._jc_inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._jc_inner, name)
+
+    async def generate(self, *args, **kwargs):
+        response = await self._jc_inner.generate(*args, **kwargs)
+        recorder = CURRENT.get()
+        if recorder is not None:
+            recorder.safely(lambda: recorder.note("model.call", {
+                "request": recorder.keep({"args": list(args), "kwargs": dict(kwargs)}),
+                "response": recorder.keep(response),
+                "model": kwargs.get("model") or (response.get("model") if isinstance(response, dict) else None),
+            }))
+        return response
+
+
+def install(agent) -> None:
+    """Make ``agent`` recordable: once per instance, passing through when nothing records."""
+    if not isinstance(agent.llm_client, _RecordingLLM) and agent.llm_client is not None:
+        agent.llm_client = _RecordingLLM(agent.llm_client)
+    if agent.__dict__.get("_jc_recordable"):
+        return
+    hook, execute, carry = agent._pre_execute_hook, agent._execute_tool, agent._carry_out_decided_actions
+
+    async def recorded_hook(name, params, state):
+        result = await hook(name, params, state)
+        recorder = CURRENT.get()
+        if recorder is not None:
+            recorder.safely(lambda: recorder.note("hook.result", {
+                "tool": name, "params": recorder.keep(params), "result": recorder.keep(result), "depth": recorder.depth,
+            }))
+        return result
+
+    async def recorded_tool(name, params):
+        recorder = CURRENT.get()
+        if recorder is None:
+            return await execute(name, params)
+        depth = recorder.depth
+        recorder.depth += 1
+        try:
+            result = await execute(name, params)
+        finally:
+            recorder.depth = depth
+        recorder.safely(lambda: recorder.note("tool.result", {
+            "tool": name, "params": recorder.keep(params), "result": recorder.keep(result),
+            "phase": recorder.phase, "depth": depth,
+        }))
+        return result
+
+    async def recorded_carry(state, trace):
+        recorder = CURRENT.get()
+        if recorder is not None:
             recorder.phase = "carry_out"
-            try:
-                return await carry(state, trace)
-            finally:
+        try:
+            return await carry(state, trace)
+        finally:
+            if recorder is not None:
                 recorder.phase = "loop"
 
-        agent._pre_execute_hook, agent._execute_tool = recorded_hook, recorded_tool
-        agent._carry_out_decided_actions = recorded_carry
-        self._restore = (agent, original_llm)
-
-    def detach(self, output) -> None:
-        agent, original_llm = self._restore
-        agent.llm_client = original_llm
-        for name in ("_pre_execute_hook", "_execute_tool", "_carry_out_decided_actions"):
-            agent.__dict__.pop(name, None)
-        self.note("run.end", _outcome(self, output))
+    agent._pre_execute_hook, agent._execute_tool = recorded_hook, recorded_tool
+    agent._carry_out_decided_actions = recorded_carry
+    agent.__dict__["_jc_recordable"] = True
 
 
 def _outcome(recorder, output) -> Dict[str, Any]:
@@ -366,13 +424,15 @@ async def replay(root: str, run: str, factory: Optional[Callable[[str, Any], Any
         if tool not in agent._tools:
             agent.register_tool(tool, nothing, f"(recorded tool {tool})")
     try:
+        from jarviscore.auth.principal import act_for
         from jarviscore.control.effects import scope
 
         token, replaying = scope.set({"replay": True}), REPLAYING.set(True)
         try:
-            output = await agent.run(task=content(start["task"]), context=content(start["context"]),
-                                     max_turns=start.get("max_turns") or 15, model=start.get("model"),
-                                     cognition=_cognition(start, agent))
+            with act_for(start.get("acting_for")):  # the same person the run worked for
+                output = await agent.run(task=content(start["task"]), context=content(start["context"]),
+                                         max_turns=start.get("max_turns") or 15, model=start.get("model"),
+                                         cognition=_cognition(start, agent))
         finally:
             REPLAYING.reset(replaying)
             scope.reset(token)

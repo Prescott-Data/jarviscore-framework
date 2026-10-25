@@ -156,6 +156,7 @@ nav:
       - Connect Capabilities:
         - Integrations: guides/integrations.md
         - Nexus Credentials: guides/nexus.md
+        - Acting for Your Users: guides/acting-for-your-users.md
         - Knowledge Base: guides/knowledge-base.md
         - Internet Search: guides/internet-search.md
         - Browser Automation: guides/browser-automation.md

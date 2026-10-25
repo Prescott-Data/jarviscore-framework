@@ -28,6 +28,7 @@ def create_chat_router(
     kernel,
     prefix: str = "",
     tags: Optional[List[str]] = None,
+    on_behalf_of: Optional[Callable[[Request], OnBehalfOf | Person | str | None]] = None,
 ) -> APIRouter
 ```
 
@@ -36,6 +37,7 @@ def create_chat_router(
 | `kernel` | `Kernel` | required | The Kernel that executes chat messages |
 | `prefix` | `str` | `""` | Additional route prefix appended inside the router (independent of `app.include_router(prefix=...)`) |
 | `tags` | `List[str]` | `["chat"]` | FastAPI OpenAPI tag list |
+| `on_behalf_of` | callable | `None` | Whom each chat is for, from your own sign-in: a function of the request (sync or async) returning an `OnBehalfOf`, a `Person`, a person key or `None`. Raise `HTTPException` there to refuse. The chat then uses that person's credentials, within their mandate, and every record names them. `acting_for` and `mandate` in the request's `context` are always dropped |
 
 Returns an `APIRouter` ready for `app.include_router()`.
 

@@ -239,6 +239,8 @@ class Verification:
     #: Changes refused when previewed, before a person was asked.
     refused_in_preview: int = 0
     problems: List[str] = field(default_factory=list)
+    #: Not tampering, but worth knowing: records still being written, or an interrupted write.
+    notes: List[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -287,8 +289,12 @@ def _check_chain(path: str, label: str, problems: List[str]) -> List[Dict[str, A
     return events
 
 
-def verify(root: str) -> Verification:
-    """Check every run under ``root`` against its own chain, the head log, and its decisions."""
+def verify(root: str, export: bool = False) -> Verification:
+    """Check every run under ``root`` against its own chain, the head log, and its decisions.
+
+    ``export=True`` checks an export of one person's or tenant's runs
+    (``evidence.people.export``): runs it left out are expected to be missing.
+    """
     report = Verification(root=root)
     heads_path = os.path.join(root, HEADS)
     heads: Dict[str, Tuple[int, str]] = {}
@@ -313,26 +319,70 @@ def verify(root: str) -> Verification:
         registered = heads.get(run)
         last = events[-1]
         if registered is None:
-            report.problems.append(f"run {run}: not registered in the head log")
-        elif registered != (last["seq"], last["hash"]):
-            report.problems.append(
-                f"run {run}: the head log registered event {registered[0]}, the run ends at "
-                f"event {last['seq']} (cut short or rewritten)"
+            report.notes.append(
+                f"run {run}: not yet in the head log (being written, an interrupted write, "
+                "or added outside the journal)"
             )
+        else:
+            seq, hashed = registered
+            at = next((e for e in events if e.get("seq") == seq), None)
+            if at is None:
+                report.problems.append(
+                    f"run {run}: the head log registered event {seq}, the run ends at "
+                    f"event {last['seq']} (cut short)"
+                )
+            elif at.get("hash") != hashed:
+                report.problems.append(f"run {run}: event {seq} is not the one the head log registered (rewritten)")
+            elif last["seq"] > seq:
+                report.notes.append(
+                    f"run {run}: {last['seq'] - seq} event(s) after its registered head "
+                    "(being written, or an interrupted write)"
+                )
         _check_decisions(run, events, report)
         for event in events:
             every[(run, event.get("seq"))] = event
             data = event.get("data") or {}
             if event.get("kind") == "policy.decision" and isinstance(data.get("grounding"), dict):
                 groundings.append((f"run {run} event {event.get('seq')}", data))
-    for run in sorted(set(heads) - seen):
-        report.problems.append(f"run {run}: registered in the head log but its record is missing")
+    exported = _export_manifest(root) if export else None
+    if not export and _export_manifest(root) is not None:
+        report.problems.append(
+            "export.json: this is an export of some runs, not a whole journal; "
+            "check it as one (jarviscore verify --export)"
+        )
+    if export and exported is None:
+        report.problems.append("export.json is missing: this is not an export")
+    if exported is None:
+        for run in sorted(set(heads) - seen):
+            report.problems.append(f"run {run}: registered in the head log but its record is missing")
+    else:
+        # An export of one person's or tenant's runs: the rest were left out on purpose.
+        for run in sorted(set(exported.get("runs") or []) - seen):
+            report.problems.append(f"run {run}: listed in this export but its record is missing")
+        left_out = len(set(heads) - seen - set(exported.get("runs") or []))
+        report.notes.append(
+            f"an export for {exported.get('for')}: {len(seen)} run(s), each checked against the "
+            f"deployment's head log; {left_out} other run(s) in that log are not part of it"
+        )
     for where, decision in groundings:
-        _check_grounding(where, decision, every, report)
+        _check_grounding(where, decision, every, report, partial=exported is not None)
     return report
 
 
-def _check_grounding(where: str, decision: Dict[str, Any], every, report: Verification) -> None:
+def _export_manifest(root: str) -> Optional[Dict[str, Any]]:
+    path = os.path.join(root, "export.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except (OSError, ValueError):
+        return {"for": "(unreadable export.json)", "runs": []}
+    return manifest if isinstance(manifest, dict) else {"for": "(unreadable export.json)", "runs": []}
+
+
+def _check_grounding(where: str, decision: Dict[str, Any], every, report: Verification,
+                     partial: bool = False) -> None:
     """A grounded call cites, for every record it relied on, the response the broker recorded."""
     grounding = decision["grounding"]
     if decision.get("outcome") == "allow" and decision.get("enforced") and not grounding.get("grounded"):
@@ -345,6 +395,9 @@ def _check_grounding(where: str, decision: Dict[str, Any], every, report: Verifi
             report.problems.append(f"{where}: grounded on {citation.get('binding')} with no record of reading it")
             continue
         cited = every.get((ref.get("run"), ref.get("seq")))
+        if cited is None and partial and not any(run == ref.get("run") for run, _ in every):
+            report.notes.append(f"{where}: grounded on a read in run {ref.get('run')}, not part of this export")
+            continue
         if cited is None or cited.get("hash") != ref.get("hash"):
             report.problems.append(f"{where}: grounded on {citation.get('binding')}, whose read is not in the record")
         elif cited.get("kind") != "effect.outcome" or (cited.get("data") or {}).get("observed") != citation.get("observed"):
@@ -402,7 +455,12 @@ def store_content(root: str, value: Any) -> str:
     # the digest is over the canonical form, which reading it back checks.
     text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
     path = os.path.join(root, CONTENT, key[:2], f"{key}.json")
-    if not os.path.exists(path):
+    if os.path.exists(path):
+        try:
+            os.utime(path)  # used again: it is as recent as its newest use, for retention
+        except OSError:
+            pass
+    else:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         temporary = f"{path}.{os.getpid()}.tmp"
         with open(temporary, "w", encoding="utf-8") as handle:
@@ -431,3 +489,58 @@ def capture_mode() -> str:
     value = os.environ.get("JARVISCORE_JOURNAL_CAPTURE") or getattr(settings, "journal_capture", None) or "full"
     value = str(value).lower()
     return value if value in ("full", "digests", "off") else "full"
+
+
+
+def content_days() -> int:
+    """Days replay content is kept after its last use (JOURNAL_CONTENT_DAYS; 0 keeps it)."""
+    import importlib
+
+    settings = importlib.import_module("jarviscore.config.settings").settings
+    value = os.environ.get("JARVISCORE_JOURNAL_CONTENT_DAYS") or getattr(settings, "journal_content_days", 30)
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 30
+
+
+def prune_content(root: str, days: int) -> int:
+    """Erase replay content unused for ``days``; the chain, holding digests, stays verifiable."""
+    import time as _time
+
+    if days <= 0:
+        return 0
+    cutoff, removed = _time.time() - days * 86400, 0
+    for folder, _, names in os.walk(os.path.join(root, CONTENT)):
+        for name in names:
+            path = os.path.join(folder, name)
+            try:
+                if os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+                    removed += 1
+            except OSError:
+                continue
+    return removed
+
+
+_PRUNED: Dict[str, float] = {}
+
+
+def prune_content_soon(root: str) -> None:
+    """Prune ``root``'s replay content in the background, at most once a day per process."""
+    import time as _time
+
+    days = content_days()
+    if days <= 0 or _time.time() - _PRUNED.get(root, 0.0) < 86400:
+        return
+    _PRUNED[root] = _time.time()
+
+    def run():
+        try:
+            removed = prune_content(root, days)
+            if removed:
+                logger.info("Pruned %d replay content file(s) unused for %d days", removed, days)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Replay content not pruned: %s", exc)
+
+    threading.Thread(target=run, name="jarviscore-journal-prune", daemon=True).start()

@@ -137,7 +137,8 @@ effects:
 ## Mandate (workflow context, not this file)
 
 What a person delegated travels with the work, registered by your application:
-`execute_goal(..., context={"acting_for": ..., "mandate": {...}})`.
+`execute_goal(..., on_behalf_of=OnBehalfOf(person, mandate={...}))` (or the same
+`on_behalf_of` on `run_task`, `workflow`, `submit_goal`, `create_chat_router`).
 
 | Key | Values |
 |---|---|
@@ -158,7 +159,7 @@ Made in report and strict mode alike; enforced only in strict.
 | `approval-missing` | A gated action reaching the broker without its approval | No |
 | `ungrounded-argument` | A call a `grounding` rule matches whose values are not grounded | No |
 | `mutation-without-atom` | A provider mutation not from an integration | `rules: allow` |
-| `beyond-declared-effect` | A method beyond the integration's declared effect | No |
+| `beyond-declared-effect` | A method beyond the integration's declared effect. For code not shipped with JarvisCore (registry, model, direct), a call is never taken as less than its method: a "read" that POSTs is a write | No |
 | `outside-contract` | Model-written code sending an operation its code does not contain | No |
 | `unverified-model-code` | Model-written code mutating where its operations cannot be read | No |
 | `unapproved-model-effect` | Model-written code mutating without an approval of that exact action | No |

@@ -9,7 +9,7 @@ scope:
   - Sub-agent runs (the kernel's agent loop) with JOURNAL_CAPTURE=full.
 assumptions:
   - The agent's code is the code being replayed (a changed agent may diverge, which is the point).
-  - The recorded content is still kept (erased content makes a run verifiable but not replayable).
+  - The recorded content is still kept (JOURNAL_CONTENT_DAYS, or erasure for a person, makes a run verifiable but not replayable).
 not_claimed:
   - That the model would answer the same today: replay uses the recorded answers.
   - Replay of CustomAgent code outside the kernel's agent loop.
@@ -19,4 +19,8 @@ evidence:
   - tests/test_replay.py::test_an_agent_that_now_decides_differently_diverges_at_that_decision
   - tests/test_replay.py::test_tampered_content_is_caught
   - tests/test_replay.py::test_a_digest_only_record_is_verifiable_but_says_it_cannot_be_replayed
+  - tests/test_replay.py::test_a_journal_that_cannot_be_written_never_breaks_a_run
+  - tests/test_replay.py::test_concurrent_runs_of_one_agent_each_record_their_own_run_and_leave_it_clean
+  - tests/test_replay.py::test_old_replay_content_is_pruned_and_the_journal_still_verifies
+  - tests/test_evidence_people.py::test_a_run_records_whom_it_was_for_and_its_export_replays
 published: []

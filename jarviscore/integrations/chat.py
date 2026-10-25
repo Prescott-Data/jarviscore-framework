@@ -59,6 +59,7 @@ def create_chat_router(
     kernel,
     prefix: str = "",
     tags: Optional[List[str]] = None,
+    on_behalf_of=None,
 ):
     """
     Create a FastAPI router with chat + SSE trace endpoints.
@@ -67,6 +68,12 @@ def create_chat_router(
         kernel: Kernel instance (jarviscore.kernel.kernel.Kernel)
         prefix:  Optional route prefix (added in addition to app.include_router prefix)
         tags:    FastAPI tag list for OpenAPI docs
+        on_behalf_of: Your application's answer to "whom is this chat for?":
+                 ``(request) -> OnBehalfOf | Person | str | None`` (sync or async),
+                 read from your own authentication. Raise ``HTTPException(401)``
+                 there to refuse unauthenticated chats. Each chat then works with
+                 that person's credentials, within their mandate, named on every
+                 record. Whom a chat is for is never taken from the request body.
 
     Returns:
         APIRouter ready for app.include_router()
@@ -108,7 +115,7 @@ def create_chat_router(
     # ──────────────────────────────────────────────────────────────────────
 
     @router.post("/chat", response_model=ChatResponse)
-    async def chat(req: ChatRequest):
+    async def chat(req: ChatRequest, request: Request):
         """
         Send a message to the agent and get an answer.
 
@@ -126,18 +133,32 @@ def create_chat_router(
         step_id = f"step_{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
         context: Dict[str, Any] = dict(req.context or {})
+        # Whom the work is for comes from the application's authentication, never the client.
+        for authority in ("acting_for", "mandate"):
+            context.pop(authority, None)
         context["workflow_id"] = workflow_id
         context["step_id"] = step_id
+        principal = None
+        if on_behalf_of is not None:
+            import inspect
+
+            from jarviscore.auth.principal import on_behalf_of as resolve
+
+            found = on_behalf_of(request)
+            principal = resolve(await found if inspect.isawaitable(found) else found)
 
         logger.info("[chat] workflow=%s message=%s", workflow_id, req.message[:80])
 
+        from jarviscore.auth.principal import act_for
+
         try:
-            output = await kernel.execute(
-                task=req.message,
-                system_prompt=req.system_prompt or "",
-                context=context,
-                agent_id=req.agent_id or "chat",
-            )
+            with act_for(principal):
+                output = await kernel.execute(
+                    task=req.message,
+                    system_prompt=req.system_prompt or "",
+                    context=context,
+                    agent_id=req.agent_id or "chat",
+                )
         except Exception as exc:
             logger.error("[chat] Kernel execute failed: %s", exc, exc_info=True)
             return JSONResponse(

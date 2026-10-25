@@ -70,6 +70,12 @@ app.include_router(
 > [!NOTE]
 > `create_chat_router` requires FastAPI. Install with `pip install fastapi[all]`.
 
+If your application signs users in, pass `on_behalf_of=` a function of the
+request that returns whom the chat is for (`OnBehalfOf.of(tenant, user)`); each
+chat then uses that user's own accounts. A client can never name someone else:
+`acting_for` and `mandate` in the request body are dropped. See
+[Agents That Act for Your Users](acting-for-your-users.md#from-a-chat-endpoint).
+
 ---
 
 ## Endpoints

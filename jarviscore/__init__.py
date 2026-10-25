@@ -75,6 +75,8 @@ _EXPORTS = {
         "SourceSnapshot", "WorkspaceAccess", "WorkspaceDelta", "WorkspaceDeltaConflict",
     ),
     "jarviscore.room": ("Proposal", "Room", "RoomConflict"),
+    "jarviscore.auth.people": ("Person",),
+    "jarviscore.auth.principal": ("OnBehalfOf", "act_for"),
     "jarviscore.execution.sources": (
         "SourceAdapter", "SourceAdapterError", "SourceContractError", "SourceIntegrityError",
     ),
@@ -133,6 +135,8 @@ def __dir__():
 
 if _TYPE_CHECKING:  # pragma: no cover - for type checkers and IDEs
     from jarviscore.adapter import jarvis_agent, wrap
+    from jarviscore.auth.people import Person
+    from jarviscore.auth.principal import OnBehalfOf, act_for
     from jarviscore.context import DependencyAccessor, JarvisContext, MemoryAccessor
     from jarviscore.core.agent import Agent
     from jarviscore.core.agent import Agent as JarvisAgent
@@ -194,6 +198,12 @@ __all__ = [
     "Room",
     "Proposal",
     "RoomConflict",
+
+    # Acting for your users: their credentials, within what they delegated
+    "OnBehalfOf",
+    "Person",
+    "act_for",
+
     "SourceAdapter",
     "SourceAdapterError",
     "SourceContractError",

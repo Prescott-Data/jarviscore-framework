@@ -175,7 +175,15 @@ def content_digest(value: Any) -> Dict[str, Any]:
     if not isinstance(value, (bytes, bytearray)):
         from jarviscore.evidence.journal import canonical
 
-        value = canonical(value).encode("utf-8")
+        try:
+            value = canonical(value).encode("utf-8")
+        except Exception:  # noqa: BLE001 - any content has a digest: keys as text, the rest by its text
+            from jarviscore.evidence.replay import _jsonable
+
+            try:
+                value = canonical(_jsonable(value)).encode("utf-8")
+            except Exception:  # noqa: BLE001
+                value = repr(value).encode("utf-8", errors="replace")
     return {"bytes": len(value), "digest": hashlib.sha256(value).hexdigest()}
 
 

@@ -116,6 +116,24 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   (`context["mandate"]`: systems, effects, expiry) is enforced at every provider
   call (`outside-mandate`, not liftable). Every decision in the journal names
   `acting_for`. See [Acting for a person](concepts/control-and-evidence.md#acting-for-a-person).
+- **`on_behalf_of` on every entry point, for applications with their own users
+  and tenants.** `run_task`, `execute_goal`, `submit_goal`, `workflow` and
+  `create_chat_router` take `on_behalf_of=OnBehalfOf.of(tenant, user, mandate=...)`
+  (or a `Person` or person key); `act_for` covers a block of your own code. The
+  chat router asks your application whom each chat is for and drops `acting_for`
+  and `mandate` from the request body. Workflows, including DAGs an agent builds
+  while working for someone, register the person with their definition, so steps
+  on other nodes act for the same person. `mesh.connect(provider, on_behalf_of=...)`
+  starts a user's consent and `mesh.connected(...)` checks it. `OnBehalfOf`,
+  `Person` and `act_for` are exported from `jarviscore`. See
+  [Agents That Act for Your Users](guides/acting-for-your-users.md).
+- **Evidence per person and per tenant.** `jarviscore evidence acme/u_1` (or
+  `acme/` for a tenant) lists each run done for them with every decision and
+  approval; `--export DIR` copies those runs with the deployment's head log for
+  an auditor, who checks them with `jarviscore verify --export DIR`; runs that
+  also worked for others are left out. `--erase --yes` erases a person's replay
+  content while the journal still verifies. Each run records whom it was for
+  (`run.start`), and replays as that person.
 - **Replay any recorded run.** Each agent run keeps every model request and
   response, gate result and tool result (content-addressed beside the journal;
   the chain holds their digests), and `jarviscore replay` re-simulates it from
@@ -123,7 +141,11 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   is called and nothing acts. It reports whether the agent made the same
   decisions and ended the same way, how many model requests were identical
   (runtime clock masked), and otherwise the first divergence. `JOURNAL_CAPTURE`:
-  `full` (default), `digests`, `off`. See [Replay](concepts/control-and-evidence.md#replay).
+  `full` (default), `digests`, `off`. Content unused for `JOURNAL_CONTENT_DAYS`
+  (30) is erased in the background; the journal still verifies. A run's record
+  never breaks or slows the run: a journal that cannot be written leaves the run
+  as it was, and concurrent runs of one agent each record their own.
+  See [Replay](concepts/control-and-evidence.md#replay).
 - **Nobody is asked to approve what policy will refuse.** Where a grounding rule
   could apply, a consequential action is previewed before a person is asked: its
   code runs with every change held at the broker after the decision. A change
@@ -155,6 +177,18 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Fixed
 
+- **Review findings on control and evidence.**
+    - Code not shipped with JarvisCore (registry, model-written, direct) is never
+      taken as doing less than its method: a "read" that POSTs is decided as a write.
+    - A grounding check builds the query exactly as the request sends it.
+    - A `fresh: reread` value counts only reads made after the fetch.
+    - A grounding rule with a malformed path no longer stops every call it does
+      not match.
+    - Work acting for a person never falls back to the local credential store
+      when the gateway fails.
+    - `verify` reports a run whose registered head is missing or rewritten, and
+      notes (not problems) a run still being written.
+    - A refused model-code effect reports `performed: false`.
 - **Repairing an integration that acts on the world no longer performs it.**
   A repair is proven by running it. For a write, notify or destructive
   integration that performed the effect, with the arguments the repair carried

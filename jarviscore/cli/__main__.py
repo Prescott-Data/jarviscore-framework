@@ -19,6 +19,7 @@ Usage:
     jarviscore verify [journal_dir]          # Check the journal of decisions and effects
     jarviscore policy check|review           # Check a control policy; review what strict mode refuses
     jarviscore replay [journal_dir] [run]    # Re-simulate recorded runs from the journal
+    jarviscore evidence acme/u_1 [--export DIR]  # What agents did for a person (or acme/ for a tenant)
     jarviscore human join alice --capabilities review --seed HOST:PORT
     jarviscore room watch launch
 """
@@ -40,6 +41,7 @@ def main():
         print("  verify     - Check the journal: every record intact, every effect decided")
         print("  policy     - Check a control policy file; review what strict mode would refuse")
         print("  replay     - Re-simulate recorded agent runs from the journal, every effect stubbed")
+        print("  evidence   - What agents did for a person or tenant; export it for their auditor")
         print("  human      - Join the mesh as a person (join, inbox, answer)")
         print("  room       - Work together on a shared workspace (ask, diff, accept, watch)")
         sys.exit(1)
@@ -77,6 +79,9 @@ def main():
     elif command == 'replay':
         from .replay import main as replay_main
         replay_main()
+    elif command == 'evidence':
+        from .evidence import main as evidence_main
+        evidence_main()
     elif command == 'human':
         from .human import main as human_main
         human_main()
@@ -85,7 +90,7 @@ def main():
         room_main()
     else:
         print(f"Unknown command: {command}")
-        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom, inspect, verify, policy, replay, human, room")
+        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom, inspect, verify, policy, replay, evidence, human, room")
         sys.exit(1)
 
 

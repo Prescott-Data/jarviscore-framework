@@ -171,3 +171,65 @@ async def test_a_digest_only_record_is_verifiable_but_says_it_cannot_be_replayed
 
     assert verify(root).ok
     assert not report.reproduced and "JOURNAL_CAPTURE=full" in report.divergence
+
+
+@pytest.mark.asyncio
+async def test_a_journal_that_cannot_be_written_never_breaks_a_run(journal, monkeypatch, tmp_path):
+    journal()
+    blocked = tmp_path / "read-only"
+    blocked.mkdir()
+    blocked.chmod(0o500)
+    monkeypatch.setenv("JARVISCORE_JOURNAL_DIR", str(blocked / "journal"))
+    monkeypatch.setattr(journal_module, "_journal", None)
+    try:
+        output = await LedgerAgent(llm_client=ScriptedLLM(SCRIPT)).run(
+            task="Pay invoice INV-7", context={"workflow_id": "wf", "step_id": "pay"})
+    finally:
+        blocked.chmod(0o700)
+    assert output.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_runs_of_one_agent_each_record_their_own_run_and_leave_it_clean(journal):
+    import asyncio
+
+    root = journal()
+
+    class Slow(ScriptedLLM):
+        async def generate(self, messages=None, **kwargs):
+            await asyncio.sleep(0.01)
+            return await super().generate(messages=messages, **kwargs)
+
+    agent = LedgerAgent(llm_client=Slow(SCRIPT + SCRIPT))
+    real = agent.llm_client
+    await asyncio.gather(
+        agent.run(task="Pay invoice INV-7", context={"workflow_id": "wf", "step_id": "a"}),
+        agent.run(task="Pay invoice INV-7", context={"workflow_id": "wf", "step_id": "b"}),
+    )
+
+    assert getattr(agent.llm_client, "_jc_inner", None) is real  # wrapped once, never stacked
+    recorded = 0
+    for run in ("wf/a", "wf/b"):
+        events = [json.loads(line) for line in open(os.path.join(root, "runs", run.replace("/", "_") + ".jsonl"))]
+        assert [e["kind"] for e in events].count("run.start") == 1
+        recorded += sum(e["kind"] == "model.call" for e in events)
+    assert recorded == real.calls  # every call recorded once, in the run that made it
+
+
+@pytest.mark.asyncio
+async def test_old_replay_content_is_pruned_and_the_journal_still_verifies(journal):
+    import time as time_module
+
+    from jarviscore.evidence.journal import prune_content
+
+    root = journal()
+    await record(root)
+    old = time_module.time() - 40 * 86400
+    for folder, _, names in os.walk(os.path.join(root, "content")):
+        for name in names:
+            os.utime(os.path.join(folder, name), (old, old))
+
+    assert prune_content(root, 30) > 0
+    assert verify(root).ok
+    report = await replay(root, "wf/pay")
+    assert not report.reproduced and "not kept" in report.divergence

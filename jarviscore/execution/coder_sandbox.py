@@ -860,9 +860,11 @@ class CoderSandbox:
                 ok=lambda result: result.get("status") == "success",
             )
         except EffectDenied as exc:
-            return self._to_sandbox_dict(CoderResult(
+            refused = self._to_sandbox_dict(CoderResult(
                 success=False, error=f"Not run: {exc}", error_type="PolicyDenied",
             ))
+            # Nothing ran: an approval for it stays usable, and nobody is told it was done.
+            return {**refused, "performed": False, "semantic_error": "POLICY_REFUSED"}
 
     @property
     def confined(self) -> bool:

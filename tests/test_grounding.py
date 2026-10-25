@@ -165,8 +165,13 @@ def test_what_is_checked_is_the_body_httpx_will_actually_send():
     assert sneaky.opaque and sneaky.json is None
     form_wins = g.request_from("POST", "https://h/p", {"json": {"iban": GOOD}, "data": {"iban": EVIL}})
     assert form_wins.form == {"iban": EVIL} and form_wins.json is None
+    # params replace the address's query, as httpx sends it, in every form httpx accepts.
+    import httpx
+
     query = g.request_from("GET", "https://h/p?a=1", {"params": {"a": "2", "b": "3"}})
-    assert query.query == {"a": ["1", "2"], "b": "3"}
+    assert query.query == {"a": "2", "b": "3"}
+    for params in ("amount=99999", b"amount=99999", httpx.QueryParams({"amount": "99999"})):
+        assert g.request_from("POST", "https://h/pay?amount=10", {"params": params}).query == {"amount": "99999"}
 
 
 @pytest.mark.parametrize("change, problem", [
@@ -501,3 +506,23 @@ async def test_in_report_mode_the_person_is_asked_and_shown_the_refusal_policy_w
     [check] = request["payload"]["checks"]
     assert check["outcome"] == "deny" and check["enforced"] is False
     assert check["rule"] == "ungrounded-argument" and not payments()
+
+
+@pytest.mark.asyncio
+async def test_a_reread_that_fails_does_not_fall_back_to_the_earlier_read(erp):
+    proxy, _ = erp("strict", {"grounding": [{**POLICY["grounding"][0], "fresh": "reread"}]})
+    await read(proxy, "/invoices/INV-7")
+    await read(proxy, "/suppliers/S-1")
+    del ERP.records["/invoices/INV-7"]  # voided at the provider since it was read
+
+    with pytest.raises(PolicyDenied, match="could not be read again"):
+        await pay(proxy, invoice="INV-7", amount=1250, iban=GOOD)
+    assert not payments()
+
+
+def test_a_malformed_path_refuses_what_it_matches_and_nothing_else():
+    rule = g.parse_rule({**POLICY["grounding"][0], "match": {"provider": "erp", "path": "/pay/{id"}}, 0)
+
+    assert rule.invalid
+    assert rule.applies("erp", None, g.request_from("POST", "https://erp.example.test/pay/1", {}))
+    assert not rule.applies("slack", None, g.request_from("GET", "https://slack.com/x", {}))

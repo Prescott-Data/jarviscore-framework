@@ -1,0 +1,27 @@
+id: evidence-per-person-is-exportable
+claim: >-
+  Everything agents did for a person, or for everyone in a tenant, can be listed
+  from the journal and exported for their auditor; jarviscore verify --export
+  checks each exported run against its own hash chain and the deployment's head
+  log, and still detects any edited event or listed run that is missing. Runs
+  that also worked for someone else are never exported, and a whole journal
+  cannot pass as an export. A person's replay content can be erased while the
+  journal still verifies.
+scope:
+  - Runs recorded with JOURNAL_DIR set, for work started with on_behalf_of or act_for.
+assumptions:
+  - Whom work is for is named by the application (on_behalf_of), from its own authentication.
+  - The deployment's head log is the one it wrote (anchoring it outside the deployment is not yet done).
+not_claimed:
+  - That an export is complete: proving no run for the person was left out needs the whole journal.
+  - That the head log hides other runs' names (it holds every run's name and hash, not content).
+  - Erasure of content another person's run also used (content is shared by digest).
+evidence:
+  - tests/test_evidence_people.py::test_the_account_of_a_person_is_every_run_done_for_them_and_nothing_else
+  - tests/test_evidence_people.py::test_the_account_of_a_tenant_covers_all_its_people_and_no_other_tenant
+  - tests/test_evidence_people.py::test_an_export_holds_the_tenants_runs_verifiable_on_their_own
+  - tests/test_evidence_people.py::test_an_export_still_shows_tampering_and_a_run_it_claims_but_lacks
+  - tests/test_evidence_people.py::test_an_export_is_not_a_whole_journal_and_a_whole_journal_cannot_pass_as_one
+  - tests/test_evidence_people.py::test_erasing_a_persons_content_keeps_the_journal_verifiable_and_others_replayable
+  - tests/test_evidence_people.py::test_the_cli_lists_and_exports_a_persons_evidence
+published: []

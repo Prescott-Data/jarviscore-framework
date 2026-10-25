@@ -1820,13 +1820,15 @@ class RedisContextStore:
                 interpretations[str(dependency_id)] = interpretation
         return interpretations
 
-    def init_workflow_graph(self, workflow_id: str, steps: List[Dict]) -> bool:
-        """Initialize Redis DAG for a workflow."""
+    def init_workflow_graph(self, workflow_id: str, steps: List[Dict],
+                            context: Optional[Dict[str, Any]] = None) -> bool:
+        """Initialize Redis DAG for a workflow; ``context`` is registered with its definition."""
         return self.publish_workflow(
             workflow_id,
             goal="",
             obligations=[],
             steps=steps,
+            context=context,
         )
 
     def get_step_status(self, workflow_id: str, step_id: str) -> Optional[str]:

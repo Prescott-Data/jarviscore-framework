@@ -1464,20 +1464,24 @@ class BaseSubAgent(ABC):
             "step_id": (context or {}).get("step_id"),
             "agent": getattr(self, "agent_id", None),
         })
-        from jarviscore.evidence.replay import Recorder
+        from jarviscore.evidence.replay import CURRENT, Recorder, install
 
-        # What the run depended on is kept so it can be replayed (evidence.replay).
-        recorder = Recorder.for_run(context)
-        if recorder is not None:
-            recorder.attach(self, task, context, max_turns, model, cognition)
         output = None
+        recording = None
         try:
+            # What the run depended on is kept so it can be replayed (evidence.replay).
+            recorder = Recorder.for_run(context)
+            if recorder is not None:
+                install(self)
+                recording = CURRENT.set(recorder)
+                recorder.start(self, task, context, max_turns, model, cognition)
             output = await self._run_turns(
                 task, context, max_turns, model, cognition, context_manager, memory, trace,
             )
         finally:
-            if recorder is not None:
-                recorder.detach(output)
+            if recording is not None:
+                recorder.end(output)
+                CURRENT.reset(recording)
             effect_scope.reset(token)
         state = self._current_state
         if output.status != "success" and state is not None:

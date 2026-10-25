@@ -26,6 +26,7 @@ Commands:
   verify      Check the journal of decisions and effects
   policy      Check a control policy file; review what strict mode would refuse
   replay      Re-simulate recorded agent runs from the journal, every effect stubbed
+  evidence    What agents did for a person or tenant; export it for their auditor
   human       Join the mesh as a person
   room        Work together on a shared workspace
 ```
@@ -557,12 +558,19 @@ jarviscore verify /path/to/journal
 
 # The report as JSON
 jarviscore verify --json
+
+# An export of one person's or tenant's runs (jarviscore evidence --export)
+jarviscore verify --export /path/to/export
 ```
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `journal_dir` | `str` | `JOURNAL_DIR` (`./.jarviscore/journal`) | Journal to check |
-| `--json` | flag | off | Print the report as JSON |
+| `--json` | flag | off | Print the report as JSON (with `problems` and `notes`) |
+| `--export` | flag | off | Check an export: runs it left out are expected missing. A plain `verify` refuses an export |
+
+Notes (not problems) report a run still being written or events after a run's
+registered head.
 
 It checks each run's hash chain, that each run ends where the head log
 registered it, that every effect followed an allow decision, and that every
@@ -587,6 +595,34 @@ A run reproduces when the agent makes the same decisions and ends the same way;
 otherwise the report names the first decision where it diverged. Exit status:
 `0` all reproduced, `1` any diverged, `2` nothing to replay. Needs
 `JOURNAL_CAPTURE=full` (the default). See [Replay](../concepts/control-and-evidence.md#replay).
+
+---
+
+## jarviscore evidence
+
+What agents did for one person, or for everyone in a tenant (a key ending in
+`/`), from the journal; export it for an auditor; erase a person's replay content.
+
+```bash
+jarviscore evidence acme/u_123                       # each run, decision and approval for them
+jarviscore evidence acme/ /path/to/journal --json    # a whole tenant, as JSON
+jarviscore evidence acme/ --export acme-evidence/    # copy those runs, verifiable on their own
+jarviscore evidence acme/ --export out/ --content    # ... with replay content (personal data)
+jarviscore evidence acme/u_123 --erase               # what erasing their replay content removes
+jarviscore evidence acme/u_123 --erase --yes         # erase it
+```
+
+| Option | Description |
+|---|---|
+| `who` | A person key (`acme/u_123`) or a tenant (`acme/`) |
+| `journal_dir` | Default `JOURNAL_DIR` |
+| `--export DIR` | Copy their runs and the head log into an empty `DIR`, with `export.json`; runs shared with others are left out and listed |
+| `--content` | With `--export`: also copy the content replay needs |
+| `--erase [--yes]` | Count, then erase, the replay content only their runs used; the journal still verifies |
+| `--json` | JSON output |
+
+Exit status: `0`, or `2` when there is no journal or nothing was done for them.
+See [Agents That Act for Your Users](../guides/acting-for-your-users.md#6-evidence-per-user-and-per-tenant).
 
 ---
 
