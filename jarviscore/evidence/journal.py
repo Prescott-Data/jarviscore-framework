@@ -248,7 +248,7 @@ class Verification:
         state = "intact" if self.ok else f"{len(self.problems)} problem(s)"
         preview = f", {self.refused_in_preview} refused before approval" if self.refused_in_preview else ""
         return (
-            f"{self.runs} run(s), {self.events} event(s), {self.effects} provider call(s) "
+            f"{self.runs} run(s), {self.events} event(s), {self.effects} effect(s) "
             f"({self.refused} refused{preview}): {state}"
         )
 

@@ -32,8 +32,10 @@ def main() -> None:
         for problem in report.problems:
             print(f"  - {problem}")
         print(
-            "\nChecked: each run's hash chain, its head in the head log, and that every "
-            "provider call followed an allow decision.\nNot covered: a rewrite of the whole "
+            "\nChecked: each run's hash chain, its head in the head log, that every "
+            "effect (provider calls, code, processes, artifacts, workspace, memory, peers, "
+            "outputs) followed an allow decision, and that every grounded call cites reads "
+            "in the record.\nNot covered: a rewrite of the whole "
             "journal by whoever controls it, until checkpoints are anchored outside it."
         )
     sys.exit(0 if report.ok else 1)

@@ -1446,9 +1446,20 @@ class BaseSubAgent(ABC):
         ``metadata["progress"]``, whichever way it stopped.
         """
         self._current_state = None
-        output = await self._run_turns(
-            task, context, max_turns, model, cognition, context_manager, memory, trace,
-        )
+        from jarviscore.control.effects import scope as effect_scope
+
+        # Effects made during this run belong to its workflow step (control.effects).
+        token = effect_scope.set({
+            "workflow_id": (context or {}).get("workflow_id"),
+            "step_id": (context or {}).get("step_id"),
+            "agent": getattr(self, "agent_id", None),
+        })
+        try:
+            output = await self._run_turns(
+                task, context, max_turns, model, cognition, context_manager, memory, trace,
+            )
+        finally:
+            effect_scope.reset(token)
         state = self._current_state
         if output.status != "success" and state is not None:
             progress = state.progress()

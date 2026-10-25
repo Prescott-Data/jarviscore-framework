@@ -23,7 +23,7 @@ Commands:
   memory      Manage agent memory infrastructure
   atom        Validate, test, and list integration atoms
   inspect     Read recorded traces from past runs
-  verify      Check the journal of decisions and provider calls
+  verify      Check the journal of decisions and effects
   human       Join the mesh as a person
   room        Work together on a shared workspace
 ```
@@ -542,7 +542,8 @@ See [Observability](../guides/observability.md) for how traces are recorded and 
 
 ## jarviscore verify
 
-Checks the journal of decisions and provider calls, offline. It needs no keys and
+Checks the journal of decisions and effects (provider calls and every other
+mediated effect), offline. It needs no keys and
 no network, so it runs the same on a copy handed to an auditor.
 
 ```bash
@@ -562,6 +563,7 @@ jarviscore verify --json
 | `--json` | flag | off | Print the report as JSON |
 
 It checks each run's hash chain, that each run ends where the head log
-registered it, and that every provider call followed an allow decision. Exit
+registered it, that every effect followed an allow decision, and that every
+grounded call cites reads that are in the record. Exit
 status: `0` intact, `1` problems found, `2` no journal. See
 [Control and Evidence](../concepts/control-and-evidence.md) for what it detects and what it does not yet.

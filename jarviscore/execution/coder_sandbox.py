@@ -317,6 +317,25 @@ class BashExecutor:
         if not work_dir.exists():
             work_dir.mkdir(parents=True, exist_ok=True)
 
+        if os.environ.get("JARVISCORE_SANDBOX_CHILD") == "1":
+            return self._spawn(command, work_dir)
+        from jarviscore.control.effects import Effect, EffectDenied, content_digest, mediated
+
+        effect = Effect(
+            "process", "run",
+            target=" ".join(os.path.basename(shell_tokens[index]) for index in command_indexes),
+            origin="model",
+            attributes={"confined": False, **content_digest(command)},
+        )
+        try:
+            with mediated(effect) as mediation:
+                result = self._spawn(command, work_dir)
+                mediation.done(ok=bool(result.get("success")), returncode=result.get("returncode"))
+                return result
+        except EffectDenied as exc:
+            raise BashPermissionError(str(exc)) from exc
+
+    def _spawn(self, command: str, work_dir: Path) -> Dict[str, Any]:
         try:
             command_dirs = {
                 str(Path(found).parent)
@@ -818,10 +837,32 @@ class CoderSandbox:
         if self.browser_proxy is not None and getattr(self, "_browser_process", None) is not None:
             # The session keeps its own variables and state; the step's reads arrive with each cell.
             reads = {"browser_reads": (context or {}).get("browser_reads") or {}}
-            return await self._execute_browser_cell(
+            return await self._mediated_code_run(code, context, lambda: self._execute_browser_cell(
                 {"code": code, "context": reads}, timeout or self.timeout,
-            )
+            ))
         return await self._execute_subprocess(code, context, timeout or self.timeout)
+
+    async def _mediated_code_run(self, code: str, context: Optional[Dict], run) -> Dict[str, Any]:
+        """Run code as a decided, recorded effect (control.effects); a refusal is the result."""
+        from jarviscore.control.effects import Effect, EffectDenied, content_digest, run_mediated
+
+        authority = (context or {}).get("_atom_authority") or {}
+        effect = Effect(
+            "code", "run",
+            target=str(authority.get("atom") or "program"),
+            origin=str(authority.get("code_origin") or "model"),
+            attributes={"confined": self.confined, **content_digest(code)},
+        )
+        try:
+            return await run_mediated(
+                effect, run,
+                workflow_id=(context or {}).get("workflow_id"), step_id=(context or {}).get("step_id"),
+                ok=lambda result: result.get("status") == "success",
+            )
+        except EffectDenied as exc:
+            return self._to_sandbox_dict(CoderResult(
+                success=False, error=f"Not run: {exc}", error_type="PolicyDenied",
+            ))
 
     @property
     def confined(self) -> bool:
@@ -853,6 +894,13 @@ class CoderSandbox:
         return await self._execute_subprocess(code, context, timeout or self.timeout)
 
     async def _execute_subprocess(
+        self, code: str, context: Optional[Dict], timeout: int
+    ) -> Dict[str, Any]:
+        return await self._mediated_code_run(
+            code, context, lambda: self._run_child(code, context, timeout),
+        )
+
+    async def _run_child(
         self, code: str, context: Optional[Dict], timeout: int
     ) -> Dict[str, Any]:
         start = time.time()
@@ -888,6 +936,8 @@ class CoderSandbox:
             "TMPDIR": str(self.workspace / ".tmp"),
             "LANG": "C.UTF-8",
             "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+            # Commands inside the child are its own scratch work, inside its confinement.
+            "JARVISCORE_SANDBOX_CHILD": "1",
             **_user_site_environment(),
         }
         Path(safe_env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
@@ -950,7 +1000,7 @@ class CoderSandbox:
             )
         else:
             cr = self._parse_result(response.get("result"), response.get("stdout", ""), time.time() - start)
-            await self._collect_artifacts(cr, before)
+            await self._collect_artifacts(cr, before, context)
         return self._to_sandbox_dict(cr)
 
     @staticmethod
@@ -1143,12 +1193,24 @@ class CoderSandbox:
                         if self._mesh_proxy is None:
                             raise RuntimeError("No mesh is attached to this agent.")
                         payload = request["payload"]
-                        result = await self._mesh_proxy.delegate(
-                            to=str(payload.get("to") or ""),
-                            task=str(payload.get("task") or ""),
-                            context=payload.get("context"),
-                            capability=payload.get("capability"),
-                            timeout=payload.get("timeout"),
+                        from jarviscore.control.effects import Effect, content_digest, run_mediated
+
+                        authority = context.get("_atom_authority") or {}
+                        result = await run_mediated(
+                            Effect(
+                                "peer", "delegate",
+                                target=str(payload.get("to") or payload.get("capability") or ""),
+                                origin=str(authority.get("code_origin") or "model"),
+                                attributes=content_digest({"task": payload.get("task"), "context": payload.get("context")}),
+                            ),
+                            lambda: self._mesh_proxy.delegate(
+                                to=str(payload.get("to") or ""),
+                                task=str(payload.get("task") or ""),
+                                context=payload.get("context"),
+                                capability=payload.get("capability"),
+                                timeout=payload.get("timeout"),
+                            ),
+                            workflow_id=context.get("workflow_id"), step_id=context.get("step_id"),
                         )
                     else:
                         raise RuntimeError("Unknown sandbox RPC operation.")
@@ -1396,7 +1458,9 @@ class CoderSandbox:
                 snapshot[str(path)] = path.stat().st_mtime_ns
         return snapshot
 
-    async def _collect_artifacts(self, cr: "CoderResult", before: Dict[str, float]) -> None:
+    async def _collect_artifacts(
+        self, cr: "CoderResult", before: Dict[str, float], context: Optional[Dict] = None,
+    ) -> None:
         """Hand what the run produced to storage, and report it as a handle.
 
         An agent that downloads a file has to be able to say what it produced
@@ -1407,6 +1471,8 @@ class CoderSandbox:
         produced = [p for p, stamp in after.items() if before.get(p) != stamp]
         if not produced:
             return
+        # What the files came from is what made them: the code that just ran.
+        origin = str(((context or {}).get("_atom_authority") or {}).get("code_origin") or "model")
 
         for path in sorted(produced):
             local = Path(path)
@@ -1417,10 +1483,19 @@ class CoderSandbox:
                 "key": None,
             }
             if self.blob_storage is not None:
+                from jarviscore.control.effects import Effect, EffectDenied, content_digest, mediated
+
                 key = f"{self.artifact_prefix}/{record['name']}"
+                payload = local.read_bytes()
                 try:
-                    await self.blob_storage.save(key, local.read_bytes())
+                    with mediated(
+                        Effect("artifact", "publish", target=key, origin=origin, attributes=content_digest(payload)),
+                        workflow_id=(context or {}).get("workflow_id"), step_id=(context or {}).get("step_id"),
+                    ):
+                        await self.blob_storage.save(key, payload)
                     record["key"] = key
+                except EffectDenied as exc:
+                    record["error"] = f"Not published: {exc}"
                 except Exception as exc:  # noqa: BLE001 - storage must not fail the run
                     logger.warning("Could not store artifact %s: %s", key, exc)
                     record["error"] = str(exc)

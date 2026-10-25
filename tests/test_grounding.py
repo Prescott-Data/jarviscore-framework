@@ -430,7 +430,10 @@ def paying_coder(erp, tmp_path):
     from jarviscore.testing.mocks import MockRedisContextStore
 
     def make(mode):
-        proxy, root = erp(mode)
+        # Strict mode runs integration code unconfined only where the deployment says so.
+        proxy, root = erp(mode, {**POLICY, "effects": [
+            {"name": "unconfined-test-host", "decision": "allow", "match": {"sink": "code"}},
+        ]})
         registry = create_function_registry(tempfile.mkdtemp(), seed=False)
         registry.register_function("erp_pay_invoice", PAY_ATOM, metadata={
             "system": "erp", "description": "Pay one invoice", "capabilities": ["payments"]})
@@ -460,7 +463,8 @@ async def test_nobody_is_asked_to_approve_a_payment_policy_will_refuse(paying_co
     assert coder.redis_store.list_hitl_action_requests("wf", "pay") == []
     assert not payments()
     check = verify(root)
-    assert check.ok and check.refused_in_preview == 1 and check.effects == 2
+    # Two reads, and the preview's own run of the integration's code; no payment.
+    assert check.ok and check.refused_in_preview == 1 and check.effects == 3
 
 
 @pytest.mark.asyncio

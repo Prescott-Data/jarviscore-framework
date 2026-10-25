@@ -2743,6 +2743,20 @@ class Mesh:
                     workflow_id,
                 )
             return
+        from jarviscore.control.effects import Effect, EffectDenied, content_digest, mediated
+
+        try:
+            # Delivering the step's result to the steps and caller after it is an effect.
+            with mediated(
+                Effect("output", "deliver", target=str(step_id), agent=agent.agent_id,
+                       attributes={"status": str(s), **content_digest(result)}),
+                workflow_id=workflow_id, step_id=step_id,
+            ):
+                pass
+        except EffectDenied as exc:
+            result = {"status": "failure", "error": f"Result not delivered: {exc}",
+                      "semantic_error": "POLICY_REFUSED"}
+            s = "failure"
         terminal = terminal_step_status(s)
         committed = self._redis_store.finish_claimed_step(
             workflow_id,

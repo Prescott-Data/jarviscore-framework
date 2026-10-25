@@ -254,8 +254,29 @@ class UnifiedMemory:
 
         The agent is the memory lifecycle: it chooses what deserves to persist.
         Returns False when no cross-session tier is available, so the caller can
-        say so instead of believing something was kept.
+        say so instead of believing something was kept, or when policy refuses it.
         """
+        from jarviscore.control.effects import Effect, EffectDenied, content_digest, mediated
+
+        effect = Effect(
+            "memory", "write", target=str(kind), origin="model", agent=getattr(self, "_agent", None),
+            attributes={
+                "private": bool(getattr(self, "_private_scope", None) and self._is_private()),
+                **content_digest(fact),
+            },
+        )
+        try:
+            with mediated(
+                effect, workflow_id=getattr(self, "_wf", None), step_id=getattr(self, "_step", None),
+            ) as mediation:
+                kept = await self._remember(fact, kind, **metadata)
+                mediation.done(ok=bool(kept))
+                return kept
+        except EffectDenied as exc:
+            logger.info("Memory write refused by policy: %s", exc)
+            return False
+
+    async def _remember(self, fact: str, kind: str = "fact", **metadata: str) -> bool:
         local = getattr(self, "local", None)
         if local is not None and getattr(self, "_athena_client", None) is None:
             if self._private_scope and self._is_private():

@@ -91,6 +91,17 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   caller's input, optional re-read before acting, and every grounded call citing
   the journal event of each read it relied on, checked by `jarviscore verify`.
   See [Grounding](concepts/control-and-evidence.md#grounding).
+- **Every effect, not only provider calls, is decided before it happens and
+  recorded.** Code runs in the sandbox, host commands, artifacts published to
+  blob storage, workspace changes exported or written, memories kept, messages
+  to peers (sent, delegated from sandboxed code, and the engine's broadcast of
+  every step result), and step results delivered downstream all pass one
+  decision point (`jarviscore.control.effects`) recorded in the journal and held
+  by `jarviscore verify`. `effects:` rules in the control policy refuse any of
+  them. In strict mode, model-written code and commands are refused when they
+  would run outside a confined sandbox, unless a rule allows it. A test fails the
+  build when a raw effect call in the package is neither decided on nor
+  classified. See [Every other effect](concepts/control-and-evidence.md#every-other-effect).
 - **Nobody is asked to approve what policy will refuse.** Where a grounding rule
   could apply, a consequential action is previewed before a person is asked: its
   code runs with every change held at the broker after the decision. A change

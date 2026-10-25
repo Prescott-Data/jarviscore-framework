@@ -7,14 +7,18 @@ description: "How JarvisCore decides on every provider call before any network I
 # Control and Evidence
 
 The model proposes. The runtime decides what runs, and keeps a record anyone can
-check. This page covers the first part of that built so far: **calls to connected
-providers** (GitHub, Slack, ERPs and the rest of the catalogue).
+check. Every **call to a connected provider** (GitHub, Slack, ERPs and the rest of
+the catalogue) and every **other effect** an agent has outside its step (code it
+runs, commands on the host, files it publishes, changes it exports, memories it
+keeps, messages to other agents, the result it delivers) is decided before it
+happens and recorded.
 
 | What | Where |
 |---|---|
 | Every provider call is decided on before anything leaves | `NexusCallProxy` |
 | What an integration's code can send, read from that code | `jarviscore.control.operations` |
 | The decision rules | `jarviscore.control.policy` |
+| Every other effect, decided where it happens | `jarviscore.control.effects` |
 | The record of decisions and calls | `jarviscore.evidence.journal` |
 | Checking the record | `jarviscore verify` |
 
@@ -166,6 +170,56 @@ assurance, how they were authenticated), `approval.refused`, `approval.claim`,
 
 ---
 
+## Every other effect
+
+What an agent does outside its step that is not a provider call goes through one
+decision point at the place it happens, recorded the same way (`policy.decision`,
+`effect.attempt`, `effect.outcome`; sizes and digests, never content), so
+`jarviscore verify` holds each to "decided before it happened".
+
+| Sink | Where | Records |
+|---|---|---|
+| `code` | Each program run in the sandbox: model-written code, registry and shipped integrations, browser cells | Origin, digest, whether the child was confined |
+| `process` | A command on the host, outside the sandbox's child | The programs, digest |
+| `artifact` | A file the sandbox publishes to blob storage | Key, size, digest |
+| `workspace` | A step's changes exported for the next step or for review; a file an agent writes on the host | Counts, digest; path |
+| `memory` | A fact kept for later sessions | Kind, private or shared, digest |
+| `peer` | A message to another agent: `send`, `delegate` from sandboxed code, and the engine's `broadcast` of every step result to all peers | Recipient, digest |
+| `output` | A step's result delivered to the steps and caller after it | Status, digest |
+
+Commands a confined child runs inside its own workspace are its scratch work: they
+cannot reach the network or write outside the workspace, and what they produce
+leaves only through the sinks above.
+
+**Strict mode needs a confined sandbox.** Model-written code, registry
+integrations and host commands the model chose are refused (`unconfined-execution`)
+when they would run outside a confined child, since there they reach the network
+and the host past every broker. Integrations shipped with JarvisCore still run.
+Where confinement is not available (macOS `sandbox-exec`, Linux bubblewrap), a
+deployment that accepts the risk says so with a rule, which is then on record with
+every run it allows.
+
+```yaml
+effects:
+  - name: no-broadcast-of-results     # keep step results off the P2P network
+    decision: deny
+    match: {sink: peer, action: broadcast}
+  - name: no-exports
+    decision: deny
+    match: {sink: artifact, target: "*/exports/*"}
+  - name: ci-runner-without-bubblewrap
+    decision: allow                   # lifts only unconfined-execution
+    match: {sink: code}
+```
+
+Match keys: `sink`, `action`, `origin`, `agent`, `target` (a glob) and
+`confined`. A rule that cannot be read refuses every effect. A test enumerates
+every raw call in the package that runs a process, stores a blob, keeps a memory,
+messages peers or writes a file from an agent tool, and fails the build if one is
+neither decided on nor classified as the runtime's own.
+
+---
+
 ## Grounding
 
 An approval asks a person. Grounding asks the system of record. For an operation
@@ -243,6 +297,6 @@ HTTPS endpoint a call went from about 500 ms with a fresh connection to about
 
 ## Not covered yet
 
-Effects that do not go through a provider call are not decided on here yet:
-workspace files and processes, the browser, memory, and messages between agents.
-Signed, witnessed checkpoints come next, each with its own claim and tests.
+The browser's own requests and actions are not decided on here yet (navigation,
+clicks, page-initiated requests); a browser request broker comes next. Signed,
+witnessed checkpoints after that, each with its own claim and tests.

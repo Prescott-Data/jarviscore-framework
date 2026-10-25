@@ -132,6 +132,8 @@ class ControlPolicy:
     principals: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
     #: Which request fields must come from records the runtime read (control.grounding).
     grounding: Tuple[Any, ...] = ()
+    #: Rules on effects other than provider calls (control.effects).
+    effect_rules: Tuple[Any, ...] = ()
     #: Digest of the policy file, recorded with every decision made under it.
     digest: str = ""
 
@@ -245,13 +247,15 @@ def current_policy() -> ControlPolicy:
     approvals: List[Any] = []
     principals: Dict[str, Tuple[str, ...]] = {}
     grounding: List[Any] = []
+    effect_rules: Tuple[Any, ...] = ()
     digest = ""
     if path:
         rules, approvals, principals, digest = _load_document(path)
         grounding = _load_grounding(path)
+        effect_rules = _load_effect_rules(path, broken=any(r.name == "unreadable-policy" for r in rules))
     policy = ControlPolicy(
         mode=mode, rules=tuple(rules), approvals=tuple(approvals),
-        principals=principals, grounding=tuple(grounding), digest=digest,
+        principals=principals, grounding=tuple(grounding), effect_rules=effect_rules, digest=digest,
     )
     _cached = (key, policy)
     return policy
@@ -260,6 +264,24 @@ def current_policy() -> ControlPolicy:
 def _load_rules(path: str) -> List[Rule]:
     """The call rules of a policy file."""
     return _load_document(path)[0]
+
+
+def _load_effect_rules(path: str, broken: bool) -> Tuple[Any, ...]:
+    """The ``effects:`` rules of a policy file; a file that cannot be read refuses every effect."""
+    from jarviscore.control.effects import EffectRule, parse_rules
+
+    if broken:
+        return (EffectRule(name="unreadable-policy", decision="deny"),)
+    try:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8")
+        data = json.loads(text) if path.endswith(".json") else __import__("yaml").safe_load(text)
+        entries = (data or {}).get("effects")
+    except Exception:  # noqa: BLE001 - reported by _load_document
+        return (EffectRule(name="unreadable-policy", decision="deny"),)
+    if entries is not None and not isinstance(entries, list):
+        return (EffectRule(name="unreadable-effects", decision="deny"),)
+    return parse_rules(entries)
 
 
 def _load_grounding(path: str) -> List[Any]:
