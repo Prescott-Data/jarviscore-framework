@@ -1294,6 +1294,7 @@ class BaseSubAgent(ABC):
         total_tokens: dict,
         total_cost: float,
         exhausted: str,
+        trajectory: Optional[List[Dict[str, Any]]] = None,
     ):
         """One tools-disabled synthesis turn after lease expiry (issue #139).
 
@@ -1327,6 +1328,14 @@ class BaseSubAgent(ABC):
                     "COMPLETE: yes when the answer covers everything the task asked for, "
                     "no when any part was not reached\n"
                     "DONE: <complete human answer; may span lines>\nRESULT: <json result>"
+                )
+            unperformed = self._unperformed(state)
+            if unperformed:
+                # Written from memory, an answer reports what was meant as done. The run's own
+                # record of what did not happen keeps it to what did.
+                instruction += (
+                    "\n\nThese attempts did not succeed; report something as done only where a "
+                    "later result above shows it happened:\n" + "\n".join(unperformed)
                 )
             messages.append({"role": "user", "content": instruction})
             llm_result = await self.llm_client.generate(messages=messages, **kwargs)
@@ -1376,7 +1385,8 @@ class BaseSubAgent(ABC):
                 status="success",
                 summary=f"Completed on landing turn after budget exhaustion ({exhausted}): {parsed['summary']}",
                 payload=state.get_final_output(),
-                trajectory=[{"turn": state.turn, "type": "landing", "summary": parsed["summary"]}],
+                # What the run did stays on the record; the landing is its last entry.
+                trajectory=[*(trajectory or []), {"turn": state.turn, "type": "landing", "summary": parsed["summary"]}],
                 metadata={"tokens": total_tokens, "cost_usd": total_cost,
                           "lease_exhausted": exhausted, "landing_turn": True,
                           "typed_outcome": "SUCCESS_ON_LANDING",
@@ -1603,7 +1613,7 @@ class BaseSubAgent(ABC):
                 if memory is None or not self._epochs_remain(state.context):
                     landing = await self._landing_turn(
                         state, system_prompt, conversation_history, model,
-                        total_tokens, total_cost, exhausted,
+                        total_tokens, total_cost, exhausted, trajectory=trajectory,
                     )
                 if landing is not None:
                     return landing
@@ -2650,6 +2660,19 @@ class BaseSubAgent(ABC):
                 "kept_memories": list(getattr(self, "_kept_memories", [])),
             },
         )
+
+    @staticmethod
+    def _unperformed(state: KernelState, limit: int = 12) -> List[str]:
+        """The run's attempts that were refused, failed or are waiting, from its tool log."""
+        lines = []
+        for item in state.tool_history:
+            output = item.tool_output if isinstance(item.tool_output, dict) else {}
+            held = str(output.get("status") or "").lower() in ("error", "failed", "failure", "blocked", "refused", "waiting")
+            if item.status == "success" and not held:
+                continue
+            reason = item.error or output.get("error") or output.get("detail") or output.get("status") or item.status
+            lines.append(f"- {item.tool_name}: {' '.join(str(reason).split())[:200]}")
+        return lines[-limit:]
 
     def _records_support_completion(self, state: KernelState, parsed: Dict[str, Any]) -> tuple:
         """Whether a clock expiry may be reported as completion.
