@@ -111,6 +111,14 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - **An integration's mutation is held to what it declares.** The sandbox let any
   integration with an action id send any POST, PUT, PATCH or DELETE; the broker
   now holds it to the methods its declared effect allows.
+- **`import jarviscore` takes about 0.13 s instead of about 3 s, and every
+  sandboxed code run starts about 3 s sooner.** The package and
+  `jarviscore.execution` imported the mesh, every LLM SDK and the planner on
+  import; so did the sandbox's child process, for every integration call and
+  every `execute_code`. Their public names now load on first use (PEP 562); the
+  names, `from jarviscore import *`, and reaching subpackages as attributes are
+  unchanged. Measured: a sandboxed integration run 3.6 s to 0.55 s; a live
+  coder step that reads an invoice and asks to pay it, median 8.9 s to 7.45 s.
 
 ### Fixed
 
