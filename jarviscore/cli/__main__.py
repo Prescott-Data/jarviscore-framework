@@ -16,7 +16,8 @@ Usage:
     jarviscore atom list
     jarviscore inspect                       # List recorded runs
     jarviscore inspect <workflow_id>         # Timeline for one run
-    jarviscore verify [journal_dir]          # Check the journal of decisions and provider calls
+    jarviscore verify [journal_dir]          # Check the journal of decisions and effects
+    jarviscore policy check|review           # Check a control policy; review what strict mode refuses
     jarviscore human join alice --capabilities review --seed HOST:PORT
     jarviscore room watch launch
 """
@@ -35,7 +36,8 @@ def main():
         print("  memory     - Manage Athena MemOS (init, status, context, search)")
         print("  atom       - Validate, test, and list integration atoms")
         print("  inspect    - Read recorded traces: what did my agents do?")
-        print("  verify     - Check the journal: every record intact, every provider call decided")
+        print("  verify     - Check the journal: every record intact, every effect decided")
+        print("  policy     - Check a control policy file; review what strict mode would refuse")
         print("  human      - Join the mesh as a person (join, inbox, answer)")
         print("  room       - Work together on a shared workspace (ask, diff, accept, watch)")
         sys.exit(1)
@@ -67,6 +69,9 @@ def main():
     elif command == 'verify':
         from .verify import main as verify_main
         verify_main()
+    elif command == 'policy':
+        from .policy import main as policy_main
+        policy_main()
     elif command == 'human':
         from .human import main as human_main
         human_main()
@@ -75,7 +80,7 @@ def main():
         room_main()
     else:
         print(f"Unknown command: {command}")
-        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom, inspect, verify, human, room")
+        print("\nAvailable commands: init, check, smoketest, nexus, memory, atom, inspect, verify, policy, human, room")
         sys.exit(1)
 
 

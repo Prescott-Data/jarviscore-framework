@@ -102,6 +102,12 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   would run outside a confined sandbox, unless a rule allows it. A test fails the
   build when a raw effect call in the package is neither decided on nor
   classified. See [Every other effect](concepts/control-and-evidence.md#every-other-effect).
+- **What a browser page sends is decided where it leaves.** Every top-level
+  navigation and every request carrying data out of the browser (forms,
+  `fetch`, XHR, beacons, including ones browser code starts with `evaluate`) is
+  decided and recorded (`browser` sink). In strict mode a page sends only to the
+  site it is on unless a rule allows another host (`browser-send-off-site`);
+  requests are intercepted there and only observed in report mode.
 - **Nobody is asked to approve what policy will refuse.** Where a grounding rule
   could apply, a consequential action is previewed before a person is asked: its
   code runs with every change held at the broker after the decision. A change

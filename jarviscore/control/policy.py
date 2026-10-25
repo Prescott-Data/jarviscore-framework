@@ -364,3 +364,125 @@ def _load_document(path: str):
             match=dict(entry.get("match") or {}),
         ))
     return rules, approvals, principals, digest
+
+
+_SECTIONS = {"rules", "approvals", "principals", "grounding", "effects"}
+_RULE_MATCH = {"provider", "system", "atom", "effect", "method", "code_origin", "verified"}
+_APPROVAL_KEYS = {"name", "match", "require", "roles", "distinct_from", "assurance"}
+_APPROVAL_MATCH = {"provider", "system", "atom", "effect"}
+
+
+def check_policy(path: str) -> Tuple[List[str], Dict[str, Any]]:
+    """What is wrong with a control policy file, and what it holds.
+
+    Everything a running deployment would refuse silently (a rule it cannot read
+    fails closed and is only logged) is named here, before it is deployed.
+    Returns ``(problems, summary)``; no problems means every rule reads as written.
+    """
+    from jarviscore.control.effects import parse_rules
+    from jarviscore.control.grounding import parse_rule
+
+    problems: List[str] = []
+    try:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8")
+        data = json.loads(text) if path.endswith(".json") else __import__("yaml").safe_load(text)
+    except Exception as exc:  # noqa: BLE001
+        return [f"{path} cannot be read ({exc}); a deployment using it refuses every call and effect."], {}
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return [f"{path} is not a mapping of sections; every call and effect would be refused."], {}
+    for key in sorted(set(data) - _SECTIONS):
+        problems.append(f"Unknown section {key!r}: it is ignored. Sections: {', '.join(sorted(_SECTIONS))}.")
+
+    for index, entry in enumerate(data.get("rules") or []):
+        name = (entry or {}).get("name") or f"rules[{index}]"
+        if str((entry or {}).get("decision") or "").lower() not in ("deny", "allow"):
+            problems.append(f"rules: {name!r} has decision {(entry or {}).get('decision')!r}; it is treated as deny.")
+        unknown = set((entry or {}).get("match") or {}) - _RULE_MATCH
+        if unknown:
+            problems.append(f"rules: {name!r} matches on {sorted(unknown)}, which calls do not have, so it never applies.")
+    for index, entry in enumerate(data.get("approvals") or []):
+        name = (entry or {}).get("name") or f"approvals[{index}]"
+        unknown = set(entry or {}) - _APPROVAL_KEYS
+        if unknown:
+            problems.append(f"approvals: {name!r} has unknown keys {sorted(unknown)}.")
+        unmatched = set((entry or {}).get("match") or {}) - _APPROVAL_MATCH
+        if unmatched:
+            problems.append(f"approvals: {name!r} matches on {sorted(unmatched)}, which actions do not have.")
+        if str((entry or {}).get("assurance") or "unauthenticated") not in ("unauthenticated", "asserted", "verified"):
+            problems.append(f"approvals: {name!r} assurance must be unauthenticated, asserted or verified.")
+    grounding = []
+    for index, entry in enumerate(data.get("grounding") or []):
+        try:
+            rule = parse_rule(entry if isinstance(entry, dict) else {}, index)
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"grounding[{index}]: {exc}; every call would be refused.")
+            continue
+        grounding.append(rule)
+        if rule.invalid:
+            problems.append(f"grounding: {rule.name!r} cannot be read ({rule.invalid}); the calls it matches are refused.")
+    effect_rules = parse_rules(data.get("effects") or [])
+    for rule in effect_rules:
+        if rule.name.endswith("(unreadable)"):
+            problems.append(
+                f"effects: {rule.name[:-13]!r} cannot be read (decision deny or allow; match on sink, action, "
+                "origin, agent, target, confined); every effect would be refused."
+            )
+    summary = {
+        "rules": len(data.get("rules") or []),
+        "approvals": len(data.get("approvals") or []),
+        "principals": len(data.get("principals") or {}),
+        "grounding": len(grounding),
+        "effects": len(effect_rules),
+    }
+    return problems, summary
+
+
+#: What to do about a refusal strict mode would make, by rule.
+REMEDIES = {
+    "unconfined-execution": "Run where the sandbox is confined (macOS sandbox-exec, Linux bubblewrap), or accept the risk: effects: allow {sink: code}.",
+    "browser-send-off-site": "If the site really sends there, allow the host: effects: allow {sink: browser, target: \"<host>/*\"}.",
+    "mutation-without-atom": "Call it through an integration (atom), or for your own reviewed client: rules: allow {provider: <provider>, code_origin: direct}.",
+    "approval-missing": "The action needs a person's approval; route it through the agent's approval gate.",
+    "ungrounded-argument": "The request's values do not come from the records the grounding rule names; check the rule or the agent's sources.",
+    "beyond-declared-effect": "The integration sends more than its declared effect; fix the integration or its ATOM_POLICY.",
+    "outside-contract": "Model-written code sent an operation its own code does not contain.",
+    "unverified-model-code": "Model-written code mutating where its operations cannot be read; register a reviewed integration.",
+    "unapproved-model-effect": "Code the model wrote may not act without a person's approval of that exact action.",
+}
+
+
+def review_journal(root: str) -> List[Dict[str, Any]]:
+    """Refusals in a journal, grouped by rule and target: what strict mode would refuse
+    (from report mode), what it refused, and what was refused before approval."""
+    import glob
+    from collections import OrderedDict
+
+    groups: "OrderedDict[tuple, Dict[str, Any]]" = OrderedDict()
+    for path in sorted(glob.glob(os.path.join(root, "runs", "*.jsonl"))):
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                data = event.get("data") or {}
+                if event.get("kind") not in ("policy.decision", "policy.preview") or data.get("outcome") != "deny":
+                    continue
+                where = data.get("sink") or "provider"
+                target = data.get("target") or f"{data.get('host', '')}{data.get('path', '')}"
+                state = (
+                    "refused before approval" if event["kind"] == "policy.preview"
+                    else "refused" if data.get("enforced") else "would refuse"
+                )
+                key = (state, data.get("rule"), where, data.get("action") or data.get("method"), target)
+                group = groups.setdefault(key, {
+                    "state": state, "rule": data.get("rule"), "sink": where,
+                    "action": data.get("action") or data.get("method"), "target": target,
+                    "count": 0, "first_run": event.get("run"), "reason": data.get("reason") or "",
+                    "remedy": REMEDIES.get(str(data.get("rule")), "") if not str(data.get("rule")).startswith("deployment:") else "A deployment rule refuses it.",
+                })
+                group["count"] += 1
+    return sorted(groups.values(), key=lambda g: (-g["count"], g["rule"] or ""))

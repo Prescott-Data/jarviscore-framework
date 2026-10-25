@@ -22,6 +22,8 @@ happens and recorded.
 | The record of decisions and calls | `jarviscore.evidence.journal` |
 | Checking the record | `jarviscore verify` |
 
+To adopt it, follow [Turning On Control](../guides/control-policy.md); every
+key of the policy file is in the [Control Policy Reference](../reference/control-policy.md).
 The exact claims, their assumptions and the tests behind them are in
 [`claims/`](https://github.com/Prescott-Data/jarviscore-framework/tree/main/claims).
 
@@ -37,8 +39,9 @@ The exact claims, their assumptions and the tests behind them are in
 | `report` (default) | Yes | Yes | No: the call goes through, marked as one strict mode would refuse |
 | `strict` | Yes | Yes | Yes, before any network I/O, including the credential lookup |
 
-Start in `report`, read what strict mode would have refused (`jarviscore verify --json`
-lists the counts; the journal names each call and rule), then switch to `strict`.
+Start in `report`, read what strict mode would have refused (`jarviscore policy
+review` groups it by rule and target, with what to do about each), then switch
+to `strict`.
 
 In strict mode a decision that cannot be recorded refuses the call too: the
 promise is that every call that leaves has its decision on record.
@@ -186,6 +189,7 @@ decision point at the place it happens, recorded the same way (`policy.decision`
 | `memory` | A fact kept for later sessions | Kind, private or shared, digest |
 | `peer` | A message to another agent: `send`, `delegate` from sandboxed code, and the engine's `broadcast` of every step result to all peers | Recipient, digest |
 | `output` | A step's result delivered to the steps and caller after it | Status, digest |
+| `browser` | A page's top-level navigation, and every request carrying data out of the browser (a form, `fetch`, XHR, a beacon) | Method, host, the page's host, digest of the body |
 
 Commands a confined child runs inside its own workspace are its scratch work: they
 cannot reach the network or write outside the workspace, and what they produce
@@ -211,6 +215,26 @@ effects:
     decision: allow                   # lifts only unconfined-execution
     match: {sink: code}
 ```
+
+**The browser sends only to the site it is on.** In strict mode a page's request
+that carries data (any method but GET, HEAD and OPTIONS) to a host other than the
+page's own is refused before it leaves (`browser-send-off-site`): a script an
+attacker planted, an instruction that made the agent `fetch` somewhere, a
+third-party beacon. Allow the hosts your sites really send to, as `target`
+globs over host and path:
+
+```yaml
+effects:
+  - name: our-app-api
+    decision: allow
+    match: {sink: browser, target: "api.example.com/*"}
+```
+
+Requests are intercepted in strict mode (Playwright then disables the browser's
+HTTP cache) and only observed in report mode, at no cost. Plain reads (images,
+scripts, GET data) are neither decided on nor recorded. Strict mode blocks
+service workers in contexts JarvisCore creates. Not covered: WebSocket and
+WebRTC traffic, and data a GET request carries in its address.
 
 Match keys: `sink`, `action`, `origin`, `agent`, `target` (a glob) and
 `confined`. A rule that cannot be read refuses every effect. A test enumerates
@@ -297,6 +321,6 @@ HTTPS endpoint a call went from about 500 ms with a fresh connection to about
 
 ## Not covered yet
 
-The browser's own requests and actions are not decided on here yet (navigation,
-clicks, page-initiated requests); a browser request broker comes next. Signed,
-witnessed checkpoints after that, each with its own claim and tests.
+WebSocket and WebRTC traffic from a page, and data carried in a GET request's
+address, are not decided on. Signed, witnessed checkpoints come next, each with
+its own claim and tests.

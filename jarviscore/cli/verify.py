@@ -25,7 +25,8 @@ def main() -> None:
     if as_json:
         print(json.dumps({
             "root": report.root, "ok": report.ok, "runs": report.runs, "events": report.events,
-            "provider_calls": report.effects, "refused": report.refused, "problems": report.problems,
+            "effects": report.effects, "provider_calls": report.effects, "refused": report.refused,
+            "refused_in_preview": report.refused_in_preview, "problems": report.problems,
         }, indent=2))
     else:
         print(f"{root}: {report.summary()}")

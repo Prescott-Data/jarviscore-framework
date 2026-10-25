@@ -33,7 +33,9 @@ JarvisCore is both a multi-agent framework and a production agent harness. The r
 - [Model Routing](https://jarviscore.developers.prescottdata.io/concepts/model-routing/): provider routing and Jev-backed task-complexity tiers
 - [P2P Communication](https://jarviscore.developers.prescottdata.io/concepts/p2p/): the agent mesh
 - [Observability](https://jarviscore.developers.prescottdata.io/guides/observability/): tracing, metrics, jarviscore inspect
-- [HITL Escalation](https://jarviscore.developers.prescottdata.io/guides/hitl/): human-in-the-loop
+- [HITL Escalation](https://jarviscore.developers.prescottdata.io/guides/hitl/): human-in-the-loop, approvals bound to the exact action, who may approve
+- [Control and Evidence](https://jarviscore.developers.prescottdata.io/concepts/control-and-evidence/): every provider call and effect decided before it happens and recorded in a verifiable journal; grounding of payment values in the system of record
+- [Turning On Control](https://jarviscore.developers.prescottdata.io/guides/control-policy/): report mode to strict mode, `jarviscore policy check` and `review`, your own effects with `mediated()`
 - [Nexus Credentials](https://jarviscore.developers.prescottdata.io/guides/nexus/): zero-trust auth
 - [Integrations](https://jarviscore.developers.prescottdata.io/guides/integrations/): built-in service bundles and prebuilt actions; inspect the installed catalog with [jarviscore atom list](https://jarviscore.developers.prescottdata.io/reference/cli/#atom-list)
 - [Production Deployment](https://jarviscore.developers.prescottdata.io/guides/production/): sandbox isolation, Nexus credentials, persistent Redis, durable storage, monitoring and crash recovery for production deployments
@@ -41,5 +43,6 @@ JarvisCore is both a multi-agent framework and a production agent harness. The r
 ## Reference
 
 - [Configuration](https://jarviscore.developers.prescottdata.io/reference/configuration/): every environment variable
-- [CLI](https://jarviscore.developers.prescottdata.io/reference/cli/): init, check, memory, nexus, atom, inspect
+- [Control Policy](https://jarviscore.developers.prescottdata.io/reference/control-policy/): every key of the control policy file, the built-in refusals, the journal's events
+- [CLI](https://jarviscore.developers.prescottdata.io/reference/cli/): init, check, memory, nexus, atom, inspect, verify, policy
 - [AI Editor Setup](https://jarviscore.developers.prescottdata.io/guides/ai-editors/): skill for Copilot, Claude Code, Cursor

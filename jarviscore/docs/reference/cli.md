@@ -24,6 +24,7 @@ Commands:
   atom        Validate, test, and list integration atoms
   inspect     Read recorded traces from past runs
   verify      Check the journal of decisions and effects
+  policy      Check a control policy file; review what strict mode would refuse
   human       Join the mesh as a person
   room        Work together on a shared workspace
 ```
@@ -567,3 +568,32 @@ registered it, that every effect followed an allow decision, and that every
 grounded call cites reads that are in the record. Exit
 status: `0` intact, `1` problems found, `2` no journal. See
 [Control and Evidence](../concepts/control-and-evidence.md) for what it detects and what it does not yet.
+
+---
+
+## jarviscore policy
+
+Checks a control policy file, and reviews a journal for what strict mode refuses.
+Both run offline.
+
+```bash
+# Every rule reads as written? (default: CONTROL_POLICY_PATH)
+jarviscore policy check control-policy.yaml
+
+# What strict mode would refuse (report mode) or refused (strict), grouped,
+# with what to do about each (default: JOURNAL_DIR)
+jarviscore policy review
+
+# Either as JSON
+jarviscore policy check control-policy.yaml --json
+```
+
+`check` names every rule a deployment would silently fail closed on (an unknown
+section, a match key a rule can never meet, a grounding requirement that refers
+to nothing bound, an unreadable `effects` rule), and says whether this host can
+confine the sandbox, which strict mode needs. Exit status: `0` every rule reads
+as written, `1` problems found, `2` no policy file. `review` exits `0`. See
+[Turning On Control](../guides/control-policy.md).
+
+---
+
