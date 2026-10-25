@@ -102,7 +102,7 @@ def asked(store, workflow_id: str, step_id: str, action: HITLAction) -> bool:
     return not _asks_again(record if isinstance(record, dict) else None, action)
 
 
-def _ask(store, workflow_id: str, step_id: str, action: HITLAction, requirement, checks=None) -> dict[str, Any]:
+def _ask(store, workflow_id: str, step_id: str, action: HITLAction, requirement, checks=None, before=None) -> dict[str, Any]:
     from jarviscore.auth.principal import acting_for
 
     requester = acting_for.get() or ""
@@ -119,6 +119,8 @@ def _ask(store, workflow_id: str, step_id: str, action: HITLAction, requirement,
             **({"requirement": requirement.as_record()} if requirement is not None else {}),
             # What policy found when the action was previewed (grounding against records).
             **({"checks": checks} if checks else {}),
+            # What this step tried before the pause that did not happen, for the run that resumes it.
+            **({"before_pause": list(before)} if before else {}),
         },
     )
     store.create_hitl_request_typed(request)
@@ -143,6 +145,7 @@ def gate(
     requirement=None,
     directory: Optional[Mapping[str, Any]] = None,
     checks: Optional[list] = None,
+    before: Optional[list] = None,
 ) -> dict[str, Any] | None:
     """None when a person approved exactly ``action``, may approve it, and it is now claimed to run.
 
@@ -165,7 +168,7 @@ def gate(
     if _asks_again(record, action):
         # An approval that could not be carried out leaves the action undecided, and
         # one given for other arguments does not cover these: the person decides again.
-        return _ask(store, workflow_id, step_id, action, requirement, checks)
+        return _ask(store, workflow_id, step_id, action, requirement, checks, before)
     resolution = HITLResolution.from_raw(record)
     if resolution is not None and resolution.is_rejected:
         return {
@@ -260,6 +263,19 @@ def decided(store, workflow_id: str, step_id: str) -> list[tuple[HITLAction, boo
             continue
         actions.append((HITLAction(**raw["action"]), resolution.is_approved))
     return actions
+
+
+def before_pause(store, workflow_id: str, step_id: str) -> list[str]:
+    """What this step tried before it paused for a decision, and did not achieve."""
+    if not _durable(store, workflow_id, step_id):
+        return []
+    notes: list[str] = []
+    for raw in store.list_hitl_action_requests(workflow_id, step_id):
+        payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+        for note in payload.get("before_pause") or ():
+            if note not in notes:
+                notes.append(str(note))
+    return notes
 
 
 def assertion_keys() -> dict[str, str]:

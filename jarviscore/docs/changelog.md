@@ -153,6 +153,12 @@ All notable changes to JarvisCore Framework are documented here. This project fo
   reported a refused send as done; its output also replaced the run's trajectory
   with one entry. It now gets the run's own list of attempts that were refused,
   failed or are waiting, and keeps the full trajectory.
+- **An agent reports what its actions did, not what it meant them to do.** In
+  live browser runs an agent claimed to have sent data that never left the
+  browser. A step that resumes after an approval is now told which of its
+  earlier attempts did not succeed (kept with the approval request, so it holds
+  without a memory checkpoint), and each browser action's result lists what
+  actually left the browser during it, from the request broker's record.
 - **Nobody is asked to approve a call that cannot run.** A consequential call
   missing a required argument was sent for approval as it was; it is now refused
   with `ATOM_PARAMETERS_INVALID` first.

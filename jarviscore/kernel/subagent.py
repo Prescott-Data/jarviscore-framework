@@ -2441,6 +2441,15 @@ class BaseSubAgent(ABC):
                 thought for thought in state.thoughts
                 if not thought.startswith("[DONE_GATE]")
             ]
+            earlier = approval.before_pause(self.redis_store, workflow_id, step_id)
+            if earlier:
+                # A run that resumes a step may not have its memory; the approval record does.
+                state.internal_variables["unperformed_before_pause"] = earlier
+                state.add_thought(
+                    "[BEFORE THE PAUSE] Earlier in this step these attempts did not succeed. "
+                    "They did not happen unless a result after the pause shows they did; "
+                    "say so in your answer:\n" + "\n".join(earlier)
+                )
         for action, approved in decisions:
             if not approved:
                 approval.settle(self.redis_store, workflow_id, step_id, action.action_id, {
@@ -2664,8 +2673,9 @@ class BaseSubAgent(ABC):
     @staticmethod
     def _unperformed(state: KernelState, limit: int = 12) -> List[str]:
         """The run's attempts that were refused, failed or are waiting, from its tool log."""
-        lines = []
-        for item in state.tool_history:
+        earlier = (getattr(state, "internal_variables", None) or {}).get("unperformed_before_pause")
+        lines = [str(n) for n in earlier or ()]
+        for item in getattr(state, "tool_history", None) or ():
             output = item.tool_output if isinstance(item.tool_output, dict) else {}
             held = str(output.get("status") or "").lower() in ("error", "failed", "failure", "blocked", "refused", "waiting")
             if item.status == "success" and not held:

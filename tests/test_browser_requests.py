@@ -84,13 +84,15 @@ def control(monkeypatch, tmp_path):
     return configure
 
 
-async def browse(server, sends_to):
+async def browse(server, sends_to, brokers=None):
     """Open the shop page on 127.0.0.1 and have it POST to each host in ``sends_to``."""
     async with playwright.async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:
             context = await browser.new_context()
-            await attach(context, {"workflow_id": "wf", "step_id": "s1", "agent": "browser-1"})
+            broker = await attach(context, {"workflow_id": "wf", "step_id": "s1", "agent": "browser-1"})
+            if brokers is not None:
+                brokers.append(broker)
             page = await context.new_page()
             await page.goto(f"http://127.0.0.1:{server.port}/")
             results = [await page.evaluate(f"send('{host}:{server.port}')") for host in sends_to]
@@ -197,3 +199,15 @@ def test_an_off_site_send_is_refused_by_the_built_in_rule_and_liftable():
     assert _builtin_refusal(Effect("browser", "send", attributes={"host": "shop.test", "page": "shop.test"})) is None
     assert _builtin_refusal(Effect("browser", "navigate", attributes={"host": "evil.test", "page": "shop.test"})) is None
 
+
+
+@pytest.mark.asyncio
+async def test_the_broker_keeps_what_each_action_really_sent_for_the_agent_to_report(control, server):
+    control("strict")
+    brokers = []
+
+    await browse(server, ["127.0.0.1", "localhost"], brokers)
+
+    assert [(s["to"], s["outcome"]) for s in brokers[0].sent] == [
+        ("127.0.0.1/api/order", "sent"), ("localhost/api/order", "refused"),
+    ]

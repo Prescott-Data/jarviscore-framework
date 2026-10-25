@@ -1020,6 +1020,16 @@ repair that part and continue. Current facts always come from this run.
             return None
 
     async def _execute_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
+        broker = getattr(getattr(self, "_context", None), "_jc_request_broker", None)
+        mark = len(broker.sent) if broker is not None else 0
+        result = await self._execute_browser_tool(tool_name, params)
+        if broker is not None and isinstance(result, dict) and len(broker.sent) > mark:
+            # What actually left the browser during this action, from the request broker's
+            # record: an agent reports what its actions did, not what it meant them to do.
+            result = {**result, "sent": broker.sent[mark:]}
+        return result
+
+    async def _execute_browser_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
         params = dict(params)
         if tool_name == "act" and params.get("irreversible") is True:
             return {
@@ -1078,7 +1088,10 @@ repair that part and continue. Current facts always come from this run.
                 target=target if isinstance(target, dict) else {},
             )
             workflow_id, step_id = context.get("workflow_id"), context.get("step_id")
-            refusal = approval.gate(self.redis_store, workflow_id, step_id, action)
+            refusal = approval.gate(
+                self.redis_store, workflow_id, step_id, action,
+                before=self._unperformed(self._current_state) if getattr(self, "_current_state", None) else None,
+            )
             if refusal is not None:
                 return refusal
             result = await super()._execute_tool(tool_name, params)

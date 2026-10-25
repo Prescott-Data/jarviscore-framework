@@ -2326,6 +2326,7 @@ capability; if one fails, report what failed.
                     requirement=requirement,
                     directory=policy.principals,
                     checks=checks,
+                    before=self._unperformed(self._current_state) if getattr(self, "_current_state", None) else None,
                 )
                 if refusal is not None:
                     return refusal

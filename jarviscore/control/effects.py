@@ -182,7 +182,7 @@ def content_digest(value: Any) -> Dict[str, Any]:
 class Mediation:
     """Decide on one effect, record its attempt and outcome. Use as a context manager."""
 
-    __slots__ = ("effect", "run", "journal", "strict", "effect_id", "outcome", "active", "agent")
+    __slots__ = ("effect", "run", "journal", "strict", "effect_id", "outcome", "active", "agent", "decision")
 
     def __init__(self, effect: Effect, workflow_id: Optional[str], step_id: Optional[str]):
         self.effect = effect
@@ -191,6 +191,7 @@ class Mediation:
         self.journal = None
         self.strict = False
         self.active = False
+        self.decision = None
         current = scope.get() or {}
         self.agent = effect.agent or current.get("agent")
         workflow = workflow_id or current.get("workflow_id")
@@ -209,7 +210,7 @@ class Mediation:
 
         self.active = True
         self.strict = policy.mode == "strict"
-        decision = decide(self.effect)
+        decision = self.decision = decide(self.effect)
         self.journal = current_journal()
         record = {
             "call_id": self.effect_id,

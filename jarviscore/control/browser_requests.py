@@ -88,6 +88,19 @@ class RequestBroker:
     def __init__(self, scope: Optional[Dict[str, Any]]):
         self.scope = dict(scope or {})
         self._open: Dict[int, effects.Mediation] = {}
+        #: Every request that carried data out, in order: what the agent's actions really sent.
+        self.sent: list = []
+
+    def _note(self, effect: effects.Effect, mediation: Optional[effects.Mediation], refused: bool) -> None:
+        if effect.action != "send":
+            return
+        decision = getattr(mediation, "decision", None)
+        self.sent.append({
+            "method": effect.attributes.get("method"), "to": effect.target,
+            "outcome": "refused" if refused else (
+                "sent (strict mode would refuse)" if decision is not None and not decision.allowed else "sent"
+            ),
+        })
 
     def _mediation(self, effect: effects.Effect) -> effects.Mediation:
         agent = self.scope.get("agent")
@@ -106,8 +119,10 @@ class RequestBroker:
             mediation.__enter__()
         except effects.EffectDenied as exc:
             logger.info("[browser] refused %s %s: %s", request.method, effect.target, exc)
+            self._note(effect, mediation, refused=True)
             await route.abort("blockedbyclient")
             return
+        self._note(effect, mediation, refused=False)
         self._open[id(request)] = mediation
         try:
             await route.continue_()
@@ -127,6 +142,7 @@ class RequestBroker:
         except Exception as exc:  # noqa: BLE001 - observing must never break the page
             logger.warning("[browser] could not record %s: %s", effect.target, exc)
             return
+        self._note(effect, mediation, refused=False)
         self._open[id(request)] = mediation
 
     async def finished(self, request) -> None:
